@@ -1,0 +1,5 @@
+{
+  "telegram_bot_token": "YOUR_BOT_TOKEN_HERE",
+  "user_ids": [123456789],
+  "update_check_interval": 10
+}
