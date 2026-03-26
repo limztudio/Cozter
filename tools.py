@@ -1,5 +1,6 @@
 """Workspace tools that the AI can invoke."""
 
+import difflib
 import json
 import logging
 import os
@@ -162,7 +163,39 @@ TOOL_DEFS = [
 
 
 # ---------------------------------------------------------------------------
-# Tool execution
+# Diff helper
+# ---------------------------------------------------------------------------
+
+def make_diff(path: str, old_content: str | None, new_content: str | None) -> str:
+    """Generate a unified diff string for display."""
+    old_lines = (old_content or "").splitlines(keepends=True)
+    new_lines = (new_content or "").splitlines(keepends=True)
+
+    diff = difflib.unified_diff(
+        old_lines, new_lines,
+        fromfile=f"a/{path}", tofile=f"b/{path}",
+        lineterm="",
+    )
+    diff_lines = list(diff)
+    if not diff_lines:
+        return ""
+
+    # Only keep -/+ lines (and @@ headers) for compact display
+    result = []
+    for line in diff_lines:
+        if line.startswith("---") or line.startswith("+++"):
+            result.append(line.rstrip())
+        elif line.startswith("@@"):
+            result.append(line.rstrip())
+        elif line.startswith("-"):
+            result.append(line.rstrip())
+        elif line.startswith("+"):
+            result.append(line.rstrip())
+    return "\n".join(result)
+
+
+# ---------------------------------------------------------------------------
+# Tool execution — returns (result_for_ai, diff_for_display_or_None)
 # ---------------------------------------------------------------------------
 
 def _resolve(workspace: str, path: str) -> str:
@@ -174,8 +207,12 @@ def _resolve(workspace: str, path: str) -> str:
     return full
 
 
-def execute(workspace: str, name: str, arguments: dict) -> str:
-    """Execute a tool and return the result as a string."""
+def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None]:
+    """
+    Execute a tool.
+    Returns (result_text, diff_text_or_None).
+    diff_text is set for file-modifying operations.
+    """
     try:
         match name:
             case "read_file":
@@ -184,31 +221,47 @@ def execute(workspace: str, name: str, arguments: dict) -> str:
                     content = f.read()
                 if len(content) > 50000:
                     content = content[:50000] + "\n... (truncated)"
-                return content
+                return content, None
 
             case "write_file":
                 fpath = _resolve(workspace, arguments["path"])
+                rel = arguments["path"]
+                # Capture old content
+                old = None
+                if os.path.exists(fpath):
+                    with open(fpath, encoding="utf-8", errors="replace") as f:
+                        old = f.read()
+                new = arguments["content"]
                 os.makedirs(os.path.dirname(fpath), exist_ok=True)
                 with open(fpath, "w", encoding="utf-8") as f:
-                    f.write(arguments["content"])
-                return f"Written: {arguments['path']}"
+                    f.write(new)
+                diff = make_diff(rel, old, new)
+                return f"Written: {rel}", diff or None
 
             case "edit_file":
                 fpath = _resolve(workspace, arguments["path"])
+                rel = arguments["path"]
                 with open(fpath, encoding="utf-8") as f:
-                    content = f.read()
-                old = arguments["old_string"]
-                if old not in content:
-                    return f"Error: old_string not found in {arguments['path']}"
-                content = content.replace(old, arguments["new_string"], 1)
+                    old = f.read()
+                old_str = arguments["old_string"]
+                if old_str not in old:
+                    return f"Error: old_string not found in {rel}", None
+                new = old.replace(old_str, arguments["new_string"], 1)
                 with open(fpath, "w", encoding="utf-8") as f:
-                    f.write(content)
-                return f"Edited: {arguments['path']}"
+                    f.write(new)
+                diff = make_diff(rel, old, new)
+                return f"Edited: {rel}", diff or None
 
             case "delete_file":
                 fpath = _resolve(workspace, arguments["path"])
+                rel = arguments["path"]
+                old = None
+                if os.path.exists(fpath):
+                    with open(fpath, encoding="utf-8", errors="replace") as f:
+                        old = f.read()
                 os.remove(fpath)
-                return f"Deleted: {arguments['path']}"
+                diff = make_diff(rel, old, None)
+                return f"Deleted: {rel}", diff or None
 
             case "list_directory":
                 dpath = _resolve(workspace, arguments["path"])
@@ -218,17 +271,17 @@ def execute(workspace: str, name: str, arguments: dict) -> str:
                     full = os.path.join(dpath, e)
                     prefix = "[dir] " if os.path.isdir(full) else "      "
                     result.append(f"{prefix}{e}")
-                return "\n".join(result) if result else "(empty directory)"
+                return ("\n".join(result) if result else "(empty directory)"), None
 
             case "create_directory":
                 dpath = _resolve(workspace, arguments["path"])
                 os.makedirs(dpath, exist_ok=True)
-                return f"Created: {arguments['path']}"
+                return f"Created: {arguments['path']}", None
 
             case "delete_directory":
                 dpath = _resolve(workspace, arguments["path"])
                 shutil.rmtree(dpath)
-                return f"Deleted: {arguments['path']}"
+                return f"Deleted: {arguments['path']}", None
 
             case "git":
                 args = arguments["args"]
@@ -240,14 +293,14 @@ def execute(workspace: str, name: str, arguments: dict) -> str:
                 output = result.stdout + result.stderr
                 if len(output) > 10000:
                     output = output[:10000] + "\n... (truncated)"
-                return output.strip() or "(no output)"
+                return (output.strip() or "(no output)"), None
 
             case "web_fetch":
                 resp = httpx.get(arguments["url"], timeout=30, follow_redirects=True)
                 content = resp.text
                 if len(content) > 30000:
                     content = content[:30000] + "\n... (truncated)"
-                return f"HTTP {resp.status_code}\n\n{content}"
+                return f"HTTP {resp.status_code}\n\n{content}", None
 
             case "shell":
                 result = subprocess.run(
@@ -258,10 +311,10 @@ def execute(workspace: str, name: str, arguments: dict) -> str:
                 output = result.stdout + result.stderr
                 if len(output) > 10000:
                     output = output[:10000] + "\n... (truncated)"
-                return output.strip() or "(no output)"
+                return (output.strip() or "(no output)"), None
 
             case _:
-                return f"Unknown tool: {name}"
+                return f"Unknown tool: {name}", None
 
     except Exception as e:
-        return f"Error: {type(e).__name__}: {e}"
+        return f"Error: {type(e).__name__}: {e}", None

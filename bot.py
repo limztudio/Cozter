@@ -18,6 +18,10 @@ from .chatgpt import ChatGPTClient
 
 logger = logging.getLogger(__name__)
 
+
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
 # Conversation states
 NEW_AWAITING_DIR = 0
 OPEN_AWAITING_DIR = 1
@@ -360,15 +364,26 @@ class CozterBot:
 
             await update.message.reply_text("Thinking...")
             try:
-                reply = await self.ai.chat(uid, update.message.text, ws, model=model, effort=effort)
+                events = await self.ai.chat(uid, update.message.text, ws, model=model, effort=effort)
             except Exception as e:
                 logger.exception("AI chat failed")
                 await update.message.reply_text(f"Error: {e}")
                 return
 
-            # Telegram has a 4096 char limit per message
-            for i in range(0, len(reply), 4096):
-                await update.message.reply_text(reply[i:i + 4096])
+            for ev in events:
+                if ev.kind == "diff":
+                    # Show diff in monospace code block
+                    header = f"📄 {ev.file_path or 'file'}"
+                    diff_text = ev.content
+                    if len(diff_text) > 3900:
+                        diff_text = diff_text[:3900] + "\n... (truncated)"
+                    msg = f"{header}\n<pre>{_escape_html(diff_text)}</pre>"
+                    await update.message.reply_text(msg, parse_mode="HTML")
+                else:
+                    # Tool events and text
+                    text = ev.content
+                    for i in range(0, len(text), 4096):
+                        await update.message.reply_text(text[i:i + 4096])
 
         # --- register handlers ---
 

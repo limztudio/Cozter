@@ -2,6 +2,7 @@
 
 import json
 import logging
+from dataclasses import dataclass
 
 from openai import AsyncOpenAI
 
@@ -34,12 +35,19 @@ REREAD_PROMPT = (
 )
 
 
+@dataclass
+class ChatEvent:
+    """An event produced during a chat turn."""
+    kind: str  # "tool", "diff", "text"
+    content: str
+    tool_name: str | None = None
+    file_path: str | None = None
+
+
 class ChatGPTClient:
     def __init__(self):
         self._client: AsyncOpenAI | None = None
-        # In-memory conversation: {user_id: [messages]}
         self._histories: dict[int, list[dict]] = {}
-        # Track message counts for compact/reread triggers: {user_id: int}
         self._msg_counts: dict[int, int] = {}
 
     def _ensure_client(self) -> AsyncOpenAI:
@@ -58,19 +66,16 @@ class ChatGPTClient:
         self._msg_counts.pop(user_id, None)
 
     async def load_session(self, user_id: int, workspace_path: str, session_id: str) -> None:
-        """Load a session's messages into memory, replacing any existing history."""
         self._histories.pop(user_id, None)
         self._msg_counts[user_id] = 0
 
         messages = session.get_messages(workspace_path, session_id)
         if messages:
-            # Start with system prompt + a reread instruction + the saved messages
             history = [{"role": "system", "content": SYSTEM_PROMPT}]
             history.append({
                 "role": "user",
                 "content": REREAD_PROMPT + json.dumps(messages, indent=2, default=str),
             })
-            # We'll let the AI acknowledge on the first real user message
             self._histories[user_id] = history
         else:
             self._histories[user_id] = [
@@ -84,43 +89,36 @@ class ChatGPTClient:
         workspace_path: str,
         model: str = "gpt-4o",
         effort: str = "medium",
-    ) -> str:
-        """Send a user message, run tool calls in a loop, return final text."""
+    ) -> list[ChatEvent]:
+        """Send a user message, run tool calls, return list of ChatEvents."""
         client = self._ensure_client()
+        events: list[ChatEvent] = []
 
-        # Ensure session exists
         session_id = session.ensure_session(workspace_path, user_id)
 
-        # Initialize history if not loaded
         if user_id not in self._histories:
             await self.load_session(user_id, workspace_path, session_id)
 
         history = self._histories[user_id]
 
-        # Append user message to history and persist
         user_msg = {"role": "user", "content": message}
         history.append(user_msg)
         session.append_message(workspace_path, session_id, user_msg)
 
-        # Increment message counter
         count = self._msg_counts.get(user_id, 0) + 1
         self._msg_counts[user_id] = count
 
         compact_interval = workspace.get_compact_interval(workspace_path)
         reread_interval = workspace.get_reread_interval(workspace_path)
 
-        # Auto reread: reload session from disk periodically for better memory
         if count > 0 and count % reread_interval == 0:
             logger.info("Auto-reread triggered for user %s (count=%d)", user_id, count)
             await self.load_session(user_id, workspace_path, session_id)
             history = self._histories[user_id]
-            # Re-add the current user message since load_session doesn't include it
             history.append(user_msg)
 
         reasoning_effort_models = {"o3", "o4-mini"}
 
-        # Run the completion loop
-        assistant_text = ""
         while True:
             kwargs = {
                 "model": model,
@@ -138,7 +136,6 @@ class ChatGPTClient:
             history.append(msg_dict)
 
             if msg.tool_calls:
-                # Persist assistant tool-call message
                 session.append_message(workspace_path, session_id, msg_dict)
 
                 for tc in msg.tool_calls:
@@ -146,7 +143,24 @@ class ChatGPTClient:
                     fn_args = json.loads(tc.function.arguments)
                     logger.info("Tool call: %s(%s)", fn_name, fn_args)
 
-                    result = tools.execute(workspace_path, fn_name, fn_args)
+                    result, diff = tools.execute(workspace_path, fn_name, fn_args)
+
+                    # Emit tool event
+                    events.append(ChatEvent(
+                        kind="tool",
+                        content=f"🔧 {fn_name}: {result}",
+                        tool_name=fn_name,
+                        file_path=fn_args.get("path"),
+                    ))
+
+                    # Emit diff event if file was modified
+                    if diff:
+                        events.append(ChatEvent(
+                            kind="diff",
+                            content=diff,
+                            file_path=fn_args.get("path"),
+                        ))
+
                     tool_msg = {
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -156,23 +170,30 @@ class ChatGPTClient:
                     session.append_message(workspace_path, session_id, tool_msg)
                 continue
 
-            # Final text response
+            # Final text
             assistant_text = msg.content or "(no response)"
             assistant_msg = {"role": "assistant", "content": assistant_text}
             session.append_message(workspace_path, session_id, assistant_msg)
+
+            # Emit intermediate text from tool-call messages if the AI spoke between tools
+            if msg.content:
+                events.append(ChatEvent(kind="text", content=assistant_text))
             break
 
-        # Auto compact: summarize conversation to save storage
+        # Auto compact
         if count > 0 and count % compact_interval == 0:
             logger.info("Auto-compact triggered for user %s (count=%d)", user_id, count)
             await self._compact_session(user_id, workspace_path, session_id, model)
 
-        return assistant_text
+        # Ensure there's at least one text event
+        if not any(e.kind == "text" for e in events):
+            events.append(ChatEvent(kind="text", content=assistant_text))
+
+        return events
 
     async def _compact_session(
         self, user_id: int, workspace_path: str, session_id: str, model: str,
     ) -> None:
-        """Ask the AI to summarize the conversation, then replace session history."""
         client = self._ensure_client()
         history = self._histories.get(user_id, [])
         if len(history) < 4:
@@ -192,7 +213,6 @@ class ChatGPTClient:
             logger.exception("Compaction failed")
             return
 
-        # Replace history with system prompt + summary
         compacted = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "assistant", "content": f"[Session summary]\n{summary}"},
