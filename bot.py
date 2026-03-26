@@ -76,13 +76,15 @@ class CozterBot:
 
         @_authorized(self.user_ids)
         async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            current = workspace.get_current()
+            uid = update.effective_user.id
+            current = workspace.get_current(uid)
             msg = f"Current workspace: {current or '(none)'}\n\nEnter the full path for the new workspace directory (or /cancel):"
             await update.message.reply_text(msg)
             return NEW_AWAITING_DIR
 
         @_authorized(self.user_ids)
         async def new_receive_dir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
             path = update.message.text.strip()
 
             if os.path.exists(path):
@@ -100,7 +102,7 @@ class CozterBot:
                 return NEW_AWAITING_DIR
 
             workspace.ensure_cozter_dir(path)
-            workspace.select_workspace(path)
+            workspace.select_workspace(uid, path)
             await update.message.reply_text(
                 f"Workspace created and selected:\n{path}"
             )
@@ -110,8 +112,9 @@ class CozterBot:
 
         @_authorized(self.user_ids)
         async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            current = workspace.get_current()
-            recent = workspace.get_recent(self.recent_limit)
+            uid = update.effective_user.id
+            current = workspace.get_current(uid)
+            recent = workspace.get_recent(uid, self.recent_limit)
 
             lines = [f"Current workspace: {current or '(none)'}"]
             if recent:
@@ -126,8 +129,9 @@ class CozterBot:
 
         @_authorized(self.user_ids)
         async def open_receive_dir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
             text = update.message.text.strip()
-            recent = workspace.get_recent(self.recent_limit)
+            recent = workspace.get_recent(uid, self.recent_limit)
 
             if text.isdigit():
                 idx = int(text) - 1
@@ -148,7 +152,7 @@ class CozterBot:
                 return OPEN_AWAITING_DIR
 
             workspace.ensure_cozter_dir(path)
-            workspace.select_workspace(path)
+            workspace.select_workspace(uid, path)
             await update.message.reply_text(
                 f"Workspace selected:\n{path}"
             )

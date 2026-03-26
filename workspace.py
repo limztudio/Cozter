@@ -9,37 +9,45 @@ WORKSPACE_STATE_PATH = os.path.join(CONFIG_DIR, "workspaces.json")
 COZTER_DIR_NAME = ".cozter"
 
 
-def _load_state() -> dict:
+def _load_all() -> dict:
+    """Load the full state: {user_id_str: {current, recent}, ...}"""
     if os.path.exists(WORKSPACE_STATE_PATH):
         with open(WORKSPACE_STATE_PATH, encoding="utf-8") as f:
             return json.load(f)
-    return {"current": None, "recent": []}
+    return {}
 
 
-def _save_state(state: dict) -> None:
+def _save_all(data: dict) -> None:
     os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(WORKSPACE_STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
+        json.dump(data, f, indent=2)
 
 
-def get_current() -> str | None:
-    return _load_state().get("current")
+def _get_user(user_id: int) -> dict:
+    return _load_all().get(str(user_id), {"current": None, "recent": []})
 
 
-def get_recent(limit: int = 10) -> list[str]:
-    return _load_state().get("recent", [])[:limit]
+def get_current(user_id: int) -> str | None:
+    return _get_user(user_id).get("current")
 
 
-def select_workspace(path: str) -> None:
+def get_recent(user_id: int, limit: int = 10) -> list[str]:
+    return _get_user(user_id).get("recent", [])[:limit]
+
+
+def select_workspace(user_id: int, path: str) -> None:
     """Set path as current workspace and push it to the top of recent list."""
-    state = _load_state()
-    state["current"] = path
-    recent = state.get("recent", [])
+    all_state = _load_all()
+    uid = str(user_id)
+    user_state = all_state.get(uid, {"current": None, "recent": []})
+    user_state["current"] = path
+    recent = user_state.get("recent", [])
     if path in recent:
         recent.remove(path)
     recent.insert(0, path)
-    state["recent"] = recent
-    _save_state(state)
+    user_state["recent"] = recent
+    all_state[uid] = user_state
+    _save_all(all_state)
 
 
 def ensure_cozter_dir(path: str) -> None:
