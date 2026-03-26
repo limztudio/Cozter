@@ -77,4 +77,4 @@ def restart_script() -> None:
         [sys.executable, "-m", module_name],
         cwd=parent_dir,
     )
-    sys.exit(0)
+    os._exit(0)
