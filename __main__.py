@@ -19,6 +19,7 @@ from logging.handlers import RotatingFileHandler
 from . import auth
 from . import config as cfg
 from . import updater
+from . import workspace
 from .bot import CozterBot
 
 MODULE_ROOT = os.path.dirname(__file__)
@@ -129,9 +130,20 @@ async def main() -> None:
             signal.signal(sig, lambda *_: _signal_handler())
 
     await bot.start()
-    await bot.notify_users(
-        f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
-    )
+
+    # Build startup message with per-user workspace info
+    for uid in user_ids:
+        ws = workspace.get_current(uid)
+        msg = f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
+        if ws:
+            msg += f"\nWorkspace: {ws}"
+        else:
+            msg += "\nNo workspace selected. Use /new or /open."
+        try:
+            await bot.app.bot.send_message(chat_id=uid, text=msg)
+        except Exception as e:
+            logger.warning("Failed to notify user %s: %s", uid, e)
+
     logger.info("Version: %s | Updated: %s", version, commit_date)
 
     update_task = asyncio.create_task(update_loop(bot, interval))
