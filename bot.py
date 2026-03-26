@@ -12,6 +12,7 @@ from telegram.ext import (
 )
 
 from . import auth
+from . import session
 from . import workspace
 from .chatgpt import ChatGPTClient
 
@@ -22,6 +23,7 @@ NEW_AWAITING_DIR = 0
 OPEN_AWAITING_DIR = 1
 MODEL_AWAITING = 2
 EFFORT_AWAITING = 3
+SESSION_AWAITING = 4
 
 
 def _authorized(user_ids: list[int]):
@@ -79,8 +81,13 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            if ws:
+                # Create a fresh session
+                new_sess = session.create_session(ws)
+                session.set_current_session_id(ws, uid, new_sess["id"])
             self.ai.clear_history(uid)
-            await update.message.reply_text("Conversation cleared.")
+            await update.message.reply_text("Conversation cleared. New session started.")
 
         # --- /new conversation ---
 
@@ -260,6 +267,75 @@ class CozterBot:
             await update.message.reply_text(f"Effort set to: {effort}")
             return ConversationHandler.END
 
+        # --- /session conversation ---
+
+        @_authorized(self.user_ids)
+        async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return ConversationHandler.END
+
+            current_sid = session.get_current_session_id(ws, uid)
+            sessions = session.list_sessions(ws)
+
+            lines = []
+            if current_sid:
+                current_data = session.load_session(ws, current_sid)
+                if current_data:
+                    lines.append(f"Current session: {current_data.get('name', current_sid[:8])} ({current_data.get('message_count', len(current_data.get('messages', [])))} msgs)")
+                else:
+                    lines.append("Current session: (invalid)")
+            else:
+                lines.append("Current session: (none)")
+
+            if sessions:
+                lines.append("\nSessions:")
+                for i, s in enumerate(sessions, 1):
+                    marker = " <-" if s["id"] == current_sid else ""
+                    lines.append(f"  {i}. {s['name']} ({s['message_count']} msgs){marker}")
+            else:
+                lines.append("\nNo sessions yet.")
+
+            lines.append("\nEnter a number to switch, or 'new' to create (or /cancel):")
+            await update.message.reply_text("\n".join(lines))
+            return SESSION_AWAITING
+
+        @_authorized(self.user_ids)
+        async def session_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            text = update.message.text.strip()
+            sessions = session.list_sessions(ws)
+
+            if text.lower() == "new":
+                new_sess = session.create_session(ws)
+                session.set_current_session_id(ws, uid, new_sess["id"])
+                self.ai.clear_history(uid)
+                await self.ai.load_session(uid, ws, new_sess["id"])
+                await update.message.reply_text(
+                    f"New session created: {new_sess['name']}\nConversation cleared."
+                )
+                return ConversationHandler.END
+
+            if text.isdigit():
+                idx = int(text) - 1
+                if 0 <= idx < len(sessions):
+                    chosen = sessions[idx]
+                    session.set_current_session_id(ws, uid, chosen["id"])
+                    self.ai.clear_history(uid)
+                    await self.ai.load_session(uid, ws, chosen["id"])
+                    await update.message.reply_text(
+                        f"Switched to: {chosen['name']}\nPrevious conversation loaded."
+                    )
+                    return ConversationHandler.END
+
+            await update.message.reply_text(
+                "Invalid input. Enter a number, 'new', or /cancel:"
+            )
+            return SESSION_AWAITING
+
         # --- shared cancel ---
 
         @_authorized(self.user_ids)
@@ -342,10 +418,22 @@ class CozterBot:
             fallbacks=[cancel_handler],
         )
 
+        session_conv = ConversationHandler(
+            entry_points=[CommandHandler("session", cmd_session)],
+            states={
+                SESSION_AWAITING: [
+                    cancel_handler,
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, session_receive),
+                ],
+            },
+            fallbacks=[cancel_handler],
+        )
+
         self.app.add_handler(new_conv)
         self.app.add_handler(open_conv)
         self.app.add_handler(model_conv)
         self.app.add_handler(effort_conv)
+        self.app.add_handler(session_conv)
         self.app.add_handler(CommandHandler("start", cmd_start))
         self.app.add_handler(CommandHandler("version", cmd_version))
         self.app.add_handler(CommandHandler("account", cmd_account))

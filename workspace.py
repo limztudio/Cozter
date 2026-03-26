@@ -103,3 +103,15 @@ def set_effort(workspace_path: str, effort: str) -> None:
     settings = _load_settings(workspace_path)
     settings["effort"] = effort
     _save_settings(workspace_path, settings)
+
+
+DEFAULT_COMPACT_INTERVAL = 15
+DEFAULT_REREAD_INTERVAL = 30
+
+
+def get_compact_interval(workspace_path: str) -> int:
+    return _load_settings(workspace_path).get("compact_interval", DEFAULT_COMPACT_INTERVAL)
+
+
+def get_reread_interval(workspace_path: str) -> int:
+    return _load_settings(workspace_path).get("reread_interval", DEFAULT_REREAD_INTERVAL)
