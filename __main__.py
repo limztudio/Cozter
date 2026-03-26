@@ -3,7 +3,7 @@ import subprocess
 import sys
 
 # Re-launch as module if run as `python Cozter` (no package context)
-if __name__ == "__main__" and __package__ is None:
+if __name__ == "__main__" and not __package__:
     module_dir = os.path.dirname(os.path.abspath(__file__))
     module_name = os.path.basename(module_dir)
     parent_dir = os.path.dirname(module_dir)
