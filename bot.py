@@ -13,6 +13,7 @@ from telegram.ext import (
 
 from . import auth
 from . import workspace
+from .chatgpt import ChatGPTClient
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class CozterBot:
         self.user_ids = user_ids
         self.recent_limit = recent_limit
         self.app: Application | None = None
+        self.ai = ChatGPTClient()
 
     async def start(self) -> None:
         self.app = Application.builder().token(self.token).build()
@@ -73,6 +75,12 @@ class CozterBot:
                 f"Account: {tokens.get('email', '?')}\n"
                 f"Plan: {tokens.get('plan', '?')}"
             )
+
+        @_authorized(self.user_ids)
+        async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            self.ai.clear_history(uid)
+            await update.message.reply_text("Conversation cleared.")
 
         # --- /new conversation ---
 
@@ -259,11 +267,32 @@ class CozterBot:
             await update.message.reply_text("Cancelled.")
             return ConversationHandler.END
 
-        # --- fallback echo (only outside conversations) ---
+        # --- AI chat (default for non-command messages) ---
 
         @_authorized(self.user_ids)
-        async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            await update.message.reply_text(update.message.text)
+        async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            if not ws:
+                await update.message.reply_text(
+                    "No workspace selected. Use /new or /open first."
+                )
+                return
+
+            model = workspace.get_model(ws)
+            effort = workspace.get_effort(ws)
+
+            await update.message.reply_text("Thinking...")
+            try:
+                reply = await self.ai.chat(uid, update.message.text, ws, model=model, effort=effort)
+            except Exception as e:
+                logger.exception("AI chat failed")
+                await update.message.reply_text(f"Error: {e}")
+                return
+
+            # Telegram has a 4096 char limit per message
+            for i in range(0, len(reply), 4096):
+                await update.message.reply_text(reply[i:i + 4096])
 
         # --- register handlers ---
 
@@ -320,7 +349,8 @@ class CozterBot:
         self.app.add_handler(CommandHandler("start", cmd_start))
         self.app.add_handler(CommandHandler("version", cmd_version))
         self.app.add_handler(CommandHandler("account", cmd_account))
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+        self.app.add_handler(CommandHandler("clear", cmd_clear))
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
 
         await self.app.initialize()
         await self.app.start()

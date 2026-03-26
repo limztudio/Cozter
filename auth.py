@@ -239,6 +239,46 @@ def save_tokens(token_resp: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# API key exchange (id_token -> openai-api-key, like Codex CLI)
+# ---------------------------------------------------------------------------
+
+def get_api_key() -> str | None:
+    """Return a usable OpenAI API key, exchanging the id_token if needed."""
+    data = _load_auth()
+    if not data:
+        return None
+    # Use cached key if present
+    if data.get("api_key"):
+        return data["api_key"]
+    # Exchange id_token for API key
+    id_token = data.get("id_token")
+    if not id_token:
+        return None
+    try:
+        resp = httpx.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "client_id": CLIENT_ID,
+                "requested_token": "openai-api-key",
+                "subject_token": id_token,
+                "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        resp.raise_for_status()
+        api_key = resp.json().get("access_token", "")
+        if api_key:
+            data["api_key"] = api_key
+            _save_auth(data)
+            logger.info("API key obtained via token exchange.")
+        return api_key or None
+    except Exception:
+        logger.exception("API key exchange failed")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Token refresh
 # ---------------------------------------------------------------------------
 
@@ -275,6 +315,7 @@ def _refresh_tokens(data: dict) -> dict | None:
         if token_resp.get("id_token"):
             data["id_token"] = token_resp["id_token"]
         data["last_refresh"] = datetime.now(timezone.utc).isoformat()
+        data.pop("api_key", None)  # invalidate cached API key
         _save_auth(data)
         logger.info("Tokens refreshed successfully.")
         return data

@@ -1,74 +1,93 @@
-"""Client for the ChatGPT backend API (not the public API)."""
+"""OpenAI API client with tool-calling support."""
 
+import json
 import logging
 
-import httpx
+from openai import AsyncOpenAI
 
 from . import auth
+from . import tools
 
 logger = logging.getLogger(__name__)
 
-CHATGPT_BASE = "https://chatgpt.com/backend-api"
+SYSTEM_PROMPT = """\
+You are Cozter, a coding assistant operating inside a workspace directory.
+You have full permission to create, read, edit, and delete files and directories,
+run git commands, execute shell commands, and fetch content from the internet.
+
+Always work within the workspace. Use the tools provided to accomplish tasks.
+When you make changes, briefly explain what you did.\
+"""
 
 
 class ChatGPTClient:
     def __init__(self):
-        self._client = httpx.AsyncClient(timeout=60.0)
+        self._client: AsyncOpenAI | None = None
+        # Per-user conversation histories: {user_id: [messages]}
+        self._histories: dict[int, list[dict]] = {}
 
-    async def close(self):
-        await self._client.aclose()
+    def _ensure_client(self) -> AsyncOpenAI:
+        if self._client is None:
+            api_key = auth.get_api_key()
+            if not api_key:
+                raise RuntimeError("Not logged in or API key exchange failed.")
+            self._client = AsyncOpenAI(api_key=api_key)
+        return self._client
 
-    def _headers(self, tokens: dict) -> dict:
-        headers = {
-            "Authorization": f"Bearer {tokens['access_token']}",
-            "Content-Type": "application/json",
-        }
-        if tokens.get("account_id"):
-            headers["chatgpt-account-id"] = tokens["account_id"]
-        return headers
+    def reset_client(self) -> None:
+        """Force re-creation of client (e.g. after token refresh)."""
+        self._client = None
 
-    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        tokens = auth.refresh_if_needed()
-        if not tokens:
-            raise RuntimeError("Not logged in. Use /login first.")
+    def clear_history(self, user_id: int) -> None:
+        self._histories.pop(user_id, None)
 
-        url = f"{CHATGPT_BASE}/{path.lstrip('/')}"
-        resp = await self._client.request(method, url, headers=self._headers(tokens), **kwargs)
-
-        # Retry once on 401 after forcing a refresh
-        if resp.status_code == 401:
-            tokens = auth._refresh_tokens(tokens)
-            if not tokens:
-                raise RuntimeError("Session expired. Use /login to re-authenticate.")
-            resp = await self._client.request(method, url, headers=self._headers(tokens), **kwargs)
-
-        resp.raise_for_status()
-        return resp
-
-    async def get_models(self) -> list[str]:
-        resp = await self._request("GET", "/models")
-        data = resp.json()
-        return [m.get("slug", m.get("id", "?")) for m in data.get("models", [])]
-
-    async def send_message(
+    async def chat(
         self,
+        user_id: int,
         message: str,
+        workspace_path: str,
         model: str = "gpt-4o",
-        conversation_id: str | None = None,
-    ) -> dict:
-        """Send a message and return the full response dict."""
-        payload = {
-            "action": "next",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": {"content_type": "text", "parts": [message]},
-                }
-            ],
-            "model": model,
-        }
-        if conversation_id:
-            payload["conversation_id"] = conversation_id
+        effort: str = "medium",
+    ) -> str:
+        """Send a user message, run tool calls in a loop, return final text."""
+        client = self._ensure_client()
 
-        resp = await self._request("POST", "/conversation", json=payload)
-        return resp.json()
+        history = self._histories.setdefault(user_id, [
+            {"role": "system", "content": SYSTEM_PROMPT},
+        ])
+        history.append({"role": "user", "content": message})
+
+        reasoning_effort_models = {"o3", "o4-mini"}
+
+        while True:
+            kwargs = {
+                "model": model,
+                "messages": history,
+                "tools": tools.TOOL_DEFS,
+            }
+            if model in reasoning_effort_models:
+                kwargs["reasoning"] = {"effort": effort}
+
+            response = await client.chat.completions.create(**kwargs)
+            choice = response.choices[0]
+            msg = choice.message
+
+            # Append assistant message to history
+            history.append(msg.to_dict())
+
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    fn_name = tc.function.name
+                    fn_args = json.loads(tc.function.arguments)
+                    logger.info("Tool call: %s(%s)", fn_name, fn_args)
+
+                    result = tools.execute(workspace_path, fn_name, fn_args)
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
+                continue  # loop back to get next response
+
+            # No tool calls — return the final text
+            return msg.content or "(no response)"
