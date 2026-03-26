@@ -89,8 +89,17 @@ def ensure_login() -> None:
         logger.warning("Token refresh failed — re-login required.")
         auth.clear_auth()
 
-    saved = auth.browser_login()
-    logger.info("Logged in as %s (plan: %s)", saved.get("email"), saved.get("plan"))
+    while True:
+        try:
+            saved = auth.browser_login()
+            logger.info("Logged in as %s (plan: %s)", saved.get("email"), saved.get("plan"))
+            return
+        except Exception as e:
+            logger.error("Login failed: %s", e)
+            print(f"\nLogin failed: {e}")
+            print("Retrying in 30 seconds... (Ctrl+C to quit)\n")
+            import time
+            time.sleep(30)
 
 
 async def main() -> None:
@@ -136,21 +145,20 @@ async def main() -> None:
 
 
 def run() -> None:
-    while True:
-        try:
-            setup_logging()
-            asyncio.run(main())
-            break  # clean shutdown via signal — exit normally
-        except KeyboardInterrupt:
-            break
-        except Exception as exc:
-            crash_path = log_crash(exc)
-            logger.critical(
-                "Unhandled exception — crash log written to %s. Restarting...",
-                crash_path,
-            )
-            # restart the entire process so modules are re-imported fresh
-            updater.restart_script()
+    setup_logging()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception as exc:
+        crash_path = log_crash(exc)
+        logger.critical(
+            "Unhandled exception — crash log written to %s. Restarting in 5s...",
+            crash_path,
+        )
+        import time
+        time.sleep(5)
+        updater.restart_script()
 
 
 if __name__ == "__main__":
