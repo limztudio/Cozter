@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 # Conversation states
 NEW_AWAITING_DIR = 0
 OPEN_AWAITING_DIR = 1
+MODEL_AWAITING = 2
+EFFORT_AWAITING = 3
 
 
 def _authorized(user_ids: list[int]):
@@ -158,6 +160,98 @@ class CozterBot:
             )
             return ConversationHandler.END
 
+        # --- /model conversation ---
+
+        @_authorized(self.user_ids)
+        async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return ConversationHandler.END
+
+            current = workspace.get_model(ws)
+            options = workspace.AVAILABLE_MODELS
+            lines = [f"Current model: {current}\n", "Available models:"]
+            for i, m in enumerate(options, 1):
+                marker = " <-" if m == current else ""
+                lines.append(f"  {i}. {m}{marker}")
+            lines.append("\nEnter a number or model name (or /cancel):")
+            await update.message.reply_text("\n".join(lines))
+            return MODEL_AWAITING
+
+        @_authorized(self.user_ids)
+        async def model_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            text = update.message.text.strip()
+            options = workspace.AVAILABLE_MODELS
+
+            if text.isdigit():
+                idx = int(text) - 1
+                if 0 <= idx < len(options):
+                    model = options[idx]
+                else:
+                    await update.message.reply_text("Invalid number. Try again (or /cancel):")
+                    return MODEL_AWAITING
+            elif text in options:
+                model = text
+            else:
+                await update.message.reply_text(
+                    f"Unknown model: {text}\nTry again (or /cancel):"
+                )
+                return MODEL_AWAITING
+
+            workspace.set_model(ws, model)
+            await update.message.reply_text(f"Model set to: {model}")
+            return ConversationHandler.END
+
+        # --- /effort conversation ---
+
+        @_authorized(self.user_ids)
+        async def cmd_effort(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return ConversationHandler.END
+
+            current = workspace.get_effort(ws)
+            options = workspace.AVAILABLE_EFFORTS
+            lines = [f"Current effort: {current}\n", "Available levels:"]
+            for i, e in enumerate(options, 1):
+                marker = " <-" if e == current else ""
+                lines.append(f"  {i}. {e}{marker}")
+            lines.append("\nEnter a number or level name (or /cancel):")
+            await update.message.reply_text("\n".join(lines))
+            return EFFORT_AWAITING
+
+        @_authorized(self.user_ids)
+        async def effort_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            text = update.message.text.strip().lower()
+            options = workspace.AVAILABLE_EFFORTS
+
+            if text.isdigit():
+                idx = int(text) - 1
+                if 0 <= idx < len(options):
+                    effort = options[idx]
+                else:
+                    await update.message.reply_text("Invalid number. Try again (or /cancel):")
+                    return EFFORT_AWAITING
+            elif text in options:
+                effort = text
+            else:
+                await update.message.reply_text(
+                    f"Unknown effort level: {text}\nTry again (or /cancel):"
+                )
+                return EFFORT_AWAITING
+
+            workspace.set_effort(ws, effort)
+            await update.message.reply_text(f"Effort set to: {effort}")
+            return ConversationHandler.END
+
         # --- shared cancel ---
 
         @_authorized(self.user_ids)
@@ -197,8 +291,32 @@ class CozterBot:
             fallbacks=[cancel_handler],
         )
 
+        model_conv = ConversationHandler(
+            entry_points=[CommandHandler("model", cmd_model)],
+            states={
+                MODEL_AWAITING: [
+                    cancel_handler,
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, model_receive),
+                ],
+            },
+            fallbacks=[cancel_handler],
+        )
+
+        effort_conv = ConversationHandler(
+            entry_points=[CommandHandler("effort", cmd_effort)],
+            states={
+                EFFORT_AWAITING: [
+                    cancel_handler,
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, effort_receive),
+                ],
+            },
+            fallbacks=[cancel_handler],
+        )
+
         self.app.add_handler(new_conv)
         self.app.add_handler(open_conv)
+        self.app.add_handler(model_conv)
+        self.app.add_handler(effort_conv)
         self.app.add_handler(CommandHandler("start", cmd_start))
         self.app.add_handler(CommandHandler("version", cmd_version))
         self.app.add_handler(CommandHandler("account", cmd_account))
