@@ -82,11 +82,12 @@ async def main() -> None:
     token = config["telegram_bot_token"]
     user_ids = config["user_ids"]
     interval = config["update_check_interval"]
+    recent_limit = config["recent_workspace_limit"]
 
     version = updater.get_current_version()
     commit_date = updater.get_last_commit_date()
 
-    bot = CozterBot(token, user_ids)
+    bot = CozterBot(token, user_ids, recent_limit=recent_limit)
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()

@@ -9,6 +9,7 @@ _DEFAULT_CONFIG = {
     "telegram_bot_token": "",
     "user_ids": [],
     "update_check_interval": 10,
+    "recent_workspace_limit": 10,
 }
 
 
