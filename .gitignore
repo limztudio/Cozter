@@ -206,7 +206,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Local config
+# Local config & secrets
 .config/
 
 # Crash & runtime logs
