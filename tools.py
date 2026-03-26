@@ -78,6 +78,21 @@ TOOL_DEFS = [
     {
         "type": "function",
         "function": {
+            "name": "rename_file",
+            "description": "Rename or move a file within the workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "old_path": {"type": "string", "description": "Current relative path."},
+                    "new_path": {"type": "string", "description": "New relative path."},
+                },
+                "required": ["old_path", "new_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_directory",
             "description": "List files and subdirectories in a directory.",
             "parameters": {
@@ -280,6 +295,13 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                 stats = _diff_stats(added, removed)
                 result = f"Deleted: {rel} ({stats})" if stats else f"Deleted: {rel}"
                 return result, diff or None
+
+            case "rename_file":
+                old_fpath = _resolve(workspace, arguments["old_path"])
+                new_fpath = _resolve(workspace, arguments["new_path"])
+                os.makedirs(os.path.dirname(new_fpath), exist_ok=True)
+                os.rename(old_fpath, new_fpath)
+                return f"Renamed: {arguments['old_path']} -> {arguments['new_path']}", None
 
             case "list_directory":
                 dpath = _resolve(workspace, arguments["path"])
