@@ -166,8 +166,9 @@ TOOL_DEFS = [
 # Diff helper
 # ---------------------------------------------------------------------------
 
-def make_diff(path: str, old_content: str | None, new_content: str | None) -> str:
-    """Generate a unified diff string for display."""
+def make_diff(path: str, old_content: str | None, new_content: str | None) -> tuple[str, int, int]:
+    """Generate a unified diff string for display.
+    Returns (diff_text, lines_added, lines_removed)."""
     old_lines = (old_content or "").splitlines(keepends=True)
     new_lines = (new_content or "").splitlines(keepends=True)
 
@@ -178,20 +179,23 @@ def make_diff(path: str, old_content: str | None, new_content: str | None) -> st
     )
     diff_lines = list(diff)
     if not diff_lines:
-        return ""
+        return "", 0, 0
 
-    # Only keep -/+ lines (and @@ headers) for compact display
     result = []
+    added = 0
+    removed = 0
     for line in diff_lines:
         if line.startswith("---") or line.startswith("+++"):
             result.append(line.rstrip())
         elif line.startswith("@@"):
             result.append(line.rstrip())
-        elif line.startswith("-"):
-            result.append(line.rstrip())
         elif line.startswith("+"):
             result.append(line.rstrip())
-    return "\n".join(result)
+            added += 1
+        elif line.startswith("-"):
+            result.append(line.rstrip())
+            removed += 1
+    return "\n".join(result), added, removed
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +209,15 @@ def _resolve(workspace: str, path: str) -> str:
     if not full.startswith(ws_norm):
         raise ValueError(f"Path escapes workspace: {path}")
     return full
+
+
+def _diff_stats(added: int, removed: int) -> str:
+    parts = []
+    if removed:
+        parts.append(f"-{removed}")
+    if added:
+        parts.append(f"+{added}")
+    return ", ".join(parts) + " lines" if parts else ""
 
 
 def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None]:
@@ -226,7 +239,6 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
             case "write_file":
                 fpath = _resolve(workspace, arguments["path"])
                 rel = arguments["path"]
-                # Capture old content
                 old = None
                 if os.path.exists(fpath):
                     with open(fpath, encoding="utf-8", errors="replace") as f:
@@ -235,8 +247,10 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                 os.makedirs(os.path.dirname(fpath), exist_ok=True)
                 with open(fpath, "w", encoding="utf-8") as f:
                     f.write(new)
-                diff = make_diff(rel, old, new)
-                return f"Written: {rel}", diff or None
+                diff, added, removed = make_diff(rel, old, new)
+                stats = _diff_stats(added, removed)
+                result = f"Written: {rel} ({stats})" if stats else f"Written: {rel}"
+                return result, diff or None
 
             case "edit_file":
                 fpath = _resolve(workspace, arguments["path"])
@@ -249,8 +263,10 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                 new = old.replace(old_str, arguments["new_string"], 1)
                 with open(fpath, "w", encoding="utf-8") as f:
                     f.write(new)
-                diff = make_diff(rel, old, new)
-                return f"Edited: {rel}", diff or None
+                diff, added, removed = make_diff(rel, old, new)
+                stats = _diff_stats(added, removed)
+                result = f"Edited: {rel} ({stats})" if stats else f"Edited: {rel}"
+                return result, diff or None
 
             case "delete_file":
                 fpath = _resolve(workspace, arguments["path"])
@@ -260,8 +276,10 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                     with open(fpath, encoding="utf-8", errors="replace") as f:
                         old = f.read()
                 os.remove(fpath)
-                diff = make_diff(rel, old, None)
-                return f"Deleted: {rel}", diff or None
+                diff, added, removed = make_diff(rel, old, None)
+                stats = _diff_stats(added, removed)
+                result = f"Deleted: {rel} ({stats})" if stats else f"Deleted: {rel}"
+                return result, diff or None
 
             case "list_directory":
                 dpath = _resolve(workspace, arguments["path"])
