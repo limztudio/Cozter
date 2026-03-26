@@ -11,6 +11,7 @@ from telegram.ext import (
     filters,
 )
 
+from . import auth
 from . import workspace
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,19 @@ class CozterBot:
             ver = updater.get_current_version()
             date = updater.get_last_commit_date()
             await update.message.reply_text(f"Version: {ver}\nUpdated: {date}")
+
+        @_authorized(self.user_ids)
+        async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if not auth.is_logged_in():
+                await update.message.reply_text(
+                    "Not logged in.\nRestart the script to trigger login."
+                )
+                return
+            tokens = auth.get_tokens()
+            await update.message.reply_text(
+                f"Account: {tokens.get('email', '?')}\n"
+                f"Plan: {tokens.get('plan', '?')}"
+            )
 
         # --- /new conversation ---
 
@@ -115,7 +129,6 @@ class CozterBot:
             text = update.message.text.strip()
             recent = workspace.get_recent(self.recent_limit)
 
-            # Allow picking by number from the recent list
             if text.isdigit():
                 idx = int(text) - 1
                 if 0 <= idx < len(recent):
@@ -184,6 +197,7 @@ class CozterBot:
         self.app.add_handler(open_conv)
         self.app.add_handler(CommandHandler("start", cmd_start))
         self.app.add_handler(CommandHandler("version", cmd_version))
+        self.app.add_handler(CommandHandler("account", cmd_account))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
         await self.app.initialize()

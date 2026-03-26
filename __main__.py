@@ -16,6 +16,7 @@ import traceback
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
+from . import auth
 from . import config as cfg
 from . import updater
 from .bot import CozterBot
@@ -77,12 +78,44 @@ async def update_loop(bot: CozterBot, interval: int) -> None:
             logger.exception("Update check failed")
 
 
+def ensure_login() -> None:
+    """Run the device-code login flow on the console if not already logged in."""
+    if auth.is_logged_in():
+        tokens = auth.get_tokens()
+        logger.info("Logged in as %s (plan: %s)", tokens.get("email"), tokens.get("plan"))
+        # Try to refresh if stale
+        refreshed = auth.refresh_if_needed()
+        if refreshed:
+            return
+        logger.warning("Token refresh failed — re-login required.")
+        auth.clear_auth()
+
+    print("\n=== OpenAI Login ===")
+    print("Requesting device code...")
+    device_data = auth.request_device_code()
+
+    user_code = device_data["user_code"]
+    device_auth_id = device_data["device_auth_id"]
+    interval = device_data.get("interval", 5)
+
+    print(f"\n  1. Go to: {auth.DEVICE_VERIFY_URL}")
+    print(f"  2. Enter code: {user_code}\n")
+    print("Waiting for login...")
+
+    token_resp = auth.poll_device_code(device_auth_id, user_code, interval)
+    saved = auth.save_tokens(token_resp)
+
+    print(f"Logged in as {saved.get('email', '?')} (plan: {saved.get('plan', '?')})\n")
+
+
 async def main() -> None:
     config = cfg.load_config()
     token = config["telegram_bot_token"]
     user_ids = config["user_ids"]
     interval = config["update_check_interval"]
     recent_limit = config["recent_workspace_limit"]
+
+    ensure_login()
 
     version = updater.get_current_version()
     commit_date = updater.get_last_commit_date()
