@@ -1,8 +1,17 @@
+import os
+import subprocess
+import sys
+
+# Re-launch as module if run as `python Cozter` (no package context)
+if __name__ == "__main__" and __package__ is None:
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    module_name = os.path.basename(module_dir)
+    parent_dir = os.path.dirname(module_dir)
+    sys.exit(subprocess.call([sys.executable, "-m", module_name], cwd=parent_dir))
+
 import asyncio
 import logging
-import os
 import signal
-import sys
 import traceback
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
