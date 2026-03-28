@@ -35,6 +35,23 @@ REREAD_PROMPT = (
     "Read it carefully and continue from where you left off.\n\n"
 )
 
+# Responses API uses a flat tool format (name/description/parameters at top level)
+RESPONSES_TOOL_DEFS = [
+    {
+        "type": "function",
+        "name": td["function"]["name"],
+        "description": td["function"]["description"],
+        "parameters": td["function"]["parameters"],
+    }
+    for td in tools.TOOL_DEFS
+]
+
+# Models that use the Responses API (required for tools + reasoning)
+RESPONSES_API_MODELS = {"gpt-5.4", "gpt-5.4-pro"}
+
+# Models that support the reasoning effort parameter
+REASONING_EFFORT_MODELS = {"o3", "o4-mini", "gpt-5.4", "gpt-5.4-pro"}
+
 
 @dataclass
 class ChatEvent:
@@ -118,15 +135,143 @@ class ChatGPTClient:
             history = self._histories[user_id]
             history.append(user_msg)
 
-        reasoning_effort_models = {"o3", "o4-mini", "gpt-5.4", "gpt-5.4-pro"}
+        if model in RESPONSES_API_MODELS:
+            events, assistant_text = await self._chat_responses(
+                client, history, model, effort, workspace_path, session_id,
+            )
+        else:
+            events, assistant_text = await self._chat_completions(
+                client, history, model, effort, workspace_path, session_id,
+            )
+
+        # Auto compact
+        if count > 0 and count % compact_interval == 0:
+            logger.info("Auto-compact triggered for user %s (count=%d)", user_id, count)
+            await self._compact_session(user_id, workspace_path, session_id, model)
+
+        # Ensure there's at least one text event
+        if not any(e.kind == "text" for e in events):
+            events.append(ChatEvent(kind="text", content=assistant_text))
+
+        return events
+
+    # ------------------------------------------------------------------
+    # Responses API path (gpt-5.4+)
+    # ------------------------------------------------------------------
+
+    async def _chat_responses(
+        self,
+        client: AsyncOpenAI,
+        history: list[dict],
+        model: str,
+        effort: str,
+        workspace_path: str,
+        session_id: str,
+    ) -> tuple[list[ChatEvent], str]:
+        events: list[ChatEvent] = []
+        assistant_text = "(no response)"
+
+        # Build input: skip the system message (passed as instructions)
+        input_items = [msg for msg in history if msg.get("role") != "system"]
 
         while True:
-            kwargs = {
+            kwargs: dict = {
+                "model": model,
+                "instructions": SYSTEM_PROMPT,
+                "input": input_items,
+                "tools": RESPONSES_TOOL_DEFS,
+            }
+            if model in REASONING_EFFORT_MODELS:
+                kwargs["reasoning"] = {"effort": effort}
+
+            response = await client.responses.create(**kwargs)
+
+            # Check for function_call items
+            function_calls = [
+                item for item in response.output
+                if item.type == "function_call"
+            ]
+
+            if function_calls:
+                # Append all model output to input (preserves reasoning items)
+                input_items += [item.to_dict() for item in response.output]
+
+                for fc in function_calls:
+                    fn_name = fc.name
+                    fn_args = json.loads(fc.arguments)
+                    logger.info("Tool call: %s(%s)", fn_name, fn_args)
+
+                    result, diff = tools.execute(workspace_path, fn_name, fn_args)
+
+                    events.append(ChatEvent(
+                        kind="tool",
+                        content=f"🔧 {fn_name}: {result}",
+                        tool_name=fn_name,
+                        file_path=fn_args.get("path"),
+                    ))
+
+                    if diff:
+                        events.append(ChatEvent(
+                            kind="diff",
+                            content=diff,
+                            file_path=fn_args.get("path"),
+                        ))
+
+                    input_items.append({
+                        "type": "function_call_output",
+                        "call_id": fc.call_id,
+                        "output": result,
+                    })
+
+                # Save tool interactions to session
+                session.append_message(workspace_path, session_id, {
+                    "_responses_api": True,
+                    "tool_calls": [
+                        {"name": fc.name, "arguments": fc.arguments}
+                        for fc in function_calls
+                    ],
+                })
+                continue
+
+            # Final text response
+            assistant_text = response.output_text or "(no response)"
+
+            # Update history with a summary for future turns
+            history.append({"role": "assistant", "content": assistant_text})
+            session.append_message(
+                workspace_path, session_id,
+                {"role": "assistant", "content": assistant_text},
+            )
+
+            if assistant_text != "(no response)":
+                events.append(ChatEvent(kind="text", content=assistant_text))
+            break
+
+        return events, assistant_text
+
+    # ------------------------------------------------------------------
+    # Chat Completions API path (gpt-4o, o3, etc.)
+    # ------------------------------------------------------------------
+
+    async def _chat_completions(
+        self,
+        client: AsyncOpenAI,
+        history: list[dict],
+        model: str,
+        effort: str,
+        workspace_path: str,
+        session_id: str,
+    ) -> tuple[list[ChatEvent], str]:
+        events: list[ChatEvent] = []
+        assistant_text = "(no response)"
+
+        while True:
+            kwargs: dict = {
                 "model": model,
                 "messages": history,
                 "tools": tools.TOOL_DEFS,
             }
-            if model in reasoning_effort_models:
+            if model in REASONING_EFFORT_MODELS:
                 kwargs["reasoning_effort"] = effort
 
             response = await client.chat.completions.create(**kwargs)
@@ -146,7 +291,6 @@ class ChatGPTClient:
 
                     result, diff = tools.execute(workspace_path, fn_name, fn_args)
 
-                    # Emit tool event
                     events.append(ChatEvent(
                         kind="tool",
                         content=f"🔧 {fn_name}: {result}",
@@ -154,7 +298,6 @@ class ChatGPTClient:
                         file_path=fn_args.get("path"),
                     ))
 
-                    # Emit diff event if file was modified
                     if diff:
                         events.append(ChatEvent(
                             kind="diff",
@@ -176,21 +319,15 @@ class ChatGPTClient:
             assistant_msg = {"role": "assistant", "content": assistant_text}
             session.append_message(workspace_path, session_id, assistant_msg)
 
-            # Emit intermediate text from tool-call messages if the AI spoke between tools
             if msg.content:
                 events.append(ChatEvent(kind="text", content=assistant_text))
             break
 
-        # Auto compact
-        if count > 0 and count % compact_interval == 0:
-            logger.info("Auto-compact triggered for user %s (count=%d)", user_id, count)
-            await self._compact_session(user_id, workspace_path, session_id, model)
+        return events, assistant_text
 
-        # Ensure there's at least one text event
-        if not any(e.kind == "text" for e in events):
-            events.append(ChatEvent(kind="text", content=assistant_text))
-
-        return events
+    # ------------------------------------------------------------------
+    # Session compaction
+    # ------------------------------------------------------------------
 
     async def _compact_session(
         self, user_id: int, workspace_path: str, session_id: str, model: str,
@@ -205,11 +342,20 @@ class ChatGPTClient:
         ]
 
         try:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=compact_messages,
-            )
-            summary = response.choices[0].message.content or ""
+            if model in RESPONSES_API_MODELS:
+                input_items = [m for m in compact_messages if m.get("role") != "system"]
+                resp = await client.responses.create(
+                    model=model,
+                    instructions=SYSTEM_PROMPT,
+                    input=input_items,
+                )
+                summary = resp.output_text or ""
+            else:
+                resp = await client.chat.completions.create(
+                    model=model,
+                    messages=compact_messages,
+                )
+                summary = resp.choices[0].message.content or ""
         except Exception:
             logger.exception("Compaction failed")
             return
