@@ -120,8 +120,6 @@ async def main() -> None:
     interval = config["update_check_interval"]
     recent_limit = config["recent_workspace_limit"]
 
-    ensure_login()
-
     version = updater.get_current_version()
     commit_date = updater.get_last_commit_date()
 

@@ -1,12 +1,9 @@
-import asyncio
-import json
 import logging
 import os
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Update
 from telegram.ext import (
     Application,
-    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     MessageHandler,
@@ -15,9 +12,9 @@ from telegram.ext import (
 )
 
 from . import auth
+from . import codex
 from . import session
 from . import workspace
-from .chatgpt import ChatGPTClient
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +100,6 @@ class CozterBot:
         self.user_ids = user_ids
         self.recent_limit = recent_limit
         self.app: Application | None = None
-        self.ai = ChatGPTClient()
 
     async def start(self) -> None:
         self.app = Application.builder().token(self.token).build()
@@ -139,10 +135,8 @@ class CozterBot:
             uid = update.effective_user.id
             ws = workspace.get_current(uid)
             if ws:
-                # Create a fresh session
                 new_sess = session.create_session(ws)
                 session.set_current_session_id(ws, uid, new_sess["id"])
-            self.ai.clear_history(uid)
             await update.message.reply_text("Conversation cleared. New session started.")
 
         # --- /new conversation ---
@@ -415,8 +409,6 @@ class CozterBot:
             if text.lower() == "new":
                 new_sess = session.create_session(ws)
                 session.set_current_session_id(ws, uid, new_sess["id"])
-                self.ai.clear_history(uid)
-                await self.ai.load_session(uid, ws, new_sess["id"])
                 await update.message.reply_text(
                     f"New session created: {new_sess['name']}\nConversation cleared."
                 )
@@ -427,10 +419,8 @@ class CozterBot:
                 if 0 <= idx < len(sessions):
                     chosen = sessions[idx]
                     session.set_current_session_id(ws, uid, chosen["id"])
-                    self.ai.clear_history(uid)
-                    await self.ai.load_session(uid, ws, chosen["id"])
                     await update.message.reply_text(
-                        f"Switched to: {chosen['name']}\nPrevious conversation loaded."
+                        f"Switched to: {chosen['name']}"
                     )
                     return ConversationHandler.END
 
@@ -446,27 +436,6 @@ class CozterBot:
             await update.message.reply_text("Cancelled.")
             return ConversationHandler.END
 
-        # --- tool confirmation via inline keyboard ---
-
-        # Pending confirmations: {callback_id: asyncio.Future}
-        _pending_confirms: dict[str, asyncio.Future] = {}
-        _confirm_counter = 0
-
-        async def tool_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            query = update.callback_query
-            await query.answer()
-            data = json.loads(query.data)
-            cid = data.get("id")
-            approved = data.get("ok")
-            fut = _pending_confirms.pop(cid, None)
-            if fut and not fut.done():
-                fut.set_result(approved)
-            label = "Approved" if approved else "Denied"
-            await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(
-                query.message.text + f"\n\n→ {label}"
-            )
-
         # --- AI chat (default for non-command messages) ---
 
         @_authorized(self.user_ids)
@@ -480,79 +449,26 @@ class CozterBot:
                 return
 
             model = workspace.get_model(ws)
-            effort = workspace.get_effort(ws)
             perm = workspace.get_permission(ws)
-
-            # Build confirm callback based on permission mode
-            confirm = None
-            if perm == "deny":
-                async def _deny(name: str, args: dict) -> bool:
-                    return False
-                confirm = _deny
-            elif perm == "confirm":
-                nonlocal _confirm_counter
-
-                async def _confirm(name: str, args: dict) -> bool:
-                    nonlocal _confirm_counter
-                    _confirm_counter += 1
-                    cid = str(_confirm_counter)
-
-                    args_preview = json.dumps(args, ensure_ascii=False)
-                    if len(args_preview) > 300:
-                        args_preview = args_preview[:300] + "..."
-
-                    keyboard = InlineKeyboardMarkup([
-                        [
-                            InlineKeyboardButton(
-                                "✅ Allow",
-                                callback_data=json.dumps({"id": cid, "ok": True}),
-                            ),
-                            InlineKeyboardButton(
-                                "❌ Deny",
-                                callback_data=json.dumps({"id": cid, "ok": False}),
-                            ),
-                        ]
-                    ])
-
-                    fut = asyncio.get_running_loop().create_future()
-                    _pending_confirms[cid] = fut
-
-                    await update.message.reply_text(
-                        f"🔧 {name}\n<pre>{_escape_html(args_preview)}</pre>",
-                        parse_mode="HTML",
-                        reply_markup=keyboard,
-                    )
-
-                    try:
-                        return await asyncio.wait_for(fut, timeout=120)
-                    except asyncio.TimeoutError:
-                        _pending_confirms.pop(cid, None)
-                        await update.message.reply_text(
-                            f"⏰ Confirmation timed out for {name}. Denied."
-                        )
-                        return False
-
-                confirm = _confirm
 
             await update.message.reply_text("Thinking...")
             try:
-                events = await self.ai.chat(
-                    uid, update.message.text, ws,
-                    model=model, effort=effort, confirm=confirm,
+                result = await codex.run(
+                    update.message.text, ws,
+                    model=model, approval=perm,
                 )
             except Exception as e:
                 logger.exception("AI chat failed")
                 await update.message.reply_text(f"Error: {e}")
                 return
 
-            for ev in events:
+            for ev in result.events:
                 if ev.kind == "text":
                     html = _md_to_html(ev.content)
                     for i in range(0, len(html), 4096):
                         try:
                             await update.message.reply_text(html[i:i + 4096], parse_mode="HTML")
                         except Exception:
-                            # Fallback to plain text if HTML parsing fails
                             await update.message.reply_text(ev.content[i:i + 4096])
                 else:
                     text = ev.content
@@ -639,7 +555,6 @@ class CozterBot:
         self.app.add_handler(CommandHandler("version", cmd_version))
         self.app.add_handler(CommandHandler("account", cmd_account))
         self.app.add_handler(CommandHandler("clear", cmd_clear))
-        self.app.add_handler(CallbackQueryHandler(tool_confirm_callback))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
 
         await self.app.initialize()
