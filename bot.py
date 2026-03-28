@@ -546,8 +546,6 @@ class CozterBot:
                 return
 
             for ev in events:
-                if ev.kind == "diff":
-                    continue
                 if ev.kind == "text":
                     html = _md_to_html(ev.content)
                     for i in range(0, len(html), 4096):

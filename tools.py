@@ -1,6 +1,5 @@
 """Workspace tools that the AI can invoke."""
 
-import difflib
 import json
 import logging
 import os
@@ -178,43 +177,7 @@ TOOL_DEFS = [
 
 
 # ---------------------------------------------------------------------------
-# Diff helper
-# ---------------------------------------------------------------------------
-
-def make_diff(path: str, old_content: str | None, new_content: str | None) -> tuple[str, int, int]:
-    """Generate a unified diff string for display.
-    Returns (diff_text, lines_added, lines_removed)."""
-    old_lines = (old_content or "").splitlines(keepends=True)
-    new_lines = (new_content or "").splitlines(keepends=True)
-
-    diff = difflib.unified_diff(
-        old_lines, new_lines,
-        fromfile=f"a/{path}", tofile=f"b/{path}",
-        lineterm="",
-    )
-    diff_lines = list(diff)
-    if not diff_lines:
-        return "", 0, 0
-
-    result = []
-    added = 0
-    removed = 0
-    for line in diff_lines:
-        if line.startswith("---") or line.startswith("+++"):
-            result.append(line.rstrip())
-        elif line.startswith("@@"):
-            result.append(line.rstrip())
-        elif line.startswith("+"):
-            result.append(line.rstrip())
-            added += 1
-        elif line.startswith("-"):
-            result.append(line.rstrip())
-            removed += 1
-    return "\n".join(result), added, removed
-
-
-# ---------------------------------------------------------------------------
-# Tool execution — returns (result_for_ai, diff_for_display_or_None)
+# Tool execution
 # ---------------------------------------------------------------------------
 
 def _resolve(workspace: str, path: str) -> str:
@@ -226,7 +189,11 @@ def _resolve(workspace: str, path: str) -> str:
     return full
 
 
-def _diff_stats(added: int, removed: int) -> str:
+def _line_stats(old: str | None, new: str | None) -> str:
+    old_n = len((old or "").splitlines())
+    new_n = len((new or "").splitlines())
+    added = max(0, new_n - old_n)
+    removed = max(0, old_n - new_n)
     parts = []
     if removed:
         parts.append(f"-{removed}")
@@ -235,12 +202,8 @@ def _diff_stats(added: int, removed: int) -> str:
     return ", ".join(parts) + " lines" if parts else ""
 
 
-def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None]:
-    """
-    Execute a tool.
-    Returns (result_text, diff_text_or_None).
-    diff_text is set for file-modifying operations.
-    """
+def execute(workspace: str, name: str, arguments: dict) -> str:
+    """Execute a tool and return the result text."""
     try:
         match name:
             case "read_file":
@@ -249,7 +212,7 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                     content = f.read()
                 if len(content) > 50000:
                     content = content[:50000] + "\n... (truncated)"
-                return content, None
+                return content
 
             case "write_file":
                 fpath = _resolve(workspace, arguments["path"])
@@ -262,10 +225,8 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                 os.makedirs(os.path.dirname(fpath), exist_ok=True)
                 with open(fpath, "w", encoding="utf-8") as f:
                     f.write(new)
-                diff, added, removed = make_diff(rel, old, new)
-                stats = _diff_stats(added, removed)
-                result = f"Written: {rel} ({stats})" if stats else f"Written: {rel}"
-                return result, diff or None
+                stats = _line_stats(old, new)
+                return f"Written: {rel} ({stats})" if stats else f"Written: {rel}"
 
             case "edit_file":
                 fpath = _resolve(workspace, arguments["path"])
@@ -274,14 +235,12 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                     old = f.read()
                 old_str = arguments["old_string"]
                 if old_str not in old:
-                    return f"Error: old_string not found in {rel}", None
+                    return f"Error: old_string not found in {rel}"
                 new = old.replace(old_str, arguments["new_string"], 1)
                 with open(fpath, "w", encoding="utf-8") as f:
                     f.write(new)
-                diff, added, removed = make_diff(rel, old, new)
-                stats = _diff_stats(added, removed)
-                result = f"Edited: {rel} ({stats})" if stats else f"Edited: {rel}"
-                return result, diff or None
+                stats = _line_stats(old, new)
+                return f"Edited: {rel} ({stats})" if stats else f"Edited: {rel}"
 
             case "delete_file":
                 fpath = _resolve(workspace, arguments["path"])
@@ -291,17 +250,15 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                     with open(fpath, encoding="utf-8", errors="replace") as f:
                         old = f.read()
                 os.remove(fpath)
-                diff, added, removed = make_diff(rel, old, None)
-                stats = _diff_stats(added, removed)
-                result = f"Deleted: {rel} ({stats})" if stats else f"Deleted: {rel}"
-                return result, diff or None
+                stats = _line_stats(old, None)
+                return f"Deleted: {rel} ({stats})" if stats else f"Deleted: {rel}"
 
             case "rename_file":
                 old_fpath = _resolve(workspace, arguments["old_path"])
                 new_fpath = _resolve(workspace, arguments["new_path"])
                 os.makedirs(os.path.dirname(new_fpath), exist_ok=True)
                 os.rename(old_fpath, new_fpath)
-                return f"Renamed: {arguments['old_path']} -> {arguments['new_path']}", None
+                return f"Renamed: {arguments['old_path']} -> {arguments['new_path']}"
 
             case "list_directory":
                 dpath = _resolve(workspace, arguments["path"])
@@ -311,17 +268,17 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                     full = os.path.join(dpath, e)
                     prefix = "[dir] " if os.path.isdir(full) else "      "
                     result.append(f"{prefix}{e}")
-                return ("\n".join(result) if result else "(empty directory)"), None
+                return "\n".join(result) if result else "(empty directory)"
 
             case "create_directory":
                 dpath = _resolve(workspace, arguments["path"])
                 os.makedirs(dpath, exist_ok=True)
-                return f"Created: {arguments['path']}", None
+                return f"Created: {arguments['path']}"
 
             case "delete_directory":
                 dpath = _resolve(workspace, arguments["path"])
                 shutil.rmtree(dpath)
-                return f"Deleted: {arguments['path']}", None
+                return f"Deleted: {arguments['path']}"
 
             case "git":
                 args = arguments["args"]
@@ -333,14 +290,14 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                 output = result.stdout + result.stderr
                 if len(output) > 10000:
                     output = output[:10000] + "\n... (truncated)"
-                return (output.strip() or "(no output)"), None
+                return output.strip() or "(no output)"
 
             case "web_fetch":
                 resp = httpx.get(arguments["url"], timeout=30, follow_redirects=True)
                 content = resp.text
                 if len(content) > 30000:
                     content = content[:30000] + "\n... (truncated)"
-                return f"HTTP {resp.status_code}\n\n{content}", None
+                return f"HTTP {resp.status_code}\n\n{content}"
 
             case "shell":
                 result = subprocess.run(
@@ -351,10 +308,10 @@ def execute(workspace: str, name: str, arguments: dict) -> tuple[str, str | None
                 output = result.stdout + result.stderr
                 if len(output) > 10000:
                     output = output[:10000] + "\n... (truncated)"
-                return (output.strip() or "(no output)"), None
+                return output.strip() or "(no output)"
 
             case _:
-                return f"Unknown tool: {name}", None
+                return f"Unknown tool: {name}"
 
     except Exception as e:
-        return f"Error: {type(e).__name__}: {e}", None
+        return f"Error: {type(e).__name__}: {e}"

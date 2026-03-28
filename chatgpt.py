@@ -77,7 +77,7 @@ async def _retry_api_call(coro_fn, *args, **kwargs):
 @dataclass
 class ChatEvent:
     """An event produced during a chat turn."""
-    kind: str  # "tool", "diff", "text"
+    kind: str  # "tool", "text"
     content: str
     tool_name: str | None = None
     file_path: str | None = None
@@ -234,9 +234,8 @@ class ChatGPTClient:
 
                     if confirm and not await confirm(fn_name, fn_args):
                         result = "Tool call denied by user."
-                        diff = None
                     else:
-                        result, diff = tools.execute(workspace_path, fn_name, fn_args)
+                        result = tools.execute(workspace_path, fn_name, fn_args)
 
                     events.append(ChatEvent(
                         kind="tool",
@@ -244,13 +243,6 @@ class ChatGPTClient:
                         tool_name=fn_name,
                         file_path=fn_args.get("path"),
                     ))
-
-                    if diff:
-                        events.append(ChatEvent(
-                            kind="diff",
-                            content=diff,
-                            file_path=fn_args.get("path"),
-                        ))
 
                     input_items.append({
                         "type": "function_call_output",
@@ -328,9 +320,8 @@ class ChatGPTClient:
 
                     if confirm and not await confirm(fn_name, fn_args):
                         result = "Tool call denied by user."
-                        diff = None
                     else:
-                        result, diff = tools.execute(workspace_path, fn_name, fn_args)
+                        result = tools.execute(workspace_path, fn_name, fn_args)
 
                     events.append(ChatEvent(
                         kind="tool",
@@ -338,13 +329,6 @@ class ChatGPTClient:
                         tool_name=fn_name,
                         file_path=fn_args.get("path"),
                     ))
-
-                    if diff:
-                        events.append(ChatEvent(
-                            kind="diff",
-                            content=diff,
-                            file_path=fn_args.get("path"),
-                        ))
 
                     tool_msg = {
                         "role": "tool",
