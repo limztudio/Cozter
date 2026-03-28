@@ -132,16 +132,20 @@ async def run(
     else:
         cmd += ["--full-auto"]
 
-    cmd.append(contextual_prompt)
+    # Pass prompt via stdin to avoid command-line length limits
+    cmd.append("-")
 
     logger.info("Running codex exec (prompt %d chars, context %d chars)",
                 len(prompt), len(contextual_prompt))
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+    proc.stdin.write(contextual_prompt.encode("utf-8"))
+    proc.stdin.close()
 
     result = CodexResult()
 
@@ -263,15 +267,18 @@ async def _compact_session(
     cmd = ["codex", "exec", "--ephemeral", "--full-auto", "-C", workspace_path]
     if model:
         cmd += ["-m", model]
-    cmd.append(full_prompt)
+    cmd.append("-")
 
     logger.info("Running compaction for session %s", session_id)
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+    proc.stdin.write(full_prompt.encode("utf-8"))
+    proc.stdin.close()
 
     # Collect the agent_message text from JSON output
     new_summary = ""
