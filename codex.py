@@ -143,6 +143,7 @@ async def run(
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=1024 * 1024,  # 1 MB stream buffer
     )
     proc.stdin.write(contextual_prompt.encode("utf-8"))
     proc.stdin.close()
@@ -276,6 +277,7 @@ async def _compact_session(
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=1024 * 1024,  # 1 MB stream buffer
     )
     proc.stdin.write(full_prompt.encode("utf-8"))
     proc.stdin.close()
