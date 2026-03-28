@@ -1,11 +1,12 @@
 """OpenAI API client with tool-calling and session support."""
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, RateLimitError
 
 from . import auth
 from . import session
@@ -52,6 +53,25 @@ RESPONSES_API_MODELS = {"gpt-5.4", "gpt-5.4-pro"}
 
 # Models that support the reasoning effort parameter
 REASONING_EFFORT_MODELS = {"o3", "o4-mini", "gpt-5.4", "gpt-5.4-pro"}
+
+
+MAX_RETRIES = 5
+RETRY_BASE_DELAY = 2.0
+
+
+async def _retry_api_call(coro_fn, *args, **kwargs):
+    """Call an async API function with retry on rate limit (429) errors."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            return await coro_fn(*args, **kwargs)
+        except RateLimitError as e:
+            if attempt == MAX_RETRIES - 1:
+                raise
+            # Use retry-after header if available, otherwise exponential backoff
+            retry_after = getattr(e, "retry_after", None)
+            delay = retry_after if retry_after else RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning("Rate limited (attempt %d/%d), retrying in %.1fs...", attempt + 1, MAX_RETRIES, delay)
+            await asyncio.sleep(delay)
 
 
 @dataclass
@@ -195,7 +215,7 @@ class ChatGPTClient:
             if model in REASONING_EFFORT_MODELS:
                 kwargs["reasoning"] = {"effort": effort}
 
-            response = await client.responses.create(**kwargs)
+            response = await _retry_api_call(client.responses.create, **kwargs)
 
             # Check for function_call items
             function_calls = [
@@ -291,7 +311,7 @@ class ChatGPTClient:
             if model in REASONING_EFFORT_MODELS:
                 kwargs["reasoning_effort"] = effort
 
-            response = await client.chat.completions.create(**kwargs)
+            response = await _retry_api_call(client.chat.completions.create, **kwargs)
             choice = response.choices[0]
             msg = choice.message
             msg_dict = msg.to_dict()
@@ -365,14 +385,16 @@ class ChatGPTClient:
         try:
             if model in RESPONSES_API_MODELS:
                 input_items = [m for m in compact_messages if m.get("role") != "system"]
-                resp = await client.responses.create(
+                resp = await _retry_api_call(
+                    client.responses.create,
                     model=model,
                     instructions=SYSTEM_PROMPT,
                     input=input_items,
                 )
                 summary = resp.output_text or ""
             else:
-                resp = await client.chat.completions.create(
+                resp = await _retry_api_call(
+                    client.chat.completions.create,
                     model=model,
                     messages=compact_messages,
                 )
