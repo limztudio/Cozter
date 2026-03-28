@@ -499,18 +499,11 @@ class CozterBot:
 
             for ev in events:
                 if ev.kind == "diff":
-                    # Show diff in monospace code block
-                    header = f"📄 {ev.file_path or 'file'}"
-                    diff_text = ev.content
-                    if len(diff_text) > 3900:
-                        diff_text = diff_text[:3900] + "\n... (truncated)"
-                    msg = f"{header}\n<pre>{_escape_html(diff_text)}</pre>"
-                    await update.message.reply_text(msg, parse_mode="HTML")
-                else:
-                    # Tool events and text
-                    text = ev.content
-                    for i in range(0, len(text), 4096):
-                        await update.message.reply_text(text[i:i + 4096])
+                    # Skip full diffs — the tool event already has a summary
+                    continue
+                text = ev.content
+                for i in range(0, len(text), 4096):
+                    await update.message.reply_text(text[i:i + 4096])
 
         # --- register handlers ---
 
