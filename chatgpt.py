@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from openai import AsyncOpenAI
@@ -107,8 +108,14 @@ class ChatGPTClient:
         workspace_path: str,
         model: str = "gpt-5.4",
         effort: str = "medium",
+        confirm: Callable[[str, dict], Awaitable[bool]] | None = None,
     ) -> list[ChatEvent]:
-        """Send a user message, run tool calls, return list of ChatEvents."""
+        """Send a user message, run tool calls, return list of ChatEvents.
+
+        confirm: optional async callback(tool_name, args) -> bool.
+            Called before each tool execution. Return True to allow,
+            False to skip.  If None, tools run unconditionally.
+        """
         client = self._ensure_client()
         events: list[ChatEvent] = []
 
@@ -135,26 +142,15 @@ class ChatGPTClient:
             history = self._histories[user_id]
             history.append(user_msg)
 
-        # Filter tools by workspace permissions
-        allowed = workspace.get_allowed_tools(workspace_path)
-        completions_tools = [
-            td for td in tools.TOOL_DEFS
-            if td["function"]["name"] in allowed
-        ]
-        responses_tools = [
-            td for td in RESPONSES_TOOL_DEFS
-            if td["name"] in allowed
-        ]
-
         if model in RESPONSES_API_MODELS:
             events, assistant_text = await self._chat_responses(
                 client, history, model, effort, workspace_path, session_id,
-                responses_tools,
+                RESPONSES_TOOL_DEFS, confirm,
             )
         else:
             events, assistant_text = await self._chat_completions(
                 client, history, model, effort, workspace_path, session_id,
-                completions_tools,
+                tools.TOOL_DEFS, confirm,
             )
 
         # Auto compact
@@ -181,6 +177,7 @@ class ChatGPTClient:
         workspace_path: str,
         session_id: str,
         tool_defs: list[dict],
+        confirm: Callable[[str, dict], Awaitable[bool]] | None = None,
     ) -> tuple[list[ChatEvent], str]:
         events: list[ChatEvent] = []
         assistant_text = "(no response)"
@@ -215,7 +212,11 @@ class ChatGPTClient:
                     fn_args = json.loads(fc.arguments)
                     logger.info("Tool call: %s(%s)", fn_name, fn_args)
 
-                    result, diff = tools.execute(workspace_path, fn_name, fn_args)
+                    if confirm and not await confirm(fn_name, fn_args):
+                        result = "Tool call denied by user."
+                        diff = None
+                    else:
+                        result, diff = tools.execute(workspace_path, fn_name, fn_args)
 
                     events.append(ChatEvent(
                         kind="tool",
@@ -276,6 +277,7 @@ class ChatGPTClient:
         workspace_path: str,
         session_id: str,
         tool_defs: list[dict],
+        confirm: Callable[[str, dict], Awaitable[bool]] | None = None,
     ) -> tuple[list[ChatEvent], str]:
         events: list[ChatEvent] = []
         assistant_text = "(no response)"
@@ -304,7 +306,11 @@ class ChatGPTClient:
                     fn_args = json.loads(tc.function.arguments)
                     logger.info("Tool call: %s(%s)", fn_name, fn_args)
 
-                    result, diff = tools.execute(workspace_path, fn_name, fn_args)
+                    if confirm and not await confirm(fn_name, fn_args):
+                        result = "Tool call denied by user."
+                        diff = None
+                    else:
+                        result, diff = tools.execute(workspace_path, fn_name, fn_args)
 
                     events.append(ChatEvent(
                         kind="tool",

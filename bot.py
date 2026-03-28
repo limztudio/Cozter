@@ -1,9 +1,12 @@
+import asyncio
+import json
 import logging
 import os
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     MessageHandler,
@@ -282,14 +285,14 @@ class CozterBot:
                 await update.message.reply_text("No workspace selected. Use /new or /open first.")
                 return ConversationHandler.END
 
-            current = workspace.get_permissions(ws)
+            current = workspace.get_permission(ws)
             options = workspace.AVAILABLE_PERMISSIONS
-            lines = ["Current permissions:\n"]
+            lines = [f"Current permission: {current}\n", "Available modes:"]
             for i, p in enumerate(options, 1):
-                status = "ON" if p in current else "OFF"
-                tool_names = ", ".join(workspace.PERMISSION_CATEGORIES[p])
-                lines.append(f"  {i}. [{status}] {p} — {tool_names}")
-            lines.append("\nEnter a number or name to toggle, 'all' to enable all, 'none' to disable all (or /cancel):")
+                marker = " <-" if p == current else ""
+                desc = workspace.PERMISSION_DESCRIPTIONS[p]
+                lines.append(f"  {i}. {p} — {desc}{marker}")
+            lines.append("\nEnter a number or mode name (or /cancel):")
             await update.message.reply_text("\n".join(lines))
             return PERMISSION_AWAITING
 
@@ -299,19 +302,7 @@ class CozterBot:
             ws = workspace.get_current(uid)
             text = update.message.text.strip().lower()
             options = workspace.AVAILABLE_PERMISSIONS
-            current = workspace.get_permissions(ws)
 
-            if text == "all":
-                workspace.set_permissions(ws, list(options))
-                await update.message.reply_text("All permissions enabled.")
-                return ConversationHandler.END
-
-            if text == "none":
-                workspace.set_permissions(ws, [])
-                await update.message.reply_text("All permissions disabled. AI can only respond with text.")
-                return ConversationHandler.END
-
-            # Resolve which permission to toggle
             perm = None
             if text.isdigit():
                 idx = int(text) - 1
@@ -322,26 +313,14 @@ class CozterBot:
 
             if perm is None:
                 await update.message.reply_text(
-                    f"Unknown permission: {text}\nTry again (or /cancel):"
+                    f"Unknown mode: {text}\nTry again (or /cancel):"
                 )
                 return PERMISSION_AWAITING
 
-            if perm in current:
-                current.remove(perm)
-                status = "disabled"
-            else:
-                current.append(perm)
-                status = "enabled"
-            workspace.set_permissions(ws, current)
-
-            # Show updated state
-            lines = [f"'{perm}' {status}.\n"]
-            for i, p in enumerate(options, 1):
-                s = "ON" if p in current else "OFF"
-                lines.append(f"  {i}. [{s}] {p}")
-            lines.append("\nToggle another, or /cancel to finish:")
-            await update.message.reply_text("\n".join(lines))
-            return PERMISSION_AWAITING
+            workspace.set_permission(ws, perm)
+            desc = workspace.PERMISSION_DESCRIPTIONS[perm]
+            await update.message.reply_text(f"Permission set to: {perm}\n{desc}")
+            return ConversationHandler.END
 
         # --- /session conversation ---
 
@@ -419,6 +398,27 @@ class CozterBot:
             await update.message.reply_text("Cancelled.")
             return ConversationHandler.END
 
+        # --- tool confirmation via inline keyboard ---
+
+        # Pending confirmations: {callback_id: asyncio.Future}
+        _pending_confirms: dict[str, asyncio.Future] = {}
+        _confirm_counter = 0
+
+        async def tool_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            query = update.callback_query
+            await query.answer()
+            data = json.loads(query.data)
+            cid = data.get("id")
+            approved = data.get("ok")
+            fut = _pending_confirms.pop(cid, None)
+            if fut and not fut.done():
+                fut.set_result(approved)
+            label = "Approved" if approved else "Denied"
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.edit_message_text(
+                query.message.text + f"\n\n→ {label}"
+            )
+
         # --- AI chat (default for non-command messages) ---
 
         @_authorized(self.user_ids)
@@ -433,10 +433,65 @@ class CozterBot:
 
             model = workspace.get_model(ws)
             effort = workspace.get_effort(ws)
+            perm = workspace.get_permission(ws)
+
+            # Build confirm callback based on permission mode
+            confirm = None
+            if perm == "deny":
+                async def _deny(name: str, args: dict) -> bool:
+                    return False
+                confirm = _deny
+            elif perm == "confirm":
+                nonlocal _confirm_counter
+
+                async def _confirm(name: str, args: dict) -> bool:
+                    nonlocal _confirm_counter
+                    _confirm_counter += 1
+                    cid = str(_confirm_counter)
+
+                    args_preview = json.dumps(args, ensure_ascii=False)
+                    if len(args_preview) > 300:
+                        args_preview = args_preview[:300] + "..."
+
+                    keyboard = InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton(
+                                "✅ Allow",
+                                callback_data=json.dumps({"id": cid, "ok": True}),
+                            ),
+                            InlineKeyboardButton(
+                                "❌ Deny",
+                                callback_data=json.dumps({"id": cid, "ok": False}),
+                            ),
+                        ]
+                    ])
+
+                    fut = asyncio.get_running_loop().create_future()
+                    _pending_confirms[cid] = fut
+
+                    await update.message.reply_text(
+                        f"🔧 {name}\n<pre>{_escape_html(args_preview)}</pre>",
+                        parse_mode="HTML",
+                        reply_markup=keyboard,
+                    )
+
+                    try:
+                        return await asyncio.wait_for(fut, timeout=120)
+                    except asyncio.TimeoutError:
+                        _pending_confirms.pop(cid, None)
+                        await update.message.reply_text(
+                            f"⏰ Confirmation timed out for {name}. Denied."
+                        )
+                        return False
+
+                confirm = _confirm
 
             await update.message.reply_text("Thinking...")
             try:
-                events = await self.ai.chat(uid, update.message.text, ws, model=model, effort=effort)
+                events = await self.ai.chat(
+                    uid, update.message.text, ws,
+                    model=model, effort=effort, confirm=confirm,
+                )
             except Exception as e:
                 logger.exception("AI chat failed")
                 await update.message.reply_text(f"Error: {e}")
@@ -537,6 +592,7 @@ class CozterBot:
         self.app.add_handler(CommandHandler("version", cmd_version))
         self.app.add_handler(CommandHandler("account", cmd_account))
         self.app.add_handler(CommandHandler("clear", cmd_clear))
+        self.app.add_handler(CallbackQueryHandler(tool_confirm_callback))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
 
         await self.app.initialize()

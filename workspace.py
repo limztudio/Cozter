@@ -105,34 +105,23 @@ def set_effort(workspace_path: str, effort: str) -> None:
     _save_settings(workspace_path, settings)
 
 
-PERMISSION_CATEGORIES = {
-    "file": ["read_file", "write_file", "edit_file", "delete_file", "rename_file"],
-    "directory": ["list_directory", "create_directory", "delete_directory"],
-    "git": ["git"],
-    "shell": ["shell"],
-    "web": ["web_fetch"],
+AVAILABLE_PERMISSIONS = ["auto", "confirm", "deny"]
+DEFAULT_PERMISSION = "auto"
+PERMISSION_DESCRIPTIONS = {
+    "auto": "Execute all tool calls automatically",
+    "confirm": "Ask before each tool call",
+    "deny": "Block all tool calls (text-only responses)",
 }
-AVAILABLE_PERMISSIONS = list(PERMISSION_CATEGORIES.keys())
-DEFAULT_PERMISSIONS = list(PERMISSION_CATEGORIES.keys())  # all enabled
 
 
-def get_permissions(workspace_path: str) -> list[str]:
-    return _load_settings(workspace_path).get("permissions", list(DEFAULT_PERMISSIONS))
+def get_permission(workspace_path: str) -> str:
+    return _load_settings(workspace_path).get("permission", DEFAULT_PERMISSION)
 
 
-def set_permissions(workspace_path: str, permissions: list[str]) -> None:
+def set_permission(workspace_path: str, permission: str) -> None:
     settings = _load_settings(workspace_path)
-    settings["permissions"] = permissions
+    settings["permission"] = permission
     _save_settings(workspace_path, settings)
-
-
-def get_allowed_tools(workspace_path: str) -> set[str]:
-    """Return the set of tool names allowed by current permissions."""
-    perms = get_permissions(workspace_path)
-    allowed = set()
-    for p in perms:
-        allowed.update(PERMISSION_CATEGORIES.get(p, []))
-    return allowed
 
 
 DEFAULT_COMPACT_INTERVAL = 15
