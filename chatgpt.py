@@ -88,7 +88,7 @@ class ChatGPTClient:
         user_id: int,
         message: str,
         workspace_path: str,
-        model: str = "gpt-4o",
+        model: str = "gpt-5.4",
         effort: str = "medium",
     ) -> list[ChatEvent]:
         """Send a user message, run tool calls, return list of ChatEvents."""
@@ -118,7 +118,7 @@ class ChatGPTClient:
             history = self._histories[user_id]
             history.append(user_msg)
 
-        reasoning_effort_models = {"o3", "o4-mini"}
+        reasoning_effort_models = {"o3", "o4-mini", "gpt-5.4", "gpt-5.4-pro"}
 
         while True:
             kwargs = {
