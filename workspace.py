@@ -105,6 +105,36 @@ def set_effort(workspace_path: str, effort: str) -> None:
     _save_settings(workspace_path, settings)
 
 
+PERMISSION_CATEGORIES = {
+    "file": ["read_file", "write_file", "edit_file", "delete_file", "rename_file"],
+    "directory": ["list_directory", "create_directory", "delete_directory"],
+    "git": ["git"],
+    "shell": ["shell"],
+    "web": ["web_fetch"],
+}
+AVAILABLE_PERMISSIONS = list(PERMISSION_CATEGORIES.keys())
+DEFAULT_PERMISSIONS = list(PERMISSION_CATEGORIES.keys())  # all enabled
+
+
+def get_permissions(workspace_path: str) -> list[str]:
+    return _load_settings(workspace_path).get("permissions", list(DEFAULT_PERMISSIONS))
+
+
+def set_permissions(workspace_path: str, permissions: list[str]) -> None:
+    settings = _load_settings(workspace_path)
+    settings["permissions"] = permissions
+    _save_settings(workspace_path, settings)
+
+
+def get_allowed_tools(workspace_path: str) -> set[str]:
+    """Return the set of tool names allowed by current permissions."""
+    perms = get_permissions(workspace_path)
+    allowed = set()
+    for p in perms:
+        allowed.update(PERMISSION_CATEGORIES.get(p, []))
+    return allowed
+
+
 DEFAULT_COMPACT_INTERVAL = 15
 DEFAULT_REREAD_INTERVAL = 30
 

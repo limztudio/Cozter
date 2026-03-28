@@ -135,13 +135,26 @@ class ChatGPTClient:
             history = self._histories[user_id]
             history.append(user_msg)
 
+        # Filter tools by workspace permissions
+        allowed = workspace.get_allowed_tools(workspace_path)
+        completions_tools = [
+            td for td in tools.TOOL_DEFS
+            if td["function"]["name"] in allowed
+        ]
+        responses_tools = [
+            td for td in RESPONSES_TOOL_DEFS
+            if td["name"] in allowed
+        ]
+
         if model in RESPONSES_API_MODELS:
             events, assistant_text = await self._chat_responses(
                 client, history, model, effort, workspace_path, session_id,
+                responses_tools,
             )
         else:
             events, assistant_text = await self._chat_completions(
                 client, history, model, effort, workspace_path, session_id,
+                completions_tools,
             )
 
         # Auto compact
@@ -167,6 +180,7 @@ class ChatGPTClient:
         effort: str,
         workspace_path: str,
         session_id: str,
+        tool_defs: list[dict],
     ) -> tuple[list[ChatEvent], str]:
         events: list[ChatEvent] = []
         assistant_text = "(no response)"
@@ -179,7 +193,7 @@ class ChatGPTClient:
                 "model": model,
                 "instructions": SYSTEM_PROMPT,
                 "input": input_items,
-                "tools": RESPONSES_TOOL_DEFS,
+                "tools": tool_defs,
             }
             if model in REASONING_EFFORT_MODELS:
                 kwargs["reasoning"] = {"effort": effort}
@@ -261,6 +275,7 @@ class ChatGPTClient:
         effort: str,
         workspace_path: str,
         session_id: str,
+        tool_defs: list[dict],
     ) -> tuple[list[ChatEvent], str]:
         events: list[ChatEvent] = []
         assistant_text = "(no response)"
@@ -269,7 +284,7 @@ class ChatGPTClient:
             kwargs: dict = {
                 "model": model,
                 "messages": history,
-                "tools": tools.TOOL_DEFS,
+                "tools": tool_defs,
             }
             if model in REASONING_EFFORT_MODELS:
                 kwargs["reasoning_effort"] = effort

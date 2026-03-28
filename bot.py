@@ -28,6 +28,7 @@ OPEN_AWAITING_DIR = 1
 MODEL_AWAITING = 2
 EFFORT_AWAITING = 3
 SESSION_AWAITING = 4
+PERMISSION_AWAITING = 5
 
 
 def _authorized(user_ids: list[int]):
@@ -271,6 +272,77 @@ class CozterBot:
             await update.message.reply_text(f"Effort set to: {effort}")
             return ConversationHandler.END
 
+        # --- /permission conversation ---
+
+        @_authorized(self.user_ids)
+        async def cmd_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return ConversationHandler.END
+
+            current = workspace.get_permissions(ws)
+            options = workspace.AVAILABLE_PERMISSIONS
+            lines = ["Current permissions:\n"]
+            for i, p in enumerate(options, 1):
+                status = "ON" if p in current else "OFF"
+                tool_names = ", ".join(workspace.PERMISSION_CATEGORIES[p])
+                lines.append(f"  {i}. [{status}] {p} — {tool_names}")
+            lines.append("\nEnter a number or name to toggle, 'all' to enable all, 'none' to disable all (or /cancel):")
+            await update.message.reply_text("\n".join(lines))
+            return PERMISSION_AWAITING
+
+        @_authorized(self.user_ids)
+        async def permission_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            text = update.message.text.strip().lower()
+            options = workspace.AVAILABLE_PERMISSIONS
+            current = workspace.get_permissions(ws)
+
+            if text == "all":
+                workspace.set_permissions(ws, list(options))
+                await update.message.reply_text("All permissions enabled.")
+                return ConversationHandler.END
+
+            if text == "none":
+                workspace.set_permissions(ws, [])
+                await update.message.reply_text("All permissions disabled. AI can only respond with text.")
+                return ConversationHandler.END
+
+            # Resolve which permission to toggle
+            perm = None
+            if text.isdigit():
+                idx = int(text) - 1
+                if 0 <= idx < len(options):
+                    perm = options[idx]
+            elif text in options:
+                perm = text
+
+            if perm is None:
+                await update.message.reply_text(
+                    f"Unknown permission: {text}\nTry again (or /cancel):"
+                )
+                return PERMISSION_AWAITING
+
+            if perm in current:
+                current.remove(perm)
+                status = "disabled"
+            else:
+                current.append(perm)
+                status = "enabled"
+            workspace.set_permissions(ws, current)
+
+            # Show updated state
+            lines = [f"'{perm}' {status}.\n"]
+            for i, p in enumerate(options, 1):
+                s = "ON" if p in current else "OFF"
+                lines.append(f"  {i}. [{s}] {p}")
+            lines.append("\nToggle another, or /cancel to finish:")
+            await update.message.reply_text("\n".join(lines))
+            return PERMISSION_AWAITING
+
         # --- /session conversation ---
 
         @_authorized(self.user_ids)
@@ -433,6 +505,17 @@ class CozterBot:
             fallbacks=[cancel_handler],
         )
 
+        permission_conv = ConversationHandler(
+            entry_points=[CommandHandler("permission", cmd_permission)],
+            states={
+                PERMISSION_AWAITING: [
+                    cancel_handler,
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, permission_receive),
+                ],
+            },
+            fallbacks=[cancel_handler],
+        )
+
         session_conv = ConversationHandler(
             entry_points=[CommandHandler("session", cmd_session)],
             states={
@@ -448,6 +531,7 @@ class CozterBot:
         self.app.add_handler(open_conv)
         self.app.add_handler(model_conv)
         self.app.add_handler(effort_conv)
+        self.app.add_handler(permission_conv)
         self.app.add_handler(session_conv)
         self.app.add_handler(CommandHandler("start", cmd_start))
         self.app.add_handler(CommandHandler("version", cmd_version))
