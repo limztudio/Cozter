@@ -120,7 +120,7 @@ class CozterBot:
             uid = update.effective_user.id
             ws = workspace.get_current(uid)
             if ws:
-                codex.clear_session(uid, ws)
+
                 new_sess = session.create_session(ws)
                 session.set_current_session_id(ws, uid, new_sess["id"])
             await update.message.reply_text("Conversation cleared. Next message starts a new session.")
@@ -351,7 +351,7 @@ class CozterBot:
             if text.lower() == "new":
                 new_sess = session.create_session(ws)
                 session.set_current_session_id(ws, uid, new_sess["id"])
-                codex.clear_session(uid, ws)
+
                 await update.message.reply_text(
                     f"New session created: {new_sess['name']}"
                 )
@@ -362,7 +362,7 @@ class CozterBot:
                 if 0 <= idx < len(sessions):
                     chosen = sessions[idx]
                     session.set_current_session_id(ws, uid, chosen["id"])
-                    codex.clear_session(uid, ws)
+    
                     await update.message.reply_text(
                         f"Switched to: {chosen['name']}"
                     )
@@ -372,6 +372,46 @@ class CozterBot:
                 "Invalid input. Enter a number, 'new', or /cancel:"
             )
             return SESSION_AWAITING
+
+        # --- /compact command ---
+
+        @_authorized(self.user_ids)
+        async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return
+
+            sid = session.ensure_session(ws, uid)
+            args = (context.args[0] if context.args else "").strip().lower()
+
+            if args == "now":
+                await update.message.reply_text("Compacting session...")
+                model = workspace.get_model(ws)
+                await codex._compact_session(ws, sid, model)
+                await update.message.reply_text("Session compacted.")
+                return
+
+            if args.isdigit():
+                interval = int(args)
+                session.set_compact_interval(ws, sid, interval)
+                await update.message.reply_text(f"Compact interval set to {interval} messages.")
+                return
+
+            current = session.get_compact_interval(ws, sid)
+            total = session.get_total_message_count(ws, sid)
+            summary = session.get_summary(ws, sid)
+            lines = [
+                f"Compact interval: {current} messages",
+                f"Total messages: {total}",
+                f"Has summary: {'yes' if summary else 'no'}",
+                "",
+                "Usage:",
+                "  /compact <number> — set interval",
+                "  /compact now — compact immediately",
+            ]
+            await update.message.reply_text("\n".join(lines))
 
         # --- shared cancel ---
 
@@ -486,6 +526,7 @@ class CozterBot:
         self.app.add_handler(CommandHandler("start", cmd_start))
         self.app.add_handler(CommandHandler("version", cmd_version))
         self.app.add_handler(CommandHandler("clear", cmd_clear))
+        self.app.add_handler(CommandHandler("compact", cmd_compact))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
 
         await self.app.initialize()

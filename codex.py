@@ -9,6 +9,16 @@ from . import session
 
 logger = logging.getLogger(__name__)
 
+MAX_HISTORY_CHARS = 50_000
+KEEP_RECENT_AFTER_COMPACT = 10
+
+SUMMARY_PROMPT = (
+    "Summarize the following conversation history into a concise context block. "
+    "Preserve all key decisions, file changes, file paths, tool results, and "
+    "the current state of work. This summary will replace the full history "
+    "to save space, so include everything needed to continue seamlessly."
+)
+
 
 @dataclass
 class ChatEvent:
@@ -24,22 +34,75 @@ class CodexResult:
     text: str = "(no response)"
 
 
-# Track whether a user has an active Codex session per workspace.
-# Key: (user_id, workspace_path) → True if at least one message was sent.
-_active_sessions: dict[tuple[int, str], bool] = {}
+# ------------------------------------------------------------------
+# Contextual prompt building
+# ------------------------------------------------------------------
+
+def _build_contextual_prompt(
+    prompt: str, workspace_path: str, user_id: int,
+) -> str:
+    """Prepend session history to the prompt so Codex has full context."""
+    sid = session.ensure_session(workspace_path, user_id)
+    summary = session.get_summary(workspace_path, sid)
+    messages = session.get_messages(workspace_path, sid)
+
+    if not summary and not messages:
+        return prompt
+
+    parts: list[str] = []
+
+    if summary:
+        parts.append("[Session Summary]")
+        parts.append(summary)
+        parts.append("[End of Session Summary]\n")
+
+    if messages:
+        parts.append("[Recent Messages]")
+        for msg in messages:
+            role = msg.get("role", "?").capitalize()
+            content = msg.get("content", "")
+            parts.append(f"{role}: {content}")
+        parts.append("[End of Recent Messages]\n")
+
+    parts.append(
+        "Continue the conversation. The user's new message follows.\n"
+    )
+    parts.append(prompt)
+
+    full = "\n".join(parts)
+
+    # Truncate if too long — drop oldest messages, keep summary + recent
+    if len(full) > MAX_HISTORY_CHARS:
+        # Rebuild with fewer messages
+        budget = MAX_HISTORY_CHARS - len(prompt) - 500  # margin
+        history_parts: list[str] = []
+        if summary:
+            history_parts.append(f"[Session Summary]\n{summary}\n[End of Session Summary]\n")
+        # Add messages from newest to oldest until budget runs out
+        msg_lines: list[str] = []
+        for msg in reversed(messages):
+            role = msg.get("role", "?").capitalize()
+            content = msg.get("content", "")
+            line = f"{role}: {content}"
+            if sum(len(l) for l in msg_lines) + len(line) > budget:
+                break
+            msg_lines.insert(0, line)
+        if msg_lines:
+            history_parts.append("[Recent Messages]")
+            history_parts.extend(msg_lines)
+            history_parts.append("[End of Recent Messages]\n")
+        history_parts.append(
+            "Continue the conversation. The user's new message follows.\n"
+        )
+        history_parts.append(prompt)
+        full = "\n".join(history_parts)
+
+    return full
 
 
-def has_session(user_id: int, workspace_path: str) -> bool:
-    return _active_sessions.get((user_id, workspace_path), False)
-
-
-def mark_session(user_id: int, workspace_path: str) -> None:
-    _active_sessions[(user_id, workspace_path)] = True
-
-
-def clear_session(user_id: int, workspace_path: str) -> None:
-    _active_sessions.pop((user_id, workspace_path), None)
-
+# ------------------------------------------------------------------
+# Main run function
+# ------------------------------------------------------------------
 
 async def run(
     prompt: str,
@@ -48,22 +111,16 @@ async def run(
     model: str | None = None,
     approval: str = "auto",
 ) -> CodexResult:
-    """Run ``codex exec`` and return parsed events.
-
-    On first message per workspace, starts a new session.
-    On follow-up messages, resumes the last session with ``resume --last``.
+    """Run ``codex exec --json`` with session history prepended.
 
     approval maps to sandbox/approval flags:
       - "auto"    → --full-auto
       - "confirm" → --sandbox workspace-write
       - "deny"    → --sandbox read-only
     """
-    resume = has_session(user_id, workspace_path)
+    contextual_prompt = _build_contextual_prompt(prompt, workspace_path, user_id)
 
-    if resume:
-        cmd = ["codex", "exec", "--json", "-C", workspace_path, "resume", "--last"]
-    else:
-        cmd = ["codex", "exec", "--json", "-C", workspace_path]
+    cmd = ["codex", "exec", "--json", "-C", workspace_path]
 
     if model:
         cmd += ["-m", model]
@@ -75,9 +132,10 @@ async def run(
     else:
         cmd += ["--full-auto"]
 
-    cmd.append(prompt)
+    cmd.append(contextual_prompt)
 
-    logger.info("Running: %s", " ".join(cmd))
+    logger.info("Running codex exec (prompt %d chars, context %d chars)",
+                len(prompt), len(contextual_prompt))
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -111,23 +169,16 @@ async def run(
         logger.debug("codex stderr: %s", stderr)
 
     if proc.returncode != 0 and not result.events:
-        # If resume failed (e.g. no previous session), retry without resume
-        if resume:
-            logger.warning("Resume failed (exit %d), retrying as new session", proc.returncode)
-            clear_session(user_id, workspace_path)
-            return await run(prompt, workspace_path, user_id, model, approval)
-
         result.text = f"Codex exited with code {proc.returncode}"
         if stderr:
             result.text += f"\n{stderr}"
         result.events.append(ChatEvent(kind="text", content=result.text))
 
-    # Mark session as active after successful run
-    if proc.returncode == 0:
-        mark_session(user_id, workspace_path)
-
-    # Log to local session history
+    # Log the original prompt (not the contextual one) to session
     _log_to_session(workspace_path, user_id, prompt, result)
+
+    # Auto-compact if threshold reached
+    await _maybe_compact(workspace_path, user_id, model)
 
     # Ensure there's at least one text event
     if not any(e.kind == "text" for e in result.events):
@@ -135,6 +186,10 @@ async def run(
 
     return result
 
+
+# ------------------------------------------------------------------
+# Session logging
+# ------------------------------------------------------------------
 
 def _log_to_session(
     workspace_path: str, user_id: int, prompt: str, result: CodexResult,
@@ -151,6 +206,114 @@ def _log_to_session(
     except Exception:
         logger.debug("Failed to log session", exc_info=True)
 
+
+# ------------------------------------------------------------------
+# Auto-compaction
+# ------------------------------------------------------------------
+
+async def _maybe_compact(
+    workspace_path: str, user_id: int, model: str | None = None,
+) -> None:
+    """Summarize session history if the message count crosses the compact interval."""
+    try:
+        sid = session.ensure_session(workspace_path, user_id)
+        total = session.get_total_message_count(workspace_path, sid)
+        interval = session.get_compact_interval(workspace_path, sid)
+
+        if interval <= 0 or total < interval:
+            return
+
+        # Check if we've already compacted at this threshold
+        data = session.load_session(workspace_path, sid)
+        if data is None:
+            return
+        msgs = data.get("messages", [])
+        if len(msgs) < interval:
+            return  # not enough un-compacted messages
+
+        logger.info("Auto-compact triggered (total=%d, interval=%d)", total, interval)
+        await _compact_session(workspace_path, sid, model)
+    except Exception:
+        logger.debug("Compaction check failed", exc_info=True)
+
+
+async def _compact_session(
+    workspace_path: str, session_id: str, model: str | None = None,
+) -> None:
+    """Run Codex to summarize the session, then trim messages."""
+    summary = session.get_summary(workspace_path, session_id)
+    messages = session.get_messages(workspace_path, session_id)
+
+    if not messages:
+        return
+
+    # Build the content to summarize
+    parts: list[str] = []
+    if summary:
+        parts.append(f"Previous summary:\n{summary}\n")
+    parts.append("Conversation to summarize:")
+    for msg in messages:
+        role = msg.get("role", "?").capitalize()
+        content = msg.get("content", "")
+        parts.append(f"{role}: {content}")
+
+    summarize_input = "\n".join(parts)
+    full_prompt = f"{SUMMARY_PROMPT}\n\n{summarize_input}"
+
+    cmd = ["codex", "exec", "--ephemeral", "--full-auto", "-C", workspace_path]
+    if model:
+        cmd += ["-m", model]
+    cmd.append(full_prompt)
+
+    logger.info("Running compaction for session %s", session_id)
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    # Collect the agent_message text from JSON output
+    new_summary = ""
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            break
+        line = line.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            # Non-JSON — might be the plain text output
+            if not new_summary:
+                new_summary = line
+            continue
+        if event.get("type") == "item.completed":
+            item = event.get("item", {})
+            if item.get("type") == "agent_message":
+                text = item.get("text", "")
+                if text:
+                    new_summary = text
+
+    await proc.wait()
+
+    if not new_summary:
+        # Fallback: read stderr or use old summary
+        stderr = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
+        logger.warning("Compaction produced no summary (exit %d): %s", proc.returncode, stderr)
+        return
+
+    session.set_summary(
+        workspace_path, session_id, new_summary,
+        keep_recent=KEEP_RECENT_AFTER_COMPACT,
+    )
+    logger.info("Session %s compacted, summary %d chars", session_id, len(new_summary))
+
+
+# ------------------------------------------------------------------
+# Event parsing
+# ------------------------------------------------------------------
 
 def _process_event(event: dict, result: CodexResult) -> None:
     """Parse a single JSON event from codex exec output."""

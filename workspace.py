@@ -99,6 +99,8 @@ def set_model(workspace_path: str, model: str) -> None:
     _save_settings(workspace_path, settings)
 
 
+DEFAULT_COMPACT_INTERVAL = 20
+
 AVAILABLE_PERMISSIONS = ["auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"
 PERMISSION_DESCRIPTIONS = {

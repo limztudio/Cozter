@@ -92,6 +92,9 @@ def create_session(workspace: str, name: str | None = None) -> dict:
         "name": name or f"Session {now[:10]}",
         "created": now,
         "messages": [],
+        "summary": None,
+        "compact_interval": 20,
+        "compacted_count": 0,
     }
     with open(_session_path(workspace, session_id), "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -157,3 +160,51 @@ def ensure_session(workspace: str, user_id: int) -> str:
     data = create_session(workspace)
     set_current_session_id(workspace, user_id, data["id"])
     return data["id"]
+
+
+# ---------------------------------------------------------------------------
+# Summary and compaction
+# ---------------------------------------------------------------------------
+
+def get_summary(workspace: str, session_id: str) -> str | None:
+    data = load_session(workspace, session_id)
+    if data is None:
+        return None
+    return data.get("summary")
+
+
+def set_summary(
+    workspace: str, session_id: str, summary: str, keep_recent: int = 10,
+) -> None:
+    """Store a compacted summary, keeping only the last *keep_recent* messages."""
+    data = load_session(workspace, session_id)
+    if data is None:
+        return
+    msgs = data.get("messages", [])
+    trimmed = max(0, len(msgs) - keep_recent)
+    data["compacted_count"] = data.get("compacted_count", 0) + trimmed
+    data["messages"] = msgs[-keep_recent:] if keep_recent else []
+    data["summary"] = summary
+    save_session(workspace, session_id, data)
+
+
+def get_compact_interval(workspace: str, session_id: str) -> int:
+    data = load_session(workspace, session_id)
+    if data is None:
+        return 20
+    return data.get("compact_interval", 20)
+
+
+def set_compact_interval(workspace: str, session_id: str, interval: int) -> None:
+    data = load_session(workspace, session_id)
+    if data is None:
+        return
+    data["compact_interval"] = interval
+    save_session(workspace, session_id, data)
+
+
+def get_total_message_count(workspace: str, session_id: str) -> int:
+    data = load_session(workspace, session_id)
+    if data is None:
+        return 0
+    return data.get("compacted_count", 0) + len(data.get("messages", []))
