@@ -5,6 +5,8 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from . import session
+
 logger = logging.getLogger(__name__)
 
 
@@ -124,11 +126,30 @@ async def run(
     if proc.returncode == 0:
         mark_session(user_id, workspace_path)
 
+    # Log to local session history
+    _log_to_session(workspace_path, user_id, prompt, result)
+
     # Ensure there's at least one text event
     if not any(e.kind == "text" for e in result.events):
         result.events.append(ChatEvent(kind="text", content=result.text))
 
     return result
+
+
+def _log_to_session(
+    workspace_path: str, user_id: int, prompt: str, result: CodexResult,
+) -> None:
+    """Append the user prompt and AI response to the local session log."""
+    try:
+        sid = session.ensure_session(workspace_path, user_id)
+        session.append_message(workspace_path, sid, {
+            "role": "user", "content": prompt,
+        })
+        session.append_message(workspace_path, sid, {
+            "role": "assistant", "content": result.text,
+        })
+    except Exception:
+        logger.debug("Failed to log session", exc_info=True)
 
 
 def _process_event(event: dict, result: CodexResult) -> None:
