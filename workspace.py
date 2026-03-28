@@ -63,7 +63,7 @@ def ensure_cozter_dir(path: str) -> None:
 AVAILABLE_MODELS = ["o3", "o4-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "gpt-5.4", "gpt-5.4-pro"]
 DEFAULT_MODEL = "gpt-5.4"
 
-AVAILABLE_EFFORTS = ["low", "medium", "high"]
+AVAILABLE_EFFORTS = ["none", "low", "medium", "high", "xhigh"]
 DEFAULT_EFFORT = "medium"
 
 
