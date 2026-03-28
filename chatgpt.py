@@ -127,7 +127,7 @@ class ChatGPTClient:
                 "tools": tools.TOOL_DEFS,
             }
             if model in reasoning_effort_models:
-                kwargs["reasoning"] = {"effort": effort}
+                kwargs["reasoning_effort"] = effort
 
             response = await client.chat.completions.create(**kwargs)
             choice = response.choices[0]
