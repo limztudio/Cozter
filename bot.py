@@ -25,6 +25,54 @@ logger = logging.getLogger(__name__)
 def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+
+import re
+
+def _md_to_html(text: str) -> str:
+    """Convert common Markdown to Telegram-compatible HTML."""
+    lines = text.split("\n")
+    result = []
+    in_code_block = False
+    code_buf: list[str] = []
+
+    for line in lines:
+        # Fenced code blocks
+        if line.strip().startswith("```"):
+            if in_code_block:
+                result.append(f"<pre>{_escape_html(chr(10).join(code_buf))}</pre>")
+                code_buf.clear()
+                in_code_block = False
+            else:
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            code_buf.append(line)
+            continue
+
+        line = _escape_html(line)
+
+        # Headers → bold
+        line = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", line)
+        # Bold: **text** or __text__
+        line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
+        line = re.sub(r"__(.+?)__", r"<b>\1</b>", line)
+        # Italic: *text* or _text_  (but not inside words with underscores)
+        line = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", line)
+        line = re.sub(r"(?<!\w)_([^_]+?)_(?!\w)", r"<i>\1</i>", line)
+        # Inline code: `text`
+        line = re.sub(r"`([^`]+?)`", r"<code>\1</code>", line)
+        # Strikethrough: ~~text~~
+        line = re.sub(r"~~(.+?)~~", r"<s>\1</s>", line)
+
+        result.append(line)
+
+    # Unclosed code block
+    if in_code_block and code_buf:
+        result.append(f"<pre>{_escape_html(chr(10).join(code_buf))}</pre>")
+
+    return "\n".join(result)
+
 # Conversation states
 NEW_AWAITING_DIR = 0
 OPEN_AWAITING_DIR = 1
@@ -499,11 +547,19 @@ class CozterBot:
 
             for ev in events:
                 if ev.kind == "diff":
-                    # Skip full diffs — the tool event already has a summary
                     continue
-                text = ev.content
-                for i in range(0, len(text), 4096):
-                    await update.message.reply_text(text[i:i + 4096])
+                if ev.kind == "text":
+                    html = _md_to_html(ev.content)
+                    for i in range(0, len(html), 4096):
+                        try:
+                            await update.message.reply_text(html[i:i + 4096], parse_mode="HTML")
+                        except Exception:
+                            # Fallback to plain text if HTML parsing fails
+                            await update.message.reply_text(ev.content[i:i + 4096])
+                else:
+                    text = ev.content
+                    for i in range(0, len(text), 4096):
+                        await update.message.reply_text(text[i:i + 4096])
 
         # --- register handlers ---
 
