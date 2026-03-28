@@ -446,18 +446,16 @@ class CozterBot:
                 await update.message.reply_text(f"Error: {e}")
                 return
 
+            # Only send the final AI text response, skip tool/file noise
             for ev in result.events:
-                if ev.kind == "text":
-                    html = _md_to_html(ev.content)
-                    for i in range(0, len(html), 4096):
-                        try:
-                            await update.message.reply_text(html[i:i + 4096], parse_mode="HTML")
-                        except Exception:
-                            await update.message.reply_text(ev.content[i:i + 4096])
-                else:
-                    text = ev.content
-                    for i in range(0, len(text), 4096):
-                        await update.message.reply_text(text[i:i + 4096])
+                if ev.kind != "text":
+                    continue
+                html = _md_to_html(ev.content)
+                for i in range(0, len(html), 4096):
+                    try:
+                        await update.message.reply_text(html[i:i + 4096], parse_mode="HTML")
+                    except Exception:
+                        await update.message.reply_text(ev.content[i:i + 4096])
 
         # --- register handlers ---
 
