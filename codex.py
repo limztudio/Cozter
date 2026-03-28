@@ -22,21 +22,46 @@ class CodexResult:
     text: str = "(no response)"
 
 
+# Track whether a user has an active Codex session per workspace.
+# Key: (user_id, workspace_path) → True if at least one message was sent.
+_active_sessions: dict[tuple[int, str], bool] = {}
+
+
+def has_session(user_id: int, workspace_path: str) -> bool:
+    return _active_sessions.get((user_id, workspace_path), False)
+
+
+def mark_session(user_id: int, workspace_path: str) -> None:
+    _active_sessions[(user_id, workspace_path)] = True
+
+
+def clear_session(user_id: int, workspace_path: str) -> None:
+    _active_sessions.pop((user_id, workspace_path), None)
+
+
 async def run(
     prompt: str,
     workspace_path: str,
+    user_id: int,
     model: str | None = None,
     approval: str = "auto",
 ) -> CodexResult:
-    """Run ``codex exec --json`` and return parsed events.
+    """Run ``codex exec`` and return parsed events.
+
+    On first message per workspace, starts a new session.
+    On follow-up messages, resumes the last session with ``resume --last``.
 
     approval maps to sandbox/approval flags:
       - "auto"    → --full-auto
-      - "confirm" → default (codex asks on its own, but non-interactive
-                     mode auto-approves, so we use on-request sandbox)
+      - "confirm" → --sandbox workspace-write
       - "deny"    → --sandbox read-only
     """
-    cmd = ["codex", "exec", "--json", "-C", workspace_path]
+    resume = has_session(user_id, workspace_path)
+
+    if resume:
+        cmd = ["codex", "exec", "--json", "-C", workspace_path, "resume", "--last"]
+    else:
+        cmd = ["codex", "exec", "--json", "-C", workspace_path]
 
     if model:
         cmd += ["-m", model]
@@ -60,7 +85,6 @@ async def run(
 
     result = CodexResult()
 
-    # Parse JSON Lines from stdout
     while True:
         line = await proc.stdout.readline()
         if not line:
@@ -80,16 +104,25 @@ async def run(
 
     await proc.wait()
 
-    # Capture any stderr for debugging
     stderr = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
     if stderr:
         logger.debug("codex stderr: %s", stderr)
 
     if proc.returncode != 0 and not result.events:
+        # If resume failed (e.g. no previous session), retry without resume
+        if resume:
+            logger.warning("Resume failed (exit %d), retrying as new session", proc.returncode)
+            clear_session(user_id, workspace_path)
+            return await run(prompt, workspace_path, user_id, model, approval)
+
         result.text = f"Codex exited with code {proc.returncode}"
         if stderr:
             result.text += f"\n{stderr}"
         result.events.append(ChatEvent(kind="text", content=result.text))
+
+    # Mark session as active after successful run
+    if proc.returncode == 0:
+        mark_session(user_id, workspace_path)
 
     # Ensure there's at least one text event
     if not any(e.kind == "text" for e in result.events):
@@ -117,7 +150,6 @@ def _process_event(event: dict, result: CodexResult) -> None:
             output = item.get("aggregated_output", "")
             summary = f"$ {cmd} (exit {exit_code})"
             if output:
-                # Truncate long output
                 if len(output) > 200:
                     output = output[:200] + "..."
                 summary += f"\n{output}"

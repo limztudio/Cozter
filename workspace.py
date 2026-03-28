@@ -60,11 +60,15 @@ def ensure_cozter_dir(path: str) -> None:
 # Workspace settings (stored in .cozter/settings.json)
 # ---------------------------------------------------------------------------
 
-AVAILABLE_MODELS = ["o3", "o4-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini", "gpt-5.4", "gpt-5.4-pro"]
+AVAILABLE_MODELS = [
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2-codex",
+    "gpt-5.2",
+]
 DEFAULT_MODEL = "gpt-5.4"
-
-AVAILABLE_EFFORTS = ["none", "low", "medium", "high", "xhigh"]
-DEFAULT_EFFORT = "medium"
 
 
 def _settings_path(workspace_path: str) -> str:
@@ -95,16 +99,6 @@ def set_model(workspace_path: str, model: str) -> None:
     _save_settings(workspace_path, settings)
 
 
-def get_effort(workspace_path: str) -> str:
-    return _load_settings(workspace_path).get("effort", DEFAULT_EFFORT)
-
-
-def set_effort(workspace_path: str, effort: str) -> None:
-    settings = _load_settings(workspace_path)
-    settings["effort"] = effort
-    _save_settings(workspace_path, settings)
-
-
 AVAILABLE_PERMISSIONS = ["auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"
 PERMISSION_DESCRIPTIONS = {
@@ -122,15 +116,3 @@ def set_permission(workspace_path: str, permission: str) -> None:
     settings = _load_settings(workspace_path)
     settings["permission"] = permission
     _save_settings(workspace_path, settings)
-
-
-DEFAULT_COMPACT_INTERVAL = 15
-DEFAULT_REREAD_INTERVAL = 30
-
-
-def get_compact_interval(workspace_path: str) -> int:
-    return _load_settings(workspace_path).get("compact_interval", DEFAULT_COMPACT_INTERVAL)
-
-
-def get_reread_interval(workspace_path: str) -> int:
-    return _load_settings(workspace_path).get("reread_interval", DEFAULT_REREAD_INTERVAL)

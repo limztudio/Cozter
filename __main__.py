@@ -26,7 +26,6 @@ import traceback
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
-from . import auth
 from . import config as cfg
 from . import updater
 from . import workspace
@@ -87,30 +86,6 @@ async def update_loop(bot: CozterBot, interval: int) -> None:
                 updater.restart_script()  # replaces process, does not return
         except Exception:
             logger.exception("Update check failed")
-
-
-def ensure_login() -> None:
-    """Check .config/secret for saved tokens; open browser login if needed."""
-    if auth.is_logged_in():
-        tokens = auth.get_tokens()
-        logger.info("Logged in as %s (plan: %s)", tokens.get("email"), tokens.get("plan"))
-        refreshed = auth.refresh_if_needed()
-        if refreshed:
-            return
-        logger.warning("Token refresh failed — re-login required.")
-        auth.clear_auth()
-
-    while True:
-        try:
-            saved = auth.browser_login()
-            logger.info("Logged in as %s (plan: %s)", saved.get("email"), saved.get("plan"))
-            return
-        except Exception as e:
-            logger.error("Login failed: %s", e)
-            print(f"\nLogin failed: {e}")
-            print("Retrying in 30 seconds... (Ctrl+C to quit)\n")
-            import time
-            time.sleep(30)
 
 
 async def main() -> None:

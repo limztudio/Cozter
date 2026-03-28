@@ -11,9 +11,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import auth
 from . import codex
-from . import session
 from . import workspace
 
 logger = logging.getLogger(__name__)
@@ -74,9 +72,7 @@ def _md_to_html(text: str) -> str:
 NEW_AWAITING_DIR = 0
 OPEN_AWAITING_DIR = 1
 MODEL_AWAITING = 2
-EFFORT_AWAITING = 3
-SESSION_AWAITING = 4
-PERMISSION_AWAITING = 5
+PERMISSION_AWAITING = 3
 
 
 def _authorized(user_ids: list[int]):
@@ -118,26 +114,12 @@ class CozterBot:
             await update.message.reply_text(f"Version: {ver}\nUpdated: {date}")
 
         @_authorized(self.user_ids)
-        async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if not auth.is_logged_in():
-                await update.message.reply_text(
-                    "Not logged in.\nRestart the script to trigger login."
-                )
-                return
-            tokens = auth.get_tokens()
-            await update.message.reply_text(
-                f"Account: {tokens.get('email', '?')}\n"
-                f"Plan: {tokens.get('plan', '?')}"
-            )
-
-        @_authorized(self.user_ids)
         async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
             ws = workspace.get_current(uid)
             if ws:
-                new_sess = session.create_session(ws)
-                session.set_current_session_id(ws, uid, new_sess["id"])
-            await update.message.reply_text("Conversation cleared. New session started.")
+                codex.clear_session(uid, ws)
+            await update.message.reply_text("Conversation cleared. Next message starts a new session.")
 
         # --- /new conversation ---
 
@@ -271,52 +253,6 @@ class CozterBot:
             await update.message.reply_text(f"Model set to: {model}")
             return ConversationHandler.END
 
-        # --- /effort conversation ---
-
-        @_authorized(self.user_ids)
-        async def cmd_effort(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            uid = update.effective_user.id
-            ws = workspace.get_current(uid)
-            if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
-                return ConversationHandler.END
-
-            current = workspace.get_effort(ws)
-            options = workspace.AVAILABLE_EFFORTS
-            lines = [f"Current effort: {current}\n", "Available levels:"]
-            for i, e in enumerate(options, 1):
-                marker = " <-" if e == current else ""
-                lines.append(f"  {i}. {e}{marker}")
-            lines.append("\nEnter a number or level name (or /cancel):")
-            await update.message.reply_text("\n".join(lines))
-            return EFFORT_AWAITING
-
-        @_authorized(self.user_ids)
-        async def effort_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            uid = update.effective_user.id
-            ws = workspace.get_current(uid)
-            text = update.message.text.strip().lower()
-            options = workspace.AVAILABLE_EFFORTS
-
-            if text.isdigit():
-                idx = int(text) - 1
-                if 0 <= idx < len(options):
-                    effort = options[idx]
-                else:
-                    await update.message.reply_text("Invalid number. Try again (or /cancel):")
-                    return EFFORT_AWAITING
-            elif text in options:
-                effort = text
-            else:
-                await update.message.reply_text(
-                    f"Unknown effort level: {text}\nTry again (or /cancel):"
-                )
-                return EFFORT_AWAITING
-
-            workspace.set_effort(ws, effort)
-            await update.message.reply_text(f"Effort set to: {effort}")
-            return ConversationHandler.END
-
         # --- /permission conversation ---
 
         @_authorized(self.user_ids)
@@ -364,71 +300,6 @@ class CozterBot:
             await update.message.reply_text(f"Permission set to: {perm}\n{desc}")
             return ConversationHandler.END
 
-        # --- /session conversation ---
-
-        @_authorized(self.user_ids)
-        async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            uid = update.effective_user.id
-            ws = workspace.get_current(uid)
-            if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
-                return ConversationHandler.END
-
-            current_sid = session.get_current_session_id(ws, uid)
-            sessions = session.list_sessions(ws)
-
-            lines = []
-            if current_sid:
-                current_data = session.load_session(ws, current_sid)
-                if current_data:
-                    lines.append(f"Current session: {current_data.get('name', current_sid[:8])} ({current_data.get('message_count', len(current_data.get('messages', [])))} msgs)")
-                else:
-                    lines.append("Current session: (invalid)")
-            else:
-                lines.append("Current session: (none)")
-
-            if sessions:
-                lines.append("\nSessions:")
-                for i, s in enumerate(sessions, 1):
-                    marker = " <-" if s["id"] == current_sid else ""
-                    lines.append(f"  {i}. {s['name']} ({s['message_count']} msgs){marker}")
-            else:
-                lines.append("\nNo sessions yet.")
-
-            lines.append("\nEnter a number to switch, or 'new' to create (or /cancel):")
-            await update.message.reply_text("\n".join(lines))
-            return SESSION_AWAITING
-
-        @_authorized(self.user_ids)
-        async def session_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            uid = update.effective_user.id
-            ws = workspace.get_current(uid)
-            text = update.message.text.strip()
-            sessions = session.list_sessions(ws)
-
-            if text.lower() == "new":
-                new_sess = session.create_session(ws)
-                session.set_current_session_id(ws, uid, new_sess["id"])
-                await update.message.reply_text(
-                    f"New session created: {new_sess['name']}\nConversation cleared."
-                )
-                return ConversationHandler.END
-
-            if text.isdigit():
-                idx = int(text) - 1
-                if 0 <= idx < len(sessions):
-                    chosen = sessions[idx]
-                    session.set_current_session_id(ws, uid, chosen["id"])
-                    await update.message.reply_text(
-                        f"Switched to: {chosen['name']}"
-                    )
-                    return ConversationHandler.END
-
-            await update.message.reply_text(
-                "Invalid input. Enter a number, 'new', or /cancel:"
-            )
-            return SESSION_AWAITING
-
         # --- shared cancel ---
 
         @_authorized(self.user_ids)
@@ -454,7 +325,7 @@ class CozterBot:
             await update.message.reply_text("Thinking...")
             try:
                 result = await codex.run(
-                    update.message.text, ws,
+                    update.message.text, ws, user_id=uid,
                     model=model, approval=perm,
                 )
             except Exception as e:
@@ -512,17 +383,6 @@ class CozterBot:
             fallbacks=[cancel_handler],
         )
 
-        effort_conv = ConversationHandler(
-            entry_points=[CommandHandler("effort", cmd_effort)],
-            states={
-                EFFORT_AWAITING: [
-                    cancel_handler,
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, effort_receive),
-                ],
-            },
-            fallbacks=[cancel_handler],
-        )
-
         permission_conv = ConversationHandler(
             entry_points=[CommandHandler("permission", cmd_permission)],
             states={
@@ -534,26 +394,12 @@ class CozterBot:
             fallbacks=[cancel_handler],
         )
 
-        session_conv = ConversationHandler(
-            entry_points=[CommandHandler("session", cmd_session)],
-            states={
-                SESSION_AWAITING: [
-                    cancel_handler,
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, session_receive),
-                ],
-            },
-            fallbacks=[cancel_handler],
-        )
-
         self.app.add_handler(new_conv)
         self.app.add_handler(open_conv)
         self.app.add_handler(model_conv)
-        self.app.add_handler(effort_conv)
         self.app.add_handler(permission_conv)
-        self.app.add_handler(session_conv)
         self.app.add_handler(CommandHandler("start", cmd_start))
         self.app.add_handler(CommandHandler("version", cmd_version))
-        self.app.add_handler(CommandHandler("account", cmd_account))
         self.app.add_handler(CommandHandler("clear", cmd_clear))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
 
