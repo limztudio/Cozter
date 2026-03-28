@@ -9,6 +9,16 @@ if __name__ == "__main__" and not __package__:
     parent_dir = os.path.dirname(module_dir)
     sys.exit(subprocess.call([sys.executable, "-m", module_name], cwd=parent_dir))
 
+def _install_deps() -> None:
+    """Auto-install missing requirements before any project imports."""
+    req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
+    if os.path.exists(req_file):
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-q", "-r", req_file],
+        )
+
+_install_deps()
+
 import asyncio
 import logging
 import signal
