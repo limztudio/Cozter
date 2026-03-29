@@ -1,7 +1,9 @@
+import asyncio
 import logging
 import os
 
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -527,7 +529,15 @@ class CozterBot:
         self.app.add_handler(CommandHandler("compact", cmd_compact))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
 
-        await self.app.initialize()
+        for attempt in range(1, 6):
+            try:
+                await self.app.initialize()
+                break
+            except NetworkError as e:
+                if attempt == 5:
+                    raise
+                logger.warning("Network error during init (attempt %d/5): %s", attempt, e)
+                await asyncio.sleep(5 * attempt)
         await self.app.start()
         await self.app.updater.start_polling(drop_pending_updates=True)
         logger.info("Bot started polling.")
