@@ -101,10 +101,11 @@ def set_model(workspace_path: str, model: str) -> None:
 
 DEFAULT_COMPACT_INTERVAL = 20
 
-AVAILABLE_PERMISSIONS = ["auto", "confirm", "deny"]
+AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"
 PERMISSION_DESCRIPTIONS = {
-    "auto": "Execute all tool calls automatically",
+    "full": "Full access — bypass all approvals and sandbox",
+    "auto": "Execute all tool calls automatically (sandboxed)",
     "confirm": "Ask before each tool call",
     "deny": "Block all tool calls (text-only responses)",
 }

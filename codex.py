@@ -125,7 +125,9 @@ async def run(
     if model:
         cmd += ["-m", model]
 
-    if approval == "deny":
+    if approval == "full":
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    elif approval == "deny":
         cmd += ["--sandbox", "read-only"]
     elif approval == "confirm":
         cmd += ["--sandbox", "workspace-write"]
