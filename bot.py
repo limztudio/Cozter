@@ -375,6 +375,27 @@ class CozterBot:
             )
             return SESSION_AWAITING
 
+        # --- /refresh command ---
+
+        @_authorized(self.user_ids)
+        async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return
+
+            # Clear codex CLI's internal session state if it exists
+            codex_dir = os.path.join(ws, ".codex")
+            if os.path.isdir(codex_dir):
+                import shutil
+                shutil.rmtree(codex_dir, ignore_errors=True)
+                logger.info("Cleared codex session dir: %s", codex_dir)
+
+            await update.message.reply_text(
+                "Codex CLI session refreshed. Your conversation history is preserved."
+            )
+
         # --- /compact command ---
 
         @_authorized(self.user_ids)
@@ -526,6 +547,7 @@ class CozterBot:
         self.app.add_handler(CommandHandler("start", cmd_start))
         self.app.add_handler(CommandHandler("version", cmd_version))
         self.app.add_handler(CommandHandler("clear", cmd_clear))
+        self.app.add_handler(CommandHandler("refresh", cmd_refresh))
         self.app.add_handler(CommandHandler("compact", cmd_compact))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
 

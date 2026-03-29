@@ -120,7 +120,7 @@ async def run(
     """
     contextual_prompt = _build_contextual_prompt(prompt, workspace_path, user_id)
 
-    cmd = ["codex", "exec", "--json", "-C", workspace_path]
+    cmd = ["codex", "exec", "--ephemeral", "--json", "-C", workspace_path]
 
     if model:
         cmd += ["-m", model]
