@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import re
+import shutil
 
 from telegram import Update
 from telegram.error import NetworkError
@@ -24,7 +26,27 @@ def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-import re
+def _split_html(text: str, limit: int = 4096) -> list[str]:
+    """Split text into chunks no larger than limit, breaking at newlines when possible.
+
+    Splitting at arbitrary byte offsets risks cutting inside an HTML tag, which
+    causes Telegram to reject the message. Newline boundaries are safe because
+    _md_to_html never produces tags that span multiple lines.
+    """
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    while text:
+        if len(text) <= limit:
+            chunks.append(text)
+            break
+        split_at = text.rfind("\n", 0, limit)
+        if split_at == -1:
+            split_at = limit  # no newline — hard split as last resort
+        chunks.append(text[:split_at])
+        text = text[split_at + 1:]
+    return chunks
+
 
 def _md_to_html(text: str) -> str:
     """Convert common Markdown to Telegram-compatible HTML."""
@@ -113,18 +135,21 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from . import updater
-            ver = updater.get_current_version()
-            date = updater.get_last_commit_date()
+            ver, date = await asyncio.gather(
+                asyncio.to_thread(updater.get_current_version),
+                asyncio.to_thread(updater.get_last_commit_date),
+            )
             await update.message.reply_text(f"Version: {ver}\nUpdated: {date}")
 
         @_authorized(self.user_ids)
         async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
             ws = workspace.get_current(uid)
-            if ws:
-
-                new_sess = session.create_session(ws)
-                session.set_current_session_id(ws, uid, new_sess["id"])
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return
+            new_sess = session.create_session(ws)
+            session.set_current_session_id(ws, uid, new_sess["id"])
             await update.message.reply_text("Conversation cleared. Next message starts a new session.")
 
         # --- /new conversation ---
@@ -388,7 +413,6 @@ class CozterBot:
             # Clear codex CLI's internal session state if it exists
             codex_dir = os.path.join(ws, ".codex")
             if os.path.isdir(codex_dir):
-                import shutil
                 shutil.rmtree(codex_dir, ignore_errors=True)
                 logger.info("Cleared codex session dir: %s", codex_dir)
 
@@ -412,8 +436,14 @@ class CozterBot:
             if args == "now":
                 await update.message.reply_text("Compacting session...")
                 model = workspace.get_model(ws)
-                await codex._compact_session(ws, sid, model)
-                await update.message.reply_text("Session compacted.")
+                new_summary = await codex._compact_session(ws, sid, model)
+                if new_summary:
+                    async with codex._get_workspace_lock(ws):
+                        session.set_summary(ws, sid, new_summary,
+                                            keep_recent=codex.KEEP_RECENT_AFTER_COMPACT)
+                    await update.message.reply_text("Session compacted.")
+                else:
+                    await update.message.reply_text("Compaction produced no output — session unchanged.")
                 return
 
             if args.isdigit():
@@ -422,9 +452,10 @@ class CozterBot:
                 await update.message.reply_text(f"Compact interval set to {interval} messages.")
                 return
 
-            current = session.get_compact_interval(ws, sid)
-            total = session.get_total_message_count(ws, sid)
-            summary = session.get_summary(ws, sid)
+            sess_data = session.load_session(ws, sid) or {}
+            current = sess_data.get("compact_interval", 20)
+            total = sess_data.get("compacted_count", 0) + len(sess_data.get("messages", []))
+            summary = sess_data.get("summary")
             lines = [
                 f"Compact interval: {current} messages",
                 f"Total messages: {total}",
@@ -474,11 +505,11 @@ class CozterBot:
                 if ev.kind != "text":
                     continue
                 html = _md_to_html(ev.content)
-                for i in range(0, len(html), 4096):
+                for chunk in _split_html(html):
                     try:
-                        await update.message.reply_text(html[i:i + 4096], parse_mode="HTML")
+                        await update.message.reply_text(chunk, parse_mode="HTML")
                     except Exception:
-                        await update.message.reply_text(ev.content[i:i + 4096])
+                        await update.message.reply_text(chunk)
 
         # --- register handlers ---
 

@@ -3,12 +3,32 @@
 import json
 import logging
 import os
+import tempfile
 import uuid
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 COZTER_DIR = ".cozter"
+
+
+def _atomic_write(target: str, data: dict, tmp_dir: str) -> None:
+    """Write data as JSON to target atomically via a temp file + os.replace.
+
+    A crash during the write leaves the temp file orphaned but the target
+    untouched, so the session is never left in a half-written corrupt state.
+    """
+    fd, tmp_path = tempfile.mkstemp(dir=tmp_dir, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, target)  # atomic on same filesystem
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 SESSIONS_DIR = "sessions"
 SESSION_INDEX = "session_state.json"
 
@@ -32,15 +52,18 @@ def _state_path(workspace: str) -> str:
 def _load_state(workspace: str) -> dict:
     path = _state_path(workspace)
     if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            logger.warning("Corrupt session state file, ignoring: %s", path)
     return {}
 
 
 def _save_state(workspace: str, state: dict) -> None:
-    os.makedirs(os.path.join(workspace, COZTER_DIR), exist_ok=True)
-    with open(_state_path(workspace), "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
+    target_dir = os.path.join(workspace, COZTER_DIR)
+    os.makedirs(target_dir, exist_ok=True)
+    _atomic_write(_state_path(workspace), state, tmp_dir=target_dir)
 
 
 def get_current_session_id(workspace: str, user_id: int) -> str | None:
@@ -105,14 +128,18 @@ def load_session(workspace: str, session_id: str) -> dict | None:
     path = _session_path(workspace, session_id)
     if not os.path.exists(path):
         return None
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        logger.warning("Corrupt session file, ignoring: %s", path)
+        return None
 
 
 def save_session(workspace: str, session_id: str, data: dict) -> None:
-    os.makedirs(_sessions_dir(workspace), exist_ok=True)
-    with open(_session_path(workspace, session_id), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    sdir = _sessions_dir(workspace)
+    os.makedirs(sdir, exist_ok=True)
+    _atomic_write(_session_path(workspace, session_id), data, tmp_dir=sdir)
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +152,16 @@ def append_message(workspace: str, session_id: str, message: dict) -> int:
     if data is None:
         return 0
     data["messages"].append(message)
+    save_session(workspace, session_id, data)
+    return len(data["messages"])
+
+
+def append_messages(workspace: str, session_id: str, messages: list[dict]) -> int:
+    """Append multiple messages in a single read+write. Returns total message count."""
+    data = load_session(workspace, session_id)
+    if data is None:
+        return 0
+    data["messages"].extend(messages)
     save_session(workspace, session_id, data)
     return len(data["messages"])
 

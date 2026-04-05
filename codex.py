@@ -10,6 +10,17 @@ from . import session
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY_CHARS = 50_000
+
+# Per-workspace lock to prevent concurrent session file corruption
+_workspace_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_workspace_lock(workspace: str) -> asyncio.Lock:
+    if workspace not in _workspace_locks:
+        _workspace_locks[workspace] = asyncio.Lock()
+    return _workspace_locks[workspace]
+
+
 KEEP_RECENT_AFTER_COMPACT = 10
 
 SUMMARY_PROMPT = (
@@ -39,12 +50,15 @@ class CodexResult:
 # ------------------------------------------------------------------
 
 def _build_contextual_prompt(
-    prompt: str, workspace_path: str, user_id: int,
+    prompt: str, workspace_path: str, session_id: str,
 ) -> str:
     """Prepend session history to the prompt so Codex has full context."""
-    sid = session.ensure_session(workspace_path, user_id)
-    summary = session.get_summary(workspace_path, sid)
-    messages = session.get_messages(workspace_path, sid)
+    # Single load — avoids two separate file reads for summary + messages
+    data = session.load_session(workspace_path, session_id)
+    if data is None:
+        return prompt
+    summary: str | None = data.get("summary")
+    messages: list[dict] = data.get("messages", [])
 
     if not summary and not messages:
         return prompt
@@ -64,36 +78,42 @@ def _build_contextual_prompt(
             parts.append(f"{role}: {content}")
         parts.append("[End of Recent Messages]\n")
 
-    parts.append(
-        "Continue the conversation. The user's new message follows.\n"
-    )
+    parts.append("Continue the conversation. The user's new message follows.\n")
     parts.append(prompt)
 
     full = "\n".join(parts)
 
     # Truncate if too long — drop oldest messages, keep summary + recent
     if len(full) > MAX_HISTORY_CHARS:
-        # Rebuild with fewer messages
-        budget = MAX_HISTORY_CHARS - len(prompt) - 500  # margin
+        # Reserve space for the prompt, footer, and summary block
+        summary_block = (
+            f"[Session Summary]\n{summary}\n[End of Session Summary]\n" if summary else ""
+        )
+        overhead = len(prompt) + len(summary_block) + 500  # 500-char margin
+        msg_budget = MAX_HISTORY_CHARS - overhead
+
         history_parts: list[str] = []
-        if summary:
-            history_parts.append(f"[Session Summary]\n{summary}\n[End of Session Summary]\n")
-        # Add messages from newest to oldest until budget runs out
+        if summary_block:
+            history_parts.append(summary_block)
+
+        # Add messages newest-to-oldest until the budget is exhausted
         msg_lines: list[str] = []
+        used = 0
         for msg in reversed(messages):
             role = msg.get("role", "?").capitalize()
             content = msg.get("content", "")
             line = f"{role}: {content}"
-            if sum(len(l) for l in msg_lines) + len(line) > budget:
+            if used + len(line) > msg_budget:
                 break
             msg_lines.insert(0, line)
+            used += len(line) + 1  # +1 for the joining newline
+
         if msg_lines:
             history_parts.append("[Recent Messages]")
             history_parts.extend(msg_lines)
             history_parts.append("[End of Recent Messages]\n")
-        history_parts.append(
-            "Continue the conversation. The user's new message follows.\n"
-        )
+
+        history_parts.append("Continue the conversation. The user's new message follows.\n")
         history_parts.append(prompt)
         full = "\n".join(history_parts)
 
@@ -118,7 +138,9 @@ async def run(
       - "confirm" → --sandbox workspace-write
       - "deny"    → --sandbox read-only
     """
-    contextual_prompt = _build_contextual_prompt(prompt, workspace_path, user_id)
+    # Resolve session ID once here; pass it through to avoid redundant file reads
+    session_id = session.ensure_session(workspace_path, user_id)
+    contextual_prompt = _build_contextual_prompt(prompt, workspace_path, session_id)
 
     cmd = ["codex", "exec", "--ephemeral", "--json", "-C", workspace_path]
 
@@ -181,11 +203,12 @@ async def run(
             result.text += f"\n{stderr}"
         result.events.append(ChatEvent(kind="text", content=result.text))
 
-    # Log the original prompt (not the contextual one) to session
-    _log_to_session(workspace_path, user_id, prompt, result)
+    # Log the original prompt (not the contextual one) to session.
+    # The lock guards the file write only — compaction subprocess runs outside it.
+    async with _get_workspace_lock(workspace_path):
+        _log_to_session(workspace_path, session_id, prompt, result)
 
-    # Auto-compact if threshold reached
-    await _maybe_compact(workspace_path, user_id, model)
+    await _maybe_compact(workspace_path, session_id, model)
 
     # Ensure there's at least one text event
     if not any(e.kind == "text" for e in result.events):
@@ -199,17 +222,14 @@ async def run(
 # ------------------------------------------------------------------
 
 def _log_to_session(
-    workspace_path: str, user_id: int, prompt: str, result: CodexResult,
+    workspace_path: str, session_id: str, prompt: str, result: CodexResult,
 ) -> None:
-    """Append the user prompt and AI response to the local session log."""
+    """Append the user prompt and AI response in a single read+write."""
     try:
-        sid = session.ensure_session(workspace_path, user_id)
-        session.append_message(workspace_path, sid, {
-            "role": "user", "content": prompt,
-        })
-        session.append_message(workspace_path, sid, {
-            "role": "assistant", "content": result.text,
-        })
+        session.append_messages(workspace_path, session_id, [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": result.text},
+        ])
     except Exception:
         logger.debug("Failed to log session", exc_info=True)
 
@@ -219,53 +239,62 @@ def _log_to_session(
 # ------------------------------------------------------------------
 
 async def _maybe_compact(
-    workspace_path: str, user_id: int, model: str | None = None,
+    workspace_path: str, session_id: str, model: str | None = None,
 ) -> None:
-    """Summarize session history if the message count crosses the compact interval."""
+    """Summarize session history if uncompacted messages reach the compact interval.
+
+    The trigger is len(messages) >= interval, checked with a single session load.
+    Compaction runs outside the workspace lock so other requests aren't stalled.
+    """
     try:
-        sid = session.ensure_session(workspace_path, user_id)
-        total = session.get_total_message_count(workspace_path, sid)
-        interval = session.get_compact_interval(workspace_path, sid)
-
-        if interval <= 0 or total < interval:
-            return
-
-        # Check if we've already compacted at this threshold
-        data = session.load_session(workspace_path, sid)
+        data = session.load_session(workspace_path, session_id)
         if data is None:
             return
         msgs = data.get("messages", [])
-        if len(msgs) < interval:
-            return  # not enough un-compacted messages
+        interval = data.get("compact_interval", 20)
+        if interval <= 0 or len(msgs) < interval:
+            return
 
-        logger.info("Auto-compact triggered (total=%d, interval=%d)", total, interval)
-        await _compact_session(workspace_path, sid, model)
+        logger.info("Auto-compact triggered (msgs=%d, interval=%d)", len(msgs), interval)
+        new_summary = await _compact_session(workspace_path, session_id, model)
+        if new_summary:
+            async with _get_workspace_lock(workspace_path):
+                session.set_summary(
+                    workspace_path, session_id, new_summary,
+                    keep_recent=KEEP_RECENT_AFTER_COMPACT,
+                )
+            logger.info("Session %s compacted, summary %d chars", session_id, len(new_summary))
     except Exception:
         logger.debug("Compaction check failed", exc_info=True)
 
 
 async def _compact_session(
     workspace_path: str, session_id: str, model: str | None = None,
-) -> None:
-    """Run Codex to summarize the session, then trim messages."""
-    summary = session.get_summary(workspace_path, session_id)
-    messages = session.get_messages(workspace_path, session_id)
+) -> str:
+    """Run Codex to summarize the session. Returns the summary string (or "" on failure).
+
+    Does NOT write to disk — caller takes the workspace lock and calls set_summary.
+    """
+    data = session.load_session(workspace_path, session_id)
+    if data is None:
+        return ""
+    messages = data.get("messages", [])
+    existing_summary = data.get("summary")
 
     if not messages:
-        return
+        return ""
 
     # Build the content to summarize
     parts: list[str] = []
-    if summary:
-        parts.append(f"Previous summary:\n{summary}\n")
+    if existing_summary:
+        parts.append(f"Previous summary:\n{existing_summary}\n")
     parts.append("Conversation to summarize:")
     for msg in messages:
         role = msg.get("role", "?").capitalize()
         content = msg.get("content", "")
         parts.append(f"{role}: {content}")
 
-    summarize_input = "\n".join(parts)
-    full_prompt = f"{SUMMARY_PROMPT}\n\n{summarize_input}"
+    full_prompt = f"{SUMMARY_PROMPT}\n\n" + "\n".join(parts)
 
     cmd = ["codex", "exec", "--ephemeral", "--full-auto", "-C", workspace_path]
     if model:
@@ -279,12 +308,12 @@ async def _compact_session(
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        limit=1024 * 1024,  # 1 MB stream buffer
+        limit=1024 * 1024,
     )
     proc.stdin.write(full_prompt.encode("utf-8"))
     proc.stdin.close()
 
-    # Collect the agent_message text from JSON output
+    # Collect agent_message text from JSON event stream; keep the last one
     new_summary = ""
     while True:
         line = await proc.stdout.readline()
@@ -296,30 +325,24 @@ async def _compact_session(
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            # Non-JSON — might be the plain text output
             if not new_summary:
-                new_summary = line
+                new_summary = line  # bare-text fallback
             continue
         if event.get("type") == "item.completed":
             item = event.get("item", {})
             if item.get("type") == "agent_message":
                 text = item.get("text", "")
                 if text:
-                    new_summary = text
+                    new_summary = text  # keep updating — last one wins
 
     await proc.wait()
 
     if not new_summary:
-        # Fallback: read stderr or use old summary
         stderr = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
         logger.warning("Compaction produced no summary (exit %d): %s", proc.returncode, stderr)
-        return
+        return ""
 
-    session.set_summary(
-        workspace_path, session_id, new_summary,
-        keep_recent=KEEP_RECENT_AFTER_COMPACT,
-    )
-    logger.info("Session %s compacted, summary %d chars", session_id, len(new_summary))
+    return new_summary
 
 
 # ------------------------------------------------------------------

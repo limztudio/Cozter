@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 
@@ -184,7 +185,9 @@ def _resolve(workspace: str, path: str) -> str:
     """Resolve a relative path within the workspace, preventing escape."""
     full = os.path.normpath(os.path.join(workspace, path))
     ws_norm = os.path.normpath(workspace)
-    if not full.startswith(ws_norm):
+    # Use separator-aware check: startswith alone matches sibling dirs
+    # (e.g. /tmp/ws-evil would pass for workspace /tmp/ws)
+    if full != ws_norm and not full.startswith(ws_norm + os.sep):
         raise ValueError(f"Path escapes workspace: {path}")
     return full
 
@@ -222,7 +225,9 @@ def execute(workspace: str, name: str, arguments: dict) -> str:
                     with open(fpath, encoding="utf-8", errors="replace") as f:
                         old = f.read()
                 new = arguments["content"]
-                os.makedirs(os.path.dirname(fpath), exist_ok=True)
+                parent = os.path.dirname(fpath)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
                 with open(fpath, "w", encoding="utf-8") as f:
                     f.write(new)
                 stats = _line_stats(old, new)
@@ -245,10 +250,10 @@ def execute(workspace: str, name: str, arguments: dict) -> str:
             case "delete_file":
                 fpath = _resolve(workspace, arguments["path"])
                 rel = arguments["path"]
-                old = None
-                if os.path.exists(fpath):
-                    with open(fpath, encoding="utf-8", errors="replace") as f:
-                        old = f.read()
+                if not os.path.exists(fpath):
+                    return f"Error: {rel} does not exist"
+                with open(fpath, encoding="utf-8", errors="replace") as f:
+                    old = f.read()
                 os.remove(fpath)
                 stats = _line_stats(old, None)
                 return f"Deleted: {rel} ({stats})" if stats else f"Deleted: {rel}"
@@ -256,7 +261,9 @@ def execute(workspace: str, name: str, arguments: dict) -> str:
             case "rename_file":
                 old_fpath = _resolve(workspace, arguments["old_path"])
                 new_fpath = _resolve(workspace, arguments["new_path"])
-                os.makedirs(os.path.dirname(new_fpath), exist_ok=True)
+                parent = os.path.dirname(new_fpath)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
                 os.rename(old_fpath, new_fpath)
                 return f"Renamed: {arguments['old_path']} -> {arguments['new_path']}"
 
@@ -283,8 +290,8 @@ def execute(workspace: str, name: str, arguments: dict) -> str:
             case "git":
                 args = arguments["args"]
                 result = subprocess.run(
-                    f"git {args}",
-                    shell=True, cwd=workspace,
+                    ["git"] + shlex.split(args),
+                    shell=False, cwd=workspace,
                     capture_output=True, text=True, timeout=60,
                 )
                 output = result.stdout + result.stderr

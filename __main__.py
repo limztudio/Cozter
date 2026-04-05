@@ -78,11 +78,13 @@ async def update_loop(bot: CozterBot, interval: int) -> None:
     while True:
         await asyncio.sleep(interval)
         try:
-            if updater.has_remote_update():
+            # Run blocking git subprocess off the event loop thread
+            has_update = await asyncio.to_thread(updater.has_remote_update)
+            if has_update:
                 logger.info("New version detected, updating...")
                 await bot.notify_users("Cozter is shutting down for an update...")
                 await bot.stop()
-                updater.pull_and_update()
+                await asyncio.to_thread(updater.pull_and_update)
                 updater.restart_script()  # replaces process, does not return
         except Exception:
             logger.exception("Update check failed")
