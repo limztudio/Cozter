@@ -122,9 +122,10 @@ class CozterBot:
         self.user_ids = user_ids
         self.recent_limit = recent_limit
         self.app: Application | None = None
+        self._running_tasks: dict[int, asyncio.Task] = {}  # user_id -> task
 
     async def start(self) -> None:
-        self.app = Application.builder().token(self.token).build()
+        self.app = Application.builder().token(self.token).concurrent_updates(True).build()
 
         # --- simple commands ---
 
@@ -474,6 +475,18 @@ class CozterBot:
             await update.message.reply_text("Cancelled.")
             return ConversationHandler.END
 
+        # --- /stop command ---
+
+        @_authorized(self.user_ids)
+        async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            task = self._running_tasks.get(uid)
+            if task and not task.done():
+                task.cancel()
+                await update.message.reply_text("Cancelling...")
+            else:
+                await update.message.reply_text("Nothing is running.")
+
         # --- AI chat (default for non-command messages) ---
 
         @_authorized(self.user_ids)
@@ -486,19 +499,34 @@ class CozterBot:
                 )
                 return
 
+            # Reject if a task is already running for this user
+            existing = self._running_tasks.get(uid)
+            if existing and not existing.done():
+                await update.message.reply_text(
+                    "A task is already running. Use /stop to cancel it first."
+                )
+                return
+
             model = workspace.get_model(ws)
             perm = workspace.get_permission(ws)
 
             await update.message.reply_text("Thinking...")
+            task = asyncio.current_task()
+            self._running_tasks[uid] = task
             try:
                 result = await codex.run(
                     update.message.text, ws, user_id=uid,
                     model=model, approval=perm,
                 )
+            except asyncio.CancelledError:
+                await update.message.reply_text("Cancelled.")
+                return
             except Exception as e:
                 logger.exception("AI chat failed")
                 await update.message.reply_text(f"Error: {e}")
                 return
+            finally:
+                self._running_tasks.pop(uid, None)
 
             # Only send the final AI text response, skip tool/file noise
             for ev in result.events:
@@ -580,6 +608,7 @@ class CozterBot:
         self.app.add_handler(CommandHandler("clear", cmd_clear))
         self.app.add_handler(CommandHandler("refresh", cmd_refresh))
         self.app.add_handler(CommandHandler("compact", cmd_compact))
+        self.app.add_handler(CommandHandler("stop", cmd_stop))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
 
         for attempt in range(1, 6):

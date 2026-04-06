@@ -26,9 +26,10 @@ KEEP_RECENT_AFTER_COMPACT = 10
 
 SUMMARY_PROMPT = (
     "Summarize the following conversation history into a concise context block. "
-    "Preserve all key decisions, file changes, file paths, tool results, and "
-    "the current state of work. This summary will replace the full history "
-    "to save space, so include everything needed to continue seamlessly."
+    "Preserve all key decisions, file changes, file paths, tool results, "
+    "scheduled actions, open commitments, and the current state of work. "
+    "This summary will replace the full history to save space, so include "
+    "everything needed to continue seamlessly."
 )
 
 
@@ -196,20 +197,29 @@ async def run(
 
     result = CodexResult()
 
-    async for line in _iter_stream_lines(proc.stdout):
-        line = line.strip()
-        if not line:
-            continue
+    try:
+        async for line in _iter_stream_lines(proc.stdout):
+            line = line.strip()
+            if not line:
+                continue
 
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                logger.debug("Non-JSON line: %s", line)
+                continue
+
+            _process_event(event, result)
+
+        await proc.wait()
+    except asyncio.CancelledError:
+        logger.info("Codex run cancelled, killing subprocess %d", proc.pid)
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            logger.debug("Non-JSON line: %s", line)
-            continue
-
-        _process_event(event, result)
-
-    await proc.wait()
+            proc.kill()
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        raise
 
     stderr = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
     if stderr:
@@ -246,10 +256,27 @@ def _log_to_session(
     try:
         session.append_messages(workspace_path, session_id, [
             {"role": "user", "content": prompt},
-            {"role": "assistant", "content": result.text},
+            {"role": "assistant", "content": _format_session_response(result)},
         ])
     except Exception:
         logger.debug("Failed to log session", exc_info=True)
+
+
+def _format_session_response(result: CodexResult) -> str:
+    """Serialize the full assistant-side turn so later prompts can recover state."""
+    parts: list[str] = []
+    for event in result.events:
+        if event.kind == "text":
+            parts.append(event.content)
+        elif event.kind == "tool":
+            parts.append(f"[Tool Result]\n{event.content}")
+        elif event.kind == "file":
+            parts.append(f"[File Change]\n{event.content}")
+
+    if not parts and result.text:
+        parts.append(result.text)
+
+    return "\n\n".join(parts)
 
 
 # ------------------------------------------------------------------
