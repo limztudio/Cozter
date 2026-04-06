@@ -118,8 +118,7 @@ async def main() -> None:
     for bot in bots:
         await bot.start()
 
-    # Build startup message with per-user workspace info (sent from the first bot)
-    primary = bots[0]
+    # Send startup message through every bot
     for uid in user_ids:
         ws = workspace.get_current(uid)
         msg = f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
@@ -127,10 +126,11 @@ async def main() -> None:
             msg += f"\nWorkspace: {ws}"
         else:
             msg += "\nNo workspace selected. Use /new or /open."
-        try:
-            await primary.app.bot.send_message(chat_id=uid, text=msg)
-        except Exception as e:
-            logger.warning("Failed to notify user %s: %s", uid, e)
+        for bot in bots:
+            try:
+                await bot.app.bot.send_message(chat_id=uid, text=msg)
+            except Exception as e:
+                logger.warning("Failed to notify user %s via bot: %s", uid, e)
 
     logger.info("Version: %s | Updated: %s | Bots: %d", version, commit_date, len(bots))
 
