@@ -73,17 +73,17 @@ def log_crash(exc: BaseException) -> str:
 logger = logging.getLogger(__name__)
 
 
-async def update_loop(bot: CozterBot, interval: int) -> None:
+async def update_loop(bots: list[CozterBot], interval: int) -> None:
     """Periodically check for git updates and restart if needed."""
     while True:
         await asyncio.sleep(interval)
         try:
-            # Run blocking git subprocess off the event loop thread
             has_update = await asyncio.to_thread(updater.has_remote_update)
             if has_update:
                 logger.info("New version detected, updating...")
-                await bot.notify_users("Cozter is shutting down for an update...")
-                await bot.stop()
+                for bot in bots:
+                    await bot.notify_users("Cozter is shutting down for an update...")
+                    await bot.stop()
                 await asyncio.to_thread(updater.pull_and_update)
                 updater.restart_script()  # replaces process, does not return
         except Exception:
@@ -92,7 +92,7 @@ async def update_loop(bot: CozterBot, interval: int) -> None:
 
 async def main() -> None:
     config = cfg.load_config()
-    token = config["telegram_bot_token"]
+    tokens = config["telegram_bot_tokens"]
     user_ids = config["user_ids"]
     interval = config["update_check_interval"]
     recent_limit = config["recent_workspace_limit"]
@@ -100,7 +100,7 @@ async def main() -> None:
     version = updater.get_current_version()
     commit_date = updater.get_last_commit_date()
 
-    bot = CozterBot(token, user_ids, recent_limit=recent_limit)
+    bots = [CozterBot(token, user_ids, recent_limit=recent_limit) for token in tokens]
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
@@ -114,9 +114,11 @@ async def main() -> None:
         except NotImplementedError:
             signal.signal(sig, lambda *_: _signal_handler())
 
-    await bot.start()
+    for bot in bots:
+        await bot.start()
 
-    # Build startup message with per-user workspace info
+    # Build startup message with per-user workspace info (sent from the first bot)
+    primary = bots[0]
     for uid in user_ids:
         ws = workspace.get_current(uid)
         msg = f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
@@ -125,20 +127,21 @@ async def main() -> None:
         else:
             msg += "\nNo workspace selected. Use /new or /open."
         try:
-            await bot.app.bot.send_message(chat_id=uid, text=msg)
+            await primary.app.bot.send_message(chat_id=uid, text=msg)
         except Exception as e:
             logger.warning("Failed to notify user %s: %s", uid, e)
 
-    logger.info("Version: %s | Updated: %s", version, commit_date)
+    logger.info("Version: %s | Updated: %s | Bots: %d", version, commit_date, len(bots))
 
-    update_task = asyncio.create_task(update_loop(bot, interval))
+    update_task = asyncio.create_task(update_loop(bots, interval))
 
     await stop_event.wait()
 
     logger.info("Shutting down...")
     update_task.cancel()
-    await bot.notify_users("Cozter is shutting down.")
-    await bot.stop()
+    for bot in bots:
+        await bot.notify_users("Cozter is shutting down.")
+        await bot.stop()
 
 
 def run() -> None:

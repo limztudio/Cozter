@@ -6,7 +6,7 @@ CONFIG_DIR = os.path.join(os.path.dirname(__file__), ".config")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 _DEFAULT_CONFIG = {
-    "telegram_bot_token": "",
+    "telegram_bot_tokens": [],
     "user_ids": [],
     "update_check_interval": 10,
     "recent_workspace_limit": 10,
@@ -19,15 +19,21 @@ def load_config() -> dict:
         with open(CONFIG_PATH, "w") as f:
             json.dump(_DEFAULT_CONFIG, f, indent=2)
         print(f"Config file created at: {CONFIG_PATH}")
-        print("Please fill in 'telegram_bot_token' and 'user_ids', then restart.")
+        print("Please fill in 'telegram_bot_tokens' and 'user_ids', then restart.")
         sys.exit(0)
 
     with open(CONFIG_PATH) as f:
         cfg = json.load(f)
 
-    if not cfg.get("telegram_bot_token"):
-        print(f"ERROR: 'telegram_bot_token' is empty in {CONFIG_PATH}")
-        print("Fill it in and restart.")
+    # Backward-compat: migrate old single-token key to list
+    if "telegram_bot_token" in cfg and "telegram_bot_tokens" not in cfg:
+        old = cfg.pop("telegram_bot_token")
+        cfg["telegram_bot_tokens"] = [old] if old else []
+
+    tokens = cfg.get("telegram_bot_tokens")
+    if not tokens:
+        print(f"ERROR: 'telegram_bot_tokens' is empty in {CONFIG_PATH}")
+        print("Add at least one bot token and restart.")
         sys.exit(1)
 
     if not cfg.get("user_ids"):
