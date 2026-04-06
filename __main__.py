@@ -74,18 +74,18 @@ logger = logging.getLogger(__name__)
 
 
 async def update_loop(bots: list[CozterBot], interval: int) -> None:
-    """Periodically check for git updates and restart if needed."""
+    """Periodically fetch, pull, and restart if code on disk differs from startup."""
     while True:
         await asyncio.sleep(interval)
         try:
-            has_update = await asyncio.to_thread(updater.has_remote_update)
-            if has_update:
-                logger.info("New version detected, updating...")
+            changed = await asyncio.to_thread(updater.fetch_and_pull)
+            if changed:
+                logger.info("New version detected, restarting...")
+                await asyncio.to_thread(updater.install_requirements)
                 for bot in bots:
-                    await bot.notify_users("Cozter is shutting down for an update...")
+                    await bot.notify_users("Cozter is restarting for an update...")
                     await bot.stop()
-                await asyncio.to_thread(updater.pull_and_update)
-                updater.restart_script()  # replaces process, does not return
+                updater.restart_script()  # exits; systemd respawns
         except Exception:
             logger.exception("Update check failed")
 
@@ -97,6 +97,7 @@ async def main() -> None:
     interval = config["update_check_interval"]
     recent_limit = config["recent_workspace_limit"]
 
+    updater.init_startup_commit()
     version = updater.get_current_version()
     commit_date = updater.get_last_commit_date()
 
