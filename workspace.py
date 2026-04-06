@@ -10,10 +10,17 @@ COZTER_DIR_NAME = ".cozter"
 
 
 def _load_all() -> dict:
-    """Load the full state: {user_id_str: {current, recent}, ...}"""
+    """Load the full state: {user_id_str: {current: {bot_id: path}, recent}, ...}"""
     if os.path.exists(WORKSPACE_STATE_PATH):
         with open(WORKSPACE_STATE_PATH, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        # Migrate old format: current was a plain string, now a dict keyed by bot_id
+        for uid, state in data.items():
+            cur = state.get("current")
+            if isinstance(cur, str):
+                state["current"] = {"_default": cur} if cur else {}
+                logger.info("Migrated workspace state for user %s", uid)
+        return data
     return {}
 
 
@@ -24,28 +31,35 @@ def _save_all(data: dict) -> None:
 
 
 def _get_user(user_id: int) -> dict:
-    return _load_all().get(str(user_id), {"current": None, "recent": []})
+    return _load_all().get(str(user_id), {"current": {}, "recent": []})
 
 
-def get_current(user_id: int) -> str | None:
-    return _get_user(user_id).get("current")
+def get_current(user_id: int, bot_id: int | str = "_default") -> str | None:
+    return _get_user(user_id).get("current", {}).get(str(bot_id))
 
 
 def get_recent(user_id: int, limit: int = 10) -> list[str]:
     return _get_user(user_id).get("recent", [])[:limit]
 
 
-def select_workspace(user_id: int, path: str) -> None:
-    """Set path as current workspace and push it to the top of recent list."""
+def select_workspace(user_id: int, path: str, bot_id: int | str = "_default") -> None:
+    """Set path as current workspace for a specific bot and push it to recent."""
     all_state = _load_all()
     uid = str(user_id)
-    user_state = all_state.get(uid, {"current": None, "recent": []})
-    user_state["current"] = path
+    user_state = all_state.get(uid, {"current": {}, "recent": []})
+
+    # Ensure current is a dict (handles migrated data)
+    if not isinstance(user_state.get("current"), dict):
+        user_state["current"] = {}
+
+    user_state["current"][str(bot_id)] = path
+
     recent = user_state.get("recent", [])
     if path in recent:
         recent.remove(path)
     recent.insert(0, path)
     user_state["recent"] = recent
+
     all_state[uid] = user_state
     _save_all(all_state)
 

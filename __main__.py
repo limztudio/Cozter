@@ -118,15 +118,15 @@ async def main() -> None:
     for bot in bots:
         await bot.start()
 
-    # Send startup message through every bot
-    for uid in user_ids:
-        ws = workspace.get_current(uid)
-        msg = f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
-        if ws:
-            msg += f"\nWorkspace: {ws}"
-        else:
-            msg += "\nNo workspace selected. Use /new or /open."
-        for bot in bots:
+    # Send startup message through every bot with per-bot workspace info
+    for bot in bots:
+        for uid in user_ids:
+            ws = workspace.get_current(uid, bot.bot_id)
+            msg = f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
+            if ws:
+                msg += f"\nWorkspace: {ws}"
+            else:
+                msg += "\nNo workspace selected. Use /new or /open."
             try:
                 await bot.app.bot.send_message(chat_id=uid, text=msg)
             except Exception as e:

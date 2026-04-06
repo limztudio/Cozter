@@ -124,6 +124,10 @@ class CozterBot:
         self.app: Application | None = None
         self._running_tasks: dict[int, asyncio.Task] = {}  # user_id -> task
 
+    @property
+    def bot_id(self) -> int:
+        return self.app.bot.id
+
     async def start(self) -> None:
         self.app = Application.builder().token(self.token).concurrent_updates(True).build()
 
@@ -145,7 +149,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             if not ws:
                 await update.message.reply_text("No workspace selected. Use /new or /open first.")
                 return
@@ -158,7 +162,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            current = workspace.get_current(uid)
+            current = workspace.get_current(uid, self.bot_id)
             msg = f"Current workspace: {current or '(none)'}\n\nEnter the full path for the new workspace directory (or /cancel):"
             await update.message.reply_text(msg)
             return NEW_AWAITING_DIR
@@ -183,7 +187,7 @@ class CozterBot:
                 return NEW_AWAITING_DIR
 
             workspace.ensure_cozter_dir(path)
-            workspace.select_workspace(uid, path)
+            workspace.select_workspace(uid, path, self.bot_id)
             await update.message.reply_text(
                 f"Workspace created and selected:\n{path}"
             )
@@ -194,7 +198,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            current = workspace.get_current(uid)
+            current = workspace.get_current(uid, self.bot_id)
             recent = workspace.get_recent(uid, self.recent_limit)
 
             lines = [f"Current workspace: {current or '(none)'}"]
@@ -233,7 +237,7 @@ class CozterBot:
                 return OPEN_AWAITING_DIR
 
             workspace.ensure_cozter_dir(path)
-            workspace.select_workspace(uid, path)
+            workspace.select_workspace(uid, path, self.bot_id)
             await update.message.reply_text(
                 f"Workspace selected:\n{path}"
             )
@@ -244,7 +248,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             if not ws:
                 await update.message.reply_text("No workspace selected. Use /new or /open first.")
                 return ConversationHandler.END
@@ -262,7 +266,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def model_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             text = update.message.text.strip()
             options = workspace.AVAILABLE_MODELS
 
@@ -290,7 +294,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             if not ws:
                 await update.message.reply_text("No workspace selected. Use /new or /open first.")
                 return ConversationHandler.END
@@ -309,7 +313,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def permission_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             text = update.message.text.strip().lower()
             options = workspace.AVAILABLE_PERMISSIONS
 
@@ -337,7 +341,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             if not ws:
                 await update.message.reply_text("No workspace selected. Use /new or /open first.")
                 return ConversationHandler.END
@@ -372,7 +376,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def session_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             text = update.message.text.strip()
             sessions = session.list_sessions(ws)
 
@@ -406,7 +410,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             if not ws:
                 await update.message.reply_text("No workspace selected. Use /new or /open first.")
                 return
@@ -426,7 +430,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             if not ws:
                 await update.message.reply_text("No workspace selected. Use /new or /open first.")
                 return
@@ -492,7 +496,7 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid)
+            ws = workspace.get_current(uid, self.bot_id)
             if not ws:
                 await update.message.reply_text(
                     "No workspace selected. Use /new or /open first."
