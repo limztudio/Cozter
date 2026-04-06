@@ -256,16 +256,28 @@ async def _maybe_compact(
             return
 
         logger.info("Auto-compact triggered (msgs=%d, interval=%d)", len(msgs), interval)
+        existing_summary = data.get("summary") or ""
         new_summary = await _compact_session(workspace_path, session_id, model)
-        if new_summary:
-            async with _get_workspace_lock(workspace_path):
-                session.set_summary(
-                    workspace_path, session_id, new_summary,
-                    keep_recent=KEEP_RECENT_AFTER_COMPACT,
-                )
-            logger.info("Session %s compacted, summary %d chars", session_id, len(new_summary))
+        if not new_summary:
+            logger.error("Compaction produced empty summary for session %s", session_id)
+            return
+        # Reject summaries that are suspiciously short compared to the existing
+        # one — a sign of a truncated or failed codex response.
+        min_len = max(100, len(existing_summary) // 2)
+        if len(new_summary) < min_len:
+            logger.error(
+                "Compaction summary too short (%d chars, min %d) for session %s — keeping existing",
+                len(new_summary), min_len, session_id,
+            )
+            return
+        async with _get_workspace_lock(workspace_path):
+            session.set_summary(
+                workspace_path, session_id, new_summary,
+                keep_recent=KEEP_RECENT_AFTER_COMPACT,
+            )
+        logger.info("Session %s compacted, summary %d chars", session_id, len(new_summary))
     except Exception:
-        logger.debug("Compaction check failed", exc_info=True)
+        logger.error("Compaction check failed", exc_info=True)
 
 
 async def _compact_session(
