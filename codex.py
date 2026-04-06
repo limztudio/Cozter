@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
+from typing import AsyncIterator
 
 from . import session
 
@@ -120,6 +121,27 @@ def _build_contextual_prompt(
     return full
 
 
+async def _iter_stream_lines(
+    stream: asyncio.StreamReader, chunk_size: int = 64 * 1024,
+) -> AsyncIterator[str]:
+    """Yield decoded stdout lines without StreamReader.readline() size limits."""
+    buffer = bytearray()
+
+    while True:
+        chunk = await stream.read(chunk_size)
+        if not chunk:
+            if buffer:
+                yield buffer.decode("utf-8", errors="replace")
+            return
+
+        buffer.extend(chunk)
+        parts = buffer.split(b"\n")
+        buffer = bytearray(parts.pop())
+
+        for part in parts:
+            yield part.decode("utf-8", errors="replace")
+
+
 # ------------------------------------------------------------------
 # Main run function
 # ------------------------------------------------------------------
@@ -174,12 +196,8 @@ async def run(
 
     result = CodexResult()
 
-    while True:
-        line = await proc.stdout.readline()
-        if not line:
-            break
-
-        line = line.decode("utf-8", errors="replace").strip()
+    async for line in _iter_stream_lines(proc.stdout):
+        line = line.strip()
         if not line:
             continue
 
@@ -327,11 +345,8 @@ async def _compact_session(
 
     # Collect agent_message text from JSON event stream; keep the last one
     new_summary = ""
-    while True:
-        line = await proc.stdout.readline()
-        if not line:
-            break
-        line = line.decode("utf-8", errors="replace").strip()
+    async for line in _iter_stream_lines(proc.stdout):
+        line = line.strip()
         if not line:
             continue
         try:
