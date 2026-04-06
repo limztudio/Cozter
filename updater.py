@@ -69,12 +69,6 @@ def pull_and_update() -> None:
 
 
 def restart_script() -> None:
-    """Restart the current module by spawning a new process and exiting."""
-    logger.info("Restarting...")
-    module_name = os.path.basename(MODULE_ROOT)
-    parent_dir = os.path.dirname(MODULE_ROOT)
-    subprocess.Popen(
-        [sys.executable, "-m", module_name],
-        cwd=parent_dir,
-    )
+    """Exit so the systemd service (Restart=always) restarts us."""
+    logger.info("Restarting (exiting for systemd to respawn)...")
     os._exit(0)
