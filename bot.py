@@ -42,9 +42,13 @@ def _split_html(text: str, limit: int = 4096) -> list[str]:
             break
         split_at = text.rfind("\n", 0, limit)
         if split_at == -1:
-            split_at = limit  # no newline — hard split as last resort
-        chunks.append(text[:split_at])
-        text = text[split_at + 1:]
+            # No newline — hard split, keep all characters
+            chunks.append(text[:limit])
+            text = text[limit:]
+        else:
+            # Split at newline, consume the newline character
+            chunks.append(text[:split_at])
+            text = text[split_at + 1:]
     return chunks
 
 

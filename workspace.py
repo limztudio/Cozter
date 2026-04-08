@@ -110,8 +110,19 @@ def _load_settings(workspace_path: str) -> dict:
 
 def _save_settings(workspace_path: str, settings: dict) -> None:
     ensure_cozter_dir(workspace_path)
-    with open(_settings_path(workspace_path), "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2)
+    target = _settings_path(workspace_path)
+    tmp_dir = os.path.join(workspace_path, COZTER_DIR_NAME)
+    fd, tmp_path = tempfile.mkstemp(dir=tmp_dir, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def get_model(workspace_path: str) -> str:
