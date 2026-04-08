@@ -16,14 +16,14 @@ _DEFAULT_CONFIG = {
 def load_config() -> dict:
     if not os.path.exists(CONFIG_PATH):
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_PATH, "w") as f:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(_DEFAULT_CONFIG, f, indent=2)
         print(f"Config file created at: {CONFIG_PATH}")
         print("Please fill in 'telegram_bot_tokens' and 'user_ids', then restart.")
         sys.exit(0)
 
     try:
-        with open(CONFIG_PATH) as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         print(f"ERROR: config.json is corrupted or unreadable: {e}")
