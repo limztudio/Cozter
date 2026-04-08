@@ -273,6 +273,9 @@ class CozterBot:
         async def model_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return ConversationHandler.END
             text = update.message.text.strip()
             options = workspace.AVAILABLE_MODELS
 
@@ -319,6 +322,9 @@ class CozterBot:
         async def summarymodel_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return ConversationHandler.END
             text = update.message.text.strip()
             options = workspace.AVAILABLE_MODELS
 
@@ -366,6 +372,9 @@ class CozterBot:
         async def permission_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return ConversationHandler.END
             text = update.message.text.strip().lower()
             options = workspace.AVAILABLE_PERMISSIONS
 
@@ -429,6 +438,9 @@ class CozterBot:
         async def session_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return ConversationHandler.END
             text = update.message.text.strip()
             sessions = session.list_sessions(ws)
 

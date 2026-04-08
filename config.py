@@ -22,8 +22,13 @@ def load_config() -> dict:
         print("Please fill in 'telegram_bot_tokens' and 'user_ids', then restart.")
         sys.exit(0)
 
-    with open(CONFIG_PATH) as f:
-        cfg = json.load(f)
+    try:
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"ERROR: config.json is corrupted or unreadable: {e}")
+        print(f"Fix or delete {CONFIG_PATH}, then restart.")
+        sys.exit(1)
 
     # Backward-compat: migrate old single-token key to list
     if "telegram_bot_token" in cfg and "telegram_bot_tokens" not in cfg:
