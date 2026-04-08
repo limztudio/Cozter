@@ -560,10 +560,13 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
+            text = update.message.text.strip()
+            if not text:
+                return
             ws = workspace.get_current(uid, self.bot_id)
-            if not ws:
+            if not ws or not os.path.isdir(ws):
                 await update.message.reply_text(
-                    "No workspace selected. Use /new or /open first."
+                    "No workspace selected (or it was deleted). Use /new or /open."
                 )
                 return
 
@@ -589,7 +592,7 @@ class CozterBot:
             self._running_tasks[uid] = task
             try:
                 result = await codex.run(
-                    update.message.text, ws, user_id=uid,
+                    text, ws, user_id=uid,
                     model=model, summary_model=summary_model, approval=perm,
                 )
             except asyncio.CancelledError:
