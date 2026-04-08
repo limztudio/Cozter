@@ -52,21 +52,24 @@ def fetch_and_pull() -> bool:
     This detects both remote updates and manual pulls that happened while
     the process was running.
     """
-    # Fetch latest refs
-    fetch = subprocess.run(
-        ["git", "fetch", "origin"],
-        cwd=MODULE_ROOT, capture_output=True, text=True,
-    )
-    if fetch.returncode != 0:
-        logger.warning("git fetch failed: %s", fetch.stderr.strip())
+    # Fetch latest refs and pull
+    try:
+        fetch = subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=MODULE_ROOT, capture_output=True, text=True,
+        )
+        if fetch.returncode != 0:
+            logger.warning("git fetch failed: %s", fetch.stderr.strip())
 
-    # Pull if behind (no-op if already up to date)
-    pull = subprocess.run(
-        ["git", "pull", "--ff-only"],
-        cwd=MODULE_ROOT, capture_output=True, text=True,
-    )
-    if pull.returncode != 0:
-        logger.warning("git pull failed: %s", pull.stderr.strip())
+        pull = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=MODULE_ROOT, capture_output=True, text=True,
+        )
+        if pull.returncode != 0:
+            logger.warning("git pull failed: %s", pull.stderr.strip())
+    except FileNotFoundError:
+        logger.error("git not found on PATH, skipping update check")
+        return False
 
     # Compare disk HEAD to the commit we started with
     current = _get_head_commit()

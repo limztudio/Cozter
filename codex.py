@@ -186,12 +186,19 @@ async def run(
     logger.info("Running codex exec (prompt %d chars, context %d chars)",
                 len(prompt), len(contextual_prompt))
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        result = CodexResult()
+        result.text = "Error: codex CLI not found on PATH."
+        result.events.append(ChatEvent(kind="text", content=result.text))
+        return result
+
     # Use drain() to avoid deadlock when the prompt exceeds the OS pipe buffer
     proc.stdin.write(contextual_prompt.encode("utf-8"))
     await proc.stdin.drain()
@@ -262,7 +269,7 @@ def _log_to_session(
             {"role": "assistant", "content": _format_session_response(result)},
         ])
     except Exception:
-        logger.debug("Failed to log session", exc_info=True)
+        logger.error("Failed to log session", exc_info=True)
 
 
 def _format_session_response(result: CodexResult) -> str:
