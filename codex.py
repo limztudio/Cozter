@@ -191,10 +191,12 @@ async def run(
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        limit=1024 * 1024,  # 1 MB stream buffer
     )
+    # Use drain() to avoid deadlock when the prompt exceeds the OS pipe buffer
     proc.stdin.write(contextual_prompt.encode("utf-8"))
+    await proc.stdin.drain()
     proc.stdin.close()
+    await proc.stdin.wait_closed()
 
     result = CodexResult()
 
@@ -379,36 +381,49 @@ async def _compact_session(
 
     logger.info("Running compaction for session %s", session_id)
 
+    COMPACT_TIMEOUT = 120  # seconds
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        limit=1024 * 1024,
     )
     proc.stdin.write(full_prompt.encode("utf-8"))
+    await proc.stdin.drain()
     proc.stdin.close()
+    await proc.stdin.wait_closed()
 
     # Collect agent_message text from JSON event stream; keep the last one
     new_summary = ""
-    async for line in _iter_stream_lines(proc.stdout):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            if not new_summary:
-                new_summary = line  # bare-text fallback
-            continue
-        if event.get("type") == "item.completed":
-            item = event.get("item", {})
-            if item.get("type") == "agent_message":
-                text = item.get("text", "")
-                if text:
-                    new_summary = text  # keep updating — last one wins
+    try:
+        async with asyncio.timeout(COMPACT_TIMEOUT):
+            async for line in _iter_stream_lines(proc.stdout):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    if not new_summary:
+                        new_summary = line  # bare-text fallback
+                    continue
+                if event.get("type") == "item.completed":
+                    item = event.get("item", {})
+                    if item.get("type") == "agent_message":
+                        text = item.get("text", "")
+                        if text:
+                            new_summary = text  # keep updating — last one wins
 
-    await proc.wait()
+            await proc.wait()
+    except TimeoutError:
+        logger.error("Compaction timed out after %ds for session %s", COMPACT_TIMEOUT, session_id)
+        try:
+            proc.kill()
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        return ""
 
     if not new_summary:
         stderr = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()

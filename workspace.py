@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +27,17 @@ def _load_all() -> dict:
 
 def _save_all(data: dict) -> None:
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(WORKSPACE_STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    fd, tmp_path = tempfile.mkstemp(dir=CONFIG_DIR, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, WORKSPACE_STATE_PATH)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _get_user(user_id: int) -> dict:

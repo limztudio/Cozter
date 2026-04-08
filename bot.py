@@ -124,6 +124,7 @@ class CozterBot:
         self.recent_limit = recent_limit
         self.app: Application | None = None
         self._running_tasks: dict[int, asyncio.Task] = {}  # user_id -> task
+        self._task_locks: dict[int, asyncio.Lock] = {}  # user_id -> lock
 
     @property
     def bot_id(self) -> int:
@@ -550,9 +551,13 @@ class CozterBot:
                 )
                 return
 
-            # Reject if a task is already running for this user
-            existing = self._running_tasks.get(uid)
-            if existing and not existing.done():
+            # Use a per-user lock to prevent two rapid messages from both
+            # passing the "is running" check with concurrent_updates=True.
+            if uid not in self._task_locks:
+                self._task_locks[uid] = asyncio.Lock()
+            lock = self._task_locks[uid]
+
+            if lock.locked():
                 await update.message.reply_text(
                     "A task is already running. Use /stop to cancel it first."
                 )
@@ -563,6 +568,7 @@ class CozterBot:
             perm = workspace.get_permission(ws)
 
             await update.message.reply_text("Thinking...")
+            await lock.acquire()
             task = asyncio.current_task()
             self._running_tasks[uid] = task
             try:
@@ -579,6 +585,7 @@ class CozterBot:
                 return
             finally:
                 self._running_tasks.pop(uid, None)
+                lock.release()
 
             # Only send the final AI text response, skip tool/file noise
             for ev in result.events:
