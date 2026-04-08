@@ -152,6 +152,7 @@ async def run(
     workspace_path: str,
     user_id: int,
     model: str | None = None,
+    summary_model: str | None = None,
     approval: str = "auto",
 ) -> CodexResult:
     """Run ``codex exec --json`` with session history prepended.
@@ -236,7 +237,7 @@ async def run(
     async with _get_workspace_lock(workspace_path):
         _log_to_session(workspace_path, session_id, prompt, result)
 
-    await _maybe_compact(workspace_path, session_id, model)
+    await _maybe_compact(workspace_path, session_id, summary_model)
 
     # Ensure there's at least one text event
     if not any(e.kind == "text" for e in result.events):
@@ -284,7 +285,7 @@ def _format_session_response(result: CodexResult) -> str:
 # ------------------------------------------------------------------
 
 async def _maybe_compact(
-    workspace_path: str, session_id: str, model: str | None = None,
+    workspace_path: str, session_id: str, summary_model: str | None = None,
 ) -> None:
     """Summarize session history if uncompacted messages reach the compact interval.
 
@@ -302,7 +303,7 @@ async def _maybe_compact(
 
         logger.info("Auto-compact triggered (msgs=%d, interval=%d)", len(msgs), interval)
         existing_summary = data.get("summary") or ""
-        new_summary = await _compact_session(workspace_path, session_id, model)
+        new_summary = await _compact_session(workspace_path, session_id, summary_model)
         if not new_summary:
             logger.error("Compaction produced empty summary for session %s", session_id)
             return
@@ -326,7 +327,7 @@ async def _maybe_compact(
 
 
 async def _compact_session(
-    workspace_path: str, session_id: str, model: str | None = None,
+    workspace_path: str, session_id: str, summary_model: str | None = None,
 ) -> str:
     """Run Codex to summarize the session. Returns the summary string (or "" on failure).
 
@@ -354,8 +355,8 @@ async def _compact_session(
     full_prompt = f"{SUMMARY_PROMPT}\n\n" + "\n".join(parts)
 
     cmd = ["codex", "exec", "--ephemeral", "--full-auto", "-C", workspace_path]
-    if model:
-        cmd += ["-m", model]
+    if summary_model:
+        cmd += ["-m", summary_model]
     cmd.append("-")
 
     logger.info("Running compaction for session %s", session_id)

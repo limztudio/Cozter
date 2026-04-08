@@ -83,6 +83,7 @@ AVAILABLE_MODELS = [
     "gpt-5.2",
 ]
 DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_SUMMARY_MODEL = "gpt-5.3-codex"
 
 
 def _settings_path(workspace_path: str) -> str:
@@ -110,6 +111,16 @@ def get_model(workspace_path: str) -> str:
 def set_model(workspace_path: str, model: str) -> None:
     settings = _load_settings(workspace_path)
     settings["model"] = model
+    _save_settings(workspace_path, settings)
+
+
+def get_summary_model(workspace_path: str) -> str:
+    return _load_settings(workspace_path).get("summary_model", DEFAULT_SUMMARY_MODEL)
+
+
+def set_summary_model(workspace_path: str, model: str) -> None:
+    settings = _load_settings(workspace_path)
+    settings["summary_model"] = model
     _save_settings(workspace_path, settings)
 
 

@@ -99,6 +99,7 @@ OPEN_AWAITING_DIR = 1
 MODEL_AWAITING = 2
 PERMISSION_AWAITING = 3
 SESSION_AWAITING = 4
+SUMMARY_MODEL_AWAITING = 5
 
 
 def _authorized(user_ids: list[int]):
@@ -289,6 +290,52 @@ class CozterBot:
             await update.message.reply_text(f"Model set to: {model}")
             return ConversationHandler.END
 
+        # --- /summarymodel conversation ---
+
+        @_authorized(self.user_ids)
+        async def cmd_summarymodel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid, self.bot_id)
+            if not ws:
+                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                return ConversationHandler.END
+
+            current = workspace.get_summary_model(ws)
+            options = workspace.AVAILABLE_MODELS
+            lines = [f"Current summary model: {current}\n", "Available models:"]
+            for i, m in enumerate(options, 1):
+                marker = " <-" if m == current else ""
+                lines.append(f"  {i}. {m}{marker}")
+            lines.append("\nEnter a number or model name (or /cancel):")
+            await update.message.reply_text("\n".join(lines))
+            return SUMMARY_MODEL_AWAITING
+
+        @_authorized(self.user_ids)
+        async def summarymodel_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid, self.bot_id)
+            text = update.message.text.strip()
+            options = workspace.AVAILABLE_MODELS
+
+            if text.isdigit():
+                idx = int(text) - 1
+                if 0 <= idx < len(options):
+                    model = options[idx]
+                else:
+                    await update.message.reply_text("Invalid number. Try again (or /cancel):")
+                    return SUMMARY_MODEL_AWAITING
+            elif text in options:
+                model = text
+            else:
+                await update.message.reply_text(
+                    f"Unknown model: {text}\nTry again (or /cancel):"
+                )
+                return SUMMARY_MODEL_AWAITING
+
+            workspace.set_summary_model(ws, model)
+            await update.message.reply_text(f"Summary model set to: {model}")
+            return ConversationHandler.END
+
         # --- /permission conversation ---
 
         @_authorized(self.user_ids)
@@ -440,8 +487,8 @@ class CozterBot:
 
             if args == "now":
                 await update.message.reply_text("Compacting session...")
-                model = workspace.get_model(ws)
-                new_summary = await codex._compact_session(ws, sid, model)
+                summary_model = workspace.get_summary_model(ws)
+                new_summary = await codex._compact_session(ws, sid, summary_model)
                 if new_summary:
                     async with codex._get_workspace_lock(ws):
                         session.set_summary(ws, sid, new_summary,
@@ -512,6 +559,7 @@ class CozterBot:
                 return
 
             model = workspace.get_model(ws)
+            summary_model = workspace.get_summary_model(ws)
             perm = workspace.get_permission(ws)
 
             await update.message.reply_text("Thinking...")
@@ -520,7 +568,7 @@ class CozterBot:
             try:
                 result = await codex.run(
                     update.message.text, ws, user_id=uid,
-                    model=model, approval=perm,
+                    model=model, summary_model=summary_model, approval=perm,
                 )
             except asyncio.CancelledError:
                 await update.message.reply_text("Cancelled.")
@@ -580,6 +628,17 @@ class CozterBot:
             fallbacks=[cancel_handler],
         )
 
+        summarymodel_conv = ConversationHandler(
+            entry_points=[CommandHandler("summarymodel", cmd_summarymodel)],
+            states={
+                SUMMARY_MODEL_AWAITING: [
+                    cancel_handler,
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, summarymodel_receive),
+                ],
+            },
+            fallbacks=[cancel_handler],
+        )
+
         permission_conv = ConversationHandler(
             entry_points=[CommandHandler("permission", cmd_permission)],
             states={
@@ -605,6 +664,7 @@ class CozterBot:
         self.app.add_handler(new_conv)
         self.app.add_handler(open_conv)
         self.app.add_handler(model_conv)
+        self.app.add_handler(summarymodel_conv)
         self.app.add_handler(permission_conv)
         self.app.add_handler(session_conv)
         self.app.add_handler(CommandHandler("start", cmd_start))
