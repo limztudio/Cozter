@@ -342,15 +342,33 @@ async def _compact_session(
     if not messages:
         return ""
 
-    # Build the content to summarize
+    # Build the content to summarize, staying within a token budget.
+    # Large prompts cause the summary model to return truncated/empty output.
+    MAX_SUMMARY_CHARS = 80_000  # ~20K tokens — safe for most models
+
     parts: list[str] = []
     if existing_summary:
         parts.append(f"Previous summary:\n{existing_summary}\n")
     parts.append("Conversation to summarize:")
-    for msg in messages:
+
+    # Add messages newest-first until we hit the budget, then reverse
+    overhead = len(SUMMARY_PROMPT) + sum(len(p) for p in parts) + 200
+    budget = MAX_SUMMARY_CHARS - overhead
+    msg_lines: list[str] = []
+    used = 0
+    for msg in reversed(messages):
         role = msg.get("role", "?").capitalize()
         content = msg.get("content", "")
-        parts.append(f"{role}: {content}")
+        line = f"{role}: {content}"
+        if used + len(line) > budget:
+            break
+        msg_lines.insert(0, line)
+        used += len(line) + 1
+    parts.extend(msg_lines)
+
+    if not msg_lines:
+        logger.warning("Session %s messages too large even for a single entry", session_id)
+        return ""
 
     full_prompt = f"{SUMMARY_PROMPT}\n\n" + "\n".join(parts)
 
