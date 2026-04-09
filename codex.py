@@ -381,7 +381,15 @@ async def _compact_session(
 
     full_prompt = f"{SUMMARY_PROMPT}\n\n" + "\n".join(parts)
 
-    cmd = ["codex", "exec", "--ephemeral", "--full-auto", "-C", workspace_path]
+    # --json so we can parse agent_message events reliably; bypass mode
+    # because compaction is a trusted internal LLM call with no tool use,
+    # and --full-auto's sandbox can interfere with model API access in some
+    # environments.
+    cmd = [
+        "codex", "exec", "--ephemeral", "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-C", workspace_path,
+    ]
     if summary_model:
         cmd += ["-m", summary_model]
     cmd.append("-")
