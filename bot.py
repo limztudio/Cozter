@@ -572,6 +572,11 @@ class CozterBot:
 
             # Use a per-user lock to prevent two rapid messages from both
             # passing the "is running" check with concurrent_updates=True.
+            # IMPORTANT: acquire the lock immediately after the locked() check,
+            # before any other awaits. asyncio.Lock.acquire() takes a synchronous
+            # fast path when the lock is free, so the check+acquire pair is
+            # effectively atomic. Inserting an await between them (e.g. a
+            # reply_text) would let a second concurrent handler slip through.
             if uid not in self._task_locks:
                 self._task_locks[uid] = asyncio.Lock()
             lock = self._task_locks[uid]
@@ -581,15 +586,15 @@ class CozterBot:
                     "A task is already running. Use /stop to cancel it first."
                 )
                 return
+            await lock.acquire()
+            task = asyncio.current_task()
+            self._running_tasks[uid] = task
 
             model = workspace.get_model(ws)
             summary_model = workspace.get_summary_model(ws)
             perm = workspace.get_permission(ws)
 
             await update.message.reply_text("Thinking...")
-            await lock.acquire()
-            task = asyncio.current_task()
-            self._running_tasks[uid] = task
             try:
                 result = await codex.run(
                     text, ws, user_id=uid,
@@ -615,7 +620,14 @@ class CozterBot:
                     try:
                         await update.message.reply_text(chunk, parse_mode="HTML")
                     except Exception:
-                        await update.message.reply_text(chunk)
+                        # Telegram rejected the HTML — strip tags and unescape
+                        # entities so the user sees readable plain text instead
+                        # of literal <b>...</b> markup.
+                        plain = re.sub(r"<[^>]+>", "", chunk)
+                        plain = (plain.replace("&lt;", "<")
+                                      .replace("&gt;", ">")
+                                      .replace("&amp;", "&"))
+                        await update.message.reply_text(plain)
 
         # --- register handlers ---
 

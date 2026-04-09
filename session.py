@@ -107,7 +107,8 @@ def list_sessions(workspace: str) -> list[dict]:
 
 def create_session(workspace: str, name: str | None = None) -> dict:
     """Create a new session and return its metadata."""
-    os.makedirs(_sessions_dir(workspace), exist_ok=True)
+    sdir = _sessions_dir(workspace)
+    os.makedirs(sdir, exist_ok=True)
     session_id = uuid.uuid4().hex[:12]
     now = datetime.now().isoformat()
     data = {
@@ -119,8 +120,7 @@ def create_session(workspace: str, name: str | None = None) -> dict:
         "compact_interval": 20,
         "compacted_count": 0,
     }
-    with open(_session_path(workspace, session_id), "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    _atomic_write(_session_path(workspace, session_id), data, tmp_dir=sdir)
     return data
 
 

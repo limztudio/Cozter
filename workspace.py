@@ -13,8 +13,13 @@ COZTER_DIR_NAME = ".cozter"
 def _load_all() -> dict:
     """Load the full state: {user_id_str: {current: {bot_id: path}, recent}, ...}"""
     if os.path.exists(WORKSPACE_STATE_PATH):
-        with open(WORKSPACE_STATE_PATH, encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with open(WORKSPACE_STATE_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Corrupt or unreadable workspace state file (%s): %s",
+                           WORKSPACE_STATE_PATH, e)
+            return {}
         # Migrate old format: current was a plain string, now a dict keyed by bot_id
         for uid, state in data.items():
             cur = state.get("current")
@@ -103,8 +108,11 @@ def _settings_path(workspace_path: str) -> str:
 def _load_settings(workspace_path: str) -> dict:
     path = _settings_path(workspace_path)
     if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Corrupt or unreadable workspace settings (%s): %s", path, e)
     return {}
 
 
