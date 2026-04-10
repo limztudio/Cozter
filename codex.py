@@ -272,9 +272,13 @@ async def run(
                 except asyncio.CancelledError:
                     pass
 
-        # If we're restarting due to inject, also drain any extra injects
-        # that arrived while we were shutting down.
+        # If we're restarting due to inject, drain pipes and any extra
+        # injects that arrived while we were shutting down.
         if restarting:
+            try:
+                await proc.stderr.read()
+            except Exception:
+                pass
             if inject_queue is not None:
                 while not inject_queue.empty():
                     try:
@@ -284,8 +288,8 @@ async def run(
             logger.info("Restarting codex with %d injected message(s)", len(injected))
             if on_event:
                 await on_event(ChatEvent(
-                    kind="text",
-                    content="[Restarting with injected context...]",
+                    kind="tool",
+                    content="Restarting with injected context...",
                 ))
             continue  # restart loop
 

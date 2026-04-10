@@ -755,6 +755,12 @@ class CozterBot:
         Caller must already hold the per-user lock.
         """
         ws = workspace.get_current(uid, self.bot_id)
+        if not ws or not os.path.isdir(ws):
+            await self.app.bot.send_message(
+                chat_id=chat_id,
+                text="Workspace not available (deleted?). Use /new or /open.",
+            )
+            return
         model = workspace.get_model(ws)
         summary_model = workspace.get_summary_model(ws)
         perm = workspace.get_permission(ws)
@@ -813,6 +819,8 @@ class CozterBot:
                 continue
             html = _md_to_html(ev.content)
             for chunk in _split_html(html):
+                if not chunk.strip():
+                    continue  # skip empty chunks — Telegram rejects them
                 try:
                     await self.app.bot.send_message(
                         chat_id=chat_id, text=chunk, parse_mode="HTML",
@@ -822,7 +830,8 @@ class CozterBot:
                     plain = (plain.replace("&lt;", "<")
                                   .replace("&gt;", ">")
                                   .replace("&amp;", "&"))
-                    await self.app.bot.send_message(chat_id=chat_id, text=plain)
+                    if plain.strip():
+                        await self.app.bot.send_message(chat_id=chat_id, text=plain)
 
     async def _drain_message_queue(self, uid: int) -> None:
         """Process any messages that were queued while the AI was busy."""
@@ -831,16 +840,17 @@ class CozterBot:
             return
 
         while not q.empty():
-            try:
-                text, msg_chat_id = q.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
             lock = self._task_locks[uid]
             if lock.locked():
                 break  # something else acquired — stop draining
 
+            # Check lock BEFORE dequeuing so we never drop a message.
             await lock.acquire()
+            try:
+                text, msg_chat_id = q.get_nowait()
+            except asyncio.QueueEmpty:
+                lock.release()
+                break
             try:
                 await self._run_ai_turn(uid, msg_chat_id, text)
             except asyncio.CancelledError:
