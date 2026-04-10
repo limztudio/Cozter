@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
@@ -154,23 +155,26 @@ async def run(
     model: str | None = None,
     summary_model: str | None = None,
     approval: str = "auto",
+    on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
+    inject_queue: asyncio.Queue[str] | None = None,
 ) -> CodexResult:
     """Run ``codex exec --json`` with session history prepended.
 
+    on_event  — called for each parsed event as it arrives (streaming).
+    inject_queue — when a message is put, the running subprocess is killed
+                   and restarted with the injected context appended.
+
     approval maps to sandbox/approval flags:
+      - "full"    → --dangerously-bypass-approvals-and-sandbox
       - "auto"    → --full-auto
       - "confirm" → --sandbox workspace-write
       - "deny"    → --sandbox read-only
     """
-    # Resolve session ID once here; pass it through to avoid redundant file reads
     session_id = session.ensure_session(workspace_path, user_id)
-    contextual_prompt = _build_contextual_prompt(prompt, workspace_path, session_id)
 
     cmd = ["codex", "exec", "--ephemeral", "--json", "-C", workspace_path]
-
     if model:
         cmd += ["-m", model]
-
     if approval == "full":
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     elif approval == "deny":
@@ -179,57 +183,113 @@ async def run(
         cmd += ["--sandbox", "workspace-write"]
     else:
         cmd += ["--full-auto"]
-
-    # Pass prompt via stdin to avoid command-line length limits
     cmd.append("-")
 
-    logger.info("Running codex exec (prompt %d chars, context %d chars)",
-                len(prompt), len(contextual_prompt))
+    injected: list[str] = []
 
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+    while True:  # restart loop for inject
+        effective_prompt = prompt
+        if injected:
+            effective_prompt += (
+                "\n\n[Additional context from user while you were thinking]:\n"
+                + "\n".join(injected)
+            )
+
+        contextual_prompt = _build_contextual_prompt(
+            effective_prompt, workspace_path, session_id,
         )
-    except FileNotFoundError:
-        result = CodexResult()
-        result.text = "Error: codex CLI not found on PATH."
-        result.events.append(ChatEvent(kind="text", content=result.text))
-        return result
+        logger.info("Running codex exec (prompt %d chars, context %d chars)",
+                     len(prompt), len(contextual_prompt))
 
-    # Use drain() to avoid deadlock when the prompt exceeds the OS pipe buffer
-    proc.stdin.write(contextual_prompt.encode("utf-8"))
-    await proc.stdin.drain()
-    proc.stdin.close()
-    await proc.stdin.wait_closed()
-
-    result = CodexResult()
-
-    try:
-        async for line in _iter_stream_lines(proc.stdout):
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                logger.debug("Non-JSON line: %s", line)
-                continue
-
-            _process_event(event, result)
-
-        await proc.wait()
-    except asyncio.CancelledError:
-        logger.info("Codex run cancelled, killing subprocess %d", proc.pid)
         try:
-            proc.kill()
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            result = CodexResult()
+            result.text = "Error: codex CLI not found on PATH."
+            result.events.append(ChatEvent(kind="text", content=result.text))
+            return result
+
+        proc.stdin.write(contextual_prompt.encode("utf-8"))
+        await proc.stdin.drain()
+        proc.stdin.close()
+        await proc.stdin.wait_closed()
+
+        result = CodexResult()
+        restarting = False
+
+        # Watch inject_queue — kill subprocess when a message arrives
+        async def _watch_inject() -> None:
+            nonlocal restarting
+            msg = await inject_queue.get()
+            injected.append(msg)
+            restarting = True
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+        inject_task: asyncio.Task | None = None
+        if inject_queue is not None:
+            inject_task = asyncio.create_task(_watch_inject())
+
+        try:
+            async for line in _iter_stream_lines(proc.stdout):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.debug("Non-JSON line: %s", line)
+                    continue
+
+                prev_count = len(result.events)
+                _process_event(event, result)
+
+                if on_event:
+                    for ev in result.events[prev_count:]:
+                        await on_event(ev)
+
             await proc.wait()
-        except ProcessLookupError:
-            pass
-        raise
+        except asyncio.CancelledError:
+            logger.info("Codex run cancelled, killing subprocess %d", proc.pid)
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+            raise
+        finally:
+            if inject_task and not inject_task.done():
+                inject_task.cancel()
+                try:
+                    await inject_task
+                except asyncio.CancelledError:
+                    pass
+
+        # If we're restarting due to inject, also drain any extra injects
+        # that arrived while we were shutting down.
+        if restarting:
+            if inject_queue is not None:
+                while not inject_queue.empty():
+                    try:
+                        injected.append(inject_queue.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+            logger.info("Restarting codex with %d injected message(s)", len(injected))
+            if on_event:
+                await on_event(ChatEvent(
+                    kind="text",
+                    content="[Restarting with injected context...]",
+                ))
+            continue  # restart loop
+
+        break  # normal completion
 
     stderr = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
     if stderr:
@@ -241,14 +301,13 @@ async def run(
             result.text += f"\n{stderr}"
         result.events.append(ChatEvent(kind="text", content=result.text))
 
-    # Log the original prompt (not the contextual one) to session.
-    # The lock guards the file write only — compaction subprocess runs outside it.
+    # Log the original prompt (including injected context) to session.
     async with _get_workspace_lock(workspace_path):
-        _log_to_session(workspace_path, session_id, prompt, result)
+        log_prompt = effective_prompt if injected else prompt
+        _log_to_session(workspace_path, session_id, log_prompt, result)
 
     await _maybe_compact(workspace_path, session_id, summary_model)
 
-    # Ensure there's at least one text event
     if not any(e.kind == "text" for e in result.events):
         result.events.append(ChatEvent(kind="text", content=result.text))
 

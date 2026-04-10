@@ -121,14 +121,20 @@ def _authorized(user_ids: list[int]):
     return decorator
 
 
+MAX_MESSAGE_QUEUE = 5
+
+
 class CozterBot:
     def __init__(self, token: str, user_ids: list[int], recent_limit: int = 10):
         self.token = token
         self.user_ids = user_ids
         self.recent_limit = recent_limit
         self.app: Application | None = None
-        self._running_tasks: dict[int, asyncio.Task] = {}  # user_id -> task
-        self._task_locks: dict[int, asyncio.Lock] = {}  # user_id -> lock
+        self._running_tasks: dict[int, asyncio.Task] = {}     # user_id -> task
+        self._task_locks: dict[int, asyncio.Lock] = {}         # user_id -> lock
+        self._message_queues: dict[int, asyncio.Queue] = {}    # user_id -> queued messages
+        self._inject_queues: dict[int, asyncio.Queue] = {}     # user_id -> inject queue
+        self._thinking_msgs: dict[int, object] = {}            # user_id -> Message
 
     @property
     def bot_id(self) -> int:
@@ -551,9 +557,35 @@ class CozterBot:
             task = self._running_tasks.get(uid)
             if task and not task.done():
                 task.cancel()
+                # Also clear the message queue so queued messages don't run
+                q = self._message_queues.get(uid)
+                if q:
+                    while not q.empty():
+                        try:
+                            q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
                 await update.message.reply_text("Cancelling...")
             else:
                 await update.message.reply_text("Nothing is running.")
+
+        # --- /inject command ---
+
+        @_authorized(self.user_ids)
+        async def cmd_inject(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            text = " ".join(context.args) if context.args else ""
+            if not text:
+                await update.message.reply_text("Usage: /inject <message>")
+                return
+
+            inject_q = self._inject_queues.get(uid)
+            if inject_q is None:
+                await update.message.reply_text("No task is running.")
+                return
+
+            await inject_q.put(text)
+            await update.message.reply_text("Injected.")
 
         # --- AI chat (default for non-command messages) ---
 
@@ -570,36 +602,28 @@ class CozterBot:
                 )
                 return
 
-            # Use a per-user lock to prevent two rapid messages from both
-            # passing the "is running" check with concurrent_updates=True.
-            # IMPORTANT: acquire the lock immediately after the locked() check,
-            # before any other awaits. asyncio.Lock.acquire() takes a synchronous
-            # fast path when the lock is free, so the check+acquire pair is
-            # effectively atomic. Inserting an await between them (e.g. a
-            # reply_text) would let a second concurrent handler slip through.
             if uid not in self._task_locks:
                 self._task_locks[uid] = asyncio.Lock()
             lock = self._task_locks[uid]
 
+            # If AI is already running, queue the message for later.
             if lock.locked():
-                await update.message.reply_text(
-                    "A task is already running. Use /stop to cancel it first."
-                )
+                if uid not in self._message_queues:
+                    self._message_queues[uid] = asyncio.Queue(maxsize=MAX_MESSAGE_QUEUE)
+                q = self._message_queues[uid]
+                if q.full():
+                    await update.message.reply_text("Queue full. Wait or /stop first.")
+                else:
+                    await q.put((text, update.effective_chat.id))
+                    await update.message.reply_text(
+                        f"Queued ({q.qsize()}/{MAX_MESSAGE_QUEUE})."
+                    )
                 return
             await lock.acquire()
-            task = asyncio.current_task()
-            self._running_tasks[uid] = task
 
-            model = workspace.get_model(ws)
-            summary_model = workspace.get_summary_model(ws)
-            perm = workspace.get_permission(ws)
-
-            await update.message.reply_text("Thinking...")
+            chat_id = update.effective_chat.id
             try:
-                result = await codex.run(
-                    text, ws, user_id=uid,
-                    model=model, summary_model=summary_model, approval=perm,
-                )
+                await self._run_ai_turn(uid, chat_id, text)
             except asyncio.CancelledError:
                 await update.message.reply_text("Cancelled.")
                 return
@@ -609,25 +633,12 @@ class CozterBot:
                 return
             finally:
                 self._running_tasks.pop(uid, None)
+                self._inject_queues.pop(uid, None)
+                self._thinking_msgs.pop(uid, None)
                 lock.release()
 
-            # Only send the final AI text response, skip tool/file noise
-            for ev in result.events:
-                if ev.kind != "text":
-                    continue
-                html = _md_to_html(ev.content)
-                for chunk in _split_html(html):
-                    try:
-                        await update.message.reply_text(chunk, parse_mode="HTML")
-                    except Exception:
-                        # Telegram rejected the HTML — strip tags and unescape
-                        # entities so the user sees readable plain text instead
-                        # of literal <b>...</b> markup.
-                        plain = re.sub(r"<[^>]+>", "", chunk)
-                        plain = (plain.replace("&lt;", "<")
-                                      .replace("&gt;", ">")
-                                      .replace("&amp;", "&"))
-                        await update.message.reply_text(plain)
+            # Drain the message queue while there are pending messages.
+            await self._drain_message_queue(uid)
 
         # --- register handlers ---
 
@@ -711,6 +722,7 @@ class CozterBot:
         self.app.add_handler(CommandHandler("refresh", cmd_refresh))
         self.app.add_handler(CommandHandler("compact", cmd_compact))
         self.app.add_handler(CommandHandler("stop", cmd_stop))
+        self.app.add_handler(CommandHandler("inject", cmd_inject))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
 
         for attempt in range(1, 6):
@@ -732,6 +744,126 @@ class CozterBot:
             await self.app.stop()
             await self.app.shutdown()
             logger.info("Bot stopped.")
+
+    # ------------------------------------------------------------------
+    # Core AI turn logic (used by ai_chat handler and queue drain)
+    # ------------------------------------------------------------------
+
+    async def _run_ai_turn(self, uid: int, chat_id: int, text: str) -> None:
+        """Run a single AI turn: send thinking msg, stream events, send result.
+
+        Caller must already hold the per-user lock.
+        """
+        ws = workspace.get_current(uid, self.bot_id)
+        model = workspace.get_model(ws)
+        summary_model = workspace.get_summary_model(ws)
+        perm = workspace.get_permission(ws)
+
+        # Create inject queue for this run
+        inject_q: asyncio.Queue[str] = asyncio.Queue()
+        self._inject_queues[uid] = inject_q
+
+        # Send the "Thinking..." message that we'll update with progress
+        thinking_msg = await self.app.bot.send_message(chat_id=chat_id, text="Thinking...")
+        self._thinking_msgs[uid] = thinking_msg
+        self._running_tasks[uid] = asyncio.current_task()
+
+        # Streaming callback — update the Thinking message with tool/file events
+        status_lines: list[str] = []
+        last_edit = 0.0
+
+        async def on_event(ev: codex.ChatEvent) -> None:
+            nonlocal last_edit
+            if ev.kind == "tool":
+                status_lines.append(f"» {ev.content.split(chr(10))[0][:80]}")
+            elif ev.kind == "file":
+                status_lines.append(f"» {ev.content[:80]}")
+            else:
+                return  # don't update for text events
+
+            now = asyncio.get_event_loop().time()
+            if now - last_edit < 1.5:
+                return
+            last_edit = now
+
+            display = "Thinking...\n\n" + "\n".join(status_lines[-5:])
+            try:
+                await thinking_msg.edit_text(display)
+            except Exception:
+                pass  # Telegram rejects identical edits or rate-limits
+
+        result = await codex.run(
+            text, ws, user_id=uid,
+            model=model, summary_model=summary_model, approval=perm,
+            on_event=on_event, inject_queue=inject_q,
+        )
+
+        # Delete the thinking message now that we have the answer
+        try:
+            await thinking_msg.delete()
+        except Exception:
+            pass
+
+        await self._send_result(chat_id, result)
+
+    async def _send_result(self, chat_id: int, result: codex.CodexResult) -> None:
+        """Send the final AI text response to the chat."""
+        for ev in result.events:
+            if ev.kind != "text":
+                continue
+            html = _md_to_html(ev.content)
+            for chunk in _split_html(html):
+                try:
+                    await self.app.bot.send_message(
+                        chat_id=chat_id, text=chunk, parse_mode="HTML",
+                    )
+                except Exception:
+                    plain = re.sub(r"<[^>]+>", "", chunk)
+                    plain = (plain.replace("&lt;", "<")
+                                  .replace("&gt;", ">")
+                                  .replace("&amp;", "&"))
+                    await self.app.bot.send_message(chat_id=chat_id, text=plain)
+
+    async def _drain_message_queue(self, uid: int) -> None:
+        """Process any messages that were queued while the AI was busy."""
+        q = self._message_queues.get(uid)
+        if not q:
+            return
+
+        while not q.empty():
+            try:
+                text, msg_chat_id = q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+            lock = self._task_locks[uid]
+            if lock.locked():
+                break  # something else acquired — stop draining
+
+            await lock.acquire()
+            try:
+                await self._run_ai_turn(uid, msg_chat_id, text)
+            except asyncio.CancelledError:
+                try:
+                    await self.app.bot.send_message(
+                        chat_id=msg_chat_id, text="Cancelled.",
+                    )
+                except Exception:
+                    pass
+                break
+            except Exception as e:
+                logger.exception("Queued AI chat failed")
+                try:
+                    await self.app.bot.send_message(
+                        chat_id=msg_chat_id, text=f"Error: {e}",
+                    )
+                except Exception:
+                    pass
+            finally:
+                self._running_tasks.pop(uid, None)
+                self._inject_queues.pop(uid, None)
+                self._thinking_msgs.pop(uid, None)
+                lock.release()
 
     async def notify_users(self, message: str) -> None:
         """Send a message to all authorized users."""
