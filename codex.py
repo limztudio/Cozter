@@ -295,6 +295,14 @@ async def run(
 
         break  # normal completion
 
+    # Discard any inject messages that arrived after the final answer.
+    if inject_queue is not None:
+        while not inject_queue.empty():
+            try:
+                inject_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
     stderr = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
     if stderr:
         logger.debug("codex stderr: %s", stderr)
