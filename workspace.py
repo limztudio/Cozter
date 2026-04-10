@@ -15,18 +15,10 @@ def _load_all() -> dict:
     if os.path.exists(WORKSPACE_STATE_PATH):
         try:
             with open(WORKSPACE_STATE_PATH, encoding="utf-8") as f:
-                data = json.load(f)
+                return json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Corrupt or unreadable workspace state file (%s): %s",
                            WORKSPACE_STATE_PATH, e)
-            return {}
-        # Migrate old format: current was a plain string, now a dict keyed by bot_id
-        for uid, state in data.items():
-            cur = state.get("current")
-            if isinstance(cur, str):
-                state["current"] = {"_default": cur} if cur else {}
-                logger.info("Migrated workspace state for user %s", uid)
-        return data
     return {}
 
 
@@ -62,11 +54,6 @@ def select_workspace(user_id: int, path: str, bot_id: int | str = "_default") ->
     all_state = _load_all()
     uid = str(user_id)
     user_state = all_state.get(uid, {"current": {}, "recent": []})
-
-    # Ensure current is a dict (handles migrated data)
-    if not isinstance(user_state.get("current"), dict):
-        user_state["current"] = {}
-
     user_state["current"][str(bot_id)] = path
 
     recent = user_state.get("recent", [])

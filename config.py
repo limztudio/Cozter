@@ -30,14 +30,6 @@ def load_config() -> dict:
         print(f"Fix or delete {CONFIG_PATH}, then restart.")
         sys.exit(1)
 
-    # Backward-compat: migrate old single-token key to list
-    if "telegram_bot_token" in cfg and "telegram_bot_tokens" not in cfg:
-        old = cfg.pop("telegram_bot_token")
-        if isinstance(old, list):
-            cfg["telegram_bot_tokens"] = old
-        else:
-            cfg["telegram_bot_tokens"] = [old] if old else []
-
     tokens = cfg.get("telegram_bot_tokens")
     if not tokens:
         print(f"ERROR: 'telegram_bot_tokens' is empty in {CONFIG_PATH}")
