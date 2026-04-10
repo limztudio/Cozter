@@ -787,7 +787,7 @@ class CozterBot:
             else:
                 return  # don't update for text events
 
-            now = asyncio.get_event_loop().time()
+            now = asyncio.get_running_loop().time()
             if now - last_edit < 1.5:
                 return
             last_edit = now
