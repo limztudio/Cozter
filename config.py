@@ -10,6 +10,7 @@ _DEFAULT_CONFIG = {
     "user_ids": [],
     "update_check_interval": 10,
     "recent_workspace_limit": 10,
+    "message_queue_size": 50,
 }
 
 

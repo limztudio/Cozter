@@ -96,12 +96,13 @@ async def main() -> None:
     user_ids = config["user_ids"]
     interval = config["update_check_interval"]
     recent_limit = config["recent_workspace_limit"]
+    queue_size = config["message_queue_size"]
 
     updater.init_startup_commit()
     version = updater.get_current_version()
     commit_date = updater.get_last_commit_date()
 
-    bots = [CozterBot(token, user_ids, recent_limit=recent_limit) for token in tokens]
+    bots = [CozterBot(token, user_ids, recent_limit=recent_limit, max_queue_size=queue_size) for token in tokens]
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()

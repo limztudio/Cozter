@@ -121,14 +121,12 @@ def _authorized(user_ids: list[int]):
     return decorator
 
 
-MAX_MESSAGE_QUEUE = 5
-
-
 class CozterBot:
-    def __init__(self, token: str, user_ids: list[int], recent_limit: int = 10):
+    def __init__(self, token: str, user_ids: list[int], recent_limit: int = 10, max_queue_size: int = 50):
         self.token = token
         self.user_ids = user_ids
         self.recent_limit = recent_limit
+        self.max_queue_size = max_queue_size
         self.app: Application | None = None
         self._running_tasks: dict[int, asyncio.Task] = {}     # user_id -> task
         self._task_locks: dict[int, asyncio.Lock] = {}         # user_id -> lock
@@ -584,6 +582,9 @@ class CozterBot:
                 await update.message.reply_text("No task is running.")
                 return
 
+            if inject_q.full():
+                await update.message.reply_text("Inject queue full.")
+                return
             await inject_q.put(text)
             await update.message.reply_text("Injected.")
 
@@ -609,14 +610,14 @@ class CozterBot:
             # If AI is already running, queue the message for later.
             if lock.locked():
                 if uid not in self._message_queues:
-                    self._message_queues[uid] = asyncio.Queue(maxsize=MAX_MESSAGE_QUEUE)
+                    self._message_queues[uid] = asyncio.Queue(maxsize=self.max_queue_size)
                 q = self._message_queues[uid]
                 if q.full():
                     await update.message.reply_text("Queue full. Wait or /stop first.")
                 else:
                     await q.put((text, update.effective_chat.id))
                     await update.message.reply_text(
-                        f"Queued ({q.qsize()}/{MAX_MESSAGE_QUEUE})."
+                        f"Queued ({q.qsize()}/{self.max_queue_size})."
                     )
                 return
             await lock.acquire()
@@ -766,7 +767,7 @@ class CozterBot:
         perm = workspace.get_permission(ws)
 
         # Create inject queue for this run
-        inject_q: asyncio.Queue[str] = asyncio.Queue()
+        inject_q: asyncio.Queue[str] = asyncio.Queue(maxsize=self.max_queue_size)
         self._inject_queues[uid] = inject_q
 
         # Send the "Thinking..." message that we'll update with progress
