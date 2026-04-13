@@ -1,7 +1,7 @@
 import logging
+import os
 import subprocess
 import sys
-import os
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def get_current_version() -> str:
         ["git", "rev-parse", "--short", "HEAD"],
         cwd=MODULE_ROOT, capture_output=True, text=True,
     )
-    return result.stdout.strip()
+    return result.stdout.strip() or "(unknown)"
 
 
 def get_last_commit_date() -> str:
@@ -43,11 +43,11 @@ def get_last_commit_date() -> str:
         ["git", "log", "-1", "--format=%ci"],
         cwd=MODULE_ROOT, capture_output=True, text=True,
     )
-    return result.stdout.strip()
+    return result.stdout.strip() or "(unknown)"
 
 
 def fetch_and_pull() -> bool:
-    """Fetch origin, pull if behind, and return True if disk HEAD differs from startup.
+    """Fetch origin, pull if behind; return True if disk HEAD changed.
 
     This detects both remote updates and manual pulls that happened while
     the process was running.
@@ -73,7 +73,7 @@ def fetch_and_pull() -> bool:
 
     # Compare disk HEAD to the commit we started with
     current = _get_head_commit()
-    if _STARTUP_COMMIT and current != _STARTUP_COMMIT:
+    if current and _STARTUP_COMMIT and current != _STARTUP_COMMIT:
         logger.info("Code changed: %s -> %s", _STARTUP_COMMIT[:8], current[:8])
         return True
     return False

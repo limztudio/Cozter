@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 import os
 import re
@@ -17,21 +18,25 @@ from telegram.ext import (
 
 from . import codex
 from . import session
+from . import updater
 from . import workspace
 
 logger = logging.getLogger(__name__)
 
 
 def _escape_html(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
 
 
 def _split_html(text: str, limit: int = 4096) -> list[str]:
-    """Split text into chunks no larger than limit, breaking at newlines when possible.
+    """
+    Split text into chunks no larger than limit, breaking at newlines.
 
-    Splitting at arbitrary byte offsets risks cutting inside an HTML tag, which
-    causes Telegram to reject the message. Newline boundaries are safe because
-    _md_to_html never produces tags that span multiple lines.
+    Splitting at arbitrary byte offsets risks cutting inside an HTML tag,
+    which causes Telegram to reject the message. Newline boundaries are safe
+    because _md_to_html never produces tags that span multiple lines.
     """
     if len(text) <= limit:
         return [text]
@@ -42,7 +47,7 @@ def _split_html(text: str, limit: int = 4096) -> list[str]:
             break
         split_at = text.rfind("\n", 0, limit)
         if split_at == -1:
-            # No newline - hard split, keep all characters
+            # No newline - hard split
             chunks.append(text[:limit])
             text = text[limit:]
         else:
@@ -63,7 +68,8 @@ def _md_to_html(text: str) -> str:
         # Fenced code blocks
         if line.strip().startswith("```"):
             if in_code_block:
-                result.append(f"<pre>{_escape_html(chr(10).join(code_buf))}</pre>")
+                escaped = _escape_html("\n".join(code_buf))
+                result.append(f"<pre>{escaped}</pre>")
                 code_buf.clear()
                 in_code_block = False
             else:
@@ -81,7 +87,7 @@ def _md_to_html(text: str) -> str:
         # Bold: **text** or __text__
         line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
         line = re.sub(r"__(.+?)__", r"<b>\1</b>", line)
-        # Italic: *text* or _text_  (but not inside words with underscores)
+        # Italic: *text* or _text_ (but not inside words with underscores)
         line = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", line)
         line = re.sub(r"(?<!\w)_([^_]+?)_(?!\w)", r"<i>\1</i>", line)
         # Inline code: `text`
@@ -93,9 +99,11 @@ def _md_to_html(text: str) -> str:
 
     # Unclosed code block
     if in_code_block and code_buf:
-        result.append(f"<pre>{_escape_html(chr(10).join(code_buf))}</pre>")
+        escaped = _escape_html("\n".join(code_buf))
+        result.append(f"<pre>{escaped}</pre>")
 
     return "\n".join(result)
+
 
 # Conversation states
 NEW_AWAITING_DIR = 0
@@ -105,15 +113,19 @@ PERMISSION_AWAITING = 3
 SESSION_AWAITING = 4
 SUMMARY_MODEL_AWAITING = 5
 
+_NO_WS_MSG = "No workspace selected. Use /new or /open first."
+
 
 def _authorized(user_ids: list[int]):
     """Decorator that restricts handler to authorized user_ids."""
     def decorator(func):
+        @functools.wraps(func)
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if update.effective_user.id not in user_ids:
                 logger.warning(
                     "Unauthorized access attempt from user %s (%s)",
-                    update.effective_user.id, update.effective_user.full_name,
+                    update.effective_user.id,
+                    update.effective_user.full_name,
                 )
                 return
             return await func(update, context)
@@ -122,69 +134,96 @@ def _authorized(user_ids: list[int]):
 
 
 class CozterBot:
-    def __init__(self, token: str, user_ids: list[int], recent_limit: int = 10, max_queue_size: int = 50):
+    def __init__(
+        self,
+        token: str,
+        user_ids: list[int],
+        recent_limit: int = 10,
+        max_queue_size: int = 50,
+    ):
         self.token = token
         self.user_ids = user_ids
         self.recent_limit = recent_limit
         self.max_queue_size = max_queue_size
         self.app: Application | None = None
-        self._running_tasks: dict[int, asyncio.Task] = {}     # user_id -> task
-        self._task_locks: dict[int, asyncio.Lock] = {}         # user_id -> lock
-        self._message_queues: dict[int, asyncio.Queue] = {}    # user_id -> queued messages
-        self._inject_queues: dict[int, asyncio.Queue] = {}     # user_id -> inject queue
-        self._thinking_msgs: dict[int, object] = {}            # user_id -> Message
+        self._running_tasks: dict[int, asyncio.Task] = {}
+        self._task_locks: dict[int, asyncio.Lock] = {}
+        self._message_queues: dict[int, asyncio.Queue] = {}
+        self._inject_queues: dict[int, asyncio.Queue] = {}
+        self._thinking_msgs: dict[int, object] = {}
 
     @property
     def bot_id(self) -> int:
         return self.app.bot.id
 
     async def start(self) -> None:
-        self.app = Application.builder().token(self.token).concurrent_updates(True).build()
+        self.app = (
+            Application.builder()
+            .token(self.token)
+            .concurrent_updates(True)
+            .build()
+        )
 
         # --- simple commands ---
 
         @_authorized(self.user_ids)
-        async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_start(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             await update.message.reply_text("Cozter bot is running.")
 
         @_authorized(self.user_ids)
-        async def cmd_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            from . import updater
+        async def cmd_version(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             ver, date = await asyncio.gather(
                 asyncio.to_thread(updater.get_current_version),
                 asyncio.to_thread(updater.get_last_commit_date),
             )
-            await update.message.reply_text(f"Version: {ver}\nUpdated: {date}")
+            await update.message.reply_text(
+                f"Version: {ver}\nUpdated: {date}"
+            )
 
         @_authorized(self.user_ids)
-        async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_clear(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return
             new_sess = session.create_session(ws)
             session.set_current_session_id(ws, uid, new_sess["id"])
-            await update.message.reply_text("Conversation cleared. Next message starts a new session.")
+            await update.message.reply_text(
+                "Conversation cleared. Next message starts a new session."
+            )
 
         # --- /new conversation ---
 
         @_authorized(self.user_ids)
-        async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_new(update: Update, _context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
             current = workspace.get_current(uid, self.bot_id)
-            msg = f"Current workspace: {current or '(none)'}\n\nEnter the full path for the new workspace directory (or /cancel):"
+            msg = (
+                f"Current workspace: {current or '(none)'}\n\n"
+                "Enter the full path for the new workspace directory"
+                " (or /cancel):"
+            )
             await update.message.reply_text(msg)
             return NEW_AWAITING_DIR
 
         @_authorized(self.user_ids)
-        async def new_receive_dir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def new_receive_dir(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             path = update.message.text.strip()
 
             if os.path.exists(path):
                 await update.message.reply_text(
-                    f"Directory already exists:\n{path}\n\nPlease choose a different path (or /cancel):"
+                    f"Directory already exists:\n{path}\n\n"
+                    "Please choose a different path (or /cancel):"
                 )
                 return NEW_AWAITING_DIR
 
@@ -192,7 +231,8 @@ class CozterBot:
                 os.makedirs(path)
             except OSError as e:
                 await update.message.reply_text(
-                    f"Failed to create directory: {e}\n\nPlease try again (or /cancel):"
+                    f"Failed to create directory: {e}\n\n"
+                    "Please try again (or /cancel):"
                 )
                 return NEW_AWAITING_DIR
 
@@ -206,7 +246,9 @@ class CozterBot:
         # --- /open conversation ---
 
         @_authorized(self.user_ids)
-        async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_open(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             current = workspace.get_current(uid, self.bot_id)
             recent = workspace.get_recent(uid, self.recent_limit)
@@ -218,12 +260,17 @@ class CozterBot:
                     lines.append(f"  {i}. {r}")
             else:
                 lines.append("\nNo recent workspaces.")
-            lines.append("\nEnter a directory path or number from the list (or /cancel):")
+            lines.append(
+                "\nEnter a directory path or number"
+                " from the list (or /cancel):"
+            )
             await update.message.reply_text("\n".join(lines))
             return OPEN_AWAITING_DIR
 
         @_authorized(self.user_ids)
-        async def open_receive_dir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def open_receive_dir(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             text = update.message.text.strip()
             recent = workspace.get_recent(uid, self.recent_limit)
@@ -242,25 +289,26 @@ class CozterBot:
 
             if not os.path.isdir(path):
                 await update.message.reply_text(
-                    f"Directory does not exist:\n{path}\n\nPlease enter a valid directory (or /cancel):"
+                    f"Directory does not exist:\n{path}\n\n"
+                    "Please enter a valid directory (or /cancel):"
                 )
                 return OPEN_AWAITING_DIR
 
             workspace.ensure_cozter_dir(path)
             workspace.select_workspace(uid, path, self.bot_id)
-            await update.message.reply_text(
-                f"Workspace selected:\n{path}"
-            )
+            await update.message.reply_text(f"Workspace selected:\n{path}")
             return ConversationHandler.END
 
         # --- /model conversation ---
 
         @_authorized(self.user_ids)
-        async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_model(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
 
             current = workspace.get_model(ws)
@@ -274,11 +322,13 @@ class CozterBot:
             return MODEL_AWAITING
 
         @_authorized(self.user_ids)
-        async def model_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def model_receive(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
             text = update.message.text.strip()
             options = workspace.AVAILABLE_MODELS
@@ -288,7 +338,9 @@ class CozterBot:
                 if 0 <= idx < len(options):
                     model = options[idx]
                 else:
-                    await update.message.reply_text("Invalid number. Try again (or /cancel):")
+                    await update.message.reply_text(
+                        "Invalid number. Try again (or /cancel):"
+                    )
                     return MODEL_AWAITING
             elif text in options:
                 model = text
@@ -305,16 +357,20 @@ class CozterBot:
         # --- /summarymodel conversation ---
 
         @_authorized(self.user_ids)
-        async def cmd_summarymodel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_summarymodel(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
 
             current = workspace.get_summary_model(ws)
             options = workspace.AVAILABLE_MODELS
-            lines = [f"Current summary model: {current}\n", "Available models:"]
+            lines = [
+                f"Current summary model: {current}\n", "Available models:",
+            ]
             for i, m in enumerate(options, 1):
                 marker = " <-" if m == current else ""
                 lines.append(f"  {i}. {m}{marker}")
@@ -323,11 +379,13 @@ class CozterBot:
             return SUMMARY_MODEL_AWAITING
 
         @_authorized(self.user_ids)
-        async def summarymodel_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def summarymodel_receive(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
             text = update.message.text.strip()
             options = workspace.AVAILABLE_MODELS
@@ -337,7 +395,9 @@ class CozterBot:
                 if 0 <= idx < len(options):
                     model = options[idx]
                 else:
-                    await update.message.reply_text("Invalid number. Try again (or /cancel):")
+                    await update.message.reply_text(
+                        "Invalid number. Try again (or /cancel):"
+                    )
                     return SUMMARY_MODEL_AWAITING
             elif text in options:
                 model = text
@@ -354,11 +414,13 @@ class CozterBot:
         # --- /permission conversation ---
 
         @_authorized(self.user_ids)
-        async def cmd_permission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_permission(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
 
             current = workspace.get_permission(ws)
@@ -373,11 +435,13 @@ class CozterBot:
             return PERMISSION_AWAITING
 
         @_authorized(self.user_ids)
-        async def permission_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def permission_receive(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
             text = update.message.text.strip().lower()
             options = workspace.AVAILABLE_PERMISSIONS
@@ -398,17 +462,21 @@ class CozterBot:
 
             workspace.set_permission(ws, perm)
             desc = workspace.PERMISSION_DESCRIPTIONS[perm]
-            await update.message.reply_text(f"Permission set to: {perm}\n{desc}")
+            await update.message.reply_text(
+                f"Permission set to: {perm}\n{desc}"
+            )
             return ConversationHandler.END
 
         # --- /session conversation ---
 
         @_authorized(self.user_ids)
-        async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_session(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
 
             current_sid = session.get_current_session_id(ws, uid)
@@ -430,20 +498,27 @@ class CozterBot:
                 lines.append("\nSessions:")
                 for i, s in enumerate(sessions, 1):
                     marker = " <-" if s["id"] == current_sid else ""
-                    lines.append(f"  {i}. {s['name']} ({s['message_count']} msgs){marker}")
+                    lines.append(
+                        f"  {i}. {s['name']}"
+                        f" ({s['message_count']} msgs){marker}"
+                    )
             else:
                 lines.append("\nNo sessions yet.")
 
-            lines.append("\nEnter a number to switch, or 'new' to create (or /cancel):")
+            lines.append(
+                "\nEnter a number to switch, or 'new' to create (or /cancel):"
+            )
             await update.message.reply_text("\n".join(lines))
             return SESSION_AWAITING
 
         @_authorized(self.user_ids)
-        async def session_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def session_receive(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
             text = update.message.text.strip()
             sessions = session.list_sessions(ws)
@@ -451,7 +526,6 @@ class CozterBot:
             if text.lower() == "new":
                 new_sess = session.create_session(ws)
                 session.set_current_session_id(ws, uid, new_sess["id"])
-
                 await update.message.reply_text(
                     f"New session created: {new_sess['name']}"
                 )
@@ -462,7 +536,6 @@ class CozterBot:
                 if 0 <= idx < len(sessions):
                     chosen = sessions[idx]
                     session.set_current_session_id(ws, uid, chosen["id"])
-    
                     await update.message.reply_text(
                         f"Switched to: {chosen['name']}"
                     )
@@ -476,31 +549,35 @@ class CozterBot:
         # --- /refresh command ---
 
         @_authorized(self.user_ids)
-        async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_refresh(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return
 
-            # Clear codex CLI's internal session state if it exists
             codex_dir = os.path.join(ws, ".codex")
             if os.path.isdir(codex_dir):
                 shutil.rmtree(codex_dir, ignore_errors=True)
                 logger.info("Cleared codex session dir: %s", codex_dir)
 
             await update.message.reply_text(
-                "Codex CLI session refreshed. Your conversation history is preserved."
+                "Codex CLI session refreshed."
+                " Your conversation history is preserved."
             )
 
         # --- /compact command ---
 
         @_authorized(self.user_ids)
-        async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_compact(
+            update: Update, context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             ws = workspace.get_current(uid, self.bot_id)
             if not ws:
-                await update.message.reply_text("No workspace selected. Use /new or /open first.")
+                await update.message.reply_text(_NO_WS_MSG)
                 return
 
             sid = session.ensure_session(ws, uid)
@@ -509,31 +586,45 @@ class CozterBot:
             if args == "now":
                 await update.message.reply_text("Compacting session...")
                 summary_model = workspace.get_summary_model(ws)
-                new_summary, lt_add, lt_remove = await codex._compact_session(
-                    ws, sid, summary_model)
+                new_summary, new_long_term = await codex.compact_session(
+                    ws, sid, summary_model,
+                )
                 if new_summary:
-                    async with codex._get_workspace_lock(ws):
+                    async with codex.get_workspace_lock(ws):
                         session.set_summary(
                             ws, sid, new_summary,
                             keep_recent=codex.KEEP_RECENT_AFTER_COMPACT,
-                            long_term_add=lt_add,
-                            long_term_remove=lt_remove,
+                            long_term_rewrite=new_long_term,
                         )
+                    lt_count = (
+                        len(new_long_term)
+                        if new_long_term is not None else "?"
+                    )
                     await update.message.reply_text(
-                        f"Session compacted (long-term +{len(lt_add)}/-{len(lt_remove)}).")
+                        f"Session compacted ({lt_count} long-term items)."
+                    )
                 else:
-                    await update.message.reply_text("Compaction produced no output - session unchanged.")
+                    await update.message.reply_text(
+                        "Compaction produced no output - session unchanged."
+                    )
                 return
 
             if args.isdigit():
                 interval = int(args)
                 session.set_compact_interval(ws, sid, interval)
-                await update.message.reply_text(f"Compact interval set to {interval} messages.")
+                await update.message.reply_text(
+                    f"Compact interval set to {interval} messages."
+                )
                 return
 
             sess_data = session.load_session(ws, sid) or {}
-            current = sess_data.get("compact_interval", 20)
-            total = sess_data.get("compacted_count", 0) + len(sess_data.get("messages", []))
+            current = sess_data.get(
+                "compact_interval", session.DEFAULT_COMPACT_INTERVAL,
+            )
+            total = (
+                sess_data.get("compacted_count", 0)
+                + len(sess_data.get("messages", []))
+            )
             summary = sess_data.get("summary")
             long_term = sess_data.get("long_term") or []
             lines = [
@@ -551,19 +642,20 @@ class CozterBot:
         # --- shared cancel ---
 
         @_authorized(self.user_ids)
-        async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cancel(update: Update, _context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Cancelled.")
             return ConversationHandler.END
 
         # --- /stop command ---
 
         @_authorized(self.user_ids)
-        async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_stop(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             task = self._running_tasks.get(uid)
             if task and not task.done():
                 task.cancel()
-                # Also clear the message queue so queued messages don't run
                 q = self._message_queues.get(uid)
                 if q:
                     while not q.empty():
@@ -578,7 +670,9 @@ class CozterBot:
         # --- /inject command ---
 
         @_authorized(self.user_ids)
-        async def cmd_inject(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def cmd_inject(
+            update: Update, context: ContextTypes.DEFAULT_TYPE,
+        ):
             uid = update.effective_user.id
             text = " ".join(context.args) if context.args else ""
             if not text:
@@ -599,7 +693,7 @@ class CozterBot:
         # --- AI chat (default for non-command messages) ---
 
         @_authorized(self.user_ids)
-        async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        async def ai_chat(update: Update, _context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
             text = update.message.text.strip()
             if not text:
@@ -607,7 +701,8 @@ class CozterBot:
             ws = workspace.get_current(uid, self.bot_id)
             if not ws or not os.path.isdir(ws):
                 await update.message.reply_text(
-                    "No workspace selected (or it was deleted). Use /new or /open."
+                    "No workspace selected (or it was deleted)."
+                    " Use /new or /open."
                 )
                 return
 
@@ -618,10 +713,14 @@ class CozterBot:
             # If AI is already running, queue the message for later.
             if lock.locked():
                 if uid not in self._message_queues:
-                    self._message_queues[uid] = asyncio.Queue(maxsize=self.max_queue_size)
+                    self._message_queues[uid] = asyncio.Queue(
+                        maxsize=self.max_queue_size,
+                    )
                 q = self._message_queues[uid]
                 if q.full():
-                    await update.message.reply_text("Queue full. Wait or /stop first.")
+                    await update.message.reply_text(
+                        "Queue full. Wait or /stop first."
+                    )
                 else:
                     await q.put((text, update.effective_chat.id))
                     await update.message.reply_text(
@@ -658,7 +757,9 @@ class CozterBot:
             states={
                 NEW_AWAITING_DIR: [
                     cancel_handler,
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, new_receive_dir),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND, new_receive_dir,
+                    ),
                 ],
             },
             fallbacks=[cancel_handler],
@@ -669,7 +770,9 @@ class CozterBot:
             states={
                 OPEN_AWAITING_DIR: [
                     cancel_handler,
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, open_receive_dir),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND, open_receive_dir,
+                    ),
                 ],
             },
             fallbacks=[cancel_handler],
@@ -680,7 +783,9 @@ class CozterBot:
             states={
                 MODEL_AWAITING: [
                     cancel_handler,
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, model_receive),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND, model_receive,
+                    ),
                 ],
             },
             fallbacks=[cancel_handler],
@@ -691,7 +796,9 @@ class CozterBot:
             states={
                 SUMMARY_MODEL_AWAITING: [
                     cancel_handler,
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, summarymodel_receive),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND, summarymodel_receive,
+                    ),
                 ],
             },
             fallbacks=[cancel_handler],
@@ -702,7 +809,9 @@ class CozterBot:
             states={
                 PERMISSION_AWAITING: [
                     cancel_handler,
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, permission_receive),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND, permission_receive,
+                    ),
                 ],
             },
             fallbacks=[cancel_handler],
@@ -713,7 +822,9 @@ class CozterBot:
             states={
                 SESSION_AWAITING: [
                     cancel_handler,
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, session_receive),
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND, session_receive,
+                    ),
                 ],
             },
             fallbacks=[cancel_handler],
@@ -732,7 +843,9 @@ class CozterBot:
         self.app.add_handler(CommandHandler("compact", cmd_compact))
         self.app.add_handler(CommandHandler("stop", cmd_stop))
         self.app.add_handler(CommandHandler("inject", cmd_inject))
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat))
+        self.app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat)
+        )
 
         for attempt in range(1, 6):
             try:
@@ -741,7 +854,10 @@ class CozterBot:
             except NetworkError as e:
                 if attempt == 5:
                     raise
-                logger.warning("Network error during init (attempt %d/5): %s", attempt, e)
+                logger.warning(
+                    "Network error during init (attempt %d/5): %s",
+                    attempt, e,
+                )
                 await asyncio.sleep(5 * attempt)
         await self.app.start()
         await self.app.updater.start_polling(drop_pending_updates=True)
@@ -774,27 +890,30 @@ class CozterBot:
         summary_model = workspace.get_summary_model(ws)
         perm = workspace.get_permission(ws)
 
-        # Create inject queue for this run
-        inject_q: asyncio.Queue[str] = asyncio.Queue(maxsize=self.max_queue_size)
+        inject_q: asyncio.Queue[str] = asyncio.Queue(
+            maxsize=self.max_queue_size,
+        )
         self._inject_queues[uid] = inject_q
 
-        # Send the "Thinking..." message that we'll update with progress
-        thinking_msg = await self.app.bot.send_message(chat_id=chat_id, text="Thinking...")
+        thinking_msg = await self.app.bot.send_message(
+            chat_id=chat_id, text="Thinking...",
+        )
         self._thinking_msgs[uid] = thinking_msg
         self._running_tasks[uid] = asyncio.current_task()
 
-        # Streaming callback - update the Thinking message with tool/file events
         status_lines: list[str] = []
         last_edit = 0.0
 
         async def on_event(ev: codex.ChatEvent) -> None:
             nonlocal last_edit
             if ev.kind == "tool":
-                status_lines.append(f"» {ev.content.split(chr(10))[0][:80]}")
+                status_lines.append(
+                    f"» {ev.content.split(chr(10))[0][:80]}"
+                )
             elif ev.kind == "file":
                 status_lines.append(f"» {ev.content[:80]}")
             else:
-                return  # don't update for text events
+                return
 
             now = asyncio.get_running_loop().time()
             if now - last_edit < 1.5:
@@ -807,21 +926,23 @@ class CozterBot:
             except Exception:
                 pass  # Telegram rejects identical edits or rate-limits
 
-        result = await codex.run(
-            text, ws, user_id=uid,
-            model=model, summary_model=summary_model, approval=perm,
-            on_event=on_event, inject_queue=inject_q,
-        )
-
-        # Delete the thinking message now that we have the answer
         try:
-            await thinking_msg.delete()
-        except Exception:
-            pass
+            result = await codex.run(
+                text, ws, user_id=uid,
+                model=model, summary_model=summary_model, approval=perm,
+                on_event=on_event, inject_queue=inject_q,
+            )
+        finally:
+            try:
+                await thinking_msg.delete()
+            except Exception:
+                pass
 
         await self._send_result(chat_id, result)
 
-    async def _send_result(self, chat_id: int, result: codex.CodexResult) -> None:
+    async def _send_result(
+        self, chat_id: int, result: codex.CodexResult,
+    ) -> None:
         """Send the final AI text response to the chat."""
         for ev in result.events:
             if ev.kind != "text":
@@ -836,11 +957,15 @@ class CozterBot:
                     )
                 except Exception:
                     plain = re.sub(r"<[^>]+>", "", chunk)
-                    plain = (plain.replace("&lt;", "<")
-                                  .replace("&gt;", ">")
-                                  .replace("&amp;", "&"))
+                    plain = (
+                        plain.replace("&lt;", "<")
+                             .replace("&gt;", ">")
+                             .replace("&amp;", "&")
+                    )
                     if plain.strip():
-                        await self.app.bot.send_message(chat_id=chat_id, text=plain)
+                        await self.app.bot.send_message(
+                            chat_id=chat_id, text=plain,
+                        )
 
     async def _drain_message_queue(self, uid: int) -> None:
         """Process any messages that were queued while the AI was busy."""

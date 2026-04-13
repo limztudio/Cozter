@@ -1,13 +1,17 @@
 import os
 import subprocess
 import sys
+import time
 
 # Re-launch as module if run as `python Cozter` (no package context)
 if __name__ == "__main__" and not __package__:
     module_dir = os.path.dirname(os.path.abspath(__file__))
     module_name = os.path.basename(module_dir)
     parent_dir = os.path.dirname(module_dir)
-    sys.exit(subprocess.call([sys.executable, "-m", module_name], cwd=parent_dir))
+    sys.exit(
+        subprocess.call([sys.executable, "-m", module_name], cwd=parent_dir)
+    )
+
 
 def _install_deps() -> None:
     """Auto-install missing requirements before any project imports."""
@@ -17,19 +21,20 @@ def _install_deps() -> None:
             [sys.executable, "-m", "pip", "install", "-q", "-r", req_file],
         )
 
+
 _install_deps()
 
-import asyncio
-import logging
-import signal
-import traceback
-from datetime import datetime
-from logging.handlers import RotatingFileHandler
+import asyncio  # noqa: E402
+import logging  # noqa: E402
+import signal  # noqa: E402
+import traceback  # noqa: E402
+from datetime import datetime  # noqa: E402
+from logging.handlers import RotatingFileHandler  # noqa: E402
 
-from . import config as cfg
-from . import updater
-from . import workspace
-from .bot import CozterBot
+from . import config as cfg  # noqa: E402
+from . import updater  # noqa: E402
+from . import workspace  # noqa: E402
+from .bot import CozterBot  # noqa: E402
 
 MODULE_ROOT = os.path.dirname(__file__)
 LOG_DIR = os.path.join(MODULE_ROOT, ".log")
@@ -39,7 +44,9 @@ def setup_logging() -> None:
     os.makedirs(LOG_DIR, exist_ok=True)
 
     log_file = os.path.join(LOG_DIR, "cozter.log")
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
 
     file_handler = RotatingFileHandler(
         log_file, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8",
@@ -60,11 +67,13 @@ def setup_logging() -> None:
 def log_crash(exc: BaseException) -> str:
     """Write a timestamped crash report to .log/ and return the file path."""
     os.makedirs(LOG_DIR, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    crash_file = os.path.join(LOG_DIR, f"crash_{timestamp}.log")
+    now = datetime.now()
+    crash_file = os.path.join(
+        LOG_DIR, f"crash_{now.strftime('%Y%m%d_%H%M%S')}.log"
+    )
     tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
     with open(crash_file, "w", encoding="utf-8") as f:
-        f.write(f"Crash at {datetime.now().isoformat()}\n")
+        f.write(f"Crash at {now.isoformat()}\n")
         f.write(f"Exception: {type(exc).__name__}: {exc}\n\n")
         f.writelines(tb)
     return crash_file
@@ -74,7 +83,7 @@ logger = logging.getLogger(__name__)
 
 
 async def update_loop(bots: list[CozterBot], interval: int) -> None:
-    """Periodically fetch, pull, and restart if code on disk differs from startup."""
+    """Periodically fetch, pull, and restart if disk HEAD changed."""
     while True:
         await asyncio.sleep(interval)
         try:
@@ -83,7 +92,9 @@ async def update_loop(bots: list[CozterBot], interval: int) -> None:
                 logger.info("New version detected, restarting...")
                 await asyncio.to_thread(updater.install_requirements)
                 for bot in bots:
-                    await bot.notify_users("Cozter is restarting for an update...")
+                    await bot.notify_users(
+                        "Cozter is restarting for an update..."
+                    )
                     await bot.stop()
                 updater.restart_script()  # exits; systemd respawns
         except Exception:
@@ -102,7 +113,13 @@ async def main() -> None:
     version = updater.get_current_version()
     commit_date = updater.get_last_commit_date()
 
-    bots = [CozterBot(token, user_ids, recent_limit=recent_limit, max_queue_size=queue_size) for token in tokens]
+    bots = [
+        CozterBot(
+            token, user_ids,
+            recent_limit=recent_limit, max_queue_size=queue_size,
+        )
+        for token in tokens
+    ]
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
@@ -123,7 +140,9 @@ async def main() -> None:
     for bot in bots:
         for uid in user_ids:
             ws = workspace.get_current(uid, bot.bot_id)
-            msg = f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
+            msg = (
+                f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
+            )
             if ws:
                 msg += f"\nWorkspace: {ws}"
             else:
@@ -131,9 +150,14 @@ async def main() -> None:
             try:
                 await bot.app.bot.send_message(chat_id=uid, text=msg)
             except Exception as e:
-                logger.warning("Failed to notify user %s via bot: %s", uid, e)
+                logger.warning(
+                    "Failed to notify user %s via bot: %s", uid, e,
+                )
 
-    logger.info("Version: %s | Updated: %s | Bots: %d", version, commit_date, len(bots))
+    logger.info(
+        "Version: %s | Updated: %s | Bots: %d",
+        version, commit_date, len(bots),
+    )
 
     update_task = asyncio.create_task(update_loop(bots, interval))
 
@@ -141,6 +165,10 @@ async def main() -> None:
 
     logger.info("Shutting down...")
     update_task.cancel()
+    try:
+        await update_task
+    except asyncio.CancelledError:
+        pass
     for bot in bots:
         await bot.notify_users("Cozter is shutting down.")
         await bot.stop()
@@ -155,10 +183,10 @@ def run() -> None:
     except Exception as exc:
         crash_path = log_crash(exc)
         logger.critical(
-            "Unhandled exception - crash log written to %s. Restarting in 5s...",
+            "Unhandled exception - crash log written to %s."
+            " Restarting in 5s...",
             crash_path,
         )
-        import time
         time.sleep(5)
         updater.restart_script()
 

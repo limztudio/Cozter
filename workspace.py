@@ -1,40 +1,37 @@
 import json
-import os
 import logging
-import tempfile
+import os
+
+from .utils import atomic_write as _atomic_write
 
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), ".config")
 WORKSPACE_STATE_PATH = os.path.join(CONFIG_DIR, "workspaces.json")
 COZTER_DIR_NAME = ".cozter"
+MAX_RECENT = 50  # cap on stored recent-workspaces list
 
 
 def _load_all() -> dict:
-    """Load the full state: {user_id_str: {current: {bot_id: path}, recent}, ...}"""
+    """Load workspace state.
+
+    Shape: {user_id_str: {current: {bot_id: path}, recent: [path, ...]}}.
+    """
     if os.path.exists(WORKSPACE_STATE_PATH):
         try:
             with open(WORKSPACE_STATE_PATH, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Corrupt or unreadable workspace state file (%s): %s",
-                           WORKSPACE_STATE_PATH, e)
+            logger.warning(
+                "Corrupt or unreadable workspace state file (%s): %s",
+                WORKSPACE_STATE_PATH, e,
+            )
     return {}
 
 
 def _save_all(data: dict) -> None:
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=CONFIG_DIR, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_path, WORKSPACE_STATE_PATH)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    _atomic_write(WORKSPACE_STATE_PATH, data, CONFIG_DIR)
 
 
 def _get_user(user_id: int) -> dict:
@@ -49,8 +46,10 @@ def get_recent(user_id: int, limit: int = 10) -> list[str]:
     return _get_user(user_id).get("recent", [])[:limit]
 
 
-def select_workspace(user_id: int, path: str, bot_id: int | str = "_default") -> None:
-    """Set path as current workspace for a specific bot and push it to recent."""
+def select_workspace(
+    user_id: int, path: str, bot_id: int | str = "_default",
+) -> None:
+    """Set path as current workspace for a bot and push it to recent."""
     all_state = _load_all()
     uid = str(user_id)
     user_state = all_state.get(uid, {"current": {}, "recent": []})
@@ -60,7 +59,7 @@ def select_workspace(user_id: int, path: str, bot_id: int | str = "_default") ->
     if path in recent:
         recent.remove(path)
     recent.insert(0, path)
-    user_state["recent"] = recent
+    user_state["recent"] = recent[:MAX_RECENT]
 
     all_state[uid] = user_state
     _save_all(all_state)
@@ -99,25 +98,16 @@ def _load_settings(workspace_path: str) -> dict:
             with open(path, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Corrupt or unreadable workspace settings (%s): %s", path, e)
+            logger.warning(
+                "Corrupt or unreadable workspace settings (%s): %s", path, e,
+            )
     return {}
 
 
 def _save_settings(workspace_path: str, settings: dict) -> None:
     ensure_cozter_dir(workspace_path)
-    target = _settings_path(workspace_path)
     tmp_dir = os.path.join(workspace_path, COZTER_DIR_NAME)
-    fd, tmp_path = tempfile.mkstemp(dir=tmp_dir, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-        os.replace(tmp_path, target)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    _atomic_write(_settings_path(workspace_path), settings, tmp_dir)
 
 
 def get_model(workspace_path: str) -> str:
@@ -131,7 +121,9 @@ def set_model(workspace_path: str, model: str) -> None:
 
 
 def get_summary_model(workspace_path: str) -> str:
-    return _load_settings(workspace_path).get("summary_model", DEFAULT_SUMMARY_MODEL)
+    return _load_settings(workspace_path).get(
+        "summary_model", DEFAULT_SUMMARY_MODEL,
+    )
 
 
 def set_summary_model(workspace_path: str, model: str) -> None:
@@ -139,8 +131,6 @@ def set_summary_model(workspace_path: str, model: str) -> None:
     settings["summary_model"] = model
     _save_settings(workspace_path, settings)
 
-
-DEFAULT_COMPACT_INTERVAL = 20
 
 AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"

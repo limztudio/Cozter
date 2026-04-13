@@ -20,7 +20,10 @@ def load_config() -> dict:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(_DEFAULT_CONFIG, f, indent=2)
         print(f"Config file created at: {CONFIG_PATH}")
-        print("Please fill in 'telegram_bot_tokens' and 'user_ids', then restart.")
+        print(
+            "Please fill in 'telegram_bot_tokens' and 'user_ids',"
+            " then restart."
+        )
         sys.exit(0)
 
     try:
