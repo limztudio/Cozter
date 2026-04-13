@@ -155,7 +155,7 @@ def run() -> None:
     except Exception as exc:
         crash_path = log_crash(exc)
         logger.critical(
-            "Unhandled exception — crash log written to %s. Restarting in 5s...",
+            "Unhandled exception - crash log written to %s. Restarting in 5s...",
             crash_path,
         )
         import time

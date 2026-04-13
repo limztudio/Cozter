@@ -145,7 +145,7 @@ DEFAULT_COMPACT_INTERVAL = 20
 AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"
 PERMISSION_DESCRIPTIONS = {
-    "full": "Full access — bypass all approvals and sandbox",
+    "full": "Full access - bypass all approvals and sandbox",
     "auto": "Execute all tool calls automatically (sandboxed)",
     "confirm": "Ask before each tool call",
     "deny": "Block all tool calls (text-only responses)",

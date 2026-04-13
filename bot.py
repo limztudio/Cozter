@@ -42,7 +42,7 @@ def _split_html(text: str, limit: int = 4096) -> list[str]:
             break
         split_at = text.rfind("\n", 0, limit)
         if split_at == -1:
-            # No newline — hard split, keep all characters
+            # No newline - hard split, keep all characters
             chunks.append(text[:limit])
             text = text[limit:]
         else:
@@ -76,7 +76,7 @@ def _md_to_html(text: str) -> str:
 
         line = _escape_html(line)
 
-        # Headers → bold
+        # Headers -> bold
         line = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", line)
         # Bold: **text** or __text__
         line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
@@ -367,7 +367,7 @@ class CozterBot:
             for i, p in enumerate(options, 1):
                 marker = " <-" if p == current else ""
                 desc = workspace.PERMISSION_DESCRIPTIONS[p]
-                lines.append(f"  {i}. {p} — {desc}{marker}")
+                lines.append(f"  {i}. {p} - {desc}{marker}")
             lines.append("\nEnter a number or mode name (or /cancel):")
             await update.message.reply_text("\n".join(lines))
             return PERMISSION_AWAITING
@@ -509,14 +509,20 @@ class CozterBot:
             if args == "now":
                 await update.message.reply_text("Compacting session...")
                 summary_model = workspace.get_summary_model(ws)
-                new_summary = await codex._compact_session(ws, sid, summary_model)
+                new_summary, lt_add, lt_remove = await codex._compact_session(
+                    ws, sid, summary_model)
                 if new_summary:
                     async with codex._get_workspace_lock(ws):
-                        session.set_summary(ws, sid, new_summary,
-                                            keep_recent=codex.KEEP_RECENT_AFTER_COMPACT)
-                    await update.message.reply_text("Session compacted.")
+                        session.set_summary(
+                            ws, sid, new_summary,
+                            keep_recent=codex.KEEP_RECENT_AFTER_COMPACT,
+                            long_term_add=lt_add,
+                            long_term_remove=lt_remove,
+                        )
+                    await update.message.reply_text(
+                        f"Session compacted (long-term +{len(lt_add)}/-{len(lt_remove)}).")
                 else:
-                    await update.message.reply_text("Compaction produced no output — session unchanged.")
+                    await update.message.reply_text("Compaction produced no output - session unchanged.")
                 return
 
             if args.isdigit():
@@ -529,14 +535,16 @@ class CozterBot:
             current = sess_data.get("compact_interval", 20)
             total = sess_data.get("compacted_count", 0) + len(sess_data.get("messages", []))
             summary = sess_data.get("summary")
+            long_term = sess_data.get("long_term") or []
             lines = [
                 f"Compact interval: {current} messages",
                 f"Total messages: {total}",
                 f"Has summary: {'yes' if summary else 'no'}",
+                f"Long-term memory items: {len(long_term)}",
                 "",
                 "Usage:",
-                "  /compact <number> — set interval",
-                "  /compact now — compact immediately",
+                "  /compact <number> - set interval",
+                "  /compact now - compact immediately",
             ]
             await update.message.reply_text("\n".join(lines))
 
@@ -775,7 +783,7 @@ class CozterBot:
         self._thinking_msgs[uid] = thinking_msg
         self._running_tasks[uid] = asyncio.current_task()
 
-        # Streaming callback — update the Thinking message with tool/file events
+        # Streaming callback - update the Thinking message with tool/file events
         status_lines: list[str] = []
         last_edit = 0.0
 
@@ -821,7 +829,7 @@ class CozterBot:
             html = _md_to_html(ev.content)
             for chunk in _split_html(html):
                 if not chunk.strip():
-                    continue  # skip empty chunks — Telegram rejects them
+                    continue  # skip empty chunks - Telegram rejects them
                 try:
                     await self.app.bot.send_message(
                         chat_id=chat_id, text=chunk, parse_mode="HTML",
@@ -843,7 +851,7 @@ class CozterBot:
         while not q.empty():
             lock = self._task_locks[uid]
             if lock.locked():
-                break  # something else acquired — stop draining
+                break  # something else acquired - stop draining
 
             # Check lock BEFORE dequeuing so we never drop a message.
             await lock.acquire()

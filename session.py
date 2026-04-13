@@ -1,4 +1,4 @@
-"""Session management — stored in each workspace's .cozter/sessions/."""
+"""Session management - stored in each workspace's .cozter/sessions/."""
 
 import json
 import logging
@@ -10,6 +10,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 COZTER_DIR = ".cozter"
+LONG_TERM_CAP = 500
 
 
 def _atomic_write(target: str, data: dict, tmp_dir: str) -> None:
@@ -117,6 +118,7 @@ def create_session(workspace: str, name: str | None = None) -> dict:
         "created": now,
         "messages": [],
         "summary": None,
+        "long_term": [],
         "compact_interval": 20,
         "compacted_count": 0,
     }
@@ -212,8 +214,15 @@ def get_summary(workspace: str, session_id: str) -> str | None:
 
 def set_summary(
     workspace: str, session_id: str, summary: str, keep_recent: int = 10,
+    long_term_add: list[str] | None = None,
+    long_term_remove: list[str] | None = None,
 ) -> None:
-    """Store a compacted summary, keeping only the last *keep_recent* messages."""
+    """Store a compacted summary, keeping only the last *keep_recent* messages.
+
+    long_term_add / long_term_remove apply deltas to the persistent long_term
+    memory list. Removals match by exact string equality; unknown removals
+    are silently ignored. Adds are appended only if not already present.
+    """
     data = load_session(workspace, session_id)
     if data is None:
         return
@@ -222,7 +231,41 @@ def set_summary(
     data["compacted_count"] = data.get("compacted_count", 0) + trimmed
     data["messages"] = msgs[-keep_recent:] if keep_recent else []
     data["summary"] = summary
+
+    long_term: list[str] = list(data.get("long_term") or [])
+    if long_term_remove:
+        remove_set = set(long_term_remove)
+        unmatched = remove_set - set(long_term)
+        if unmatched:
+            logger.warning(
+                "Long-term remove: %d item(s) had no exact match and were ignored",
+                len(unmatched),
+            )
+        long_term = [item for item in long_term if item not in remove_set]
+    if long_term_add:
+        existing = set(long_term)
+        for item in long_term_add:
+            if item and item not in existing:
+                long_term.append(item)
+                existing.add(item)
+    # Soft cap - drop oldest to keep context overhead bounded
+    if len(long_term) > LONG_TERM_CAP:
+        dropped = len(long_term) - LONG_TERM_CAP
+        logger.warning(
+            "Long-term memory exceeded cap (%d); dropping %d oldest item(s)",
+            LONG_TERM_CAP, dropped,
+        )
+        long_term = long_term[-LONG_TERM_CAP:]
+    data["long_term"] = long_term
+
     save_session(workspace, session_id, data)
+
+
+def get_long_term(workspace: str, session_id: str) -> list[str]:
+    data = load_session(workspace, session_id)
+    if data is None:
+        return []
+    return list(data.get("long_term") or [])
 
 
 def get_compact_interval(workspace: str, session_id: str) -> int:
