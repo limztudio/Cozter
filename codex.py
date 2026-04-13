@@ -146,6 +146,15 @@ class CodexResult:
 # Contextual prompt building
 # ------------------------------------------------------------------
 
+def _format_msg_line(msg: dict) -> str:
+    """Format a session message as 'Role: content', capped at MSG_CONTENT_MAX."""
+    role = msg.get("role", "?").capitalize()
+    content = msg.get("content", "")
+    if len(content) > MSG_CONTENT_MAX:
+        content = content[:MSG_CONTENT_MAX] + "…"
+    return f"{role}: {content}"
+
+
 def _build_contextual_prompt(
     prompt: str, workspace_path: str, session_id: str,
 ) -> str:
@@ -177,11 +186,7 @@ def _build_contextual_prompt(
     if messages:
         parts.append("[Recent Messages]")
         for msg in messages:
-            role = msg.get("role", "?").capitalize()
-            content = msg.get("content", "")
-            if len(content) > MSG_CONTENT_MAX:
-                content = content[:MSG_CONTENT_MAX] + "…"
-            parts.append(f"{role}: {content}")
+            parts.append(_format_msg_line(msg))
         parts.append("[End of Recent Messages]\n")
 
     parts.append(
@@ -225,11 +230,7 @@ def _build_contextual_prompt(
         used = 0
         if msg_budget > 0:
             for msg in reversed(messages):
-                role = msg.get("role", "?").capitalize()
-                content = msg.get("content", "")
-                if len(content) > MSG_CONTENT_MAX:
-                    content = content[:MSG_CONTENT_MAX] + "…"
-                line = f"{role}: {content}"
+                line = _format_msg_line(msg)
                 if used + len(line) > msg_budget:
                     break
                 msg_lines.append(line)
