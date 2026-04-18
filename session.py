@@ -67,6 +67,11 @@ def set_current_session_id(
 # Session CRUD
 # ---------------------------------------------------------------------------
 
+def total_message_count(data: dict) -> int:
+    """Total messages in a session (compacted + currently stored)."""
+    return data.get("compacted_count", 0) + len(data.get("messages", []))
+
+
 def list_sessions(workspace: str) -> list[dict]:
     """Return [{id, name, created, message_count}] sorted by created desc."""
     sdir = _sessions_dir(workspace)
@@ -84,10 +89,7 @@ def list_sessions(workspace: str) -> list[dict]:
                 "id": data["id"],
                 "name": data.get("name", data["id"][:8]),
                 "created": data.get("created", ""),
-                "message_count": (
-                    data.get("compacted_count", 0)
-                    + len(data.get("messages", []))
-                ),
+                "message_count": total_message_count(data),
             })
         except Exception:
             continue

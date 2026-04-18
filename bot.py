@@ -533,10 +533,7 @@ class CozterBot:
             if current_sid:
                 current_data = session.load_session(ws, current_sid)
                 if current_data:
-                    count = (
-                        current_data.get("compacted_count", 0)
-                        + len(current_data.get("messages", []))
-                    )
+                    count = session.total_message_count(current_data)
                     name = current_data.get("name", current_sid[:8])
                     lines.append(f"Current session: {name} ({count} msgs)")
                 else:
@@ -671,10 +668,7 @@ class CozterBot:
             current = sess_data.get(
                 "compact_interval", session.DEFAULT_COMPACT_INTERVAL,
             )
-            total = (
-                sess_data.get("compacted_count", 0)
-                + len(sess_data.get("messages", []))
-            )
+            total = session.total_message_count(sess_data)
             summary = sess_data.get("summary")
             long_term = sess_data.get("long_term") or []
             lines = [
@@ -1090,6 +1084,47 @@ class CozterBot:
 
         await self._send_result(chat_id, ws, result)
 
+    async def _send_text(self, chat_id: int, text: str) -> None:
+        """Send markdown text as HTML, falling back to plain on parse error."""
+        if not text:
+            return
+        html = _md_to_html(text)
+        for chunk in _split_html(html):
+            if not chunk.strip():
+                continue  # Telegram rejects empty messages
+            try:
+                await self.app.bot.send_message(
+                    chat_id=chat_id, text=chunk, parse_mode="HTML",
+                )
+            except Exception:
+                plain = re.sub(r"<[^>]+>", "", chunk)
+                plain = (
+                    plain.replace("&lt;", "<")
+                         .replace("&gt;", ">")
+                         .replace("&amp;", "&")
+                )
+                if plain.strip():
+                    await self.app.bot.send_message(
+                        chat_id=chat_id, text=plain,
+                    )
+
+    async def _send_attachment(self, chat_id: int, path: str) -> None:
+        """Send a file as a Telegram document, notifying the chat on failure."""
+        name = os.path.basename(path)
+        try:
+            with open(path, "rb") as f:
+                await self.app.bot.send_document(
+                    chat_id=chat_id, document=f, filename=name,
+                )
+        except Exception as e:
+            logger.warning("Failed to send attachment %s: %s", path, e)
+            try:
+                await self.app.bot.send_message(
+                    chat_id=chat_id, text=f"Failed to attach {name}: {e}",
+                )
+            except Exception:
+                pass
+
     async def _send_result(
         self, chat_id: int, ws: str, result: codex.CodexResult,
     ) -> None:
@@ -1098,49 +1133,9 @@ class CozterBot:
             if ev.kind != "text":
                 continue
             text, attach_paths = _extract_attachments(ev.content, ws)
-
-            if text:
-                html = _md_to_html(text)
-                for chunk in _split_html(html):
-                    if not chunk.strip():
-                        continue  # skip empty chunks - Telegram rejects them
-                    try:
-                        await self.app.bot.send_message(
-                            chat_id=chat_id, text=chunk, parse_mode="HTML",
-                        )
-                    except Exception:
-                        plain = re.sub(r"<[^>]+>", "", chunk)
-                        plain = (
-                            plain.replace("&lt;", "<")
-                                 .replace("&gt;", ">")
-                                 .replace("&amp;", "&")
-                        )
-                        if plain.strip():
-                            await self.app.bot.send_message(
-                                chat_id=chat_id, text=plain,
-                            )
-
+            await self._send_text(chat_id, text)
             for path in attach_paths:
-                try:
-                    with open(path, "rb") as f:
-                        await self.app.bot.send_document(
-                            chat_id=chat_id, document=f,
-                            filename=os.path.basename(path),
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to send attachment %s: %s", path, e,
-                    )
-                    try:
-                        await self.app.bot.send_message(
-                            chat_id=chat_id,
-                            text=(
-                                f"Failed to attach"
-                                f" {os.path.basename(path)}: {e}"
-                            ),
-                        )
-                    except Exception:
-                        pass
+                await self._send_attachment(chat_id, path)
 
     async def _drain_message_queue(self, uid: int) -> None:
         """Process any messages that were queued while the AI was busy."""
