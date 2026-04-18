@@ -156,11 +156,10 @@ def _format_msg_line(msg: dict) -> str:
 
 
 def _build_contextual_prompt(
-    prompt: str, workspace_path: str, session_id: str,
+    prompt: str, session_data: dict | None,
 ) -> str:
     """Prepend session history to the prompt so Codex has full context."""
-    # Single load - avoids two separate file reads for summary + messages
-    data = session.load_session(workspace_path, session_id)
+    data = session_data
     if data is None:
         return prompt
     summary: str | None = data.get("summary")
@@ -299,6 +298,9 @@ async def run(
       - "deny"    -> --sandbox read-only
     """
     session_id = session.ensure_session(workspace_path, user_id)
+    # Pre-load session data once — reused on every inject restart so the
+    # session file is not re-read for each iteration of the restart loop.
+    session_data = session.load_session(workspace_path, session_id)
 
     cmd = ["codex", "exec", "--ephemeral", "--json", "-C", workspace_path]
     if model:
@@ -324,7 +326,7 @@ async def run(
             )
 
         contextual_prompt = _build_contextual_prompt(
-            effective_prompt, workspace_path, session_id,
+            effective_prompt, session_data,
         )
         logger.info(
             "Running codex exec (prompt %d chars, context %d chars)",

@@ -12,21 +12,23 @@ COZTER_DIR_NAME = ".cozter"
 MAX_RECENT = 50  # cap on stored recent-workspaces list
 
 
+def _load_json(path: str, label: str) -> dict:
+    """Load a JSON file, returning {} on missing/corrupt."""
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Corrupt or unreadable %s (%s): %s", label, path, e)
+    return {}
+
+
 def _load_all() -> dict:
     """Load workspace state.
 
     Shape: {user_id_str: {current: {bot_id: path}, recent: [path, ...]}}.
     """
-    if os.path.exists(WORKSPACE_STATE_PATH):
-        try:
-            with open(WORKSPACE_STATE_PATH, encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(
-                "Corrupt or unreadable workspace state file (%s): %s",
-                WORKSPACE_STATE_PATH, e,
-            )
-    return {}
+    return _load_json(WORKSPACE_STATE_PATH, "workspace state file")
 
 
 def _save_all(data: dict) -> None:
@@ -92,22 +94,23 @@ def _settings_path(workspace_path: str) -> str:
 
 
 def _load_settings(workspace_path: str) -> dict:
-    path = _settings_path(workspace_path)
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(
-                "Corrupt or unreadable workspace settings (%s): %s", path, e,
-            )
-    return {}
+    return _load_json(_settings_path(workspace_path), "workspace settings")
 
 
 def _save_settings(workspace_path: str, settings: dict) -> None:
     ensure_cozter_dir(workspace_path)
     tmp_dir = os.path.join(workspace_path, COZTER_DIR_NAME)
     _atomic_write(_settings_path(workspace_path), settings, tmp_dir)
+
+
+def get_run_config(workspace_path: str) -> tuple[str, str, str]:
+    """Return (model, summary_model, permission) from a single settings read."""
+    s = _load_settings(workspace_path)
+    return (
+        s.get("model", DEFAULT_MODEL),
+        s.get("summary_model", DEFAULT_SUMMARY_MODEL),
+        s.get("permission", DEFAULT_PERMISSION),
+    )
 
 
 def get_model(workspace_path: str) -> str:

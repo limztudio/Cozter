@@ -12,13 +12,23 @@ REQUIREMENTS_PATH = os.path.join(MODULE_ROOT, "requirements.txt")
 _STARTUP_COMMIT: str | None = None
 
 
-def _get_head_commit() -> str:
-    """Return the full hash of the current HEAD commit on disk."""
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=MODULE_ROOT, capture_output=True, text=True,
+_GIT_TIMEOUT = 30  # seconds — prevents hung network calls from blocking forever
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    """Run a git command with a timeout, returning the CompletedProcess."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=MODULE_ROOT, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
     )
-    return result.stdout.strip()
+
+
+def _get_head_commit() -> str:
+    """Return the full hash of the current HEAD commit on disk, or ''."""
+    try:
+        return _git("rev-parse", "HEAD").stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
 
 
 def init_startup_commit() -> None:
@@ -30,20 +40,18 @@ def init_startup_commit() -> None:
 
 def get_current_version() -> str:
     """Return the short hash of the current HEAD commit."""
-    result = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        cwd=MODULE_ROOT, capture_output=True, text=True,
-    )
-    return result.stdout.strip() or "(unknown)"
+    try:
+        return _git("rev-parse", "--short", "HEAD").stdout.strip() or "(unknown)"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "(unknown)"
 
 
 def get_last_commit_date() -> str:
     """Return the date of the latest commit."""
-    result = subprocess.run(
-        ["git", "log", "-1", "--format=%ci"],
-        cwd=MODULE_ROOT, capture_output=True, text=True,
-    )
-    return result.stdout.strip() or "(unknown)"
+    try:
+        return _git("log", "-1", "--format=%ci").stdout.strip() or "(unknown)"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "(unknown)"
 
 
 def fetch_and_pull() -> bool:
@@ -52,23 +60,16 @@ def fetch_and_pull() -> bool:
     This detects both remote updates and manual pulls that happened while
     the process was running.
     """
-    # Fetch latest refs and pull
     try:
-        fetch = subprocess.run(
-            ["git", "fetch", "origin"],
-            cwd=MODULE_ROOT, capture_output=True, text=True,
-        )
+        fetch = _git("fetch", "origin")
         if fetch.returncode != 0:
             logger.warning("git fetch failed: %s", fetch.stderr.strip())
 
-        pull = subprocess.run(
-            ["git", "pull", "--ff-only"],
-            cwd=MODULE_ROOT, capture_output=True, text=True,
-        )
+        pull = _git("pull", "--ff-only")
         if pull.returncode != 0:
             logger.warning("git pull failed: %s", pull.stderr.strip())
-    except FileNotFoundError:
-        logger.error("git not found on PATH, skipping update check")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        logger.error("git not available or timed out, skipping update check")
         return False
 
     # Compare disk HEAD to the commit we started with

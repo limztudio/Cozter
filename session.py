@@ -84,7 +84,10 @@ def list_sessions(workspace: str) -> list[dict]:
                 "id": data["id"],
                 "name": data.get("name", data["id"][:8]),
                 "created": data.get("created", ""),
-                "message_count": len(data.get("messages", [])),
+                "message_count": (
+                    data.get("compacted_count", 0)
+                    + len(data.get("messages", []))
+                ),
             })
         except Exception:
             continue

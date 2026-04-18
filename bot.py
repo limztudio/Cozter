@@ -115,6 +115,19 @@ SUMMARY_MODEL_AWAITING = 5
 
 _NO_WS_MSG = "No workspace selected. Use /new or /open first."
 
+_TEXT_EXTENSIONS = frozenset({
+    ".txt", ".md", ".rst", ".py", ".js", ".ts", ".jsx", ".tsx",
+    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".sh", ".bash", ".zsh", ".fish",
+    ".html", ".htm", ".css", ".scss", ".xml", ".csv",
+    ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp",
+    ".rb", ".php", ".swift", ".kt", ".r", ".m",
+    ".sql", ".graphql", ".proto",
+    ".dockerfile", ".gitignore", ".env",
+    ".log", ".diff", ".patch",
+})
+_INLINE_SIZE_LIMIT = 50_000  # characters
+
 
 def _authorized(user_ids: list[int]):
     """Decorator that restricts handler to authorized user_ids."""
@@ -486,7 +499,10 @@ class CozterBot:
             if current_sid:
                 current_data = session.load_session(ws, current_sid)
                 if current_data:
-                    count = len(current_data.get("messages", []))
+                    count = (
+                        current_data.get("compacted_count", 0)
+                        + len(current_data.get("messages", []))
+                    )
                     name = current_data.get("name", current_sid[:8])
                     lines.append(f"Current session: {name} ({count} msgs)")
                 else:
@@ -701,52 +717,105 @@ class CozterBot:
             ws = workspace.get_current(uid, self.bot_id)
             if not ws or not os.path.isdir(ws):
                 await update.message.reply_text(
-                    "No workspace selected (or it was deleted)."
-                    " Use /new or /open."
+                    "No workspace selected (or it was deleted). Use /new or /open."
+                )
+                return
+            await self._dispatch(uid, update.effective_chat.id, text, update)
+
+        # --- AI file attachment ---
+
+        @_authorized(self.user_ids)
+        async def ai_file(update: Update, _context: ContextTypes.DEFAULT_TYPE):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid, self.bot_id)
+            if not ws or not os.path.isdir(ws):
+                await update.message.reply_text(
+                    "No workspace selected (or it was deleted). Use /new or /open."
                 )
                 return
 
-            if uid not in self._task_locks:
-                self._task_locks[uid] = asyncio.Lock()
-            lock = self._task_locks[uid]
-
-            # If AI is already running, queue the message for later.
-            if lock.locked():
-                if uid not in self._message_queues:
-                    self._message_queues[uid] = asyncio.Queue(
-                        maxsize=self.max_queue_size,
-                    )
-                q = self._message_queues[uid]
-                if q.full():
-                    await update.message.reply_text(
-                        "Queue full. Wait or /stop first."
-                    )
-                else:
-                    await q.put((text, update.effective_chat.id))
-                    await update.message.reply_text(
-                        f"Queued ({q.qsize()}/{self.max_queue_size})."
-                    )
+            message = update.message
+            if message.document:
+                tg_file = await message.document.get_file()
+                filename = (
+                    message.document.file_name
+                    or f"file_{message.document.file_id}"
+                )
+                file_type = "document"
+            elif message.photo:
+                photo = message.photo[-1]  # largest resolution
+                tg_file = await photo.get_file()
+                filename = f"photo_{photo.file_id}.jpg"
+                file_type = "photo"
+            elif message.audio:
+                tg_file = await message.audio.get_file()
+                filename = (
+                    message.audio.file_name
+                    or f"audio_{message.audio.file_id}.ogg"
+                )
+                file_type = "audio"
+            elif message.video:
+                tg_file = await message.video.get_file()
+                filename = (
+                    message.video.file_name
+                    or f"video_{message.video.file_id}.mp4"
+                )
+                file_type = "video"
+            elif message.voice:
+                tg_file = await message.voice.get_file()
+                filename = f"voice_{message.voice.file_id}.ogg"
+                file_type = "voice"
+            elif message.video_note:
+                tg_file = await message.video_note.get_file()
+                filename = f"videonote_{message.video_note.file_id}.mp4"
+                file_type = "video note"
+            else:
                 return
-            await lock.acquire()
 
-            chat_id = update.effective_chat.id
+            caption = (message.caption or "").strip()
+
+            # Strip any path components from user-supplied filenames to prevent
+            # path traversal (e.g. file_name="../../etc/passwd").
+            filename = os.path.basename(filename) or f"file_{tg_file.file_id}"
+
+            upload_dir = os.path.join(ws, ".cozter", "uploads")
+            os.makedirs(upload_dir, exist_ok=True)
+            local_path = os.path.join(upload_dir, filename)
             try:
-                await self._run_ai_turn(uid, chat_id, text)
-            except asyncio.CancelledError:
-                await update.message.reply_text("Cancelled.")
-                return
+                await tg_file.download_to_drive(local_path)
             except Exception as e:
-                logger.exception("AI chat failed")
-                await update.message.reply_text(f"Error: {e}")
+                await update.message.reply_text(f"Failed to download file: {e}")
                 return
-            finally:
-                self._running_tasks.pop(uid, None)
-                self._inject_queues.pop(uid, None)
-                self._thinking_msgs.pop(uid, None)
-                lock.release()
 
-            # Drain the message queue while there are pending messages.
-            await self._drain_message_queue(uid)
+            ext = os.path.splitext(filename)[1].lower()
+            rel_path = os.path.relpath(local_path, ws)
+
+            parts: list[str] = []
+            if caption:
+                parts.append(caption)
+            parts.append(f"[{file_type.capitalize()} attachment saved to: {rel_path}]")
+
+            if ext in _TEXT_EXTENSIONS:
+                try:
+                    with open(local_path, encoding="utf-8", errors="replace") as f:
+                        content = f.read()
+                    if len(content) <= _INLINE_SIZE_LIMIT:
+                        parts.append(
+                            f"[File contents of {filename}]\n"
+                            f"{content}\n"
+                            f"[End of file]"
+                        )
+                    else:
+                        parts.append(
+                            f"[File too large to inline ({len(content):,} chars);"
+                            f" read it from {rel_path}]"
+                        )
+                except OSError:
+                    pass  # binary or unreadable — path reference is enough
+
+            await self._dispatch(
+                uid, update.effective_chat.id, "\n".join(parts), update,
+            )
 
         # --- register handlers ---
 
@@ -843,6 +912,12 @@ class CozterBot:
         self.app.add_handler(CommandHandler("compact", cmd_compact))
         self.app.add_handler(CommandHandler("stop", cmd_stop))
         self.app.add_handler(CommandHandler("inject", cmd_inject))
+        self.app.add_handler(MessageHandler(filters.Document.ALL, ai_file))
+        self.app.add_handler(MessageHandler(filters.PHOTO, ai_file))
+        self.app.add_handler(MessageHandler(filters.AUDIO, ai_file))
+        self.app.add_handler(MessageHandler(filters.VIDEO, ai_file))
+        self.app.add_handler(MessageHandler(filters.VOICE, ai_file))
+        self.app.add_handler(MessageHandler(filters.VIDEO_NOTE, ai_file))
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat)
         )
@@ -871,7 +946,52 @@ class CozterBot:
             logger.info("Bot stopped.")
 
     # ------------------------------------------------------------------
-    # Core AI turn logic (used by ai_chat handler and queue drain)
+    # Dispatch: acquire lock or queue, then run AI turn
+    # ------------------------------------------------------------------
+
+    async def _dispatch(
+        self, uid: int, chat_id: int, text: str, update: Update,
+    ) -> None:
+        """Acquire the per-user lock and run an AI turn, or queue if busy."""
+        if uid not in self._task_locks:
+            self._task_locks[uid] = asyncio.Lock()
+        lock = self._task_locks[uid]
+
+        if lock.locked():
+            if uid not in self._message_queues:
+                self._message_queues[uid] = asyncio.Queue(
+                    maxsize=self.max_queue_size,
+                )
+            q = self._message_queues[uid]
+            if q.full():
+                await update.message.reply_text("Queue full. Wait or /stop first.")
+            else:
+                await q.put((text, chat_id))
+                await update.message.reply_text(
+                    f"Queued ({q.qsize()}/{self.max_queue_size})."
+                )
+            return
+        await lock.acquire()
+
+        try:
+            await self._run_ai_turn(uid, chat_id, text)
+        except asyncio.CancelledError:
+            await update.message.reply_text("Cancelled.")
+            return
+        except Exception as e:
+            logger.exception("AI turn failed")
+            await update.message.reply_text(f"Error: {e}")
+            return
+        finally:
+            self._running_tasks.pop(uid, None)
+            self._inject_queues.pop(uid, None)
+            self._thinking_msgs.pop(uid, None)
+            lock.release()
+
+        await self._drain_message_queue(uid)
+
+    # ------------------------------------------------------------------
+    # Core AI turn logic (used by _dispatch and queue drain)
     # ------------------------------------------------------------------
 
     async def _run_ai_turn(self, uid: int, chat_id: int, text: str) -> None:
@@ -886,9 +1006,7 @@ class CozterBot:
                 text="Workspace not available (deleted?). Use /new or /open.",
             )
             return
-        model = workspace.get_model(ws)
-        summary_model = workspace.get_summary_model(ws)
-        perm = workspace.get_permission(ws)
+        model, summary_model, perm = workspace.get_run_config(ws)
 
         inject_q: asyncio.Queue[str] = asyncio.Queue(
             maxsize=self.max_queue_size,
@@ -934,7 +1052,7 @@ class CozterBot:
             )
         finally:
             try:
-                await thinking_msg.delete()
+                await asyncio.shield(thinking_msg.delete())
             except Exception:
                 pass
 
