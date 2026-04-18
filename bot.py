@@ -533,11 +533,14 @@ class CozterBot:
 
             lines = []
             if current_sid:
-                current_data = session.load_session(ws, current_sid)
-                if current_data:
-                    count = session.total_message_count(current_data)
-                    name = current_data.get("name", current_sid[:8])
-                    lines.append(f"Current session: {name} ({count} msgs)")
+                current_meta = next(
+                    (s for s in sessions if s["id"] == current_sid), None,
+                )
+                if current_meta:
+                    lines.append(
+                        f"Current session: {current_meta['name']}"
+                        f" ({current_meta['message_count']} msgs)"
+                    )
                 else:
                     lines.append("Current session: (invalid)")
             else:
@@ -570,7 +573,6 @@ class CozterBot:
                 await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
             text = update.message.text.strip()
-            sessions = session.list_sessions(ws)
 
             if text.lower() == "new":
                 new_sess = session.create_session(ws)
@@ -581,6 +583,7 @@ class CozterBot:
                 return ConversationHandler.END
 
             if text.isdigit():
+                sessions = session.list_sessions(ws)
                 idx = int(text) - 1
                 if 0 <= idx < len(sessions):
                     chosen = sessions[idx]
