@@ -12,6 +12,12 @@ from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
 
+CAPABILITY_HINT = (
+    "[System: To attach a file in your reply, include "
+    "\"[[attach: PATH]]\" on its own line. PATH is relative to the "
+    "workspace root, or absolute.]"
+)
+
 MAX_HISTORY_CHARS = 50_000
 # Cap each individual message's content when building context so a single
 # long AI response cannot consume the entire message budget.
@@ -331,6 +337,7 @@ async def run(
         contextual_prompt = _build_contextual_prompt(
             effective_prompt, session_data,
         )
+        full_prompt = CAPABILITY_HINT + "\n\n" + contextual_prompt
         logger.info(
             "Running codex exec (prompt %d chars, context %d chars)",
             len(prompt), len(contextual_prompt),
@@ -349,7 +356,7 @@ async def run(
             result.events.append(ChatEvent(kind="text", content=result.text))
             return result
 
-        proc.stdin.write(contextual_prompt.encode("utf-8"))
+        proc.stdin.write(full_prompt.encode("utf-8"))
         await proc.stdin.drain()
         proc.stdin.close()
         await proc.stdin.wait_closed()

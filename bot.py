@@ -129,6 +129,40 @@ _TEXT_EXTENSIONS = frozenset({
 })
 _INLINE_SIZE_LIMIT = 50_000  # characters
 
+_ATTACH_RE = re.compile(
+    r"\[\[attach:\s*([^\]\n]+?)\s*\]\]", re.IGNORECASE,
+)
+
+
+def _extract_attachments(text: str, ws: str) -> tuple[str, list[str]]:
+    """Parse [[attach: PATH]] markers.
+
+    Returns (text_without_markers, list_of_absolute_file_paths).
+    Only files that resolve inside the workspace are accepted, so the AI
+    can't attach arbitrary system files.
+    """
+    ws_real = os.path.realpath(ws)
+    paths: list[str] = []
+
+    def _sub(m: re.Match) -> str:
+        rel = m.group(1).strip()
+        if not rel:
+            return ""
+        abs_path = rel if os.path.isabs(rel) else os.path.join(ws, rel)
+        abs_path = os.path.realpath(abs_path)
+        if not (
+            abs_path == ws_real
+            or abs_path.startswith(ws_real + os.sep)
+        ):
+            return ""  # outside workspace — drop silently
+        if os.path.isfile(abs_path):
+            paths.append(abs_path)
+        return ""
+
+    cleaned = _ATTACH_RE.sub(_sub, text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, paths
+
 
 def _authorized(user_ids: list[int]):
     """Decorator that restricts handler to authorized user_ids."""
@@ -1054,34 +1088,59 @@ class CozterBot:
             except Exception:
                 pass
 
-        await self._send_result(chat_id, result)
+        await self._send_result(chat_id, ws, result)
 
     async def _send_result(
-        self, chat_id: int, result: codex.CodexResult,
+        self, chat_id: int, ws: str, result: codex.CodexResult,
     ) -> None:
-        """Send the final AI text response to the chat."""
+        """Send the AI's text reply plus any [[attach: ...]] files."""
         for ev in result.events:
             if ev.kind != "text":
                 continue
-            html = _md_to_html(ev.content)
-            for chunk in _split_html(html):
-                if not chunk.strip():
-                    continue  # skip empty chunks - Telegram rejects them
-                try:
-                    await self.app.bot.send_message(
-                        chat_id=chat_id, text=chunk, parse_mode="HTML",
-                    )
-                except Exception:
-                    plain = re.sub(r"<[^>]+>", "", chunk)
-                    plain = (
-                        plain.replace("&lt;", "<")
-                             .replace("&gt;", ">")
-                             .replace("&amp;", "&")
-                    )
-                    if plain.strip():
+            text, attach_paths = _extract_attachments(ev.content, ws)
+
+            if text:
+                html = _md_to_html(text)
+                for chunk in _split_html(html):
+                    if not chunk.strip():
+                        continue  # skip empty chunks - Telegram rejects them
+                    try:
                         await self.app.bot.send_message(
-                            chat_id=chat_id, text=plain,
+                            chat_id=chat_id, text=chunk, parse_mode="HTML",
                         )
+                    except Exception:
+                        plain = re.sub(r"<[^>]+>", "", chunk)
+                        plain = (
+                            plain.replace("&lt;", "<")
+                                 .replace("&gt;", ">")
+                                 .replace("&amp;", "&")
+                        )
+                        if plain.strip():
+                            await self.app.bot.send_message(
+                                chat_id=chat_id, text=plain,
+                            )
+
+            for path in attach_paths:
+                try:
+                    with open(path, "rb") as f:
+                        await self.app.bot.send_document(
+                            chat_id=chat_id, document=f,
+                            filename=os.path.basename(path),
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to send attachment %s: %s", path, e,
+                    )
+                    try:
+                        await self.app.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                f"Failed to attach"
+                                f" {os.path.basename(path)}: {e}"
+                            ),
+                        )
+                    except Exception:
+                        pass
 
     async def _drain_message_queue(self, uid: int) -> None:
         """Process any messages that were queued while the AI was busy."""
