@@ -372,7 +372,9 @@ async def run(
             restarting = True
             try:
                 proc.kill()
-            except ProcessLookupError:
+            except OSError:
+                # ProcessLookupError on Unix, other OSError on Windows
+                # when TerminateProcess fails (e.g., already exited).
                 pass
 
         inject_task: asyncio.Task | None = None
@@ -403,7 +405,7 @@ async def run(
             try:
                 proc.kill()
                 await proc.wait()
-            except ProcessLookupError:
+            except OSError:
                 pass
             raise
         finally:
@@ -695,7 +697,7 @@ async def compact_session(
         try:
             proc.kill()
             await proc.wait()
-        except ProcessLookupError:
+        except OSError:
             pass
         return ("", None)
 
