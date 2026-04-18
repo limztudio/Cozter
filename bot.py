@@ -952,12 +952,15 @@ class CozterBot:
         self.app.add_handler(CommandHandler("compact", cmd_compact))
         self.app.add_handler(CommandHandler("stop", cmd_stop))
         self.app.add_handler(CommandHandler("inject", cmd_inject))
-        self.app.add_handler(MessageHandler(filters.Document.ALL, ai_file))
-        self.app.add_handler(MessageHandler(filters.PHOTO, ai_file))
-        self.app.add_handler(MessageHandler(filters.AUDIO, ai_file))
-        self.app.add_handler(MessageHandler(filters.VIDEO, ai_file))
-        self.app.add_handler(MessageHandler(filters.VOICE, ai_file))
-        self.app.add_handler(MessageHandler(filters.VIDEO_NOTE, ai_file))
+        attachment_filter = (
+            filters.Document.ALL
+            | filters.PHOTO
+            | filters.AUDIO
+            | filters.VIDEO
+            | filters.VOICE
+            | filters.VIDEO_NOTE
+        )
+        self.app.add_handler(MessageHandler(attachment_filter, ai_file))
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat)
         )
