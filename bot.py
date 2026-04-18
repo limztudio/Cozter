@@ -20,6 +20,7 @@ from . import codex
 from . import session
 from . import updater
 from . import workspace
+from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +164,6 @@ class CozterBot:
         self._task_locks: dict[int, asyncio.Lock] = {}
         self._message_queues: dict[int, asyncio.Queue] = {}
         self._inject_queues: dict[int, asyncio.Queue] = {}
-        self._thinking_msgs: dict[int, object] = {}
 
     @property
     def bot_id(self) -> int:
@@ -672,13 +672,7 @@ class CozterBot:
             task = self._running_tasks.get(uid)
             if task and not task.done():
                 task.cancel()
-                q = self._message_queues.get(uid)
-                if q:
-                    while not q.empty():
-                        try:
-                            q.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
+                _drain_queue(self._message_queues.get(uid))
                 await update.message.reply_text("Cancelling...")
             else:
                 await update.message.reply_text("Nothing is running.")
@@ -706,6 +700,15 @@ class CozterBot:
             await inject_q.put(text)
             await update.message.reply_text("Injected.")
 
+        async def _require_ws(update: Update, uid: int) -> str | None:
+            ws = workspace.get_current(uid, self.bot_id)
+            if not ws or not os.path.isdir(ws):
+                await update.message.reply_text(
+                    "No workspace selected (or it was deleted). Use /new or /open."
+                )
+                return None
+            return ws
+
         # --- AI chat (default for non-command messages) ---
 
         @_authorized(self.user_ids)
@@ -714,11 +717,7 @@ class CozterBot:
             text = update.message.text.strip()
             if not text:
                 return
-            ws = workspace.get_current(uid, self.bot_id)
-            if not ws or not os.path.isdir(ws):
-                await update.message.reply_text(
-                    "No workspace selected (or it was deleted). Use /new or /open."
-                )
+            if await _require_ws(update, uid) is None:
                 return
             await self._dispatch(uid, update.effective_chat.id, text, update)
 
@@ -727,11 +726,8 @@ class CozterBot:
         @_authorized(self.user_ids)
         async def ai_file(update: Update, _context: ContextTypes.DEFAULT_TYPE):
             uid = update.effective_user.id
-            ws = workspace.get_current(uid, self.bot_id)
-            if not ws or not os.path.isdir(ws):
-                await update.message.reply_text(
-                    "No workspace selected (or it was deleted). Use /new or /open."
-                )
+            ws = await _require_ws(update, uid)
+            if ws is None:
                 return
 
             message = update.message
@@ -949,6 +945,12 @@ class CozterBot:
     # Dispatch: acquire lock or queue, then run AI turn
     # ------------------------------------------------------------------
 
+    def _cleanup_turn(self, uid: int, lock: asyncio.Lock) -> None:
+        """Per-user state cleanup shared by dispatch and queue-drain paths."""
+        self._running_tasks.pop(uid, None)
+        self._inject_queues.pop(uid, None)
+        lock.release()
+
     async def _dispatch(
         self, uid: int, chat_id: int, text: str, update: Update,
     ) -> None:
@@ -983,10 +985,7 @@ class CozterBot:
             await update.message.reply_text(f"Error: {e}")
             return
         finally:
-            self._running_tasks.pop(uid, None)
-            self._inject_queues.pop(uid, None)
-            self._thinking_msgs.pop(uid, None)
-            lock.release()
+            self._cleanup_turn(uid, lock)
 
         await self._drain_message_queue(uid)
 
@@ -1016,7 +1015,6 @@ class CozterBot:
         thinking_msg = await self.app.bot.send_message(
             chat_id=chat_id, text="Thinking...",
         )
-        self._thinking_msgs[uid] = thinking_msg
         self._running_tasks[uid] = asyncio.current_task()
 
         status_lines: list[str] = []
@@ -1090,9 +1088,9 @@ class CozterBot:
         q = self._message_queues.get(uid)
         if not q:
             return
+        lock = self._task_locks[uid]
 
         while not q.empty():
-            lock = self._task_locks[uid]
             if lock.locked():
                 break  # something else acquired - stop draining
 
@@ -1122,10 +1120,7 @@ class CozterBot:
                 except Exception:
                     pass
             finally:
-                self._running_tasks.pop(uid, None)
-                self._inject_queues.pop(uid, None)
-                self._thinking_msgs.pop(uid, None)
-                lock.release()
+                self._cleanup_turn(uid, lock)
 
     async def notify_users(self, message: str) -> None:
         """Send a message to all authorized users."""

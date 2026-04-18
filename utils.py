@@ -1,8 +1,24 @@
 """Shared low-level utilities."""
 
+import asyncio
 import json
 import os
 import tempfile
+
+
+def drain_queue(
+    q: asyncio.Queue | None, collect: list | None = None,
+) -> None:
+    """Empty a queue non-blocking. If collect is given, append items to it."""
+    if q is None:
+        return
+    while not q.empty():
+        try:
+            msg = q.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        if collect is not None:
+            collect.append(msg)
 
 
 def atomic_write(target: str, data: dict, tmp_dir: str) -> None:

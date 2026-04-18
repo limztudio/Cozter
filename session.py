@@ -153,17 +153,23 @@ def append_messages(
 # Ensure a session exists for a user in a workspace
 # ---------------------------------------------------------------------------
 
-def ensure_session(workspace: str, user_id: int) -> str:
-    """Return the current session ID, creating one if needed."""
+def ensure_session_with_data(
+    workspace: str, user_id: int,
+) -> tuple[str, dict]:
+    """Return (session_id, loaded data), creating the session if needed."""
     sid = get_current_session_id(workspace, user_id)
     if sid:
         data = load_session(workspace, sid)
         if data is not None:
-            return sid
-    # Create new session
+            return (sid, data)
     data = create_session(workspace)
     set_current_session_id(workspace, user_id, data["id"])
-    return data["id"]
+    return (data["id"], data)
+
+
+def ensure_session(workspace: str, user_id: int) -> str:
+    """Return the current session ID, creating one if needed."""
+    return ensure_session_with_data(workspace, user_id)[0]
 
 
 # ---------------------------------------------------------------------------

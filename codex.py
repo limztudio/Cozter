@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator
 
 from . import session
+from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
 
@@ -297,10 +298,12 @@ async def run(
       - "confirm" -> --sandbox workspace-write
       - "deny"    -> --sandbox read-only
     """
-    session_id = session.ensure_session(workspace_path, user_id)
-    # Pre-load session data once — reused on every inject restart so the
-    # session file is not re-read for each iteration of the restart loop.
-    session_data = session.load_session(workspace_path, session_id)
+    # ensure_session_with_data gives us (id, data) from a single load.
+    # session_data is reused on every inject restart so the session file
+    # is not re-read for each iteration of the restart loop.
+    session_id, session_data = session.ensure_session_with_data(
+        workspace_path, user_id,
+    )
 
     cmd = ["codex", "exec", "--ephemeral", "--json", "-C", workspace_path]
     if model:
@@ -411,12 +414,7 @@ async def run(
                 await proc.stderr.read()
             except Exception:
                 pass
-            if inject_queue is not None:
-                while not inject_queue.empty():
-                    try:
-                        injected.append(inject_queue.get_nowait())
-                    except asyncio.QueueEmpty:
-                        break
+            _drain_queue(inject_queue, collect=injected)
             logger.info(
                 "Restarting codex with %d injected message(s)",
                 len(injected),
@@ -431,12 +429,7 @@ async def run(
         break  # normal completion
 
     # Discard any inject messages that arrived after the final answer.
-    if inject_queue is not None:
-        while not inject_queue.empty():
-            try:
-                inject_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+    _drain_queue(inject_queue)
 
     stderr = (
         await proc.stderr.read()
