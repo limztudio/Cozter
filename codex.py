@@ -473,20 +473,16 @@ def _log_to_session(
 
 
 def _format_session_response(result: CodexResult) -> str:
-    """Serialize the full assistant turn so later prompts can recover state."""
-    parts: list[str] = []
-    for event in result.events:
-        if event.kind == "text":
-            parts.append(event.content)
-        elif event.kind == "tool":
-            parts.append(f"[Tool Result]\n{event.content}")
-        elif event.kind == "file":
-            parts.append(f"[File Change]\n{event.content}")
+    """Return the assistant's final text reply for session logging.
 
-    if not parts and result.text:
-        parts.append(result.text)
-
-    return "\n\n".join(parts)
+    Tool and file events are intermediate 'thinking' — the text reply
+    already summarizes what was done, and skipping them keeps the saved
+    history (and the context fed to future turns) compact.
+    """
+    text_parts = [ev.content for ev in result.events if ev.kind == "text"]
+    if text_parts:
+        return "\n\n".join(text_parts)
+    return result.text
 
 
 # ------------------------------------------------------------------
