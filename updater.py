@@ -23,12 +23,17 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _git_str(*args: str, default: str = "") -> str:
+    """Run a git command and return stripped stdout; `default` if unavailable."""
+    try:
+        return _git(*args).stdout.strip() or default
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return default
+
+
 def _get_head_commit() -> str:
     """Return the full hash of the current HEAD commit on disk, or ''."""
-    try:
-        return _git("rev-parse", "HEAD").stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return ""
+    return _git_str("rev-parse", "HEAD")
 
 
 def init_startup_commit() -> None:
@@ -40,18 +45,12 @@ def init_startup_commit() -> None:
 
 def get_current_version() -> str:
     """Return the short hash of the current HEAD commit."""
-    try:
-        return _git("rev-parse", "--short", "HEAD").stdout.strip() or "(unknown)"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return "(unknown)"
+    return _git_str("rev-parse", "--short", "HEAD", default="(unknown)")
 
 
 def get_last_commit_date() -> str:
     """Return the date of the latest commit."""
-    try:
-        return _git("log", "-1", "--format=%ci").stdout.strip() or "(unknown)"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return "(unknown)"
+    return _git_str("log", "-1", "--format=%ci", default="(unknown)")
 
 
 def fetch_and_pull() -> bool:

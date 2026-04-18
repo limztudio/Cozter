@@ -88,6 +88,15 @@ AVAILABLE_MODELS = [
 DEFAULT_MODEL = "gpt-5.4"
 DEFAULT_SUMMARY_MODEL = "gpt-5.3-codex"
 
+AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
+DEFAULT_PERMISSION = "auto"
+PERMISSION_DESCRIPTIONS = {
+    "full": "Full access - bypass all approvals and sandbox",
+    "auto": "Execute all tool calls automatically (sandboxed)",
+    "confirm": "Ask before each tool call",
+    "deny": "Block all tool calls (text-only responses)",
+}
+
 
 def _settings_path(workspace_path: str) -> str:
     return os.path.join(workspace_path, COZTER_DIR_NAME, "settings.json")
@@ -101,6 +110,12 @@ def _save_settings(workspace_path: str, settings: dict) -> None:
     ensure_cozter_dir(workspace_path)
     tmp_dir = os.path.join(workspace_path, COZTER_DIR_NAME)
     _atomic_write(_settings_path(workspace_path), settings, tmp_dir)
+
+
+def _set_setting(workspace_path: str, key: str, value: str) -> None:
+    settings = _load_settings(workspace_path)
+    settings[key] = value
+    _save_settings(workspace_path, settings)
 
 
 def get_run_config(workspace_path: str) -> tuple[str, str, str]:
@@ -118,9 +133,7 @@ def get_model(workspace_path: str) -> str:
 
 
 def set_model(workspace_path: str, model: str) -> None:
-    settings = _load_settings(workspace_path)
-    settings["model"] = model
-    _save_settings(workspace_path, settings)
+    _set_setting(workspace_path, "model", model)
 
 
 def get_summary_model(workspace_path: str) -> str:
@@ -130,19 +143,7 @@ def get_summary_model(workspace_path: str) -> str:
 
 
 def set_summary_model(workspace_path: str, model: str) -> None:
-    settings = _load_settings(workspace_path)
-    settings["summary_model"] = model
-    _save_settings(workspace_path, settings)
-
-
-AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
-DEFAULT_PERMISSION = "auto"
-PERMISSION_DESCRIPTIONS = {
-    "full": "Full access - bypass all approvals and sandbox",
-    "auto": "Execute all tool calls automatically (sandboxed)",
-    "confirm": "Ask before each tool call",
-    "deny": "Block all tool calls (text-only responses)",
-}
+    _set_setting(workspace_path, "summary_model", model)
 
 
 def get_permission(workspace_path: str) -> str:
@@ -150,6 +151,4 @@ def get_permission(workspace_path: str) -> str:
 
 
 def set_permission(workspace_path: str, permission: str) -> None:
-    settings = _load_settings(workspace_path)
-    settings["permission"] = permission
-    _save_settings(workspace_path, settings)
+    _set_setting(workspace_path, "permission", permission)
