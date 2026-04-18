@@ -148,15 +148,17 @@ def _extract_attachments(text: str, ws: str) -> tuple[str, list[str]]:
         rel = m.group(1).strip()
         if not rel:
             return ""
-        abs_path = rel if os.path.isabs(rel) else os.path.join(ws, rel)
-        abs_path = os.path.realpath(abs_path)
-        if not (
-            abs_path == ws_real
-            or abs_path.startswith(ws_real + os.sep)
-        ):
-            return ""  # outside workspace — drop silently
-        if os.path.isfile(abs_path):
-            paths.append(abs_path)
+        try:
+            abs_path = rel if os.path.isabs(rel) else os.path.join(ws, rel)
+            abs_path = os.path.realpath(abs_path)
+            inside = (
+                abs_path == ws_real
+                or abs_path.startswith(ws_real + os.sep)
+            )
+            if inside and os.path.isfile(abs_path):
+                paths.append(abs_path)
+        except (ValueError, OSError):
+            pass  # malformed path (e.g. null byte) — drop silently
         return ""
 
     cleaned = _ATTACH_RE.sub(_sub, text)
