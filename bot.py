@@ -629,10 +629,10 @@ class CozterBot:
                 await update.message.reply_text(_NO_WS_MSG)
                 return
 
-            sid = session.ensure_session(ws, uid)
             args = (context.args[0] if context.args else "").strip().lower()
 
             if args == "now":
+                sid = session.ensure_session(ws, uid)
                 await update.message.reply_text("Compacting session...")
                 summary_model = workspace.get_summary_model(ws)
                 new_summary, new_long_term = await codex.compact_session(
@@ -659,6 +659,7 @@ class CozterBot:
                 return
 
             if args.isdigit():
+                sid = session.ensure_session(ws, uid)
                 interval = int(args)
                 session.set_compact_interval(ws, sid, interval)
                 await update.message.reply_text(
@@ -666,6 +667,16 @@ class CozterBot:
                 )
                 return
 
+            # Display mode — do not create a session just to read stats.
+            sid = session.get_current_session_id(ws, uid)
+            if not sid:
+                await update.message.reply_text(
+                    "No session yet. Send a message to start one.\n\n"
+                    "Usage:\n"
+                    "  /compact <number> - set interval\n"
+                    "  /compact now - compact immediately"
+                )
+                return
             sess_data = session.load_session(ws, sid) or {}
             current = sess_data.get(
                 "compact_interval", session.DEFAULT_COMPACT_INTERVAL,
