@@ -1,13 +1,18 @@
-"""Codex CLI wrapper - runs codex exec and parses JSON event output."""
+"""Agent orchestrator - session management, context building, compaction.
+
+The actual CLI invocation and event parsing are delegated to backend
+adapters in the ``backends_agent`` package (currently codex and copilot).
+The backend is chosen per workspace via ``workspace.get_backend_name``.
+"""
 
 import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 from typing import AsyncIterator
 
-from . import session
+from . import backends_agent, session
+from .backends_agent.base import AgentResult, ChatEvent
 from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
@@ -135,20 +140,6 @@ def _parse_compaction_output(
     return summary, long_term
 
 
-@dataclass
-class ChatEvent:
-    """An event produced during a codex exec turn."""
-    kind: str  # "tool", "file", "text"
-    content: str
-
-
-@dataclass
-class CodexResult:
-    """Collected result from a single codex exec run."""
-    events: list[ChatEvent] = field(default_factory=list)
-    text: str = "(no response)"
-
-
 # ------------------------------------------------------------------
 # Contextual prompt building
 # ------------------------------------------------------------------
@@ -165,7 +156,7 @@ def _format_msg_line(msg: dict) -> str:
 def _build_contextual_prompt(
     prompt: str, session_data: dict | None,
 ) -> str:
-    """Prepend session history to the prompt so Codex has full context."""
+    """Prepend session history to the prompt so the agent has full context."""
     data = session_data
     if data is None:
         return prompt
@@ -291,38 +282,26 @@ async def run(
     approval: str = "auto",
     on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
     inject_queue: asyncio.Queue[str] | None = None,
-) -> CodexResult:
-    """Run ``codex exec --json`` with session history prepended.
+    backend_name: str | None = None,
+) -> AgentResult:
+    """Run the selected agent CLI with session history prepended.
+
+    backend_name selects the CLI adapter (codex/copilot). When None, the
+    default backend is used. The workspace's configured backend should be
+    passed in by the caller.
 
     on_event  - called for each parsed event as it arrives (streaming).
     inject_queue - when a message is put, the running subprocess is killed
                    and restarted with the injected context appended.
-
-    approval maps to sandbox/approval flags:
-      - "full"    -> --dangerously-bypass-approvals-and-sandbox
-      - "auto"    -> --full-auto
-      - "confirm" -> --sandbox workspace-write
-      - "deny"    -> --sandbox read-only
     """
+    backend = backends_agent.get_backend(backend_name)
+
     # ensure_session_with_data gives us (id, data) from a single load.
     # session_data is reused on every inject restart so the session file
     # is not re-read for each iteration of the restart loop.
     session_id, session_data = session.ensure_session_with_data(
         workspace_path, user_id,
     )
-
-    cmd = ["codex", "exec", "--ephemeral", "--json", "-C", workspace_path]
-    if model:
-        cmd += ["-m", model]
-    if approval == "full":
-        cmd.append("--dangerously-bypass-approvals-and-sandbox")
-    elif approval == "deny":
-        cmd += ["--sandbox", "read-only"]
-    elif approval == "confirm":
-        cmd += ["--sandbox", "workspace-write"]
-    else:
-        cmd += ["--full-auto"]
-    cmd.append("-")
 
     injected: list[str] = []
 
@@ -339,29 +318,21 @@ async def run(
         )
         full_prompt = CAPABILITY_HINT + "\n\n" + contextual_prompt
         logger.info(
-            "Running codex exec (prompt %d chars, context %d chars)",
-            len(prompt), len(contextual_prompt),
+            "Running %s (prompt %d chars, context %d chars)",
+            backend.name, len(prompt), len(contextual_prompt),
         )
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            proc = await backend.launch(
+                workspace_path, full_prompt, model, approval,
             )
         except FileNotFoundError:
-            result = CodexResult()
-            result.text = "Error: codex CLI not found on PATH."
+            result = AgentResult()
+            result.text = f"Error: {backend.executable} CLI not found on PATH."
             result.events.append(ChatEvent(kind="text", content=result.text))
             return result
 
-        proc.stdin.write(full_prompt.encode("utf-8"))
-        await proc.stdin.drain()
-        proc.stdin.close()
-        await proc.stdin.wait_closed()
-
-        result = CodexResult()
+        result = AgentResult()
         restarting = False
 
         # Watch inject_queue - kill subprocess when a message arrives
@@ -393,7 +364,7 @@ async def run(
                     continue
 
                 prev_count = len(result.events)
-                _process_event(event, result)
+                backend.parse_event(event, result)
 
                 if on_event:
                     for ev in result.events[prev_count:]:
@@ -401,7 +372,10 @@ async def run(
 
             await proc.wait()
         except asyncio.CancelledError:
-            logger.info("Codex run cancelled, killing subprocess %d", proc.pid)
+            logger.info(
+                "%s run cancelled, killing subprocess %d",
+                backend.name, proc.pid,
+            )
             try:
                 proc.kill()
                 await proc.wait()
@@ -425,8 +399,8 @@ async def run(
                 pass
             _drain_queue(inject_queue, collect=injected)
             logger.info(
-                "Restarting codex with %d injected message(s)",
-                len(injected),
+                "Restarting %s with %d injected message(s)",
+                backend.name, len(injected),
             )
             if on_event:
                 await on_event(ChatEvent(
@@ -444,10 +418,10 @@ async def run(
         await proc.stderr.read()
     ).decode("utf-8", errors="replace").strip()
     if stderr:
-        logger.debug("codex stderr: %s", stderr)
+        logger.debug("%s stderr: %s", backend.name, stderr)
 
     if proc.returncode != 0 and not result.events:
-        result.text = f"Codex exited with code {proc.returncode}"
+        result.text = f"{backend.name} exited with code {proc.returncode}"
         if stderr:
             result.text += f"\n{stderr}"
         result.events.append(ChatEvent(kind="text", content=result.text))
@@ -456,7 +430,9 @@ async def run(
     async with get_workspace_lock(workspace_path):
         _log_to_session(workspace_path, session_id, effective_prompt, result)
 
-    await _maybe_compact(workspace_path, session_id, summary_model)
+    await _maybe_compact(
+        workspace_path, session_id, summary_model, backend_name=backend.name,
+    )
 
     if not any(e.kind == "text" for e in result.events):
         result.events.append(ChatEvent(kind="text", content=result.text))
@@ -469,7 +445,7 @@ async def run(
 # ------------------------------------------------------------------
 
 def _log_to_session(
-    workspace_path: str, session_id: str, prompt: str, result: CodexResult,
+    workspace_path: str, session_id: str, prompt: str, result: AgentResult,
 ) -> None:
     """Append the user prompt and AI response in a single read+write."""
     try:
@@ -481,7 +457,7 @@ def _log_to_session(
         logger.error("Failed to log session", exc_info=True)
 
 
-def _format_session_response(result: CodexResult) -> str:
+def _format_session_response(result: AgentResult) -> str:
     """Return the assistant's final text reply for session logging.
 
     Tool and file events are intermediate 'thinking' — the text reply
@@ -500,6 +476,7 @@ def _format_session_response(result: CodexResult) -> str:
 
 async def _maybe_compact(
     workspace_path: str, session_id: str, summary_model: str | None = None,
+    *, backend_name: str | None = None,
 ) -> None:
     """Compact session if uncompacted messages reach the compact interval.
 
@@ -525,6 +502,7 @@ async def _maybe_compact(
         existing_summary = data.get("summary") or ""
         new_summary, new_long_term = await compact_session(
             workspace_path, session_id, summary_model,
+            backend_name=backend_name,
             _preloaded_data=data,
         )
         if not new_summary:
@@ -534,7 +512,7 @@ async def _maybe_compact(
             )
             return
         # Reject summaries that are suspiciously short compared to the
-        # existing one - a sign of a truncated or failed codex response.
+        # existing one - a sign of a truncated or failed backend response.
         min_len = max(100, len(existing_summary) // 2)
         if len(new_summary) < min_len:
             logger.error(
@@ -563,9 +541,10 @@ async def compact_session(
     session_id: str,
     summary_model: str | None = None,
     *,
+    backend_name: str | None = None,
     _preloaded_data: dict | None = None,
 ) -> tuple[str, list[str] | None]:
-    """Run Codex to compact a session.
+    """Run the selected backend to compact a session.
 
     Returns (summary, long_term). long_term is the new complete list, or
     None if the model did not emit a [LONG_TERM] block (existing list kept).
@@ -575,6 +554,7 @@ async def compact_session(
     _preloaded_data: pass already-loaded session dict to skip a disk read
     (used by _maybe_compact which loads the data to check the interval).
     """
+    backend = backends_agent.get_backend(backend_name)
     data = _preloaded_data or session.load_session(workspace_path, session_id)
     if data is None:
         return ("", None)
@@ -637,37 +617,23 @@ async def compact_session(
 
     full_prompt = f"{SUMMARY_PROMPT}\n\n" + "\n".join(parts)
 
-    # --json so we can parse agent_message events reliably; bypass mode
-    # because compaction is a trusted internal LLM call with no tool use,
-    # and --full-auto's sandbox can interfere with model API access in some
-    # environments.
-    cmd = [
-        "codex", "exec", "--ephemeral", "--json",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "-C", workspace_path,
-    ]
-    if summary_model:
-        cmd += ["-m", summary_model]
-    cmd.append("-")
-
-    logger.info("Running compaction for session %s", session_id)
+    logger.info(
+        "Running %s compaction for session %s", backend.name, session_id,
+    )
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        proc = await backend.launch(
+            workspace_path, full_prompt, summary_model, approval="full",
+            compaction=True,
         )
     except FileNotFoundError:
-        logger.error("codex CLI not found on PATH - cannot compact session")
+        logger.error(
+            "%s CLI not found on PATH - cannot compact session",
+            backend.executable,
+        )
         return ("", None)
-    proc.stdin.write(full_prompt.encode("utf-8"))
-    await proc.stdin.drain()
-    proc.stdin.close()
-    await proc.stdin.wait_closed()
 
-    # Collect agent_message text from JSON event stream; keep the last one
+    # Collect the last agent text from the JSON event stream.
     new_summary = ""
     try:
         async with asyncio.timeout(COMPACT_TIMEOUT):
@@ -681,12 +647,9 @@ async def compact_session(
                     if not new_summary:
                         new_summary = line  # bare-text fallback
                     continue
-                if event.get("type") == "item.completed":
-                    item = event.get("item", {})
-                    if item.get("type") == "agent_message":
-                        text = item.get("text", "")
-                        if text:
-                            new_summary = text  # keep updating - last one wins
+                text = backend.extract_agent_text(event)
+                if text:
+                    new_summary = text  # keep updating - last one wins
 
             await proc.wait()
     except TimeoutError:
@@ -713,51 +676,3 @@ async def compact_session(
 
     summary, long_term = _parse_compaction_output(new_summary)
     return (summary, long_term)
-
-
-# ------------------------------------------------------------------
-# Event parsing
-# ------------------------------------------------------------------
-
-def _process_event(event: dict, result: CodexResult) -> None:
-    """Parse a single JSON event from codex exec output."""
-    etype = event.get("type", "")
-    item = event.get("item", {})
-    item_type = item.get("type", "")
-
-    if etype == "item.completed":
-        if item_type == "agent_message":
-            text = item.get("text", "")
-            if text:
-                result.text = text
-                result.events.append(ChatEvent(kind="text", content=text))
-
-        elif item_type == "command_execution":
-            cmd = item.get("command", "?")
-            exit_code = item.get("exit_code", "?")
-            output = item.get("aggregated_output", "")
-            summary = f"$ {cmd} (exit {exit_code})"
-            if output:
-                if len(output) > 200:
-                    output = output[:200] + "..."
-                summary += f"\n{output}"
-            result.events.append(ChatEvent(kind="tool", content=summary))
-
-        elif item_type == "file_change":
-            changes = item.get("changes", [])
-            for ch in changes:
-                path = ch.get("path", "?")
-                kind = ch.get("kind", "?")
-                result.events.append(ChatEvent(
-                    kind="file",
-                    content=f"📄 {kind}: {path}",
-                ))
-
-    elif etype == "turn.failed":
-        err = event.get("error", {}).get("message", "Unknown error")
-        result.text = f"Error: {err}"
-        result.events.append(ChatEvent(kind="text", content=result.text))
-
-    elif etype == "error":
-        msg = event.get("message", "Unknown error")
-        logger.warning("Codex stream error: %s", msg)

@@ -2,6 +2,7 @@ import json
 import logging
 import os
 
+from . import backends_agent
 from .utils import atomic_write as _atomic_write
 
 logger = logging.getLogger(__name__)
@@ -77,16 +78,8 @@ def ensure_cozter_dir(path: str) -> None:
 # Workspace settings (stored in .cozter/settings.json)
 # ---------------------------------------------------------------------------
 
-AVAILABLE_MODELS = [
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.3-codex",
-    "gpt-5.3-codex-spark",
-    "gpt-5.2-codex",
-    "gpt-5.2",
-]
-DEFAULT_MODEL = "gpt-5.4"
-DEFAULT_SUMMARY_MODEL = "gpt-5.3-codex"
+AVAILABLE_BACKENDS = backends_agent.AVAILABLE_BACKENDS
+DEFAULT_BACKEND = backends_agent.DEFAULT_BACKEND
 
 AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"
@@ -118,32 +111,78 @@ def _set_setting(workspace_path: str, key: str, value: str) -> None:
     _save_settings(workspace_path, settings)
 
 
-def get_run_config(workspace_path: str) -> tuple[str, str, str]:
-    """Return (model, summary_model, permission) from a single settings read."""
+def get_backend_name(workspace_path: str) -> str:
+    return _load_settings(workspace_path).get("backend", DEFAULT_BACKEND)
+
+
+def set_backend_name(workspace_path: str, name: str) -> None:
+    if name not in AVAILABLE_BACKENDS:
+        raise ValueError(
+            f"Unknown backend: {name}. Available: {AVAILABLE_BACKENDS}"
+        )
+    _set_setting(workspace_path, "backend", name)
+
+
+def get_available_models(workspace_path: str) -> list[str]:
+    """List models for the workspace's currently selected backend."""
+    backend_name = get_backend_name(workspace_path)
+    return list(backends_agent.get_backend(backend_name).available_models)
+
+
+def _model_keys(backend_name: str) -> tuple[str, str]:
+    """Return (model_key, summary_key) for the given backend."""
+    return f"{backend_name}_model", f"{backend_name}_summary_model"
+
+
+def _resolve_model(
+    settings: dict, backend_name: str, summary: bool,
+) -> str:
+    backend = backends_agent.get_backend(backend_name)
+    model_key, summary_key = _model_keys(backend_name)
+    key = summary_key if summary else model_key
+    default = (
+        backend.default_summary_model if summary else backend.default_model
+    )
+    # Legacy fallback: settings prior to the backend split stored bare
+    # "model" / "summary_model" keys scoped implicitly to the codex backend.
+    if backend_name == "codex":
+        legacy = "summary_model" if summary else "model"
+        return settings.get(key, settings.get(legacy, default))
+    return settings.get(key, default)
+
+
+def get_run_config(workspace_path: str) -> tuple[str, str, str, str]:
+    """Return (backend, model, summary_model, permission) from one read."""
     s = _load_settings(workspace_path)
+    backend_name = s.get("backend", DEFAULT_BACKEND)
     return (
-        s.get("model", DEFAULT_MODEL),
-        s.get("summary_model", DEFAULT_SUMMARY_MODEL),
+        backend_name,
+        _resolve_model(s, backend_name, summary=False),
+        _resolve_model(s, backend_name, summary=True),
         s.get("permission", DEFAULT_PERMISSION),
     )
 
 
 def get_model(workspace_path: str) -> str:
-    return _load_settings(workspace_path).get("model", DEFAULT_MODEL)
+    s = _load_settings(workspace_path)
+    return _resolve_model(s, s.get("backend", DEFAULT_BACKEND), summary=False)
 
 
 def set_model(workspace_path: str, model: str) -> None:
-    _set_setting(workspace_path, "model", model)
+    backend_name = get_backend_name(workspace_path)
+    model_key, _ = _model_keys(backend_name)
+    _set_setting(workspace_path, model_key, model)
 
 
 def get_summary_model(workspace_path: str) -> str:
-    return _load_settings(workspace_path).get(
-        "summary_model", DEFAULT_SUMMARY_MODEL,
-    )
+    s = _load_settings(workspace_path)
+    return _resolve_model(s, s.get("backend", DEFAULT_BACKEND), summary=True)
 
 
 def set_summary_model(workspace_path: str, model: str) -> None:
-    _set_setting(workspace_path, "summary_model", model)
+    backend_name = get_backend_name(workspace_path)
+    _, summary_key = _model_keys(backend_name)
+    _set_setting(workspace_path, summary_key, model)
 
 
 def get_permission(workspace_path: str) -> str:

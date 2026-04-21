@@ -16,7 +16,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import codex
+from . import agent
 from . import session
 from . import updater
 from . import workspace
@@ -113,6 +113,7 @@ MODEL_AWAITING = 2
 PERMISSION_AWAITING = 3
 SESSION_AWAITING = 4
 SUMMARY_MODEL_AWAITING = 5
+AGENT_AWAITING = 6
 
 _NO_WS_MSG = "No workspace selected. Use /new or /open first."
 
@@ -361,8 +362,12 @@ class CozterBot:
                 return ConversationHandler.END
 
             current = workspace.get_model(ws)
-            options = workspace.AVAILABLE_MODELS
-            lines = [f"Current model: {current}\n", "Available models:"]
+            backend_name = workspace.get_backend_name(ws)
+            options = workspace.get_available_models(ws)
+            lines = [
+                f"Current model: {current} (backend: {backend_name})\n",
+                "Available models:",
+            ]
             for i, m in enumerate(options, 1):
                 marker = " <-" if m == current else ""
                 lines.append(f"  {i}. {m}{marker}")
@@ -380,7 +385,7 @@ class CozterBot:
                 await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
             text = update.message.text.strip()
-            options = workspace.AVAILABLE_MODELS
+            options = workspace.get_available_models(ws)
 
             if text.isdigit():
                 idx = int(text) - 1
@@ -416,9 +421,11 @@ class CozterBot:
                 return ConversationHandler.END
 
             current = workspace.get_summary_model(ws)
-            options = workspace.AVAILABLE_MODELS
+            backend_name = workspace.get_backend_name(ws)
+            options = workspace.get_available_models(ws)
             lines = [
-                f"Current summary model: {current}\n", "Available models:",
+                f"Current summary model: {current} (backend: {backend_name})\n",
+                "Available models:",
             ]
             for i, m in enumerate(options, 1):
                 marker = " <-" if m == current else ""
@@ -437,7 +444,7 @@ class CozterBot:
                 await update.message.reply_text(_NO_WS_MSG)
                 return ConversationHandler.END
             text = update.message.text.strip()
-            options = workspace.AVAILABLE_MODELS
+            options = workspace.get_available_models(ws)
 
             if text.isdigit():
                 idx = int(text) - 1
@@ -458,6 +465,65 @@ class CozterBot:
 
             workspace.set_summary_model(ws, model)
             await update.message.reply_text(f"Summary model set to: {model}")
+            return ConversationHandler.END
+
+        # --- /agent conversation ---
+
+        @_authorized(self.user_ids)
+        async def cmd_agent(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid, self.bot_id)
+            if not ws:
+                await update.message.reply_text(_NO_WS_MSG)
+                return ConversationHandler.END
+
+            current = workspace.get_backend_name(ws)
+            options = workspace.AVAILABLE_BACKENDS
+            lines = [f"Current agent: {current}\n", "Available agents:"]
+            for i, name in enumerate(options, 1):
+                marker = " <-" if name == current else ""
+                lines.append(f"  {i}. {name}{marker}")
+            lines.append("\nEnter a number or agent name (or /cancel):")
+            await update.message.reply_text("\n".join(lines))
+            return AGENT_AWAITING
+
+        @_authorized(self.user_ids)
+        async def agent_receive(
+            update: Update, _context: ContextTypes.DEFAULT_TYPE,
+        ):
+            uid = update.effective_user.id
+            ws = workspace.get_current(uid, self.bot_id)
+            if not ws:
+                await update.message.reply_text(_NO_WS_MSG)
+                return ConversationHandler.END
+            text = update.message.text.strip()
+            options = workspace.AVAILABLE_BACKENDS
+
+            if text.isdigit():
+                idx = int(text) - 1
+                if 0 <= idx < len(options):
+                    name = options[idx]
+                else:
+                    await update.message.reply_text(
+                        "Invalid number. Try again (or /cancel):"
+                    )
+                    return AGENT_AWAITING
+            elif text in options:
+                name = text
+            else:
+                await update.message.reply_text(
+                    f"Unknown agent: {text}\nTry again (or /cancel):"
+                )
+                return AGENT_AWAITING
+
+            workspace.set_backend_name(ws, name)
+            _, model, summary_model, _ = workspace.get_run_config(ws)
+            await update.message.reply_text(
+                f"Agent set to: {name}\n"
+                f"Model: {model}\nSummary model: {summary_model}"
+            )
             return ConversationHandler.END
 
         # --- /permission conversation ---
@@ -610,15 +676,28 @@ class CozterBot:
                 await update.message.reply_text(_NO_WS_MSG)
                 return
 
+            # The codex CLI caches workspace-local state in .codex/.
+            # Copilot keeps its state in ~/.copilot/ and has nothing
+            # workspace-local to clear.
             codex_dir = os.path.join(ws, ".codex")
+            cleared = False
             if os.path.isdir(codex_dir):
                 shutil.rmtree(codex_dir, ignore_errors=True)
                 logger.info("Cleared codex session dir: %s", codex_dir)
+                cleared = True
 
-            await update.message.reply_text(
-                "Codex CLI session refreshed."
-                " Your conversation history is preserved."
-            )
+            backend_name = workspace.get_backend_name(ws)
+            if cleared:
+                msg = (
+                    f"{backend_name} CLI session refreshed."
+                    " Your conversation history is preserved."
+                )
+            else:
+                msg = (
+                    f"{backend_name} has no workspace-local state to clear."
+                    " Your conversation history is preserved."
+                )
+            await update.message.reply_text(msg)
 
         # --- /compact command ---
 
@@ -638,14 +717,15 @@ class CozterBot:
                 sid = session.ensure_session(ws, uid)
                 await update.message.reply_text("Compacting session...")
                 summary_model = workspace.get_summary_model(ws)
-                new_summary, new_long_term = await codex.compact_session(
-                    ws, sid, summary_model,
+                backend_name = workspace.get_backend_name(ws)
+                new_summary, new_long_term = await agent.compact_session(
+                    ws, sid, summary_model, backend_name=backend_name,
                 )
                 if new_summary:
-                    async with codex.get_workspace_lock(ws):
+                    async with agent.get_workspace_lock(ws):
                         session.set_summary(
                             ws, sid, new_summary,
-                            keep_recent=codex.KEEP_RECENT_AFTER_COMPACT,
+                            keep_recent=agent.KEEP_RECENT_AFTER_COMPACT,
                             long_term_rewrite=new_long_term,
                         )
                     lt_count = (
@@ -913,6 +993,19 @@ class CozterBot:
             fallbacks=[cancel_handler],
         )
 
+        agent_conv = ConversationHandler(
+            entry_points=[CommandHandler("agent", cmd_agent)],
+            states={
+                AGENT_AWAITING: [
+                    cancel_handler,
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND, agent_receive,
+                    ),
+                ],
+            },
+            fallbacks=[cancel_handler],
+        )
+
         permission_conv = ConversationHandler(
             entry_points=[CommandHandler("permission", cmd_permission)],
             states={
@@ -943,6 +1036,7 @@ class CozterBot:
         self.app.add_handler(open_conv)
         self.app.add_handler(model_conv)
         self.app.add_handler(summarymodel_conv)
+        self.app.add_handler(agent_conv)
         self.app.add_handler(permission_conv)
         self.app.add_handler(session_conv)
         self.app.add_handler(CommandHandler("start", cmd_start))
@@ -1052,7 +1146,9 @@ class CozterBot:
                 text="Workspace not available (deleted?). Use /new or /open.",
             )
             return
-        model, summary_model, perm = workspace.get_run_config(ws)
+        backend_name, model, summary_model, perm = (
+            workspace.get_run_config(ws)
+        )
 
         inject_q: asyncio.Queue[str] = asyncio.Queue(
             maxsize=self.max_queue_size,
@@ -1067,7 +1163,7 @@ class CozterBot:
         status_lines: list[str] = []
         last_edit = 0.0
 
-        async def on_event(ev: codex.ChatEvent) -> None:
+        async def on_event(ev: agent.ChatEvent) -> None:
             nonlocal last_edit
             if ev.kind == "tool":
                 status_lines.append(
@@ -1090,10 +1186,11 @@ class CozterBot:
                 pass  # Telegram rejects identical edits or rate-limits
 
         try:
-            result = await codex.run(
+            result = await agent.run(
                 text, ws, user_id=uid,
                 model=model, summary_model=summary_model, approval=perm,
                 on_event=on_event, inject_queue=inject_q,
+                backend_name=backend_name,
             )
         finally:
             try:
@@ -1145,7 +1242,7 @@ class CozterBot:
                 pass
 
     async def _send_result(
-        self, chat_id: int, ws: str, result: codex.CodexResult,
+        self, chat_id: int, ws: str, result: agent.AgentResult,
     ) -> None:
         """Send the AI's text reply plus any [[attach: ...]] files."""
         for ev in result.events:
