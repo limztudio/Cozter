@@ -33,8 +33,7 @@ from logging.handlers import RotatingFileHandler  # noqa: E402
 
 from . import config as cfg  # noqa: E402
 from . import updater  # noqa: E402
-from . import workspace  # noqa: E402
-from .bot import CozterBot  # noqa: E402
+from .backends_bot import BotPlatform, create_platforms  # noqa: E402
 
 MODULE_ROOT = os.path.dirname(__file__)
 LOG_DIR = os.path.join(MODULE_ROOT, ".log")
@@ -82,7 +81,7 @@ def log_crash(exc: BaseException) -> str:
 logger = logging.getLogger(__name__)
 
 
-async def update_loop(bots: list[CozterBot], interval: int) -> None:
+async def update_loop(bots: list[BotPlatform], interval: int) -> None:
     """Periodically fetch, pull, and restart if disk HEAD changed."""
     while True:
         await asyncio.sleep(interval)
@@ -103,23 +102,13 @@ async def update_loop(bots: list[CozterBot], interval: int) -> None:
 
 async def main() -> None:
     config = cfg.load_config()
-    tokens = config["telegram_bot_tokens"]
-    user_ids = config["user_ids"]
     interval = config["update_check_interval"]
-    recent_limit = config["recent_workspace_limit"]
-    queue_size = config["message_queue_size"]
 
     updater.init_startup_commit()
     version = updater.get_current_version()
     commit_date = updater.get_last_commit_date()
 
-    bots = [
-        CozterBot(
-            token, user_ids,
-            recent_limit=recent_limit, max_queue_size=queue_size,
-        )
-        for token in tokens
-    ]
+    bots = create_platforms(config)
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
@@ -136,23 +125,12 @@ async def main() -> None:
     for bot in bots:
         await bot.start()
 
-    # Send startup message through every bot with per-bot workspace info
+    # Each platform decides how to greet its notify targets on startup.
     for bot in bots:
-        for uid in user_ids:
-            ws = workspace.get_current(uid, bot.bot_id)
-            msg = (
-                f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
-            )
-            if ws:
-                msg += f"\nWorkspace: {ws}"
-            else:
-                msg += "\nNo workspace selected. Use /new or /open."
-            try:
-                await bot.app.bot.send_message(chat_id=uid, text=msg)
-            except Exception as e:
-                logger.warning(
-                    "Failed to notify user %s via bot: %s", uid, e,
-                )
+        try:
+            await bot.send_startup_messages(version, commit_date)
+        except Exception:
+            logger.exception("Failed to send startup message via bot")
 
     logger.info(
         "Version: %s | Updated: %s | Bots: %d",

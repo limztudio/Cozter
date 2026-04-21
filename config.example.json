@@ -1,6 +1,11 @@
 {
-  "telegram_bot_tokens": ["YOUR_BOT_TOKEN_HERE"],
+  "telegram_bot_tokens": ["YOUR_TELEGRAM_BOT_TOKEN_HERE"],
   "user_ids": [123456789],
+
+  "slack_bot_token": "",
+  "slack_app_token": "",
+  "slack_channel_ids": [],
+
   "update_check_interval": 10,
   "recent_workspace_limit": 10
 }

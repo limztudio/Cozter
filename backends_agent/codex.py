@@ -20,7 +20,7 @@ class CodexBackend(Backend):
         "gpt-5.2",
     )
     default_model = "gpt-5.4"
-    default_summary_model = "gpt-5.3-codex"
+    default_summary_model = "gpt-5.2"
 
     async def launch(
         self,
