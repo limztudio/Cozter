@@ -12,6 +12,7 @@ class CodexBackend(Backend):
     name = "codex"
     executable = "codex"
     available_models = (
+        "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5.3-codex",
@@ -19,7 +20,7 @@ class CodexBackend(Backend):
         "gpt-5.2-codex",
         "gpt-5.2",
     )
-    default_model = "gpt-5.4"
+    default_model = "gpt-5.5"
     default_summary_model = "gpt-5.2"
 
     async def launch(
