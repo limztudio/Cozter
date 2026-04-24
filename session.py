@@ -223,3 +223,41 @@ def set_compact_interval(
         return
     data["compact_interval"] = interval
     save_session(workspace, session_id, data)
+
+
+# ---------------------------------------------------------------------------
+# Scheduled commands (recurring reservations, per session)
+# ---------------------------------------------------------------------------
+
+def add_schedule(
+    workspace: str, session_id: str, schedule: dict,
+) -> None:
+    """Append a recurring schedule entry to the session."""
+    data = load_session(workspace, session_id)
+    if data is None:
+        return
+    data.setdefault("schedules", []).append(schedule)
+    save_session(workspace, session_id, data)
+
+
+def remove_schedule(
+    workspace: str, session_id: str, schedule_id: str,
+) -> bool:
+    """Remove a schedule by id. Returns True if removed, False if absent."""
+    data = load_session(workspace, session_id)
+    if data is None:
+        return False
+    schedules = data.get("schedules", [])
+    kept = [s for s in schedules if s.get("id") != schedule_id]
+    if len(kept) == len(schedules):
+        return False
+    data["schedules"] = kept
+    save_session(workspace, session_id, data)
+    return True
+
+
+def list_schedules(workspace: str, session_id: str) -> list[dict]:
+    data = load_session(workspace, session_id)
+    if data is None:
+        return []
+    return data.get("schedules", [])

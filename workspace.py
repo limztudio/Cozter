@@ -49,6 +49,23 @@ def get_recent(user_id: int, limit: int = 10) -> list[str]:
     return _get_user(user_id).get("recent", [])[:limit]
 
 
+def iter_current_workspaces(
+    bot_id: int | str,
+) -> list[tuple[str, str]]:
+    """Return [(user_id, workspace_path)] for users with a current ws on *bot_id*.
+
+    Used by the scheduler to enumerate active (user, workspace) pairs
+    independent of whether the platform addresses users directly
+    (Telegram) or via channels (Slack).
+    """
+    pairs: list[tuple[str, str]] = []
+    for uid, state in _load_all().items():
+        path = state.get("current", {}).get(str(bot_id))
+        if path:
+            pairs.append((uid, path))
+    return pairs
+
+
 def select_workspace(
     user_id: int, path: str, bot_id: int | str = "_default",
 ) -> None:

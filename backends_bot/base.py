@@ -18,9 +18,11 @@ import logging
 import os
 import re
 import shutil
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from .. import agent, session, updater, workspace
 from ..utils import drain_queue as _drain_queue
@@ -166,6 +168,11 @@ class BotPlatform(ABC):
         self._inject_queues: dict[str, asyncio.Queue] = {}
         # Multi-step flow state: maps user_id -> next text-input callback.
         self._pending_input: dict[str, Handler] = {}
+        # Scheduler state.
+        self._scheduler_task: asyncio.Task | None = None
+        # Keyed by schedule_id — tracks the "HH:MM" minute when we last
+        # fired each schedule, so a 30s poll loop can't double-fire.
+        self._scheduler_fired: dict[str, str] = {}
 
     # ----- platform identity + I/O primitives (abstract) ------------------
 
@@ -734,6 +741,340 @@ class BotPlatform(ABC):
         await inject_q.put(text)
         await ctx.reply_text("Injected.")
 
+    # ----- /reserve (recurring schedule wizard) --------------------------
+
+    _DAY_ABBREV: tuple[str, ...] = (
+        "mon", "tue", "wed", "thu", "fri", "sat", "sun",
+    )
+
+    async def cmd_reserve(self, ctx: BotContext) -> None:
+        ws = workspace.get_current(ctx.user_id, self.platform_id)
+        if not ws:
+            await ctx.reply_text(_NO_WS_MSG)
+            return
+        await ctx.reply_text(
+            "Select days for this schedule.\n"
+            "Use comma-separated names or numbers, or 'all'.\n"
+            "1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun\n\n"
+            "Examples: '1,3,5' or 'mon,wed,fri' or 'all'\n\n"
+            "Enter days (or /cancel):"
+        )
+        self._expect_input(ctx.user_id, self._receive_reserve_days)
+
+    async def _receive_reserve_days(self, ctx: BotContext) -> None:
+        text = ctx.text.strip().lower()
+        days = self._parse_days(text)
+        if not days:
+            await ctx.reply_text(
+                "Could not parse days. Try again (e.g., 'mon,wed,fri'"
+                " or '1,3,5') (or /cancel):"
+            )
+            self._expect_input(ctx.user_id, self._receive_reserve_days)
+            return
+        await ctx.reply_text(
+            f"Days: {', '.join(days)}\n\n"
+            "Enter time in HH:MM (24-hour) format (or /cancel):"
+        )
+
+        async def _time_cb(next_ctx: BotContext) -> None:
+            await self._receive_reserve_time(next_ctx, days)
+
+        self._expect_input(ctx.user_id, _time_cb)
+
+    async def _receive_reserve_time(
+        self, ctx: BotContext, days: list[str],
+    ) -> None:
+        time_str = self._parse_time(ctx.text.strip())
+        if time_str is None:
+            await ctx.reply_text(
+                "Invalid time. Enter HH:MM (24-hour, e.g., 09:30)"
+                " (or /cancel):"
+            )
+
+            async def _retry(next_ctx: BotContext) -> None:
+                await self._receive_reserve_time(next_ctx, days)
+
+            self._expect_input(ctx.user_id, _retry)
+            return
+        await ctx.reply_text(
+            f"Time: {time_str}\n\n"
+            "Enter the command to run at that time (or /cancel):"
+        )
+
+        async def _cmd_cb(next_ctx: BotContext) -> None:
+            await self._receive_reserve_command(next_ctx, days, time_str)
+
+        self._expect_input(ctx.user_id, _cmd_cb)
+
+    async def _receive_reserve_command(
+        self, ctx: BotContext, days: list[str], time_str: str,
+    ) -> None:
+        command = ctx.text.strip()
+        if not command:
+            await ctx.reply_text(
+                "Command cannot be empty. Try again (or /cancel):"
+            )
+
+            async def _retry(next_ctx: BotContext) -> None:
+                await self._receive_reserve_command(
+                    next_ctx, days, time_str,
+                )
+
+            self._expect_input(ctx.user_id, _retry)
+            return
+
+        ws = workspace.get_current(ctx.user_id, self.platform_id)
+        if not ws:
+            await ctx.reply_text(_NO_WS_MSG)
+            return
+
+        sid = session.ensure_session(ws, ctx.user_id)
+        schedule = {
+            "id": uuid.uuid4().hex[:12],
+            "days": days,
+            "time": time_str,
+            "command": command,
+            "created": datetime.now().isoformat(),
+            "chat_id": ctx.chat_id,
+            "user_id": ctx.user_id,
+        }
+        session.add_schedule(ws, sid, schedule)
+        await ctx.reply_text(
+            f"Schedule created:\n"
+            f"  Days: {', '.join(days)}\n"
+            f"  Time: {time_str}\n"
+            f"  Command: {command}"
+        )
+
+    # ----- /schedules (list/delete) --------------------------------------
+
+    async def cmd_schedules(self, ctx: BotContext) -> None:
+        ws = workspace.get_current(ctx.user_id, self.platform_id)
+        if not ws:
+            await ctx.reply_text(_NO_WS_MSG)
+            return
+        sid = session.get_current_session_id(ws, ctx.user_id)
+        if not sid:
+            await ctx.reply_text(
+                "No session yet. Send a message to start one."
+            )
+            return
+        schedules = session.list_schedules(ws, sid)
+        if not schedules:
+            await ctx.reply_text("No schedules in this session.")
+            return
+        lines = ["Schedules in this session:"]
+        for i, s in enumerate(schedules, 1):
+            days_str = ",".join(s.get("days", []))
+            lines.append(
+                f"  {i}. [{days_str}] {s.get('time', '?')}"
+                f" — {s.get('command', '')}"
+            )
+        lines.append(
+            "\nEnter a number to delete, or /cancel to exit:"
+        )
+        await ctx.reply_text("\n".join(lines))
+        self._expect_input(ctx.user_id, self._receive_schedules)
+
+    async def _receive_schedules(self, ctx: BotContext) -> None:
+        ws = workspace.get_current(ctx.user_id, self.platform_id)
+        if not ws:
+            await ctx.reply_text(_NO_WS_MSG)
+            return
+        sid = session.get_current_session_id(ws, ctx.user_id)
+        if not sid:
+            await ctx.reply_text("No session.")
+            return
+        schedules = session.list_schedules(ws, sid)
+        text = ctx.text.strip()
+        if not text.isdigit():
+            await ctx.reply_text(
+                "Invalid input. Enter a number or /cancel:"
+            )
+            self._expect_input(ctx.user_id, self._receive_schedules)
+            return
+        idx = int(text) - 1
+        if not (0 <= idx < len(schedules)):
+            await ctx.reply_text(
+                "Invalid number. Try again (or /cancel):"
+            )
+            self._expect_input(ctx.user_id, self._receive_schedules)
+            return
+        removed = schedules[idx]
+        session.remove_schedule(ws, sid, removed["id"])
+        # Forget the fired-this-minute marker so a recreated schedule
+        # with the same id (unlikely but possible) isn't suppressed.
+        self._scheduler_fired.pop(removed.get("id", ""), None)
+        await ctx.reply_text(
+            f"Removed: [{','.join(removed.get('days', []))}]"
+            f" {removed.get('time', '?')} — {removed.get('command', '')}"
+        )
+
+    @classmethod
+    def _parse_days(cls, text: str) -> list[str]:
+        """Parse a days spec into ordered, de-duplicated abbreviations."""
+        if text == "all":
+            return list(cls._DAY_ABBREV)
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        if not parts:
+            return []
+        days: list[str] = []
+        for p in parts:
+            if p.isdigit():
+                n = int(p)
+                if not (1 <= n <= 7):
+                    return []
+                days.append(cls._DAY_ABBREV[n - 1])
+            else:
+                abbr = p[:3]
+                if abbr not in cls._DAY_ABBREV:
+                    return []
+                days.append(abbr)
+        seen: set[str] = set()
+        unique: list[str] = []
+        for d in days:
+            if d not in seen:
+                seen.add(d)
+                unique.append(d)
+        return unique
+
+    @staticmethod
+    def _parse_time(text: str) -> str | None:
+        parts = text.split(":")
+        if len(parts) != 2:
+            return None
+        try:
+            h = int(parts[0])
+            m = int(parts[1])
+        except ValueError:
+            return None
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            return None
+        return f"{h:02d}:{m:02d}"
+
+    # ----- Scheduler loop ------------------------------------------------
+
+    async def start_scheduler(self) -> None:
+        """Kick off the background scheduler task. Idempotent."""
+        if self._scheduler_task and not self._scheduler_task.done():
+            return
+        self._scheduler_task = asyncio.create_task(self._scheduler_loop())
+
+    async def stop_scheduler(self) -> None:
+        if self._scheduler_task and not self._scheduler_task.done():
+            self._scheduler_task.cancel()
+            try:
+                await self._scheduler_task
+            except asyncio.CancelledError:
+                pass
+        self._scheduler_task = None
+
+    async def _scheduler_loop(self) -> None:
+        """Poll every 30s; fire schedules whose day+time match 'now'."""
+        # Give the platform a moment to fully start.
+        await asyncio.sleep(5)
+        while True:
+            try:
+                await self._scheduler_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Scheduler tick failed")
+            await asyncio.sleep(30)
+
+    async def _scheduler_tick(self) -> None:
+        now = datetime.now()
+        minute_str = now.strftime("%H:%M")
+        day = now.strftime("%a").lower()
+
+        # Collect every matching fire across all authorized users before
+        # pushing anything — lets us sort by creation time so that two
+        # schedules at the same minute fire in the order they were made.
+        #
+        # We iterate workspace state (not notify_targets) because on
+        # Slack notify_targets are channel ids, not user ids. workspace
+        # state maps real users to their current workspaces regardless
+        # of how the platform identifies authorization targets.
+        to_fire: list[tuple[str, dict]] = []
+        for uid, ws in workspace.iter_current_workspaces(self.platform_id):
+            if not os.path.isdir(ws):
+                continue
+            sid = session.get_current_session_id(ws, uid)
+            if not sid:
+                continue
+            for sched in session.list_schedules(ws, sid):
+                sid_key = sched.get("id", "")
+                if not sid_key:
+                    continue
+                if self._scheduler_fired.get(sid_key) == minute_str:
+                    continue
+                if (
+                    day in sched.get("days", [])
+                    and sched.get("time") == minute_str
+                ):
+                    to_fire.append((uid, sched))
+                    self._scheduler_fired[sid_key] = minute_str
+
+        to_fire.sort(key=lambda item: item[1].get("created", ""))
+
+        # Keep the fired-markers dict from growing unbounded: once we've
+        # crossed to a new minute, drop everything older.
+        if len(self._scheduler_fired) > 500:
+            self._scheduler_fired = {
+                k: v for k, v in self._scheduler_fired.items()
+                if v == minute_str
+            }
+
+        for uid, sched in to_fire:
+            await self._fire_schedule(uid, sched)
+
+    async def _fire_schedule(self, uid: str, sched: dict) -> None:
+        """Push a scheduled command onto the user's message queue."""
+        command = sched.get("command", "")
+        chat_id = sched.get("chat_id", "")
+        if not command or not chat_id:
+            return
+
+        # A user who was authorized when creating the schedule may have
+        # been removed since — re-check so stale schedules don't bypass
+        # authorization.
+        if not self.authorized(uid, chat_id):
+            logger.warning(
+                "Skipping schedule for unauthorized user=%s chat=%s",
+                uid, chat_id,
+            )
+            return
+
+        if uid not in self._message_queues:
+            self._message_queues[uid] = asyncio.Queue(
+                maxsize=self.max_queue_size,
+            )
+        q = self._message_queues[uid]
+
+        try:
+            await self.send_text(
+                chat_id, f"⏰ Scheduled: {command}",
+            )
+        except Exception:
+            logger.warning("Failed to announce scheduled command")
+
+        if q.full():
+            try:
+                await self.send_text(
+                    chat_id,
+                    f"Queue full — dropped scheduled command: {command}",
+                )
+            except Exception:
+                pass
+            return
+
+        await q.put((command, chat_id))
+
+        # Kick the queue drainer in a background task; if a turn is
+        # already running, _drain_message_queue breaks out immediately
+        # and the running handler's own drain-after-turn picks up later.
+        asyncio.create_task(self._drain_message_queue(uid))
+
     # ----- AI chat + file -------------------------------------------------
 
     async def _require_ws(self, ctx: BotContext) -> str | None:
@@ -994,6 +1335,8 @@ def _build_command_registry() -> dict[str, Handler]:
         "compact":      BotPlatform.cmd_compact,
         "stop":         BotPlatform.cmd_stop,
         "inject":       BotPlatform.cmd_inject,
+        "reserve":      BotPlatform.cmd_reserve,
+        "schedules":    BotPlatform.cmd_schedules,
     }
 
 

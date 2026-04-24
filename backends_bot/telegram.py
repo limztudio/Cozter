@@ -239,9 +239,11 @@ class TelegramBot(BotPlatform):
                 await asyncio.sleep(5 * attempt)
         await self.app.start()
         await self.app.updater.start_polling(drop_pending_updates=True)
+        await self.start_scheduler()
         logger.info("Telegram bot started polling.")
 
     async def stop(self) -> None:
+        await self.stop_scheduler()
         if self.app:
             await self.app.updater.stop()
             await self.app.stop()

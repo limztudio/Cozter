@@ -231,12 +231,14 @@ class SlackBot(BotPlatform):
 
         self._handler = AsyncSocketModeHandler(self.app, self.app_token)
         await self._handler.connect_async()
+        await self.start_scheduler()
         logger.info(
             "Slack bot started in Socket Mode (bot_user=%s).",
             self._bot_user_id,
         )
 
     async def stop(self) -> None:
+        await self.stop_scheduler()
         if self._handler is not None:
             try:
                 await self._handler.close_async()
