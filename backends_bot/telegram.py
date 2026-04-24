@@ -240,6 +240,9 @@ class TelegramBot(BotPlatform):
         await self.app.start()
         await self.app.updater.start_polling(drop_pending_updates=True)
         await self.start_scheduler()
+        # Restore any in-flight / queued messages that a prior run
+        # didn't finish, so work survives restarts.
+        await self.restore_queues()
         logger.info("Telegram bot started polling.")
 
     async def stop(self) -> None:

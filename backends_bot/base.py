@@ -14,6 +14,7 @@ adapters only deal with framework plumbing.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
 
 from .. import agent, session, updater, workspace
+from ..utils import atomic_write as _atomic_write
 from ..utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
@@ -172,6 +174,9 @@ class BotPlatform(ABC):
         # by the persisted ``last_fired`` timestamp on each schedule,
         # which also survives bot restarts to enable catch-up firing.
         self._scheduler_task: asyncio.Task | None = None
+        # Serializes read-modify-write on the persistent-queue file so
+        # concurrent enqueue/complete calls don't clobber each other.
+        self._queue_file_lock: asyncio.Lock = asyncio.Lock()
 
     # ----- platform identity + I/O primitives (abstract) ------------------
 
@@ -719,6 +724,9 @@ class BotPlatform(ABC):
         if task and not task.done():
             task.cancel()
             _drain_queue(self._message_queues.get(ctx.user_id))
+            # Clear the persistent queue so cancelled work doesn't
+            # come back on the next restart.
+            await self._clear_persistent_queue(ctx.user_id)
             await ctx.reply_text("Cancelling...")
         else:
             await ctx.reply_text("Nothing is running.")
@@ -948,6 +956,120 @@ class BotPlatform(ABC):
             return None
         return f"{h:02d}:{m:02d}"
 
+    # ----- Persistent message queue --------------------------------------
+    #
+    # The in-memory asyncio.Queue is volatile — a bot restart (crash or
+    # intentional) would drop everything the user had in flight. We
+    # mirror each pending message to a per-platform JSON file so a
+    # restart can resume from the last committed state.
+    #
+    # Writing order matters:
+    #   1. enqueue: persist first, then put in in-memory queue
+    #   2. complete: remove from persistent file after the turn settled
+    #   3. cancellation (CancelledError) does NOT complete — on a clean
+    #      shutdown the entry must survive restart; on /stop, cmd_stop
+    #      clears the file explicitly.
+
+    def _queue_file_path(self) -> str:
+        os.makedirs(workspace.CONFIG_DIR, exist_ok=True)
+        return os.path.join(
+            workspace.CONFIG_DIR, f"queue_{self.platform_id}.json",
+        )
+
+    def _read_queue_file(self) -> dict:
+        path = self._queue_file_path()
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(
+                "Corrupt or unreadable queue file (%s): %s", path, e,
+            )
+            return {}
+
+    def _write_queue_file(self, data: dict) -> None:
+        _atomic_write(
+            self._queue_file_path(), data, workspace.CONFIG_DIR,
+        )
+
+    async def _persist_enqueue(
+        self, uid: str, text: str, chat_id: str,
+    ) -> str:
+        entry_id = uuid.uuid4().hex[:12]
+        entry = {"id": entry_id, "text": text, "chat_id": chat_id}
+        async with self._queue_file_lock:
+            data = self._read_queue_file()
+            data.setdefault(uid, []).append(entry)
+            self._write_queue_file(data)
+        return entry_id
+
+    async def _persist_complete(
+        self, uid: str, entry_id: str,
+    ) -> None:
+        async with self._queue_file_lock:
+            data = self._read_queue_file()
+            entries = data.get(uid)
+            if not entries:
+                return
+            remaining = [e for e in entries if e.get("id") != entry_id]
+            if len(remaining) == len(entries):
+                return  # entry already gone
+            if remaining:
+                data[uid] = remaining
+            else:
+                data.pop(uid, None)
+            self._write_queue_file(data)
+
+    async def _clear_persistent_queue(self, uid: str) -> None:
+        async with self._queue_file_lock:
+            data = self._read_queue_file()
+            if data.pop(uid, None) is not None:
+                self._write_queue_file(data)
+
+    async def restore_queues(self) -> None:
+        """Rehydrate in-memory queues from disk and resume processing.
+
+        Called once after the platform has started. For each user with
+        persisted entries, refill the in-memory queue and spawn a drain
+        task so the oldest entry runs first.
+        """
+        async with self._queue_file_lock:
+            data = self._read_queue_file()
+        if not data:
+            return
+
+        drained_users: list[str] = []
+        for uid, entries in data.items():
+            if not entries:
+                continue
+            if uid not in self._task_locks:
+                self._task_locks[uid] = asyncio.Lock()
+            if uid not in self._message_queues:
+                self._message_queues[uid] = asyncio.Queue(
+                    maxsize=self.max_queue_size,
+                )
+            q = self._message_queues[uid]
+            for entry in entries:
+                # Oldest-first preserves the user's original ordering.
+                try:
+                    q.put_nowait((
+                        entry.get("text", ""),
+                        entry.get("chat_id", ""),
+                        entry.get("id", ""),
+                    ))
+                except asyncio.QueueFull:
+                    logger.warning(
+                        "Restore dropped entry for user=%s"
+                        " (queue at capacity)", uid,
+                    )
+                    break
+            drained_users.append(uid)
+
+        for uid in drained_users:
+            asyncio.create_task(self._drain_message_queue(uid))
+
     # ----- Scheduler loop ------------------------------------------------
 
     async def start_scheduler(self) -> None:
@@ -1107,7 +1229,8 @@ class BotPlatform(ABC):
                 pass
             return
 
-        await q.put((command, chat_id))
+        entry_id = await self._persist_enqueue(uid, command, chat_id)
+        await q.put((command, chat_id, entry_id))
 
         # Kick the queue drainer in a background task; if a turn is
         # already running, _drain_message_queue breaks out immediately
@@ -1193,25 +1316,36 @@ class BotPlatform(ABC):
             if q.full():
                 await ctx.reply_text("Queue full. Wait or /stop first.")
             else:
-                await q.put((text, chat_id))
+                entry_id = await self._persist_enqueue(
+                    uid, text, chat_id,
+                )
+                await q.put((text, chat_id, entry_id))
                 await ctx.reply_text(
                     f"Queued ({q.qsize()}/{self.max_queue_size})."
                 )
             return
 
+        # Direct path: persist BEFORE acquiring the lock so a crash
+        # between persist and processing still leaves the entry on
+        # disk to be resumed by restore_queues() after restart.
+        entry_id = await self._persist_enqueue(uid, text, chat_id)
         await lock.acquire()
         try:
             await self._run_ai_turn(uid, chat_id, text)
         except asyncio.CancelledError:
-            # /stop path: cmd_stop already drained the queue, so don't
-            # re-process anything here.
+            # /stop path already cleared the persistent queue.
+            # Shutdown path deliberately leaves the entry so restart
+            # can resume it — do NOT call _persist_complete here.
             await ctx.reply_text("Cancelled.")
             return
         except Exception as e:
-            # Turn failed but messages queued while it ran are still
-            # valid user input; fall through to drain them.
+            # Error is user-facing; consume the entry so it doesn't
+            # re-run with the same failure after restart.
             logger.exception("AI turn failed")
             await ctx.reply_text(f"Error: {e}")
+            await self._persist_complete(uid, entry_id)
+        else:
+            await self._persist_complete(uid, entry_id)
         finally:
             self._cleanup_turn(uid, lock)
 
@@ -1317,13 +1451,16 @@ class BotPlatform(ABC):
                 break
             await lock.acquire()
             try:
-                text, msg_chat_id = q.get_nowait()
+                text, msg_chat_id, entry_id = q.get_nowait()
             except asyncio.QueueEmpty:
                 lock.release()
                 break
             try:
                 await self._run_ai_turn(uid, msg_chat_id, text)
             except asyncio.CancelledError:
+                # Leave the entry on disk so restart resumes it
+                # (or, if /stop caused the cancel, cmd_stop already
+                # cleared the persistent queue).
                 try:
                     await self.send_text(msg_chat_id, "Cancelled.")
                 except Exception:
@@ -1335,6 +1472,9 @@ class BotPlatform(ABC):
                     await self.send_text(msg_chat_id, f"Error: {e}")
                 except Exception:
                     pass
+                await self._persist_complete(uid, entry_id)
+            else:
+                await self._persist_complete(uid, entry_id)
             finally:
                 self._cleanup_turn(uid, lock)
 
