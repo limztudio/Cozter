@@ -1212,13 +1212,9 @@ class BotPlatform(ABC):
             )
         q = self._message_queues[uid]
 
-        try:
-            await self.send_text(
-                chat_id, f"⏰ Scheduled: {command}",
-            )
-        except Exception:
-            logger.warning("Failed to announce scheduled command")
-
+        # Check capacity BEFORE announcing — otherwise a user with a full
+        # queue sees "⏰ Scheduled: X" immediately followed by "Queue full
+        # — dropped scheduled command: X", which is confusing.
         if q.full():
             try:
                 await self.send_text(
@@ -1228,6 +1224,13 @@ class BotPlatform(ABC):
             except Exception:
                 pass
             return
+
+        try:
+            await self.send_text(
+                chat_id, f"⏰ Scheduled: {command}",
+            )
+        except Exception:
+            logger.warning("Failed to announce scheduled command")
 
         entry_id = await self._persist_enqueue(uid, command, chat_id)
         await q.put((command, chat_id, entry_id))
@@ -1347,14 +1350,26 @@ class BotPlatform(ABC):
             # /stop path already cleared the persistent queue.
             # Shutdown path deliberately leaves the entry so restart
             # can resume it — do NOT call _persist_complete here.
-            await ctx.reply_text("Cancelled.")
+            # Wrap the reply: during shutdown the platform may be
+            # tearing down and send_text can raise; that shouldn't
+            # mask the fact that we handled the cancel cleanly.
+            try:
+                await ctx.reply_text("Cancelled.")
+            except Exception:
+                pass
             return
         except Exception as e:
             # Error is user-facing; consume the entry so it doesn't
-            # re-run with the same failure after restart.
+            # re-run with the same failure after restart. Complete
+            # BEFORE replying so a failing reply (e.g., platform
+            # torn down) doesn't skip the completion and leave a
+            # stale entry for restart to replay.
             logger.exception("AI turn failed")
-            await ctx.reply_text(f"Error: {e}")
             await self._persist_complete(uid, entry_id)
+            try:
+                await ctx.reply_text(f"Error: {e}")
+            except Exception:
+                pass
         else:
             await self._persist_complete(uid, entry_id)
         finally:
