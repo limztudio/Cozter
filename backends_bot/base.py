@@ -1323,6 +1323,13 @@ class BotPlatform(ABC):
                 await ctx.reply_text(
                     f"Queued ({q.qsize()}/{self.max_queue_size})."
                 )
+                # Race guard: the previous turn could have finished and
+                # its drain could have exited (on an empty queue) while
+                # we were awaiting _persist_enqueue above. Kick a fresh
+                # drain task so the entry we just put isn't orphaned.
+                # If a drain is already active it will no-op on the
+                # locked() check at the top of the loop.
+                asyncio.create_task(self._drain_message_queue(uid))
             return
 
         # Direct path: persist BEFORE acquiring the lock so a crash
@@ -1455,6 +1462,19 @@ class BotPlatform(ABC):
             except asyncio.QueueEmpty:
                 lock.release()
                 break
+
+            # Entries survive across restarts, which means a user may
+            # have been de-authorized between persist and drain. Drop
+            # unauthorized entries without running them.
+            if not self.authorized(uid, msg_chat_id):
+                logger.warning(
+                    "Dropping queued entry for unauthorized user=%s chat=%s",
+                    uid, msg_chat_id,
+                )
+                await self._persist_complete(uid, entry_id)
+                lock.release()
+                continue
+
             try:
                 await self._run_ai_turn(uid, msg_chat_id, text)
             except asyncio.CancelledError:
