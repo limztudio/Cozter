@@ -1337,6 +1337,10 @@ class BotPlatform(ABC):
         # disk to be resumed by restore_queues() after restart.
         entry_id = await self._persist_enqueue(uid, text, chat_id)
         await lock.acquire()
+        # Register the task as soon as the lock is held, so /stop can
+        # find it even if the turn yields on its initial Telegram/Slack
+        # API calls (send "Thinking..." etc.) before it fully starts.
+        self._running_tasks[uid] = asyncio.current_task()
         try:
             await self._run_ai_turn(uid, chat_id, text)
         except asyncio.CancelledError:
@@ -1378,7 +1382,9 @@ class BotPlatform(ABC):
         self._inject_queues[uid] = inject_q
 
         thinking_handle = await self.send_text(chat_id, "Thinking...")
-        self._running_tasks[uid] = asyncio.current_task()
+        # _running_tasks is already populated by the caller (dispatch_ai
+        # or drain) right after lock.acquire(), so /stop can cancel
+        # this turn during any of its await points.
 
         status_lines: list[str] = []
         last_edit = 0.0
@@ -1475,6 +1481,10 @@ class BotPlatform(ABC):
                 lock.release()
                 continue
 
+            # Register the task before run_ai_turn yields on any API call,
+            # so /stop can cancel it even during the initial "Thinking..."
+            # send. Pops in _cleanup_turn via finally.
+            self._running_tasks[uid] = asyncio.current_task()
             try:
                 await self._run_ai_turn(uid, msg_chat_id, text)
             except asyncio.CancelledError:
