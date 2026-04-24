@@ -261,3 +261,25 @@ def list_schedules(workspace: str, session_id: str) -> list[dict]:
     if data is None:
         return []
     return data.get("schedules", [])
+
+
+def update_schedule_fired(
+    workspace: str, session_id: str, schedule_id: str, fired_at: str,
+) -> None:
+    """Persist the ``last_fired`` ISO timestamp on a schedule.
+
+    Called right before pushing a scheduled command so the bot can
+    skip already-fired slots after a restart — the file on disk is
+    the source of truth for whether a slot has run.
+    """
+    data = load_session(workspace, session_id)
+    if data is None:
+        return
+    changed = False
+    for s in data.get("schedules", []):
+        if s.get("id") == schedule_id:
+            s["last_fired"] = fired_at
+            changed = True
+            break
+    if changed:
+        save_session(workspace, session_id, data)

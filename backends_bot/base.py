@@ -22,7 +22,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time as dt_time, timedelta
 
 from .. import agent, session, updater, workspace
 from ..utils import drain_queue as _drain_queue
@@ -168,11 +168,10 @@ class BotPlatform(ABC):
         self._inject_queues: dict[str, asyncio.Queue] = {}
         # Multi-step flow state: maps user_id -> next text-input callback.
         self._pending_input: dict[str, Handler] = {}
-        # Scheduler state.
+        # Scheduler state. Double-fire within one tick cycle is prevented
+        # by the persisted ``last_fired`` timestamp on each schedule,
+        # which also survives bot restarts to enable catch-up firing.
         self._scheduler_task: asyncio.Task | None = None
-        # Keyed by schedule_id — tracks the "HH:MM" minute when we last
-        # fired each schedule, so a 30s poll loop can't double-fire.
-        self._scheduler_fired: dict[str, str] = {}
 
     # ----- platform identity + I/O primitives (abstract) ------------------
 
@@ -902,9 +901,6 @@ class BotPlatform(ABC):
             return
         removed = schedules[idx]
         session.remove_schedule(ws, sid, removed["id"])
-        # Forget the fired-this-minute marker so a recreated schedule
-        # with the same id (unlikely but possible) isn't suppressed.
-        self._scheduler_fired.pop(removed.get("id", ""), None)
         await ctx.reply_text(
             f"Removed: [{','.join(removed.get('days', []))}]"
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
@@ -983,19 +979,26 @@ class BotPlatform(ABC):
             await asyncio.sleep(30)
 
     async def _scheduler_tick(self) -> None:
-        now = datetime.now()
-        minute_str = now.strftime("%H:%M")
-        day = now.strftime("%a").lower()
+        """Fire every schedule whose most-recent matching slot hasn't run.
 
-        # Collect every matching fire across all authorized users before
-        # pushing anything — lets us sort by creation time so that two
-        # schedules at the same minute fire in the order they were made.
-        #
-        # We iterate workspace state (not notify_targets) because on
-        # Slack notify_targets are channel ids, not user ids. workspace
-        # state maps real users to their current workspaces regardless
-        # of how the platform identifies authorization targets.
-        to_fire: list[tuple[str, dict]] = []
+        A schedule's "slot" is the most recent (day, time) match at or
+        before ``now``. If that slot is newer than the schedule's
+        persisted ``last_fired`` (or the schedule has never fired and
+        the slot is newer than ``created``), fire it.
+
+        Because ``last_fired`` lives in the session JSON on disk, this
+        correctly catches up after a bot restart: any slot that should
+        have run while the bot was down will fire once on the next tick.
+        """
+        now = datetime.now()
+
+        # (uid, ws, sid, sched, slot) tuples; sorted by creation order
+        # so two schedules firing at the same slot run in the order the
+        # user made them.
+        to_fire: list[tuple[str, str, str, dict, datetime]] = []
+
+        # Iterate workspace state (not notify_targets) so Slack — where
+        # notify_targets are channels — correctly finds user sessions.
         for uid, ws in workspace.iter_current_workspaces(self.platform_id):
             if not os.path.isdir(ws):
                 continue
@@ -1003,30 +1006,66 @@ class BotPlatform(ABC):
             if not sid:
                 continue
             for sched in session.list_schedules(ws, sid):
-                sid_key = sched.get("id", "")
-                if not sid_key:
+                slot = self._most_recent_slot(sched, now)
+                if slot is None:
                     continue
-                if self._scheduler_fired.get(sid_key) == minute_str:
+                last_fired = self._parse_iso(sched.get("last_fired"))
+                baseline = last_fired or self._parse_iso(
+                    sched.get("created"),
+                )
+                # Never fire for slots at or before the schedule's
+                # creation time (the user shouldn't see a fire at the
+                # instant they created it).
+                if baseline is not None and slot <= baseline:
                     continue
-                if (
-                    day in sched.get("days", [])
-                    and sched.get("time") == minute_str
-                ):
-                    to_fire.append((uid, sched))
-                    self._scheduler_fired[sid_key] = minute_str
+                to_fire.append((uid, ws, sid, sched, slot))
 
-        to_fire.sort(key=lambda item: item[1].get("created", ""))
+        to_fire.sort(key=lambda item: item[3].get("created", ""))
 
-        # Keep the fired-markers dict from growing unbounded: once we've
-        # crossed to a new minute, drop everything older.
-        if len(self._scheduler_fired) > 500:
-            self._scheduler_fired = {
-                k: v for k, v in self._scheduler_fired.items()
-                if v == minute_str
-            }
-
-        for uid, sched in to_fire:
+        for uid, ws, sid, sched, slot in to_fire:
+            # Persist last_fired BEFORE queueing the command, so a
+            # crash between marking and queueing at worst drops the
+            # fire rather than firing it twice.
+            async with agent.get_workspace_lock(ws):
+                session.update_schedule_fired(
+                    ws, sid, sched["id"], slot.isoformat(),
+                )
             await self._fire_schedule(uid, sched)
+
+    @classmethod
+    def _most_recent_slot(
+        cls, sched: dict, now: datetime,
+    ) -> datetime | None:
+        """Return the latest (day, time) match <= now, or None."""
+        time_str = sched.get("time", "")
+        parsed = cls._parse_time(time_str)
+        if parsed is None:
+            return None
+        h, m = map(int, parsed.split(":"))
+        target = dt_time(h, m)
+        days = sched.get("days", [])
+        if not days:
+            return None
+        # Walk back up to 7 days; the first day-match whose datetime
+        # is <= now is the most recent slot.
+        for offset in range(8):
+            candidate_date = (now - timedelta(days=offset)).date()
+            day_name = cls._DAY_ABBREV[candidate_date.weekday()]
+            if day_name not in days:
+                continue
+            candidate = datetime.combine(candidate_date, target)
+            if candidate <= now:
+                return candidate
+        return None
+
+    @staticmethod
+    def _parse_iso(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
 
     async def _fire_schedule(self, uid: str, sched: dict) -> None:
         """Push a scheduled command onto the user's message queue."""
