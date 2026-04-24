@@ -238,11 +238,13 @@ class TelegramBot(BotPlatform):
                 )
                 await asyncio.sleep(5 * attempt)
         await self.app.start()
-        await self.app.updater.start_polling(drop_pending_updates=True)
-        await self.start_scheduler()
-        # Restore any in-flight / queued messages that a prior run
-        # didn't finish, so work survives restarts.
+        # Restore in-flight / queued messages before polling begins so a
+        # new user message can't race past the restored backlog and run
+        # out of order. app.bot.send_message works after initialize(), so
+        # drain can still post "Thinking..." during restore.
         await self.restore_queues()
+        await self.start_scheduler()
+        await self.app.updater.start_polling(drop_pending_updates=True)
         logger.info("Telegram bot started polling.")
 
     async def stop(self) -> None:

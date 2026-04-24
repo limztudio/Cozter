@@ -230,11 +230,13 @@ class SlackBot(BotPlatform):
         self.app.event("message")(self._on_message)
 
         self._handler = AsyncSocketModeHandler(self.app, self.app_token)
-        await self._handler.connect_async()
-        await self.start_scheduler()
-        # Restore any in-flight / queued messages that a prior run
-        # didn't finish, so work survives restarts.
+        # Restore in-flight / queued messages before connecting so new
+        # user events can't race past the restored backlog. app.client
+        # is already ready (auth_test succeeded above), so drain can
+        # still post messages via chat_postMessage during restore.
         await self.restore_queues()
+        await self.start_scheduler()
+        await self._handler.connect_async()
         logger.info(
             "Slack bot started in Socket Mode (bot_user=%s).",
             self._bot_user_id,
