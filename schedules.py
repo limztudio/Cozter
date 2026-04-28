@@ -78,17 +78,6 @@ def list_schedules(
     return list(_load_all(workspace).get(str(user_id), []))
 
 
-def iter_all_schedules(
-    workspace: str,
-) -> list[tuple[str, dict]]:
-    """Return [(user_id_str, schedule_dict)] for every schedule in *workspace*."""
-    out: list[tuple[str, dict]] = []
-    for uid, schedules in _load_all(workspace).items():
-        for s in schedules:
-            out.append((uid, s))
-    return out
-
-
 def update_schedule_fired(
     workspace: str,
     user_id: str | int,

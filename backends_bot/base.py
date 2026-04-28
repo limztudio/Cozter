@@ -1124,12 +1124,7 @@ class BotPlatform(ABC):
         for uid, ws in workspace.iter_current_workspaces(self.platform_id):
             if not os.path.isdir(ws):
                 continue
-            for sched_uid, sched in schedules.iter_all_schedules(ws):
-                # Schedules in this workspace are partitioned by user.
-                # Only fire entries belonging to the current user (the
-                # owner of the workspace tracked in workspace state).
-                if str(sched_uid) != str(uid):
-                    continue
+            for sched in schedules.list_schedules(ws, uid):
                 slot = self._most_recent_slot(sched, now)
                 if slot is None:
                     continue
@@ -1355,7 +1350,7 @@ class BotPlatform(ABC):
         # API calls (send "Thinking..." etc.) before it fully starts.
         self._running_tasks[uid] = asyncio.current_task()
         try:
-            await self._run_ai_turn(uid, chat_id, text)
+            await self._run_turn(uid, chat_id, text)
         except asyncio.CancelledError:
             # /stop path already cleared the persistent queue.
             # Shutdown path deliberately leaves the entry so restart
@@ -1387,9 +1382,22 @@ class BotPlatform(ABC):
 
         await self._drain_message_queue(uid)
 
-    async def _run_ai_turn(
+    async def _run_turn(
         self, uid: str, chat_id: str, text: str,
+        *, session_id: str | None = None,
     ) -> None:
+        """Send a "Thinking..." status, run the agent, then post the reply.
+
+        ``session_id`` pins the run to a specific session — used by
+        ``_run_ephemeral_turn`` to route a scheduled command into a
+        throwaway session. When None, ``agent.run`` resolves the
+        user's current session itself.
+
+        ``_running_tasks`` is already populated by the caller
+        (``_dispatch_ai`` or ``_drain_message_queue``) right after
+        lock.acquire(), so /stop can cancel this turn during any of
+        its await points.
+        """
         ws = workspace.get_current(uid, self.platform_id)
         if not ws or not os.path.isdir(ws):
             await self.send_text(
@@ -1407,9 +1415,6 @@ class BotPlatform(ABC):
         self._inject_queues[uid] = inject_q
 
         thinking_handle = await self.send_text(chat_id, "Thinking...")
-        # _running_tasks is already populated by the caller (dispatch_ai
-        # or drain) right after lock.acquire(), so /stop can cancel
-        # this turn during any of its await points.
 
         status_lines: list[str] = []
         last_edit = 0.0
@@ -1442,6 +1447,7 @@ class BotPlatform(ABC):
                 model=model, summary_model=summary_model, approval=perm,
                 on_event=on_event, inject_queue=inject_q,
                 backend_name=backend_name,
+                session_id=session_id,
             )
         finally:
             if thinking_handle is not None:
@@ -1471,76 +1477,21 @@ class BotPlatform(ABC):
                 "Workspace not available (deleted?). Use /new or /open.",
             )
             return
-        backend_name, model, summary_model, perm = (
-            workspace.get_run_config(ws)
-        )
 
         # Name the session after the command (truncated) so /session
         # listings momentarily show what's running.
         label = text.strip().splitlines()[0] if text.strip() else "scheduled"
         if len(label) > 40:
             label = label[:40] + "…"
-        sess_data = session.create_session(
-            ws, name=f"⏰ {label}",
-        )
+        sess_data = session.create_session(ws, name=f"⏰ {label}")
         sid = sess_data["id"]
-
-        inject_q: asyncio.Queue[str] = asyncio.Queue(
-            maxsize=self.max_queue_size,
-        )
-        self._inject_queues[uid] = inject_q
-
-        thinking_handle = await self.send_text(chat_id, "Thinking...")
-
-        status_lines: list[str] = []
-        last_edit = 0.0
-
-        async def on_event(ev: agent.ChatEvent) -> None:
-            nonlocal last_edit
-            if ev.kind == "tool":
-                status_lines.append(
-                    f"» {ev.content.split(chr(10))[0][:80]}"
-                )
-            elif ev.kind == "file":
-                status_lines.append(f"» {ev.content[:80]}")
-            else:
-                return
-            if thinking_handle is None:
-                return
-            now = asyncio.get_running_loop().time()
-            if now - last_edit < 1.5:
-                return
-            last_edit = now
-            display = "Thinking...\n\n" + "\n".join(status_lines[-5:])
-            try:
-                await self.edit_text(thinking_handle, display)
-            except Exception:
-                pass
-
         try:
-            try:
-                result = await agent.run(
-                    text, ws, user_id=uid,
-                    model=model, summary_model=summary_model, approval=perm,
-                    on_event=on_event, inject_queue=inject_q,
-                    backend_name=backend_name,
-                    session_id=sid,
-                )
-            finally:
-                if thinking_handle is not None:
-                    try:
-                        await asyncio.shield(
-                            self.delete_message(thinking_handle)
-                        )
-                    except Exception:
-                        pass
-            await self._send_result(chat_id, ws, result)
+            await self._run_turn(uid, chat_id, text, session_id=sid)
         finally:
             # Always tear down the throwaway session — including on
             # /stop (CancelledError propagates after this finally) and
-            # on backend errors. The session never gets to participate
-            # in compaction or auto-titling because it's gone before
-            # those background tasks can race against the delete.
+            # on backend errors. The non-default session name keeps
+            # the auto-title task from racing against the delete.
             try:
                 session.delete_session(ws, sid)
             except Exception:
@@ -1609,7 +1560,7 @@ class BotPlatform(ABC):
                 if ephemeral:
                     await self._run_ephemeral_turn(uid, msg_chat_id, text)
                 else:
-                    await self._run_ai_turn(uid, msg_chat_id, text)
+                    await self._run_turn(uid, msg_chat_id, text)
             except asyncio.CancelledError:
                 # Leave the entry on disk so restart resumes it
                 # (or, if /stop caused the cancel, cmd_stop already

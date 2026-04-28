@@ -171,8 +171,10 @@ def _parse_compaction_output(
 
 def _clean_title(raw: str) -> str | None:
     """Trim a model-emitted title to a single short line."""
-    line = raw.strip().splitlines()[0].strip() if raw.strip() else ""
-    line = line.strip(" \t.\"'`*_")
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    line = stripped.splitlines()[0].strip(" \t.\"'`*_")
     if not line:
         return None
     if len(line) > TITLE_MAX_CHARS:
