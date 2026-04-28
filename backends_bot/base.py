@@ -845,7 +845,10 @@ class BotPlatform(ABC):
             "chat_id": ctx.chat_id,
             "user_id": ctx.user_id,
         }
-        schedules.add_schedule(ws, ctx.user_id, schedule)
+        # Hold the workspace lock so a concurrent scheduler tick
+        # writing last_fired can't clobber this insert.
+        async with agent.get_workspace_lock(ws):
+            schedules.add_schedule(ws, ctx.user_id, schedule)
         await ctx.reply_text(
             f"Schedule created:\n"
             f"  Days: {', '.join(days)}\n"
@@ -898,7 +901,8 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, self._receive_schedules)
             return
         removed = user_schedules[idx]
-        schedules.remove_schedule(ws, ctx.user_id, removed["id"])
+        async with agent.get_workspace_lock(ws):
+            schedules.remove_schedule(ws, ctx.user_id, removed["id"])
         await ctx.reply_text(
             f"Removed: [{','.join(removed.get('days', []))}]"
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
