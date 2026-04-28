@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
 
-from .. import agent, session, updater, workspace
+from .. import agent, schedules, session, updater, workspace
 from ..utils import atomic_write as _atomic_write
 from ..utils import drain_queue as _drain_queue
 
@@ -657,7 +657,7 @@ class BotPlatform(ABC):
             await ctx.reply_text("Compacting session...")
             summary_model = workspace.get_summary_model(ws)
             backend_name = workspace.get_backend_name(ws)
-            new_summary, new_long_term = await agent.compact_session(
+            new_summary, new_long_term, new_title = await agent.compact_session(
                 ws, sid, summary_model, backend_name=backend_name,
             )
             if new_summary:
@@ -666,6 +666,7 @@ class BotPlatform(ABC):
                         ws, sid, new_summary,
                         keep_recent=agent.KEEP_RECENT_AFTER_COMPACT,
                         long_term_rewrite=new_long_term,
+                        title=new_title,
                     )
                 lt_count = (
                     len(new_long_term)
@@ -835,7 +836,6 @@ class BotPlatform(ABC):
             await ctx.reply_text(_NO_WS_MSG)
             return
 
-        sid = session.ensure_session(ws, ctx.user_id)
         schedule = {
             "id": uuid.uuid4().hex[:12],
             "days": days,
@@ -845,7 +845,7 @@ class BotPlatform(ABC):
             "chat_id": ctx.chat_id,
             "user_id": ctx.user_id,
         }
-        session.add_schedule(ws, sid, schedule)
+        schedules.add_schedule(ws, ctx.user_id, schedule)
         await ctx.reply_text(
             f"Schedule created:\n"
             f"  Days: {', '.join(days)}\n"
@@ -860,18 +860,12 @@ class BotPlatform(ABC):
         if not ws:
             await ctx.reply_text(_NO_WS_MSG)
             return
-        sid = session.get_current_session_id(ws, ctx.user_id)
-        if not sid:
-            await ctx.reply_text(
-                "No session yet. Send a message to start one."
-            )
+        user_schedules = schedules.list_schedules(ws, ctx.user_id)
+        if not user_schedules:
+            await ctx.reply_text("No schedules.")
             return
-        schedules = session.list_schedules(ws, sid)
-        if not schedules:
-            await ctx.reply_text("No schedules in this session.")
-            return
-        lines = ["Schedules in this session:"]
-        for i, s in enumerate(schedules, 1):
+        lines = ["Schedules:"]
+        for i, s in enumerate(user_schedules, 1):
             days_str = ",".join(s.get("days", []))
             lines.append(
                 f"  {i}. [{days_str}] {s.get('time', '?')}"
@@ -888,11 +882,7 @@ class BotPlatform(ABC):
         if not ws:
             await ctx.reply_text(_NO_WS_MSG)
             return
-        sid = session.get_current_session_id(ws, ctx.user_id)
-        if not sid:
-            await ctx.reply_text("No session.")
-            return
-        schedules = session.list_schedules(ws, sid)
+        user_schedules = schedules.list_schedules(ws, ctx.user_id)
         text = ctx.text.strip()
         if not text.isdigit():
             await ctx.reply_text(
@@ -901,14 +891,14 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, self._receive_schedules)
             return
         idx = int(text) - 1
-        if not (0 <= idx < len(schedules)):
+        if not (0 <= idx < len(user_schedules)):
             await ctx.reply_text(
                 "Invalid number. Try again (or /cancel):"
             )
             self._expect_input(ctx.user_id, self._receive_schedules)
             return
-        removed = schedules[idx]
-        session.remove_schedule(ws, sid, removed["id"])
+        removed = user_schedules[idx]
+        schedules.remove_schedule(ws, ctx.user_id, removed["id"])
         await ctx.reply_text(
             f"Removed: [{','.join(removed.get('days', []))}]"
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
@@ -996,9 +986,14 @@ class BotPlatform(ABC):
 
     async def _persist_enqueue(
         self, uid: str, text: str, chat_id: str,
+        *, ephemeral: bool = False,
     ) -> str:
         entry_id = uuid.uuid4().hex[:12]
-        entry = {"id": entry_id, "text": text, "chat_id": chat_id}
+        entry = {
+            "id": entry_id, "text": text, "chat_id": chat_id,
+        }
+        if ephemeral:
+            entry["ephemeral"] = True
         async with self._queue_file_lock:
             data = self._read_queue_file()
             data.setdefault(uid, []).append(entry)
@@ -1058,6 +1053,7 @@ class BotPlatform(ABC):
                         entry.get("text", ""),
                         entry.get("chat_id", ""),
                         entry.get("id", ""),
+                        bool(entry.get("ephemeral", False)),
                     ))
                 except asyncio.QueueFull:
                     logger.warning(
@@ -1073,9 +1069,20 @@ class BotPlatform(ABC):
     # ----- Scheduler loop ------------------------------------------------
 
     async def start_scheduler(self) -> None:
-        """Kick off the background scheduler task. Idempotent."""
+        """Kick off the background scheduler task. Idempotent.
+
+        Also performs a one-time migration of any pre-existing schedules
+        that were embedded inside session JSON files into the new
+        per-workspace ``schedules.json`` store.
+        """
         if self._scheduler_task and not self._scheduler_task.done():
             return
+        try:
+            for _uid, ws in workspace.iter_current_workspaces(self.platform_id):
+                if os.path.isdir(ws):
+                    schedules.migrate_from_sessions(ws)
+        except Exception:
+            logger.exception("Schedule migration failed")
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
 
     async def stop_scheduler(self) -> None:
@@ -1114,20 +1121,22 @@ class BotPlatform(ABC):
         """
         now = datetime.now()
 
-        # (uid, ws, sid, sched, slot) tuples; sorted by creation order
-        # so two schedules firing at the same slot run in the order the
+        # (uid, ws, sched, slot) tuples; sorted by creation order so
+        # two schedules firing at the same slot run in the order the
         # user made them.
-        to_fire: list[tuple[str, str, str, dict, datetime]] = []
+        to_fire: list[tuple[str, str, dict, datetime]] = []
 
         # Iterate workspace state (not notify_targets) so Slack — where
         # notify_targets are channels — correctly finds user sessions.
         for uid, ws in workspace.iter_current_workspaces(self.platform_id):
             if not os.path.isdir(ws):
                 continue
-            sid = session.get_current_session_id(ws, uid)
-            if not sid:
-                continue
-            for sched in session.list_schedules(ws, sid):
+            for sched_uid, sched in schedules.iter_all_schedules(ws):
+                # Schedules in this workspace are partitioned by user.
+                # Only fire entries belonging to the current user (the
+                # owner of the workspace tracked in workspace state).
+                if str(sched_uid) != str(uid):
+                    continue
                 slot = self._most_recent_slot(sched, now)
                 if slot is None:
                     continue
@@ -1140,17 +1149,17 @@ class BotPlatform(ABC):
                 # instant they created it).
                 if baseline is not None and slot <= baseline:
                     continue
-                to_fire.append((uid, ws, sid, sched, slot))
+                to_fire.append((uid, ws, sched, slot))
 
-        to_fire.sort(key=lambda item: item[3].get("created", ""))
+        to_fire.sort(key=lambda item: item[2].get("created", ""))
 
-        for uid, ws, sid, sched, slot in to_fire:
+        for uid, ws, sched, slot in to_fire:
             # Persist last_fired BEFORE queueing the command, so a
             # crash between marking and queueing at worst drops the
             # fire rather than firing it twice.
             async with agent.get_workspace_lock(ws):
-                session.update_schedule_fired(
-                    ws, sid, sched["id"], slot.isoformat(),
+                schedules.update_schedule_fired(
+                    ws, uid, sched["id"], slot.isoformat(),
                 )
             await self._fire_schedule(uid, sched)
 
@@ -1190,7 +1199,13 @@ class BotPlatform(ABC):
             return None
 
     async def _fire_schedule(self, uid: str, sched: dict) -> None:
-        """Push a scheduled command onto the user's message queue."""
+        """Push a scheduled command onto the user's message queue.
+
+        The queue entry is flagged ``ephemeral=True`` so the drain loop
+        runs it in a fresh session that is deleted after the turn,
+        rather than appending to whichever session was current at the
+        time the schedule fires.
+        """
         command = sched.get("command", "")
         chat_id = sched.get("chat_id", "")
         if not command or not chat_id:
@@ -1232,8 +1247,10 @@ class BotPlatform(ABC):
         except Exception:
             logger.warning("Failed to announce scheduled command")
 
-        entry_id = await self._persist_enqueue(uid, command, chat_id)
-        await q.put((command, chat_id, entry_id))
+        entry_id = await self._persist_enqueue(
+            uid, command, chat_id, ephemeral=True,
+        )
+        await q.put((command, chat_id, entry_id, True))
 
         # Kick the queue drainer in a background task; if a turn is
         # already running, _drain_message_queue breaks out immediately
@@ -1322,7 +1339,7 @@ class BotPlatform(ABC):
                 entry_id = await self._persist_enqueue(
                     uid, text, chat_id,
                 )
-                await q.put((text, chat_id, entry_id))
+                await q.put((text, chat_id, entry_id, False))
                 await ctx.reply_text(
                     f"Queued ({q.qsize()}/{self.max_queue_size})."
                 )
@@ -1444,6 +1461,101 @@ class BotPlatform(ABC):
 
         await self._send_result(chat_id, ws, result)
 
+    async def _run_ephemeral_turn(
+        self, uid: str, chat_id: str, text: str,
+    ) -> None:
+        """Run a scheduled command in a fresh, throwaway session.
+
+        The session is created right before the run and deleted in a
+        ``finally`` so a crash, /stop, or backend error still cleans up.
+        It never becomes the user's current session — interactive
+        chat continues against whatever session was current before.
+        """
+        ws = workspace.get_current(uid, self.platform_id)
+        if not ws or not os.path.isdir(ws):
+            await self.send_text(
+                chat_id,
+                "Workspace not available (deleted?). Use /new or /open.",
+            )
+            return
+        backend_name, model, summary_model, perm = (
+            workspace.get_run_config(ws)
+        )
+
+        # Name the session after the command (truncated) so /session
+        # listings momentarily show what's running.
+        label = text.strip().splitlines()[0] if text.strip() else "scheduled"
+        if len(label) > 40:
+            label = label[:40] + "…"
+        sess_data = session.create_session(
+            ws, name=f"⏰ {label}",
+        )
+        sid = sess_data["id"]
+
+        inject_q: asyncio.Queue[str] = asyncio.Queue(
+            maxsize=self.max_queue_size,
+        )
+        self._inject_queues[uid] = inject_q
+
+        thinking_handle = await self.send_text(chat_id, "Thinking...")
+
+        status_lines: list[str] = []
+        last_edit = 0.0
+
+        async def on_event(ev: agent.ChatEvent) -> None:
+            nonlocal last_edit
+            if ev.kind == "tool":
+                status_lines.append(
+                    f"» {ev.content.split(chr(10))[0][:80]}"
+                )
+            elif ev.kind == "file":
+                status_lines.append(f"» {ev.content[:80]}")
+            else:
+                return
+            if thinking_handle is None:
+                return
+            now = asyncio.get_running_loop().time()
+            if now - last_edit < 1.5:
+                return
+            last_edit = now
+            display = "Thinking...\n\n" + "\n".join(status_lines[-5:])
+            try:
+                await self.edit_text(thinking_handle, display)
+            except Exception:
+                pass
+
+        try:
+            try:
+                result = await agent.run(
+                    text, ws, user_id=uid,
+                    model=model, summary_model=summary_model, approval=perm,
+                    on_event=on_event, inject_queue=inject_q,
+                    backend_name=backend_name,
+                    session_id=sid,
+                )
+            finally:
+                if thinking_handle is not None:
+                    try:
+                        await asyncio.shield(
+                            self.delete_message(thinking_handle)
+                        )
+                    except Exception:
+                        pass
+            await self._send_result(chat_id, ws, result)
+        finally:
+            # Always tear down the throwaway session — including on
+            # /stop (CancelledError propagates after this finally) and
+            # on backend errors. The session never gets to participate
+            # in compaction or auto-titling because it's gone before
+            # those background tasks can race against the delete.
+            try:
+                session.delete_session(ws, sid)
+            except Exception:
+                logger.warning(
+                    "Failed to delete ephemeral session %s", sid,
+                    exc_info=True,
+                )
+
     async def _send_result(
         self, chat_id: str, ws: str, result: agent.AgentResult,
     ) -> None:
@@ -1479,7 +1591,7 @@ class BotPlatform(ABC):
                 break
             await lock.acquire()
             try:
-                text, msg_chat_id, entry_id = q.get_nowait()
+                text, msg_chat_id, entry_id, ephemeral = q.get_nowait()
             except asyncio.QueueEmpty:
                 lock.release()
                 break
@@ -1501,7 +1613,10 @@ class BotPlatform(ABC):
             # send. Pops in _cleanup_turn via finally.
             self._running_tasks[uid] = asyncio.current_task()
             try:
-                await self._run_ai_turn(uid, msg_chat_id, text)
+                if ephemeral:
+                    await self._run_ephemeral_turn(uid, msg_chat_id, text)
+                else:
+                    await self._run_ai_turn(uid, msg_chat_id, text)
             except asyncio.CancelledError:
                 # Leave the entry on disk so restart resumes it
                 # (or, if /stop caused the cancel, cmd_stop already

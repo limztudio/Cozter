@@ -135,6 +135,58 @@ def save_session(workspace: str, session_id: str, data: dict) -> None:
     _atomic_write(_session_path(workspace, session_id), data, tmp_dir=sdir)
 
 
+def delete_session(workspace: str, session_id: str) -> bool:
+    """Remove a session file. Returns True if a file was deleted.
+
+    Used by the scheduler to clean up the ephemeral session it spins
+    up to run a scheduled command.
+    """
+    path = _session_path(workspace, session_id)
+    try:
+        os.remove(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        logger.warning("Failed to delete session file: %s", path)
+        return False
+
+
+def is_default_name(name: str | None) -> bool:
+    """True if *name* still matches the auto-generated ``Session YYYY-MM-DD``.
+
+    Used as the trigger for auto-renaming: a session whose name has
+    been changed (manually or by a previous title pass) is left alone
+    so we don't overwrite a meaningful title with a stale draft.
+    """
+    if not name:
+        return True
+    if not name.startswith("Session "):
+        return False
+    rest = name[len("Session "):]
+    if len(rest) != 10:
+        return False
+    parts = rest.split("-")
+    return (
+        len(parts) == 3
+        and len(parts[0]) == 4
+        and all(p.isdigit() for p in parts)
+    )
+
+
+def set_session_name(
+    workspace: str, session_id: str, name: str,
+) -> None:
+    name = name.strip()
+    if not name:
+        return
+    data = load_session(workspace, session_id)
+    if data is None:
+        return
+    data["name"] = name
+    save_session(workspace, session_id, data)
+
+
 # ---------------------------------------------------------------------------
 # Message persistence
 # ---------------------------------------------------------------------------
@@ -184,12 +236,17 @@ def set_summary(
     summary: str,
     keep_recent: int = 10,
     long_term_rewrite: list[str] | None = None,
+    title: str | None = None,
 ) -> None:
     """Store a compacted summary, keeping only the last *keep_recent* messages.
 
     long_term_rewrite, when provided, replaces the long_term list entirely.
     None means the model did not emit a rewrite block; the existing list is
     kept unchanged. The list is capped at LONG_TERM_CAP after writing.
+
+    title, when provided and non-empty, replaces the session name. The
+    compaction prompt asks the model for a short title alongside the
+    summary so the user-visible name reflects the latest topic.
     """
     data = load_session(workspace, session_id)
     if data is None:
@@ -212,6 +269,11 @@ def set_summary(
             long_term = long_term[-LONG_TERM_CAP:]
         data["long_term"] = long_term
 
+    if title:
+        cleaned = title.strip()
+        if cleaned:
+            data["name"] = cleaned
+
     save_session(workspace, session_id, data)
 
 
@@ -225,61 +287,7 @@ def set_compact_interval(
     save_session(workspace, session_id, data)
 
 
-# ---------------------------------------------------------------------------
-# Scheduled commands (recurring reservations, per session)
-# ---------------------------------------------------------------------------
-
-def add_schedule(
-    workspace: str, session_id: str, schedule: dict,
-) -> None:
-    """Append a recurring schedule entry to the session."""
-    data = load_session(workspace, session_id)
-    if data is None:
-        return
-    data.setdefault("schedules", []).append(schedule)
-    save_session(workspace, session_id, data)
-
-
-def remove_schedule(
-    workspace: str, session_id: str, schedule_id: str,
-) -> bool:
-    """Remove a schedule by id. Returns True if removed, False if absent."""
-    data = load_session(workspace, session_id)
-    if data is None:
-        return False
-    schedules = data.get("schedules", [])
-    kept = [s for s in schedules if s.get("id") != schedule_id]
-    if len(kept) == len(schedules):
-        return False
-    data["schedules"] = kept
-    save_session(workspace, session_id, data)
-    return True
-
-
-def list_schedules(workspace: str, session_id: str) -> list[dict]:
-    data = load_session(workspace, session_id)
-    if data is None:
-        return []
-    return data.get("schedules", [])
-
-
-def update_schedule_fired(
-    workspace: str, session_id: str, schedule_id: str, fired_at: str,
-) -> None:
-    """Persist the ``last_fired`` ISO timestamp on a schedule.
-
-    Called right before pushing a scheduled command so the bot can
-    skip already-fired slots after a restart — the file on disk is
-    the source of truth for whether a slot has run.
-    """
-    data = load_session(workspace, session_id)
-    if data is None:
-        return
-    changed = False
-    for s in data.get("schedules", []):
-        if s.get("id") == schedule_id:
-            s["last_fired"] = fired_at
-            changed = True
-            break
-    if changed:
-        save_session(workspace, session_id, data)
+# Schedules are managed separately in ``schedules.py`` (workspace-level
+# store at ``.cozter/schedules.json``) so a fired schedule can run in
+# its own ephemeral session rather than being tied to whichever session
+# was current when the user created it.

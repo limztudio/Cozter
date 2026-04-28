@@ -45,7 +45,8 @@ COMPACT_TIMEOUT = 120  # seconds
 SUMMARY_PROMPT = (
     "You are compacting a conversation into two memory layers: a SCRATCH "
     "summary (rewritten each compaction) and LONG-TERM memory (persistent "
-    "facts that survive future compactions).\n\n"
+    "facts that survive future compactions). You will also produce a short "
+    "TITLE that names the session.\n\n"
     "=== SCRATCH SUMMARY ===\n"
     "Produce a concise abstract of the conversation below. This abstract "
     "REPLACES the raw history, so it must be thorough enough to continue "
@@ -75,25 +76,46 @@ SUMMARY_PROMPT = (
     "- Add new durable facts from this conversation\n"
     "Keep the list SHORT: aim for 5-15 items, hard max 30. "
     "Fewer precise items beat many vague ones.\n\n"
+    "=== TITLE ===\n"
+    "A short descriptive name for this session: 3-7 words, Title Case, "
+    "no trailing punctuation, no quotes. Pick the dominant topic of the "
+    "conversation as a whole. Example: 'Refactor Schedule Storage'.\n\n"
     "=== OUTPUT FORMAT ===\n"
-    "Emit exactly two sections. Omit a section's body if empty, "
-    "but always include the markers.\n\n"
+    "Emit all three sections. Omit a body if empty, but always include "
+    "the markers.\n\n"
     "[SUMMARY]\n"
     "<scratch summary prose here>\n"
     "[/SUMMARY]\n\n"
     "[LONG_TERM]\n"
     "- <item 1>\n"
     "- <item 2>\n"
-    "[/LONG_TERM]"
+    "[/LONG_TERM]\n\n"
+    "[TITLE]\n"
+    "<short title>\n"
+    "[/TITLE]"
 )
+
+# A standalone prompt used to title a session early (after the first
+# turn) — before there's enough material for a full compaction.
+TITLE_PROMPT = (
+    "You are titling a chat session for a list view. Read the recent "
+    "messages and produce a short descriptive name: 3-7 words, "
+    "Title Case, no trailing punctuation, no quotes, no commentary. "
+    "Pick the dominant topic, not the most recent line. Output only "
+    "the title."
+)
+TITLE_TIMEOUT = 30  # seconds
+TITLE_MAX_CHARS = 60
+TITLE_CONTEXT_CHARS = 8_000
 
 
 def _parse_compaction_output(
     text: str,
-) -> tuple[str, list[str] | None]:
-    """Extract (summary, long_term) from model output.
+) -> tuple[str, list[str] | None, str | None]:
+    """Extract (summary, long_term, title) from model output.
 
     long_term is None if [LONG_TERM] markers are absent (no rewrite).
+    title is None if [TITLE] markers are absent or empty.
     Falls back to treating the entire text as the summary if [SUMMARY]
     markers are absent, so misbehaving models still produce a usable result.
     """
@@ -127,17 +149,35 @@ def _parse_compaction_output(
     long_term: list[str] | None = (
         _bullets(lt_block) if lt_block is not None else None
     )
+    title_block = _extract("TITLE")
+    title: str | None = None
+    if title_block:
+        title = _clean_title(title_block)
     if summary is None:
-        # Fallback: treat full text as summary, stripping the long-term block.
+        # Fallback: treat full text as summary, stripping the other blocks.
         fallback = text
-        open_tag, close_tag = "[LONG_TERM]", "[/LONG_TERM]"
-        i = fallback.find(open_tag)
-        if i != -1:
-            j = fallback.find(close_tag, i + len(open_tag))
-            if j != -1:
-                fallback = fallback[:i] + fallback[j + len(close_tag):]
+        for tag in ("LONG_TERM", "TITLE"):
+            open_tag, close_tag = f"[{tag}]", f"[/{tag}]"
+            i = fallback.find(open_tag)
+            if i != -1:
+                j = fallback.find(close_tag, i + len(open_tag))
+                if j != -1:
+                    fallback = (
+                        fallback[:i] + fallback[j + len(close_tag):]
+                    )
         summary = fallback.strip()
-    return summary, long_term
+    return summary, long_term, title
+
+
+def _clean_title(raw: str) -> str | None:
+    """Trim a model-emitted title to a single short line."""
+    line = raw.strip().splitlines()[0].strip() if raw.strip() else ""
+    line = line.strip(" \t.\"'`*_")
+    if not line:
+        return None
+    if len(line) > TITLE_MAX_CHARS:
+        line = line[:TITLE_MAX_CHARS].rstrip()
+    return line or None
 
 
 # ------------------------------------------------------------------
@@ -283,6 +323,7 @@ async def run(
     on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
     inject_queue: asyncio.Queue[str] | None = None,
     backend_name: str | None = None,
+    session_id: str | None = None,
 ) -> AgentResult:
     """Run the selected agent CLI with session history prepended.
 
@@ -290,18 +331,34 @@ async def run(
     default backend is used. The workspace's configured backend should be
     passed in by the caller.
 
+    session_id pins the run to a specific session (used for ephemeral
+    schedule sessions). When None, the user's current session is loaded
+    or created via ``ensure_session_with_data``.
+
     on_event  - called for each parsed event as it arrives (streaming).
     inject_queue - when a message is put, the running subprocess is killed
                    and restarted with the injected context appended.
     """
     backend = backends_agent.get_backend(backend_name)
 
-    # ensure_session_with_data gives us (id, data) from a single load.
     # session_data is reused on every inject restart so the session file
     # is not re-read for each iteration of the restart loop.
-    session_id, session_data = session.ensure_session_with_data(
-        workspace_path, user_id,
-    )
+    if session_id is not None:
+        session_data = session.load_session(workspace_path, session_id)
+        if session_data is None:
+            # The pinned session was deleted out from under us; bail
+            # rather than silently writing into a fresh one.
+            result = AgentResult()
+            result.text = (
+                f"Error: session {session_id} not found in {workspace_path}."
+            )
+            result.events.append(ChatEvent(kind="text", content=result.text))
+            return result
+    else:
+        # ensure_session_with_data gives us (id, data) from a single load.
+        session_id, session_data = session.ensure_session_with_data(
+            workspace_path, user_id,
+        )
 
     injected: list[str] = []
 
@@ -434,6 +491,14 @@ async def run(
         workspace_path, session_id, summary_model, backend_name=backend.name,
     )
 
+    # Auto-title sessions whose name still matches the default
+    # "Session YYYY-MM-DD" pattern. Fire-and-forget so the user-visible
+    # reply isn't gated on a second backend call.
+    asyncio.create_task(_maybe_auto_title(
+        workspace_path, session_id, summary_model,
+        backend_name=backend.name,
+    ))
+
     if not any(e.kind == "text" for e in result.events):
         result.events.append(ChatEvent(kind="text", content=result.text))
 
@@ -500,7 +565,7 @@ async def _maybe_compact(
             len(msgs), interval,
         )
         existing_summary = data.get("summary") or ""
-        new_summary, new_long_term = await compact_session(
+        new_summary, new_long_term, new_title = await compact_session(
             workspace_path, session_id, summary_model,
             backend_name=backend_name,
             _preloaded_data=data,
@@ -526,6 +591,7 @@ async def _maybe_compact(
                 workspace_path, session_id, new_summary,
                 keep_recent=KEEP_RECENT_AFTER_COMPACT,
                 long_term_rewrite=new_long_term,
+                title=new_title,
             )
         lt_count = len(new_long_term) if new_long_term is not None else "?"
         logger.info(
@@ -536,6 +602,138 @@ async def _maybe_compact(
         logger.error("Compaction check failed", exc_info=True)
 
 
+# ------------------------------------------------------------------
+# Auto-titling
+# ------------------------------------------------------------------
+
+# Per-session lock so two concurrent run() calls (in theory) on the
+# same session don't both spawn a title pass. The bot's per-user lock
+# already serializes turns, but we don't rely on that here.
+_title_in_flight: set[tuple[str, str]] = set()
+
+
+async def _maybe_auto_title(
+    workspace_path: str, session_id: str, summary_model: str | None,
+    *, backend_name: str | None,
+) -> None:
+    """Generate a title once a session has its first assistant reply.
+
+    Skipped when the session already has a custom name (anything other
+    than the auto-generated ``Session YYYY-MM-DD``) so we don't
+    overwrite a meaningful title with a freshly-generated one. The
+    compaction path refreshes the title separately.
+    """
+    key = (workspace_path, session_id)
+    if key in _title_in_flight:
+        return
+    try:
+        data = session.load_session(workspace_path, session_id)
+        if data is None:
+            return
+        if not session.is_default_name(data.get("name")):
+            return
+        # Need at least one assistant reply before titling makes sense.
+        msgs = data.get("messages", [])
+        if not any(m.get("role") == "assistant" for m in msgs):
+            return
+        _title_in_flight.add(key)
+        title = await generate_session_title(
+            workspace_path, session_id, summary_model,
+            backend_name=backend_name, _preloaded_data=data,
+        )
+        if not title:
+            return
+        async with get_workspace_lock(workspace_path):
+            session.set_session_name(workspace_path, session_id, title)
+        logger.info("Session %s auto-titled: %s", session_id, title)
+    except Exception:
+        logger.warning("Auto-title failed", exc_info=True)
+    finally:
+        _title_in_flight.discard(key)
+
+
+async def generate_session_title(
+    workspace_path: str,
+    session_id: str,
+    summary_model: str | None = None,
+    *,
+    backend_name: str | None = None,
+    _preloaded_data: dict | None = None,
+) -> str | None:
+    """Run a small backend call to title a session. Returns None on failure."""
+    backend = backends_agent.get_backend(backend_name)
+    data = _preloaded_data or session.load_session(workspace_path, session_id)
+    if data is None:
+        return None
+
+    parts: list[str] = []
+    summary = data.get("summary")
+    if summary:
+        parts.append(f"Previous summary:\n{summary}\n")
+    parts.append("Recent messages:")
+
+    # Newest-first under a tight char budget; the title only needs the
+    # gist, so we don't pull the whole history.
+    used = 0
+    msg_lines: list[str] = []
+    for msg in reversed(data.get("messages", [])):
+        role = msg.get("role", "?").capitalize()
+        content = msg.get("content", "")
+        if len(content) > MSG_CONTENT_MAX:
+            content = content[:MSG_CONTENT_MAX] + "…"
+        line = f"{role}: {content}"
+        if used + len(line) > TITLE_CONTEXT_CHARS:
+            break
+        msg_lines.append(line)
+        used += len(line) + 1
+    msg_lines.reverse()
+    if not msg_lines:
+        return None
+    parts.extend(msg_lines)
+
+    full_prompt = f"{TITLE_PROMPT}\n\n" + "\n".join(parts)
+
+    try:
+        proc = await backend.launch(
+            workspace_path, full_prompt, summary_model, approval="full",
+            compaction=True,
+        )
+    except FileNotFoundError:
+        logger.warning(
+            "%s CLI not found on PATH - cannot title session",
+            backend.executable,
+        )
+        return None
+
+    raw = ""
+    try:
+        async with asyncio.timeout(TITLE_TIMEOUT):
+            async for line in _iter_stream_lines(proc.stdout):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    if not raw:
+                        raw = line
+                    continue
+                text = backend.extract_agent_text(event)
+                if text:
+                    raw = text
+            await proc.wait()
+    except TimeoutError:
+        logger.warning("Title generation timed out for %s", session_id)
+        try:
+            proc.kill()
+            await proc.wait()
+        except OSError:
+            pass
+        return None
+
+    return _clean_title(raw) if raw else None
+
+
 async def compact_session(
     workspace_path: str,
     session_id: str,
@@ -543,13 +741,14 @@ async def compact_session(
     *,
     backend_name: str | None = None,
     _preloaded_data: dict | None = None,
-) -> tuple[str, list[str] | None]:
+) -> tuple[str, list[str] | None, str | None]:
     """Run the selected backend to compact a session.
 
-    Returns (summary, long_term). long_term is the new complete list, or
-    None if the model did not emit a [LONG_TERM] block (existing list kept).
-    On failure returns ("", None). Does NOT write to disk - caller takes
-    the workspace lock and calls set_summary.
+    Returns (summary, long_term, title). long_term is the new complete
+    list, or None if the model did not emit a [LONG_TERM] block
+    (existing list kept). title is None if the model did not emit a
+    [TITLE] block. On failure returns ("", None, None). Does NOT write
+    to disk - caller takes the workspace lock and calls set_summary.
 
     _preloaded_data: pass already-loaded session dict to skip a disk read
     (used by _maybe_compact which loads the data to check the interval).
@@ -557,13 +756,13 @@ async def compact_session(
     backend = backends_agent.get_backend(backend_name)
     data = _preloaded_data or session.load_session(workspace_path, session_id)
     if data is None:
-        return ("", None)
+        return ("", None, None)
     messages = data.get("messages", [])
     existing_summary = data.get("summary")
     existing_long_term: list[str] = data.get("long_term") or []
 
     if not messages:
-        return ("", None)
+        return ("", None, None)
 
     # Build the content to summarize, staying within a token budget.
     # Large prompts cause the summary model to return truncated/empty output.
@@ -613,7 +812,7 @@ async def compact_session(
             "Session %s messages too large even for a single entry",
             session_id,
         )
-        return ("", None)
+        return ("", None, None)
 
     full_prompt = f"{SUMMARY_PROMPT}\n\n" + "\n".join(parts)
 
@@ -631,7 +830,7 @@ async def compact_session(
             "%s CLI not found on PATH - cannot compact session",
             backend.executable,
         )
-        return ("", None)
+        return ("", None, None)
 
     # Collect the last agent text from the JSON event stream.
     new_summary = ""
@@ -662,7 +861,7 @@ async def compact_session(
             await proc.wait()
         except OSError:
             pass
-        return ("", None)
+        return ("", None, None)
 
     if not new_summary:
         stderr = (
@@ -672,7 +871,7 @@ async def compact_session(
             "Compaction produced no summary (exit %d): %s",
             proc.returncode, stderr,
         )
-        return ("", None)
+        return ("", None, None)
 
-    summary, long_term = _parse_compaction_output(new_summary)
-    return (summary, long_term)
+    summary, long_term, title = _parse_compaction_output(new_summary)
+    return (summary, long_term, title)
