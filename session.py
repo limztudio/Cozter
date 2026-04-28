@@ -287,7 +287,4 @@ def set_compact_interval(
     save_session(workspace, session_id, data)
 
 
-# Schedules are managed separately in ``schedules.py`` (workspace-level
-# store at ``.cozter/schedules.json``) so a fired schedule can run in
-# its own ephemeral session rather than being tied to whichever session
-# was current when the user created it.
+# Schedules live in ``schedules.py`` (``.cozter/schedules.json``).

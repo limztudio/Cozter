@@ -1069,20 +1069,9 @@ class BotPlatform(ABC):
     # ----- Scheduler loop ------------------------------------------------
 
     async def start_scheduler(self) -> None:
-        """Kick off the background scheduler task. Idempotent.
-
-        Also performs a one-time migration of any pre-existing schedules
-        that were embedded inside session JSON files into the new
-        per-workspace ``schedules.json`` store.
-        """
+        """Kick off the background scheduler task. Idempotent."""
         if self._scheduler_task and not self._scheduler_task.done():
             return
-        try:
-            for _uid, ws in workspace.iter_current_workspaces(self.platform_id):
-                if os.path.isdir(ws):
-                    schedules.migrate_from_sessions(ws)
-        except Exception:
-            logger.exception("Schedule migration failed")
         self._scheduler_task = asyncio.create_task(self._scheduler_loop())
 
     async def stop_scheduler(self) -> None:

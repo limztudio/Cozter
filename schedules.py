@@ -1,19 +1,14 @@
 """Workspace-level schedule store.
 
-Schedules used to be embedded inside each session's JSON. They are now
-managed independently in ``.cozter/schedules.json`` so a fired schedule
+Schedules are stored in ``.cozter/schedules.json`` so a fired schedule
 can run in its own ephemeral session without being tied to whichever
-session happened to be current at the time the user created it.
+session happened to be current when the user created it.
 
 File shape:
     {"<user_id>": [<schedule_dict>, ...], ...}
 
-Each ``<schedule_dict>`` matches the previous embedded format:
+Each ``<schedule_dict>``:
     {id, days, time, command, created, chat_id, user_id, last_fired?}
-
-``migrate_from_sessions`` lifts any pre-existing embedded schedules out
-of session files into this store on startup, so users don't lose
-schedules they created before this change.
 """
 
 import json
@@ -26,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 COZTER_DIR = ".cozter"
 SCHEDULES_FILE = "schedules.json"
-SESSIONS_DIR = "sessions"
 
 
 def _path(workspace: str) -> str:
@@ -112,60 +106,3 @@ def update_schedule_fired(
             break
     if changed:
         _save_all(workspace, data)
-
-
-def migrate_from_sessions(workspace: str) -> int:
-    """Lift schedules embedded in session JSONs into the new store.
-
-    Idempotent: a session whose ``schedules`` field has already been
-    cleared is skipped. Returns the number of schedule entries moved.
-    Called once on bot startup so users keep schedules they created
-    before the split.
-    """
-    sessions_dir = os.path.join(workspace, COZTER_DIR, SESSIONS_DIR)
-    if not os.path.isdir(sessions_dir):
-        return 0
-
-    moved = 0
-    cozter_dir = os.path.join(workspace, COZTER_DIR)
-    target = _load_all(workspace)
-    target_dirty = False
-
-    for fname in os.listdir(sessions_dir):
-        if not fname.endswith(".json"):
-            continue
-        spath = os.path.join(sessions_dir, fname)
-        try:
-            with open(spath, encoding="utf-8") as f:
-                sdata = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            continue
-        embedded = sdata.get("schedules")
-        if not embedded:
-            continue
-        # Hoist each schedule into the per-user list, keyed by the
-        # schedule's stored user_id (falling back to the session's
-        # name field is unsafe; if user_id is missing we drop it to
-        # avoid orphaning into a wrong owner).
-        for sched in embedded:
-            uid = sched.get("user_id")
-            if uid is None:
-                continue
-            target.setdefault(str(uid), []).append(sched)
-            moved += 1
-            target_dirty = True
-        # Clear the field on the session so we don't re-migrate.
-        sdata.pop("schedules", None)
-        try:
-            _atomic_write(spath, sdata, tmp_dir=sessions_dir)
-        except OSError:
-            logger.warning("Failed to rewrite session file %s", spath)
-
-    if target_dirty:
-        os.makedirs(cozter_dir, exist_ok=True)
-        _save_all(workspace, target)
-        logger.info(
-            "Migrated %d schedule(s) from session files to %s",
-            moved, _path(workspace),
-        )
-    return moved
