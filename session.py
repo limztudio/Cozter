@@ -42,16 +42,43 @@ def total_message_count(data: dict) -> int:
     return data.get("compacted_count", 0) + len(data.get("messages", []))
 
 
-def format_msg_line(msg: dict) -> str:
-    """Format a session message as ``Role: content``, capping content
-    at ``MSG_CONTENT_MAX`` so a single long reply can't dominate the
-    prompt budget.
+def format_msg_line(msg: dict, cap: int | None = MSG_CONTENT_MAX) -> str:
+    """Format a session message as ``Role: content``.
+
+    Content is truncated with an ellipsis when it exceeds *cap*.
+    Pass ``cap=None`` to disable truncation (used by compaction, where
+    the per-call budget is large enough to afford full message text).
     """
     role = msg.get("role", "?").capitalize()
     content = msg.get("content", "")
-    if len(content) > MSG_CONTENT_MAX:
-        content = content[:MSG_CONTENT_MAX] + "…"
+    if cap is not None and len(content) > cap:
+        content = content[:cap] + "…"
     return f"{role}: {content}"
+
+
+def take_recent_messages(
+    messages: list[dict],
+    budget: int,
+    *,
+    cap: int | None = MSG_CONTENT_MAX,
+) -> list[str]:
+    """Format the most recent messages that fit in *budget* chars.
+
+    Iterates newest-first, accumulating formatted lines until the next
+    line would exceed the budget; the result is reversed back into
+    chronological order. Each line is formatted via :func:`format_msg_line`
+    with the given *cap*.
+    """
+    used = 0
+    lines: list[str] = []
+    for msg in reversed(messages):
+        line = format_msg_line(msg, cap=cap)
+        if used + len(line) > budget:
+            break
+        lines.append(line)
+        used += len(line) + 1  # +1 for the joining newline
+    lines.reverse()
+    return lines
 
 
 def list_sessions(workspace: str) -> list[dict]:

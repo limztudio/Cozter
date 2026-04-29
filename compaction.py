@@ -231,20 +231,12 @@ async def compact_session(
         parts.append(f"Previous summary:\n{existing_summary}\n")
     parts.append("Conversation to summarize:")
 
-    # Add messages newest-first until we hit the budget, then reverse
+    # Add messages newest-first until we hit the budget. cap=None so
+    # the model sees full message content (compaction's budget is
+    # generous enough to afford it).
     overhead = len(SUMMARY_PROMPT) + sum(len(p) for p in parts) + 200
     budget = max(0, MAX_SUMMARY_CHARS - overhead)
-    msg_lines: list[str] = []
-    used = 0
-    for msg in reversed(messages):
-        role = msg.get("role", "?").capitalize()
-        content = msg.get("content", "")
-        line = f"{role}: {content}"
-        if used + len(line) > budget:
-            break
-        msg_lines.append(line)
-        used += len(line) + 1
-    msg_lines.reverse()
+    msg_lines = session.take_recent_messages(messages, budget, cap=None)
     parts.extend(msg_lines)
 
     if not msg_lines:

@@ -108,15 +108,9 @@ async def generate(
 
     # Newest-first under a tight char budget; the title only needs the
     # gist, so we don't pull the whole history.
-    used = 0
-    msg_lines: list[str] = []
-    for msg in reversed(data.get("messages", [])):
-        line = session.format_msg_line(msg)
-        if used + len(line) > TITLE_CONTEXT_CHARS:
-            break
-        msg_lines.append(line)
-        used += len(line) + 1
-    msg_lines.reverse()
+    msg_lines = session.take_recent_messages(
+        data.get("messages", []), TITLE_CONTEXT_CHARS,
+    )
     if not msg_lines:
         return None
     parts.extend(msg_lines)

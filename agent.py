@@ -128,16 +128,10 @@ def _build_contextual_prompt(
         # Add messages newest-to-oldest until the budget is exhausted.
         # Content is already capped at session.MSG_CONTENT_MAX so budget arithmetic
         # is predictable.
-        msg_lines: list[str] = []
-        used = 0
-        if msg_budget > 0:
-            for msg in reversed(messages):
-                line = session.format_msg_line(msg)
-                if used + len(line) > msg_budget:
-                    break
-                msg_lines.append(line)
-                used += len(line) + 1  # +1 for the joining newline
-            msg_lines.reverse()
+        msg_lines = (
+            session.take_recent_messages(messages, msg_budget)
+            if msg_budget > 0 else []
+        )
 
         if msg_lines:
             history_parts.append("[Recent Messages]")
