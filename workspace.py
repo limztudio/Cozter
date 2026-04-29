@@ -4,12 +4,11 @@ import logging
 import os
 
 from . import backends_agent
-from .utils import COZTER_DIR
+from .utils import CONFIG_DIR, COZTER_DIR
 from .utils import atomic_write as _atomic_write
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), ".config")
 WORKSPACE_STATE_PATH = os.path.join(CONFIG_DIR, "workspaces.json")
 MAX_RECENT = 50  # cap on stored recent-workspaces list
 

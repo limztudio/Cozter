@@ -9,7 +9,10 @@ from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
-COZTER_DIR = ".cozter"
+COZTER_DIR = ".cozter"  # name of the per-workspace dotfile directory
+CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.)
+    os.path.dirname(os.path.abspath(__file__)), ".config",
+)
 
 
 def drain_queue(

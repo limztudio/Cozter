@@ -2,7 +2,8 @@ import json
 import os
 import sys
 
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), ".config")
+from .utils import CONFIG_DIR
+
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 _DEFAULT_CONFIG = {
