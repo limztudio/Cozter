@@ -8,10 +8,11 @@ The backend is chosen per workspace via ``workspace.get_backend_name``.
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import AsyncIterator
 
-from . import backends_agent, session
+from . import backends_agent, colony, session, workspace as workspace_mod
 from .backends_agent.base import AgentResult, ChatEvent
 from .utils import drain_queue as _drain_queue
 
@@ -109,6 +110,90 @@ TITLE_MAX_CHARS = 60
 TITLE_CONTEXT_CHARS = 8_000
 
 
+# ------------------------------------------------------------------
+# Colony (workspace-shared memory) — consolidates recurring long-term
+# items across all sessions in a workspace into a single canonical list.
+# ------------------------------------------------------------------
+
+COLONY_PROMPT = (
+    "You are consolidating a workspace's shared memory ('colony') from "
+    "the long-term memory of every session in the workspace.\n\n"
+    "Goal: promote facts that recur across sessions into a single "
+    "canonical shared list, and keep each session's own list focused "
+    "on facts specific to that session.\n\n"
+    "=== INPUT ===\n"
+    "You receive: the current colony list, then a [SESSION:<id>] "
+    "block per session containing that session's long-term items.\n\n"
+    "=== TASK ===\n"
+    "1. PROMOTE: items appearing (verbatim or as paraphrases) in 2+ "
+    "sessions, OR items already in the colony, become colony items.\n"
+    "2. KEEP: items clearly specific to one session stay in that "
+    "session's list.\n"
+    "3. MERGE: rewrite near-duplicates into one canonical sentence.\n"
+    "4. DROP: items that are now wrong or redundant with the colony.\n"
+    "Carry forward existing colony items unless they are clearly wrong; "
+    "the colony is durable cross-session knowledge.\n"
+    "Each item must be ONE self-contained sentence.\n\n"
+    "=== OUTPUT FORMAT ===\n"
+    "Emit one [COLONY] block, then one [SESSION:<id>] block per "
+    "input session (even if the new list is empty). Use the same "
+    "<id> values you saw in the input. One bullet per item.\n\n"
+    "[COLONY]\n"
+    "- <colony item 1>\n"
+    "- <colony item 2>\n"
+    "[/COLONY]\n\n"
+    "[SESSION:<session_id>]\n"
+    "- <remaining session-specific item>\n"
+    "[/SESSION]\n"
+)
+COLONY_TIMEOUT = 180  # seconds; consolidation can be heavier than compaction
+COLONY_MAX_INPUT_CHARS = 100_000
+
+_SESSION_BLOCK_RE = re.compile(
+    r"\[SESSION:([^\]\s]+)\](.*?)\[/SESSION\]", re.DOTALL,
+)
+
+
+def _parse_colony_output(
+    text: str,
+) -> tuple[list[str] | None, dict[str, list[str]]]:
+    """Extract (colony, {session_id: long_term}) from the consolidation output.
+
+    colony is None when the [COLONY] markers are absent; sessions absent
+    from the output are simply not in the dict (caller leaves them as-is).
+    """
+    def _bullets(block: str) -> list[str]:
+        out: list[str] = []
+        for raw in block.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith(("- ", "* ")):
+                line = line[2:].strip()
+            if line:
+                out.append(line)
+        return out
+
+    colony_block: str | None = None
+    open_tag, close_tag = "[COLONY]", "[/COLONY]"
+    i = text.find(open_tag)
+    if i != -1:
+        j = text.find(close_tag, i + len(open_tag))
+        if j != -1:
+            colony_block = text[i + len(open_tag):j].strip()
+    new_colony: list[str] | None = (
+        _bullets(colony_block) if colony_block is not None else None
+    )
+
+    per_session: dict[str, list[str]] = {}
+    for m in _SESSION_BLOCK_RE.finditer(text):
+        sid = m.group(1).strip()
+        body = m.group(2)
+        per_session[sid] = _bullets(body)
+
+    return new_colony, per_session
+
+
 def _parse_compaction_output(
     text: str,
 ) -> tuple[str, list[str] | None, str | None]:
@@ -196,20 +281,33 @@ def _format_msg_line(msg: dict) -> str:
 
 
 def _build_contextual_prompt(
-    prompt: str, session_data: dict | None,
+    prompt: str,
+    session_data: dict | None,
+    colony_items: list[str] | None = None,
 ) -> str:
-    """Prepend session history to the prompt so the agent has full context."""
+    """Prepend colony + session history to the prompt for full context.
+
+    Block order: [Colony] (workspace-shared) → [Long-term Memory]
+    (session-scoped) → [Session Summary] → [Recent Messages] → user prompt.
+    """
     data = session_data
     if data is None:
-        return prompt
+        data = {}
     summary: str | None = data.get("summary")
     long_term: list[str] = data.get("long_term") or []
     messages: list[dict] = data.get("messages", [])
+    colony_list: list[str] = colony_items or []
 
-    if not summary and not messages and not long_term:
+    if not summary and not messages and not long_term and not colony_list:
         return prompt
 
     parts: list[str] = []
+
+    if colony_list:
+        parts.append("[Colony]")
+        for item in colony_list:
+            parts.append(f"- {item}")
+        parts.append("[End of Colony]\n")
 
     if long_term:
         parts.append("[Long-term Memory]")
@@ -235,8 +333,16 @@ def _build_contextual_prompt(
 
     full = "\n".join(parts)
 
-    # Truncate if too long - drop oldest messages, keep long-term + summary
+    # Truncate if too long - drop oldest messages; colony, long-term and
+    # summary are durable so they're preserved at the expense of recent msgs.
     if len(full) > MAX_HISTORY_CHARS:
+        colony_block = ""
+        if colony_list:
+            colony_block = (
+                "[Colony]\n"
+                + "\n".join(f"- {item}" for item in colony_list)
+                + "\n[End of Colony]\n"
+            )
         lt_block = ""
         if long_term:
             lt_block = (
@@ -248,15 +354,20 @@ def _build_contextual_prompt(
             f"[Session Summary]\n{summary}\n[End of Session Summary]\n"
             if summary else ""
         )
-        overhead = len(prompt) + len(lt_block) + len(summary_block) + 500
+        overhead = (
+            len(prompt) + len(colony_block) + len(lt_block)
+            + len(summary_block) + 500
+        )
         msg_budget = max(0, MAX_HISTORY_CHARS - overhead)
         if msg_budget == 0 and messages:
             logger.warning(
-                "History truncation: long-term/summary fill budget; "
+                "History truncation: colony/long-term/summary fill budget; "
                 "dropping all %d recent messages", len(messages),
             )
 
         history_parts: list[str] = []
+        if colony_block:
+            history_parts.append(colony_block)
         if lt_block:
             history_parts.append(lt_block)
         if summary_block:
@@ -362,6 +473,10 @@ async def run(
             workspace_path, user_id,
         )
 
+    # Workspace-shared memory is loaded once and reused on every inject
+    # restart, just like session_data.
+    colony_items = colony.get_items(workspace_path)
+
     injected: list[str] = []
 
     while True:  # restart loop for inject
@@ -373,7 +488,7 @@ async def run(
             )
 
         contextual_prompt = _build_contextual_prompt(
-            effective_prompt, session_data,
+            effective_prompt, session_data, colony_items,
         )
         full_prompt = CAPABILITY_HINT + "\n\n" + contextual_prompt
         logger.info(
@@ -595,13 +710,213 @@ async def _maybe_compact(
                 long_term_rewrite=new_long_term,
                 title=new_title,
             )
+            colony_count = colony.bump_compact_count(workspace_path)
         lt_count = len(new_long_term) if new_long_term is not None else "?"
         logger.info(
             "Session %s compacted, summary %d chars, long_term %s items",
             session_id, len(new_summary), lt_count,
         )
+
+        # Every Nth compaction, run a workspace-wide colony pass. We
+        # fire-and-forget so the user reply isn't gated on it; if the
+        # bot is shut down mid-run the colony is just left as-is and
+        # the next interval hit will try again.
+        try:
+            interval = workspace_mod.get_colony_interval(workspace_path)
+        except Exception:
+            interval = colony.DEFAULT_COLONY_INTERVAL
+        if interval > 0 and colony_count % interval == 0:
+            logger.info(
+                "Colony pass triggered (count=%d, interval=%d)",
+                colony_count, interval,
+            )
+            asyncio.create_task(colony_consolidate(
+                workspace_path, summary_model, backend_name=backend_name,
+            ))
     except Exception:
         logger.error("Compaction check failed", exc_info=True)
+
+
+# ------------------------------------------------------------------
+# Colony consolidation
+# ------------------------------------------------------------------
+
+# Per-workspace lock so two compactions hitting the same interval mark
+# don't both spawn a colony pass that would race against each other.
+_colony_in_flight: set[str] = set()
+
+
+async def colony_consolidate(
+    workspace_path: str,
+    summary_model: str | None = None,
+    *,
+    backend_name: str | None = None,
+) -> bool:
+    """Promote recurring long-term items into the workspace-shared colony.
+
+    Reads every session's ``long_term`` list, asks the backend to
+    identify items that recur across sessions, writes the new colony
+    list, and rewrites each session's ``long_term`` with the promoted
+    items removed. Returns True on a successful apply.
+    """
+    if workspace_path in _colony_in_flight:
+        logger.info(
+            "Colony pass already in flight for %s, skipping",
+            workspace_path,
+        )
+        return False
+    _colony_in_flight.add(workspace_path)
+    try:
+        return await _colony_consolidate_inner(
+            workspace_path, summary_model, backend_name=backend_name,
+        )
+    finally:
+        _colony_in_flight.discard(workspace_path)
+
+
+async def _colony_consolidate_inner(
+    workspace_path: str,
+    summary_model: str | None,
+    *,
+    backend_name: str | None,
+) -> bool:
+    backend = backends_agent.get_backend(backend_name)
+
+    # Collect non-empty long_term lists from every session in the workspace.
+    inputs: list[tuple[str, list[str]]] = []
+    for meta in session.list_sessions(workspace_path):
+        sid = meta["id"]
+        data = session.load_session(workspace_path, sid)
+        if data is None:
+            continue
+        lt = data.get("long_term") or []
+        if not lt:
+            continue
+        inputs.append((sid, lt))
+
+    if not inputs:
+        logger.info(
+            "Colony pass: no sessions with long-term items in %s",
+            workspace_path,
+        )
+        return False
+
+    existing_colony = colony.get_items(workspace_path)
+
+    parts: list[str] = ["Current colony list:"]
+    if existing_colony:
+        for it in existing_colony:
+            parts.append(f"- {it}")
+    else:
+        parts.append("(empty)")
+    parts.append("")
+
+    # Greedy build: if a session can't fit in the budget, skip the rest.
+    # Sessions are listed newest-first so older sessions are dropped
+    # first under tight budgets.
+    used = sum(len(p) + 1 for p in parts)
+    included: list[str] = []
+    for sid, lt in inputs:
+        block_lines = [f"[SESSION:{sid}]"]
+        for it in lt:
+            block_lines.append(f"- {it}")
+        block_lines.append("[/SESSION]")
+        block_lines.append("")
+        block = "\n".join(block_lines)
+        if used + len(block) > COLONY_MAX_INPUT_CHARS:
+            logger.warning(
+                "Colony input over budget; dropping %d session(s) from "
+                "consolidation pass",
+                len(inputs) - len(included),
+            )
+            break
+        parts.append(block)
+        used += len(block) + 1
+        included.append(sid)
+
+    if not included:
+        logger.info("Colony pass: no sessions fit in budget, skipping")
+        return False
+
+    full_prompt = f"{COLONY_PROMPT}\n\n" + "\n".join(parts)
+
+    try:
+        proc = await backend.launch(
+            workspace_path, full_prompt, summary_model, approval="full",
+            compaction=True,
+        )
+    except FileNotFoundError:
+        logger.error(
+            "%s CLI not found on PATH - cannot consolidate colony",
+            backend.executable,
+        )
+        return False
+
+    output = ""
+    try:
+        async with asyncio.timeout(COLONY_TIMEOUT):
+            async for line in _iter_stream_lines(proc.stdout):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    if not output:
+                        output = line  # bare-text fallback
+                    continue
+                text = backend.extract_agent_text(event)
+                if text:
+                    output = text
+            await proc.wait()
+    except TimeoutError:
+        logger.error("Colony consolidation timed out for %s", workspace_path)
+        try:
+            proc.kill()
+            await proc.wait()
+        except OSError:
+            pass
+        return False
+
+    if not output:
+        stderr = (
+            await proc.stderr.read()
+        ).decode("utf-8", errors="replace").strip()
+        logger.warning(
+            "Colony consolidation produced no output (exit %d): %s",
+            proc.returncode, stderr,
+        )
+        return False
+
+    new_colony, per_session = _parse_colony_output(output)
+    if new_colony is None:
+        logger.warning("Colony output missing [COLONY] block; aborting")
+        return False
+
+    # Drop output for sessions we didn't actually send (the model
+    # invented them) so we don't accidentally rewrite anything else.
+    included_set = set(included)
+    per_session = {
+        sid: lt for sid, lt in per_session.items() if sid in included_set
+    }
+
+    # Apply atomically: write colony, then re-read+rewrite each session
+    # so concurrent message appends aren't clobbered.
+    async with get_workspace_lock(workspace_path):
+        colony.set_items(workspace_path, new_colony)
+        for sid, new_lt in per_session.items():
+            data = session.load_session(workspace_path, sid)
+            if data is None:
+                continue
+            cleaned = [item for item in new_lt if item][:session.LONG_TERM_CAP]
+            data["long_term"] = cleaned
+            session.save_session(workspace_path, sid, data)
+
+    logger.info(
+        "Colony consolidated for %s: %d colony item(s); %d session(s) rewritten",
+        workspace_path, len(new_colony), len(per_session),
+    )
+    return True
 
 
 # ------------------------------------------------------------------

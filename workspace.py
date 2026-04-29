@@ -208,3 +208,22 @@ def get_permission(workspace_path: str) -> str:
 
 def set_permission(workspace_path: str, permission: str) -> None:
     _set_setting(workspace_path, "permission", permission)
+
+
+def get_colony_interval(workspace_path: str) -> int:
+    """Compactions per workspace-wide colony consolidation pass."""
+    from . import colony
+    raw = _load_settings(workspace_path).get(
+        "colony_interval", colony.DEFAULT_COLONY_INTERVAL,
+    )
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = colony.DEFAULT_COLONY_INTERVAL
+    return max(1, n)
+
+
+def set_colony_interval(workspace_path: str, interval: int) -> None:
+    if interval < 1:
+        raise ValueError("colony_interval must be >= 1")
+    _set_setting(workspace_path, "colony_interval", interval)

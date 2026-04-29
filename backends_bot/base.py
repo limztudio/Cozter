@@ -25,7 +25,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
 
-from .. import agent, schedules, session, updater, workspace
+from .. import agent, colony, schedules, session, updater, workspace
 from ..utils import atomic_write as _atomic_write
 from ..utils import drain_queue as _drain_queue
 
@@ -716,6 +716,68 @@ class BotPlatform(ABC):
             "  /compact <number> - set interval",
             "  /compact now - compact immediately",
         ]
+        await ctx.reply_text("\n".join(lines))
+
+    # ----- /colony --------------------------------------------------------
+
+    async def cmd_colony(self, ctx: BotContext) -> None:
+        ws = workspace.get_current(ctx.user_id, self.platform_id)
+        if not ws:
+            await ctx.reply_text(_NO_WS_MSG)
+            return
+        arg = ctx.args.strip().lower().split()
+        first = arg[0] if arg else ""
+
+        if first == "now":
+            await ctx.reply_text("Consolidating colony...")
+            summary_model = workspace.get_summary_model(ws)
+            backend_name = workspace.get_backend_name(ws)
+            ok = await agent.colony_consolidate(
+                ws, summary_model, backend_name=backend_name,
+            )
+            if ok:
+                items = colony.get_items(ws)
+                await ctx.reply_text(
+                    f"Colony consolidated ({len(items)} item(s))."
+                )
+            else:
+                await ctx.reply_text(
+                    "Colony pass produced no changes (see logs)."
+                )
+            return
+
+        if first.isdigit():
+            n = int(first)
+            try:
+                workspace.set_colony_interval(ws, n)
+            except ValueError as e:
+                await ctx.reply_text(f"Error: {e}")
+                return
+            await ctx.reply_text(f"Colony interval set to {n} compaction(s).")
+            return
+
+        items = colony.get_items(ws)
+        count = colony.get_compact_count(ws)
+        interval = workspace.get_colony_interval(ws)
+        until = (interval - (count % interval)) if interval > 0 else 0
+        if until == interval:
+            until = 0  # next compaction will trigger
+        lines = [
+            f"Colony items: {len(items)}",
+            f"Compactions since last pass: {count % interval}/{interval}",
+            f"Compactions until next pass: {until}",
+            "",
+        ]
+        if items:
+            lines.append("Items:")
+            for i, it in enumerate(items, 1):
+                lines.append(f"  {i}. {it}")
+            lines.append("")
+        lines.extend([
+            "Usage:",
+            "  /colony <number> - set interval (compactions per pass)",
+            "  /colony now - run consolidation immediately",
+        ])
         await ctx.reply_text("\n".join(lines))
 
     # ----- /stop ----------------------------------------------------------
@@ -1616,6 +1678,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "session":      BotPlatform.cmd_session,
         "refresh":      BotPlatform.cmd_refresh,
         "compact":      BotPlatform.cmd_compact,
+        "colony":       BotPlatform.cmd_colony,
         "stop":         BotPlatform.cmd_stop,
         "inject":       BotPlatform.cmd_inject,
         "reserve":      BotPlatform.cmd_reserve,
