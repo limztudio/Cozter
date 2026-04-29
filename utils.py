@@ -9,6 +9,8 @@ from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
+COZTER_DIR = ".cozter"
+
 
 def drain_queue(
     q: asyncio.Queue | None, collect: list | None = None,
@@ -63,6 +65,37 @@ async def iter_stream_lines(
 
         for part in parts:
             yield part.decode("utf-8", errors="replace")
+
+
+def extract_marker_block(text: str, tag: str) -> str | None:
+    """Return the body of ``[TAG]...[/TAG]`` (stripped), or None if absent."""
+    open_tag = f"[{tag}]"
+    close_tag = f"[/{tag}]"
+    i = text.find(open_tag)
+    if i == -1:
+        return None
+    j = text.find(close_tag, i + len(open_tag))
+    if j == -1:
+        return None
+    return text[i + len(open_tag):j].strip()
+
+
+def parse_bullets(block: str | None) -> list[str]:
+    """Parse a block into list items. Accepts ``- `` or ``* `` bullet prefixes
+    and skips blank lines. Returns ``[]`` for an empty/None block.
+    """
+    if not block:
+        return []
+    items: list[str] = []
+    for raw in block.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith(("- ", "* ")):
+            line = line[2:].strip()
+        if line:
+            items.append(line)
+    return items
 
 
 async def drain_llm_subprocess(

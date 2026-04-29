@@ -10,11 +10,11 @@ import os
 import uuid
 from datetime import datetime
 
+from .utils import COZTER_DIR
 from .utils import atomic_write as _atomic_write
 
 logger = logging.getLogger(__name__)
 
-COZTER_DIR = ".cozter"
 LONG_TERM_CAP = 50
 DEFAULT_COMPACT_INTERVAL = 10
 

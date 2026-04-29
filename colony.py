@@ -30,12 +30,12 @@ import re
 
 from . import backends_agent, session
 from . import workspace as workspace_mod
+from .utils import COZTER_DIR
 from .utils import atomic_write as _atomic_write
-from .utils import drain_llm_subprocess
+from .utils import drain_llm_subprocess, extract_marker_block, parse_bullets
 
 logger = logging.getLogger(__name__)
 
-COZTER_DIR = ".cozter"
 COLONY_FILE = "colony.json"
 
 DEFAULT_COLONY_INTERVAL = 3
@@ -165,34 +165,15 @@ def _parse_consolidate_output(
     colony is None when the [COLONY] markers are absent; sessions absent
     from the output are simply not in the dict (caller leaves them as-is).
     """
-    def _bullets(block: str) -> list[str]:
-        out: list[str] = []
-        for raw in block.splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            if line.startswith(("- ", "* ")):
-                line = line[2:].strip()
-            if line:
-                out.append(line)
-        return out
-
-    colony_block: str | None = None
-    open_tag, close_tag = "[COLONY]", "[/COLONY]"
-    i = text.find(open_tag)
-    if i != -1:
-        j = text.find(close_tag, i + len(open_tag))
-        if j != -1:
-            colony_block = text[i + len(open_tag):j].strip()
+    colony_block = extract_marker_block(text, "COLONY")
     new_colony: list[str] | None = (
-        _bullets(colony_block) if colony_block is not None else None
+        parse_bullets(colony_block) if colony_block is not None else None
     )
 
     per_session: dict[str, list[str]] = {}
     for m in _SESSION_BLOCK_RE.finditer(text):
         sid = m.group(1).strip()
-        body = m.group(2)
-        per_session[sid] = _bullets(body)
+        per_session[sid] = parse_bullets(m.group(2))
 
     return new_colony, per_session
 

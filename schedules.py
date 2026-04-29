@@ -15,11 +15,11 @@ import json
 import logging
 import os
 
+from .utils import COZTER_DIR
 from .utils import atomic_write as _atomic_write
 
 logger = logging.getLogger(__name__)
 
-COZTER_DIR = ".cozter"
 SCHEDULES_FILE = "schedules.json"
 
 

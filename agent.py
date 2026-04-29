@@ -13,7 +13,10 @@ from collections.abc import Awaitable, Callable
 
 from . import backends_agent, colony, session, workspace as workspace_mod
 from .backends_agent.base import AgentResult, ChatEvent
-from .utils import drain_llm_subprocess, iter_stream_lines
+from .utils import (
+    drain_llm_subprocess, extract_marker_block, iter_stream_lines,
+    parse_bullets,
+)
 from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
@@ -244,40 +247,15 @@ def _parse_compaction_output(
     Falls back to treating the entire text as the summary if [SUMMARY]
     markers are absent, so misbehaving models still produce a usable result.
     """
-    def _extract(tag: str) -> str | None:
-        open_tag = f"[{tag}]"
-        close_tag = f"[/{tag}]"
-        i = text.find(open_tag)
-        if i == -1:
-            return None
-        j = text.find(close_tag, i + len(open_tag))
-        if j == -1:
-            return None
-        return text[i + len(open_tag):j].strip()
-
-    def _bullets(block: str | None) -> list[str]:
-        if not block:
-            return []
-        items: list[str] = []
-        for raw in block.splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            if line.startswith(("- ", "* ")):
-                line = line[2:].strip()
-            if line:
-                items.append(line)
-        return items
-
-    summary = _extract("SUMMARY")
-    lt_block = _extract("LONG_TERM")
+    summary = extract_marker_block(text, "SUMMARY")
+    lt_block = extract_marker_block(text, "LONG_TERM")
     long_term: list[str] | None = (
-        _bullets(lt_block) if lt_block is not None else None
+        parse_bullets(lt_block) if lt_block is not None else None
     )
-    title_block = _extract("TITLE")
-    title: str | None = None
-    if title_block:
-        title = _clean_title(title_block)
+    title_block = extract_marker_block(text, "TITLE")
+    title: str | None = (
+        _clean_title(title_block) if title_block else None
+    )
     if summary is None:
         # Fallback: treat full text as summary, stripping the other blocks.
         fallback = text

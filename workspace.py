@@ -4,13 +4,13 @@ import logging
 import os
 
 from . import backends_agent
+from .utils import COZTER_DIR
 from .utils import atomic_write as _atomic_write
 
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), ".config")
 WORKSPACE_STATE_PATH = os.path.join(CONFIG_DIR, "workspaces.json")
-COZTER_DIR_NAME = ".cozter"
 MAX_RECENT = 50  # cap on stored recent-workspaces list
 
 
@@ -88,7 +88,7 @@ def select_workspace(
 
 def ensure_cozter_dir(path: str) -> None:
     """Create .cozter folder inside the workspace if it doesn't exist."""
-    cozter_path = os.path.join(path, COZTER_DIR_NAME)
+    cozter_path = os.path.join(path, COZTER_DIR)
     os.makedirs(cozter_path, exist_ok=True)
 
 
@@ -110,7 +110,7 @@ PERMISSION_DESCRIPTIONS = {
 
 
 def _settings_path(workspace_path: str) -> str:
-    return os.path.join(workspace_path, COZTER_DIR_NAME, "settings.json")
+    return os.path.join(workspace_path, COZTER_DIR, "settings.json")
 
 
 def _load_settings(workspace_path: str) -> dict:
@@ -119,7 +119,7 @@ def _load_settings(workspace_path: str) -> dict:
 
 def _save_settings(workspace_path: str, settings: dict) -> None:
     ensure_cozter_dir(workspace_path)
-    tmp_dir = os.path.join(workspace_path, COZTER_DIR_NAME)
+    tmp_dir = os.path.join(workspace_path, COZTER_DIR)
     _atomic_write(_settings_path(workspace_path), settings, tmp_dir)
 
 
