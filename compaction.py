@@ -16,7 +16,7 @@ from . import backends_agent, colony, session, titling
 from . import workspace as workspace_mod
 from .utils import (
     drain_llm_subprocess, extract_marker_block, parse_bullets,
-    strip_marker_block,
+    strip_marker_block, take_recent_lines,
 )
 
 logger = logging.getLogger(__name__)
@@ -212,15 +212,9 @@ async def compact_session(
         # Show up to 15% of the budget for the existing list so the model
         # knows what to rewrite. With a target of <=30 items this is plenty.
         lt_max = int(MAX_SUMMARY_CHARS * 0.15)
-        lt_lines: list[str] = []
-        lt_used = 0
-        for item in reversed(existing_long_term):
-            line = f"- {item}"
-            if lt_used + len(line) + 1 > lt_max:
-                break
-            lt_lines.append(line)
-            lt_used += len(line) + 1
-        lt_lines.reverse()
+        lt_lines = take_recent_lines(
+            existing_long_term, lt_max, lambda x: f"- {x}",
+        )
         if lt_lines:
             parts.append(
                 "Existing long-term items (rewrite this list per the "

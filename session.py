@@ -11,7 +11,7 @@ import os
 import uuid
 from datetime import datetime
 
-from .utils import COZTER_DIR
+from .utils import COZTER_DIR, take_recent_lines
 from .utils import atomic_write as _atomic_write
 
 logger = logging.getLogger(__name__)
@@ -63,21 +63,12 @@ def take_recent_messages(
 ) -> list[str]:
     """Format the most recent messages that fit in *budget* chars.
 
-    Iterates newest-first, accumulating formatted lines until the next
-    line would exceed the budget; the result is reversed back into
-    chronological order. Each line is formatted via :func:`format_msg_line`
-    with the given *cap*.
+    Each line is formatted via :func:`format_msg_line` with the given
+    *cap*. Wrapper around :func:`utils.take_recent_lines`.
     """
-    used = 0
-    lines: list[str] = []
-    for msg in reversed(messages):
-        line = format_msg_line(msg, cap=cap)
-        if used + len(line) > budget:
-            break
-        lines.append(line)
-        used += len(line) + 1  # +1 for the joining newline
-    lines.reverse()
-    return lines
+    return take_recent_lines(
+        messages, budget, lambda m: format_msg_line(m, cap=cap),
+    )
 
 
 def list_sessions_with_data(workspace: str) -> list[dict]:

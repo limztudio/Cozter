@@ -93,6 +93,30 @@ def strip_marker_block(text: str, tag: str) -> str:
     return text[:i] + text[j + len(close_tag):]
 
 
+def take_recent_lines(
+    items: list,
+    budget: int,
+    formatter,
+) -> list[str]:
+    """Format the most recent items that fit in *budget* chars.
+
+    Iterates ``items`` newest-first, calls ``formatter(item)`` on each,
+    accumulates lines until the next one would exceed ``budget``, then
+    reverses back into chronological order. Newlines that join the
+    output count toward the budget.
+    """
+    used = 0
+    out: list[str] = []
+    for item in reversed(items):
+        line = formatter(item)
+        if used + len(line) > budget:
+            break
+        out.append(line)
+        used += len(line) + 1  # +1 for the joining newline
+    out.reverse()
+    return out
+
+
 def parse_bullets(block: str | None) -> list[str]:
     """Parse a block into list items. Accepts ``- `` or ``* `` bullet prefixes
     and skips blank lines. Returns ``[]`` for an empty/None block.
