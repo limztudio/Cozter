@@ -17,7 +17,6 @@ from .utils import atomic_write as _atomic_write
 logger = logging.getLogger(__name__)
 
 LONG_TERM_CAP = 50
-DEFAULT_COMPACT_INTERVAL = 10
 # Cap each message's content when including it in a prompt so a single
 # long AI response cannot consume the entire token budget.
 MSG_CONTENT_MAX = 800

@@ -227,9 +227,9 @@ def set_colony_interval(workspace_path: str, interval: int) -> None:
 
 def get_compact_interval(workspace_path: str) -> int:
     """Messages between auto-compactions for sessions in this workspace."""
-    from . import session
+    from . import compaction
     return _load_settings(workspace_path).get(
-        "compact_interval", session.DEFAULT_COMPACT_INTERVAL,
+        "compact_interval", compaction.DEFAULT_COMPACT_INTERVAL,
     )
 
 

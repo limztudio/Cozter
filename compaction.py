@@ -22,6 +22,7 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_COMPACT_INTERVAL = 10
 KEEP_RECENT_AFTER_COMPACT = 5
 MAX_SUMMARY_CHARS = 80_000  # ~20K tokens - safe for most models
 COMPACT_TIMEOUT = 120  # seconds
