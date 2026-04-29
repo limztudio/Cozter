@@ -14,6 +14,7 @@ Each ``<schedule_dict>``:
 import json
 import logging
 import os
+from datetime import datetime, time as dt_time, timedelta
 
 from .utils import COZTER_DIR
 from .utils import atomic_write as _atomic_write
@@ -21,6 +22,10 @@ from .utils import atomic_write as _atomic_write
 logger = logging.getLogger(__name__)
 
 SCHEDULES_FILE = "schedules.json"
+
+DAY_ABBREV: tuple[str, ...] = (
+    "mon", "tue", "wed", "thu", "fri", "sat", "sun",
+)
 
 
 def _path(workspace: str) -> str:
@@ -95,3 +100,88 @@ def update_schedule_fired(
             break
     if changed:
         _save_all(workspace, data)
+
+
+# ---------------------------------------------------------------------------
+# Schedule field parsers and time-slot computation. Pure functions used by
+# both the user-input wizard (``cmd_reserve``) and the scheduler tick.
+# ---------------------------------------------------------------------------
+
+def parse_days(text: str) -> list[str]:
+    """Parse a days spec into ordered, de-duplicated abbreviations.
+
+    Accepts ``"all"``, comma-separated names (``"mon,wed,fri"``), or
+    1-7 numbers (``"1,3,5"``). Returns ``[]`` on invalid input.
+    """
+    if text == "all":
+        return list(DAY_ABBREV)
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if not parts:
+        return []
+    days: list[str] = []
+    for p in parts:
+        if p.isdigit():
+            n = int(p)
+            if not (1 <= n <= 7):
+                return []
+            days.append(DAY_ABBREV[n - 1])
+        else:
+            abbr = p[:3]
+            if abbr not in DAY_ABBREV:
+                return []
+            days.append(abbr)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for d in days:
+        if d not in seen:
+            seen.add(d)
+            unique.append(d)
+    return unique
+
+
+def parse_time(text: str) -> str | None:
+    """Parse ``"HH:MM"`` (24-hour) into ``"HH:MM"`` (zero-padded)."""
+    parts = text.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        h = int(parts[0])
+        m = int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return f"{h:02d}:{m:02d}"
+
+
+def parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO timestamp; return None for missing or malformed input."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
+    """Return the latest (day, time) match <= now, or None."""
+    parsed = parse_time(sched.get("time", ""))
+    if parsed is None:
+        return None
+    h, m = map(int, parsed.split(":"))
+    target = dt_time(h, m)
+    days = sched.get("days", [])
+    if not days:
+        return None
+    # Walk back up to 7 days; the first day-match whose datetime
+    # is <= now is the most recent slot.
+    for offset in range(8):
+        candidate_date = (now - timedelta(days=offset)).date()
+        day_name = DAY_ABBREV[candidate_date.weekday()]
+        if day_name not in days:
+            continue
+        candidate = datetime.combine(candidate_date, target)
+        if candidate <= now:
+            return candidate
+    return None

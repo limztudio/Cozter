@@ -23,7 +23,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, time as dt_time, timedelta
+from datetime import datetime
 
 from .. import agent, colony, schedules, session, updater, workspace
 from ..utils import atomic_write as _atomic_write
@@ -696,10 +696,6 @@ class BotPlatform(ABC):
 
     # ----- /reserve (recurring schedule wizard) --------------------------
 
-    _DAY_ABBREV: tuple[str, ...] = (
-        "mon", "tue", "wed", "thu", "fri", "sat", "sun",
-    )
-
     async def cmd_reserve(self, ctx: BotContext) -> None:
         ws = workspace.get_current(ctx.user_id, self.platform_id)
         if not ws:
@@ -716,7 +712,7 @@ class BotPlatform(ABC):
 
     async def _receive_reserve_days(self, ctx: BotContext) -> None:
         text = ctx.text.strip().lower()
-        days = self._parse_days(text)
+        days = schedules.parse_days(text)
         if not days:
             await ctx.reply_text(
                 "Could not parse days. Try again (e.g., 'mon,wed,fri'"
@@ -737,7 +733,7 @@ class BotPlatform(ABC):
     async def _receive_reserve_time(
         self, ctx: BotContext, days: list[str],
     ) -> None:
-        time_str = self._parse_time(ctx.text.strip())
+        time_str = schedules.parse_time(ctx.text.strip())
         if time_str is None:
             await ctx.reply_text(
                 "Invalid time. Enter HH:MM (24-hour, e.g., 09:30)"
@@ -852,48 +848,6 @@ class BotPlatform(ABC):
             f"Removed: [{','.join(removed.get('days', []))}]"
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
         )
-
-    @classmethod
-    def _parse_days(cls, text: str) -> list[str]:
-        """Parse a days spec into ordered, de-duplicated abbreviations."""
-        if text == "all":
-            return list(cls._DAY_ABBREV)
-        parts = [p.strip() for p in text.split(",") if p.strip()]
-        if not parts:
-            return []
-        days: list[str] = []
-        for p in parts:
-            if p.isdigit():
-                n = int(p)
-                if not (1 <= n <= 7):
-                    return []
-                days.append(cls._DAY_ABBREV[n - 1])
-            else:
-                abbr = p[:3]
-                if abbr not in cls._DAY_ABBREV:
-                    return []
-                days.append(abbr)
-        seen: set[str] = set()
-        unique: list[str] = []
-        for d in days:
-            if d not in seen:
-                seen.add(d)
-                unique.append(d)
-        return unique
-
-    @staticmethod
-    def _parse_time(text: str) -> str | None:
-        parts = text.split(":")
-        if len(parts) != 2:
-            return None
-        try:
-            h = int(parts[0])
-            m = int(parts[1])
-        except ValueError:
-            return None
-        if not (0 <= h <= 23 and 0 <= m <= 59):
-            return None
-        return f"{h:02d}:{m:02d}"
 
     # ----- Persistent message queue --------------------------------------
     #
@@ -1070,11 +1024,11 @@ class BotPlatform(ABC):
             if not os.path.isdir(ws):
                 continue
             for sched in schedules.list_schedules(ws, uid):
-                slot = self._most_recent_slot(sched, now)
+                slot = schedules.most_recent_slot(sched, now)
                 if slot is None:
                     continue
-                last_fired = self._parse_iso(sched.get("last_fired"))
-                baseline = last_fired or self._parse_iso(
+                last_fired = schedules.parse_iso(sched.get("last_fired"))
+                baseline = last_fired or schedules.parse_iso(
                     sched.get("created"),
                 )
                 # Never fire for slots at or before the schedule's
@@ -1095,41 +1049,6 @@ class BotPlatform(ABC):
                     ws, uid, sched["id"], slot.isoformat(),
                 )
             await self._fire_schedule(uid, sched)
-
-    @classmethod
-    def _most_recent_slot(
-        cls, sched: dict, now: datetime,
-    ) -> datetime | None:
-        """Return the latest (day, time) match <= now, or None."""
-        time_str = sched.get("time", "")
-        parsed = cls._parse_time(time_str)
-        if parsed is None:
-            return None
-        h, m = map(int, parsed.split(":"))
-        target = dt_time(h, m)
-        days = sched.get("days", [])
-        if not days:
-            return None
-        # Walk back up to 7 days; the first day-match whose datetime
-        # is <= now is the most recent slot.
-        for offset in range(8):
-            candidate_date = (now - timedelta(days=offset)).date()
-            day_name = cls._DAY_ABBREV[candidate_date.weekday()]
-            if day_name not in days:
-                continue
-            candidate = datetime.combine(candidate_date, target)
-            if candidate <= now:
-                return candidate
-        return None
-
-    @staticmethod
-    def _parse_iso(value: str | None) -> datetime | None:
-        if not value:
-            return None
-        try:
-            return datetime.fromisoformat(value)
-        except ValueError:
-            return None
 
     async def _fire_schedule(self, uid: str, sched: dict) -> None:
         """Push a scheduled command onto the user's message queue.
