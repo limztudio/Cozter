@@ -136,7 +136,7 @@ ROUTER_PROMPT_PREVIEW_CHARS = 1_000
 _ROUTER_LINE_RE = re.compile(r"^[A-Za-z0-9]+$")
 
 
-def _build_router_prompt(prompt: str, sessions_meta: list[dict]) -> str:
+def _build_router_prompt(prompt: str, sessions_data: list[dict]) -> str:
     """Assemble the router prompt body. Caller prepends ROUTER_PROMPT."""
     parts: list[str] = ["User message:"]
     preview = prompt.strip()
@@ -144,21 +144,22 @@ def _build_router_prompt(prompt: str, sessions_meta: list[dict]) -> str:
         preview = preview[:ROUTER_PROMPT_PREVIEW_CHARS] + "…"
     parts.append(preview)
     parts.append("")
-    parts.append(f"Existing sessions ({len(sessions_meta)}, newest first):")
+    parts.append(f"Existing sessions ({len(sessions_data)}, newest first):")
     parts.append("")
-    for s in sessions_meta:
+    for s in sessions_data:
+        sid = s["id"]
         block = [
-            f"id: {s['id']}",
-            f"name: {s['name']}",
+            f"id: {sid}",
+            f"name: {s.get('name') or sid[:8]}",
         ]
-        if s.get("summary"):
-            sm = s["summary"]
+        sm = s.get("summary")
+        if sm:
             if len(sm) > ROUTER_PER_SESSION_CHARS:
                 sm = sm[:ROUTER_PER_SESSION_CHARS] + "…"
             block.append(f"summary: {sm}")
-        if s.get("long_term"):
-            lt = "; ".join(s["long_term"][:5])
-            block.append(f"long-term: {lt}")
+        lt = s.get("long_term") or []
+        if lt:
+            block.append("long-term: " + "; ".join(lt[:5]))
         block.append("")
         parts.extend(block)
     parts.append(
@@ -200,34 +201,17 @@ async def select_or_create_session(
     """
     backend = backends_agent.get_backend(backend_name)
 
-    metas = session.list_sessions(workspace_path)
-    metas = metas[:ROUTER_MAX_SESSIONS]
+    sessions_data = session.list_sessions_with_data(workspace_path)
+    sessions_data = sessions_data[:ROUTER_MAX_SESSIONS]
 
-    if not metas:
+    if not sessions_data:
         data = session.create_session(workspace_path)
         logger.info(
             "Router: no existing sessions, created %s", data["id"],
         )
         return (data["id"], data)
 
-    # Hydrate the lightweight metadata with each session's summary +
-    # top long-term items so the router has topical signal.
-    enriched: list[dict] = []
-    for meta in metas:
-        data = session.load_session(workspace_path, meta["id"])
-        if data is None:
-            continue
-        enriched.append({
-            "id": meta["id"],
-            "name": meta.get("name") or meta["id"][:8],
-            "summary": data.get("summary"),
-            "long_term": data.get("long_term") or [],
-        })
-    if not enriched:
-        data = session.create_session(workspace_path)
-        return (data["id"], data)
-
-    body = _build_router_prompt(prompt, enriched)
+    body = _build_router_prompt(prompt, sessions_data)
     full_prompt = f"{ROUTER_PROMPT}\n\n{body}"
 
     try:
@@ -245,7 +229,7 @@ async def select_or_create_session(
 
     raw = await _drain_internal_proc(proc, backend, ROUTER_TIMEOUT, "Router")
 
-    valid_ids = {e["id"] for e in enriched}
+    valid_ids = {s["id"] for s in sessions_data}
     decision = _parse_router_output(raw, valid_ids) if raw else None
     if decision and decision != "NEW":
         loaded = session.load_session(workspace_path, decision)
@@ -812,12 +796,17 @@ async def run(
     )
 
     # Auto-title sessions whose name still matches the default
-    # "Session YYYY-MM-DD" pattern. Fire-and-forget so the user-visible
-    # reply isn't gated on a second backend call.
-    asyncio.create_task(_maybe_auto_title(
-        workspace_path, session_id, summary_model,
-        backend_name=backend.name,
-    ))
+    # "Session YYYY-MM-DD" pattern. The in-memory snapshot reflects
+    # the name as it was at run start; a session with a custom name
+    # is no longer a candidate for renaming, so skip the spawn entirely.
+    # _maybe_compact above could have set a fresh title via [TITLE] —
+    # in that case spawning is harmless (the task just bails on its
+    # own is_default_name check after a fresh load).
+    if session.is_default_name(session_data.get("name")):
+        asyncio.create_task(_maybe_auto_title(
+            workspace_path, session_id, summary_model,
+            backend_name=backend.name,
+        ))
 
     if not any(e.kind == "text" for e in result.events):
         result.events.append(ChatEvent(kind="text", content=result.text))
@@ -1000,14 +989,11 @@ async def _colony_consolidate_inner(
     # The session name accompanies each list so the model can judge whether
     # a colony item's topic is still represented in the workspace.
     inputs: list[tuple[str, str, list[str]]] = []
-    for meta in session.list_sessions(workspace_path):
-        sid = meta["id"]
-        data = session.load_session(workspace_path, sid)
-        if data is None:
-            continue
+    for data in session.list_sessions_with_data(workspace_path):
         lt = data.get("long_term") or []
         if not lt:
             continue
+        sid = data["id"]
         name = data.get("name") or sid[:8]
         inputs.append((sid, name, lt))
 

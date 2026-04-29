@@ -63,6 +63,30 @@ def list_sessions(workspace: str) -> list[dict]:
     return sessions
 
 
+def list_sessions_with_data(workspace: str) -> list[dict]:
+    """Like ``list_sessions`` but returns each session's full data dict.
+
+    Use when the caller needs ``summary``/``long_term`` etc. — avoids
+    the double read (list_sessions + load_session each) that would
+    otherwise happen on every routing or colony pass.
+    """
+    sdir = _sessions_dir(workspace)
+    if not os.path.isdir(sdir):
+        return []
+    out: list[dict] = []
+    for fname in os.listdir(sdir):
+        if not fname.endswith(".json"):
+            continue
+        fpath = os.path.join(sdir, fname)
+        try:
+            with open(fpath, encoding="utf-8") as f:
+                out.append(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            continue
+    out.sort(key=lambda d: d.get("created", ""), reverse=True)
+    return out
+
+
 def create_session(workspace: str, name: str | None = None) -> dict:
     """Create a new session and return its metadata.
 
