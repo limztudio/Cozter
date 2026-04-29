@@ -1,7 +1,8 @@
 """Session management - stored in each workspace's .cozter/sessions/.
 
 Sessions are no longer addressed by a "current session per user" — each
-user turn is routed to the best-matching session by ``agent.select_or_create_session``.
+user turn is routed to the best-matching session by
+``router.select_or_create_session``.
 """
 
 import json
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 LONG_TERM_CAP = 50
 DEFAULT_COMPACT_INTERVAL = 10
+# Cap each message's content when including it in a prompt so a single
+# long AI response cannot consume the entire token budget.
+MSG_CONTENT_MAX = 800
 
 SESSIONS_DIR = "sessions"
 

@@ -1,22 +1,20 @@
-"""Agent orchestrator - session management, context building, compaction.
-
-The actual CLI invocation and event parsing are delegated to backend
-adapters in the ``backends_agent`` package (currently codex and copilot).
-The backend is chosen per workspace via ``workspace.get_backend_name``.
+"""Agent runtime — runs a single user turn: routes to a session,
+prepends colony + session context to the prompt, invokes the backend
+CLI, streams events, logs the turn, and triggers compaction and
+auto-titling background tasks.
 """
 
 import asyncio
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 
-from . import backends_agent, colony, session, workspace as workspace_mod
-from .backends_agent.base import AgentResult, ChatEvent
-from .utils import (
-    drain_llm_subprocess, extract_marker_block, iter_stream_lines,
-    parse_bullets, strip_marker_block,
+from . import (
+    backends_agent, colony, compaction, router, session, titling,
 )
+from . import workspace as workspace_mod
+from .backends_agent.base import AgentResult, ChatEvent
+from .utils import iter_stream_lines
 from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
@@ -28,254 +26,6 @@ CAPABILITY_HINT = (
 )
 
 MAX_HISTORY_CHARS = 50_000
-# Cap each individual message's content when building context so a single
-# long AI response cannot consume the entire message budget.
-MSG_CONTENT_MAX = 800
-
-KEEP_RECENT_AFTER_COMPACT = 5
-MAX_SUMMARY_CHARS = 80_000  # ~20K tokens - safe for most models
-COMPACT_TIMEOUT = 120  # seconds
-
-SUMMARY_PROMPT = (
-    "You are compacting a conversation into two memory layers: a SCRATCH "
-    "summary (rewritten each compaction) and LONG-TERM memory (persistent "
-    "facts that survive future compactions). You will also produce a short "
-    "TITLE that names the session.\n\n"
-    "=== SCRATCH SUMMARY ===\n"
-    "Produce a concise abstract of the conversation below. This abstract "
-    "REPLACES the raw history, so it must be thorough enough to continue "
-    "work seamlessly.\n"
-    "The reader will always see the [Long-term Memory] list alongside this "
-    "summary, so do NOT repeat facts already captured there. Focus only on "
-    "ephemeral context: recent work, current state, open commitments, "
-    "in-progress decisions, and errors encountered.\n"
-    "Capture: what was just done and why, file paths touched and the nature "
-    "of each change, concrete tool results and errors, current "
-    "done/in-progress/blocked state, and open commitments not yet in "
-    "long-term memory.\n"
-    "Drop: greetings, filler, repeated restatements, exploratory turns the "
-    "user redirected, superseded tool output, and anything already in the "
-    "long-term list.\n"
-    "Prose paragraphs grouped by topic. Aim for 80-200 words. "
-    "Prefer specificity (names, paths, values) over generic phrasing.\n\n"
-    "=== LONG-TERM MEMORY ===\n"
-    "Long-term items are durable facts: explicit preferences, architectural "
-    "decisions, invariants, stable project facts, hard constraints. "
-    "Each item is ONE self-contained sentence.\n"
-    "Output the COMPLETE new list in [LONG_TERM] markers - this REPLACES "
-    "the existing list entirely. Rules:\n"
-    "- Carry forward items that are still true\n"
-    "- Merge similar items into one sentence\n"
-    "- Remove items that are now wrong or redundant with the summary\n"
-    "- Add new durable facts from this conversation\n"
-    "Keep the list SHORT: aim for 5-15 items, hard max 30. "
-    "Fewer precise items beat many vague ones.\n\n"
-    "=== TITLE ===\n"
-    "A short descriptive name for this session: 3-7 words, Title Case, "
-    "no trailing punctuation, no quotes. Pick the dominant topic of the "
-    "conversation as a whole. Example: 'Refactor Schedule Storage'.\n\n"
-    "=== OUTPUT FORMAT ===\n"
-    "Emit all three sections. Omit a body if empty, but always include "
-    "the markers.\n\n"
-    "[SUMMARY]\n"
-    "<scratch summary prose here>\n"
-    "[/SUMMARY]\n\n"
-    "[LONG_TERM]\n"
-    "- <item 1>\n"
-    "- <item 2>\n"
-    "[/LONG_TERM]\n\n"
-    "[TITLE]\n"
-    "<short title>\n"
-    "[/TITLE]"
-)
-
-# A standalone prompt used to title a session early (after the first
-# turn) — before there's enough material for a full compaction.
-TITLE_PROMPT = (
-    "You are titling a chat session for a list view. Read the recent "
-    "messages and produce a short descriptive name: 3-7 words, "
-    "Title Case, no trailing punctuation, no quotes, no commentary. "
-    "Pick the dominant topic, not the most recent line. Output only "
-    "the title."
-)
-TITLE_TIMEOUT = 30  # seconds
-TITLE_MAX_CHARS = 60
-TITLE_CONTEXT_CHARS = 8_000
-
-
-# ------------------------------------------------------------------
-# Session router — picks the best-matching existing session for a new
-# user message, or creates a new one when no session is a good fit.
-# ------------------------------------------------------------------
-
-ROUTER_PROMPT = (
-    "You are a session router for a multi-session chat assistant.\n"
-    "The user is about to send a new message. Pick the existing "
-    "session whose ongoing topic best fits the message — or output "
-    "NEW if the user has switched to a topic none of the sessions "
-    "match.\n\n"
-    "Rules:\n"
-    "- Prefer to continue an existing session when there is a clear "
-    "topical match.\n"
-    "- Choose NEW for genuinely new topics, not minor digressions.\n"
-    "- Output exactly one line: either the bare session id "
-    "(no quotes, no commentary), or the literal word NEW.\n"
-)
-ROUTER_TIMEOUT = 30  # seconds
-ROUTER_MAX_SESSIONS = 20  # cap input size; sessions are listed newest-first
-ROUTER_PER_SESSION_CHARS = 600
-ROUTER_PROMPT_PREVIEW_CHARS = 1_000
-
-_ROUTER_LINE_RE = re.compile(r"^[A-Za-z0-9]+$")
-
-
-def _build_router_prompt(prompt: str, sessions_data: list[dict]) -> str:
-    """Assemble the router prompt body. Caller prepends ROUTER_PROMPT."""
-    parts: list[str] = ["User message:"]
-    preview = prompt.strip()
-    if len(preview) > ROUTER_PROMPT_PREVIEW_CHARS:
-        preview = preview[:ROUTER_PROMPT_PREVIEW_CHARS] + "…"
-    parts.append(preview)
-    parts.append("")
-    parts.append(f"Existing sessions ({len(sessions_data)}, newest first):")
-    parts.append("")
-    for s in sessions_data:
-        sid = s["id"]
-        block = [
-            f"id: {sid}",
-            f"name: {s.get('name') or sid[:8]}",
-        ]
-        sm = s.get("summary")
-        if sm:
-            if len(sm) > ROUTER_PER_SESSION_CHARS:
-                sm = sm[:ROUTER_PER_SESSION_CHARS] + "…"
-            block.append(f"summary: {sm}")
-        lt = s.get("long_term") or []
-        if lt:
-            block.append("long-term: " + "; ".join(lt[:5]))
-        block.append("")
-        parts.extend(block)
-    parts.append(
-        "Output exactly one line: a session id from the list above, or NEW."
-    )
-    return "\n".join(parts)
-
-
-def _parse_router_output(raw: str, valid_ids: set[str]) -> str | None:
-    """Return a session id, "NEW", or None if the output is unparseable.
-
-    The model is instructed to output exactly one line, but in practice
-    it sometimes adds a trailing period, code-fences, or explanatory
-    text. We scan lines and take the first that's either "NEW" or a
-    known session id.
-    """
-    for line in raw.splitlines():
-        token = line.strip().strip("`'\"., ")
-        if not token:
-            continue
-        if token.upper() == "NEW":
-            return "NEW"
-        if _ROUTER_LINE_RE.match(token) and token in valid_ids:
-            return token
-    return None
-
-
-async def select_or_create_session(
-    prompt: str,
-    workspace_path: str,
-    summary_model: str | None = None,
-    *,
-    backend_name: str | None = None,
-) -> tuple[str, dict]:
-    """Pick the session whose topic best matches *prompt*, else create one.
-
-    Shortcuts an LLM call for the trivial cases (zero sessions →
-    create new). Returns (session_id, loaded session data).
-    """
-    backend = backends_agent.get_backend(backend_name)
-
-    sessions_data = session.list_sessions_with_data(workspace_path)
-    sessions_data = sessions_data[:ROUTER_MAX_SESSIONS]
-
-    if not sessions_data:
-        data = session.create_session(workspace_path)
-        logger.info(
-            "Router: no existing sessions, created %s", data["id"],
-        )
-        return (data["id"], data)
-
-    body = _build_router_prompt(prompt, sessions_data)
-    full_prompt = f"{ROUTER_PROMPT}\n\n{body}"
-
-    try:
-        proc = await backend.launch(
-            workspace_path, full_prompt, summary_model, approval="full",
-            compaction=True,
-        )
-    except FileNotFoundError:
-        logger.warning(
-            "%s CLI not found - router falling back to NEW",
-            backend.executable,
-        )
-        data = session.create_session(workspace_path)
-        return (data["id"], data)
-
-    raw = await drain_llm_subprocess(proc, backend, ROUTER_TIMEOUT, "Router")
-
-    valid_ids = {s["id"] for s in sessions_data}
-    decision = _parse_router_output(raw, valid_ids) if raw else None
-    if decision and decision != "NEW":
-        loaded = session.load_session(workspace_path, decision)
-        if loaded is not None:
-            logger.info("Router: continuing session %s", decision)
-            return (decision, loaded)
-
-    if decision is None:
-        logger.warning("Router output unparseable; defaulting to NEW: %r", raw)
-    fresh = session.create_session(workspace_path)
-    logger.info("Router: created new session %s", fresh["id"])
-    return (fresh["id"], fresh)
-
-
-def _parse_compaction_output(
-    text: str,
-) -> tuple[str, list[str] | None, str | None]:
-    """Extract (summary, long_term, title) from model output.
-
-    long_term is None if [LONG_TERM] markers are absent (no rewrite).
-    title is None if [TITLE] markers are absent or empty.
-    Falls back to treating the entire text as the summary if [SUMMARY]
-    markers are absent, so misbehaving models still produce a usable result.
-    """
-    summary = extract_marker_block(text, "SUMMARY")
-    lt_block = extract_marker_block(text, "LONG_TERM")
-    long_term: list[str] | None = (
-        parse_bullets(lt_block) if lt_block is not None else None
-    )
-    title_block = extract_marker_block(text, "TITLE")
-    title: str | None = (
-        _clean_title(title_block) if title_block else None
-    )
-    if summary is None:
-        # Fallback: treat full text as summary, stripping the other blocks.
-        fallback = text
-        for tag in ("LONG_TERM", "TITLE"):
-            fallback = strip_marker_block(fallback, tag)
-        summary = fallback.strip()
-    return summary, long_term, title
-
-
-def _clean_title(raw: str) -> str | None:
-    """Trim a model-emitted title to a single short line."""
-    stripped = raw.strip()
-    if not stripped:
-        return None
-    line = stripped.splitlines()[0].strip(" \t.\"'`*_")
-    if not line:
-        return None
-    if len(line) > TITLE_MAX_CHARS:
-        line = line[:TITLE_MAX_CHARS].rstrip()
-    return line or None
 
 
 # ------------------------------------------------------------------
@@ -283,11 +33,11 @@ def _clean_title(raw: str) -> str | None:
 # ------------------------------------------------------------------
 
 def _format_msg_line(msg: dict) -> str:
-    """Format a session message as 'Role: content', capped at MSG_CONTENT_MAX."""
+    """Format a session message as 'Role: content', capped at session.MSG_CONTENT_MAX."""
     role = msg.get("role", "?").capitalize()
     content = msg.get("content", "")
-    if len(content) > MSG_CONTENT_MAX:
-        content = content[:MSG_CONTENT_MAX] + "…"
+    if len(content) > session.MSG_CONTENT_MAX:
+        content = content[:session.MSG_CONTENT_MAX] + "…"
     return f"{role}: {content}"
 
 
@@ -385,7 +135,7 @@ def _build_contextual_prompt(
             history_parts.append(summary_block)
 
         # Add messages newest-to-oldest until the budget is exhausted.
-        # Content is already capped at MSG_CONTENT_MAX so budget arithmetic
+        # Content is already capped at session.MSG_CONTENT_MAX so budget arithmetic
         # is predictable.
         msg_lines: list[str] = []
         used = 0
@@ -459,7 +209,7 @@ async def run(
             result.events.append(ChatEvent(kind="text", content=result.text))
             return result
     else:
-        session_id, session_data = await select_or_create_session(
+        session_id, session_data = await router.select_or_create_session(
             prompt, workspace_path, summary_model,
             backend_name=backend.name,
         )
@@ -595,7 +345,7 @@ async def run(
     async with workspace_mod.get_lock(workspace_path):
         _log_to_session(workspace_path, session_id, effective_prompt, result)
 
-    await _maybe_compact(
+    await compaction.maybe_compact(
         workspace_path, session_id, summary_model, backend_name=backend.name,
     )
 
@@ -603,11 +353,11 @@ async def run(
     # "Session YYYY-MM-DD" pattern. The in-memory snapshot reflects
     # the name as it was at run start; a session with a custom name
     # is no longer a candidate for renaming, so skip the spawn entirely.
-    # _maybe_compact above could have set a fresh title via [TITLE] —
+    # compaction above could have set a fresh title via [TITLE] —
     # in that case spawning is harmless (the task just bails on its
     # own is_default_name check after a fresh load).
     if session.is_default_name(session_data.get("name")):
-        asyncio.create_task(_maybe_auto_title(
+        asyncio.create_task(titling.maybe_auto_title(
             workspace_path, session_id, summary_model,
             backend_name=backend.name,
         ))
@@ -648,296 +398,3 @@ def _format_session_response(result: AgentResult) -> str:
     return result.text
 
 
-# ------------------------------------------------------------------
-# Auto-compaction
-# ------------------------------------------------------------------
-
-async def _maybe_compact(
-    workspace_path: str, session_id: str, summary_model: str | None = None,
-    *, backend_name: str | None = None,
-) -> None:
-    """Compact session if uncompacted messages reach the compact interval.
-
-    The trigger is len(messages) >= interval, checked with a single load.
-    Compaction runs outside the workspace lock so other requests
-    aren't stalled.
-    """
-    try:
-        data = session.load_session(workspace_path, session_id)
-        if data is None:
-            return
-        msgs = data.get("messages", [])
-        interval = workspace_mod.get_compact_interval(workspace_path)
-        if interval <= 0 or len(msgs) < interval:
-            return
-
-        logger.info(
-            "Auto-compact triggered (msgs=%d, interval=%d)",
-            len(msgs), interval,
-        )
-        existing_summary = data.get("summary") or ""
-        new_summary, new_long_term, new_title = await compact_session(
-            workspace_path, session_id, summary_model,
-            backend_name=backend_name,
-            _preloaded_data=data,
-        )
-        if not new_summary:
-            logger.error(
-                "Compaction produced empty summary for session %s",
-                session_id,
-            )
-            return
-        # Reject summaries that are suspiciously short compared to the
-        # existing one - a sign of a truncated or failed backend response.
-        min_len = max(100, len(existing_summary) // 2)
-        if len(new_summary) < min_len:
-            logger.error(
-                "Compaction summary too short (%d chars, min %d) "
-                "for session %s - keeping existing",
-                len(new_summary), min_len, session_id,
-            )
-            return
-        async with workspace_mod.get_lock(workspace_path):
-            session.set_summary(
-                workspace_path, session_id, new_summary,
-                keep_recent=KEEP_RECENT_AFTER_COMPACT,
-                long_term_rewrite=new_long_term,
-                title=new_title,
-            )
-            colony_count = colony.bump_compact_count(workspace_path)
-        lt_count = len(new_long_term) if new_long_term is not None else "?"
-        logger.info(
-            "Session %s compacted, summary %d chars, long_term %s items",
-            session_id, len(new_summary), lt_count,
-        )
-        colony.maybe_trigger(
-            workspace_path, colony_count, summary_model,
-            backend_name=backend_name,
-        )
-    except Exception:
-        logger.error("Compaction check failed", exc_info=True)
-
-
-# ------------------------------------------------------------------
-# Auto-titling
-# ------------------------------------------------------------------
-
-# Per-session lock so two concurrent run() calls (in theory) on the
-# same session don't both spawn a title pass. The bot's per-user lock
-# already serializes turns, but we don't rely on that here.
-_title_in_flight: set[tuple[str, str]] = set()
-
-
-async def _maybe_auto_title(
-    workspace_path: str, session_id: str, summary_model: str | None,
-    *, backend_name: str | None,
-) -> None:
-    """Generate a title once a session has its first assistant reply.
-
-    Skipped when the session already has a custom name (anything other
-    than the auto-generated ``Session YYYY-MM-DD``) so we don't
-    overwrite a meaningful title with a freshly-generated one. The
-    compaction path refreshes the title separately.
-    """
-    key = (workspace_path, session_id)
-    if key in _title_in_flight:
-        return
-    try:
-        data = session.load_session(workspace_path, session_id)
-        if data is None:
-            return
-        if not session.is_default_name(data.get("name")):
-            return
-        # Need at least one assistant reply before titling makes sense.
-        msgs = data.get("messages", [])
-        if not any(m.get("role") == "assistant" for m in msgs):
-            return
-        _title_in_flight.add(key)
-        title = await generate_session_title(
-            workspace_path, session_id, summary_model,
-            backend_name=backend_name, _preloaded_data=data,
-        )
-        if not title:
-            return
-        async with workspace_mod.get_lock(workspace_path):
-            session.set_session_name(workspace_path, session_id, title)
-        logger.info("Session %s auto-titled: %s", session_id, title)
-    except Exception:
-        logger.warning("Auto-title failed", exc_info=True)
-    finally:
-        _title_in_flight.discard(key)
-
-
-async def generate_session_title(
-    workspace_path: str,
-    session_id: str,
-    summary_model: str | None = None,
-    *,
-    backend_name: str | None = None,
-    _preloaded_data: dict | None = None,
-) -> str | None:
-    """Run a small backend call to title a session. Returns None on failure."""
-    backend = backends_agent.get_backend(backend_name)
-    data = _preloaded_data or session.load_session(workspace_path, session_id)
-    if data is None:
-        return None
-
-    parts: list[str] = []
-    summary = data.get("summary")
-    if summary:
-        parts.append(f"Previous summary:\n{summary}\n")
-    parts.append("Recent messages:")
-
-    # Newest-first under a tight char budget; the title only needs the
-    # gist, so we don't pull the whole history.
-    used = 0
-    msg_lines: list[str] = []
-    for msg in reversed(data.get("messages", [])):
-        role = msg.get("role", "?").capitalize()
-        content = msg.get("content", "")
-        if len(content) > MSG_CONTENT_MAX:
-            content = content[:MSG_CONTENT_MAX] + "…"
-        line = f"{role}: {content}"
-        if used + len(line) > TITLE_CONTEXT_CHARS:
-            break
-        msg_lines.append(line)
-        used += len(line) + 1
-    msg_lines.reverse()
-    if not msg_lines:
-        return None
-    parts.extend(msg_lines)
-
-    full_prompt = f"{TITLE_PROMPT}\n\n" + "\n".join(parts)
-
-    try:
-        proc = await backend.launch(
-            workspace_path, full_prompt, summary_model, approval="full",
-            compaction=True,
-        )
-    except FileNotFoundError:
-        logger.warning(
-            "%s CLI not found on PATH - cannot title session",
-            backend.executable,
-        )
-        return None
-
-    raw = await drain_llm_subprocess(
-        proc, backend, TITLE_TIMEOUT, f"Title (session {session_id})",
-    )
-    return _clean_title(raw) if raw else None
-
-
-async def compact_session(
-    workspace_path: str,
-    session_id: str,
-    summary_model: str | None = None,
-    *,
-    backend_name: str | None = None,
-    _preloaded_data: dict | None = None,
-) -> tuple[str, list[str] | None, str | None]:
-    """Run the selected backend to compact a session.
-
-    Returns (summary, long_term, title). long_term is the new complete
-    list, or None if the model did not emit a [LONG_TERM] block
-    (existing list kept). title is None if the model did not emit a
-    [TITLE] block. On failure returns ("", None, None). Does NOT write
-    to disk - caller takes the workspace lock and calls set_summary.
-
-    _preloaded_data: pass already-loaded session dict to skip a disk read
-    (used by _maybe_compact which loads the data to check the interval).
-    """
-    backend = backends_agent.get_backend(backend_name)
-    data = _preloaded_data or session.load_session(workspace_path, session_id)
-    if data is None:
-        return ("", None, None)
-    messages = data.get("messages", [])
-    existing_summary = data.get("summary")
-    existing_long_term: list[str] = data.get("long_term") or []
-
-    if not messages:
-        return ("", None, None)
-
-    # Build the content to summarize, staying within a token budget.
-    # Large prompts cause the summary model to return truncated/empty output.
-    parts: list[str] = []
-    if existing_long_term:
-        # Show up to 15% of the budget for the existing list so the model
-        # knows what to rewrite. With a target of <=30 items this is plenty.
-        lt_max = int(MAX_SUMMARY_CHARS * 0.15)
-        lt_lines: list[str] = []
-        lt_used = 0
-        for item in reversed(existing_long_term):
-            line = f"- {item}"
-            if lt_used + len(line) + 1 > lt_max:
-                break
-            lt_lines.append(line)
-            lt_used += len(line) + 1
-        lt_lines.reverse()
-        if lt_lines:
-            parts.append(
-                "Existing long-term items (rewrite this list per the "
-                "instructions above):"
-            )
-            parts.extend(lt_lines)
-            parts.append("")
-    if existing_summary:
-        parts.append(f"Previous summary:\n{existing_summary}\n")
-    parts.append("Conversation to summarize:")
-
-    # Add messages newest-first until we hit the budget, then reverse
-    overhead = len(SUMMARY_PROMPT) + sum(len(p) for p in parts) + 200
-    budget = max(0, MAX_SUMMARY_CHARS - overhead)
-    msg_lines: list[str] = []
-    used = 0
-    for msg in reversed(messages):
-        role = msg.get("role", "?").capitalize()
-        content = msg.get("content", "")
-        line = f"{role}: {content}"
-        if used + len(line) > budget:
-            break
-        msg_lines.append(line)
-        used += len(line) + 1
-    msg_lines.reverse()
-    parts.extend(msg_lines)
-
-    if not msg_lines:
-        logger.warning(
-            "Session %s messages too large even for a single entry",
-            session_id,
-        )
-        return ("", None, None)
-
-    full_prompt = f"{SUMMARY_PROMPT}\n\n" + "\n".join(parts)
-
-    logger.info(
-        "Running %s compaction for session %s", backend.name, session_id,
-    )
-
-    try:
-        proc = await backend.launch(
-            workspace_path, full_prompt, summary_model, approval="full",
-            compaction=True,
-        )
-    except FileNotFoundError:
-        logger.error(
-            "%s CLI not found on PATH - cannot compact session",
-            backend.executable,
-        )
-        return ("", None, None)
-
-    new_summary = await drain_llm_subprocess(
-        proc, backend, COMPACT_TIMEOUT, f"Compaction (session {session_id})",
-    )
-
-    if not new_summary:
-        stderr = (
-            await proc.stderr.read()
-        ).decode("utf-8", errors="replace").strip()
-        logger.warning(
-            "Compaction produced no summary (exit %d): %s",
-            proc.returncode, stderr,
-        )
-        return ("", None, None)
-
-    summary, long_term, title = _parse_compaction_output(new_summary)
-    return (summary, long_term, title)
