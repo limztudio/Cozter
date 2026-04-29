@@ -1204,8 +1204,8 @@ class BotPlatform(ABC):
 
         ``session_id`` pins the run to a specific session — used by
         ``_run_ephemeral_turn`` to route a scheduled command into a
-        throwaway session. When None, ``agent.run`` resolves the
-        user's current session itself.
+        throwaway session. When None, ``agent.run`` routes the prompt
+        to the best-matching session via ``router.select_or_create_session``.
 
         ``_running_tasks`` is already populated by the caller
         (``_dispatch_ai`` or ``_drain_message_queue``) right after
