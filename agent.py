@@ -32,15 +32,6 @@ MAX_HISTORY_CHARS = 50_000
 # Contextual prompt building
 # ------------------------------------------------------------------
 
-def _format_msg_line(msg: dict) -> str:
-    """Format a session message as 'Role: content', capped at session.MSG_CONTENT_MAX."""
-    role = msg.get("role", "?").capitalize()
-    content = msg.get("content", "")
-    if len(content) > session.MSG_CONTENT_MAX:
-        content = content[:session.MSG_CONTENT_MAX] + "…"
-    return f"{role}: {content}"
-
-
 def _build_contextual_prompt(
     prompt: str,
     session_data: dict | None,
@@ -84,7 +75,7 @@ def _build_contextual_prompt(
     if messages:
         parts.append("[Recent Messages]")
         for msg in messages:
-            parts.append(_format_msg_line(msg))
+            parts.append(session.format_msg_line(msg))
         parts.append("[End of Recent Messages]\n")
 
     parts.append(
@@ -141,7 +132,7 @@ def _build_contextual_prompt(
         used = 0
         if msg_budget > 0:
             for msg in reversed(messages):
-                line = _format_msg_line(msg)
+                line = session.format_msg_line(msg)
                 if used + len(line) > msg_budget:
                     break
                 msg_lines.append(line)

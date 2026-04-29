@@ -42,6 +42,18 @@ def total_message_count(data: dict) -> int:
     return data.get("compacted_count", 0) + len(data.get("messages", []))
 
 
+def format_msg_line(msg: dict) -> str:
+    """Format a session message as ``Role: content``, capping content
+    at ``MSG_CONTENT_MAX`` so a single long reply can't dominate the
+    prompt budget.
+    """
+    role = msg.get("role", "?").capitalize()
+    content = msg.get("content", "")
+    if len(content) > MSG_CONTENT_MAX:
+        content = content[:MSG_CONTENT_MAX] + "…"
+    return f"{role}: {content}"
+
+
 def list_sessions(workspace: str) -> list[dict]:
     """Return [{id, name, created, message_count}] sorted by created desc."""
     sdir = _sessions_dir(workspace)

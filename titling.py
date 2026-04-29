@@ -111,11 +111,7 @@ async def generate(
     used = 0
     msg_lines: list[str] = []
     for msg in reversed(data.get("messages", [])):
-        role = msg.get("role", "?").capitalize()
-        content = msg.get("content", "")
-        if len(content) > session.MSG_CONTENT_MAX:
-            content = content[:session.MSG_CONTENT_MAX] + "…"
-        line = f"{role}: {content}"
+        line = session.format_msg_line(msg)
         if used + len(line) > TITLE_CONTEXT_CHARS:
             break
         msg_lines.append(line)
