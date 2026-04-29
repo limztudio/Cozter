@@ -31,8 +31,6 @@ from ..utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
 
-_NO_WS_MSG = "No workspace selected. Use /new or /open first."
-
 _TEXT_EXTENSIONS = frozenset({
     ".txt", ".md", ".rst", ".py", ".js", ".ts", ".jsx", ".tsx",
     ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
@@ -390,9 +388,8 @@ class BotPlatform(ABC):
     # ----- /model ---------------------------------------------------------
 
     async def cmd_model(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         current = workspace.get_model(ws)
         backend_name = workspace.get_backend_name(ws)
@@ -409,9 +406,8 @@ class BotPlatform(ABC):
         self._expect_input(ctx.user_id, self._receive_model)
 
     async def _receive_model(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         text = ctx.text.strip()
         options = workspace.get_available_models(ws)
@@ -428,9 +424,8 @@ class BotPlatform(ABC):
     # ----- /summarymodel --------------------------------------------------
 
     async def cmd_summarymodel(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         current = workspace.get_summary_model(ws)
         backend_name = workspace.get_backend_name(ws)
@@ -447,9 +442,8 @@ class BotPlatform(ABC):
         self._expect_input(ctx.user_id, self._receive_summarymodel)
 
     async def _receive_summarymodel(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         text = ctx.text.strip()
         options = workspace.get_available_models(ws)
@@ -466,9 +460,8 @@ class BotPlatform(ABC):
     # ----- /agent ---------------------------------------------------------
 
     async def cmd_agent(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         current = workspace.get_backend_name(ws)
         options = workspace.AVAILABLE_BACKENDS
@@ -481,9 +474,8 @@ class BotPlatform(ABC):
         self._expect_input(ctx.user_id, self._receive_agent)
 
     async def _receive_agent(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         text = ctx.text.strip()
         options = workspace.AVAILABLE_BACKENDS
@@ -504,9 +496,8 @@ class BotPlatform(ABC):
     # ----- /permission ----------------------------------------------------
 
     async def cmd_permission(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         current = workspace.get_permission(ws)
         options = workspace.AVAILABLE_PERMISSIONS
@@ -520,9 +511,8 @@ class BotPlatform(ABC):
         self._expect_input(ctx.user_id, self._receive_permission)
 
     async def _receive_permission(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         text = ctx.text.strip().lower()
         options = workspace.AVAILABLE_PERMISSIONS
@@ -540,9 +530,8 @@ class BotPlatform(ABC):
     # ----- /refresh -------------------------------------------------------
 
     async def cmd_refresh(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         codex_dir = os.path.join(ws, ".codex")
         cleared = False
@@ -566,9 +555,8 @@ class BotPlatform(ABC):
     # ----- /compact -------------------------------------------------------
 
     async def cmd_compact(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         arg = ctx.args.strip().lower().split()
         first = arg[0] if arg else ""
@@ -603,9 +591,8 @@ class BotPlatform(ABC):
     # ----- /colony --------------------------------------------------------
 
     async def cmd_colony(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         arg = ctx.args.strip().lower().split()
         first = arg[0] if arg else ""
@@ -697,9 +684,8 @@ class BotPlatform(ABC):
     # ----- /reserve (recurring schedule wizard) --------------------------
 
     async def cmd_reserve(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         await ctx.reply_text(
             "Select days for this schedule.\n"
@@ -772,9 +758,8 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, _retry)
             return
 
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
 
         schedule = {
@@ -800,9 +785,8 @@ class BotPlatform(ABC):
     # ----- /schedules (list/delete) --------------------------------------
 
     async def cmd_schedules(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         user_schedules = schedules.list_schedules(ws, ctx.user_id)
         if not user_schedules:
@@ -822,9 +806,8 @@ class BotPlatform(ABC):
         self._expect_input(ctx.user_id, self._receive_schedules)
 
     async def _receive_schedules(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
+        ws = await self._require_ws(ctx)
+        if ws is None:
             return
         user_schedules = schedules.list_schedules(ws, ctx.user_id)
         text = ctx.text.strip()
