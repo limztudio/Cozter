@@ -7,6 +7,8 @@ auto-titling background tasks.
 import asyncio
 import json
 import logging
+import os
+import re
 from collections.abc import Awaitable, Callable
 
 from . import (
@@ -26,6 +28,43 @@ CAPABILITY_HINT = (
 )
 
 MAX_HISTORY_CHARS = 50_000
+
+_ATTACH_RE = re.compile(
+    r"\[\[attach:\s*([^\]\n]+?)\s*\]\]", re.IGNORECASE,
+)
+
+
+def extract_attachments(text: str, ws: str) -> tuple[str, list[str]]:
+    """Parse ``[[attach: PATH]]`` markers from agent-emitted text.
+
+    Pairs with :data:`CAPABILITY_HINT` (which instructs the model to
+    use these markers). Returns ``(cleaned_text, [absolute_paths])``;
+    only paths that resolve inside the workspace and exist as files
+    are included.
+    """
+    ws_real = os.path.realpath(ws)
+    paths: list[str] = []
+
+    def _sub(m: re.Match) -> str:
+        rel = m.group(1).strip()
+        if not rel:
+            return ""
+        try:
+            abs_path = rel if os.path.isabs(rel) else os.path.join(ws, rel)
+            abs_path = os.path.realpath(abs_path)
+            inside = (
+                abs_path == ws_real
+                or abs_path.startswith(ws_real + os.sep)
+            )
+            if inside and os.path.isfile(abs_path):
+                paths.append(abs_path)
+        except (ValueError, OSError):
+            pass
+        return ""
+
+    cleaned = _ATTACH_RE.sub(_sub, text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, paths
 
 
 # ------------------------------------------------------------------
