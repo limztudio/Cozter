@@ -80,9 +80,14 @@ def list_sessions_with_data(workspace: str) -> list[dict]:
         fpath = os.path.join(sdir, fname)
         try:
             with open(fpath, encoding="utf-8") as f:
-                out.append(json.load(f))
+                data = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
+        # Skip files that don't carry the required identity — downstream
+        # code does data["id"] without further validation.
+        if not isinstance(data, dict) or not data.get("id"):
+            continue
+        out.append(data)
     out.sort(key=lambda d: d.get("created", ""), reverse=True)
     return out
 
