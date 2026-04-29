@@ -243,32 +243,7 @@ async def select_or_create_session(
         data = session.create_session(workspace_path)
         return (data["id"], data)
 
-    raw = ""
-    try:
-        async with asyncio.timeout(ROUTER_TIMEOUT):
-            async for line in _iter_stream_lines(proc.stdout):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    if not raw:
-                        raw = line
-                    continue
-                text = backend.extract_agent_text(event)
-                if text:
-                    raw = text
-            await proc.wait()
-    except TimeoutError:
-        logger.warning("Router timed out, falling back to NEW")
-        try:
-            proc.kill()
-            await proc.wait()
-        except OSError:
-            pass
-        data = session.create_session(workspace_path)
-        return (data["id"], data)
+    raw = await _drain_internal_proc(proc, backend, ROUTER_TIMEOUT, "Router")
 
     valid_ids = {e["id"] for e in enriched}
     decision = _parse_router_output(raw, valid_ids) if raw else None
@@ -605,6 +580,48 @@ async def _iter_stream_lines(
 
         for part in parts:
             yield part.decode("utf-8", errors="replace")
+
+
+async def _drain_internal_proc(
+    proc: asyncio.subprocess.Process,
+    backend,
+    timeout: float,
+    label: str,
+) -> str:
+    """Drain JSON event lines from an internal LLM subprocess and return
+    the last agent text emitted, or an empty string on timeout/no output.
+
+    The subprocess is *always* killed and reaped on exit — including on
+    cancellation — so /stop or any other exception path can't leak a
+    running subprocess past the cancelled task.
+    """
+    raw = ""
+    try:
+        async with asyncio.timeout(timeout):
+            async for line in _iter_stream_lines(proc.stdout):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    if not raw:
+                        raw = line  # bare-text fallback
+                    continue
+                text = backend.extract_agent_text(event)
+                if text:
+                    raw = text
+            await proc.wait()
+    except TimeoutError:
+        logger.warning("%s timed out after %ds", label, timeout)
+    finally:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except OSError:
+                pass
+    return raw
 
 
 # ------------------------------------------------------------------
@@ -1055,31 +1072,9 @@ async def _colony_consolidate_inner(
         )
         return False
 
-    output = ""
-    try:
-        async with asyncio.timeout(COLONY_TIMEOUT):
-            async for line in _iter_stream_lines(proc.stdout):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    if not output:
-                        output = line  # bare-text fallback
-                    continue
-                text = backend.extract_agent_text(event)
-                if text:
-                    output = text
-            await proc.wait()
-    except TimeoutError:
-        logger.error("Colony consolidation timed out for %s", workspace_path)
-        try:
-            proc.kill()
-            await proc.wait()
-        except OSError:
-            pass
-        return False
+    output = await _drain_internal_proc(
+        proc, backend, COLONY_TIMEOUT, f"Colony ({workspace_path})",
+    )
 
     if not output:
         stderr = (
@@ -1225,32 +1220,9 @@ async def generate_session_title(
         )
         return None
 
-    raw = ""
-    try:
-        async with asyncio.timeout(TITLE_TIMEOUT):
-            async for line in _iter_stream_lines(proc.stdout):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    if not raw:
-                        raw = line
-                    continue
-                text = backend.extract_agent_text(event)
-                if text:
-                    raw = text
-            await proc.wait()
-    except TimeoutError:
-        logger.warning("Title generation timed out for %s", session_id)
-        try:
-            proc.kill()
-            await proc.wait()
-        except OSError:
-            pass
-        return None
-
+    raw = await _drain_internal_proc(
+        proc, backend, TITLE_TIMEOUT, f"Title (session {session_id})",
+    )
     return _clean_title(raw) if raw else None
 
 
@@ -1352,36 +1324,9 @@ async def compact_session(
         )
         return ("", None, None)
 
-    # Collect the last agent text from the JSON event stream.
-    new_summary = ""
-    try:
-        async with asyncio.timeout(COMPACT_TIMEOUT):
-            async for line in _iter_stream_lines(proc.stdout):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    if not new_summary:
-                        new_summary = line  # bare-text fallback
-                    continue
-                text = backend.extract_agent_text(event)
-                if text:
-                    new_summary = text  # keep updating - last one wins
-
-            await proc.wait()
-    except TimeoutError:
-        logger.error(
-            "Compaction timed out after %ds for session %s",
-            COMPACT_TIMEOUT, session_id,
-        )
-        try:
-            proc.kill()
-            await proc.wait()
-        except OSError:
-            pass
-        return ("", None, None)
+    new_summary = await _drain_internal_proc(
+        proc, backend, COMPACT_TIMEOUT, f"Compaction (session {session_id})",
+    )
 
     if not new_summary:
         stderr = (
