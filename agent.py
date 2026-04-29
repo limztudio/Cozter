@@ -118,26 +118,36 @@ TITLE_CONTEXT_CHARS = 8_000
 COLONY_PROMPT = (
     "You are consolidating a workspace's shared memory ('colony') from "
     "the long-term memory of every session in the workspace.\n\n"
-    "Goal: promote facts that recur across sessions into a single "
-    "canonical shared list, and keep each session's own list focused "
-    "on facts specific to that session.\n\n"
+    "Goal: maintain a canonical list of facts that recur across "
+    "sessions, AND retire colony items that are no longer used by "
+    "any session.\n\n"
     "=== INPUT ===\n"
-    "You receive: the current colony list, then a [SESSION:<id>] "
-    "block per session containing that session's long-term items.\n\n"
+    "You receive: the current colony list, then for each session, a "
+    "'Session: <name>' header line followed by a [SESSION:<id>] "
+    "block of that session's long-term items. The session name tells "
+    "you the session's overall topic; use it together with the "
+    "long-term items to judge whether each colony item is still "
+    "relevant.\n\n"
     "=== TASK ===\n"
-    "1. PROMOTE: items appearing (verbatim or as paraphrases) in 2+ "
-    "sessions, OR items already in the colony, become colony items.\n"
-    "2. KEEP: items clearly specific to one session stay in that "
-    "session's list.\n"
-    "3. MERGE: rewrite near-duplicates into one canonical sentence.\n"
-    "4. DROP: items that are now wrong or redundant with the colony.\n"
-    "Carry forward existing colony items unless they are clearly wrong; "
-    "the colony is durable cross-session knowledge.\n"
+    "PROMOTE to colony:\n"
+    "- An item that appears (verbatim or as a paraphrase) in 2+ "
+    "sessions.\n"
+    "- An existing colony item whose topic is still represented by "
+    "at least one current session (its name or its long-term items).\n\n"
+    "KEEP in a session's own list:\n"
+    "- An item clearly specific to that one session.\n\n"
+    "MERGE near-duplicates into one canonical sentence.\n\n"
+    "PRUNE (drop entirely):\n"
+    "- Colony items whose topic is no longer represented in any "
+    "session — the colony exists for cross-session knowledge, so "
+    "once a topic disappears from the workspace, retire the entry.\n"
+    "- Items that are wrong or contradicted by current input.\n\n"
     "Each item must be ONE self-contained sentence.\n\n"
     "=== OUTPUT FORMAT ===\n"
     "Emit one [COLONY] block, then one [SESSION:<id>] block per "
     "input session (even if the new list is empty). Use the same "
-    "<id> values you saw in the input. One bullet per item.\n\n"
+    "<id> values you saw in the input. One bullet per item. Do NOT "
+    "emit 'Session:' header lines in your output.\n\n"
     "[COLONY]\n"
     "- <colony item 1>\n"
     "- <colony item 2>\n"
@@ -780,7 +790,9 @@ async def _colony_consolidate_inner(
     backend = backends_agent.get_backend(backend_name)
 
     # Collect non-empty long_term lists from every session in the workspace.
-    inputs: list[tuple[str, list[str]]] = []
+    # The session name accompanies each list so the model can judge whether
+    # a colony item's topic is still represented in the workspace.
+    inputs: list[tuple[str, str, list[str]]] = []
     for meta in session.list_sessions(workspace_path):
         sid = meta["id"]
         data = session.load_session(workspace_path, sid)
@@ -789,7 +801,8 @@ async def _colony_consolidate_inner(
         lt = data.get("long_term") or []
         if not lt:
             continue
-        inputs.append((sid, lt))
+        name = data.get("name") or sid[:8]
+        inputs.append((sid, name, lt))
 
     if not inputs:
         logger.info(
@@ -813,8 +826,11 @@ async def _colony_consolidate_inner(
     # first under tight budgets.
     used = sum(len(p) + 1 for p in parts)
     included: list[str] = []
-    for sid, lt in inputs:
-        block_lines = [f"[SESSION:{sid}]"]
+    for sid, name, lt in inputs:
+        block_lines = [
+            f"Session: {name}",
+            f"[SESSION:{sid}]",
+        ]
         for it in lt:
             block_lines.append(f"- {it}")
         block_lines.append("[/SESSION]")
