@@ -7,13 +7,7 @@ config.json. Exactly one of ``telegram_bot_tokens`` or
 session state isn't fragmented across platforms.
 """
 
-from .base import (
-    AttachmentInfo,
-    BotContext,
-    BotPlatform,
-    MessageHandle,
-    COMMAND_NAMES,
-)
+from .base import BotPlatform
 
 
 def create_platforms(config: dict) -> list[BotPlatform]:
@@ -58,11 +52,4 @@ def create_platforms(config: dict) -> list[BotPlatform]:
     )
 
 
-__all__ = [
-    "AttachmentInfo",
-    "BotContext",
-    "BotPlatform",
-    "MessageHandle",
-    "COMMAND_NAMES",
-    "create_platforms",
-]
+__all__ = ["BotPlatform", "create_platforms"]
