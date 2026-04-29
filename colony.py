@@ -47,16 +47,10 @@ def _load(workspace: str) -> dict:
         return {"items": [], "compact_count": 0}
     try:
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                # Tolerate older / partial files.
-                return {
-                    "items": list(data.get("items") or []),
-                    "compact_count": int(data.get("compact_count") or 0),
-                }
-    except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
         logger.warning("Corrupt colony file, ignoring: %s", path)
-    return {"items": [], "compact_count": 0}
+        return {"items": [], "compact_count": 0}
 
 
 def _save(workspace: str, data: dict) -> None:

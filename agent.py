@@ -721,10 +721,7 @@ async def _maybe_compact(
         # fire-and-forget so the user reply isn't gated on it; if the
         # bot is shut down mid-run the colony is just left as-is and
         # the next interval hit will try again.
-        try:
-            interval = workspace_mod.get_colony_interval(workspace_path)
-        except Exception:
-            interval = colony.DEFAULT_COLONY_INTERVAL
+        interval = workspace_mod.get_colony_interval(workspace_path)
         if interval > 0 and colony_count % interval == 0:
             logger.info(
                 "Colony pass triggered (count=%d, interval=%d)",
