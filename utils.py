@@ -80,6 +80,19 @@ def extract_marker_block(text: str, tag: str) -> str | None:
     return text[i + len(open_tag):j].strip()
 
 
+def strip_marker_block(text: str, tag: str) -> str:
+    """Return *text* with the first ``[TAG]...[/TAG]`` block removed."""
+    open_tag = f"[{tag}]"
+    close_tag = f"[/{tag}]"
+    i = text.find(open_tag)
+    if i == -1:
+        return text
+    j = text.find(close_tag, i + len(open_tag))
+    if j == -1:
+        return text
+    return text[:i] + text[j + len(close_tag):]
+
+
 def parse_bullets(block: str | None) -> list[str]:
     """Parse a block into list items. Accepts ``- `` or ``* `` bullet prefixes
     and skips blank lines. Returns ``[]`` for an empty/None block.

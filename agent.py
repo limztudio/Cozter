@@ -15,7 +15,7 @@ from . import backends_agent, colony, session, workspace as workspace_mod
 from .backends_agent.base import AgentResult, ChatEvent
 from .utils import (
     drain_llm_subprocess, extract_marker_block, iter_stream_lines,
-    parse_bullets,
+    parse_bullets, strip_marker_block,
 )
 from .utils import drain_queue as _drain_queue
 
@@ -260,14 +260,7 @@ def _parse_compaction_output(
         # Fallback: treat full text as summary, stripping the other blocks.
         fallback = text
         for tag in ("LONG_TERM", "TITLE"):
-            open_tag, close_tag = f"[{tag}]", f"[/{tag}]"
-            i = fallback.find(open_tag)
-            if i != -1:
-                j = fallback.find(close_tag, i + len(open_tag))
-                if j != -1:
-                    fallback = (
-                        fallback[:i] + fallback[j + len(close_tag):]
-                    )
+            fallback = strip_marker_block(fallback, tag)
         summary = fallback.strip()
     return summary, long_term, title
 
