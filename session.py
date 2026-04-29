@@ -81,37 +81,12 @@ def take_recent_messages(
     return lines
 
 
-def list_sessions(workspace: str) -> list[dict]:
-    """Return [{id, name, created, message_count}] sorted by created desc."""
-    sdir = _sessions_dir(workspace)
-    if not os.path.isdir(sdir):
-        return []
-    sessions = []
-    for fname in os.listdir(sdir):
-        if not fname.endswith(".json"):
-            continue
-        fpath = os.path.join(sdir, fname)
-        try:
-            with open(fpath, encoding="utf-8") as f:
-                data = json.load(f)
-            sessions.append({
-                "id": data["id"],
-                "name": data.get("name", data["id"][:8]),
-                "created": data.get("created", ""),
-                "message_count": total_message_count(data),
-            })
-        except Exception:
-            continue
-    sessions.sort(key=lambda s: s["created"], reverse=True)
-    return sessions
-
-
 def list_sessions_with_data(workspace: str) -> list[dict]:
-    """Like ``list_sessions`` but returns each session's full data dict.
+    """Return every session's full data dict, sorted by created desc.
 
-    Use when the caller needs ``summary``/``long_term`` etc. — avoids
-    the double read (list_sessions + load_session each) that would
-    otherwise happen on every routing or colony pass.
+    Skips files that don't parse as JSON or lack an ``id``. Callers
+    that only need lightweight metadata can use :func:`list_sessions`,
+    which projects from this result.
     """
     sdir = _sessions_dir(workspace)
     if not os.path.isdir(sdir):
@@ -133,6 +108,19 @@ def list_sessions_with_data(workspace: str) -> list[dict]:
         out.append(data)
     out.sort(key=lambda d: d.get("created", ""), reverse=True)
     return out
+
+
+def list_sessions(workspace: str) -> list[dict]:
+    """Return [{id, name, created, message_count}] sorted by created desc."""
+    return [
+        {
+            "id": d["id"],
+            "name": d.get("name", d["id"][:8]),
+            "created": d.get("created", ""),
+            "message_count": total_message_count(d),
+        }
+        for d in list_sessions_with_data(workspace)
+    ]
 
 
 def create_session(workspace: str, name: str | None = None) -> dict:

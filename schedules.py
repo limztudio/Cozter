@@ -130,13 +130,8 @@ def parse_days(text: str) -> list[str]:
             if abbr not in DAY_ABBREV:
                 return []
             days.append(abbr)
-    seen: set[str] = set()
-    unique: list[str] = []
-    for d in days:
-        if d not in seen:
-            seen.add(d)
-            unique.append(d)
-    return unique
+    # dict.fromkeys dedups while preserving insertion order (Python 3.7+).
+    return list(dict.fromkeys(days))
 
 
 def parse_time(text: str) -> str | None:
