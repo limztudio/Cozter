@@ -222,3 +222,17 @@ def set_colony_interval(workspace_path: str, interval: int) -> None:
     if interval < 1:
         raise ValueError("colony_interval must be >= 1")
     _set_setting(workspace_path, "colony_interval", interval)
+
+
+def get_compact_interval(workspace_path: str) -> int:
+    """Messages between auto-compactions for sessions in this workspace."""
+    from . import session
+    return _load_settings(workspace_path).get(
+        "compact_interval", session.DEFAULT_COMPACT_INTERVAL,
+    )
+
+
+def set_compact_interval(workspace_path: str, interval: int) -> None:
+    if interval < 1:
+        raise ValueError("compact_interval must be >= 1")
+    _set_setting(workspace_path, "compact_interval", interval)

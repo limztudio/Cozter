@@ -111,6 +111,181 @@ TITLE_CONTEXT_CHARS = 8_000
 
 
 # ------------------------------------------------------------------
+# Session router — picks the best-matching existing session for a new
+# user message, or creates a new one when no session is a good fit.
+# ------------------------------------------------------------------
+
+ROUTER_PROMPT = (
+    "You are a session router for a multi-session chat assistant.\n"
+    "The user is about to send a new message. Pick the existing "
+    "session whose ongoing topic best fits the message — or output "
+    "NEW if the user has switched to a topic none of the sessions "
+    "match.\n\n"
+    "Rules:\n"
+    "- Prefer to continue an existing session when there is a clear "
+    "topical match.\n"
+    "- Choose NEW for genuinely new topics, not minor digressions.\n"
+    "- Output exactly one line: either the bare session id "
+    "(no quotes, no commentary), or the literal word NEW.\n"
+)
+ROUTER_TIMEOUT = 30  # seconds
+ROUTER_MAX_SESSIONS = 20  # cap input size; sessions are listed newest-first
+ROUTER_PER_SESSION_CHARS = 600
+ROUTER_PROMPT_PREVIEW_CHARS = 1_000
+
+_ROUTER_LINE_RE = re.compile(r"^[A-Za-z0-9]+$")
+
+
+def _build_router_prompt(prompt: str, sessions_meta: list[dict]) -> str:
+    """Assemble the router prompt body. Caller prepends ROUTER_PROMPT."""
+    parts: list[str] = ["User message:"]
+    preview = prompt.strip()
+    if len(preview) > ROUTER_PROMPT_PREVIEW_CHARS:
+        preview = preview[:ROUTER_PROMPT_PREVIEW_CHARS] + "…"
+    parts.append(preview)
+    parts.append("")
+    parts.append(f"Existing sessions ({len(sessions_meta)}, newest first):")
+    parts.append("")
+    for s in sessions_meta:
+        block = [
+            f"id: {s['id']}",
+            f"name: {s['name']}",
+        ]
+        if s.get("summary"):
+            sm = s["summary"]
+            if len(sm) > ROUTER_PER_SESSION_CHARS:
+                sm = sm[:ROUTER_PER_SESSION_CHARS] + "…"
+            block.append(f"summary: {sm}")
+        if s.get("long_term"):
+            lt = "; ".join(s["long_term"][:5])
+            block.append(f"long-term: {lt}")
+        block.append("")
+        parts.extend(block)
+    parts.append(
+        "Output exactly one line: a session id from the list above, or NEW."
+    )
+    return "\n".join(parts)
+
+
+def _parse_router_output(raw: str, valid_ids: set[str]) -> str | None:
+    """Return a session id, "NEW", or None if the output is unparseable.
+
+    The model is instructed to output exactly one line, but in practice
+    it sometimes adds a trailing period, code-fences, or explanatory
+    text. We scan lines and take the first that's either "NEW" or a
+    known session id.
+    """
+    for line in raw.splitlines():
+        token = line.strip().strip("`'\"., ")
+        if not token:
+            continue
+        if token.upper() == "NEW":
+            return "NEW"
+        if _ROUTER_LINE_RE.match(token) and token in valid_ids:
+            return token
+    return None
+
+
+async def select_or_create_session(
+    prompt: str,
+    workspace_path: str,
+    summary_model: str | None = None,
+    *,
+    backend_name: str | None = None,
+) -> tuple[str, dict]:
+    """Pick the session whose topic best matches *prompt*, else create one.
+
+    Shortcuts an LLM call for the trivial cases (zero sessions →
+    create new). Returns (session_id, loaded session data).
+    """
+    backend = backends_agent.get_backend(backend_name)
+
+    metas = session.list_sessions(workspace_path)
+    metas = metas[:ROUTER_MAX_SESSIONS]
+
+    if not metas:
+        data = session.create_session(workspace_path)
+        logger.info(
+            "Router: no existing sessions, created %s", data["id"],
+        )
+        return (data["id"], data)
+
+    # Hydrate the lightweight metadata with each session's summary +
+    # top long-term items so the router has topical signal.
+    enriched: list[dict] = []
+    for meta in metas:
+        data = session.load_session(workspace_path, meta["id"])
+        if data is None:
+            continue
+        enriched.append({
+            "id": meta["id"],
+            "name": meta.get("name") or meta["id"][:8],
+            "summary": data.get("summary"),
+            "long_term": data.get("long_term") or [],
+        })
+    if not enriched:
+        data = session.create_session(workspace_path)
+        return (data["id"], data)
+
+    body = _build_router_prompt(prompt, enriched)
+    full_prompt = f"{ROUTER_PROMPT}\n\n{body}"
+
+    try:
+        proc = await backend.launch(
+            workspace_path, full_prompt, summary_model, approval="full",
+            compaction=True,
+        )
+    except FileNotFoundError:
+        logger.warning(
+            "%s CLI not found - router falling back to NEW",
+            backend.executable,
+        )
+        data = session.create_session(workspace_path)
+        return (data["id"], data)
+
+    raw = ""
+    try:
+        async with asyncio.timeout(ROUTER_TIMEOUT):
+            async for line in _iter_stream_lines(proc.stdout):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    if not raw:
+                        raw = line
+                    continue
+                text = backend.extract_agent_text(event)
+                if text:
+                    raw = text
+            await proc.wait()
+    except TimeoutError:
+        logger.warning("Router timed out, falling back to NEW")
+        try:
+            proc.kill()
+            await proc.wait()
+        except OSError:
+            pass
+        data = session.create_session(workspace_path)
+        return (data["id"], data)
+
+    valid_ids = {e["id"] for e in enriched}
+    decision = _parse_router_output(raw, valid_ids) if raw else None
+    if decision and decision != "NEW":
+        loaded = session.load_session(workspace_path, decision)
+        if loaded is not None:
+            logger.info("Router: continuing session %s", decision)
+            return (decision, loaded)
+
+    if decision is None:
+        logger.warning("Router output unparseable; defaulting to NEW: %r", raw)
+    fresh = session.create_session(workspace_path)
+    logger.info("Router: created new session %s", fresh["id"])
+    return (fresh["id"], fresh)
+
+
+# ------------------------------------------------------------------
 # Colony (workspace-shared memory) — consolidates recurring long-term
 # items across all sessions in a workspace into a single canonical list.
 # ------------------------------------------------------------------
@@ -455,8 +630,9 @@ async def run(
     passed in by the caller.
 
     session_id pins the run to a specific session (used for ephemeral
-    schedule sessions). When None, the user's current session is loaded
-    or created via ``ensure_session_with_data``.
+    schedule sessions). When None, the prompt is routed to the
+    best-matching existing session via ``select_or_create_session`` —
+    or a new session is created when no session is a good fit.
 
     on_event  - called for each parsed event as it arrives (streaming).
     inject_queue - when a message is put, the running subprocess is killed
@@ -478,9 +654,9 @@ async def run(
             result.events.append(ChatEvent(kind="text", content=result.text))
             return result
     else:
-        # ensure_session_with_data gives us (id, data) from a single load.
-        session_id, session_data = session.ensure_session_with_data(
-            workspace_path, user_id,
+        session_id, session_data = await select_or_create_session(
+            prompt, workspace_path, summary_model,
+            backend_name=backend.name,
         )
 
     # Workspace-shared memory is loaded once and reused on every inject
@@ -681,9 +857,7 @@ async def _maybe_compact(
         if data is None:
             return
         msgs = data.get("messages", [])
-        interval = data.get(
-            "compact_interval", session.DEFAULT_COMPACT_INTERVAL,
-        )
+        interval = workspace_mod.get_compact_interval(workspace_path)
         if interval <= 0 or len(msgs) < interval:
             return
 

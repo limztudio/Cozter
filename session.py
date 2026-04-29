@@ -1,4 +1,8 @@
-"""Session management - stored in each workspace's .cozter/sessions/."""
+"""Session management - stored in each workspace's .cozter/sessions/.
+
+Sessions are no longer addressed by a "current session per user" — each
+user turn is routed to the best-matching session by ``agent.select_or_create_session``.
+"""
 
 import json
 import logging
@@ -15,7 +19,6 @@ LONG_TERM_CAP = 50
 DEFAULT_COMPACT_INTERVAL = 10
 
 SESSIONS_DIR = "sessions"
-SESSION_INDEX = "session_state.json"
 
 
 def _sessions_dir(workspace: str) -> str:
@@ -24,43 +27,6 @@ def _sessions_dir(workspace: str) -> str:
 
 def _session_path(workspace: str, session_id: str) -> str:
     return os.path.join(_sessions_dir(workspace), f"{session_id}.json")
-
-
-def _state_path(workspace: str) -> str:
-    return os.path.join(workspace, COZTER_DIR, SESSION_INDEX)
-
-
-# ---------------------------------------------------------------------------
-# State: tracks current session per user
-# ---------------------------------------------------------------------------
-
-def _load_state(workspace: str) -> dict:
-    path = _state_path(workspace)
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            logger.warning("Corrupt session state file, ignoring: %s", path)
-    return {}
-
-
-def _save_state(workspace: str, state: dict) -> None:
-    target_dir = os.path.join(workspace, COZTER_DIR)
-    os.makedirs(target_dir, exist_ok=True)
-    _atomic_write(_state_path(workspace), state, tmp_dir=target_dir)
-
-
-def get_current_session_id(workspace: str, user_id: int) -> str | None:
-    return _load_state(workspace).get(str(user_id))
-
-
-def set_current_session_id(
-    workspace: str, user_id: int, session_id: str,
-) -> None:
-    state = _load_state(workspace)
-    state[str(user_id)] = session_id
-    _save_state(workspace, state)
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +64,11 @@ def list_sessions(workspace: str) -> list[dict]:
 
 
 def create_session(workspace: str, name: str | None = None) -> dict:
-    """Create a new session and return its metadata."""
+    """Create a new session and return its metadata.
+
+    The auto-compaction interval is read from workspace settings at
+    compaction time, so it isn't stored on the session itself.
+    """
     sdir = _sessions_dir(workspace)
     os.makedirs(sdir, exist_ok=True)
     session_id = uuid.uuid4().hex[:12]
@@ -110,7 +80,6 @@ def create_session(workspace: str, name: str | None = None) -> dict:
         "messages": [],
         "summary": None,
         "long_term": [],
-        "compact_interval": DEFAULT_COMPACT_INTERVAL,
         "compacted_count": 0,
     }
     _atomic_write(_session_path(workspace, session_id), data, tmp_dir=sdir)
@@ -204,29 +173,6 @@ def append_messages(
 
 
 # ---------------------------------------------------------------------------
-# Ensure a session exists for a user in a workspace
-# ---------------------------------------------------------------------------
-
-def ensure_session_with_data(
-    workspace: str, user_id: int,
-) -> tuple[str, dict]:
-    """Return (session_id, loaded data), creating the session if needed."""
-    sid = get_current_session_id(workspace, user_id)
-    if sid:
-        data = load_session(workspace, sid)
-        if data is not None:
-            return (sid, data)
-    data = create_session(workspace)
-    set_current_session_id(workspace, user_id, data["id"])
-    return (data["id"], data)
-
-
-def ensure_session(workspace: str, user_id: int) -> str:
-    """Return the current session ID, creating one if needed."""
-    return ensure_session_with_data(workspace, user_id)[0]
-
-
-# ---------------------------------------------------------------------------
 # Summary and compaction
 # ---------------------------------------------------------------------------
 
@@ -274,16 +220,6 @@ def set_summary(
         if cleaned:
             data["name"] = cleaned
 
-    save_session(workspace, session_id, data)
-
-
-def set_compact_interval(
-    workspace: str, session_id: str, interval: int,
-) -> None:
-    data = load_session(workspace, session_id)
-    if data is None:
-        return
-    data["compact_interval"] = interval
     save_session(workspace, session_id, data)
 
 

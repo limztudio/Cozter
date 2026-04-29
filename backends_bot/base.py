@@ -310,17 +310,6 @@ class BotPlatform(ABC):
         else:
             await ctx.reply_text("Nothing to cancel.")
 
-    async def cmd_clear(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
-            return
-        new_sess = session.create_session(ws)
-        session.set_current_session_id(ws, ctx.user_id, new_sess["id"])
-        await ctx.reply_text(
-            "Conversation cleared. Next message starts a new session."
-        )
-
     # ----- /new (dir-input flow) -----------------------------------------
 
     async def cmd_new(self, ctx: BotContext) -> None:
@@ -548,74 +537,6 @@ class BotPlatform(ABC):
         desc = workspace.PERMISSION_DESCRIPTIONS[perm]
         await ctx.reply_text(f"Permission set to: {perm}\n{desc}")
 
-    # ----- /session -------------------------------------------------------
-
-    async def cmd_session(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
-            return
-        current_sid = session.get_current_session_id(ws, ctx.user_id)
-        sessions = session.list_sessions(ws)
-
-        lines = []
-        if current_sid:
-            current_meta = next(
-                (s for s in sessions if s["id"] == current_sid), None,
-            )
-            if current_meta:
-                lines.append(
-                    f"Current session: {current_meta['name']}"
-                    f" ({current_meta['message_count']} msgs)"
-                )
-            else:
-                lines.append("Current session: (invalid)")
-        else:
-            lines.append("Current session: (none)")
-
-        if sessions:
-            lines.append("\nSessions:")
-            for i, s in enumerate(sessions, 1):
-                marker = " <-" if s["id"] == current_sid else ""
-                lines.append(
-                    f"  {i}. {s['name']}"
-                    f" ({s['message_count']} msgs){marker}"
-                )
-        else:
-            lines.append("\nNo sessions yet.")
-
-        lines.append(
-            "\nEnter a number to switch, or 'new' to create (or /cancel):"
-        )
-        await ctx.reply_text("\n".join(lines))
-        self._expect_input(ctx.user_id, self._receive_session)
-
-    async def _receive_session(self, ctx: BotContext) -> None:
-        ws = workspace.get_current(ctx.user_id, self.platform_id)
-        if not ws:
-            await ctx.reply_text(_NO_WS_MSG)
-            return
-        text = ctx.text.strip()
-        if text.lower() == "new":
-            new_sess = session.create_session(ws)
-            session.set_current_session_id(ws, ctx.user_id, new_sess["id"])
-            await ctx.reply_text(
-                f"New session created: {new_sess['name']}"
-            )
-            return
-        if text.isdigit():
-            sessions = session.list_sessions(ws)
-            idx = int(text) - 1
-            if 0 <= idx < len(sessions):
-                chosen = sessions[idx]
-                session.set_current_session_id(ws, ctx.user_id, chosen["id"])
-                await ctx.reply_text(f"Switched to: {chosen['name']}")
-                return
-        await ctx.reply_text(
-            "Invalid input. Enter a number, 'new', or /cancel:"
-        )
-        self._expect_input(ctx.user_id, self._receive_session)
-
     # ----- /refresh -------------------------------------------------------
 
     async def cmd_refresh(self, ctx: BotContext) -> None:
@@ -652,74 +573,30 @@ class BotPlatform(ABC):
         arg = ctx.args.strip().lower().split()
         first = arg[0] if arg else ""
 
-        if first == "now":
-            sid = session.ensure_session(ws, ctx.user_id)
-            await ctx.reply_text("Compacting session...")
-            summary_model = workspace.get_summary_model(ws)
-            backend_name = workspace.get_backend_name(ws)
-            new_summary, new_long_term, new_title = await agent.compact_session(
-                ws, sid, summary_model, backend_name=backend_name,
-            )
-            if new_summary:
-                async with agent.get_workspace_lock(ws):
-                    session.set_summary(
-                        ws, sid, new_summary,
-                        keep_recent=agent.KEEP_RECENT_AFTER_COMPACT,
-                        long_term_rewrite=new_long_term,
-                        title=new_title,
-                    )
-                    colony_count = colony.bump_compact_count(ws)
-                agent.maybe_trigger_colony(
-                    ws, colony_count, summary_model,
-                    backend_name=backend_name,
-                )
-                lt_count = (
-                    len(new_long_term)
-                    if new_long_term is not None else "?"
-                )
-                await ctx.reply_text(
-                    f"Session compacted ({lt_count} long-term items)."
-                )
-            else:
-                await ctx.reply_text(
-                    "Compaction produced no output - session unchanged."
-                )
-            return
-
         if first.isdigit():
-            sid = session.ensure_session(ws, ctx.user_id)
             interval = int(first)
-            session.set_compact_interval(ws, sid, interval)
+            try:
+                workspace.set_compact_interval(ws, interval)
+            except ValueError as e:
+                await ctx.reply_text(f"Error: {e}")
+                return
             await ctx.reply_text(
                 f"Compact interval set to {interval} messages."
             )
             return
 
-        sid = session.get_current_session_id(ws, ctx.user_id)
-        if not sid:
-            await ctx.reply_text(
-                "No session yet. Send a message to start one.\n\n"
-                "Usage:\n"
-                "  /compact <number> - set interval\n"
-                "  /compact now - compact immediately"
-            )
-            return
-        sess_data = session.load_session(ws, sid) or {}
-        current = sess_data.get(
-            "compact_interval", session.DEFAULT_COMPACT_INTERVAL,
-        )
-        total = session.total_message_count(sess_data)
-        summary = sess_data.get("summary")
-        long_term = sess_data.get("long_term") or []
+        current = workspace.get_compact_interval(ws)
+        sessions = session.list_sessions(ws)
+        total_msgs = sum(s.get("message_count", 0) for s in sessions)
         lines = [
             f"Compact interval: {current} messages",
-            f"Total messages: {total}",
-            f"Has summary: {'yes' if summary else 'no'}",
-            f"Long-term memory items: {len(long_term)}",
+            f"Sessions: {len(sessions)} ({total_msgs} total messages)",
+            "",
+            "Compaction is automatic — each session compacts itself "
+            f"every {current} messages.",
             "",
             "Usage:",
             "  /compact <number> - set interval",
-            "  /compact now - compact immediately",
         ]
         await ctx.reply_text("\n".join(lines))
 
@@ -1546,8 +1423,9 @@ class BotPlatform(ABC):
             )
             return
 
-        # Name the session after the command (truncated) so /session
-        # listings momentarily show what's running.
+        # Distinguishable name — the auto-router keys off session
+        # names/topics and the "⏰" prefix together with the non-default
+        # name keeps the auto-title task from racing the delete.
         label = text.strip().splitlines()[0] if text.strip() else "scheduled"
         if len(label) > 40:
             label = label[:40] + "…"
@@ -1674,14 +1552,12 @@ def _build_command_registry() -> dict[str, Handler]:
         "start":        BotPlatform.cmd_start,
         "version":      BotPlatform.cmd_version,
         "cancel":       BotPlatform.cmd_cancel,
-        "clear":        BotPlatform.cmd_clear,
         "new":          BotPlatform.cmd_new,
         "open":         BotPlatform.cmd_open,
         "model":        BotPlatform.cmd_model,
         "summarymodel": BotPlatform.cmd_summarymodel,
         "agent":        BotPlatform.cmd_agent,
         "permission":   BotPlatform.cmd_permission,
-        "session":      BotPlatform.cmd_session,
         "refresh":      BotPlatform.cmd_refresh,
         "compact":      BotPlatform.cmd_compact,
         "colony":       BotPlatform.cmd_colony,
