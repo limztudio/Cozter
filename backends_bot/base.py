@@ -668,6 +668,11 @@ class BotPlatform(ABC):
                         long_term_rewrite=new_long_term,
                         title=new_title,
                     )
+                    colony_count = colony.bump_compact_count(ws)
+                agent.maybe_trigger_colony(
+                    ws, colony_count, summary_model,
+                    backend_name=backend_name,
+                )
                 lt_count = (
                     len(new_long_term)
                     if new_long_term is not None else "?"
@@ -759,9 +764,10 @@ class BotPlatform(ABC):
         items = colony.get_items(ws)
         count = colony.get_compact_count(ws)
         interval = workspace.get_colony_interval(ws)
-        until = (interval - (count % interval)) if interval > 0 else 0
-        if until == interval:
-            until = 0  # next compaction will trigger
+        # interval - (count % interval) is in [1, interval]: when count
+        # is a multiple of interval (start, or just-consolidated state),
+        # a full interval of compactions is needed before the next pass.
+        until = interval - (count % interval) if interval > 0 else 0
         lines = [
             f"Colony items: {len(items)}",
             f"Compactions since last pass: {count % interval}/{interval}",

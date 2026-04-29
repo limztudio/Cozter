@@ -726,22 +726,38 @@ async def _maybe_compact(
             "Session %s compacted, summary %d chars, long_term %s items",
             session_id, len(new_summary), lt_count,
         )
-
-        # Every Nth compaction, run a workspace-wide colony pass. We
-        # fire-and-forget so the user reply isn't gated on it; if the
-        # bot is shut down mid-run the colony is just left as-is and
-        # the next interval hit will try again.
-        interval = workspace_mod.get_colony_interval(workspace_path)
-        if interval > 0 and colony_count % interval == 0:
-            logger.info(
-                "Colony pass triggered (count=%d, interval=%d)",
-                colony_count, interval,
-            )
-            asyncio.create_task(colony_consolidate(
-                workspace_path, summary_model, backend_name=backend_name,
-            ))
+        maybe_trigger_colony(
+            workspace_path, colony_count, summary_model,
+            backend_name=backend_name,
+        )
     except Exception:
         logger.error("Compaction check failed", exc_info=True)
+
+
+def maybe_trigger_colony(
+    workspace_path: str,
+    compact_count: int,
+    summary_model: str | None,
+    *,
+    backend_name: str | None,
+) -> None:
+    """Fire a colony consolidation task when the interval is hit.
+
+    Should be called after a successful compaction (auto or manual)
+    has bumped the workspace-wide compaction counter. Fire-and-forget:
+    the user-visible reply isn't gated on it, and a shutdown mid-pass
+    just leaves the colony unchanged for the next interval hit.
+    """
+    interval = workspace_mod.get_colony_interval(workspace_path)
+    if interval <= 0 or compact_count % interval != 0:
+        return
+    logger.info(
+        "Colony pass triggered (count=%d, interval=%d)",
+        compact_count, interval,
+    )
+    asyncio.create_task(colony_consolidate(
+        workspace_path, summary_model, backend_name=backend_name,
+    ))
 
 
 # ------------------------------------------------------------------
