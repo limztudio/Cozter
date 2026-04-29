@@ -2,8 +2,12 @@
 
 import asyncio
 import json
+import logging
 import os
 import tempfile
+from collections.abc import AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 
 def drain_queue(
@@ -38,3 +42,66 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
         except OSError:
             pass
         raise
+
+
+async def iter_stream_lines(
+    stream: asyncio.StreamReader, chunk_size: int = 64 * 1024,
+) -> AsyncIterator[str]:
+    """Yield decoded stdout lines without StreamReader.readline() limits."""
+    buffer = bytearray()
+
+    while True:
+        chunk = await stream.read(chunk_size)
+        if not chunk:
+            if buffer:
+                yield buffer.decode("utf-8", errors="replace")
+            return
+
+        buffer.extend(chunk)
+        parts = buffer.split(b"\n")
+        buffer = bytearray(parts.pop())
+
+        for part in parts:
+            yield part.decode("utf-8", errors="replace")
+
+
+async def drain_llm_subprocess(
+    proc: asyncio.subprocess.Process,
+    backend,
+    timeout: float,
+    label: str,
+) -> str:
+    """Drain JSON event lines from an internal LLM subprocess and return
+    the last agent text emitted, or an empty string on timeout/no output.
+
+    The subprocess is *always* killed and reaped on exit — including on
+    cancellation — so /stop or any other exception path can't leak a
+    running subprocess past the cancelled task.
+    """
+    raw = ""
+    try:
+        async with asyncio.timeout(timeout):
+            async for line in iter_stream_lines(proc.stdout):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    if not raw:
+                        raw = line  # bare-text fallback
+                    continue
+                text = backend.extract_agent_text(event)
+                if text:
+                    raw = text
+            await proc.wait()
+    except TimeoutError:
+        logger.warning("%s timed out after %ds", label, timeout)
+    finally:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except OSError:
+                pass
+    return raw

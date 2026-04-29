@@ -614,7 +614,7 @@ class BotPlatform(ABC):
             await ctx.reply_text("Consolidating colony...")
             summary_model = workspace.get_summary_model(ws)
             backend_name = workspace.get_backend_name(ws)
-            ok = await agent.colony_consolidate(
+            ok = await colony.consolidate(
                 ws, summary_model, backend_name=backend_name,
             )
             if ok:
@@ -792,7 +792,7 @@ class BotPlatform(ABC):
         }
         # Hold the workspace lock so a concurrent scheduler tick
         # writing last_fired can't clobber this insert.
-        async with agent.get_workspace_lock(ws):
+        async with workspace.get_lock(ws):
             schedules.add_schedule(ws, ctx.user_id, schedule)
         await ctx.reply_text(
             f"Schedule created:\n"
@@ -846,7 +846,7 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, self._receive_schedules)
             return
         removed = user_schedules[idx]
-        async with agent.get_workspace_lock(ws):
+        async with workspace.get_lock(ws):
             schedules.remove_schedule(ws, ctx.user_id, removed["id"])
         await ctx.reply_text(
             f"Removed: [{','.join(removed.get('days', []))}]"
@@ -1090,7 +1090,7 @@ class BotPlatform(ABC):
             # Persist last_fired BEFORE queueing the command, so a
             # crash between marking and queueing at worst drops the
             # fire rather than firing it twice.
-            async with agent.get_workspace_lock(ws):
+            async with workspace.get_lock(ws):
                 schedules.update_schedule_fired(
                     ws, uid, sched["id"], slot.isoformat(),
                 )

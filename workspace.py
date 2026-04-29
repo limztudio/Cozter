@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -236,3 +237,20 @@ def set_compact_interval(workspace_path: str, interval: int) -> None:
     if interval < 1:
         raise ValueError("compact_interval must be >= 1")
     _set_setting(workspace_path, "compact_interval", interval)
+
+
+# ---------------------------------------------------------------------------
+# Per-workspace lock — every concurrent reader/writer of a workspace's files
+# (sessions, colony, schedules, settings) takes this lock to serialize.
+# ---------------------------------------------------------------------------
+
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def get_lock(workspace_path: str) -> asyncio.Lock:
+    """Return the per-workspace asyncio lock; creates it on first use."""
+    lock = _locks.get(workspace_path)
+    if lock is None:
+        lock = asyncio.Lock()
+        _locks[workspace_path] = lock
+    return lock
