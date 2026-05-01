@@ -133,6 +133,9 @@ class BotPlatform(ABC):
         self._task_locks: dict[str, asyncio.Lock] = {}
         self._message_queues: dict[str, asyncio.Queue] = {}
         self._inject_queues: dict[str, asyncio.Queue] = {}
+        # Users whose last agent reply ended with [[await]] — their queue
+        # drain is paused until the next message from them arrives.
+        self._awaiting_answer: set[str] = set()
         # Multi-step flow state: maps user_id -> next text-input callback.
         self._pending_input: dict[str, Handler] = {}
         # Scheduler state. Double-fire within one tick cycle is prevented
@@ -620,6 +623,10 @@ class BotPlatform(ABC):
     # ----- /stop ----------------------------------------------------------
 
     async def cmd_stop(self, ctx: BotContext) -> None:
+        # /stop unconditionally clears the await flag — the user is
+        # giving up on the pending question, so the queue should be
+        # free to drain (or stay drained, since /stop also empties it).
+        self._awaiting_answer.discard(ctx.user_id)
         task = self._running_tasks.get(ctx.user_id)
         if task and not task.done():
             task.cancel()
@@ -1154,6 +1161,11 @@ class BotPlatform(ABC):
                 asyncio.create_task(self._drain_message_queue(uid))
             return
 
+        # The user is sending a message — if the previous turn paused
+        # for an answer ([[await]]), this message is the answer. Clear
+        # the flag so the drain after this turn resumes normally.
+        self._awaiting_answer.discard(uid)
+
         # Direct path: persist BEFORE acquiring the lock so a crash
         # between persist and processing still leaves the entry on
         # disk to be resumed by restore_queues() after restart.
@@ -1272,7 +1284,13 @@ class BotPlatform(ABC):
                 except Exception:
                     pass
 
-        await self._send_result(chat_id, ws, result)
+        # Only opt into the [[await]] pause for interactive turns —
+        # ephemeral schedule turns (session_id is set) get their session
+        # deleted right after, so there's nothing to resume into.
+        await self._send_result(
+            chat_id, ws, result,
+            uid=uid if session_id is None else None,
+        )
 
     async def _run_ephemeral_turn(
         self, uid: str, chat_id: str, text: str,
@@ -1317,11 +1335,25 @@ class BotPlatform(ABC):
 
     async def _send_result(
         self, chat_id: str, ws: str, result: agent.AgentResult,
+        *, uid: str | None = None,
     ) -> None:
+        """Send the agent's reply (text + attachments) and honor [[await]].
+
+        ``uid``, when provided, opts the user's queue into the await
+        pause: if any text event contains ``[[await]]``, the marker is
+        stripped and ``self._awaiting_answer`` is set so the next
+        drain pass will block until the user's next message clears it.
+        Ephemeral schedule turns omit ``uid`` because their session is
+        deleted right after, so there's nothing to resume into.
+        """
+        awaiting = False
         for ev in result.events:
             if ev.kind != "text":
                 continue
             text, attach_paths = agent.extract_attachments(ev.content, ws)
+            text, ev_awaiting = agent.extract_await(text)
+            if ev_awaiting:
+                awaiting = True
             if text:
                 await self.send_text(chat_id, text, rich=True)
             for path in attach_paths:
@@ -1338,6 +1370,12 @@ class BotPlatform(ABC):
                         )
                     except Exception:
                         pass
+        if awaiting and uid is not None:
+            self._awaiting_answer.add(uid)
+            logger.info(
+                "User %s awaiting answer; queue paused until next message",
+                uid,
+            )
 
     async def _drain_message_queue(self, uid: str) -> None:
         q = self._message_queues.get(uid)
@@ -1347,6 +1385,11 @@ class BotPlatform(ABC):
 
         while not q.empty():
             if lock.locked():
+                break
+            # Agent ended its last reply with [[await]] — pause the queue
+            # until the user sends an answer (which clears the flag in
+            # _dispatch_ai).
+            if uid in self._awaiting_answer:
                 break
             await lock.acquire()
             try:

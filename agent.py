@@ -24,7 +24,12 @@ logger = logging.getLogger(__name__)
 CAPABILITY_HINT = (
     "[System: To attach a file in your reply, include "
     "\"[[attach: PATH]]\" on its own line. PATH is relative to the "
-    "workspace root, or absolute.]"
+    "workspace root, or absolute. "
+    "If you need a decision from the user before you can continue, "
+    "ask the question in your reply and end with \"[[await]]\". The "
+    "bot will pause — including any queued messages or scheduled "
+    "commands — until the user's next message, which you should "
+    "treat as the answer.]"
 )
 
 MAX_HISTORY_CHARS = 50_000
@@ -32,6 +37,7 @@ MAX_HISTORY_CHARS = 50_000
 _ATTACH_RE = re.compile(
     r"\[\[attach:\s*([^\]\n]+?)\s*\]\]", re.IGNORECASE,
 )
+_AWAIT_RE = re.compile(r"\[\[await\]\]", re.IGNORECASE)
 
 
 def extract_attachments(text: str, ws: str) -> tuple[str, list[str]]:
@@ -65,6 +71,20 @@ def extract_attachments(text: str, ws: str) -> tuple[str, list[str]]:
     cleaned = _ATTACH_RE.sub(_sub, text)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned, paths
+
+
+def extract_await(text: str) -> tuple[str, bool]:
+    """Detect and strip ``[[await]]`` markers from agent-emitted text.
+
+    Pairs with :data:`CAPABILITY_HINT` (which instructs the model to
+    use the marker when it needs a decision before continuing).
+    Returns ``(cleaned_text, awaiting)``.
+    """
+    if not _AWAIT_RE.search(text):
+        return text, False
+    cleaned = _AWAIT_RE.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, True
 
 
 # ------------------------------------------------------------------
