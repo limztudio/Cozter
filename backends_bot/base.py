@@ -626,6 +626,7 @@ class BotPlatform(ABC):
         # /stop unconditionally clears the await flag — the user is
         # giving up on the pending question, so the queue should be
         # free to drain (or stay drained, since /stop also empties it).
+        was_awaiting = ctx.user_id in self._awaiting_answer
         self._awaiting_answer.discard(ctx.user_id)
         task = self._running_tasks.get(ctx.user_id)
         if task and not task.done():
@@ -635,8 +636,14 @@ class BotPlatform(ABC):
             # come back on the next restart.
             await self._clear_persistent_queue(ctx.user_id)
             await ctx.reply_text("Cancelling...")
-        else:
-            await ctx.reply_text("Nothing is running.")
+            return
+        if was_awaiting:
+            asyncio.create_task(self._drain_message_queue(ctx.user_id))
+            await ctx.reply_text(
+                "Cleared pending question; resuming queued work."
+            )
+            return
+        await ctx.reply_text("Nothing is running.")
 
     # ----- /inject --------------------------------------------------------
 
@@ -1161,16 +1168,18 @@ class BotPlatform(ABC):
                 asyncio.create_task(self._drain_message_queue(uid))
             return
 
-        # The user is sending a message — if the previous turn paused
-        # for an answer ([[await]]), this message is the answer. Clear
-        # the flag so the drain after this turn resumes normally.
-        self._awaiting_answer.discard(uid)
-
         # Direct path: persist BEFORE acquiring the lock so a crash
         # between persist and processing still leaves the entry on
         # disk to be resumed by restore_queues() after restart.
         entry_id = await self._persist_enqueue(uid, text, chat_id)
         await lock.acquire()
+        # The user is sending a message — if the previous turn paused
+        # for an answer ([[await]]), this message is the answer. Clear
+        # the flag *after* lock acquisition: any concurrent drain task
+        # racing during the persist_enqueue await will then see the
+        # flag still set and break, instead of grabbing the lock and
+        # processing a queued (non-answer) message ahead of us.
+        self._awaiting_answer.discard(uid)
         # Register the task as soon as the lock is held, so /stop can
         # find it even if the turn yields on its initial Telegram/Slack
         # API calls (send "Thinking..." etc.) before it fully starts.
