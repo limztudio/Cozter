@@ -26,7 +26,7 @@ ROUTER_PROMPT = (
     "- Do NOT call any tools or read any files; decide from the "
     "input below.\n"
 )
-ROUTER_TIMEOUT = 30  # seconds
+ROUTER_TIMEOUT = 60  # seconds; on timeout the router falls back to NEW
 ROUTER_MAX_SESSIONS = 20  # cap input size; sessions are listed newest-first
 ROUTER_PER_SESSION_CHARS = 600
 ROUTER_PROMPT_PREVIEW_CHARS = 1_000

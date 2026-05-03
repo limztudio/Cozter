@@ -25,7 +25,7 @@ TITLE_PROMPT = (
     "IMPORTANT: Do NOT call any tools or read any files. The input "
     "below is everything you need."
 )
-TITLE_TIMEOUT = 30  # seconds
+TITLE_TIMEOUT = 60  # seconds; generous headroom for an occasional slow API call
 TITLE_MAX_CHARS = 60
 TITLE_CONTEXT_CHARS = 8_000
 
