@@ -21,7 +21,9 @@ TITLE_PROMPT = (
     "messages and produce a short descriptive name: 3-7 words, "
     "Title Case, no trailing punctuation, no quotes, no commentary. "
     "Pick the dominant topic, not the most recent line. Output only "
-    "the title."
+    "the title.\n\n"
+    "IMPORTANT: Do NOT call any tools or read any files. The input "
+    "below is everything you need."
 )
 TITLE_TIMEOUT = 30  # seconds
 TITLE_MAX_CHARS = 60

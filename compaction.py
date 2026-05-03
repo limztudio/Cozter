@@ -25,13 +25,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_COMPACT_INTERVAL = 10
 KEEP_RECENT_AFTER_COMPACT = 5
 MAX_SUMMARY_CHARS = 80_000  # ~20K tokens - safe for most models
-COMPACT_TIMEOUT = 120  # seconds
+COMPACT_TIMEOUT = 240  # seconds; large sessions with rich long-term lists need headroom
 
 SUMMARY_PROMPT = (
     "You are compacting a conversation into two memory layers: a SCRATCH "
     "summary (rewritten each compaction) and LONG-TERM memory (persistent "
     "facts that survive future compactions). You will also produce a short "
     "TITLE that names the session.\n\n"
+    "IMPORTANT: This is a pure text-summarization task. Do NOT call any "
+    "tools, shell commands, file reads, or web fetches. The conversation "
+    "below is everything you need — work from it directly and emit the "
+    "output as plain text.\n\n"
     "=== SCRATCH SUMMARY ===\n"
     "Produce a concise abstract of the conversation below. This abstract "
     "REPLACES the raw history, so it must be thorough enough to continue "

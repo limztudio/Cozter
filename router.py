@@ -23,6 +23,8 @@ ROUTER_PROMPT = (
     "- Choose NEW for genuinely new topics, not minor digressions.\n"
     "- Output exactly one line: either the bare session id "
     "(no quotes, no commentary), or the literal word NEW.\n"
+    "- Do NOT call any tools or read any files; decide from the "
+    "input below.\n"
 )
 ROUTER_TIMEOUT = 30  # seconds
 ROUTER_MAX_SESSIONS = 20  # cap input size; sessions are listed newest-first

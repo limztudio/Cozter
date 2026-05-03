@@ -107,6 +107,10 @@ def bump_compact_count(workspace: str) -> int:
 CONSOLIDATE_PROMPT = (
     "You are consolidating a workspace's shared memory ('colony') from "
     "the long-term memory of every session in the workspace.\n\n"
+    "IMPORTANT: This is a pure text-merge task. Do NOT call any tools, "
+    "shell commands, file reads, or web fetches. The input below is "
+    "everything you need — work from it directly and emit the output "
+    "as plain text.\n\n"
     "Goal: maintain a canonical list of facts that recur across "
     "sessions, AND retire colony items that are no longer used by "
     "any session.\n\n"
@@ -145,7 +149,7 @@ CONSOLIDATE_PROMPT = (
     "- <remaining session-specific item>\n"
     "[/SESSION]\n"
 )
-CONSOLIDATE_TIMEOUT = 180  # heavier than per-session compaction
+CONSOLIDATE_TIMEOUT = 360  # heavier than per-session compaction; aggregates all sessions
 CONSOLIDATE_MAX_INPUT_CHARS = 100_000
 
 _SESSION_BLOCK_RE = re.compile(
