@@ -1037,6 +1037,13 @@ class BotPlatform(ABC):
             )
             return
 
+        # Ensure both per-user maps exist. After a fresh bot start the
+        # scheduler can fire BEFORE the user types anything, so neither
+        # _message_queues nor _task_locks may have an entry yet —
+        # _drain_message_queue's bare ``self._task_locks[uid]`` lookup
+        # would otherwise KeyError and crash the drain task silently.
+        if uid not in self._task_locks:
+            self._task_locks[uid] = asyncio.Lock()
         if uid not in self._message_queues:
             self._message_queues[uid] = asyncio.Queue(
                 maxsize=self.max_queue_size,
@@ -1390,7 +1397,9 @@ class BotPlatform(ABC):
         q = self._message_queues.get(uid)
         if not q:
             return
-        lock = self._task_locks[uid]
+        # Defensive: if a queue exists, a lock must too. Create on demand
+        # so a missing lock doesn't crash the drain task.
+        lock = self._task_locks.setdefault(uid, asyncio.Lock())
 
         while not q.empty():
             if lock.locked():
