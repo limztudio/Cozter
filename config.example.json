@@ -6,6 +6,8 @@
   "slack_app_token": "",
   "slack_channel_ids": [],
 
+  "llama_server_url": "http://127.0.0.1:8080",
+
   "update_check_interval": 10,
   "recent_workspace_limit": 10
 }

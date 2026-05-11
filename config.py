@@ -12,10 +12,31 @@ _DEFAULT_CONFIG = {
     "slack_bot_token": "",
     "slack_app_token": "",
     "slack_channel_ids": [],
+    "llama_server_url": "http://127.0.0.1:8080",
     "update_check_interval": 10,
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
 }
+
+
+def get_llama_server_url() -> str:
+    """Return the configured llama-server URL without bot-token validation.
+
+    CLI mode never calls load_config (it would create a daemon-only
+    config.json), so the llama backend has to read the file itself
+    if one exists - and fall back to the default otherwise.
+    """
+    if not os.path.exists(CONFIG_PATH):
+        return _DEFAULT_CONFIG["llama_server_url"]
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return _DEFAULT_CONFIG["llama_server_url"]
+    url = cfg.get("llama_server_url") or _DEFAULT_CONFIG["llama_server_url"]
+    if isinstance(url, str):
+        return url.strip() or _DEFAULT_CONFIG["llama_server_url"]
+    return _DEFAULT_CONFIG["llama_server_url"]
 
 
 def load_config() -> dict:

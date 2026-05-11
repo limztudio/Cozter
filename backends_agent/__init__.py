@@ -13,11 +13,13 @@ from .base import Backend
 from .claude_code import ClaudeCodeBackend
 from .codex import CodexBackend
 from .copilot import CopilotBackend
+from .llama import LlamaBackend
 
 _BACKENDS: dict[str, Backend] = {
     "codex": CodexBackend(),
     "copilot": CopilotBackend(),
     "claude_code": ClaudeCodeBackend(),
+    "llama": LlamaBackend(),
 }
 
 AVAILABLE_BACKENDS = list(_BACKENDS.keys())
@@ -42,6 +44,7 @@ __all__ = [
     "CodexBackend",
     "CopilotBackend",
     "ClaudeCodeBackend",
+    "LlamaBackend",
     "AVAILABLE_BACKENDS",
     "DEFAULT_BACKEND",
     "get_backend",
