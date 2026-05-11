@@ -285,15 +285,11 @@ async def main_cli(*, auto_update: bool = True) -> None:
     """
     from .backends_bot.cli import CliBot
 
-    # CLI auto-update uses the same interval as daemon mode when a
-    # config.json happens to be present; otherwise fall back to the
-    # built-in default so the user gets updates without setup.
-    try:
-        cli_interval = cfg.load_config().get("update_check_interval", 10)
-    except SystemExit:
-        # load_config sys.exits when neither platform is configured;
-        # the CLI doesn't need it, just use the default.
-        cli_interval = 10
+    # CLI mode has no config to read - reading one would create a
+    # spurious config.json with daemon-only fields on first run and
+    # print misleading "fill in your tokens" messages. Match the
+    # daemon's default interval directly.
+    cli_interval = 10
 
     updater.init_startup_commit()
     logger.info(
