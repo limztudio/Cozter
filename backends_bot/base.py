@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import uuid
 from abc import ABC, abstractmethod
@@ -829,8 +830,15 @@ class BotPlatform(ABC):
 
     def _queue_file_path(self) -> str:
         os.makedirs(workspace.CONFIG_DIR, exist_ok=True)
+        # Sanitize platform_id for the filesystem: ``cli:local`` and
+        # ``slack:U123ABC`` would otherwise produce filenames with a
+        # colon, which Windows rejects (and POSIX treats as legal but
+        # cross-platform-hostile). Strip the full Windows-reserved set.
+        safe = re.sub(
+            r'[<>:"/\\|?*\x00-\x1f]', '_', self.platform_id,
+        )
         return os.path.join(
-            workspace.CONFIG_DIR, f"queue_{self.platform_id}.json",
+            workspace.CONFIG_DIR, f"queue_{safe}.json",
         )
 
     def _read_queue_file(self) -> dict:
