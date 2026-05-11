@@ -3,13 +3,17 @@ import subprocess
 import sys
 import time
 
-# Re-launch as module if run as `python Cozter` (no package context)
+# Re-launch as module if run as `python Cozter` (no package context).
+# Forward any CLI args (e.g. -cli) so flags survive the re-exec.
 if __name__ == "__main__" and not __package__:
     module_dir = os.path.dirname(os.path.abspath(__file__))
     module_name = os.path.basename(module_dir)
     parent_dir = os.path.dirname(module_dir)
     sys.exit(
-        subprocess.call([sys.executable, "-m", module_name], cwd=parent_dir)
+        subprocess.call(
+            [sys.executable, "-m", module_name, *sys.argv[1:]],
+            cwd=parent_dir,
+        )
     )
 
 
@@ -100,7 +104,40 @@ async def update_loop(bots: list[BotPlatform], interval: int) -> None:
             logger.exception("Update check failed")
 
 
+def _cli_mode_requested() -> bool:
+    """Return True if the user passed -cli / --cli on the command line."""
+    flags = {"-cli", "--cli"}
+    return any(arg in flags for arg in sys.argv[1:])
+
+
+async def main_cli() -> None:
+    """Run the local stdin/stdout chat surface.
+
+    No config.json, no Telegram/Slack tokens, no update loop - just an
+    interactive REPL backed by the same agent/session machinery.
+    """
+    from .backends_bot.cli import CliBot
+
+    updater.init_startup_commit()
+    logger.info(
+        "Cozter CLI mode (version %s, %s)",
+        updater.get_current_version(),
+        updater.get_last_commit_date(),
+    )
+
+    bot = CliBot()
+    await bot.start()
+    try:
+        await bot.wait_until_exit()
+    finally:
+        await bot.stop()
+
+
 async def main() -> None:
+    if _cli_mode_requested():
+        await main_cli()
+        return
+
     config = cfg.load_config()
     interval = config["update_check_interval"]
 
@@ -160,6 +197,12 @@ def run() -> None:
         pass
     except Exception as exc:
         crash_path = log_crash(exc)
+        if _cli_mode_requested():
+            # CLI mode is interactive; auto-restarting would be jarring.
+            logger.critical(
+                "Cozter crashed - crash log written to %s", crash_path,
+            )
+            return
         logger.critical(
             "Unhandled exception - crash log written to %s."
             " Restarting in 5s...",

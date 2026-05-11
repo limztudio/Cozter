@@ -1264,14 +1264,20 @@ class BotPlatform(ABC):
         async def on_event(ev: agent.ChatEvent) -> None:
             nonlocal last_edit
             if ev.kind == "tool":
-                status_lines.append(
-                    f"» {ev.content.split(chr(10))[0][:80]}"
-                )
+                line = f"» {ev.content.split(chr(10))[0][:80]}"
             elif ev.kind == "file":
-                status_lines.append(f"» {ev.content[:80]}")
+                line = f"» {ev.content[:80]}"
             else:
                 return
+            status_lines.append(line)
             if thinking_handle is None:
+                # Platform doesn't support editable status messages
+                # (e.g. CLI mode). Emit each event as a fresh message
+                # so the user still sees progress.
+                try:
+                    await self.send_text(chat_id, line)
+                except Exception:
+                    pass
                 return
             now = asyncio.get_running_loop().time()
             if now - last_edit < 1.5:
