@@ -10,12 +10,14 @@ context building, compaction policy, and session logging stay there.
 """
 
 from .base import Backend
+from .claude_code import ClaudeCodeBackend
 from .codex import CodexBackend
 from .copilot import CopilotBackend
 
 _BACKENDS: dict[str, Backend] = {
     "codex": CodexBackend(),
     "copilot": CopilotBackend(),
+    "claude_code": ClaudeCodeBackend(),
 }
 
 AVAILABLE_BACKENDS = list(_BACKENDS.keys())
@@ -39,6 +41,7 @@ __all__ = [
     "Backend",
     "CodexBackend",
     "CopilotBackend",
+    "ClaudeCodeBackend",
     "AVAILABLE_BACKENDS",
     "DEFAULT_BACKEND",
     "get_backend",
