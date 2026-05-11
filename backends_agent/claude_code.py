@@ -21,7 +21,9 @@ import asyncio
 import logging
 import os
 
-from .base import AgentResult, Backend, ChatEvent
+from .base import (
+    AgentResult, Backend, ChatEvent, resolve_executable_prefix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +61,9 @@ class ClaudeCodeBackend(Backend):
         *,
         compaction: bool = False,
     ) -> asyncio.subprocess.Process:
+        prefix = resolve_executable_prefix("claude") or ["claude"]
         cmd: list[str] = [
-            "claude",
+            *prefix,
             "--print",
             "--output-format", "stream-json",
             "--verbose",  # required by claude when stream-json is set

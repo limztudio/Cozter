@@ -3,7 +3,9 @@
 import asyncio
 import logging
 
-from .base import AgentResult, Backend, ChatEvent
+from .base import (
+    AgentResult, Backend, ChatEvent, resolve_executable_prefix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,8 @@ class CodexBackend(Backend):
         *,
         compaction: bool = False,
     ) -> asyncio.subprocess.Process:
-        cmd = ["codex", "exec", "--ephemeral", "--json", "-C", workspace_path]
+        prefix = resolve_executable_prefix("codex") or ["codex"]
+        cmd = [*prefix, "exec", "--ephemeral", "--json", "-C", workspace_path]
         if model:
             cmd += ["-m", model]
 

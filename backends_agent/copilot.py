@@ -17,7 +17,9 @@ and log unknown event types so the schema can be refined.
 import asyncio
 import logging
 
-from .base import AgentResult, Backend, ChatEvent
+from .base import (
+    AgentResult, Backend, ChatEvent, resolve_executable_prefix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +67,10 @@ class CopilotBackend(Backend):
             )
             prompt = prompt[-_MAX_PROMPT_CHARS:]
 
-        cmd: list[str] = ["copilot", "--output-format", "json", "--no-color"]
+        prefix = resolve_executable_prefix("copilot") or ["copilot"]
+        cmd: list[str] = [
+            *prefix, "--output-format", "json", "--no-color",
+        ]
         if model:
             cmd += ["--model", model]
 
