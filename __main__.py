@@ -155,6 +155,39 @@ def _cli_respawner_loop() -> int:
             return rc
 
 
+def _windows_native_path() -> str:
+    """Return PATH as Windows itself would set it for a fresh cmd window.
+
+    When the launcher is started from a bash-like shell (msys2, Git Bash,
+    WSL interop), ``os.environ['PATH']`` is in Unix format (``/c/...``)
+    that ``cmd.exe`` cannot resolve - so a freshly spawned cmd window
+    can't find ``codex.exe`` etc even though the user can run them in
+    their normal terminal. We re-read PATH from the registry (system +
+    user) so the spawned console has the same PATH it would have if the
+    user opened ``cmd.exe`` from the Start menu.
+    """
+    import winreg
+    parts: list[str] = []
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ) as k:
+            value, _ = winreg.QueryValueEx(k, "Path")
+            if value:
+                parts.append(value)
+    except OSError:
+        pass
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as k:
+            value, _ = winreg.QueryValueEx(k, "Path")
+            if value:
+                parts.append(value)
+    except OSError:
+        pass
+    return ";".join(parts)
+
+
 def _spawn_cli_in_new_console() -> bool:
     """Spawn the script again in a fresh OS console window.
 
@@ -176,6 +209,12 @@ def _spawn_cli_in_new_console() -> bool:
     system = platform.system()
 
     if system == "Windows":
+        # Replace the inherited (possibly bash-mangled) PATH with what
+        # the registry says PATH should be, so the new cmd window sees
+        # the same tools the user gets from a stock Start-menu cmd.
+        native_path = _windows_native_path()
+        if native_path:
+            env["PATH"] = native_path
         # CREATE_NEW_CONSOLE attaches the child to a fresh console
         # window. Wrapping with ``cmd /k`` keeps that window open after
         # Python exits so the user can read any final output (including
