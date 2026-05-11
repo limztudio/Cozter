@@ -110,6 +110,93 @@ def _cli_mode_requested() -> bool:
     return any(arg in flags for arg in sys.argv[1:])
 
 
+# Set by the launcher process when it re-spawns itself inside a new
+# console window. Without this marker the spawned process would spawn
+# another window in turn (infinite recursion).
+_CLI_CHILD_ENV = "COZTER_CLI_CHILD"
+
+
+def _cli_child_mode() -> bool:
+    return os.environ.get(_CLI_CHILD_ENV) == "1"
+
+
+def _spawn_cli_in_new_console() -> bool:
+    """Spawn the script again in a fresh OS console window.
+
+    Returns True if a child was successfully started, False if no
+    suitable mechanism is available on this host. The caller should
+    fall back to running the CLI bot in the current terminal if False.
+    """
+    import platform
+    import shlex
+    import shutil as _shutil
+
+    py = sys.executable
+    inner_args = [py, "-m", "Cozter", *sys.argv[1:]]
+    cwd = os.getcwd()
+    env = {**os.environ, _CLI_CHILD_ENV: "1"}
+    system = platform.system()
+
+    if system == "Windows":
+        # CREATE_NEW_CONSOLE attaches the child to a fresh console
+        # window. Wrapping with ``cmd /k`` keeps that window open after
+        # Python exits so the user can read any final output (including
+        # a crash trace) before closing manually.
+        try:
+            cmdline = "cmd.exe /k " + subprocess.list2cmdline(inner_args)
+            subprocess.Popen(
+                cmdline,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                cwd=cwd, env=env,
+            )
+            return True
+        except Exception:
+            logger.exception("Failed to spawn Windows CLI console")
+            return False
+
+    # POSIX: try common terminal emulators in priority order. The
+    # trailing ``echo; read`` keeps the window open after Python exits
+    # so crash traces are visible.
+    inner_str = " ".join(shlex.quote(a) for a in inner_args)
+    inner_str += "; echo; echo '(press Enter to close)'; read"
+
+    if system == "Darwin":
+        script = (
+            f'tell application "Terminal" to do script '
+            f'"cd {shlex.quote(cwd)} && {inner_str}"'
+        )
+        if _shutil.which("osascript"):
+            try:
+                subprocess.Popen(
+                    ["osascript", "-e", script], env=env,
+                )
+                return True
+            except Exception:
+                logger.exception("Failed to spawn macOS Terminal")
+                return False
+        return False
+
+    candidates = [
+        ["gnome-terminal", "--", "bash", "-c", inner_str],
+        ["konsole", "-e", "bash", "-c", inner_str],
+        ["xfce4-terminal", "-e", "bash -c " + shlex.quote(inner_str)],
+        ["alacritty", "-e", "bash", "-c", inner_str],
+        ["kitty", "bash", "-c", inner_str],
+        ["xterm", "-e", "bash -c " + shlex.quote(inner_str)],
+    ]
+    for cmd in candidates:
+        if _shutil.which(cmd[0]):
+            try:
+                subprocess.Popen(cmd, cwd=cwd, env=env)
+                return True
+            except Exception:
+                logger.exception(
+                    "Failed to spawn terminal via %s", cmd[0],
+                )
+                continue
+    return False
+
+
 async def main_cli() -> None:
     """Run the local stdin/stdout chat surface.
 
@@ -135,6 +222,16 @@ async def main_cli() -> None:
 
 async def main() -> None:
     if _cli_mode_requested():
+        # First entry from the user's shell: spawn a fresh console
+        # window and exit. The spawned child sees COZTER_CLI_CHILD=1
+        # in its env, skips this branch, and runs the REPL directly.
+        if not _cli_child_mode():
+            if _spawn_cli_in_new_console():
+                return
+            logger.warning(
+                "Could not open a new console window; running CLI in"
+                " the current terminal instead.",
+            )
         await main_cli()
         return
 
