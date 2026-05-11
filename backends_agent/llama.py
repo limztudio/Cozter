@@ -21,8 +21,8 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import urllib.request
+import uuid
 from typing import Any
 
 import aiohttp
@@ -210,21 +210,29 @@ class LlamaBackend(Backend):
                 url, payload, proc,
             )
 
+            # OpenAI spec: when ``tool_calls`` is present, ``content``
+            # should be null (not ""). Some strict servers (notably
+            # llama-server in some builds) reject empty-string content
+            # alongside tool_calls.
             assistant_msg: dict[str, Any] = {
                 "role": "assistant",
-                "content": assistant_text or "",
+                "content": assistant_text if assistant_text else None,
             }
             if tool_calls:
                 assistant_msg["tool_calls"] = tool_calls
             messages.append(assistant_msg)
 
-            if not tool_calls:
-                # Final answer reached. Emit terminal event so the
-                # orchestrator captures any text that streamed in.
+            # Surface this turn's commentary even if more tool calls
+            # follow; otherwise the user would only see whatever the
+            # model says in the FINAL turn, losing explanations like
+            # "Let me check that file" that come before tool calls.
+            if assistant_text:
                 proc.emit({
-                    "type": "done",
-                    "text": assistant_text or "",
+                    "type": "assistant_text",
+                    "text": assistant_text,
                 })
+
+            if not tool_calls:
                 return
 
             # Execute each requested tool and append the result. ``approval``
@@ -234,9 +242,12 @@ class LlamaBackend(Backend):
                 result = await _execute_tool(
                     call, workspace_path, approval, proc,
                 )
+                # Include ``name`` alongside tool_call_id; strict
+                # llama-server builds reject tool messages without it.
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call.get("id", ""),
+                    "name": call.get("function", {}).get("name", ""),
                     "content": result,
                 })
 
@@ -261,9 +272,10 @@ class LlamaBackend(Backend):
             # the "Thinking..." rendering uncluttered.
             return
 
-        if etype == "done":
+        if etype == "assistant_text":
             text = event.get("text") or ""
             if text:
+                # Last text wins for result.text (matches codex/copilot).
                 result.text = text
                 result.events.append(ChatEvent(kind="text", content=text))
             return
@@ -298,7 +310,7 @@ class LlamaBackend(Backend):
         logger.debug("Llama: unhandled event %r", event)
 
     def extract_agent_text(self, event: dict) -> str | None:
-        if event.get("type") == "done":
+        if event.get("type") == "assistant_text":
             text = event.get("text")
             if isinstance(text, str) and text:
                 return text
@@ -374,8 +386,13 @@ async def _stream_completion(
 def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
     """Fold a single streaming tool_call delta into the index'd buffer."""
     idx = delta.get("index", 0)
+    # Pre-seed with a synthetic id so we always have something to put in
+    # the tool-result message's tool_call_id field; some OpenAI-compatible
+    # servers reject empty tool_call_ids. The server-provided id below
+    # overrides this if present.
     buf = buffers.setdefault(idx, {
-        "id": "", "type": "function",
+        "id": f"call_{idx}_{uuid.uuid4().hex[:8]}",
+        "type": "function",
         "function": {"name": "", "arguments": ""},
     })
     if "id" in delta and delta["id"]:
@@ -628,6 +645,14 @@ async def _tool_bash(workspace: str, args: dict) -> str:
         except OSError:
             pass
         return f"Error: command timed out after {timeout}s"
+    except asyncio.CancelledError:
+        # /stop fired mid-command - kill the shell so we don't leak it.
+        try:
+            proc.kill()
+            await proc.wait()
+        except OSError:
+            pass
+        raise
 
     output = stdout.decode("utf-8", errors="replace")
     rc = proc.returncode
