@@ -85,8 +85,15 @@ def log_crash(exc: BaseException) -> str:
 logger = logging.getLogger(__name__)
 
 
-async def update_loop(bots: list[BotPlatform], interval: int) -> None:
-    """Periodically fetch, pull, and restart if disk HEAD changed."""
+async def update_loop(
+    bots: list[BotPlatform], interval: int, restart_code: int = 0,
+) -> None:
+    """Periodically fetch, pull, and restart if disk HEAD changed.
+
+    restart_code is the exit code used when an update is found. The
+    daemon uses 0 (systemd's Restart=always respawns); CLI mode uses
+    99 so the in-process respawn loop picks it up.
+    """
     while True:
         await asyncio.sleep(interval)
         try:
@@ -99,7 +106,7 @@ async def update_loop(bots: list[BotPlatform], interval: int) -> None:
                         "Cozter is restarting for an update..."
                     )
                     await bot.stop()
-                updater.restart_script()  # exits; systemd respawns
+                updater.restart_script(restart_code)
         except Exception:
             logger.exception("Update check failed")
 
@@ -110,14 +117,42 @@ def _cli_mode_requested() -> bool:
     return any(arg in flags for arg in sys.argv[1:])
 
 
-# Set by the launcher process when it re-spawns itself inside a new
-# console window. Without this marker the spawned process would spawn
-# another window in turn (infinite recursion).
+# Three-phase CLI lifecycle, signalled via env vars:
+#   - launcher (no env): user invoked the script from a shell. Open a
+#     new console window running the respawner.
+#   - respawner (COZTER_CLI_RESPAWNER=1): we're inside the new console.
+#     Repeatedly invoke the bot subprocess; restart it on exit code
+#     ``CLI_RESTART_EXIT_CODE`` (auto-update path). Any other exit code
+#     ends the loop so a real crash stays visible.
+#   - bot (COZTER_CLI_CHILD=1): run main_cli with update_loop attached.
 _CLI_CHILD_ENV = "COZTER_CLI_CHILD"
+_CLI_RESPAWNER_ENV = "COZTER_CLI_RESPAWNER"
 
 
 def _cli_child_mode() -> bool:
     return os.environ.get(_CLI_CHILD_ENV) == "1"
+
+
+def _cli_respawner_mode() -> bool:
+    return os.environ.get(_CLI_RESPAWNER_ENV) == "1"
+
+
+def _cli_respawner_loop() -> int:
+    """Spawn the bot subprocess in a loop; relaunch on exit-99.
+
+    Runs in the new console window. Inherits stdin/stdout/stderr so the
+    bot has direct access to the user's terminal. Returns the bot's
+    final non-restart exit code.
+    """
+    bot_env = {**os.environ, _CLI_CHILD_ENV: "1"}
+    # Don't leak the respawner marker into the bot process - it would
+    # only confuse mode detection if anything ever inspected it.
+    bot_env.pop(_CLI_RESPAWNER_ENV, None)
+    cmd = [sys.executable, "-m", "Cozter", *sys.argv[1:]]
+    while True:
+        rc = subprocess.call(cmd, env=bot_env)
+        if rc != updater.CLI_RESTART_EXIT_CODE:
+            return rc
 
 
 def _spawn_cli_in_new_console() -> bool:
@@ -134,7 +169,10 @@ def _spawn_cli_in_new_console() -> bool:
     py = sys.executable
     inner_args = [py, "-m", "Cozter", *sys.argv[1:]]
     cwd = os.getcwd()
-    env = {**os.environ, _CLI_CHILD_ENV: "1"}
+    # Launch into respawner mode so the new console can auto-restart
+    # the bot when an update is pulled.
+    env = {**os.environ, _CLI_RESPAWNER_ENV: "1"}
+    env.pop(_CLI_CHILD_ENV, None)
     system = platform.system()
 
     if system == "Windows":
@@ -197,13 +235,26 @@ def _spawn_cli_in_new_console() -> bool:
     return False
 
 
-async def main_cli() -> None:
+async def main_cli(*, auto_update: bool = True) -> None:
     """Run the local stdin/stdout chat surface.
 
-    No config.json, no Telegram/Slack tokens, no update loop - just an
-    interactive REPL backed by the same agent/session machinery.
+    auto_update=True attaches the update_loop and exits with
+    ``CLI_RESTART_EXIT_CODE`` when new code is pulled so the outer
+    respawner relaunches the bot. Disabled in the fallback path where
+    no respawner is wrapping us - an unhandled exit would just kill
+    the visible session.
     """
     from .backends_bot.cli import CliBot
+
+    # CLI auto-update uses the same interval as daemon mode when a
+    # config.json happens to be present; otherwise fall back to the
+    # built-in default so the user gets updates without setup.
+    try:
+        cli_interval = cfg.load_config().get("update_check_interval", 10)
+    except SystemExit:
+        # load_config sys.exits when neither platform is configured;
+        # the CLI doesn't need it, just use the default.
+        cli_interval = 10
 
     updater.init_startup_commit()
     logger.info(
@@ -214,25 +265,41 @@ async def main_cli() -> None:
 
     bot = CliBot()
     await bot.start()
+    update_task: asyncio.Task | None = None
+    if auto_update:
+        update_task = asyncio.create_task(update_loop(
+            [bot], cli_interval,
+            restart_code=updater.CLI_RESTART_EXIT_CODE,
+        ))
     try:
         await bot.wait_until_exit()
     finally:
+        if update_task is not None:
+            update_task.cancel()
+            try:
+                await update_task
+            except asyncio.CancelledError:
+                pass
         await bot.stop()
 
 
 async def main() -> None:
     if _cli_mode_requested():
-        # First entry from the user's shell: spawn a fresh console
-        # window and exit. The spawned child sees COZTER_CLI_CHILD=1
-        # in its env, skips this branch, and runs the REPL directly.
-        if not _cli_child_mode():
-            if _spawn_cli_in_new_console():
-                return
-            logger.warning(
-                "Could not open a new console window; running CLI in"
-                " the current terminal instead.",
-            )
-        await main_cli()
+        # Dispatch by lifecycle phase (see _cli_respawner_mode docstring).
+        if _cli_child_mode():
+            await main_cli()
+            return
+        if _cli_respawner_mode():
+            # Sync subprocess loop; not actually async work, just exit
+            # cleanly through asyncio.
+            sys.exit(_cli_respawner_loop())
+        if _spawn_cli_in_new_console():
+            return
+        logger.warning(
+            "Could not open a new console window; running CLI in the"
+            " current terminal instead (no auto-update).",
+        )
+        await main_cli(auto_update=False)
         return
 
     config = cfg.load_config()

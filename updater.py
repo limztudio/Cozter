@@ -93,7 +93,18 @@ def install_requirements() -> None:
         logger.info("Requirements installed.")
 
 
-def restart_script() -> None:
-    """Exit so the systemd service (Restart=always) restarts us."""
-    logger.info("Restarting (exiting for systemd to respawn)...")
-    os._exit(0)
+def restart_script(exit_code: int = 0) -> None:
+    """Exit so an outer supervisor restarts us.
+
+    Daemon mode: systemd's ``Restart=always`` respawns on exit 0.
+    CLI mode: pass exit_code=99 so the in-process respawn loop in
+    ``Cozter.__main__._cli_respawner_loop`` re-launches the bot.
+    """
+    logger.info("Restarting (exit code %d)...", exit_code)
+    os._exit(exit_code)
+
+
+# Exit code signalling "please respawn me" to the CLI mode respawn loop.
+# Any other non-zero exit code stops the loop (so crash tracebacks stay
+# visible instead of getting overwritten by restart spam).
+CLI_RESTART_EXIT_CODE = 99
