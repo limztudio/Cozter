@@ -207,7 +207,12 @@ marimo/_lsp/
 __marimo__/
 
 # Local config & secrets
-.config/
+.config/*
+# ...but keep the template alongside the real file so users see both.
+# (Negation only works when the parent is excluded by ``.config/*``,
+# not ``.config/`` - the latter ignores the directory itself, which
+# can't be re-included.)
+!.config/config.example.json
 
 # Crash & runtime logs
 .log/
