@@ -421,8 +421,8 @@ async def _stream_completion(
                 if resp.status != 200:
                     body = await resp.text()
                     raise RuntimeError(
-                        f"llama-server returned HTTP {resp.status}: "
-                        f"{body[:500]}"
+                        f"llama-server at {base_url} returned HTTP"
+                        f" {resp.status}: {body[:500]}"
                     )
                 async for raw in resp.content:
                     line = raw.decode("utf-8", errors="replace").strip()
@@ -445,9 +445,35 @@ async def _stream_completion(
                         text_parts.append(content)
                     for tc in delta.get("tool_calls") or []:
                         _merge_tool_call(tool_buffers, tc)
-    except aiohttp.ClientError as exc:
+    except aiohttp.ClientConnectorError as exc:
+        # Couldn't even establish the TCP connection - server is down,
+        # the host is unreachable, or the URL is wrong.
         raise RuntimeError(
-            f"llama-server connection failed: {exc}"
+            f"llama-server at {base_url} is unreachable - is it running?"
+        ) from exc
+    except (
+        aiohttp.ServerDisconnectedError,
+        aiohttp.ClientPayloadError,
+    ) as exc:
+        # Connected once, then the server closed or dropped the connection
+        # mid-response. The model output we got back (if any) is partial
+        # and likely useless.
+        raise RuntimeError(
+            f"llama-server at {base_url} dropped the connection"
+            " mid-response"
+        ) from exc
+    except TimeoutError as exc:
+        # ``aiohttp.ClientTimeout(sock_read=300)`` fires this if a
+        # 5-minute gap passes between successive reads of the streamed
+        # body - i.e. the server got stuck or hung up silently.
+        raise RuntimeError(
+            f"llama-server at {base_url} did not respond in time"
+        ) from exc
+    except aiohttp.ClientError as exc:
+        # Catch-all for the rest of aiohttp's client-side exception
+        # hierarchy (TLS handshake failures, bad URL, etc.).
+        raise RuntimeError(
+            f"llama-server at {base_url} request failed: {exc}"
         ) from exc
 
     # Normalize tool_buffers into the OpenAI tool_calls list shape.
