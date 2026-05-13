@@ -192,7 +192,18 @@ class LlamaBackend(Backend):
         #     tools off since the summarizer doesn't need them.
         tools_enabled = approval != "deny" and not compaction
 
-        messages: list[dict] = [{"role": "user", "content": prompt}]
+        # Llama-server is stateless, so the model has no idea what cwd it
+        # is operating against unless we tell it. Codex/copilot/claude_code
+        # learn the workspace via their CLI's --add-dir / -C / cwd flag;
+        # llama needs it in the prompt. Refreshed every turn so /new,
+        # /open, and a bot restart automatically propagate.
+        messages: list[dict] = [
+            {
+                "role": "system",
+                "content": _system_prompt(workspace_path, tools_enabled),
+            },
+            {"role": "user", "content": prompt},
+        ]
         tools_schema = _TOOL_SCHEMA if tools_enabled else None
 
         for turn in range(_MAX_AGENT_TURNS):
@@ -675,6 +686,31 @@ def _find_shell() -> list[str] | None:
     if sh:
         return [sh, "-c"]
     return None
+
+
+def _system_prompt(workspace_path: str, tools_enabled: bool) -> str:
+    """Build the per-turn system message.
+
+    Embeds the current workspace path so the model is aware of where it
+    is operating; mentions the tool surface (or lack of it) so the
+    model doesn't try to call tools that aren't exposed. Rebuilt on
+    every turn, so any workspace switch is automatically reflected.
+    """
+    parts = [
+        "You are a coding assistant running inside Cozter.",
+        f"Current workspace: {workspace_path}",
+    ]
+    if tools_enabled:
+        parts.append(
+            "Tool calls (read_file, write_file, edit_file, bash) run"
+            " inside this workspace. Paths may be relative to the"
+            " workspace root or absolute inside it."
+        )
+    else:
+        parts.append(
+            "No tools are available this turn - respond in plain text."
+        )
+    return "\n".join(parts)
 
 
 def _summarize_tool_use(tool: str, args: dict) -> str:
