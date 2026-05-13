@@ -90,6 +90,20 @@ class CliBot(BotPlatform):
         # at the absolute path.
         print(f"[Attached file: {os.path.abspath(path)}]")
 
+    async def send_status(self, chat_id: str, text: str) -> None:
+        """Print transient progress lines in dim gray so they're visually
+        distinct from the agent's final reply.
+
+        Falls back to plain text if the terminal can't render ANSI.
+        """
+        if not text:
+            return
+        if _ANSI_ENABLED:
+            # ESC[2m = dim, ESC[90m = bright black ("gray").
+            print(f"\x1b[2;90m{text}\x1b[0m")
+        else:
+            print(text)
+
     # ----- lifecycle ------------------------------------------------------
 
     async def start(self) -> None:
@@ -229,6 +243,8 @@ def _prepare_console() -> None:
             # without a reconfigure-able encoding) - leave as-is.
             pass
 
+    _enable_ansi()
+
     # Suppress INFO-level logging on the console so it doesn't interleave
     # with chat output. The file handler installed by setup_logging still
     # captures WARNING+ records.
@@ -238,6 +254,45 @@ def _prepare_console() -> None:
             handler, logging.FileHandler,
         ):
             handler.setLevel(logging.WARNING)
+
+
+# Whether to emit ANSI color sequences from ``send_status``. Decided once
+# in ``_enable_ansi``; we disable for non-TTY stdout (piped/redirected)
+# so escape codes don't appear literally in log files.
+_ANSI_ENABLED = False
+
+
+def _enable_ansi() -> None:
+    """Best-effort enable ANSI escape processing in the current console.
+
+    Sets the module-level ``_ANSI_ENABLED`` flag based on whether stdout
+    is a TTY and (on Windows) whether we can switch the console into
+    Virtual Terminal Processing mode. Modern Windows Terminal and
+    cmd.exe on Windows 10 1903+ support VT processing once enabled.
+    """
+    global _ANSI_ENABLED
+    if not sys.stdout.isatty():
+        _ANSI_ENABLED = False
+        return
+    if sys.platform != "win32":
+        # POSIX terminals universally honor ANSI for tty output.
+        _ANSI_ENABLED = True
+        return
+    # Windows: try to enable VT processing via SetConsoleMode.
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        STD_OUTPUT_HANDLE = -11
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        handle = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            _ANSI_ENABLED = False
+            return
+        new_mode = mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        _ANSI_ENABLED = bool(kernel32.SetConsoleMode(handle, new_mode))
+    except (OSError, AttributeError):
+        _ANSI_ENABLED = False
 
 
 _force_exit_installed = False
