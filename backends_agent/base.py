@@ -72,6 +72,7 @@ class Backend(ABC):
         approval: str,
         *,
         compaction: bool = False,
+        effort: int = 0,
     ) -> asyncio.subprocess.Process:
         """Spawn the CLI subprocess with *prompt* delivered appropriately.
 
@@ -81,7 +82,28 @@ class Backend(ABC):
         compaction=True indicates this is an internal summarization call
         (no user-facing tool use). Backends typically translate this to
         a broader approval scope since compaction is trusted.
+
+        effort is a 0-100 percentage of "how hard the model should
+        think". 0 means "do not send a reasoning-effort signal at all"
+        (server defaults apply). 1-100 are translated to each backend's
+        native vocabulary via :meth:`convert_effort`.
         """
+
+    def convert_effort(self, percent: int) -> str | None:
+        """Translate a 0-100 percentage to the backend's native effort form.
+
+        Return ``None`` to skip sending an effort signal - either because
+        the percentage is 0 (no override) or because the backend has no
+        equivalent control. Backends override this with their own banding
+        (e.g. codex has 5 levels with ``xhigh`` at the top, llama has 4
+        levels topping out at ``high``, claude_code is binary).
+
+        Default implementation always returns ``None``, which is the
+        correct behavior for backends with no reasoning-effort control
+        (currently copilot, claude_code).
+        """
+        del percent  # unused in the default implementation
+        return None
 
     @abstractmethod
     def parse_event(self, event: dict, result: AgentResult) -> None:

@@ -52,6 +52,16 @@ class ClaudeCodeBackend(Backend):
         "Write", "Edit", "MultiEdit", "NotebookEdit",
     })
 
+    def convert_effort(self, percent: int) -> str | None:
+        # Claude Code's only public "effort"-like control is the
+        # extended-thinking toggle, whose highest setting is called
+        # "max". With no finer gradation, treat the percentage as a
+        # binary toggle: above the midpoint, ask for max thinking;
+        # otherwise leave it off.
+        if percent >= 50:
+            return "max"
+        return None
+
     async def launch(
         self,
         workspace_path: str,
@@ -60,7 +70,21 @@ class ClaudeCodeBackend(Backend):
         approval: str,
         *,
         compaction: bool = False,
+        effort: int = 0,
     ) -> asyncio.subprocess.Process:
+        native_effort = self.convert_effort(effort)
+        if native_effort:
+            # Claude Code CLI has no public reasoning-effort flag - the
+            # closest control is the model tier (sonnet < opus). Log so
+            # the user knows the workspace setting is being dropped,
+            # but show the *native* level name from convert_effort so
+            # the mapping is visibly applied.
+            logger.info(
+                "Claude Code has no reasoning_effort flag; ignoring"
+                " workspace setting %d%% (native level %r); use a"
+                " higher-tier model instead",
+                effort, native_effort,
+            )
         prefix = resolve_executable_prefix("claude") or ["claude"]
         cmd: list[str] = [
             *prefix,

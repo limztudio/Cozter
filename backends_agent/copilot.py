@@ -46,6 +46,9 @@ class CopilotBackend(Backend):
     default_model = "claude-opus-4.6"
     default_summary_model = "gpt-5.2"
 
+    # Inherits the base ``convert_effort`` (returns None), since copilot
+    # has no public reasoning-effort control.
+
     async def launch(
         self,
         workspace_path: str,
@@ -54,7 +57,16 @@ class CopilotBackend(Backend):
         approval: str,
         *,
         compaction: bool = False,
+        effort: int = 0,
     ) -> asyncio.subprocess.Process:
+        if effort > 0:
+            # Copilot CLI has no reasoning_effort flag; log so the user
+            # knows the workspace setting is being dropped.
+            logger.info(
+                "Copilot has no reasoning_effort flag; ignoring"
+                " workspace setting %d%%",
+                effort,
+            )
         if len(prompt) > _MAX_PROMPT_CHARS:
             # Keep the tail: the user's current message is at the end of the
             # composed prompt, and the head (CAPABILITY_HINT + oldest context)

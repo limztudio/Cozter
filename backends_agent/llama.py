@@ -9,6 +9,12 @@ tools. The whole loop runs inside a fake asyncio.subprocess.Process so
 the existing orchestrator code in ``agent.py`` consumes events the same
 way it does for the CLI-backed agents.
 
+Tool definitions live in the top-level ``agent_tools/`` package (one
+file per tool, plus an :class:`AgentTool` base in
+``agent_tools/base.py``); that package is backend-agnostic and any
+chat-completion agent could drive it. This module owns the
+llama-server agent loop and HTTP plumbing only.
+
 Config: ``config.json``'s ``llama_server_url`` (default
 ``http://127.0.0.1:8080``). The server must speak OpenAI-compatible
 ``/v1/chat/completions`` with streaming and tool calls.
@@ -17,37 +23,19 @@ Config: ``config.json``'s ``llama_server_url`` (default
 from __future__ import annotations
 
 import asyncio
-import html
 import json
 import logging
-import os
-import re
-import shutil
-import urllib.parse
 import urllib.request
 import uuid
 from typing import Any
 
 import aiohttp
 
+from .. import agent_tools as tools
 from .. import config as cfg
 from .base import AgentResult, Backend, ChatEvent
 
 logger = logging.getLogger(__name__)
-
-# Cap each tool result we feed back to the model: huge bash outputs
-# blow up the prompt and rarely help the model.
-_TOOL_RESULT_MAX = 4_000
-
-# Bash tool default timeout (model can override via the ``timeout``
-# argument up to this hard cap).
-_BASH_DEFAULT_TIMEOUT = 30
-_BASH_MAX_TIMEOUT = 120
-
-# Hard cap on raw HTTP body bytes per web_fetch / web_search call so a
-# pathological URL can't OOM the bot. The text returned to the model is
-# further capped by ``max_chars``.
-_MAX_FETCH_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +147,19 @@ class LlamaBackend(Backend):
 
     # ---- launch ---------------------------------------------------------
 
+    def convert_effort(self, percent: int) -> str | None:
+        # llama-server / OpenAI Chat Completions support the standard
+        # 4-level effort vocabulary. Split 1-100 into roughly equal bands.
+        if percent <= 0:
+            return None
+        if percent < 25:
+            return "minimal"
+        if percent < 50:
+            return "low"
+        if percent < 75:
+            return "medium"
+        return "high"
+
     async def launch(
         self,
         workspace_path: str,
@@ -167,10 +168,12 @@ class LlamaBackend(Backend):
         approval: str,
         *,
         compaction: bool = False,
+        effort: int = 0,
     ) -> _LlamaSession:  # type: ignore[override]
         proc = _LlamaSession()
         proc.start(self._run_agent(
             proc, workspace_path, prompt, model, approval, compaction,
+            effort,
         ))
         return proc
 
@@ -182,6 +185,7 @@ class LlamaBackend(Backend):
         model: str | None,
         approval: str,
         compaction: bool,
+        effort: int,
     ) -> None:
         url = cfg.get_llama_server_url().rstrip("/")
         # Per-AI-turn safety caps. Read fresh each turn so a config edit
@@ -200,6 +204,10 @@ class LlamaBackend(Backend):
         #     tools off since the summarizer doesn't need them.
         tools_enabled = approval != "deny" and not compaction
 
+        # Translate the 0-100 effort into llama's native vocabulary;
+        # an empty result means "do not send the reasoning_effort field".
+        reasoning_effort = self.convert_effort(effort) or ""
+
         # Llama-server is stateless, so the model has no idea what cwd it
         # is operating against unless we tell it. Codex/copilot/claude_code
         # learn the workspace via their CLI's --add-dir / -C / cwd flag;
@@ -212,7 +220,7 @@ class LlamaBackend(Backend):
             },
             {"role": "user", "content": prompt},
         ]
-        tools_schema = _TOOL_SCHEMA if tools_enabled else None
+        tools_schema = tools.TOOL_SCHEMA if tools_enabled else None
         tool_repeat_counts: dict[str, int] = {}
 
         for _ in range(max_agent_turns):
@@ -222,6 +230,8 @@ class LlamaBackend(Backend):
             }
             if request_model is not None:
                 payload["model"] = request_model
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
             if tools_schema is not None:
                 payload["tools"] = tools_schema
                 payload["tool_choice"] = "auto"
@@ -259,13 +269,13 @@ class LlamaBackend(Backend):
             # is honored when tools_enabled is True, so by the time we get
             # here every tool call is permitted.
             for call in tool_calls:
-                sig = _tool_signature(call)
+                name, args = tools.parse_openai_call(call)
+                sig = tools.tool_signature(name, args)
                 tool_repeat_counts[sig] = tool_repeat_counts.get(sig, 0) + 1
 
                 if tool_repeat_counts[sig] > tool_repeat_limit:
-                    fn = call.get("function") or {}
                     result = (
-                        f"Skipped repeated tool call: {fn.get('name', '')}. "
+                        f"Skipped repeated tool call: {name}. "
                         f"The same tool call was requested more than "
                         f"{tool_repeat_limit} times. Stop repeating this "
                         "call and produce the final answer using the "
@@ -273,12 +283,12 @@ class LlamaBackend(Backend):
                     )
                     proc.emit({
                         "type": "tool_result",
-                        "name": fn.get("name", ""),
+                        "name": name,
                         "output": result,
                     })
                 else:
-                    result = await _execute_tool(
-                        call, workspace_path, approval, proc,
+                    result = await tools.execute_tool(
+                        name, args, workspace_path, approval, proc.emit,
                     )
 
                 # Include ``name`` alongside tool_call_id; strict
@@ -286,7 +296,7 @@ class LlamaBackend(Backend):
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call.get("id", ""),
-                    "name": call.get("function", {}).get("name", ""),
+                    "name": name,
                     "content": result,
                 })
 
@@ -308,6 +318,8 @@ class LlamaBackend(Backend):
         }
         if request_model is not None:
             payload["model"] = request_model
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
 
         assistant_text, _ = await _stream_completion(url, payload)
 
@@ -341,7 +353,7 @@ class LlamaBackend(Backend):
         if etype == "tool_use":
             tool = event.get("name", "?")
             inp = event.get("input") or {}
-            content = _summarize_tool_use(tool, inp)
+            content = tools.summarize_tool_use(tool, inp)
             result.events.append(ChatEvent(kind="tool", content=content))
             if event.get("file_action"):
                 # write/edit/delete - also surface as kind="file" so the
@@ -440,23 +452,6 @@ async def _stream_completion(
     return "".join(text_parts), tool_calls
 
 
-def _tool_signature(call: dict) -> str:
-    fn = call.get("function") or {}
-    name = fn.get("name", "")
-    raw_args = fn.get("arguments") or "{}"
-
-    try:
-        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-    except json.JSONDecodeError:
-        args = raw_args
-
-    return json.dumps(
-        {"name": name, "args": args},
-        sort_keys=True,
-        ensure_ascii=False,
-    )
-
-
 def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
     """Fold a single streaming tool_call delta into the index'd buffer."""
     idx = delta.get("index", 0)
@@ -480,499 +475,8 @@ def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tools
+# System prompt
 # ---------------------------------------------------------------------------
-
-
-_TOOL_SCHEMA: list[dict] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": (
-                "Read a UTF-8 text file from the workspace. Returns the"
-                " full file contents (or an error message)."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": (
-                            "Path relative to the workspace root, or an"
-                            " absolute path inside the workspace."
-                        ),
-                    },
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": (
-                "Write *content* to *path*, creating parent dirs as"
-                " needed. Overwrites any existing file."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "content": {"type": "string"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "edit_file",
-            "description": (
-                "In-place string replacement: replace *old_string* with"
-                " *new_string* in *path*. Fails if *old_string* is not"
-                " found exactly once."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "old_string": {"type": "string"},
-                    "new_string": {"type": "string"},
-                },
-                "required": ["path", "old_string", "new_string"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": (
-                "Search the public internet for current information."
-                " Use this to find relevant pages, then use web_fetch"
-                " to read a specific result."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "max_results": {
-                        "type": "integer",
-                        "description": (
-                            "Maximum results to return, default 5, max 10."
-                        ),
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "web_fetch",
-            "description": (
-                "Fetch a public HTTP/HTTPS URL and return readable text."
-                " Use this after web_search to inspect a page."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string"},
-                    "max_chars": {
-                        "type": "integer",
-                        "description": (
-                            "Maximum characters to return, default 12000."
-                        ),
-                    },
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "bash",
-            "description": (
-                "Run a shell command in the workspace. Use sparingly;"
-                " prefer read_file/write_file/edit_file for file ops."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string"},
-                    "timeout": {
-                        "type": "integer",
-                        "description": (
-                            f"Seconds (default {_BASH_DEFAULT_TIMEOUT},"
-                            f" max {_BASH_MAX_TIMEOUT})."
-                        ),
-                    },
-                },
-                "required": ["command"],
-            },
-        },
-    },
-]
-
-
-async def _execute_tool(
-    call: dict, workspace_path: str, approval: str, proc: _LlamaSession,
-) -> str:
-    """Run a single tool call; return a string the model can read back."""
-    fn = call.get("function") or {}
-    name = fn.get("name", "")
-    raw_args = fn.get("arguments") or "{}"
-    try:
-        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-    except json.JSONDecodeError:
-        args = {}
-
-    # Surface the tool call to the status display.
-    proc.emit({
-        "type": "tool_use",
-        "name": name,
-        "input": args,
-        "file_action": _file_action(name),
-    })
-
-    if approval == "confirm":
-        # We can't interactively confirm in non-interactive backends, but
-        # the user asked to be told - logging is the best we can do.
-        logger.info("llama tool call (confirm mode): %s %r", name, args)
-
-    try:
-        if name == "read_file":
-            result = _tool_read_file(workspace_path, args)
-        elif name == "write_file":
-            result = _tool_write_file(workspace_path, args)
-        elif name == "edit_file":
-            result = _tool_edit_file(workspace_path, args)
-        elif name == "bash":
-            result = await _tool_bash(workspace_path, args)
-        elif name == "web_search":
-            result = await _tool_web_search(args)
-        elif name == "web_fetch":
-            result = await _tool_web_fetch(args)
-        else:
-            result = f"Unknown tool: {name}"
-    except Exception as exc:
-        result = f"Tool {name} failed: {exc}"
-
-    if len(result) > _TOOL_RESULT_MAX:
-        result = (
-            result[:_TOOL_RESULT_MAX]
-            + f"\n... [truncated, {len(result)} chars total]"
-        )
-
-    proc.emit({"type": "tool_result", "name": name, "output": result})
-    return result
-
-
-def _file_action(tool: str) -> str | None:
-    return {"write_file": "write", "edit_file": "edit"}.get(tool)
-
-
-def _resolve_inside_workspace(workspace: str, path: str) -> str:
-    """Return absolute path; raise if it escapes the workspace."""
-    if not isinstance(path, str) or not path:
-        raise ValueError("path must be a non-empty string")
-    abs_ws = os.path.realpath(workspace)
-    candidate = (
-        path if os.path.isabs(path) else os.path.join(workspace, path)
-    )
-    abs_path = os.path.realpath(candidate)
-    if not (abs_path == abs_ws or abs_path.startswith(abs_ws + os.sep)):
-        raise ValueError(f"path escapes workspace: {path}")
-    return abs_path
-
-
-def _tool_read_file(workspace: str, args: dict) -> str:
-    target = _resolve_inside_workspace(workspace, args.get("path", ""))
-    if not os.path.isfile(target):
-        return f"File not found: {args.get('path')}"
-    with open(target, encoding="utf-8", errors="replace") as f:
-        return f.read()
-
-
-def _tool_write_file(workspace: str, args: dict) -> str:
-    target = _resolve_inside_workspace(workspace, args.get("path", ""))
-    content = args.get("content")
-    if not isinstance(content, str):
-        return "Error: 'content' must be a string"
-    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
-    with open(target, "w", encoding="utf-8") as f:
-        f.write(content)
-    return f"Wrote {len(content)} chars to {args.get('path')}"
-
-
-def _tool_edit_file(workspace: str, args: dict) -> str:
-    target = _resolve_inside_workspace(workspace, args.get("path", ""))
-    old = args.get("old_string")
-    new = args.get("new_string")
-    if not isinstance(old, str) or not isinstance(new, str):
-        return "Error: old_string and new_string must be strings"
-    if not os.path.isfile(target):
-        return f"File not found: {args.get('path')}"
-    with open(target, encoding="utf-8", errors="replace") as f:
-        original = f.read()
-    count = original.count(old)
-    if count == 0:
-        return f"old_string not found in {args.get('path')}"
-    if count > 1:
-        return (
-            f"old_string appears {count} times in {args.get('path')};"
-            " include more context to make it unique."
-        )
-    updated = original.replace(old, new, 1)
-    with open(target, "w", encoding="utf-8") as f:
-        f.write(updated)
-    return f"Replaced 1 occurrence in {args.get('path')}"
-
-
-async def _read_bounded_text(resp: aiohttp.ClientResponse) -> str:
-    """Read up to _MAX_FETCH_BYTES from *resp* and decode with its charset."""
-    body_bytes = await resp.content.read(_MAX_FETCH_BYTES + 1)
-    encoding = resp.charset or "utf-8"
-    return body_bytes.decode(encoding, errors="replace")
-
-
-def _html_to_text(value: str) -> str:
-    value = re.sub(
-        r"<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>",
-        " ",
-        value,
-        flags=re.IGNORECASE,
-    )
-    value = re.sub(
-        r"<style\b[^<]*(?:(?!</style>)<[^<]*)*</style>",
-        " ",
-        value,
-        flags=re.IGNORECASE,
-    )
-    value = re.sub(r"<[^>]+>", " ", value)
-    value = html.unescape(value)
-    value = re.sub(r"\s+", " ", value)
-    return value.strip()
-
-
-def _ddg_unwrap_url(url: str) -> str:
-    parsed = urllib.parse.urlparse(url)
-    qs = urllib.parse.parse_qs(parsed.query)
-    if "uddg" in qs and qs["uddg"]:
-        return qs["uddg"][0]
-    return url
-
-
-async def _tool_web_search(args: dict) -> str:
-    query = args.get("query")
-    if not isinstance(query, str) or not query.strip():
-        return "Error: 'query' must be a non-empty string"
-
-    max_results = args.get("max_results") or 5
-    try:
-        max_results = int(max_results)
-    except (TypeError, ValueError):
-        max_results = 5
-    max_results = max(1, min(max_results, 10))
-
-    search_url = (
-        "https://duckduckgo.com/html/?"
-        + urllib.parse.urlencode({"q": query})
-    )
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 compatible; CozterLlamaAgent/1.0; "
-            "+https://local"
-        )
-    }
-
-    try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(
-                search_url,
-                timeout=aiohttp.ClientTimeout(total=20),
-            ) as resp:
-                if resp.status != 200:
-                    return f"Search failed: HTTP {resp.status}"
-                body = await _read_bounded_text(resp)
-    except Exception as exc:
-        return f"Search failed: {exc}"
-
-    matches = re.findall(
-        r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
-        body,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
-    results: list[str] = []
-    seen: set[str] = set()
-
-    for href, title_html in matches:
-        url = _ddg_unwrap_url(html.unescape(href))
-        title = _html_to_text(title_html)
-        if not title or not url or url in seen:
-            continue
-        seen.add(url)
-        results.append(f"{len(results) + 1}. {title}\n   {url}")
-        if len(results) >= max_results:
-            break
-
-    if not results:
-        return "No search results found."
-
-    return "\n".join(results)
-
-
-async def _tool_web_fetch(args: dict) -> str:
-    url = args.get("url")
-    if not isinstance(url, str) or not url.strip():
-        return "Error: 'url' must be a non-empty string"
-
-    url = url.strip()
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        return "Error: only http:// and https:// URLs are allowed"
-
-    max_chars = args.get("max_chars") or 12_000
-    try:
-        max_chars = int(max_chars)
-    except (TypeError, ValueError):
-        max_chars = 12_000
-    max_chars = max(1_000, min(max_chars, 30_000))
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 compatible; CozterLlamaAgent/1.0; "
-            "+https://local"
-        )
-    }
-
-    try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(
-                url,
-                allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                final_url = str(resp.url)
-                content_type = resp.headers.get("content-type", "")
-
-                if resp.status >= 400:
-                    return (
-                        f"Fetch failed: HTTP {resp.status} for {final_url}"
-                    )
-
-                if not (
-                    content_type.startswith("text/")
-                    or "html" in content_type
-                    or "json" in content_type
-                    or "xml" in content_type
-                    or content_type == ""
-                ):
-                    return (
-                        f"Fetched {final_url}, but content type is "
-                        f"'{content_type}', not readable text."
-                    )
-
-                body = await _read_bounded_text(resp)
-    except Exception as exc:
-        return f"Fetch failed: {exc}"
-
-    title = ""
-    title_match = re.search(
-        r"<title[^>]*>(.*?)</title>",
-        body,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if title_match:
-        title = _html_to_text(title_match.group(1))
-
-    is_html = "html" in content_type.lower()
-    text = _html_to_text(body) if is_html else body
-    text = text.strip()
-
-    if len(text) > max_chars:
-        text = text[:max_chars] + f"\n... [truncated, {len(text)} chars total]"
-
-    header = f"URL: {final_url}"
-    if title:
-        header += f"\nTitle: {title}"
-
-    return f"{header}\n\n{text}"
-
-
-async def _tool_bash(workspace: str, args: dict) -> str:
-    command = args.get("command")
-    if not isinstance(command, str) or not command.strip():
-        return "Error: 'command' must be a non-empty string"
-    timeout = args.get("timeout") or _BASH_DEFAULT_TIMEOUT
-    try:
-        timeout = int(timeout)
-    except (TypeError, ValueError):
-        timeout = _BASH_DEFAULT_TIMEOUT
-    timeout = max(1, min(timeout, _BASH_MAX_TIMEOUT))
-
-    # Use the shell so the model can use pipes, redirection, etc.
-    shell = _find_shell()
-    if shell is None:
-        return "Error: no shell available to run bash commands"
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *shell, command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=workspace,
-        )
-    except FileNotFoundError:
-        return "Error: shell not found"
-
-    try:
-        async with asyncio.timeout(timeout):
-            stdout, _ = await proc.communicate()
-    except TimeoutError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except OSError:
-            pass
-        return f"Error: command timed out after {timeout}s"
-    except asyncio.CancelledError:
-        # /stop fired mid-command - kill the shell so we don't leak it.
-        try:
-            proc.kill()
-            await proc.wait()
-        except OSError:
-            pass
-        raise
-
-    output = stdout.decode("utf-8", errors="replace")
-    rc = proc.returncode
-    if rc == 0:
-        return output or "(no output)"
-    return f"$ exit {rc}\n{output}"
-
-
-def _find_shell() -> list[str] | None:
-    """Return an argv prefix that runs a single shell command."""
-    if os.name == "nt":
-        # Prefer bash if available (matches what bash users expect); fall
-        # back to cmd.
-        bash = shutil.which("bash")
-        if bash:
-            return [bash, "-c"]
-        cmd = shutil.which("cmd.exe") or "cmd.exe"
-        return [cmd, "/c"]
-    sh = shutil.which("bash") or shutil.which("sh")
-    if sh:
-        return [sh, "-c"]
-    return None
 
 
 def _system_prompt(workspace_path: str, tools_enabled: bool) -> str:
@@ -989,36 +493,22 @@ def _system_prompt(workspace_path: str, tools_enabled: bool) -> str:
     ]
     if tools_enabled:
         parts.append(
-            "Available tools: read_file, write_file, edit_file, bash,"
-            " web_search, web_fetch. File and shell tools run inside"
-            " this workspace. Paths may be relative to the workspace"
-            " root or absolute inside it. Web tools use this client's"
-            " internet connection. Use web_search to find pages, then"
-            " web_fetch to read specific URLs. Do not repeat the same"
-            " tool call. Once you have enough information, stop using"
-            " tools and provide the final answer."
+            f"Available tools: {', '.join(tools.TOOL_NAMES)}."
+            " File, shell, and discovery tools run inside this"
+            " workspace. Paths may be relative to the workspace root"
+            " or absolute inside it. Use list_dir/glob/grep to explore"
+            " the workspace before reading or editing files; prefer"
+            " specific patterns like '**/*.py' over '**/*' to avoid"
+            " noise from .git, node_modules, etc. For large files,"
+            " pass *offset* and *limit* to read_file. Web tools use"
+            " this client's internet connection - web_search to find"
+            " pages, then web_fetch to read specific URLs. Do not"
+            " repeat the same tool call. Once you have enough"
+            " information, stop using tools and provide the final"
+            " answer."
         )
     else:
         parts.append(
             "No tools are available this turn - respond in plain text."
         )
     return "\n".join(parts)
-
-
-def _summarize_tool_use(tool: str, args: dict) -> str:
-    if tool == "bash":
-        cmd = args.get("command", "")
-        return f"$ {cmd[:200]}" + ("..." if len(cmd) > 200 else "")
-    if tool in ("read_file", "write_file", "edit_file"):
-        return f"{tool}: {args.get('path', '?')}"
-    if tool == "web_search":
-        query = args.get("query", "")
-        return f"web_search: {query[:200]}" + (
-            "..." if len(query) > 200 else ""
-        )
-    if tool == "web_fetch":
-        url = args.get("url", "")
-        return f"web_fetch: {url[:200]}" + (
-            "..." if len(url) > 200 else ""
-        )
-    return tool

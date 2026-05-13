@@ -285,6 +285,7 @@ async def run(
         try:
             proc = await backend.launch(
                 workspace_path, full_prompt, model, approval,
+                effort=workspace_mod.get_reasoning_effort(workspace_path),
             )
         except FileNotFoundError:
             result = AgentResult()

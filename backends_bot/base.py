@@ -554,6 +554,55 @@ class BotPlatform(ABC):
         desc = workspace.PERMISSION_DESCRIPTIONS[perm]
         await ctx.reply_text(f"Permission set to: {perm}\n{desc}")
 
+    # ----- /effort --------------------------------------------------------
+
+    async def cmd_effort(self, ctx: BotContext) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        current = workspace.get_reasoning_effort(ws)
+        await ctx.reply_text(
+            f"Current reasoning effort: {current}%\n\n"
+            "Pick a percentage 0-100. Higher = more reasoning,"
+            " slower & costlier. 0 = no override (server picks).\n\n"
+            "Each agent maps to its native scale:\n"
+            "  codex:       1-19 minimal / 20-39 low / 40-59 medium"
+            " / 60-79 high / 80-100 xhigh\n"
+            "  llama:       1-24 minimal / 25-49 low / 50-74 medium"
+            " / 75-100 high\n"
+            "  claude_code: <50 ignored / >=50 max (binary)\n"
+            "  copilot:     ignored (no CLI flag)\n\n"
+            "Applies to your chat turns (not compaction/routing)."
+            "\nEnter a number 0-100 (or /cancel):"
+        )
+        self._expect_input(ctx.user_id, self._receive_effort)
+
+    async def _receive_effort(self, ctx: BotContext) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        text = ctx.text.strip().rstrip("%").strip()
+        try:
+            value = int(text)
+        except ValueError:
+            await ctx.reply_text(
+                f"Not a number: {ctx.text!r}\nEnter 0-100 (or /cancel):"
+            )
+            self._expect_input(ctx.user_id, self._receive_effort)
+            return
+        if not 0 <= value <= 100:
+            await ctx.reply_text(
+                f"Out of range: {value}\nEnter 0-100 (or /cancel):"
+            )
+            self._expect_input(ctx.user_id, self._receive_effort)
+            return
+        workspace.set_reasoning_effort(ws, value)
+        await ctx.reply_text(
+            f"Reasoning effort set to: {value}%"
+            + ("\n(0 = no override - each backend uses its default)"
+               if value == 0 else "")
+        )
+
     # ----- /refresh -------------------------------------------------------
 
     async def cmd_refresh(self, ctx: BotContext) -> None:
@@ -1560,6 +1609,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "agent":        BotPlatform.cmd_agent,
         "summaryagent": BotPlatform.cmd_summaryagent,
         "permission":   BotPlatform.cmd_permission,
+        "effort":       BotPlatform.cmd_effort,
         "refresh":      BotPlatform.cmd_refresh,
         "compact":      BotPlatform.cmd_compact,
         "colony":       BotPlatform.cmd_colony,

@@ -112,6 +112,16 @@ PERMISSION_DESCRIPTIONS = {
     "deny": "Block all tool calls (text-only responses)",
 }
 
+# Reasoning effort: a single 0-100 percentage. Each agent backend maps
+# the percentage to its own native scale (codex has 5 levels including
+# "xhigh", llama has 4, claude_code is binary, copilot ignores entirely).
+# This sidesteps the per-backend vocabulary problem - the user picks one
+# number and every backend reacts in its own way.
+#
+# 0 is the "off" value: no effort signal is sent and each backend's
+# server-side default is used. 1-100 are explicit overrides.
+DEFAULT_REASONING_EFFORT = 0
+
 
 def _settings_path(workspace_path: str) -> str:
     return os.path.join(workspace_path, COZTER_DIR, "settings.json")
@@ -239,6 +249,22 @@ def get_permission(workspace_path: str) -> str:
 
 def set_permission(workspace_path: str, permission: str) -> None:
     _set_setting(workspace_path, "permission", permission)
+
+
+def get_reasoning_effort(workspace_path: str) -> int:
+    """Workspace reasoning effort as 0-100. Falls back to default on bad data."""
+    val = _load_settings(workspace_path).get(
+        "reasoning_effort", DEFAULT_REASONING_EFFORT,
+    )
+    if not isinstance(val, int) or isinstance(val, bool):
+        return DEFAULT_REASONING_EFFORT
+    return max(0, min(val, 100))
+
+
+def set_reasoning_effort(workspace_path: str, effort: int) -> None:
+    """Clamp to 0-100 and persist."""
+    clamped = max(0, min(int(effort), 100))
+    _set_setting(workspace_path, "reasoning_effort", clamped)
 
 
 def get_colony_interval(workspace_path: str) -> int:

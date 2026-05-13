@@ -25,6 +25,22 @@ class CodexBackend(Backend):
     default_model = "gpt-5.5"
     default_summary_model = "gpt-5.3-codex"
 
+    def convert_effort(self, percent: int) -> str | None:
+        # Codex CLI offers 5 levels including ``xhigh`` (above codex's
+        # own ``high``). Split 1-100 into roughly equal bands so the
+        # user's percentage maps onto each level deterministically.
+        if percent <= 0:
+            return None
+        if percent < 20:
+            return "minimal"
+        if percent < 40:
+            return "low"
+        if percent < 60:
+            return "medium"
+        if percent < 80:
+            return "high"
+        return "xhigh"
+
     async def launch(
         self,
         workspace_path: str,
@@ -33,11 +49,17 @@ class CodexBackend(Backend):
         approval: str,
         *,
         compaction: bool = False,
+        effort: int = 0,
     ) -> asyncio.subprocess.Process:
         prefix = resolve_executable_prefix("codex") or ["codex"]
         cmd = [*prefix, "exec", "--ephemeral", "--json", "-C", workspace_path]
         if model:
             cmd += ["-m", model]
+        native_effort = self.convert_effort(effort)
+        if native_effort:
+            # Codex CLI exposes reasoning effort via the generic config
+            # override flag. Unknown levels are rejected by the CLI.
+            cmd += ["-c", f"model_reasoning_effort={native_effort}"]
 
         if compaction or approval == "full":
             # Compaction is a trusted internal LLM call with no tool use;
