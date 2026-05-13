@@ -17,6 +17,20 @@ if __name__ == "__main__" and not __package__:
     )
 
 
+# Make ``Cozter`` importable from any subprocess we spawn (codex,
+# claude_code, copilot CLIs) and from any bash command they run. The
+# CLI subprocesses inherit our env, so when the model invokes a plugin
+# via ``python -m Cozter.agent_tools.plugins.<name>``, Python can
+# resolve the package without the user setting PYTHONPATH manually.
+_pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_existing_pythonpath = os.environ.get("PYTHONPATH", "")
+if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
+    os.environ["PYTHONPATH"] = (
+        f"{_pkg_parent}{os.pathsep}{_existing_pythonpath}"
+        if _existing_pythonpath else _pkg_parent
+    )
+
+
 def _install_deps() -> None:
     """Auto-install missing requirements before any project imports."""
     req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")

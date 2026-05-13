@@ -111,7 +111,7 @@ it up on next restart. One file, two invocation paths:
 
 - **HTTP backends** (`llama` and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
-  the 14 essentials in `agent_tools/builtin/`
+  the 14 built-in tools in `agent_tools/builtin/`
 - **CLI backends** (`codex`, `claude_code`, `copilot`) can't have
   external tools injected into their fixed toolkit. The bot
   instead lists each plugin in their prompt and tells the model to
@@ -195,7 +195,7 @@ Cozter/
 │
 └── agent_tools/          tool surface for HTTP backends + plugin registry
     ├── base.py             AgentTool ABC; run_as_script; resolve_inside_workspace; html_to_text
-    ├── builtin/            14 essentials (read_file, edit_file, glob, grep, bash, web_search, ...)
+    ├── builtin/            14 built-in tools (read_file, edit_file, glob, grep, bash, web_search, ...)
     └── plugins/            user drop-in zone (current_time.py shipped as a live plugin)
 ```
 

@@ -107,6 +107,12 @@ class LlamaBackend(Backend):
     name = "llama"
     executable = "llama-server"  # only used in "not found" error text
 
+    # llama-server consumes the OpenAI-shape tools list directly, so
+    # plugins discovered in agent_tools/plugins/ become typed tool
+    # entries in TOOL_SCHEMA the same way the built-ins do. CLI backends
+    # leave this False and instead see plugins via cli_plugin_prelude().
+    supports_typed_plugins = True
+
     # The model list is populated dynamically from /v1/models on first
     # access. Stored as a tuple per the Backend contract.
     default_model = "auto"

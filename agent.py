@@ -12,7 +12,8 @@ import re
 from collections.abc import Awaitable, Callable
 
 from . import (
-    backends_agent, colony, compaction, router, session, titling,
+    agent_tools, backends_agent, colony, compaction, router, session,
+    titling,
 )
 from . import workspace as workspace_mod
 from .backends_agent.base import AgentResult, ChatEvent
@@ -276,7 +277,18 @@ async def run(
         contextual_prompt = _build_contextual_prompt(
             effective_prompt, session_data, colony_items,
         )
-        full_prompt = CAPABILITY_HINT + "\n\n" + contextual_prompt
+        parts = [CAPABILITY_HINT]
+        # For backends that can't be handed typed tool definitions
+        # (CLI subprocess agents whose toolset is fixed by the CLI),
+        # enumerate user plugins in the prompt so the model can invoke
+        # them via its own bash/shell tool. HTTP backends see plugins
+        # as ordinary entries in TOOL_SCHEMA and don't need this prelude.
+        if not backend.supports_typed_plugins:
+            prelude = agent_tools.cli_plugin_prelude()
+            if prelude:
+                parts.append(prelude)
+        parts.append(contextual_prompt)
+        full_prompt = "\n\n".join(parts)
         logger.info(
             "Running %s (prompt %d chars, context %d chars)",
             backend.name, len(prompt), len(contextual_prompt),
