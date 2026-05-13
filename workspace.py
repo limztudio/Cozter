@@ -97,6 +97,11 @@ def ensure_cozter_dir(path: str) -> None:
 
 AVAILABLE_BACKENDS = backends_agent.AVAILABLE_BACKENDS
 DEFAULT_BACKEND = backends_agent.DEFAULT_BACKEND
+# Compaction + auto-titling default to codex regardless of which agent
+# runs the chat turns - codex is the cheapest summarizer for most users.
+# Both the agent and the model under it are independently configurable
+# via /summaryagent and /summarymodel.
+DEFAULT_SUMMARY_BACKEND = "codex"
 
 AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"
@@ -140,9 +145,30 @@ def set_backend_name(workspace_path: str, name: str) -> None:
     _set_setting(workspace_path, "backend", name)
 
 
+def get_summary_backend_name(workspace_path: str) -> str:
+    """Backend that runs compaction / auto-titling for this workspace."""
+    return _load_settings(workspace_path).get(
+        "summary_backend", DEFAULT_SUMMARY_BACKEND,
+    )
+
+
+def set_summary_backend_name(workspace_path: str, name: str) -> None:
+    if name not in AVAILABLE_BACKENDS:
+        raise ValueError(
+            f"Unknown backend: {name}. Available: {AVAILABLE_BACKENDS}"
+        )
+    _set_setting(workspace_path, "summary_backend", name)
+
+
 def get_available_models(workspace_path: str) -> list[str]:
     """List models for the workspace's currently selected backend."""
     backend_name = get_backend_name(workspace_path)
+    return list(backends_agent.get_backend(backend_name).available_models)
+
+
+def get_available_summary_models(workspace_path: str) -> list[str]:
+    """List models for the workspace's summary backend (may differ from chat)."""
+    backend_name = get_summary_backend_name(workspace_path)
     return list(backends_agent.get_backend(backend_name).available_models)
 
 
@@ -160,23 +186,25 @@ def _resolve_model(
     default = (
         backend.default_summary_model if summary else backend.default_model
     )
-    # Legacy fallback: settings prior to the backend split stored bare
-    # "model" / "summary_model" keys scoped implicitly to the codex backend.
-    if backend_name == "codex":
-        legacy = "summary_model" if summary else "model"
-        return settings.get(key, settings.get(legacy, default))
     return settings.get(key, default)
 
 
-def get_run_config(workspace_path: str) -> tuple[str, str, str, str]:
-    """Return (backend, model, summary_model, permission) from one read."""
+def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
+    """Return (chat_backend, model, summary_model, permission, summary_backend).
+
+    The summary backend (and the summary model resolved against it) can
+    differ from the chat backend - users may want, say, codex to run
+    chat turns while a cheap local llama handles compaction.
+    """
     s = _load_settings(workspace_path)
     backend_name = s.get("backend", DEFAULT_BACKEND)
+    summary_backend = s.get("summary_backend", DEFAULT_SUMMARY_BACKEND)
     return (
         backend_name,
         _resolve_model(s, backend_name, summary=False),
-        _resolve_model(s, backend_name, summary=True),
+        _resolve_model(s, summary_backend, summary=True),
         s.get("permission", DEFAULT_PERMISSION),
+        summary_backend,
     )
 
 
@@ -192,13 +220,16 @@ def set_model(workspace_path: str, model: str) -> None:
 
 
 def get_summary_model(workspace_path: str) -> str:
+    """Summary model scoped to the summary backend (not the chat backend)."""
     s = _load_settings(workspace_path)
-    return _resolve_model(s, s.get("backend", DEFAULT_BACKEND), summary=True)
+    summary_backend = s.get("summary_backend", DEFAULT_SUMMARY_BACKEND)
+    return _resolve_model(s, summary_backend, summary=True)
 
 
 def set_summary_model(workspace_path: str, model: str) -> None:
-    backend_name = get_backend_name(workspace_path)
-    _, summary_key = _model_keys(backend_name)
+    """Store the summary model under the summary backend's key."""
+    summary_backend = get_summary_backend_name(workspace_path)
+    _, summary_key = _model_keys(summary_backend)
     _set_setting(workspace_path, summary_key, model)
 
 

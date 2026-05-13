@@ -190,6 +190,15 @@ class BotPlatform(ABC):
             except Exception as e:
                 logger.warning("Failed to notify %s: %s", target, e)
 
+    async def send_status(self, chat_id: str, text: str) -> None:
+        """Emit a transient progress/status message ("» <tool>", etc.).
+
+        Default: delegate to ``send_text``. Platforms that can render
+        these visually distinct from the final reply (e.g. CLI mode
+        with ANSI dim grey) should override.
+        """
+        await self.send_text(chat_id, text)
+
     async def send_startup_messages(
         self, version: str, commit_date: str,
     ) -> None:
@@ -399,10 +408,11 @@ class BotPlatform(ABC):
         if ws is None:
             return
         current = workspace.get_summary_model(ws)
-        backend_name = workspace.get_backend_name(ws)
-        options = workspace.get_available_models(ws)
+        summary_backend = workspace.get_summary_backend_name(ws)
+        options = workspace.get_available_summary_models(ws)
         lines = [
-            f"Current summary model: {current} (backend: {backend_name})\n",
+            f"Current summary model: {current}"
+            f" (summary agent: {summary_backend})\n",
             "Available models:",
         ]
         for i, m in enumerate(options, 1):
@@ -417,7 +427,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
         text = ctx.text.strip()
-        options = workspace.get_available_models(ws)
+        options = workspace.get_available_summary_models(ws)
         model = self._pick_option(text, options)
         if model is None:
             await ctx.reply_text(
@@ -458,10 +468,56 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, self._receive_agent)
             return
         workspace.set_backend_name(ws, name)
-        _, model, summary_model, _ = workspace.get_run_config(ws)
+        _, model, summary_model, _, summary_backend = (
+            workspace.get_run_config(ws)
+        )
+        # Always show the summary agent so the user doesn't read the
+        # following ``Summary model`` line as belonging to *name* - it
+        # belongs to whatever agent ``summary_backend`` points at.
         await ctx.reply_text(
             f"Agent set to: {name}\n"
-            f"Model: {model}\nSummary model: {summary_model}"
+            f"Model: {model}\n"
+            f"Summary agent: {summary_backend}\n"
+            f"Summary model: {summary_model}"
+        )
+
+    # ----- /summaryagent --------------------------------------------------
+
+    async def cmd_summaryagent(self, ctx: BotContext) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        current = workspace.get_summary_backend_name(ws)
+        options = workspace.AVAILABLE_BACKENDS
+        lines = [
+            f"Current summary agent: {current}\n",
+            "Available agents:",
+        ]
+        for i, name in enumerate(options, 1):
+            marker = " <-" if name == current else ""
+            lines.append(f"  {i}. {name}{marker}")
+        lines.append("\nEnter a number or agent name (or /cancel):")
+        await ctx.reply_text("\n".join(lines))
+        self._expect_input(ctx.user_id, self._receive_summaryagent)
+
+    async def _receive_summaryagent(self, ctx: BotContext) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        text = ctx.text.strip()
+        options = workspace.AVAILABLE_BACKENDS
+        name = self._pick_option(text, options)
+        if name is None:
+            await ctx.reply_text(
+                f"Unknown agent: {text}\nTry again (or /cancel):"
+            )
+            self._expect_input(ctx.user_id, self._receive_summaryagent)
+            return
+        workspace.set_summary_backend_name(ws, name)
+        summary_model = workspace.get_summary_model(ws)
+        await ctx.reply_text(
+            f"Summary agent set to: {name}\n"
+            f"Summary model: {summary_model}"
         )
 
     # ----- /permission ----------------------------------------------------
@@ -571,9 +627,9 @@ class BotPlatform(ABC):
         if first == "now":
             await ctx.reply_text("Consolidating colony...")
             summary_model = workspace.get_summary_model(ws)
-            backend_name = workspace.get_backend_name(ws)
+            summary_backend = workspace.get_summary_backend_name(ws)
             ok = await colony.consolidate(
-                ws, summary_model, backend_name=backend_name,
+                ws, summary_model, backend_name=summary_backend,
             )
             if ok:
                 items = colony.get_items(ws)
@@ -1255,7 +1311,7 @@ class BotPlatform(ABC):
                 "Workspace not available (deleted?). Use /new or /open.",
             )
             return
-        backend_name, model, summary_model, perm = (
+        backend_name, model, summary_model, perm, summary_backend = (
             workspace.get_run_config(ws)
         )
 
@@ -1283,7 +1339,7 @@ class BotPlatform(ABC):
                 # (e.g. CLI mode). Emit each event as a fresh message
                 # so the user still sees progress.
                 try:
-                    await self.send_text(chat_id, line)
+                    await self.send_status(chat_id, line)
                 except Exception:
                     pass
                 return
@@ -1303,6 +1359,7 @@ class BotPlatform(ABC):
                 model=model, summary_model=summary_model, approval=perm,
                 on_event=on_event, inject_queue=inject_q,
                 backend_name=backend_name,
+                summary_backend_name=summary_backend,
                 session_id=session_id,
             )
         finally:
@@ -1501,6 +1558,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "model":        BotPlatform.cmd_model,
         "summarymodel": BotPlatform.cmd_summarymodel,
         "agent":        BotPlatform.cmd_agent,
+        "summaryagent": BotPlatform.cmd_summaryagent,
         "permission":   BotPlatform.cmd_permission,
         "refresh":      BotPlatform.cmd_refresh,
         "compact":      BotPlatform.cmd_compact,

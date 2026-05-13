@@ -220,6 +220,7 @@ async def run(
     on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
     inject_queue: asyncio.Queue[str] | None = None,
     backend_name: str | None = None,
+    summary_backend_name: str | None = None,
     session_id: str | None = None,
 ) -> AgentResult:
     """Run the selected agent CLI with session history prepended.
@@ -389,8 +390,12 @@ async def run(
     async with workspace_mod.get_lock(workspace_path):
         _log_to_session(workspace_path, session_id, effective_prompt, result)
 
+    # Compaction + titling intentionally use the summary backend, which
+    # may differ from the chat backend (e.g. chat=llama, summary=codex).
+    summary_backend = summary_backend_name or backend.name
     await compaction.maybe_compact(
-        workspace_path, session_id, summary_model, backend_name=backend.name,
+        workspace_path, session_id, summary_model,
+        backend_name=summary_backend,
     )
 
     # Auto-title sessions whose name still matches the default
@@ -403,7 +408,7 @@ async def run(
     if session.is_default_name(session_data.get("name")):
         asyncio.create_task(titling.maybe_auto_title(
             workspace_path, session_id, summary_model,
-            backend_name=backend.name,
+            backend_name=summary_backend,
         ))
 
     if not any(e.kind == "text" for e in result.events):
