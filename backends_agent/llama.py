@@ -17,10 +17,13 @@ Config: ``config.json``'s ``llama_server_url`` (default
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
+import re
 import shutil
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any
@@ -32,10 +35,6 @@ from .base import AgentResult, Backend, ChatEvent
 
 logger = logging.getLogger(__name__)
 
-# Per-AI-turn safety cap on tool-call iterations to keep a runaway model
-# from hammering the server forever.
-_MAX_AGENT_TURNS = 30
-
 # Cap each tool result we feed back to the model: huge bash outputs
 # blow up the prompt and rarely help the model.
 _TOOL_RESULT_MAX = 4_000
@@ -44,6 +43,11 @@ _TOOL_RESULT_MAX = 4_000
 # argument up to this hard cap).
 _BASH_DEFAULT_TIMEOUT = 30
 _BASH_MAX_TIMEOUT = 120
+
+# Hard cap on raw HTTP body bytes per web_fetch / web_search call so a
+# pathological URL can't OOM the bot. The text returned to the model is
+# further capped by ``max_chars``.
+_MAX_FETCH_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +184,10 @@ class LlamaBackend(Backend):
         compaction: bool,
     ) -> None:
         url = cfg.get_llama_server_url().rstrip("/")
+        # Per-AI-turn safety caps. Read fresh each turn so a config edit
+        # takes effect on the next message without a restart.
+        max_agent_turns = cfg.get_llama_max_agent_turns()
+        tool_repeat_limit = cfg.get_llama_tool_repeat_limit()
         # ``model="auto"`` (our sentinel default) means "let the server
         # decide" - drop the field from the request and llama-server uses
         # whichever model it has loaded.
@@ -205,8 +213,9 @@ class LlamaBackend(Backend):
             {"role": "user", "content": prompt},
         ]
         tools_schema = _TOOL_SCHEMA if tools_enabled else None
+        tool_repeat_counts: dict[str, int] = {}
 
-        for turn in range(_MAX_AGENT_TURNS):
+        for _ in range(max_agent_turns):
             payload: dict[str, Any] = {
                 "messages": messages,
                 "stream": True,
@@ -218,7 +227,7 @@ class LlamaBackend(Backend):
                 payload["tool_choice"] = "auto"
 
             assistant_text, tool_calls = await _stream_completion(
-                url, payload, proc,
+                url, payload,
             )
 
             # OpenAI spec: when ``tool_calls`` is present, ``content``
@@ -250,9 +259,28 @@ class LlamaBackend(Backend):
             # is honored when tools_enabled is True, so by the time we get
             # here every tool call is permitted.
             for call in tool_calls:
-                result = await _execute_tool(
-                    call, workspace_path, approval, proc,
-                )
+                sig = _tool_signature(call)
+                tool_repeat_counts[sig] = tool_repeat_counts.get(sig, 0) + 1
+
+                if tool_repeat_counts[sig] > tool_repeat_limit:
+                    fn = call.get("function") or {}
+                    result = (
+                        f"Skipped repeated tool call: {fn.get('name', '')}. "
+                        f"The same tool call was requested more than "
+                        f"{tool_repeat_limit} times. Stop repeating this "
+                        "call and produce the final answer using the "
+                        "information already available."
+                    )
+                    proc.emit({
+                        "type": "tool_result",
+                        "name": fn.get("name", ""),
+                        "output": result,
+                    })
+                else:
+                    result = await _execute_tool(
+                        call, workspace_path, approval, proc,
+                    )
+
                 # Include ``name`` alongside tool_call_id; strict
                 # llama-server builds reject tool messages without it.
                 messages.append({
@@ -262,26 +290,45 @@ class LlamaBackend(Backend):
                     "content": result,
                 })
 
-        # If we fall out of the loop, the model couldn't terminate within
-        # the iteration cap - surface that explicitly so the user knows.
-        proc.emit({
-            "type": "error",
-            "message": (
-                f"llama agent exceeded {_MAX_AGENT_TURNS} tool-call"
-                " turns without producing a final answer."
+        # If we fall out of the loop, force one final no-tools response
+        # instead of returning only an error.
+        messages.append({
+            "role": "user",
+            "content": (
+                "You have reached the tool-call limit. Do not call any more"
+                " tools. Based only on the information already collected,"
+                " provide the final answer now. If something is incomplete,"
+                " clearly say what is missing."
             ),
         })
+
+        payload: dict[str, Any] = {
+            "messages": messages,
+            "stream": True,
+        }
+        if request_model is not None:
+            payload["model"] = request_model
+
+        assistant_text, _ = await _stream_completion(url, payload)
+
+        if assistant_text:
+            proc.emit({
+                "type": "assistant_text",
+                "text": assistant_text,
+            })
+        else:
+            proc.emit({
+                "type": "error",
+                "message": (
+                    f"llama agent exceeded {max_agent_turns} tool-call"
+                    " turns and failed to produce a final answer."
+                ),
+            })
 
     # ---- event parsing --------------------------------------------------
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
         etype = event.get("type", "")
-
-        if etype == "text_delta":
-            # Streaming text token from the assistant. The codex/copilot
-            # backends only surface final text; doing the same here keeps
-            # the "Thinking..." rendering uncluttered.
-            return
 
         if etype == "assistant_text":
             text = event.get("text") or ""
@@ -334,7 +381,7 @@ class LlamaBackend(Backend):
 
 
 async def _stream_completion(
-    base_url: str, payload: dict, proc: _LlamaSession,
+    base_url: str, payload: dict,
 ) -> tuple[str, list[dict]]:
     """POST /v1/chat/completions with stream=True; return (text, tool_calls).
 
@@ -378,7 +425,6 @@ async def _stream_completion(
                     content = delta.get("content")
                     if isinstance(content, str) and content:
                         text_parts.append(content)
-                        proc.emit({"type": "text_delta", "text": content})
                     for tc in delta.get("tool_calls") or []:
                         _merge_tool_call(tool_buffers, tc)
     except aiohttp.ClientError as exc:
@@ -392,6 +438,23 @@ async def _stream_completion(
         if tool_buffers[idx].get("function", {}).get("name")
     ]
     return "".join(text_parts), tool_calls
+
+
+def _tool_signature(call: dict) -> str:
+    fn = call.get("function") or {}
+    name = fn.get("name", "")
+    raw_args = fn.get("arguments") or "{}"
+
+    try:
+        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+    except json.JSONDecodeError:
+        args = raw_args
+
+    return json.dumps(
+        {"name": name, "args": args},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
 
 
 def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
@@ -486,6 +549,53 @@ _TOOL_SCHEMA: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "web_search",
+            "description": (
+                "Search the public internet for current information."
+                " Use this to find relevant pages, then use web_fetch"
+                " to read a specific result."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {
+                        "type": "integer",
+                        "description": (
+                            "Maximum results to return, default 5, max 10."
+                        ),
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": (
+                "Fetch a public HTTP/HTTPS URL and return readable text."
+                " Use this after web_search to inspect a page."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "max_chars": {
+                        "type": "integer",
+                        "description": (
+                            "Maximum characters to return, default 12000."
+                        ),
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "bash",
             "description": (
                 "Run a shell command in the workspace. Use sparingly;"
@@ -544,6 +654,10 @@ async def _execute_tool(
             result = _tool_edit_file(workspace_path, args)
         elif name == "bash":
             result = await _tool_bash(workspace_path, args)
+        elif name == "web_search":
+            result = await _tool_web_search(args)
+        elif name == "web_fetch":
+            result = await _tool_web_fetch(args)
         else:
             result = f"Unknown tool: {name}"
     except Exception as exc:
@@ -618,6 +732,179 @@ def _tool_edit_file(workspace: str, args: dict) -> str:
     with open(target, "w", encoding="utf-8") as f:
         f.write(updated)
     return f"Replaced 1 occurrence in {args.get('path')}"
+
+
+async def _read_bounded_text(resp: aiohttp.ClientResponse) -> str:
+    """Read up to _MAX_FETCH_BYTES from *resp* and decode with its charset."""
+    body_bytes = await resp.content.read(_MAX_FETCH_BYTES + 1)
+    encoding = resp.charset or "utf-8"
+    return body_bytes.decode(encoding, errors="replace")
+
+
+def _html_to_text(value: str) -> str:
+    value = re.sub(
+        r"<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r"<style\b[^<]*(?:(?!</style>)<[^<]*)*</style>",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = html.unescape(value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def _ddg_unwrap_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    qs = urllib.parse.parse_qs(parsed.query)
+    if "uddg" in qs and qs["uddg"]:
+        return qs["uddg"][0]
+    return url
+
+
+async def _tool_web_search(args: dict) -> str:
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return "Error: 'query' must be a non-empty string"
+
+    max_results = args.get("max_results") or 5
+    try:
+        max_results = int(max_results)
+    except (TypeError, ValueError):
+        max_results = 5
+    max_results = max(1, min(max_results, 10))
+
+    search_url = (
+        "https://duckduckgo.com/html/?"
+        + urllib.parse.urlencode({"q": query})
+    )
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 compatible; CozterLlamaAgent/1.0; "
+            "+https://local"
+        )
+    }
+
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(
+                search_url,
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as resp:
+                if resp.status != 200:
+                    return f"Search failed: HTTP {resp.status}"
+                body = await _read_bounded_text(resp)
+    except Exception as exc:
+        return f"Search failed: {exc}"
+
+    matches = re.findall(
+        r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+        body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    results: list[str] = []
+    seen: set[str] = set()
+
+    for href, title_html in matches:
+        url = _ddg_unwrap_url(html.unescape(href))
+        title = _html_to_text(title_html)
+        if not title or not url or url in seen:
+            continue
+        seen.add(url)
+        results.append(f"{len(results) + 1}. {title}\n   {url}")
+        if len(results) >= max_results:
+            break
+
+    if not results:
+        return "No search results found."
+
+    return "\n".join(results)
+
+
+async def _tool_web_fetch(args: dict) -> str:
+    url = args.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return "Error: 'url' must be a non-empty string"
+
+    url = url.strip()
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return "Error: only http:// and https:// URLs are allowed"
+
+    max_chars = args.get("max_chars") or 12_000
+    try:
+        max_chars = int(max_chars)
+    except (TypeError, ValueError):
+        max_chars = 12_000
+    max_chars = max(1_000, min(max_chars, 30_000))
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 compatible; CozterLlamaAgent/1.0; "
+            "+https://local"
+        )
+    }
+
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(
+                url,
+                allow_redirects=True,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                final_url = str(resp.url)
+                content_type = resp.headers.get("content-type", "")
+
+                if resp.status >= 400:
+                    return (
+                        f"Fetch failed: HTTP {resp.status} for {final_url}"
+                    )
+
+                if not (
+                    content_type.startswith("text/")
+                    or "html" in content_type
+                    or "json" in content_type
+                    or "xml" in content_type
+                    or content_type == ""
+                ):
+                    return (
+                        f"Fetched {final_url}, but content type is "
+                        f"'{content_type}', not readable text."
+                    )
+
+                body = await _read_bounded_text(resp)
+    except Exception as exc:
+        return f"Fetch failed: {exc}"
+
+    title = ""
+    title_match = re.search(
+        r"<title[^>]*>(.*?)</title>",
+        body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if title_match:
+        title = _html_to_text(title_match.group(1))
+
+    is_html = "html" in content_type.lower()
+    text = _html_to_text(body) if is_html else body
+    text = text.strip()
+
+    if len(text) > max_chars:
+        text = text[:max_chars] + f"\n... [truncated, {len(text)} chars total]"
+
+    header = f"URL: {final_url}"
+    if title:
+        header += f"\nTitle: {title}"
+
+    return f"{header}\n\n{text}"
 
 
 async def _tool_bash(workspace: str, args: dict) -> str:
@@ -702,9 +989,14 @@ def _system_prompt(workspace_path: str, tools_enabled: bool) -> str:
     ]
     if tools_enabled:
         parts.append(
-            "Tool calls (read_file, write_file, edit_file, bash) run"
-            " inside this workspace. Paths may be relative to the"
-            " workspace root or absolute inside it."
+            "Available tools: read_file, write_file, edit_file, bash,"
+            " web_search, web_fetch. File and shell tools run inside"
+            " this workspace. Paths may be relative to the workspace"
+            " root or absolute inside it. Web tools use this client's"
+            " internet connection. Use web_search to find pages, then"
+            " web_fetch to read specific URLs. Do not repeat the same"
+            " tool call. Once you have enough information, stop using"
+            " tools and provide the final answer."
         )
     else:
         parts.append(
@@ -719,4 +1011,14 @@ def _summarize_tool_use(tool: str, args: dict) -> str:
         return f"$ {cmd[:200]}" + ("..." if len(cmd) > 200 else "")
     if tool in ("read_file", "write_file", "edit_file"):
         return f"{tool}: {args.get('path', '?')}"
+    if tool == "web_search":
+        query = args.get("query", "")
+        return f"web_search: {query[:200]}" + (
+            "..." if len(query) > 200 else ""
+        )
+    if tool == "web_fetch":
+        url = args.get("url", "")
+        return f"web_fetch: {url[:200]}" + (
+            "..." if len(url) > 200 else ""
+        )
     return tool

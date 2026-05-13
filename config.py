@@ -13,6 +13,8 @@ _DEFAULT_CONFIG = {
     "slack_app_token": "",
     "slack_channel_ids": [],
     "llama_server_url": "http://127.0.0.1:8080",
+    "llama_max_agent_turns": 60,
+    "llama_tool_repeat_limit": 3,
     "update_check_interval": 10,
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
@@ -37,6 +39,36 @@ def get_llama_server_url() -> str:
     if isinstance(url, str):
         return url.strip() or _DEFAULT_CONFIG["llama_server_url"]
     return _DEFAULT_CONFIG["llama_server_url"]
+
+
+def get_llama_max_agent_turns() -> int:
+    """Return the per-turn cap on llama agent-loop iterations."""
+    if not os.path.exists(CONFIG_PATH):
+        return _DEFAULT_CONFIG["llama_max_agent_turns"]
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return _DEFAULT_CONFIG["llama_max_agent_turns"]
+    val = cfg.get("llama_max_agent_turns")
+    if isinstance(val, int) and val > 0:
+        return val
+    return _DEFAULT_CONFIG["llama_max_agent_turns"]
+
+
+def get_llama_tool_repeat_limit() -> int:
+    """Return the cap on identical repeated tool calls within a turn."""
+    if not os.path.exists(CONFIG_PATH):
+        return _DEFAULT_CONFIG["llama_tool_repeat_limit"]
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return _DEFAULT_CONFIG["llama_tool_repeat_limit"]
+    val = cfg.get("llama_tool_repeat_limit")
+    if isinstance(val, int) and val > 0:
+        return val
+    return _DEFAULT_CONFIG["llama_tool_repeat_limit"]
 
 
 def load_config() -> dict:
