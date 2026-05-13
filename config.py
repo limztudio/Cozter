@@ -15,6 +15,7 @@ _DEFAULT_CONFIG = {
     "llama_server_url": "http://127.0.0.1:8080",
     "llama_max_agent_turns": 60,
     "llama_tool_repeat_limit": 3,
+    "llama_socket_timeout": 1800,
     "update_check_interval": 10,
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
@@ -69,6 +70,28 @@ def get_llama_tool_repeat_limit() -> int:
     if isinstance(val, int) and val > 0:
         return val
     return _DEFAULT_CONFIG["llama_tool_repeat_limit"]
+
+
+def get_llama_socket_timeout() -> int:
+    """Return the per-socket-read timeout in seconds for the llama HTTP call.
+
+    A slow llama-server (heavy model, large context, weak hardware) can
+    take many minutes to emit the first byte of a response, especially
+    after a tool turn folds a large file's contents back into context.
+    The default is intentionally generous; lower it only if you have a
+    fast server and want failures to surface quickly.
+    """
+    if not os.path.exists(CONFIG_PATH):
+        return _DEFAULT_CONFIG["llama_socket_timeout"]
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return _DEFAULT_CONFIG["llama_socket_timeout"]
+    val = cfg.get("llama_socket_timeout")
+    if isinstance(val, int) and val > 0:
+        return val
+    return _DEFAULT_CONFIG["llama_socket_timeout"]
 
 
 def load_config() -> dict:

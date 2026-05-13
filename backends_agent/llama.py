@@ -412,11 +412,14 @@ async def _stream_completion(
     # OpenAI streaming protocol fragments name/arguments across deltas.
     tool_buffers: dict[int, dict[str, Any]] = {}
 
+    sock_read = cfg.get_llama_socket_timeout()
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 endpoint, json=payload,
-                timeout=aiohttp.ClientTimeout(total=None, sock_read=300),
+                timeout=aiohttp.ClientTimeout(
+                    total=None, sock_read=sock_read,
+                ),
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()
@@ -463,11 +466,15 @@ async def _stream_completion(
             " mid-response"
         ) from exc
     except TimeoutError as exc:
-        # ``aiohttp.ClientTimeout(sock_read=300)`` fires this if a
-        # 5-minute gap passes between successive reads of the streamed
-        # body - i.e. the server got stuck or hung up silently.
+        # ``aiohttp.ClientTimeout(sock_read=...)`` fires this if a
+        # full ``llama_socket_timeout`` window passes between socket
+        # reads - either the server is stuck or it's just chewing on
+        # a very large prompt for too long. Point the user at the
+        # config knob so they can lengthen it for slow servers.
         raise RuntimeError(
-            f"llama-server at {base_url} did not respond in time"
+            f"llama-server at {base_url} did not respond within"
+            f" {sock_read}s (raise llama_socket_timeout in config.json"
+            " if your server is slow, not stuck)"
         ) from exc
     except aiohttp.ClientError as exc:
         # Catch-all for the rest of aiohttp's client-side exception

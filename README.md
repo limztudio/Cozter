@@ -58,6 +58,7 @@ lives in `.config/config.example.json`):
   "llama_server_url": "http://127.0.0.1:8080",
   "llama_max_agent_turns": 60,
   "llama_tool_repeat_limit": 3,
+  "llama_socket_timeout": 1800,
 
   "update_check_interval": 10,
   "recent_workspace_limit": 10
