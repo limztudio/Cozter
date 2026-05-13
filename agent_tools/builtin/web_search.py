@@ -8,7 +8,7 @@ import urllib.parse
 
 import aiohttp
 
-from .base import AgentTool, html_to_text, read_bounded_text
+from ..base import AgentTool, html_to_text, read_bounded_text
 
 
 class WebSearchTool(AgentTool):

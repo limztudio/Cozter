@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from .base import AgentTool, resolve_inside_workspace
+from ..base import AgentTool, resolve_inside_workspace
 
 
 class ReadFileTool(AgentTool):

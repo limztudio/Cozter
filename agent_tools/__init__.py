@@ -6,29 +6,30 @@ Gemini, Claude API, LM Studio, etc.) can drive it. The package never
 sees backend protocol details - callers extract ``(name, args)`` from
 their native tool-call format and hand them in.
 
-Plug-and-play: every concrete subclass of :class:`AgentTool` (defined
-in any sibling module) auto-registers itself via
-``__init_subclass__``. The block below imports every sibling module so
-those side-effect registrations fire at import time. To add a new tool,
-drop a ``my_tool.py`` file in this directory that defines an
-``AgentTool`` subclass - no edits to this file or to any backend are
-needed.
+Layout (builtin vs plugins):
+
+  - ``agent_tools/builtin/*.py`` - the baseline toolkit shipped
+    with the bot. Always loaded. ``is_plugin`` stays False.
+  - ``agent_tools/plugins/*.py`` - user drop-in zone. Loaded the same
+    way; instances are marked ``is_plugin = True`` after registration.
+    See ``plugins/README.md`` for the template.
+
+HTTP backends (llama, future Mistral/Gemini/...) see builtin and
+plugins identically as typed tools in :data:`TOOL_SCHEMA`. CLI
+backends (codex, claude_code, copilot) cannot accept external tool
+injections; for them the orchestrator prepends :func:`cli_plugin_prelude`
+to the prompt so the model knows to invoke plugins through its own
+``bash`` tool via ``python -m Cozter.agent_tools.plugins.<name>``.
 
 Backends consume:
 
-  - :data:`TOOL_SCHEMA` - OpenAI-shape ``tools`` list. Works as-is for
-    OpenAI-compatible APIs. Anthropic-shape callers can translate by
-    walking each entry's ``function`` dict.
-  - :data:`TOOL_NAMES` - ordered tuple of tool names (for system
-    prompts).
-  - :func:`execute_tool` - run a tool by ``name`` + parsed ``args``;
-    returns the result string.
-  - :func:`tool_signature` - stable JSON fingerprint of a call for
-    repeat detection.
+  - :data:`TOOL_SCHEMA` - OpenAI-shape ``tools`` list (builtin + plugins).
+  - :data:`TOOL_NAMES` - ordered tuple of tool names.
+  - :func:`execute_tool` - run a tool by ``name`` + parsed ``args``.
+  - :func:`tool_signature` - stable JSON fingerprint for repeat detection.
   - :func:`summarize_tool_use` - one-line status-display formatter.
-  - :func:`parse_openai_call` - convenience: pull ``(name, args)`` out
-    of an OpenAI tool_call dict. Skip if your backend speaks a
-    different native format.
+  - :func:`parse_openai_call` - convenience for OpenAI-shape callers.
+  - :func:`cli_plugin_prelude` - prompt addendum for CLI backends.
 """
 
 from __future__ import annotations
@@ -53,12 +54,40 @@ _TOOL_RESULT_MAX = 4_000
 # Tool discovery: import every sibling module to trigger self-registration
 # ---------------------------------------------------------------------------
 
-# Skip the base module (no tool class) and any underscore-prefixed
-# module (treated as private by convention).
-for _mod_info in pkgutil.iter_modules(__path__):
-    if _mod_info.name == "base" or _mod_info.name.startswith("_"):
-        continue
-    importlib.import_module(f"{__name__}.{_mod_info.name}")
+
+def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
+    """Import every module of ``agent_tools/<subpkg>/`` so tool classes
+    inside auto-register via ``AgentTool.__init_subclass__``. New
+    registrations are tagged with ``is_plugin`` per the flag.
+
+    Files starting with ``_`` are skipped, so an example plugin can
+    ship in-tree without being live until renamed.
+    """
+    pkg_name = f"{__name__}.{subpkg}"
+    try:
+        pkg = importlib.import_module(pkg_name)
+    except ImportError as exc:
+        logger.warning("Could not import %s: %s", pkg_name, exc)
+        return
+    for _mod_info in pkgutil.iter_modules(pkg.__path__):
+        if _mod_info.name.startswith("_"):
+            continue
+        before = {id(t) for t in AgentTool.registry}
+        try:
+            importlib.import_module(f"{pkg_name}.{_mod_info.name}")
+        except Exception:
+            logger.exception(
+                "Failed to load %s.%s", pkg_name, _mod_info.name,
+            )
+            continue
+        if mark_as_plugin:
+            for t in AgentTool.registry:
+                if id(t) not in before:
+                    t.is_plugin = True
+
+
+_load_subpackage("builtin", mark_as_plugin=False)
+_load_subpackage("plugins", mark_as_plugin=True)
 
 # Sort registered tools deterministically: explicit ``order`` then name.
 _TOOLS: tuple[AgentTool, ...] = tuple(
@@ -71,6 +100,10 @@ TOOL_SCHEMA: list[dict[str, Any]] = [
 ]
 
 TOOL_NAMES: tuple[str, ...] = tuple(t.name for t in _TOOLS)
+
+PLUGIN_NAMES: tuple[str, ...] = tuple(
+    t.name for t in _TOOLS if t.is_plugin
+)
 
 
 # ---------------------------------------------------------------------------
@@ -156,12 +189,53 @@ def summarize_tool_use(name: str, args: dict) -> str:
     return tool.summarize(args) if tool else name
 
 
+def cli_plugin_prelude() -> str:
+    """Prompt addendum enumerating plugins for CLI backends.
+
+    Returns ``""`` if no plugins are loaded. Otherwise returns a
+    paragraph describing each plugin (name, description, args, and
+    a bash-mode invocation template) so CLI-backed agents that can't
+    receive typed tool definitions can still call plugins through
+    their built-in ``bash`` / shell tool.
+    """
+    plugins = [t for t in _TOOLS if t.is_plugin]
+    if not plugins:
+        return ""
+
+    lines = [
+        "PLUGINS (extra tools available in this workspace, invoked via"
+        " the bash/shell tool):",
+        "",
+    ]
+    for tool in plugins:
+        props = tool.parameters.get("properties", {})
+        required = set(tool.parameters.get("required", []))
+        args_summary = (
+            ", ".join(
+                f"{k}{'' if k in required else '?'}: {v.get('type', '?')}"
+                for k, v in props.items()
+            )
+            or "no args"
+        )
+        # Use the class's actual __module__ so the python -m line works
+        # even when the plugin file's name differs from the tool's name
+        # attribute (e.g. weather_lookup.py defining GetWeatherTool).
+        module_path = tool.__class__.__module__
+        lines.append(f"- {tool.name}: {tool.description}")
+        lines.append(f"  Args: {{{args_summary}}}")
+        lines.append(f"  Invoke: python -m {module_path} '<JSON args>'")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 __all__ = [
     "AgentTool",
     "TOOL_SCHEMA",
     "TOOL_NAMES",
+    "PLUGIN_NAMES",
     "execute_tool",
     "tool_signature",
     "summarize_tool_use",
     "parse_openai_call",
+    "cli_plugin_prelude",
 ]

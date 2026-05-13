@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import pathlib
 
-from .base import AgentTool
+from ..base import AgentTool
 
 
 class GlobTool(AgentTool):

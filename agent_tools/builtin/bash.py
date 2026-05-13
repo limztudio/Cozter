@@ -6,7 +6,7 @@ import asyncio
 import os
 import shutil
 
-from .base import AgentTool
+from ..base import AgentTool
 
 # Bash tool default timeout (model can override via the ``timeout``
 # argument up to this hard cap).

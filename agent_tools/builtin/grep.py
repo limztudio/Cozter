@@ -6,7 +6,7 @@ import os
 import pathlib
 import re
 
-from .base import AgentTool, resolve_inside_workspace
+from ..base import AgentTool, resolve_inside_workspace
 
 # Skip grep on files bigger than this - usually binary or generated.
 _GREP_MAX_FILE_BYTES = 1_000_000  # 1 MB

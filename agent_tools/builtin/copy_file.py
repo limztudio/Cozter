@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 
-from .base import AgentTool, resolve_inside_workspace
+from ..base import AgentTool, resolve_inside_workspace
 
 
 class CopyFileTool(AgentTool):

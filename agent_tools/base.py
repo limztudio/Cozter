@@ -52,6 +52,13 @@ class AgentTool(ABC):
     file_action: str | None = None
     order: int = 100
 
+    # Whether this tool was loaded from ``agent_tools/plugins/`` (True)
+    # vs ``agent_tools/builtin/`` (False). Set by the package loader
+    # on each registered instance, not on the class. CLI backends use
+    # the flag to enumerate plugins in their bash prelude; HTTP backends
+    # see plugins as ordinary typed tools in the schema either way.
+    is_plugin: bool = False
+
     # Populated by __init_subclass__. Read by the package's __init__.
     registry: list["AgentTool"] = []
 
@@ -84,6 +91,48 @@ class AgentTool(ABC):
     def summarize(self, args: dict) -> str:
         """One-line summary for the agent's status display."""
         return self.name
+
+    @classmethod
+    def run_as_script(cls) -> None:
+        """Entry point for bash-mode invocation (CLI-backend plugins).
+
+        Reads JSON args from ``sys.argv[1]`` (defaults to ``"{}"``),
+        runs the tool against the current working directory (which the
+        CLI subprocess already sets to the workspace via ``cwd=`` or
+        ``-C``), and prints the result to stdout. Errors go to stderr
+        with a non-zero exit code.
+
+        A plugin file at ``agent_tools/plugins/<name>.py`` becomes
+        invocable as ``python -m Cozter.agent_tools.plugins.<name>``
+        by ending the file with::
+
+            if __name__ == "__main__":
+                MyTool.run_as_script()
+        """
+        import asyncio
+        import json
+        import os
+        import sys
+
+        raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
+        try:
+            args = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            print(f"Error: invalid JSON args: {exc}", file=sys.stderr)
+            sys.exit(2)
+        if not isinstance(args, dict):
+            print(
+                "Error: JSON args must be an object",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        tool = cls()
+        try:
+            result = asyncio.run(tool.run(os.getcwd(), args))
+        except Exception as exc:  # noqa: BLE001
+            print(f"Error: tool {cls.__name__} failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(result)
 
 
 # ---------------------------------------------------------------------------
