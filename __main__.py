@@ -131,37 +131,27 @@ def _cli_mode_requested() -> bool:
     return any(arg in flags for arg in sys.argv[1:])
 
 
-# Three-phase CLI lifecycle, signalled via env vars:
-#   - launcher (no env): user invoked the script from a shell. Open a
-#     new console window running the respawner.
-#   - respawner (COZTER_CLI_RESPAWNER=1): we're inside the new console.
-#     Repeatedly invoke the bot subprocess; restart it on exit code
-#     ``CLI_RESTART_EXIT_CODE`` (auto-update path). Any other exit code
-#     ends the loop so a real crash stays visible.
-#   - bot (COZTER_CLI_CHILD=1): run main_cli with update_loop attached.
+# Two-phase CLI lifecycle, signalled via one env var:
+#   - launcher (no env): user ran ``python -m Cozter -cli`` from a
+#     shell. Run the respawner loop in *this* terminal.
+#   - bot (COZTER_CLI_CHILD=1): the loop spawned us; run main_cli with
+#     update_loop attached. On auto-update, exit with
+#     ``CLI_RESTART_EXIT_CODE`` so the loop relaunches us in place.
 _CLI_CHILD_ENV = "COZTER_CLI_CHILD"
-_CLI_RESPAWNER_ENV = "COZTER_CLI_RESPAWNER"
 
 
 def _cli_child_mode() -> bool:
     return os.environ.get(_CLI_CHILD_ENV) == "1"
 
 
-def _cli_respawner_mode() -> bool:
-    return os.environ.get(_CLI_RESPAWNER_ENV) == "1"
-
-
 def _cli_respawner_loop() -> int:
     """Spawn the bot subprocess in a loop; relaunch on exit-99.
 
-    Runs in the new console window. Inherits stdin/stdout/stderr so the
-    bot has direct access to the user's terminal. Returns the bot's
+    Runs in the user's current terminal. Inherits stdin/stdout/stderr
+    so the bot has direct access to the terminal. Returns the bot's
     final non-restart exit code.
     """
     bot_env = {**os.environ, _CLI_CHILD_ENV: "1"}
-    # Don't leak the respawner marker into the bot process - it would
-    # only confuse mode detection if anything ever inspected it.
-    bot_env.pop(_CLI_RESPAWNER_ENV, None)
     cmd = [sys.executable, "-m", "Cozter", *sys.argv[1:]]
     while True:
         rc = subprocess.call(cmd, env=bot_env)
@@ -169,133 +159,12 @@ def _cli_respawner_loop() -> int:
             return rc
 
 
-def _windows_native_path() -> str:
-    """Return PATH as Windows itself would set it for a fresh cmd window.
+async def main_cli() -> None:
+    """Run the local stdin/stdout chat surface in the current terminal.
 
-    When the launcher is started from a bash-like shell (msys2, Git Bash,
-    WSL interop), ``os.environ['PATH']`` is in Unix format (``/c/...``)
-    that ``cmd.exe`` cannot resolve - so a freshly spawned cmd window
-    can't find ``codex.exe`` etc even though the user can run them in
-    their normal terminal. We re-read PATH from the registry (system +
-    user) so the spawned console has the same PATH it would have if the
-    user opened ``cmd.exe`` from the Start menu.
-    """
-    import winreg
-    parts: list[str] = []
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE,
-            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-        ) as k:
-            value, _ = winreg.QueryValueEx(k, "Path")
-            if value:
-                parts.append(value)
-    except OSError:
-        pass
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as k:
-            value, _ = winreg.QueryValueEx(k, "Path")
-            if value:
-                parts.append(value)
-    except OSError:
-        pass
-    return ";".join(parts)
-
-
-def _spawn_cli_in_new_console() -> bool:
-    """Spawn the script again in a fresh OS console window.
-
-    Returns True if a child was successfully started, False if no
-    suitable mechanism is available on this host. The caller should
-    fall back to running the CLI bot in the current terminal if False.
-    """
-    import platform
-    import shlex
-    import shutil as _shutil
-
-    py = sys.executable
-    inner_args = [py, "-m", "Cozter", *sys.argv[1:]]
-    cwd = os.getcwd()
-    # Launch into respawner mode so the new console can auto-restart
-    # the bot when an update is pulled.
-    env = {**os.environ, _CLI_RESPAWNER_ENV: "1"}
-    env.pop(_CLI_CHILD_ENV, None)
-    system = platform.system()
-
-    if system == "Windows":
-        # Replace the inherited (possibly bash-mangled) PATH with what
-        # the registry says PATH should be, so the new cmd window sees
-        # the same tools the user gets from a stock Start-menu cmd.
-        native_path = _windows_native_path()
-        if native_path:
-            env["PATH"] = native_path
-        # CREATE_NEW_CONSOLE attaches the child to a fresh console
-        # window. Wrapping with ``cmd /k`` keeps that window open after
-        # Python exits so the user can read any final output (including
-        # a crash trace) before closing manually.
-        try:
-            cmdline = "cmd.exe /k " + subprocess.list2cmdline(inner_args)
-            subprocess.Popen(
-                cmdline,
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-                cwd=cwd, env=env,
-            )
-            return True
-        except Exception:
-            logger.exception("Failed to spawn Windows CLI console")
-            return False
-
-    # POSIX: try common terminal emulators in priority order. The
-    # trailing ``echo; read`` keeps the window open after Python exits
-    # so crash traces are visible.
-    inner_str = " ".join(shlex.quote(a) for a in inner_args)
-    inner_str += "; echo; echo '(press Enter to close)'; read"
-
-    if system == "Darwin":
-        script = (
-            f'tell application "Terminal" to do script '
-            f'"cd {shlex.quote(cwd)} && {inner_str}"'
-        )
-        if _shutil.which("osascript"):
-            try:
-                subprocess.Popen(
-                    ["osascript", "-e", script], env=env,
-                )
-                return True
-            except Exception:
-                logger.exception("Failed to spawn macOS Terminal")
-                return False
-        return False
-
-    candidates = [
-        ["gnome-terminal", "--", "bash", "-c", inner_str],
-        ["konsole", "-e", "bash", "-c", inner_str],
-        ["xfce4-terminal", "-e", "bash -c " + shlex.quote(inner_str)],
-        ["alacritty", "-e", "bash", "-c", inner_str],
-        ["kitty", "bash", "-c", inner_str],
-        ["xterm", "-e", "bash -c " + shlex.quote(inner_str)],
-    ]
-    for cmd in candidates:
-        if _shutil.which(cmd[0]):
-            try:
-                subprocess.Popen(cmd, cwd=cwd, env=env)
-                return True
-            except Exception:
-                logger.exception(
-                    "Failed to spawn terminal via %s", cmd[0],
-                )
-                continue
-    return False
-
-
-async def main_cli(*, auto_update: bool = True) -> None:
-    """Run the local stdin/stdout chat surface.
-
-    auto_update=True attaches the update_loop and exits with
+    Always attaches the update_loop and exits with
     ``CLI_RESTART_EXIT_CODE`` when new code is pulled so the outer
-    respawner relaunches the bot. Disabled in the fallback path where
-    no respawner is wrapping us - an unhandled exit would just kill
-    the visible session.
+    respawner relaunches the bot in place.
     """
     from .backends_bot.cli import CliBot
 
@@ -314,42 +183,31 @@ async def main_cli(*, auto_update: bool = True) -> None:
 
     bot = CliBot()
     await bot.start()
-    update_task: asyncio.Task | None = None
-    if auto_update:
-        update_task = asyncio.create_task(update_loop(
-            [bot], cli_interval,
-            restart_code=updater.CLI_RESTART_EXIT_CODE,
-        ))
+    update_task = asyncio.create_task(update_loop(
+        [bot], cli_interval,
+        restart_code=updater.CLI_RESTART_EXIT_CODE,
+    ))
     try:
         await bot.wait_until_exit()
     finally:
-        if update_task is not None:
-            update_task.cancel()
-            try:
-                await update_task
-            except asyncio.CancelledError:
-                pass
+        update_task.cancel()
+        try:
+            await update_task
+        except asyncio.CancelledError:
+            pass
         await bot.stop()
 
 
 async def main() -> None:
     if _cli_mode_requested():
-        # Dispatch by lifecycle phase (see _cli_respawner_mode docstring).
+        # Two phases: this process is either the launcher (run the
+        # respawner loop in the current terminal) or the bot child
+        # spawned by that loop.
         if _cli_child_mode():
             await main_cli()
             return
-        if _cli_respawner_mode():
-            # Sync subprocess loop; not actually async work, just exit
-            # cleanly through asyncio.
-            sys.exit(_cli_respawner_loop())
-        if _spawn_cli_in_new_console():
-            return
-        logger.warning(
-            "Could not open a new console window; running CLI in the"
-            " current terminal instead (no auto-update).",
-        )
-        await main_cli(auto_update=False)
-        return
+        # Sync subprocess loop; exit cleanly through asyncio.
+        sys.exit(_cli_respawner_loop())
 
     config = cfg.load_config()
     interval = config["update_check_interval"]
