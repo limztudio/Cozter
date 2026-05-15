@@ -125,6 +125,7 @@ class CodexBackend(Backend):
                 err = err_obj
             else:
                 err = "Unknown error"
+            result.error = err
             result.text = f"Error: {err}"
             result.events.append(ChatEvent(kind="text", content=result.text))
 

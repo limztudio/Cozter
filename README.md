@@ -76,7 +76,9 @@ runs commands in it, and stores per-workspace state under
 `<workspace>/.cozter/`:
 
 - `sessions/` — conversation history files (one per session)
-- `session_state.json` — current session pointer per user
+- `last_session.json` — per-user pointer to the session each user was
+  last writing into; consulted on every turn (and across bot restarts)
+  so conversations resume in place instead of being re-routed
 - `settings.json` — chosen agent, model, permission, reasoning effort,
   summary backend, summary model, compact interval
 
@@ -98,6 +100,7 @@ All chat surfaces speak the same command set:
 | `/permission` | full / auto / confirm / deny — how the agent treats tool calls |
 | `/effort` | 0–100 reasoning effort; each backend maps to its native scale |
 | `/compact` | Show compaction state / set interval / `/compact now` to force a pass |
+| `/newsession` | Start a fresh session (next message will go into a new conversation) |
 | `/colony` | Set the per-workspace colony-consolidation interval |
 | `/refresh` | Drop the workspace's `.codex/` cache (use after an upgrade) |
 | `/stop` | Cancel the running agent turn |
@@ -179,7 +182,7 @@ Cozter/
 ├── session.py            per-workspace conversation persistence
 ├── compaction.py         scratch-summary + long-term-memory rewriter
 ├── colony.py             cross-session long-term memory consolidation
-├── router.py             session picker (which existing session this turn belongs to)
+├── router.py             session picker for first-turn-in-workspace (subsequent turns reuse last_session.json)
 ├── titling.py            auto-titles new sessions from their first turn
 ├── schedules.py          /reserve cron-style scheduled prompts
 ├── workspace.py          per-workspace settings (model, permission, effort, ...)

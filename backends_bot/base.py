@@ -664,6 +664,28 @@ class BotPlatform(ABC):
         ]
         await ctx.reply_text("\n".join(lines))
 
+    # ----- /newsession ----------------------------------------------------
+
+    async def cmd_newsession(self, ctx: BotContext) -> None:
+        """Start a fresh session in the current workspace.
+
+        Normally every turn continues the user's last-active session
+        (persisted in ``.cozter/last_session.json``, so a bot restart
+        resumes where the user left off). This command creates a new
+        session and pins it as the new last_session, so the next
+        message starts a clean conversation without affecting any
+        existing session's history.
+        """
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        data = session.create_session(ws)
+        session.set_last_session(ws, ctx.user_id, data["id"])
+        await ctx.reply_text(
+            f"Started new session: {data['name']}\n"
+            "Your next message goes into this fresh session.",
+        )
+
     # ----- /colony --------------------------------------------------------
 
     async def cmd_colony(self, ctx: BotContext) -> None:
@@ -1538,14 +1560,24 @@ class BotPlatform(ABC):
 
             # Entries survive across restarts, which means a user may
             # have been de-authorized between persist and drain. Drop
-            # unauthorized entries without running them.
+            # unauthorized entries without running them. Persist
+            # completion is best-effort - if the on-disk queue write
+            # fails (disk full, etc.) we still release the lock so
+            # the next drain pass can run, instead of leaking it and
+            # wedging the user forever.
             if not self.authorized(uid, msg_chat_id):
                 logger.warning(
                     "Dropping queued entry for unauthorized user=%s chat=%s",
                     uid, msg_chat_id,
                 )
-                await self._persist_complete(uid, entry_id)
-                lock.release()
+                try:
+                    await self._persist_complete(uid, entry_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to persist completion of unauthorized entry",
+                    )
+                finally:
+                    lock.release()
                 continue
 
             # Register the task before run_ai_turn yields on any API call,
@@ -1612,6 +1644,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "effort":       BotPlatform.cmd_effort,
         "refresh":      BotPlatform.cmd_refresh,
         "compact":      BotPlatform.cmd_compact,
+        "newsession":   BotPlatform.cmd_newsession,
         "colony":       BotPlatform.cmd_colony,
         "stop":         BotPlatform.cmd_stop,
         "inject":       BotPlatform.cmd_inject,

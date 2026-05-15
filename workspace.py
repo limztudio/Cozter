@@ -267,11 +267,19 @@ def set_reasoning_effort(workspace_path: str, effort: int) -> None:
     _set_setting(workspace_path, "reasoning_effort", clamped)
 
 
+# Defaults for the two per-workspace turn-counter knobs. Owned here
+# because :mod:`colony` and :mod:`compaction` need workspace settings
+# at module import time; defining them up there too creates a cycle
+# only late imports could break. Settled here, both consumer modules
+# can import workspace.DEFAULT_* directly.
+DEFAULT_COLONY_INTERVAL = 3
+DEFAULT_COMPACT_INTERVAL = 10
+
+
 def get_colony_interval(workspace_path: str) -> int:
     """Compactions per workspace-wide colony consolidation pass."""
-    from . import colony
     return _load_settings(workspace_path).get(
-        "colony_interval", colony.DEFAULT_COLONY_INTERVAL,
+        "colony_interval", DEFAULT_COLONY_INTERVAL,
     )
 
 
@@ -283,9 +291,8 @@ def set_colony_interval(workspace_path: str, interval: int) -> None:
 
 def get_compact_interval(workspace_path: str) -> int:
     """Messages between auto-compactions for sessions in this workspace."""
-    from . import compaction
     return _load_settings(workspace_path).get(
-        "compact_interval", compaction.DEFAULT_COMPACT_INTERVAL,
+        "compact_interval", DEFAULT_COMPACT_INTERVAL,
     )
 
 

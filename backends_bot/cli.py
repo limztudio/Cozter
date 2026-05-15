@@ -165,9 +165,15 @@ class CliBot(BotPlatform):
                 return False
 
         def _reader() -> None:
+            # Bare ``input()`` (no prompt arg) so the reader thread only
+            # blocks on stdin. The "> " prompt is printed from the
+            # asyncio side just before awaiting each line, so it always
+            # lands AFTER the previous turn's AI output (status lines,
+            # reply text) instead of being scrolled out of view by an
+            # eager re-prompt.
             while True:
                 try:
-                    line = input("> ")
+                    line = input()
                 except (EOFError, KeyboardInterrupt):
                     _safe_post(None)
                     return
@@ -182,6 +188,10 @@ class CliBot(BotPlatform):
 
         try:
             while not self._stop_requested.is_set():
+                # Print the prompt fresh on each iteration so it always
+                # appears at the bottom of the scrollback after the
+                # previous turn's output finishes.
+                print("> ", end="", flush=True)
                 line = await line_q.get()
                 if line is None:  # EOF / Ctrl-D
                     break
@@ -208,7 +218,17 @@ class CliBot(BotPlatform):
             ctx = self._ctx(command=cmd, args=args)
             await self.dispatch_command(ctx)
         else:
-            await self.dispatch_text(self._ctx(text=line))
+            # Fire-and-forget the AI dispatch so the input loop returns
+            # immediately and the next line's "> " prompt shows up
+            # right away. If a turn is already running, _dispatch_ai
+            # sees the held task lock and routes the new message
+            # through the per-user queue (printing the
+            # "Queued (X/N)." feedback) instead of having it sit
+            # silently in the CLI's line buffer waiting for the
+            # current await to return.
+            asyncio.create_task(
+                self.dispatch_text(self._ctx(text=line)),
+            )
 
     def _ctx(
         self,

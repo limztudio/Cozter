@@ -148,6 +148,7 @@ class ClaudeCodeBackend(Backend):
                     or event.get("result")
                     or "Unknown error"
                 )
+                result.error = err
                 result.text = f"Error: {err}"
                 result.events.append(
                     ChatEvent(kind="text", content=result.text),
@@ -170,6 +171,7 @@ class ClaudeCodeBackend(Backend):
 
         if etype == "error":
             msg = event.get("message") or "Unknown error"
+            result.error = msg
             result.text = f"Error: {msg}"
             result.events.append(ChatEvent(kind="text", content=result.text))
             return

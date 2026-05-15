@@ -241,9 +241,15 @@ async def run(
     """
     backend = backends_agent.get_backend(backend_name)
 
+    # Track whether the caller pinned a specific session: when True
+    # (ephemeral schedule runs), we do NOT update the user's
+    # last_session - that would clobber whatever they were actually
+    # working on with a throwaway scheduler session.
+    explicit_session = session_id is not None
+
     # session_data is reused on every inject restart so the session file
     # is not re-read for each iteration of the restart loop.
-    if session_id is not None:
+    if explicit_session:
         session_data = session.load_session(workspace_path, session_id)
         if session_data is None:
             # The pinned session was deleted out from under us; bail
@@ -255,10 +261,26 @@ async def run(
             result.events.append(ChatEvent(kind="text", content=result.text))
             return result
     else:
-        session_id, session_data = await router.select_or_create_session(
-            prompt, workspace_path, summary_model,
-            backend_name=backend.name,
+        # Resume whatever session the user was last writing into.
+        # Falls back to the router only when there's no last_session
+        # pointer (first turn in this workspace, or /newsession reset
+        # it) or the pointed-to session has been deleted.
+        last_sid = session.get_last_session(workspace_path, user_id)
+        last_data = (
+            session.load_session(workspace_path, last_sid)
+            if last_sid else None
         )
+        if last_data is not None:
+            session_id, session_data = last_sid, last_data
+        else:
+            session_id, session_data = await router.select_or_create_session(
+                prompt, workspace_path, summary_model,
+                backend_name=backend.name,
+            )
+
+    if not explicit_session:
+        # Persist for the next turn - including the next bot restart.
+        session.set_last_session(workspace_path, user_id, session_id)
 
     # Workspace-shared memory is loaded once and reused on every inject
     # restart, just like session_data.
@@ -281,9 +303,14 @@ async def run(
         # For backends that can't be handed typed tool definitions
         # (CLI subprocess agents whose toolset is fixed by the CLI),
         # enumerate user plugins in the prompt so the model can invoke
-        # them via its own bash/shell tool. HTTP backends see plugins
-        # as ordinary entries in TOOL_SCHEMA and don't need this prelude.
-        if not backend.supports_typed_plugins:
+        # them via its own bash/shell tool. HTTP backends with typed
+        # tools see plugins via TOOL_SCHEMA. Chat-only HTTP backends
+        # opt out via supports_plugin_prelude=False, since they have
+        # no shell to invoke the prelude'd commands either.
+        if (
+            not backend.supports_typed_plugins
+            and backend.supports_plugin_prelude
+        ):
             prelude = agent_tools.cli_plugin_prelude()
             if prelude:
                 parts.append(prelude)
@@ -300,8 +327,10 @@ async def run(
                 effort=workspace_mod.get_reasoning_effort(workspace_path),
             )
         except FileNotFoundError:
+            err = f"{backend.executable} CLI not found on PATH."
             result = AgentResult()
-            result.text = f"Error: {backend.executable} CLI not found on PATH."
+            result.error = err
+            result.text = f"Error: {err}"
             result.events.append(ChatEvent(kind="text", content=result.text))
             return result
 
@@ -394,9 +423,11 @@ async def run(
         logger.debug("%s stderr: %s", backend.name, stderr)
 
     if proc.returncode != 0 and not result.events:
-        result.text = f"{backend.name} exited with code {proc.returncode}"
+        msg = f"{backend.name} exited with code {proc.returncode}"
         if stderr:
-            result.text += f"\n{stderr}"
+            msg += f"\n{stderr}"
+        result.error = msg
+        result.text = msg
         result.events.append(ChatEvent(kind="text", content=result.text))
 
     # Log the original prompt (including injected context) to session.

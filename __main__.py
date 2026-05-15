@@ -56,6 +56,11 @@ from .backends_bot import BotPlatform, create_platforms  # noqa: E402
 MODULE_ROOT = os.path.dirname(__file__)
 LOG_DIR = os.path.join(MODULE_ROOT, ".log")
 
+# Sleep before respawning after an unhandled exception. Long enough
+# that a tight crash loop logs at human-readable speed; short enough
+# that recovery feels prompt to a watching user.
+_CRASH_RESTART_DELAY_SEC = 5
+
 
 def setup_logging() -> None:
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -276,10 +281,10 @@ def run() -> None:
             return
         logger.critical(
             "Unhandled exception - crash log written to %s."
-            " Restarting in 5s...",
-            crash_path,
+            " Restarting in %ds...",
+            crash_path, _CRASH_RESTART_DELAY_SEC,
         )
-        time.sleep(5)
+        time.sleep(_CRASH_RESTART_DELAY_SEC)
         updater.restart_script()
 
 

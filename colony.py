@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 COLONY_FILE = "colony.json"
 
-DEFAULT_COLONY_INTERVAL = 3
 COLONY_CAP = 100  # hard cap on items so the prompt context stays bounded
 
 

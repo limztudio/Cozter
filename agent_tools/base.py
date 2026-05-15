@@ -65,7 +65,14 @@ class AgentTool(ABC):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         # Skip intermediate abstract classes that don't implement run().
-        if getattr(cls, "__abstractmethods__", None):
+        # ABCMeta sets cls.__abstractmethods__ AFTER __init_subclass__
+        # runs (it's done in ABCMeta._abc_init, called from __new__
+        # after super().__new__ returns). So we check the run method's
+        # own __isabstractmethod__ flag, which IS set at definition
+        # time and survives inheritance: True for an intermediate
+        # subclass that hasn't overridden run, False for a concrete
+        # implementation.
+        if getattr(cls.run, "__isabstractmethod__", False):
             return
         instance = cls()
         # Idempotent: replace any prior registration with the same name

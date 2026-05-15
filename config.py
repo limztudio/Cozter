@@ -22,54 +22,51 @@ _DEFAULT_CONFIG = {
 }
 
 
-def get_llama_server_url() -> str:
-    """Return the configured llama-server URL without bot-token validation.
+def _read_config_value(key: str):
+    """Read a single key from config.json on each call.
 
-    CLI mode never calls load_config (it would create a daemon-only
-    config.json), so the llama backend has to read the file itself
-    if one exists - and fall back to the default otherwise.
+    Returns ``None`` if the file is missing (CLI mode without setup).
+    JSON / OS errors propagate - daemon mode validates the file in
+    :func:`load_config` before any getter runs, and a broken config
+    in either mode should surface as an error rather than silently
+    falling back to defaults.
     """
     if not os.path.exists(CONFIG_PATH):
-        return _DEFAULT_CONFIG["llama_server_url"]
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return _DEFAULT_CONFIG["llama_server_url"]
-    url = cfg.get("llama_server_url") or _DEFAULT_CONFIG["llama_server_url"]
-    if isinstance(url, str):
-        return url.strip() or _DEFAULT_CONFIG["llama_server_url"]
-    return _DEFAULT_CONFIG["llama_server_url"]
+        return None
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        return json.load(f).get(key)
+
+
+def _get_nonempty_string(key: str) -> str:
+    """Return ``cfg[key]`` if it's a non-blank string, else the default."""
+    val = _read_config_value(key)
+    if isinstance(val, str):
+        val = val.strip()
+        if val:
+            return val
+    return _DEFAULT_CONFIG[key]
+
+
+def _get_positive_int(key: str) -> int:
+    """Return ``cfg[key]`` if it's an ``int > 0``, else the default."""
+    val = _read_config_value(key)
+    if isinstance(val, int) and val > 0:
+        return val
+    return _DEFAULT_CONFIG[key]
+
+
+def get_llama_server_url() -> str:
+    return _get_nonempty_string("llama_server_url")
 
 
 def get_llama_max_agent_turns() -> int:
     """Return the per-turn cap on llama agent-loop iterations."""
-    if not os.path.exists(CONFIG_PATH):
-        return _DEFAULT_CONFIG["llama_max_agent_turns"]
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return _DEFAULT_CONFIG["llama_max_agent_turns"]
-    val = cfg.get("llama_max_agent_turns")
-    if isinstance(val, int) and val > 0:
-        return val
-    return _DEFAULT_CONFIG["llama_max_agent_turns"]
+    return _get_positive_int("llama_max_agent_turns")
 
 
 def get_llama_tool_repeat_limit() -> int:
     """Return the cap on identical repeated tool calls within a turn."""
-    if not os.path.exists(CONFIG_PATH):
-        return _DEFAULT_CONFIG["llama_tool_repeat_limit"]
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return _DEFAULT_CONFIG["llama_tool_repeat_limit"]
-    val = cfg.get("llama_tool_repeat_limit")
-    if isinstance(val, int) and val > 0:
-        return val
-    return _DEFAULT_CONFIG["llama_tool_repeat_limit"]
+    return _get_positive_int("llama_tool_repeat_limit")
 
 
 def get_llama_socket_timeout() -> int:
@@ -81,17 +78,7 @@ def get_llama_socket_timeout() -> int:
     The default is intentionally generous; lower it only if you have a
     fast server and want failures to surface quickly.
     """
-    if not os.path.exists(CONFIG_PATH):
-        return _DEFAULT_CONFIG["llama_socket_timeout"]
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return _DEFAULT_CONFIG["llama_socket_timeout"]
-    val = cfg.get("llama_socket_timeout")
-    if isinstance(val, int) and val > 0:
-        return val
-    return _DEFAULT_CONFIG["llama_socket_timeout"]
+    return _get_positive_int("llama_socket_timeout")
 
 
 def load_config() -> dict:

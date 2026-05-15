@@ -22,7 +22,6 @@ Config: ``config.json``'s ``llama_server_url`` (default
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import urllib.request
@@ -33,69 +32,10 @@ import aiohttp
 
 from .. import agent_tools as tools
 from .. import config as cfg
+from ._http_proc import HttpAgentProcess, http_error_translator
 from .base import AgentResult, Backend, ChatEvent
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Fake process wrapper - mimics asyncio.subprocess.Process for agent.run
-# ---------------------------------------------------------------------------
-
-
-class _LlamaSession:
-    """Process-like adapter for the in-process llama agent loop.
-
-    Satisfies the duck-type that ``agent.run`` expects from
-    ``backend.launch``: ``stdout`` and ``stderr`` are async streams,
-    ``kill`` cancels the underlying task, ``wait`` blocks until it
-    settles, and ``returncode`` reports success/cancel/error.
-    """
-
-    pid: int = -1
-
-    def __init__(self) -> None:
-        self.stdout: asyncio.StreamReader = asyncio.StreamReader()
-        self.stderr: asyncio.StreamReader = asyncio.StreamReader()
-        # No separate stderr channel from the HTTP path; close it now
-        # so any reader sees EOF immediately.
-        self.stderr.feed_eof()
-        self.returncode: int | None = None
-        self._task: asyncio.Task | None = None
-
-    def emit(self, event: dict) -> None:
-        """Push an event line into stdout for the orchestrator to read."""
-        line = (json.dumps(event) + "\n").encode("utf-8")
-        self.stdout.feed_data(line)
-
-    def kill(self) -> None:
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-
-    async def wait(self) -> int:
-        if self._task is not None:
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        return self.returncode if self.returncode is not None else 0
-
-    def start(self, coro) -> None:
-        async def _driver() -> None:
-            try:
-                await coro
-                self.returncode = 0
-            except asyncio.CancelledError:
-                self.returncode = 130
-                raise
-            except Exception as exc:
-                logger.exception("llama agent loop crashed")
-                self.emit({"type": "error", "message": str(exc)})
-                self.returncode = 1
-            finally:
-                self.stdout.feed_eof()
-
-        self._task = asyncio.create_task(_driver())
 
 
 # ---------------------------------------------------------------------------
@@ -175,8 +115,8 @@ class LlamaBackend(Backend):
         *,
         compaction: bool = False,
         effort: int = 0,
-    ) -> _LlamaSession:  # type: ignore[override]
-        proc = _LlamaSession()
+    ) -> HttpAgentProcess:  # type: ignore[override]
+        proc = HttpAgentProcess("llama agent")
         proc.start(self._run_agent(
             proc, workspace_path, prompt, model, approval, compaction,
             effort,
@@ -185,7 +125,7 @@ class LlamaBackend(Backend):
 
     async def _run_agent(
         self,
-        proc: _LlamaSession,
+        proc: HttpAgentProcess,
         workspace_path: str,
         prompt: str,
         model: str | None,
@@ -379,6 +319,7 @@ class LlamaBackend(Backend):
 
         if etype == "error":
             msg = event.get("message") or "Unknown error"
+            result.error = msg
             result.text = f"Error: {msg}"
             result.events.append(ChatEvent(kind="text", content=result.text))
             return
@@ -413,7 +354,9 @@ async def _stream_completion(
     tool_buffers: dict[int, dict[str, Any]] = {}
 
     sock_read = cfg.get_llama_socket_timeout()
-    try:
+    async with http_error_translator(
+        f"llama-server at {base_url}", sock_read,
+    ):
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 endpoint, json=payload,
@@ -448,40 +391,6 @@ async def _stream_completion(
                         text_parts.append(content)
                     for tc in delta.get("tool_calls") or []:
                         _merge_tool_call(tool_buffers, tc)
-    except aiohttp.ClientConnectorError as exc:
-        # Couldn't even establish the TCP connection - server is down,
-        # the host is unreachable, or the URL is wrong.
-        raise RuntimeError(
-            f"llama-server at {base_url} is unreachable - is it running?"
-        ) from exc
-    except (
-        aiohttp.ServerDisconnectedError,
-        aiohttp.ClientPayloadError,
-    ) as exc:
-        # Connected once, then the server closed or dropped the connection
-        # mid-response. The model output we got back (if any) is partial
-        # and likely useless.
-        raise RuntimeError(
-            f"llama-server at {base_url} dropped the connection"
-            " mid-response"
-        ) from exc
-    except TimeoutError as exc:
-        # ``aiohttp.ClientTimeout(sock_read=...)`` fires this if a
-        # full ``llama_socket_timeout`` window passes between socket
-        # reads - either the server is stuck or it's just chewing on
-        # a very large prompt for too long. Point the user at the
-        # config knob so they can lengthen it for slow servers.
-        raise RuntimeError(
-            f"llama-server at {base_url} did not respond within"
-            f" {sock_read}s (raise llama_socket_timeout in config.json"
-            " if your server is slow, not stuck)"
-        ) from exc
-    except aiohttp.ClientError as exc:
-        # Catch-all for the rest of aiohttp's client-side exception
-        # hierarchy (TLS handshake failures, bad URL, etc.).
-        raise RuntimeError(
-            f"llama-server at {base_url} request failed: {exc}"
-        ) from exc
 
     # Normalize tool_buffers into the OpenAI tool_calls list shape.
     tool_calls = [

@@ -1,8 +1,10 @@
 """Session management - stored in each workspace's .cozter/sessions/.
 
-Sessions are no longer addressed by a "current session per user" — each
-user turn is routed to the best-matching session by
-``router.select_or_create_session``.
+Each user has a "last session" pointer at
+``.cozter/last_session.json`` so that conversations resume in the
+same session across bot restarts. The router is only consulted when
+that pointer is missing or stale (workspace just created, session
+file deleted, user ran ``/newsession``).
 """
 
 import json
@@ -22,6 +24,7 @@ LONG_TERM_CAP = 50
 MSG_CONTENT_MAX = 800
 
 SESSIONS_DIR = "sessions"
+LAST_SESSION_FILE = "last_session.json"
 
 
 def _sessions_dir(workspace: str) -> str:
@@ -30,6 +33,60 @@ def _sessions_dir(workspace: str) -> str:
 
 def _session_path(workspace: str, session_id: str) -> str:
     return os.path.join(_sessions_dir(workspace), f"{session_id}.json")
+
+
+def _last_session_path(workspace: str) -> str:
+    return os.path.join(workspace, COZTER_DIR, LAST_SESSION_FILE)
+
+
+# ---------------------------------------------------------------------------
+# Last-session pointer (per workspace, keyed by user)
+# ---------------------------------------------------------------------------
+
+
+def _load_last_session_map(workspace: str) -> dict:
+    """Return the user_id -> session_id map for *workspace* (empty on failure).
+
+    JSON corruption is logged and swallowed: this is a UX hint, not
+    load-bearing state, so a broken file falls back to "no last session"
+    rather than blocking the turn.
+    """
+    path = _last_session_path(workspace)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Corrupt last_session file (%s): %s", path, e)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def get_last_session(workspace: str, user_id: int | str) -> str | None:
+    """Return the session id this user was last writing into, or None."""
+    val = _load_last_session_map(workspace).get(str(user_id))
+    return val if isinstance(val, str) and val else None
+
+
+def set_last_session(
+    workspace: str, user_id: int | str, session_id: str,
+) -> None:
+    """Record that *user_id* is now working in *session_id*."""
+    data = _load_last_session_map(workspace)
+    data[str(user_id)] = session_id
+    cozter_dir = os.path.join(workspace, COZTER_DIR)
+    os.makedirs(cozter_dir, exist_ok=True)
+    _atomic_write(_last_session_path(workspace), data, cozter_dir)
+
+
+def clear_last_session(workspace: str, user_id: int | str) -> None:
+    """Forget the user's last session; next turn will route fresh."""
+    data = _load_last_session_map(workspace)
+    if data.pop(str(user_id), None) is None:
+        return
+    cozter_dir = os.path.join(workspace, COZTER_DIR)
+    _atomic_write(_last_session_path(workspace), data, cozter_dir)
 
 
 # ---------------------------------------------------------------------------

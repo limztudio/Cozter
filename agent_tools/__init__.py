@@ -101,17 +101,15 @@ TOOL_SCHEMA: list[dict[str, Any]] = [
 
 TOOL_NAMES: tuple[str, ...] = tuple(t.name for t in _TOOLS)
 
-PLUGIN_NAMES: tuple[str, ...] = tuple(
-    t.name for t in _TOOLS if t.is_plugin
-)
-
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
-EmitFn = Callable[[dict], None]
+# Internal: signature alias for the per-event emit callback that
+# every backend gives us so tools can stream status updates back.
+_EmitFn = Callable[[dict], None]
 
 
 def parse_openai_call(call: dict) -> tuple[str, dict]:
@@ -139,7 +137,7 @@ async def execute_tool(
     args: dict,
     workspace_path: str,
     approval: str,
-    emit: EmitFn,
+    emit: _EmitFn,
 ) -> str:
     """Run a tool by name; emit status events; return the result string."""
     tool = _BY_NAME.get(name)
@@ -232,7 +230,6 @@ __all__ = [
     "AgentTool",
     "TOOL_SCHEMA",
     "TOOL_NAMES",
-    "PLUGIN_NAMES",
     "execute_tool",
     "tool_signature",
     "summarize_tool_use",

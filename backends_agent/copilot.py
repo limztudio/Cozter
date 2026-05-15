@@ -177,6 +177,7 @@ class CopilotBackend(Backend):
                     msg = err
             if not msg:
                 msg = "Unknown error"
+            result.error = msg
             result.text = f"Error: {msg}"
             result.events.append(ChatEvent(kind="text", content=result.text))
             return
