@@ -143,6 +143,9 @@ class BotPlatform(ABC):
         # by the persisted ``last_fired`` timestamp on each schedule,
         # which also survives bot restarts to enable catch-up firing.
         self._scheduler_task: asyncio.Task | None = None
+        # Set when an auto-update has been pulled and the process is
+        # waiting for active AI replies to finish before restarting.
+        self._update_restart_pending = False
         # Serializes read-modify-write on the persistent-queue file so
         # concurrent enqueue/complete calls don't clobber each other.
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
@@ -212,6 +215,24 @@ class BotPlatform(ABC):
             f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
         )
         await self.notify_users(msg)
+
+    async def begin_update_restart(self) -> None:
+        """Pause new AI turns while an auto-update restart is pending."""
+        self._update_restart_pending = True
+        await self.stop_scheduler()
+
+    async def cancel_update_restart(self) -> None:
+        """Resume normal processing if an update restart is aborted."""
+        self._update_restart_pending = False
+        await self.start_scheduler()
+        for uid in list(self._message_queues):
+            asyncio.create_task(self._drain_message_queue(uid))
+
+    def has_active_turns(self) -> bool:
+        """Return True while any agent reply is still in progress."""
+        if any(not task.done() for task in self._running_tasks.values()):
+            return True
+        return any(lock.locked() for lock in self._task_locks.values())
 
     # ----- event dispatch hooks (called by platform adapters) -------------
 
@@ -1281,6 +1302,26 @@ class BotPlatform(ABC):
     async def _dispatch_ai(self, ctx: BotContext, text: str) -> None:
         uid = ctx.user_id
         chat_id = ctx.chat_id
+        if self._update_restart_pending:
+            if uid not in self._task_locks:
+                self._task_locks[uid] = asyncio.Lock()
+            if uid not in self._message_queues:
+                self._message_queues[uid] = asyncio.Queue(
+                    maxsize=self.max_queue_size,
+                )
+            q = self._message_queues[uid]
+            if q.full():
+                await ctx.reply_text("Queue full. Try again after restart.")
+            else:
+                entry_id = await self._persist_enqueue(
+                    uid, text, chat_id,
+                )
+                await q.put((text, chat_id, entry_id, False))
+                await ctx.reply_text(
+                    "Update restart pending. Queued for after restart."
+                )
+            return
+
         if uid not in self._task_locks:
             self._task_locks[uid] = asyncio.Lock()
         lock = self._task_locks[uid]
@@ -1569,6 +1610,8 @@ class BotPlatform(ABC):
         lock = self._task_locks.setdefault(uid, asyncio.Lock())
 
         while not q.empty():
+            if self._update_restart_pending:
+                break
             if lock.locked():
                 break
             # Agent ended its last reply with [[await]] — pause the queue

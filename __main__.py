@@ -60,6 +60,8 @@ LOG_DIR = os.path.join(MODULE_ROOT, ".log")
 # that a tight crash loop logs at human-readable speed; short enough
 # that recovery feels prompt to a watching user.
 _CRASH_RESTART_DELAY_SEC = 5
+_UPDATE_IDLE_POLL_SEC = 1
+_UPDATE_IDLE_LOG_SEC = 30
 
 
 def setup_logging() -> None:
@@ -104,6 +106,74 @@ def log_crash(exc: BaseException) -> str:
 logger = logging.getLogger(__name__)
 
 
+def _bot_label(bot: BotPlatform) -> str:
+    try:
+        return bot.platform_id
+    except Exception:
+        return bot.__class__.__name__
+
+
+async def _wait_for_update_idle(
+    bots: list[BotPlatform], *, log_message: str,
+) -> None:
+    """Wait until no platform is actively producing an agent reply."""
+    last_log = 0.0
+    loop = asyncio.get_running_loop()
+    while True:
+        active = [bot for bot in bots if bot.has_active_turns()]
+        if not active:
+            return
+        now = loop.time()
+        if now - last_log >= _UPDATE_IDLE_LOG_SEC:
+            logger.info(
+                "%s: %s",
+                log_message,
+                ", ".join(_bot_label(bot) for bot in active),
+            )
+            last_log = now
+        await asyncio.sleep(_UPDATE_IDLE_POLL_SEC)
+
+
+async def _restart_after_update(
+    bots: list[BotPlatform], restart_code: int,
+) -> None:
+    """Pause intake, wait for active replies, then restart for an update."""
+    prepared: list[BotPlatform] = []
+    try:
+        for bot in bots:
+            await bot.begin_update_restart()
+            prepared.append(bot)
+        await _wait_for_update_idle(
+            bots,
+            log_message=(
+                "Update ready; waiting for active turn(s) before restart"
+            ),
+        )
+        await asyncio.to_thread(updater.install_requirements)
+    except Exception:
+        for bot in prepared:
+            try:
+                await bot.cancel_update_restart()
+            except Exception:
+                logger.exception(
+                    "Failed to resume bot after aborted update restart",
+                )
+        raise
+
+    logger.info("Active turns finished; restarting for update...")
+    for bot in bots:
+        try:
+            await bot.notify_users("Cozter is restarting for an update...")
+        except Exception:
+            logger.exception("Failed to send update restart notification")
+    for bot in bots:
+        try:
+            await bot.stop()
+        except Exception:
+            logger.exception("Failed to stop bot before update restart")
+    updater.restart_script(restart_code)
+
+
 async def update_loop(
     bots: list[BotPlatform], interval: int, restart_code: int = 0,
 ) -> None:
@@ -116,16 +186,19 @@ async def update_loop(
     while True:
         await asyncio.sleep(interval)
         try:
+            if any(bot.has_active_turns() for bot in bots):
+                await _wait_for_update_idle(
+                    bots,
+                    log_message=(
+                        "Delaying update check until active turn(s) finish"
+                    ),
+                )
             changed = await asyncio.to_thread(updater.fetch_and_pull)
             if changed:
-                logger.info("New version detected, restarting...")
-                await asyncio.to_thread(updater.install_requirements)
-                for bot in bots:
-                    await bot.notify_users(
-                        "Cozter is restarting for an update..."
-                    )
-                    await bot.stop()
-                updater.restart_script(restart_code)
+                logger.info(
+                    "New version detected; restart pending after active turns",
+                )
+                await _restart_after_update(bots, restart_code)
         except Exception:
             logger.exception("Update check failed")
 
