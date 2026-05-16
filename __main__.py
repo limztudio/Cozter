@@ -185,6 +185,7 @@ async def update_loop(
     """
     while True:
         await asyncio.sleep(interval)
+        prepared: list[BotPlatform] = []
         try:
             if any(bot.has_active_turns() for bot in bots):
                 await _wait_for_update_idle(
@@ -193,13 +194,32 @@ async def update_loop(
                         "Delaying update check until active turn(s) finish"
                     ),
                 )
+            for bot in bots:
+                await bot.begin_update_check()
+                prepared.append(bot)
+            await _wait_for_update_idle(
+                bots,
+                log_message=(
+                    "Delaying update check until active turn(s) finish"
+                ),
+            )
             changed = await asyncio.to_thread(updater.fetch_and_pull)
             if changed:
                 logger.info(
                     "New version detected; restart pending after active turns",
                 )
                 await _restart_after_update(bots, restart_code)
+            else:
+                for bot in prepared:
+                    await bot.cancel_update_check()
         except Exception:
+            for bot in prepared:
+                try:
+                    await bot.cancel_update_check()
+                except Exception:
+                    logger.exception(
+                        "Failed to resume bot after aborted update check",
+                    )
             logger.exception("Update check failed")
 
 
