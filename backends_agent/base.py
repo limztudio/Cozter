@@ -32,7 +32,7 @@ def resolve_executable_prefix(name: str) -> list[str] | None:
 @dataclass
 class ChatEvent:
     """An event produced during an agent turn."""
-    kind: str  # "tool", "file", "text"
+    kind: str  # "tool", "file", "text", "attachment"
     content: str
 
 

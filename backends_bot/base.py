@@ -1505,29 +1505,54 @@ class BotPlatform(ABC):
         deleted right after, so there's nothing to resume into.
         """
         awaiting = False
+        sent_sources: set[str] = set()
+
+        async def send_attachment(path: str) -> None:
+            source_path = agent.attachment_source_path(path, ws)
+            if source_path is None:
+                logger.warning(
+                    "Refusing to send missing or unsafe attachment: %s", path,
+                )
+                return
+            if source_path in sent_sources:
+                return
+            abs_path = agent.prepare_attachment_path(path, ws)
+            if abs_path is None:
+                logger.warning(
+                    "Failed to prepare attachment for sending: %s", path,
+                )
+                return
+            sent_sources.add(source_path)
+            try:
+                await self.send_file(chat_id, abs_path)
+            except Exception as e:
+                logger.warning(
+                    "Failed to send attachment %s: %s", abs_path, e,
+                )
+                try:
+                    await self.send_text(
+                        chat_id,
+                        f"Failed to attach {os.path.basename(abs_path)}: {e}",
+                    )
+                except Exception:
+                    pass
+
         for ev in result.events:
+            if ev.kind == "attachment":
+                await send_attachment(ev.content)
+                continue
             if ev.kind != "text":
                 continue
-            text, attach_paths = agent.extract_attachments(ev.content, ws)
+            text, attach_paths = agent.extract_attachment_sources(
+                ev.content, ws,
+            )
             text, ev_awaiting = agent.extract_await(text)
             if ev_awaiting:
                 awaiting = True
             if text:
                 await self.send_text(chat_id, text, rich=True)
             for path in attach_paths:
-                try:
-                    await self.send_file(chat_id, path)
-                except Exception as e:
-                    logger.warning(
-                        "Failed to send attachment %s: %s", path, e,
-                    )
-                    try:
-                        await self.send_text(
-                            chat_id,
-                            f"Failed to attach {os.path.basename(path)}: {e}",
-                        )
-                    except Exception:
-                        pass
+                await send_attachment(path)
         if awaiting and uid is not None:
             self._awaiting_answer.add(uid)
             logger.info(

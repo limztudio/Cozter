@@ -28,6 +28,8 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+_TELEGRAM_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
 
 # ---------------------------------------------------------------------------
 # Markdown -> Telegram HTML
@@ -188,6 +190,20 @@ class TelegramBot(BotPlatform):
 
     async def send_file(self, chat_id: str, path: str) -> None:
         name = os.path.basename(path)
+        ext = os.path.splitext(name)[1].lower()
+        if ext in _TELEGRAM_PHOTO_EXTENSIONS:
+            try:
+                with open(path, "rb") as f:
+                    await self.app.bot.send_photo(
+                        chat_id=chat_id, photo=f, filename=name,
+                    )
+                return
+            except Exception:
+                logger.warning(
+                    "Failed to send %s as photo; falling back to document",
+                    path,
+                    exc_info=True,
+                )
         with open(path, "rb") as f:
             await self.app.bot.send_document(
                 chat_id=chat_id, document=f, filename=name,
