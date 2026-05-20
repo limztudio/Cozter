@@ -216,3 +216,6 @@ __marimo__/
 
 # Crash & runtime logs
 .log/
+
+# Cozter workspace runtime state
+.cozter/
