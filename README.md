@@ -18,7 +18,7 @@ a drop-in plugin system that works across every backend.
 - **Four chat surfaces**, selected at launch:
   - Telegram (`python -m Cozter`)
   - Slack (Socket Mode; same launcher, set `slack_bot_token` in config)
-  - Signal (same launcher, set `signal_phone_number` in config)
+  - Signal (same launcher, set `signal_group_urls` and the daemon socket)
   - CLI (`python -m Cozter -cli`) — the terminal becomes the chat
 - **Per-workspace state**, scoped to `<workspace>/.cozter/`:
   sessions, compaction history, agent choice, model, permission level,
@@ -56,7 +56,6 @@ lives in `.config/config.example.json`):
   "slack_app_token": "",
   "slack_channel_ids": [],
 
-  "signal_phone_number": "",
   "signal_group_urls": [],
   "signal_jsonrpc_socket": "",
 
@@ -72,14 +71,13 @@ lives in `.config/config.example.json`):
 
 Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
 + `user_ids`, `slack_bot_token` + `slack_app_token` +
-`slack_channel_ids`, or `signal_phone_number` + `signal_group_urls` +
-`signal_jsonrpc_socket`.
+`slack_channel_ids`, or `signal_group_urls` + `signal_jsonrpc_socket`.
 The CLI surface needs neither.
 
-For Signal, `signal-cli` must already be installed and registered or
-linked for `signal_phone_number`; each invite URL in `signal_group_urls`
-is resolved with `signal-cli listGroups` or joined with
-`signal-cli joinGroup --uri` when the bot starts. Set
+For Signal, `signal-cli` must already be installed and registered in the
+separate daemon config; each invite URL in `signal_group_urls` is resolved
+with `signal-cli listGroups` or joined with `signal-cli joinGroup --uri`
+when the bot starts. Set
 `signal_jsonrpc_socket` to a shared Unix socket path when Cozter and
 other local scripts should reuse one `signal-cli daemon`. Cozter only
 connects to that socket; run the daemon from a service manager such as

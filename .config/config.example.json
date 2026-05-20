@@ -6,7 +6,6 @@
   "slack_app_token": "",
   "slack_channel_ids": [],
 
-  "signal_phone_number": "",
   "signal_group_urls": [],
   "signal_jsonrpc_socket": "",
 

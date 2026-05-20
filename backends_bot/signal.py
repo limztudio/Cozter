@@ -33,7 +33,6 @@ class SignalBot(BotPlatform):
 
     def __init__(
         self,
-        phone_number: str,
         group_urls: list[str],
         *,
         recent_limit: int = 10,
@@ -45,7 +44,6 @@ class SignalBot(BotPlatform):
             recent_limit=recent_limit,
             max_queue_size=max_queue_size,
         )
-        self.phone_number = phone_number
         self.group_urls = _dedupe_group_urls(group_urls)
         self.jsonrpc_socket = jsonrpc_socket.strip() if jsonrpc_socket else ""
         if not self.jsonrpc_socket:
@@ -64,7 +62,7 @@ class SignalBot(BotPlatform):
 
     @property
     def platform_id(self) -> str:
-        return f"signal:{self.phone_number}"
+        return "signal"
 
     def authorized(self, user_id: str, chat_id: str) -> bool:
         return str(chat_id) in self._group_ids
@@ -340,7 +338,7 @@ class SignalBot(BotPlatform):
             return
 
         uid = _extract_sender_id(envelope)
-        if not uid or uid == self.phone_number:
+        if not uid:
             return
 
         text = str(data.get("message") or data.get("body") or "").strip()

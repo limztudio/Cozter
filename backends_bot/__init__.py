@@ -19,7 +19,8 @@ def create_platforms(config: dict) -> list[BotPlatform]:
     """
     tg_tokens = config.get("telegram_bot_tokens") or []
     slack_bot = config.get("slack_bot_token") or ""
-    signal_phone = config.get("signal_phone_number") or ""
+    signal_groups = config.get("signal_group_urls") or []
+    signal_socket = config.get("signal_jsonrpc_socket") or ""
     recent_limit = config.get("recent_workspace_limit", 10)
     queue_size = config.get("message_queue_size", 50)
 
@@ -46,14 +47,13 @@ def create_platforms(config: dict) -> list[BotPlatform]:
             ),
         ]
 
-    if signal_phone:
+    if signal_groups or signal_socket:
         from .signal import SignalBot
         return [
             SignalBot(
-                signal_phone,
-                config.get("signal_group_urls") or [],
+                signal_groups,
                 recent_limit=recent_limit, max_queue_size=queue_size,
-                jsonrpc_socket=config["signal_jsonrpc_socket"],
+                jsonrpc_socket=signal_socket,
             ),
         ]
 

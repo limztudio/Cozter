@@ -12,7 +12,6 @@ _DEFAULT_CONFIG = {
     "slack_bot_token": "",
     "slack_app_token": "",
     "slack_channel_ids": [],
-    "signal_phone_number": "",
     "signal_group_urls": [],
     "signal_jsonrpc_socket": "",
     "llama_server_url": "http://127.0.0.1:8080",
@@ -93,8 +92,8 @@ def load_config() -> dict:
         print(
             "Fill in either 'telegram_bot_tokens' + 'user_ids'"
             " or 'slack_bot_token' + 'slack_app_token' +"
-            " 'slack_channel_ids', or 'signal_phone_number' +"
-            " 'signal_group_urls' + 'signal_jsonrpc_socket', then restart."
+            " 'slack_channel_ids', or 'signal_group_urls' +"
+            " 'signal_jsonrpc_socket', then restart."
         )
         sys.exit(0)
 
@@ -124,11 +123,6 @@ def load_config() -> dict:
     cfg["slack_app_token"] = (
         slack_app_raw.strip() if isinstance(slack_app_raw, str) else ""
     )
-    signal_phone_raw = cfg.get("signal_phone_number") or ""
-    cfg["signal_phone_number"] = (
-        signal_phone_raw.strip()
-        if isinstance(signal_phone_raw, str) else ""
-    )
     cfg["signal_group_urls"] = _normalize_string_list(
         cfg.get("signal_group_urls") or []
     )
@@ -140,7 +134,7 @@ def load_config() -> dict:
 
     has_telegram = bool(cfg["telegram_bot_tokens"])
     has_slack = bool(cfg["slack_bot_token"])
-    has_signal = bool(cfg["signal_phone_number"])
+    has_signal = bool(cfg["signal_group_urls"] or cfg["signal_jsonrpc_socket"])
 
     configured = sum(bool(x) for x in (has_telegram, has_slack, has_signal))
     if configured > 1:
@@ -155,7 +149,8 @@ def load_config() -> dict:
     if configured == 0:
         print(
             f"ERROR: {CONFIG_PATH} must set either 'telegram_bot_tokens'"
-            ", 'slack_bot_token', or 'signal_phone_number'."
+            ", 'slack_bot_token', or 'signal_group_urls' +"
+            " 'signal_jsonrpc_socket'."
         )
         sys.exit(1)
 
