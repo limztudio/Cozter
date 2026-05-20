@@ -642,6 +642,22 @@ class SignalBot(BotPlatform):
         if migrated:
             logger.info("Migrated %d legacy Signal schedule(s).", migrated)
 
+        adopted = 0
+        for uid, ws in workspace.iter_current_workspaces(self.platform_id):
+            if not uid.startswith("signal-group:") or not os.path.isdir(ws):
+                continue
+            group_id = uid.removeprefix("signal-group:")
+            if group_id not in self._group_ids:
+                continue
+            adopted += self._migrate_legacy_workspace_schedules(
+                ws, uid, group_id,
+            )
+        if adopted:
+            logger.info(
+                "Adopted %d pre-Signal schedule(s) into Signal groups.",
+                adopted,
+            )
+
     def _migrate_group_schedule_state(
         self,
         sender_id: str,
@@ -662,12 +678,45 @@ class SignalBot(BotPlatform):
             source_chat_id=group_id,
             target_chat_id=group_id,
         )
+        migrated += self._migrate_legacy_workspace_schedules(
+            ws, target_user_id, group_id,
+        )
         if migrated:
             logger.info(
                 "Migrated %d legacy Signal schedule(s) into group %s.",
                 migrated,
                 _short_id(group_id),
             )
+
+    def _migrate_legacy_workspace_schedules(
+        self,
+        ws: str,
+        target_user_id: str,
+        group_id: str,
+    ) -> int:
+        targets_for_workspace = [
+            self._state_user_id(candidate_group_id)
+            for candidate_group_id in self._group_ids
+            if workspace.get_current(
+                self._state_user_id(candidate_group_id),
+                self.platform_id,
+            ) == ws
+        ]
+        if targets_for_workspace != [target_user_id]:
+            return 0
+
+        source_ids = [
+            uid for uid in schedules.list_schedule_user_ids(ws)
+            if uid != target_user_id and not uid.startswith("signal-group:")
+        ]
+        if not source_ids:
+            return 0
+        return schedules.migrate_schedules(
+            ws,
+            source_ids,
+            target_user_id,
+            target_chat_id=group_id,
+        )
 
     async def _migrate_group_queue_state(self) -> None:
         async with self._queue_file_lock:

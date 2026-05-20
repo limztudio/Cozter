@@ -83,6 +83,11 @@ def list_schedules(
     return list(_load_all(workspace).get(str(user_id), []))
 
 
+def list_schedule_user_ids(workspace: str) -> list[str]:
+    """Return user keys that currently own schedules in *workspace*."""
+    return [str(uid) for uid in _load_all(workspace)]
+
+
 def migrate_schedules(
     workspace: str,
     source_user_ids: list[str | int] | tuple[str | int, ...],
