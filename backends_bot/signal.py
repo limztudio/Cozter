@@ -54,6 +54,7 @@ class SignalBot(BotPlatform):
         self.receive_timeout = receive_timeout
         self._group_ids_by_url: dict[str, str] = {}
         self._group_ids: set[str] = set()
+        self._signal_cli_lock = asyncio.Lock()
         self._receive_task: asyncio.Task | None = None
         self._stop_requested = asyncio.Event()
 
@@ -307,8 +308,19 @@ class SignalBot(BotPlatform):
 
     async def _resolve_group_ids(self) -> dict[str, str]:
         resolved: dict[str, str] = {}
-        for group_url in self.group_urls:
-            resolved[group_url] = await self._resolve_group_id(group_url)
+        total = len(self.group_urls)
+        for index, group_url in enumerate(self.group_urls, 1):
+            try:
+                group_id = await self._resolve_group_id(group_url)
+            except Exception as e:
+                logger.warning(
+                    "Skipping Signal group URL %d/%d: %s",
+                    index, total, _safe_error_message(e),
+                )
+                continue
+            resolved[group_url] = group_id
+        if not resolved:
+            raise RuntimeError("No configured Signal group URLs resolved")
         return resolved
 
     async def _resolve_group_id(self, group_url: str) -> str:
@@ -355,41 +367,47 @@ class SignalBot(BotPlatform):
         timeout: int | None = None,
         output_json: bool = True,
     ) -> str:
-        argv = [self.signal_cli_path, "-a", self.phone_number]
-        if output_json:
-            argv.extend(["-o", "json"])
-        argv.extend(str(arg) for arg in args if arg is not None)
+        async with self._signal_cli_lock:
+            argv = [self.signal_cli_path, "-a", self.phone_number]
+            if output_json:
+                argv.extend(["-o", "json"])
+            argv.extend(str(arg) for arg in args if arg is not None)
 
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.PIPE if input_text is not None else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(
-                    input_text.encode("utf-8") if input_text is not None
-                    else None
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=(
+                    asyncio.subprocess.PIPE
+                    if input_text is not None else None
                 ),
-                timeout=timeout,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            proc.kill()
             try:
-                await proc.wait()
-            finally:
-                pass
-            raise
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(
+                        input_text.encode("utf-8")
+                        if input_text is not None else None
+                    ),
+                    timeout=timeout,
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                proc.kill()
+                try:
+                    await proc.wait()
+                finally:
+                    pass
+                raise
 
-        out = stdout.decode("utf-8", errors="replace")
-        err = stderr.decode("utf-8", errors="replace")
-        if proc.returncode != 0:
-            message = err.strip() or out.strip() or f"exit {proc.returncode}"
-            raise SignalCliError(message)
-        if err.strip():
-            logger.debug("signal-cli stderr: %s", err.strip())
-        return out
+            out = stdout.decode("utf-8", errors="replace")
+            err = stderr.decode("utf-8", errors="replace")
+            if proc.returncode != 0:
+                message = (
+                    err.strip() or out.strip() or f"exit {proc.returncode}"
+                )
+                raise SignalCliError(message)
+            if err.strip():
+                logger.debug("signal-cli stderr: %s", err.strip())
+            return out
 
     def _group_id_for_chat(self, chat_id: str) -> str:
         group_id = str(chat_id)
@@ -412,6 +430,13 @@ def _split_text(text: str, limit: int = _SIGNAL_TEXT_LIMIT) -> list[str]:
         chunks.append(text[:split_at])
         text = text[split_at:].lstrip("\n")
     return chunks
+
+
+def _safe_error_message(exc: BaseException) -> str:
+    text = str(exc).strip() or exc.__class__.__name__
+    text = re.sub(r"https://signal\.group/#[^\s]+", "<signal-group-url>", text)
+    text = re.sub(r"sgnl://[^\s]+", "<signal-group-url>", text)
+    return text
 
 
 def _dedupe_group_urls(group_urls: list[str]) -> list[str]:
