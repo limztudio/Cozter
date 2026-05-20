@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -161,14 +162,7 @@ class SignalBot(BotPlatform):
     async def _receive_loop(self) -> None:
         while not self._stop_requested.is_set():
             try:
-                raw = await self._run_signal_cli(
-                    "receive",
-                    "-t", str(self.receive_timeout),
-                    "--ignore-stories",
-                    timeout=self.receive_timeout + 30,
-                )
-                for item in _parse_json_items(raw):
-                    await self._handle_received_item(item)
+                await self._run_receive_process()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -180,6 +174,56 @@ class SignalBot(BotPlatform):
                     )
                 except asyncio.TimeoutError:
                     pass
+
+    async def _run_receive_process(self) -> None:
+        argv = [
+            self.signal_cli_path,
+            "-a", self.phone_number,
+            "-o", "json",
+            "receive",
+            "-t", str(self.receive_timeout),
+            "--max-messages", "1",
+            "--ignore-stories",
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stderr_task = asyncio.create_task(proc.stderr.read())
+        try:
+            while not self._stop_requested.is_set():
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                raw = line.decode("utf-8", errors="replace")
+                for item in _parse_json_items(raw):
+                    await self._handle_received_item(item)
+
+            returncode = await proc.wait()
+            stderr = await stderr_task
+        except (asyncio.CancelledError, Exception):
+            await self._kill_process(proc)
+            stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stderr_task
+            raise
+
+        err = stderr.decode("utf-8", errors="replace")
+        if returncode != 0 and not self._stop_requested.is_set():
+            raise SignalCliError(err.strip() or f"exit {returncode}")
+        if err.strip():
+            logger.debug("signal-cli receive stderr: %s", err.strip())
+
+    async def _kill_process(
+        self, proc: asyncio.subprocess.Process,
+    ) -> None:
+        if proc.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        with contextlib.suppress(ProcessLookupError):
+            await proc.wait()
 
     async def _handle_received_item(self, item: dict[str, Any]) -> None:
         envelope = item.get("envelope") if isinstance(item, dict) else None
