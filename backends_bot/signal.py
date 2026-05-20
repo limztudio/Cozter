@@ -1,8 +1,8 @@
 """Signal adapter: wires signal-cli group messages to BotPlatform.
 
-This backend talks to Signal through the installed ``signal-cli`` binary.
-It resolves configured group invite URLs to group ids on startup, then
-polls ``signal-cli receive -o json`` for messages from those groups.
+This backend talks to Signal through the signal-cli JSON-RPC interface.
+It can either start its own private ``signal-cli jsonRpc`` child process
+or connect to a shared ``signal-cli daemon --socket`` instance.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import shutil
 from typing import Any
 
 from .. import workspace
+from ..signal_cli_daemon import SignalCliDaemon
 from .base import AttachmentInfo, BotContext, BotPlatform, MessageHandle
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ class SignalBot(BotPlatform):
         recent_limit: int = 10,
         max_queue_size: int = 50,
         signal_cli_path: str = "signal-cli",
+        jsonrpc_socket: str = "",
         receive_timeout: int = _DEFAULT_RECEIVE_TIMEOUT,
     ):
         super().__init__(
@@ -51,10 +53,13 @@ class SignalBot(BotPlatform):
         self.phone_number = phone_number
         self.group_urls = _dedupe_group_urls(group_urls)
         self.signal_cli_path = signal_cli_path
+        self.jsonrpc_socket = jsonrpc_socket.strip() if jsonrpc_socket else ""
         self.receive_timeout = receive_timeout
         self._group_ids_by_url: dict[str, str] = {}
         self._group_ids: set[str] = set()
         self._jsonrpc_proc: asyncio.subprocess.Process | None = None
+        self._jsonrpc_reader: asyncio.StreamReader | None = None
+        self._jsonrpc_writer: asyncio.StreamWriter | None = None
         self._jsonrpc_reader_task: asyncio.Task | None = None
         self._jsonrpc_stderr_task: asyncio.Task | None = None
         self._jsonrpc_write_lock = asyncio.Lock()
@@ -125,7 +130,7 @@ class SignalBot(BotPlatform):
     # ----- lifecycle ------------------------------------------------------
 
     async def start(self) -> None:
-        if shutil.which(self.signal_cli_path) is None:
+        if not self.jsonrpc_socket and shutil.which(self.signal_cli_path) is None:
             raise RuntimeError(
                 f"signal-cli executable not found: {self.signal_cli_path}"
             )
@@ -144,8 +149,9 @@ class SignalBot(BotPlatform):
             await self._stop_jsonrpc()
             raise
         logger.info(
-            "Signal JSON-RPC bot started for %d group URL(s).",
+            "Signal JSON-RPC bot started for %d group URL(s) via %s.",
             len(self._group_ids),
+            self._jsonrpc_endpoint_name(),
         )
 
     async def stop(self) -> None:
@@ -176,9 +182,23 @@ class SignalBot(BotPlatform):
         )
         await self.notify_users(msg)
 
-    # ----- JSON-RPC process ----------------------------------------------
+    # ----- JSON-RPC transport --------------------------------------------
 
     async def _start_jsonrpc(self) -> None:
+        if self.jsonrpc_socket:
+            await SignalCliDaemon.get(
+                self.phone_number,
+                self.jsonrpc_socket,
+                signal_cli_path=self.signal_cli_path,
+            ).ensure_running()
+            self._jsonrpc_reader, self._jsonrpc_writer = (
+                await asyncio.open_unix_connection(self.jsonrpc_socket)
+            )
+            self._jsonrpc_reader_task = asyncio.create_task(
+                self._jsonrpc_reader_loop()
+            )
+            return
+
         argv = [
             self.signal_cli_path,
             "-a", self.phone_number,
@@ -192,6 +212,14 @@ class SignalBot(BotPlatform):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        if (
+            self._jsonrpc_proc.stdin is None
+            or self._jsonrpc_proc.stdout is None
+        ):
+            await self._terminate_process(self._jsonrpc_proc)
+            raise SignalCliError("signal-cli JSON-RPC pipes unavailable")
+        self._jsonrpc_reader = self._jsonrpc_proc.stdout
+        self._jsonrpc_writer = self._jsonrpc_proc.stdin
         self._jsonrpc_reader_task = asyncio.create_task(
             self._jsonrpc_reader_loop()
         )
@@ -201,7 +229,10 @@ class SignalBot(BotPlatform):
 
     async def _stop_jsonrpc(self) -> None:
         proc = self._jsonrpc_proc
+        writer = self._jsonrpc_writer
         self._jsonrpc_proc = None
+        self._jsonrpc_reader = None
+        self._jsonrpc_writer = None
         for request_id, fut in list(self._jsonrpc_pending.items()):
             self._jsonrpc_pending.pop(request_id, None)
             if not fut.done():
@@ -209,6 +240,10 @@ class SignalBot(BotPlatform):
         for task in (self._jsonrpc_reader_task, self._jsonrpc_stderr_task):
             if task and not task.done():
                 task.cancel()
+        if proc is None and writer is not None:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
         if proc is not None:
             await self._terminate_process(proc)
         for task in (self._jsonrpc_reader_task, self._jsonrpc_stderr_task):
@@ -234,12 +269,12 @@ class SignalBot(BotPlatform):
                 await proc.wait()
 
     async def _jsonrpc_reader_loop(self) -> None:
-        proc = self._jsonrpc_proc
-        if proc is None or proc.stdout is None:
+        reader = self._jsonrpc_reader
+        if reader is None:
             return
         try:
             while not self._stop_requested.is_set():
-                line = await proc.stdout.readline()
+                line = await reader.readline()
                 if not line:
                     break
                 try:
@@ -266,7 +301,10 @@ class SignalBot(BotPlatform):
                     task.add_done_callback(self._notification_tasks.discard)
         finally:
             if not self._stop_requested.is_set():
-                logger.warning("signal-cli JSON-RPC stdout closed")
+                logger.warning(
+                    "signal-cli JSON-RPC %s closed",
+                    self._jsonrpc_endpoint_name(),
+                )
             for request_id, fut in list(self._jsonrpc_pending.items()):
                 self._jsonrpc_pending.pop(request_id, None)
                 if not fut.done():
@@ -311,8 +349,9 @@ class SignalBot(BotPlatform):
         *,
         timeout: int | float | None = 60,
     ) -> Any:
+        writer = self._jsonrpc_writer
         proc = self._jsonrpc_proc
-        if proc is None or proc.returncode is not None or proc.stdin is None:
+        if writer is None or (proc is not None and proc.returncode is not None):
             raise SignalCliError("signal-cli JSON-RPC is not running")
         loop = asyncio.get_running_loop()
         self._jsonrpc_next_id += 1
@@ -329,8 +368,8 @@ class SignalBot(BotPlatform):
         line = json.dumps(request, separators=(",", ":")) + "\n"
         try:
             async with self._jsonrpc_write_lock:
-                proc.stdin.write(line.encode("utf-8"))
-                await proc.stdin.drain()
+                writer.write(line.encode("utf-8"))
+                await writer.drain()
             response = await asyncio.wait_for(fut, timeout=timeout)
         except Exception:
             self._jsonrpc_pending.pop(request_id, None)
@@ -345,6 +384,11 @@ class SignalBot(BotPlatform):
                 message = str(error)
             raise SignalCliError(message)
         return response.get("result")
+
+    def _jsonrpc_endpoint_name(self) -> str:
+        if self.jsonrpc_socket:
+            return f"socket {self.jsonrpc_socket}"
+        return "managed signal-cli process"
 
     async def _handle_received_item(self, item: dict[str, Any]) -> None:
         envelope = item.get("envelope") if isinstance(item, dict) else None

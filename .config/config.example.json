@@ -8,6 +8,7 @@
 
   "signal_phone_number": "",
   "signal_group_urls": [],
+  "signal_jsonrpc_socket": "",
 
   "llama_server_url": "http://127.0.0.1:8080",
   "llama_max_agent_turns": 60,

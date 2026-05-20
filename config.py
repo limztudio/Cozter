@@ -14,6 +14,7 @@ _DEFAULT_CONFIG = {
     "slack_channel_ids": [],
     "signal_phone_number": "",
     "signal_group_urls": [],
+    "signal_jsonrpc_socket": "",
     "llama_server_url": "http://127.0.0.1:8080",
     "llama_max_agent_turns": 60,
     "llama_tool_repeat_limit": 3,
@@ -130,6 +131,11 @@ def load_config() -> dict:
     )
     cfg["signal_group_urls"] = _normalize_string_list(
         cfg.get("signal_group_urls") or cfg.get("signal_group_url") or []
+    )
+    signal_socket_raw = cfg.get("signal_jsonrpc_socket") or ""
+    cfg["signal_jsonrpc_socket"] = (
+        os.path.expandvars(os.path.expanduser(signal_socket_raw.strip()))
+        if isinstance(signal_socket_raw, str) else ""
     )
 
     has_telegram = bool(cfg["telegram_bot_tokens"])
