@@ -18,7 +18,7 @@ import time
 from collections import deque
 from typing import Any
 
-from .. import session, workspace
+from .. import schedules, session, workspace
 from .base import AttachmentInfo, BotContext, BotPlatform, MessageHandle
 
 logger = logging.getLogger(__name__)
@@ -155,6 +155,8 @@ class SignalBot(BotPlatform):
                     "Migrated %d legacy Signal workspace selection(s).",
                     migrated,
                 )
+            self._migrate_group_schedules_from_current_workspaces()
+            await self._migrate_group_queue_state()
             await self.restore_queues()
             await self.start_scheduler()
             self._receive_subscription = await self._subscribe_receive()
@@ -377,6 +379,7 @@ class SignalBot(BotPlatform):
             return
         self._migrate_group_workspace_state(sender_id, group_id, account_id)
         self._migrate_group_session_state(sender_id, group_id, account_id)
+        self._migrate_group_schedule_state(sender_id, group_id, account_id)
 
         if text.startswith("/"):
             await self.dispatch_command(
@@ -596,6 +599,120 @@ class SignalBot(BotPlatform):
                 "Migrated legacy Signal last-session state into group %s.",
                 _short_id(group_id),
             )
+
+    def _migrate_group_schedules_from_current_workspaces(self) -> None:
+        migrated = 0
+        for uid, ws in workspace.iter_current_workspaces(self.platform_id):
+            if uid.startswith("signal-group:") or not os.path.isdir(ws):
+                continue
+            for sched in schedules.list_schedules(ws, uid):
+                chat_id = str(sched.get("chat_id") or "")
+                if chat_id not in self._group_ids:
+                    continue
+                target_uid = self._state_user_id(chat_id)
+                workspace.migrate_current_workspace(
+                    uid,
+                    target_uid,
+                    self.platform_id,
+                    source_bot_ids=(self.platform_id,),
+                    source_bot_prefixes=(_LEGACY_SIGNAL_PLATFORM_PREFIX,),
+                )
+                migrated += schedules.migrate_schedules(
+                    ws,
+                    (uid,),
+                    target_uid,
+                    source_chat_id=chat_id,
+                    target_chat_id=chat_id,
+                )
+        if migrated:
+            logger.info("Migrated %d legacy Signal schedule(s).", migrated)
+
+    def _migrate_group_schedule_state(
+        self,
+        sender_id: str,
+        group_id: str,
+        account_id: str,
+    ) -> None:
+        target_user_id = self._state_user_id(group_id)
+        ws = workspace.get_current(target_user_id, self.platform_id)
+        if not ws or not os.path.isdir(ws):
+            return
+        source_ids = list(
+            dict.fromkeys(x for x in (sender_id, account_id, group_id) if x)
+        )
+        migrated = schedules.migrate_schedules(
+            ws,
+            source_ids,
+            target_user_id,
+            source_chat_id=group_id,
+            target_chat_id=group_id,
+        )
+        if migrated:
+            logger.info(
+                "Migrated %d legacy Signal schedule(s) into group %s.",
+                migrated,
+                _short_id(group_id),
+            )
+
+    async def _migrate_group_queue_state(self) -> None:
+        async with self._queue_file_lock:
+            data = self._read_queue_file()
+            if not data:
+                return
+
+            moved = 0
+            changed = False
+            for uid, entries in list(data.items()):
+                if not isinstance(entries, list) or uid.startswith(
+                    "signal-group:",
+                ):
+                    continue
+                remaining: list[dict] = []
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        remaining.append(entry)
+                        continue
+                    chat_id = str(entry.get("chat_id") or "")
+                    if chat_id not in self._group_ids:
+                        remaining.append(entry)
+                        continue
+                    target_uid = self._state_user_id(chat_id)
+                    workspace.migrate_current_workspace(
+                        uid,
+                        target_uid,
+                        self.platform_id,
+                        source_bot_ids=(self.platform_id,),
+                        source_bot_prefixes=(_LEGACY_SIGNAL_PLATFORM_PREFIX,),
+                    )
+                    ws = workspace.get_current(target_uid, self.platform_id)
+                    if ws and os.path.isdir(ws):
+                        session.migrate_last_session(ws, (uid,), target_uid)
+                    target_entries = data.setdefault(target_uid, [])
+                    if not isinstance(target_entries, list):
+                        target_entries = []
+                        data[target_uid] = target_entries
+                    entry_id = entry.get("id")
+                    duplicate = (
+                        bool(entry_id)
+                        and any(
+                            isinstance(e, dict) and e.get("id") == entry_id
+                            for e in target_entries
+                        )
+                    )
+                    if not duplicate:
+                        target_entries.append(entry)
+                        moved += 1
+                    changed = True
+
+                if remaining:
+                    data[uid] = remaining
+                else:
+                    data.pop(uid, None)
+
+            if changed:
+                self._write_queue_file(data)
+            if moved:
+                logger.info("Migrated %d legacy Signal queued message(s).", moved)
 
     def _remember_outgoing_text(self, group_id: str, text: str) -> None:
         self._prune_outgoing_texts()

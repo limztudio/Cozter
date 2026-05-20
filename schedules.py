@@ -83,6 +83,70 @@ def list_schedules(
     return list(_load_all(workspace).get(str(user_id), []))
 
 
+def migrate_schedules(
+    workspace: str,
+    source_user_ids: list[str | int] | tuple[str | int, ...],
+    target_user_id: str | int,
+    *,
+    source_chat_id: str = "",
+    target_chat_id: str = "",
+) -> int:
+    """Move legacy schedules to a new user key, returning moved count."""
+    data = _load_all(workspace)
+    target_key = str(target_user_id)
+    target = data.get(target_key, [])
+    if not isinstance(target, list):
+        target = []
+    seen_ids = {
+        s.get("id") for s in target
+        if isinstance(s, dict) and s.get("id")
+    }
+
+    moved = 0
+    changed = False
+    for source_user_id in source_user_ids:
+        source_key = str(source_user_id)
+        if source_key == target_key:
+            continue
+        source = data.get(source_key)
+        if not isinstance(source, list) or not source:
+            continue
+
+        remaining: list[dict] = []
+        for sched in source:
+            if not isinstance(sched, dict):
+                remaining.append(sched)
+                continue
+            if source_chat_id and str(sched.get("chat_id") or "") != source_chat_id:
+                remaining.append(sched)
+                continue
+            sched_id = sched.get("id")
+            if sched_id and sched_id in seen_ids:
+                changed = True
+                continue
+
+            migrated = dict(sched)
+            migrated["user_id"] = target_key
+            if target_chat_id:
+                migrated["chat_id"] = target_chat_id
+            target.append(migrated)
+            if sched_id:
+                seen_ids.add(sched_id)
+            moved += 1
+            changed = True
+
+        if remaining:
+            data[source_key] = remaining
+        else:
+            data.pop(source_key, None)
+
+    if changed:
+        if target:
+            data[target_key] = target
+        _save_all(workspace, data)
+    return moved
+
+
 def update_schedule_fired(
     workspace: str,
     user_id: str | int,
