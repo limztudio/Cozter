@@ -81,11 +81,10 @@ is resolved with `signal-cli listGroups` or joined with
 `signal-cli joinGroup --uri` when the bot starts. Set
 `signal_jsonrpc_socket` to a shared Unix socket path when Cozter and
 other local scripts should reuse one `signal-cli daemon`. Cozter only
-connects to that socket; run `python -m Cozter.signal_cli_daemon_service`
-from a service manager such as systemd to own the daemon lifecycle.
-The daemon reads its own config from
+connects to that socket; run the daemon from a service manager such as
+systemd to own the daemon lifecycle. The daemon reads its own config from
 `/home/shared/utilities/SignalDaemon/config.json` by default. A fillable
-template lives at `.config/signal_daemon.example.json`:
+template lives at `/home/shared/utilities/SignalDaemon/config.example.json`:
 
 ```json
 {
@@ -93,15 +92,6 @@ template lives at `.config/signal_daemon.example.json`:
   "socket_path": "/home/shared/utilities/SignalDaemon/signal-cli-jsonrpc.sock",
   "signal_cli_path": "signal-cli"
 }
-```
-
-Other local scripts that should start the daemon on demand can use the
-same singleton guard before opening the socket:
-
-```python
-from Cozter.signal_cli_daemon import SignalCliDaemon
-
-await SignalCliDaemon.get(phone_number, socket_path).ensure_running()
 ```
 
 ## Workspace concept

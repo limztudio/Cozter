@@ -18,7 +18,6 @@ import shutil
 from typing import Any
 
 from .. import workspace
-from ..signal_cli_daemon import SignalCliDaemon
 from .base import AttachmentInfo, BotContext, BotPlatform, MessageHandle
 
 logger = logging.getLogger(__name__)
@@ -187,14 +186,9 @@ class SignalBot(BotPlatform):
     async def _start_jsonrpc(self) -> None:
         if self.jsonrpc_socket:
             # Cozter is only a client here. The shared signal-cli daemon is
-            # owned by systemd so other local scripts can use the same socket.
-            await SignalCliDaemon.get(
-                self.phone_number,
-                self.jsonrpc_socket,
-                signal_cli_path=self.signal_cli_path,
-            ).wait_until_running()
+            # owned outside this package so local scripts can share it too.
             self._jsonrpc_reader, self._jsonrpc_writer = (
-                await asyncio.open_unix_connection(self.jsonrpc_socket)
+                await self._open_jsonrpc_socket()
             )
             self._jsonrpc_reader_task = asyncio.create_task(
                 self._jsonrpc_reader_loop()
@@ -228,6 +222,27 @@ class SignalBot(BotPlatform):
         self._jsonrpc_stderr_task = asyncio.create_task(
             self._jsonrpc_stderr_loop()
         )
+
+    async def _open_jsonrpc_socket(
+        self, *, timeout: float = 15.0,
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        last_error: BaseException | None = None
+        while True:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.open_unix_connection(self.jsonrpc_socket),
+                    timeout=min(1.0, max(0.1, deadline - loop.time())),
+                )
+            except (OSError, asyncio.TimeoutError) as exc:
+                last_error = exc
+                if loop.time() >= deadline:
+                    raise SignalCliError(
+                        "signal-cli JSON-RPC socket is not ready: "
+                        f"{self.jsonrpc_socket}"
+                    ) from last_error
+                await asyncio.sleep(0.25)
 
     async def _stop_jsonrpc(self) -> None:
         proc = self._jsonrpc_proc
