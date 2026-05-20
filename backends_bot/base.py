@@ -268,8 +268,17 @@ class BotPlatform(ABC):
                 ctx.user_id, ctx.chat_id,
             )
             return
-        handler = self._COMMANDS.get(ctx.command or "")
+        handler = self._COMMANDS.get((ctx.command or "").lower())
         if handler is None:
+            pending = self._pending_input.pop(ctx.user_id, None)
+            if pending is not None:
+                ctx.text = "/" + (ctx.command or "")
+                if ctx.args:
+                    ctx.text += f" {ctx.args}"
+                ctx.command = None
+                ctx.args = ""
+                await pending(ctx)
+                return
             await ctx.reply_text(f"Unknown command: /{ctx.command}")
             return
         # Any new command cancels a pending text-input flow. /cancel
@@ -361,6 +370,12 @@ class BotPlatform(ABC):
     # ----- /open ----------------------------------------------------------
 
     async def cmd_open(self, ctx: BotContext) -> None:
+        if ctx.args.strip():
+            await self._open_workspace_from_text(
+                ctx, ctx.args.strip(), rearm_on_error=False,
+            )
+            return
+
         current = workspace.get_current(ctx.user_id, self.platform_id)
         recent = workspace.get_recent(ctx.user_id, self.recent_limit)
         lines = [f"Current workspace: {current or '(none)'}"]
@@ -377,26 +392,44 @@ class BotPlatform(ABC):
         self._expect_input(ctx.user_id, self._receive_open_dir)
 
     async def _receive_open_dir(self, ctx: BotContext) -> None:
-        text = ctx.text.strip()
+        await self._open_workspace_from_text(
+            ctx, ctx.text.strip(), rearm_on_error=True,
+        )
+
+    async def _open_workspace_from_text(
+        self, ctx: BotContext, text: str, *, rearm_on_error: bool,
+    ) -> None:
         recent = workspace.get_recent(ctx.user_id, self.recent_limit)
         if text.isdigit():
             idx = int(text) - 1
             if 0 <= idx < len(recent):
                 path = recent[idx]
             else:
-                await ctx.reply_text(
-                    "Invalid number. Please try again (or /cancel):"
-                )
-                self._expect_input(ctx.user_id, self._receive_open_dir)
+                if rearm_on_error:
+                    await ctx.reply_text(
+                        "Invalid number. Please try again (or /cancel):"
+                    )
+                    self._expect_input(ctx.user_id, self._receive_open_dir)
+                else:
+                    await ctx.reply_text(
+                        "Invalid number. Use /open to choose from recent"
+                        " workspaces."
+                    )
                 return
         else:
             path = text
         if not os.path.isdir(path):
-            await ctx.reply_text(
-                f"Directory does not exist:\n{path}\n\n"
-                "Please enter a valid directory (or /cancel):"
-            )
-            self._expect_input(ctx.user_id, self._receive_open_dir)
+            if rearm_on_error:
+                await ctx.reply_text(
+                    f"Directory does not exist:\n{path}\n\n"
+                    "Please enter a valid directory (or /cancel):"
+                )
+                self._expect_input(ctx.user_id, self._receive_open_dir)
+            else:
+                await ctx.reply_text(
+                    f"Directory does not exist:\n{path}\n\n"
+                    "Use /open to choose from recent workspaces."
+                )
             return
         workspace.ensure_cozter_dir(path)
         workspace.select_workspace(ctx.user_id, path, self.platform_id)

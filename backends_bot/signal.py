@@ -335,7 +335,7 @@ class SignalBot(BotPlatform):
         args = ""
         if text.startswith("/"):
             parts = text[1:].split(None, 1)
-            command = parts[0].split("@", 1)[0].lower() if parts else ""
+            command = parts[0].split("@", 1)[0] if parts else ""
             args = parts[1] if len(parts) > 1 else ""
             text = ""
         return BotContext(
