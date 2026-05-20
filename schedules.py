@@ -117,7 +117,8 @@ def migrate_schedules(
             if not isinstance(sched, dict):
                 remaining.append(sched)
                 continue
-            if source_chat_id and str(sched.get("chat_id") or "") != source_chat_id:
+            sched_chat_id = str(sched.get("chat_id") or "")
+            if source_chat_id and sched_chat_id != source_chat_id:
                 remaining.append(sched)
                 continue
             sched_id = sched.get("id")

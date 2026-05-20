@@ -378,8 +378,9 @@ class SignalBot(BotPlatform):
         if self._is_own_sent_echo(data, group_id, text, from_local_account):
             return
         self._migrate_group_workspace_state(sender_id, group_id, account_id)
-        self._migrate_group_session_state(sender_id, group_id, account_id)
-        self._migrate_group_schedule_state(sender_id, group_id, account_id)
+        await self._migrate_group_workspace_files(
+            sender_id, group_id, account_id,
+        )
 
         if text.startswith("/"):
             await self.dispatch_command(
@@ -599,6 +600,20 @@ class SignalBot(BotPlatform):
                 "Migrated legacy Signal last-session state into group %s.",
                 _short_id(group_id),
             )
+
+    async def _migrate_group_workspace_files(
+        self,
+        sender_id: str,
+        group_id: str,
+        account_id: str,
+    ) -> None:
+        target_user_id = self._state_user_id(group_id)
+        ws = workspace.get_current(target_user_id, self.platform_id)
+        if not ws or not os.path.isdir(ws):
+            return
+        async with workspace.get_lock(ws):
+            self._migrate_group_session_state(sender_id, group_id, account_id)
+            self._migrate_group_schedule_state(sender_id, group_id, account_id)
 
     def _migrate_group_schedules_from_current_workspaces(self) -> None:
         migrated = 0
