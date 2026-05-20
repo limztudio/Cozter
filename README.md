@@ -84,12 +84,13 @@ other local scripts should reuse one `signal-cli daemon`. Cozter only
 connects to that socket; run `python -m Cozter.signal_cli_daemon_service`
 from a service manager such as systemd to own the daemon lifecycle.
 The daemon reads its own config from
-`/home/shared/utilities/SignalDaemon/config.json` by default:
+`/home/shared/utilities/SignalDaemon/config.json` by default. A fillable
+template lives at `.config/signal_daemon.example.json`:
 
 ```json
 {
   "phone_number": "+10000000000",
-  "socket_path": "/run/user/1000/signal-cli-jsonrpc.sock",
+  "socket_path": "/home/shared/utilities/SignalDaemon/signal-cli-jsonrpc.sock",
   "signal_cli_path": "signal-cli"
 }
 ```

@@ -1,0 +1,5 @@
+{
+  "phone_number": "+10000000000",
+  "socket_path": "/home/shared/utilities/SignalDaemon/signal-cli-jsonrpc.sock",
+  "signal_cli_path": "signal-cli"
+}
