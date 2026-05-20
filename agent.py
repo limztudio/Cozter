@@ -68,24 +68,6 @@ def _workspace_candidate_path(path: str, workspace_path: str) -> str:
     return path if os.path.isabs(path) else os.path.join(workspace_path, path)
 
 
-def extract_attachments(text: str, ws: str) -> tuple[str, list[str]]:
-    """Parse ``[[attach: PATH]]`` markers from agent-emitted text.
-
-    Pairs with :data:`CAPABILITY_HINT` (which instructs the model to
-    use these markers). Returns ``(cleaned_text, [absolute_paths])``;
-    only paths that resolve to attachable files are included. Workspace
-    files are used directly; trusted external generated images are copied
-    into the workspace first.
-    """
-    cleaned, source_paths = extract_attachment_sources(text, ws)
-    paths: list[str] = []
-    for source_path in source_paths:
-        abs_path = prepare_attachment_path(source_path, ws)
-        if abs_path is not None:
-            paths.append(abs_path)
-    return cleaned, paths
-
-
 def extract_attachment_sources(text: str, ws: str) -> tuple[str, list[str]]:
     """Parse attachment markers without copying external generated images."""
     paths: list[str] = []
