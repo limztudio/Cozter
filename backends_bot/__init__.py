@@ -53,7 +53,7 @@ def create_platforms(config: dict) -> list[BotPlatform]:
                 signal_phone,
                 config.get("signal_group_urls") or [],
                 recent_limit=recent_limit, max_queue_size=queue_size,
-                jsonrpc_socket=config.get("signal_jsonrpc_socket") or "",
+                jsonrpc_socket=config["signal_jsonrpc_socket"],
             ),
         ]
 

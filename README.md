@@ -72,7 +72,8 @@ lives in `.config/config.example.json`):
 
 Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
 + `user_ids`, `slack_bot_token` + `slack_app_token` +
-`slack_channel_ids`, or `signal_phone_number` + `signal_group_urls`.
+`slack_channel_ids`, or `signal_phone_number` + `signal_group_urls` +
+`signal_jsonrpc_socket`.
 The CLI surface needs neither.
 
 For Signal, `signal-cli` must already be installed and registered or

@@ -94,7 +94,7 @@ def load_config() -> dict:
             "Fill in either 'telegram_bot_tokens' + 'user_ids'"
             " or 'slack_bot_token' + 'slack_app_token' +"
             " 'slack_channel_ids', or 'signal_phone_number' +"
-            " 'signal_group_urls', then restart."
+            " 'signal_group_urls' + 'signal_jsonrpc_socket', then restart."
         )
         sys.exit(0)
 
@@ -130,7 +130,7 @@ def load_config() -> dict:
         if isinstance(signal_phone_raw, str) else ""
     )
     cfg["signal_group_urls"] = _normalize_string_list(
-        cfg.get("signal_group_urls") or cfg.get("signal_group_url") or []
+        cfg.get("signal_group_urls") or []
     )
     signal_socket_raw = cfg.get("signal_jsonrpc_socket") or ""
     cfg["signal_jsonrpc_socket"] = (
@@ -187,6 +187,10 @@ def load_config() -> dict:
     if has_signal and not cfg["signal_group_urls"]:
         print(f"ERROR: 'signal_group_urls' is empty in {CONFIG_PATH}")
         print("Add at least one Signal group invite URL.")
+        sys.exit(1)
+    if has_signal and not cfg["signal_jsonrpc_socket"]:
+        print(f"ERROR: 'signal_jsonrpc_socket' is empty in {CONFIG_PATH}")
+        print("Point it at the shared signal-cli daemon Unix socket.")
         sys.exit(1)
 
     return cfg
