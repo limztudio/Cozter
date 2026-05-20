@@ -79,6 +79,10 @@ class SignalCliDaemon:
                 await self._spawn_daemon()
                 await self._wait_until_ready()
 
+    async def wait_until_running(self, *, timeout: float = 15.0) -> None:
+        """Wait for a service-owned daemon; do not start one from this process."""
+        await self._wait_until_ready(timeout=timeout)
+
     async def _can_connect(self, *, timeout: float = 1.0) -> bool:
         try:
             reader, writer = await asyncio.wait_for(

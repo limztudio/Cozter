@@ -186,11 +186,13 @@ class SignalBot(BotPlatform):
 
     async def _start_jsonrpc(self) -> None:
         if self.jsonrpc_socket:
+            # Cozter is only a client here. The shared signal-cli daemon is
+            # owned by systemd so other local scripts can use the same socket.
             await SignalCliDaemon.get(
                 self.phone_number,
                 self.jsonrpc_socket,
                 signal_cli_path=self.signal_cli_path,
-            ).ensure_running()
+            ).wait_until_running()
             self._jsonrpc_reader, self._jsonrpc_writer = (
                 await asyncio.open_unix_connection(self.jsonrpc_socket)
             )

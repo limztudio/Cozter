@@ -80,12 +80,12 @@ linked for `signal_phone_number`; each invite URL in `signal_group_urls`
 is resolved with `signal-cli listGroups` or joined with
 `signal-cli joinGroup --uri` when the bot starts. Set
 `signal_jsonrpc_socket` to a shared Unix socket path when Cozter and
-other local scripts should reuse one `signal-cli daemon`; the daemon
-helper probes the socket first, then uses a lock file before launching
-so concurrent scripts do not start duplicate Signal receivers.
+other local scripts should reuse one `signal-cli daemon`. Cozter only
+connects to that socket; run `python -m Cozter.signal_cli_daemon_service`
+from a service manager such as systemd to own the daemon lifecycle.
 
-Other local scripts can use the same singleton guard before opening the
-socket:
+Other local scripts that should start the daemon on demand can use the
+same singleton guard before opening the socket:
 
 ```python
 from Cozter.signal_cli_daemon import SignalCliDaemon
