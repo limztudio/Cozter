@@ -23,7 +23,6 @@ from .base import AttachmentInfo, BotContext, BotPlatform, MessageHandle
 logger = logging.getLogger(__name__)
 
 _DEFAULT_RECEIVE_TIMEOUT = 30
-_ERROR_RETRY_DELAY = 10
 _SIGNAL_TEXT_LIMIT = 4_000
 
 
@@ -55,8 +54,14 @@ class SignalBot(BotPlatform):
         self.receive_timeout = receive_timeout
         self._group_ids_by_url: dict[str, str] = {}
         self._group_ids: set[str] = set()
-        self._signal_cli_lock = asyncio.Lock()
-        self._receive_task: asyncio.Task | None = None
+        self._jsonrpc_proc: asyncio.subprocess.Process | None = None
+        self._jsonrpc_reader_task: asyncio.Task | None = None
+        self._jsonrpc_stderr_task: asyncio.Task | None = None
+        self._jsonrpc_write_lock = asyncio.Lock()
+        self._jsonrpc_pending: dict[str, asyncio.Future] = {}
+        self._jsonrpc_next_id = 0
+        self._receive_subscription: int | None = None
+        self._notification_tasks: set[asyncio.Task] = set()
         self._stop_requested = asyncio.Event()
 
     @property
@@ -76,11 +81,10 @@ class SignalBot(BotPlatform):
         group_id = self._group_id_for_chat(chat_id)
         last: MessageHandle | None = None
         for chunk in _split_text(text):
-            raw = await self._run_signal_cli(
-                "send", "-g", group_id, "--message-from-stdin",
-                input_text=chunk,
+            result = await self._rpc_request(
+                "send", {"groupId": group_id, "message": chunk},
             )
-            timestamp = _extract_timestamp(raw)
+            timestamp = _extract_timestamp_from_value(result)
             if timestamp:
                 last = MessageHandle(
                     chat_id=group_id,
@@ -90,24 +94,26 @@ class SignalBot(BotPlatform):
 
     async def edit_text(self, handle: MessageHandle, text: str) -> None:
         group_id = self._group_id_for_chat(handle.chat_id)
-        await self._run_signal_cli(
-            "send", "-g", group_id,
-            "--edit-timestamp", handle.message_id,
-            "--message-from-stdin",
-            input_text=text,
+        await self._rpc_request(
+            "send",
+            {
+                "groupId": group_id,
+                "editTimestamp": handle.message_id,
+                "message": text,
+            },
         )
 
     async def delete_message(self, handle: MessageHandle) -> None:
         group_id = self._group_id_for_chat(handle.chat_id)
-        await self._run_signal_cli(
-            "remoteDelete", "-g", group_id,
-            "-t", handle.message_id,
+        await self._rpc_request(
+            "remoteDelete",
+            {"groupId": group_id, "targetTimestamp": handle.message_id},
         )
 
     async def send_file(self, chat_id: str, path: str) -> None:
         group_id = self._group_id_for_chat(chat_id)
-        await self._run_signal_cli(
-            "send", "-g", group_id, "-a", path,
+        await self._rpc_request(
+            "send", {"groupId": group_id, "attachment": path},
         )
 
     async def send_status(self, chat_id: str, text: str) -> None:
@@ -123,30 +129,43 @@ class SignalBot(BotPlatform):
             raise RuntimeError(
                 f"signal-cli executable not found: {self.signal_cli_path}"
             )
-        self._group_ids_by_url = await self._resolve_group_ids()
-        self._group_ids = set(self._group_ids_by_url.values())
-        self.notify_targets = list(
-            dict.fromkeys(self._group_ids_by_url.values())
-        )
         self._stop_requested.clear()
-        await self.restore_queues()
-        await self.start_scheduler()
-        self._receive_task = asyncio.create_task(self._receive_loop())
+        await self._start_jsonrpc()
+        try:
+            self._group_ids_by_url = await self._resolve_group_ids()
+            self._group_ids = set(self._group_ids_by_url.values())
+            self.notify_targets = list(
+                dict.fromkeys(self._group_ids_by_url.values())
+            )
+            await self.restore_queues()
+            await self.start_scheduler()
+            self._receive_subscription = await self._subscribe_receive()
+        except Exception:
+            await self._stop_jsonrpc()
+            raise
         logger.info(
-            "Signal bot started for %d group URL(s).",
+            "Signal JSON-RPC bot started for %d group URL(s).",
             len(self._group_ids),
         )
 
     async def stop(self) -> None:
         await self.stop_scheduler()
         self._stop_requested.set()
-        if self._receive_task and not self._receive_task.done():
-            self._receive_task.cancel()
-            try:
-                await self._receive_task
-            except asyncio.CancelledError:
-                pass
-        self._receive_task = None
+        if self._receive_subscription is not None:
+            with contextlib.suppress(Exception):
+                await self._rpc_request(
+                    "unsubscribeReceive",
+                    {"subscription": self._receive_subscription},
+                    timeout=5,
+                )
+            self._receive_subscription = None
+        for task in list(self._notification_tasks):
+            task.cancel()
+        if self._notification_tasks:
+            await asyncio.gather(
+                *self._notification_tasks, return_exceptions=True,
+            )
+        await self._stop_jsonrpc()
         logger.info("Signal bot stopped.")
 
     async def send_startup_messages(
@@ -157,73 +176,175 @@ class SignalBot(BotPlatform):
         )
         await self.notify_users(msg)
 
-    # ----- receive loop ---------------------------------------------------
+    # ----- JSON-RPC process ----------------------------------------------
 
-    async def _receive_loop(self) -> None:
-        while not self._stop_requested.is_set():
-            try:
-                await self._run_receive_process()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Signal receive loop failed")
-                try:
-                    await asyncio.wait_for(
-                        self._stop_requested.wait(),
-                        timeout=_ERROR_RETRY_DELAY,
-                    )
-                except asyncio.TimeoutError:
-                    pass
-
-    async def _run_receive_process(self) -> None:
+    async def _start_jsonrpc(self) -> None:
         argv = [
             self.signal_cli_path,
             "-a", self.phone_number,
-            "-o", "json",
-            "receive",
-            "-t", str(self.receive_timeout),
-            "--max-messages", "1",
+            "jsonRpc",
+            "--receive-mode", "manual",
             "--ignore-stories",
         ]
-        proc = await asyncio.create_subprocess_exec(
+        self._jsonrpc_proc = await asyncio.create_subprocess_exec(
             *argv,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stderr_task = asyncio.create_task(proc.stderr.read())
-        try:
-            while not self._stop_requested.is_set():
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                raw = line.decode("utf-8", errors="replace")
-                for item in _parse_json_items(raw):
-                    await self._handle_received_item(item)
+        self._jsonrpc_reader_task = asyncio.create_task(
+            self._jsonrpc_reader_loop()
+        )
+        self._jsonrpc_stderr_task = asyncio.create_task(
+            self._jsonrpc_stderr_loop()
+        )
 
-            returncode = await proc.wait()
-            stderr = await stderr_task
-        except (asyncio.CancelledError, Exception):
-            await self._kill_process(proc)
-            stderr_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stderr_task
-            raise
+    async def _stop_jsonrpc(self) -> None:
+        proc = self._jsonrpc_proc
+        self._jsonrpc_proc = None
+        for request_id, fut in list(self._jsonrpc_pending.items()):
+            self._jsonrpc_pending.pop(request_id, None)
+            if not fut.done():
+                fut.set_exception(SignalCliError("signal-cli JSON-RPC stopped"))
+        for task in (self._jsonrpc_reader_task, self._jsonrpc_stderr_task):
+            if task and not task.done():
+                task.cancel()
+        if proc is not None:
+            await self._terminate_process(proc)
+        for task in (self._jsonrpc_reader_task, self._jsonrpc_stderr_task):
+            if task:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._jsonrpc_reader_task = None
+        self._jsonrpc_stderr_task = None
 
-        err = stderr.decode("utf-8", errors="replace")
-        if returncode != 0 and not self._stop_requested.is_set():
-            raise SignalCliError(err.strip() or f"exit {returncode}")
-        if err.strip():
-            logger.debug("signal-cli receive stderr: %s", err.strip())
-
-    async def _kill_process(
+    async def _terminate_process(
         self, proc: asyncio.subprocess.Process,
     ) -> None:
         if proc.returncode is not None:
             return
         with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-        with contextlib.suppress(ProcessLookupError):
-            await proc.wait()
+            proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                await proc.wait()
+
+    async def _jsonrpc_reader_loop(self) -> None:
+        proc = self._jsonrpc_proc
+        if proc is None or proc.stdout is None:
+            return
+        try:
+            while not self._stop_requested.is_set():
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                try:
+                    payload = json.loads(line.decode("utf-8", errors="replace"))
+                except json.JSONDecodeError:
+                    logger.debug(
+                        "Ignoring non-JSON signal-cli JSON-RPC line: %r",
+                        line,
+                    )
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if "id" in payload:
+                    request_id = str(payload.get("id"))
+                    fut = self._jsonrpc_pending.pop(request_id, None)
+                    if fut is not None and not fut.done():
+                        fut.set_result(payload)
+                    continue
+                if payload.get("method") == "receive":
+                    task = asyncio.create_task(
+                        self._handle_jsonrpc_receive(payload)
+                    )
+                    self._notification_tasks.add(task)
+                    task.add_done_callback(self._notification_tasks.discard)
+        finally:
+            if not self._stop_requested.is_set():
+                logger.warning("signal-cli JSON-RPC stdout closed")
+            for request_id, fut in list(self._jsonrpc_pending.items()):
+                self._jsonrpc_pending.pop(request_id, None)
+                if not fut.done():
+                    fut.set_exception(
+                        SignalCliError("signal-cli JSON-RPC stdout closed")
+                    )
+
+    async def _jsonrpc_stderr_loop(self) -> None:
+        proc = self._jsonrpc_proc
+        if proc is None or proc.stderr is None:
+            return
+        while True:
+            line = await proc.stderr.readline()
+            if not line:
+                break
+            logger.debug(
+                "signal-cli JSON-RPC stderr: %s",
+                line.decode("utf-8", errors="replace").strip(),
+            )
+
+    async def _handle_jsonrpc_receive(self, payload: dict[str, Any]) -> None:
+        try:
+            params = payload.get("params")
+            if not isinstance(params, dict):
+                return
+            item = params.get("result") if "result" in params else params
+            if isinstance(item, dict):
+                await self._handle_received_item(item)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Signal JSON-RPC receive notification failed")
+
+    async def _subscribe_receive(self) -> int | None:
+        result = await self._rpc_request("subscribeReceive", timeout=30)
+        return int(result) if isinstance(result, int) else None
+
+    async def _rpc_request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: int | float | None = 60,
+    ) -> Any:
+        proc = self._jsonrpc_proc
+        if proc is None or proc.returncode is not None or proc.stdin is None:
+            raise SignalCliError("signal-cli JSON-RPC is not running")
+        loop = asyncio.get_running_loop()
+        self._jsonrpc_next_id += 1
+        request_id = str(self._jsonrpc_next_id)
+        fut: asyncio.Future = loop.create_future()
+        self._jsonrpc_pending[request_id] = fut
+        request: dict[str, Any] = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "id": request_id,
+        }
+        if params:
+            request["params"] = params
+        line = json.dumps(request, separators=(",", ":")) + "\n"
+        try:
+            async with self._jsonrpc_write_lock:
+                proc.stdin.write(line.encode("utf-8"))
+                await proc.stdin.drain()
+            response = await asyncio.wait_for(fut, timeout=timeout)
+        except Exception:
+            self._jsonrpc_pending.pop(request_id, None)
+            raise
+        if not isinstance(response, dict):
+            raise SignalCliError("invalid JSON-RPC response")
+        error = response.get("error")
+        if error:
+            if isinstance(error, dict):
+                message = error.get("message") or json.dumps(error)
+            else:
+                message = str(error)
+            raise SignalCliError(message)
+        return response.get("result")
 
     async def _handle_received_item(self, item: dict[str, Any]) -> None:
         envelope = item.get("envelope") if isinstance(item, dict) else None
@@ -308,11 +429,10 @@ class SignalBot(BotPlatform):
             attachment_id = _attachment_id(att)
             if not attachment_id:
                 return None
-            raw = await self._run_signal_cli(
-                "getAttachment", "--id", attachment_id, "-g", group_id,
-                output_json=False,
+            result = await self._rpc_request(
+                "getAttachment", {"id": attachment_id, "groupId": group_id},
             )
-            payload = re.sub(r"\s+", "", raw)
+            payload = re.sub(r"\s+", "", _attachment_payload(result))
             with open(local_path, "wb") as f:
                 f.write(base64.b64decode(payload))
 
@@ -373,10 +493,8 @@ class SignalBot(BotPlatform):
             return group_id
 
         try:
-            joined_raw = await self._run_signal_cli(
-                "joinGroup", "--uri", group_url,
-            )
-            group_id = _first_group_id(joined_raw)
+            joined = await self._rpc_request("joinGroup", {"uri": group_url})
+            group_id = _first_group_id_from_value(joined)
             if group_id:
                 return group_id
         except SignalCliError as e:
@@ -393,9 +511,9 @@ class SignalBot(BotPlatform):
         )
 
     async def _find_group_id_by_url(self, group_url: str) -> str | None:
-        raw = await self._run_signal_cli("listGroups")
+        groups = await self._rpc_request("listGroups")
         wanted = _normalize_group_url(group_url)
-        for group in _extract_groups(raw):
+        for group in _extract_groups_from_value(groups):
             group_id = _group_id(group)
             if not group_id:
                 continue
@@ -403,55 +521,6 @@ class SignalBot(BotPlatform):
                 if _normalize_group_url(url) == wanted:
                     return group_id
         return None
-
-    async def _run_signal_cli(
-        self,
-        *args: str | None,
-        input_text: str | None = None,
-        timeout: int | None = None,
-        output_json: bool = True,
-    ) -> str:
-        async with self._signal_cli_lock:
-            argv = [self.signal_cli_path, "-a", self.phone_number]
-            if output_json:
-                argv.extend(["-o", "json"])
-            argv.extend(str(arg) for arg in args if arg is not None)
-
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                stdin=(
-                    asyncio.subprocess.PIPE
-                    if input_text is not None else None
-                ),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(
-                        input_text.encode("utf-8")
-                        if input_text is not None else None
-                    ),
-                    timeout=timeout,
-                )
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                proc.kill()
-                try:
-                    await proc.wait()
-                finally:
-                    pass
-                raise
-
-            out = stdout.decode("utf-8", errors="replace")
-            err = stderr.decode("utf-8", errors="replace")
-            if proc.returncode != 0:
-                message = (
-                    err.strip() or out.strip() or f"exit {proc.returncode}"
-                )
-                raise SignalCliError(message)
-            if err.strip():
-                logger.debug("signal-cli stderr: %s", err.strip())
-            return out
 
     def _group_id_for_chat(self, chat_id: str) -> str:
         group_id = str(chat_id)
@@ -498,28 +567,6 @@ def _dedupe_group_urls(group_urls: list[str]) -> list[str]:
     return urls
 
 
-def _parse_json_items(raw: str) -> list[dict[str, Any]]:
-    text = raw.strip()
-    if not text:
-        return []
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        items: list[dict[str, Any]] = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError:
-                logger.debug("Ignoring non-JSON signal-cli line: %s", line)
-                continue
-            items.extend(_coerce_json_items(value))
-        return items
-    return _coerce_json_items(data)
-
-
 def _coerce_json_items(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [x for x in value if isinstance(x, dict)]
@@ -532,12 +579,12 @@ def _coerce_json_items(value: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _extract_groups(raw: str) -> list[dict[str, Any]]:
-    return _parse_json_items(raw)
+def _extract_groups_from_value(value: Any) -> list[dict[str, Any]]:
+    return _coerce_json_items(value)
 
 
-def _first_group_id(raw: str) -> str:
-    for item in _parse_json_items(raw):
+def _first_group_id_from_value(value: Any) -> str:
+    for item in _coerce_json_items(value):
         group_id = _group_id(item)
         if group_id:
             return group_id
@@ -620,14 +667,21 @@ def _extract_sender_id(envelope: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_timestamp(raw: str) -> str | None:
-    items = _parse_json_items(raw)
-    for item in items:
-        timestamp = _find_key(item, "timestamp")
-        if timestamp is not None:
-            return str(timestamp)
-    match = re.search(r"\b(\d{12,})\b", raw)
-    return match.group(1) if match else None
+def _extract_timestamp_from_value(value: Any) -> str | None:
+    timestamp = _find_key(value, "timestamp")
+    return str(timestamp) if timestamp is not None else None
+
+
+def _attachment_payload(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    payload = _find_key(value, "data")
+    if isinstance(payload, str):
+        return payload
+    payload = _find_key(value, "attachment")
+    if isinstance(payload, str):
+        return payload
+    raise SignalCliError("signal-cli getAttachment returned no payload")
 
 
 def _find_key(value: Any, key: str) -> Any:
