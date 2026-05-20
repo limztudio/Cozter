@@ -2,7 +2,7 @@
 
 A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot)
 and a local llama-server HTTP backend, exposing them through Telegram,
-Slack, or a plain terminal. One bot process, multiple workspaces,
+Slack, Signal, or a plain terminal. One bot process, multiple workspaces,
 per-workspace settings, durable sessions with automatic compaction, and
 a drop-in plugin system that works across every backend.
 
@@ -15,9 +15,10 @@ a drop-in plugin system that works across every backend.
   - `llama` — any OpenAI-compatible HTTP server (llama-server, LM Studio,
     Mistral API, etc.); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
-- **Three chat surfaces**, selected at launch:
+- **Four chat surfaces**, selected at launch:
   - Telegram (`python -m Cozter`)
   - Slack (Socket Mode; same launcher, set `slack_bot_token` in config)
+  - Signal (same launcher, set `signal_phone_number` in config)
   - CLI (`python -m Cozter -cli`) — the terminal becomes the chat
 - **Per-workspace state**, scoped to `<workspace>/.cozter/`:
   sessions, compaction history, agent choice, model, permission level,
@@ -38,8 +39,8 @@ python -m Cozter
 ```
 
 `requirements.txt` is auto-installed on startup. Run `python -m Cozter -cli`
-if you don't have a Telegram or Slack token and want to try it in a
-terminal.
+if you don't have a Telegram, Slack, or Signal setup and want to try it
+in a terminal.
 
 ## Configuration
 
@@ -55,6 +56,9 @@ lives in `.config/config.example.json`):
   "slack_app_token": "",
   "slack_channel_ids": [],
 
+  "signal_phone_number": "",
+  "signal_group_urls": [],
+
   "llama_server_url": "http://127.0.0.1:8080",
   "llama_max_agent_turns": 60,
   "llama_tool_repeat_limit": 3,
@@ -65,9 +69,15 @@ lives in `.config/config.example.json`):
 }
 ```
 
-Either `telegram_bot_tokens` + `user_ids` *or* `slack_bot_token` +
-`slack_app_token` + `slack_channel_ids` must be populated — not both.
+Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
++ `user_ids`, `slack_bot_token` + `slack_app_token` +
+`slack_channel_ids`, or `signal_phone_number` + `signal_group_urls`.
 The CLI surface needs neither.
+
+For Signal, `signal-cli` must already be installed and registered or
+linked for `signal_phone_number`; each invite URL in `signal_group_urls`
+is resolved with `signal-cli listGroups` or joined with
+`signal-cli joinGroup --uri` when the bot starts.
 
 ## Workspace concept
 

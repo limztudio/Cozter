@@ -12,6 +12,8 @@ _DEFAULT_CONFIG = {
     "slack_bot_token": "",
     "slack_app_token": "",
     "slack_channel_ids": [],
+    "signal_phone_number": "",
+    "signal_group_urls": [],
     "llama_server_url": "http://127.0.0.1:8080",
     "llama_max_agent_turns": 60,
     "llama_tool_repeat_limit": 3,
@@ -90,7 +92,8 @@ def load_config() -> dict:
         print(
             "Fill in either 'telegram_bot_tokens' + 'user_ids'"
             " or 'slack_bot_token' + 'slack_app_token' +"
-            " 'slack_channel_ids', then restart."
+            " 'slack_channel_ids', or 'signal_phone_number' +"
+            " 'signal_group_urls', then restart."
         )
         sys.exit(0)
 
@@ -120,24 +123,33 @@ def load_config() -> dict:
     cfg["slack_app_token"] = (
         slack_app_raw.strip() if isinstance(slack_app_raw, str) else ""
     )
+    signal_phone_raw = cfg.get("signal_phone_number") or ""
+    cfg["signal_phone_number"] = (
+        signal_phone_raw.strip()
+        if isinstance(signal_phone_raw, str) else ""
+    )
+    cfg["signal_group_urls"] = _normalize_string_list(
+        cfg.get("signal_group_urls") or cfg.get("signal_group_url") or []
+    )
 
     has_telegram = bool(cfg["telegram_bot_tokens"])
     has_slack = bool(cfg["slack_bot_token"])
+    has_signal = bool(cfg["signal_phone_number"])
 
-    if has_telegram and has_slack:
+    configured = sum(bool(x) for x in (has_telegram, has_slack, has_signal))
+    if configured > 1:
         print(
-            f"ERROR: {CONFIG_PATH} has both 'telegram_bot_tokens' and"
-            " 'slack_bot_token' set."
+            f"ERROR: {CONFIG_PATH} has more than one chat platform set."
         )
         print(
-            "Pick one - sessions and workspace state aren't shared"
-            " across platforms."
+            "Pick one of Telegram, Slack, or Signal - sessions and"
+            " workspace state aren't shared across platforms."
         )
         sys.exit(1)
-    if not has_telegram and not has_slack:
+    if configured == 0:
         print(
             f"ERROR: {CONFIG_PATH} must set either 'telegram_bot_tokens'"
-            " or 'slack_bot_token'."
+            ", 'slack_bot_token', or 'signal_phone_number'."
         )
         sys.exit(1)
 
@@ -166,5 +178,21 @@ def load_config() -> dict:
                 " or MP...) and restart."
             )
             sys.exit(1)
+    if has_signal and not cfg["signal_group_urls"]:
+        print(f"ERROR: 'signal_group_urls' is empty in {CONFIG_PATH}")
+        print("Add at least one Signal group invite URL.")
+        sys.exit(1)
 
     return cfg
+
+
+def _normalize_string_list(value) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [
+        item.strip()
+        for item in value
+        if isinstance(item, str) and item.strip()
+    ]

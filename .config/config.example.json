@@ -6,6 +6,9 @@
   "slack_app_token": "",
   "slack_channel_ids": [],
 
+  "signal_phone_number": "",
+  "signal_group_urls": [],
+
   "llama_server_url": "http://127.0.0.1:8080",
   "llama_max_agent_turns": 60,
   "llama_tool_repeat_limit": 3,

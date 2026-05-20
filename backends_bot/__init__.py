@@ -1,9 +1,8 @@
-"""Chat-platform backends - Telegram and Slack adapters.
+"""Chat-platform backends - Telegram, Slack, Signal, and CLI adapters.
 
 Use ``create_platforms(config)`` to build the right BotPlatform
 instance(s) based on which token fields are present in the user's
-config.json. Exactly one of ``telegram_bot_tokens`` or
-``slack_bot_token`` must be set - having both is rejected so that
+config.json. Exactly one daemon chat surface must be set so that
 session state isn't fragmented across platforms.
 """
 
@@ -20,6 +19,7 @@ def create_platforms(config: dict) -> list[BotPlatform]:
     """
     tg_tokens = config.get("telegram_bot_tokens") or []
     slack_bot = config.get("slack_bot_token") or ""
+    signal_phone = config.get("signal_phone_number") or ""
     recent_limit = config.get("recent_workspace_limit", 10)
     queue_size = config.get("message_queue_size", 50)
 
@@ -46,8 +46,18 @@ def create_platforms(config: dict) -> list[BotPlatform]:
             ),
         ]
 
+    if signal_phone:
+        from .signal import SignalBot
+        return [
+            SignalBot(
+                signal_phone,
+                config.get("signal_group_urls") or [],
+                recent_limit=recent_limit, max_queue_size=queue_size,
+            ),
+        ]
+
     raise ValueError(
-        "config has neither telegram_bot_tokens nor slack_bot_token set"
+        "config has no Telegram, Slack, or Signal platform set"
         " (normally caught by config.load_config)."
     )
 
