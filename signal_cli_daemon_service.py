@@ -15,12 +15,20 @@ import stat
 from pathlib import Path
 from typing import Any
 
+DEFAULT_CONFIG_PATH = Path("/home/shared/utilities/SignalDaemon/config.json")
+
 
 def main() -> None:
     config = _load_config()
-    phone_number = _required_config_string(config, "signal_phone_number")
-    socket_path = _required_config_string(config, "signal_jsonrpc_socket")
-    signal_cli = os.environ.get("SIGNAL_CLI_PATH", "signal-cli")
+    phone_number = _required_config_string(
+        config, "phone_number", "signal_phone_number"
+    )
+    socket_path = _required_config_string(
+        config, "socket_path", "signal_jsonrpc_socket"
+    )
+    signal_cli = _optional_config_string(config, "signal_cli_path") or os.environ.get(
+        "SIGNAL_CLI_PATH", "signal-cli"
+    )
     executable = shutil.which(signal_cli)
     if executable is None:
         raise SystemExit(f"signal-cli executable not found: {signal_cli}")
@@ -46,8 +54,8 @@ def main() -> None:
 def _load_config() -> dict[str, Any]:
     config_path = Path(
         os.environ.get(
-            "COZTER_CONFIG_PATH",
-            Path(__file__).resolve().parent / ".config" / "config.json",
+            "SIGNAL_DAEMON_CONFIG_PATH",
+            DEFAULT_CONFIG_PATH,
         )
     )
     try:
@@ -60,10 +68,24 @@ def _load_config() -> dict[str, Any]:
     return config
 
 
-def _required_config_string(config: dict[str, Any], key: str) -> str:
+def _required_config_string(config: dict[str, Any], *keys: str) -> str:
+    value = next(
+        (
+            config.get(key)
+            for key in keys
+            if isinstance(config.get(key), str) and config.get(key).strip()
+        ),
+        "",
+    )
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"Missing required config value: {keys[0]}")
+    return os.path.expandvars(os.path.expanduser(value.strip()))
+
+
+def _optional_config_string(config: dict[str, Any], key: str) -> str:
     value = config.get(key)
     if not isinstance(value, str) or not value.strip():
-        raise SystemExit(f"Missing required config value: {key}")
+        return ""
     return os.path.expandvars(os.path.expanduser(value.strip()))
 
 

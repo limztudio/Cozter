@@ -83,6 +83,16 @@ is resolved with `signal-cli listGroups` or joined with
 other local scripts should reuse one `signal-cli daemon`. Cozter only
 connects to that socket; run `python -m Cozter.signal_cli_daemon_service`
 from a service manager such as systemd to own the daemon lifecycle.
+The daemon reads its own config from
+`/home/shared/utilities/SignalDaemon/config.json` by default:
+
+```json
+{
+  "phone_number": "+10000000000",
+  "socket_path": "/run/user/1000/signal-cli-jsonrpc.sock",
+  "signal_cli_path": "signal-cli"
+}
+```
 
 Other local scripts that should start the daemon on demand can use the
 same singleton guard before opening the socket:
