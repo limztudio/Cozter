@@ -85,6 +85,108 @@ def select_workspace(
     _save_all(all_state)
 
 
+def migrate_current_workspace(
+    source_user_id: int | str,
+    target_user_id: int | str,
+    target_bot_id: int | str,
+    *,
+    source_bot_ids: tuple[int | str, ...] = (),
+    source_bot_prefixes: tuple[str, ...] = (),
+) -> bool:
+    """Copy a current workspace to a new state key if the target is empty."""
+    all_state = _load_all()
+    source_uid = str(source_user_id)
+    target_uid = str(target_user_id)
+    target_bot = str(target_bot_id)
+
+    source_state = all_state.get(source_uid)
+    if not isinstance(source_state, dict):
+        return False
+    source_current = source_state.get("current")
+    if not isinstance(source_current, dict):
+        return False
+
+    target_state = all_state.get(target_uid)
+    if not isinstance(target_state, dict):
+        target_state = {"current": {}, "recent": []}
+    target_current = target_state.setdefault("current", {})
+    if target_current.get(target_bot):
+        return False
+
+    path = source_current.get(target_bot)
+    for bot_id in source_bot_ids:
+        if path:
+            break
+        path = source_current.get(str(bot_id))
+    if not path and source_bot_prefixes:
+        for bot_id, candidate in source_current.items():
+            if any(str(bot_id).startswith(p) for p in source_bot_prefixes):
+                path = candidate
+                break
+    if not isinstance(path, str) or not path:
+        return False
+
+    target_current[target_bot] = path
+    target_state["recent"] = _merge_recent(
+        path,
+        target_state.get("recent", []),
+        source_state.get("recent", []),
+    )
+    all_state[target_uid] = target_state
+    _save_all(all_state)
+    return True
+
+
+def migrate_current_workspace_platform_keys(
+    source_bot_prefix: str,
+    target_bot_id: int | str,
+) -> int:
+    """Copy legacy platform current keys to *target_bot_id* for all users."""
+    all_state = _load_all()
+    target_bot = str(target_bot_id)
+    changed = 0
+    for uid, state in all_state.items():
+        if not isinstance(state, dict):
+            continue
+        current = state.get("current")
+        if not isinstance(current, dict) or current.get(target_bot):
+            continue
+        path = None
+        for bot_id, candidate in current.items():
+            if str(bot_id).startswith(source_bot_prefix):
+                path = candidate
+                break
+        if not isinstance(path, str) or not path:
+            continue
+        current[target_bot] = path
+        state["recent"] = _merge_recent(path, state.get("recent", []))
+        all_state[uid] = state
+        changed += 1
+    if changed:
+        _save_all(all_state)
+    return changed
+
+
+def _merge_recent(primary: str, *recent_lists: object) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in (primary,):
+        if value and value not in seen:
+            merged.append(value)
+            seen.add(value)
+    for recent in recent_lists:
+        if not isinstance(recent, list):
+            continue
+        for value in recent:
+            if not isinstance(value, str) or not value or value in seen:
+                continue
+            merged.append(value)
+            seen.add(value)
+            if len(merged) >= MAX_RECENT:
+                return merged
+    return merged[:MAX_RECENT]
+
+
 def ensure_cozter_dir(path: str) -> None:
     """Create .cozter folder inside the workspace if it doesn't exist."""
     cozter_path = os.path.join(path, COZTER_DIR)

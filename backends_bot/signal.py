@@ -14,6 +14,8 @@ import logging
 import os
 import re
 import shutil
+import time
+from collections import deque
 from typing import Any
 
 from .. import workspace
@@ -22,6 +24,9 @@ from .base import AttachmentInfo, BotContext, BotPlatform, MessageHandle
 logger = logging.getLogger(__name__)
 
 _SIGNAL_TEXT_LIMIT = 4_000
+_OUTGOING_ECHO_TTL = 30.0
+_OUTGOING_ECHO_LIMIT = 200
+_LEGACY_SIGNAL_PLATFORM_PREFIX = "signal:"
 
 
 class SignalCliError(RuntimeError):
@@ -59,6 +64,9 @@ class SignalBot(BotPlatform):
         self._receive_subscription: int | None = None
         self._notification_tasks: set[asyncio.Task] = set()
         self._stop_requested = asyncio.Event()
+        self._own_sent_timestamps: set[str] = set()
+        self._own_sent_timestamp_order: deque[str] = deque()
+        self._recent_outgoing_texts: deque[tuple[float, str, str]] = deque()
 
     @property
     def platform_id(self) -> str:
@@ -77,11 +85,13 @@ class SignalBot(BotPlatform):
         group_id = self._group_id_for_chat(chat_id)
         last: MessageHandle | None = None
         for chunk in _split_text(text):
+            self._remember_outgoing_text(group_id, chunk)
             result = await self._rpc_request(
                 "send", {"groupId": group_id, "message": chunk},
             )
             timestamp = _extract_timestamp_from_value(result)
             if timestamp:
+                self._remember_own_sent_timestamp(timestamp)
                 last = MessageHandle(
                     chat_id=group_id,
                     message_id=timestamp,
@@ -90,7 +100,8 @@ class SignalBot(BotPlatform):
 
     async def edit_text(self, handle: MessageHandle, text: str) -> None:
         group_id = self._group_id_for_chat(handle.chat_id)
-        await self._rpc_request(
+        self._remember_outgoing_text(group_id, text)
+        result = await self._rpc_request(
             "send",
             {
                 "groupId": group_id,
@@ -98,6 +109,9 @@ class SignalBot(BotPlatform):
                 "message": text,
             },
         )
+        timestamp = _extract_timestamp_from_value(result)
+        if timestamp:
+            self._remember_own_sent_timestamp(timestamp)
 
     async def delete_message(self, handle: MessageHandle) -> None:
         group_id = self._group_id_for_chat(handle.chat_id)
@@ -108,9 +122,12 @@ class SignalBot(BotPlatform):
 
     async def send_file(self, chat_id: str, path: str) -> None:
         group_id = self._group_id_for_chat(chat_id)
-        await self._rpc_request(
+        result = await self._rpc_request(
             "send", {"groupId": group_id, "attachment": path},
         )
+        timestamp = _extract_timestamp_from_value(result)
+        if timestamp:
+            self._remember_own_sent_timestamp(timestamp)
 
     async def send_status(self, chat_id: str, text: str) -> None:
         # Signal has no cheap, reliable transient status surface if
@@ -129,6 +146,15 @@ class SignalBot(BotPlatform):
             self.notify_targets = list(
                 dict.fromkeys(self._group_ids_by_url.values())
             )
+            migrated = workspace.migrate_current_workspace_platform_keys(
+                _LEGACY_SIGNAL_PLATFORM_PREFIX,
+                self.platform_id,
+            )
+            if migrated:
+                logger.info(
+                    "Migrated %d legacy Signal workspace selection(s).",
+                    migrated,
+                )
             await self.restore_queues()
             await self.start_scheduler()
             self._receive_subscription = await self._subscribe_receive()
@@ -329,7 +355,7 @@ class SignalBot(BotPlatform):
         envelope = item.get("envelope") if isinstance(item, dict) else None
         if not isinstance(envelope, dict):
             envelope = item
-        data = envelope.get("dataMessage")
+        data, is_sent_sync = _extract_message_data(envelope)
         if not isinstance(data, dict):
             return
 
@@ -337,31 +363,46 @@ class SignalBot(BotPlatform):
         if group_id not in self._group_ids:
             return
 
-        uid = _extract_sender_id(envelope)
-        if not uid:
+        account_id = _extract_account_id(item)
+        sender_id = _extract_sender_id(envelope) or account_id
+        if not sender_id:
             return
 
         text = str(data.get("message") or data.get("body") or "").strip()
         attachments = data.get("attachments") or []
+        from_local_account = (
+            is_sent_sync or _same_signal_id(sender_id, account_id)
+        )
+        if self._is_own_sent_echo(data, group_id, text, from_local_account):
+            return
+        self._migrate_group_workspace_state(sender_id, group_id, account_id)
 
         if text.startswith("/"):
             await self.dispatch_command(
-                self._ctx(uid, group_id, text=text),
+                self._ctx(sender_id, group_id, text=text),
             )
             return
 
         if isinstance(attachments, list) and attachments:
-            await self._handle_attachments(uid, group_id, text, attachments)
+            await self._handle_attachments(
+                sender_id, group_id, text, attachments,
+            )
             return
 
         if text:
-            await self.dispatch_text(self._ctx(uid, group_id, text=text))
+            await self.dispatch_text(
+                self._ctx(sender_id, group_id, text=text),
+            )
 
     async def _handle_attachments(
-        self, uid: str, group_id: str, caption: str, attachments: list[Any],
+        self,
+        sender_id: str,
+        group_id: str,
+        caption: str,
+        attachments: list[Any],
     ) -> None:
-        ctx_for_reply = self._ctx(uid, group_id, text=caption)
-        ws = workspace.get_current(uid, self.platform_id)
+        ctx_for_reply = self._ctx(sender_id, group_id, text=caption)
+        ws = workspace.get_current(ctx_for_reply.user_id, self.platform_id)
         if not ws or not os.path.isdir(ws):
             await ctx_for_reply.reply_text(
                 "No workspace selected (or it was deleted)."
@@ -388,7 +429,7 @@ class SignalBot(BotPlatform):
             if info is None:
                 continue
             await self.dispatch_file(
-                self._ctx(uid, group_id, attachment=info),
+                self._ctx(sender_id, group_id, attachment=info),
             )
 
     async def _materialize_attachment(
@@ -424,7 +465,7 @@ class SignalBot(BotPlatform):
 
     def _ctx(
         self,
-        uid: str,
+        _sender_id: str,
         group_id: str,
         *,
         text: str = "",
@@ -438,7 +479,7 @@ class SignalBot(BotPlatform):
             args = parts[1] if len(parts) > 1 else ""
             text = ""
         return BotContext(
-            user_id=uid,
+            user_id=self._state_user_id(group_id),
             chat_id=group_id,
             text=text,
             command=command,
@@ -507,6 +548,86 @@ class SignalBot(BotPlatform):
             raise RuntimeError(f"Signal group is not configured: {chat_id}")
         return group_id
 
+    def _state_user_id(self, group_id: str) -> str:
+        return f"signal-group:{group_id}"
+
+    def _migrate_group_workspace_state(
+        self,
+        sender_id: str,
+        group_id: str,
+        account_id: str,
+    ) -> None:
+        target_user_id = self._state_user_id(group_id)
+        if workspace.get_current(target_user_id, self.platform_id):
+            return
+        source_ids = dict.fromkeys(
+            x for x in (sender_id, account_id, group_id) if x
+        )
+        for source_id in source_ids:
+            if workspace.migrate_current_workspace(
+                source_id,
+                target_user_id,
+                self.platform_id,
+                source_bot_ids=(self.platform_id,),
+                source_bot_prefixes=(_LEGACY_SIGNAL_PLATFORM_PREFIX,),
+            ):
+                logger.info(
+                    "Migrated legacy Signal workspace state into group %s.",
+                    _short_id(group_id),
+                )
+                return
+
+    def _remember_outgoing_text(self, group_id: str, text: str) -> None:
+        self._prune_outgoing_texts()
+        self._recent_outgoing_texts.append((time.monotonic(), group_id, text))
+        while len(self._recent_outgoing_texts) > _OUTGOING_ECHO_LIMIT:
+            self._recent_outgoing_texts.popleft()
+
+    def _remember_own_sent_timestamp(self, timestamp: str) -> None:
+        if not timestamp:
+            return
+        self._own_sent_timestamps.add(timestamp)
+        self._own_sent_timestamp_order.append(timestamp)
+        while len(self._own_sent_timestamp_order) > _OUTGOING_ECHO_LIMIT:
+            old = self._own_sent_timestamp_order.popleft()
+            self._own_sent_timestamps.discard(old)
+
+    def _is_own_sent_echo(
+        self,
+        data: dict[str, Any],
+        group_id: str,
+        text: str,
+        from_local_account: bool,
+    ) -> bool:
+        timestamp = _extract_timestamp_from_value(data)
+        if timestamp and timestamp in self._own_sent_timestamps:
+            return True
+        if not from_local_account or not text:
+            return False
+        return self._consume_recent_outgoing_text(group_id, text)
+
+    def _consume_recent_outgoing_text(self, group_id: str, text: str) -> bool:
+        self._prune_outgoing_texts()
+        kept: deque[tuple[float, str, str]] = deque()
+        matched = False
+        while self._recent_outgoing_texts:
+            item = self._recent_outgoing_texts.popleft()
+            _created_at, item_group_id, item_text = item
+            if not matched and item_group_id == group_id and item_text == text:
+                matched = True
+                continue
+            kept.append(item)
+        self._recent_outgoing_texts = kept
+        return matched
+
+    def _prune_outgoing_texts(self) -> None:
+        cutoff = time.monotonic() - _OUTGOING_ECHO_TTL
+        while (
+            self._recent_outgoing_texts
+            and self._recent_outgoing_texts[0][0] < cutoff
+        ):
+            self._recent_outgoing_texts.popleft()
+
 
 def _split_text(text: str, limit: int = _SIGNAL_TEXT_LIMIT) -> list[str]:
     if len(text) <= limit:
@@ -529,6 +650,10 @@ def _safe_error_message(exc: BaseException) -> str:
     text = re.sub(r"https://signal\.group/#[^\s]+", "<signal-group-url>", text)
     text = re.sub(r"sgnl://[^\s]+", "<signal-group-url>", text)
     return text
+
+
+def _short_id(value: str) -> str:
+    return value if len(value) <= 12 else f"{value[:8]}..."
 
 
 def _dedupe_group_urls(group_urls: list[str]) -> list[str]:
@@ -568,6 +693,22 @@ def _first_group_id_from_value(value: Any) -> str:
         if group_id:
             return group_id
     return ""
+
+
+def _extract_message_data(
+    envelope: dict[str, Any],
+) -> tuple[dict[str, Any] | None, bool]:
+    data = envelope.get("dataMessage")
+    if isinstance(data, dict):
+        return data, False
+
+    sync = envelope.get("syncMessage")
+    if isinstance(sync, dict):
+        sent = sync.get("sentMessage")
+        if isinstance(sent, dict):
+            return sent, True
+
+    return None, False
 
 
 def _group_id(group: dict[str, Any]) -> str:
@@ -644,6 +785,17 @@ def _extract_sender_id(envelope: dict[str, Any]) -> str:
             if value:
                 return str(value)
     return ""
+
+
+def _extract_account_id(item: dict[str, Any]) -> str:
+    value = item.get("account")
+    if value and not isinstance(value, (dict, list)):
+        return str(value)
+    return ""
+
+
+def _same_signal_id(left: str, right: str) -> bool:
+    return bool(left and right and left.strip() == right.strip())
 
 
 def _extract_timestamp_from_value(value: Any) -> str | None:
