@@ -18,7 +18,7 @@ import time
 from collections import deque
 from typing import Any
 
-from .. import workspace
+from .. import session, workspace
 from .base import AttachmentInfo, BotContext, BotPlatform, MessageHandle
 
 logger = logging.getLogger(__name__)
@@ -376,6 +376,7 @@ class SignalBot(BotPlatform):
         if self._is_own_sent_echo(data, group_id, text, from_local_account):
             return
         self._migrate_group_workspace_state(sender_id, group_id, account_id)
+        self._migrate_group_session_state(sender_id, group_id, account_id)
 
         if text.startswith("/"):
             await self.dispatch_command(
@@ -576,6 +577,25 @@ class SignalBot(BotPlatform):
                     _short_id(group_id),
                 )
                 return
+
+    def _migrate_group_session_state(
+        self,
+        sender_id: str,
+        group_id: str,
+        account_id: str,
+    ) -> None:
+        target_user_id = self._state_user_id(group_id)
+        ws = workspace.get_current(target_user_id, self.platform_id)
+        if not ws or not os.path.isdir(ws):
+            return
+        source_ids = list(
+            dict.fromkeys(x for x in (sender_id, account_id, group_id) if x)
+        )
+        if session.migrate_last_session(ws, source_ids, target_user_id):
+            logger.info(
+                "Migrated legacy Signal last-session state into group %s.",
+                _short_id(group_id),
+            )
 
     def _remember_outgoing_text(self, group_id: str, text: str) -> None:
         self._prune_outgoing_texts()

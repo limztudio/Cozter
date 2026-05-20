@@ -89,6 +89,32 @@ def clear_last_session(workspace: str, user_id: int | str) -> None:
     _atomic_write(_last_session_path(workspace), data, cozter_dir)
 
 
+def migrate_last_session(
+    workspace: str,
+    source_user_ids: list[int | str] | tuple[int | str, ...],
+    target_user_id: int | str,
+) -> bool:
+    """Copy the first legacy last-session pointer to a new user key."""
+    data = _load_last_session_map(workspace)
+    target_key = str(target_user_id)
+    if isinstance(data.get(target_key), str) and data[target_key]:
+        return False
+
+    for source_user_id in source_user_ids:
+        source_key = str(source_user_id)
+        if source_key == target_key:
+            continue
+        session_id = data.get(source_key)
+        if not isinstance(session_id, str) or not session_id:
+            continue
+        data[target_key] = session_id
+        cozter_dir = os.path.join(workspace, COZTER_DIR)
+        os.makedirs(cozter_dir, exist_ok=True)
+        _atomic_write(_last_session_path(workspace), data, cozter_dir)
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Session CRUD
 # ---------------------------------------------------------------------------
