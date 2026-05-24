@@ -83,8 +83,8 @@ class BotContext:
     attachment: AttachmentInfo | None
     platform: BotPlatform
     # Set by dispatch_command when a pending text-input flow existed and
-    # was cleared by this command arriving. /cancel reads this to know
-    # whether to say "Cancelled." or "Nothing to cancel."
+    # was cleared by this command arriving. /cancel uses this to avoid
+    # treating a wizard-exit command as a request to clear AI work.
     had_pending: bool = False
 
     async def reply_text(
@@ -331,8 +331,29 @@ class BotPlatform(ABC):
     async def cmd_cancel(self, ctx: BotContext) -> None:
         if ctx.had_pending:
             await ctx.reply_text("Cancelled.")
-        else:
-            await ctx.reply_text("Nothing to cancel.")
+            return
+
+        uid = ctx.user_id
+        was_awaiting = uid in self._awaiting_answer
+        self._awaiting_answer.discard(uid)
+
+        task = self._running_tasks.get(uid)
+        task_running = task is not None and not task.done()
+        if task_running:
+            task.cancel()
+
+        drained: list = []
+        _drain_queue(self._message_queues.get(uid), collect=drained)
+        persisted = await self._clear_persistent_queue(uid)
+        cleared = max(len(drained), persisted)
+
+        if task_running:
+            await ctx.reply_text("Cancelling...")
+            return
+        if was_awaiting or cleared:
+            await ctx.reply_text("Cancelled.")
+            return
+        await ctx.reply_text("Nothing to cancel.")
 
     # ----- /new (dir-input flow) -----------------------------------------
 
@@ -1089,11 +1110,16 @@ class BotPlatform(ABC):
                 data.pop(uid, None)
             self._write_queue_file(data)
 
-    async def _clear_persistent_queue(self, uid: str) -> None:
+    async def _clear_persistent_queue(self, uid: str) -> int:
         async with self._queue_file_lock:
             data = self._read_queue_file()
-            if data.pop(uid, None) is not None:
+            entries = data.pop(uid, None)
+            if entries is not None:
                 self._write_queue_file(data)
+                if isinstance(entries, list):
+                    return len(entries)
+                return 1
+        return 0
 
     async def restore_queues(self) -> None:
         """Rehydrate in-memory queues from disk and resume processing.
