@@ -150,6 +150,9 @@ class BotPlatform(ABC):
         # Serializes read-modify-write on the persistent-queue file so
         # concurrent enqueue/complete calls don't clobber each other.
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
+        # Users whose running task was already acknowledged by /cancel
+        # or /stop, so the cancelled task should not send a second reply.
+        self._cancel_acknowledged: set[str] = set()
 
     # ----- platform identity + I/O primitives (abstract) ------------------
 
@@ -340,6 +343,7 @@ class BotPlatform(ABC):
         task = self._running_tasks.get(uid)
         task_running = task is not None and not task.done()
         if task_running:
+            self._cancel_acknowledged.add(uid)
             task.cancel()
 
         drained: list = []
@@ -348,7 +352,7 @@ class BotPlatform(ABC):
         cleared = max(len(drained), persisted)
 
         if task_running:
-            await ctx.reply_text("Cancelling...")
+            await ctx.reply_text("Cancelled.")
             return
         if was_awaiting or cleared:
             await ctx.reply_text("Cancelled.")
@@ -849,12 +853,13 @@ class BotPlatform(ABC):
         self._awaiting_answer.discard(ctx.user_id)
         task = self._running_tasks.get(ctx.user_id)
         if task and not task.done():
+            self._cancel_acknowledged.add(ctx.user_id)
             task.cancel()
             _drain_queue(self._message_queues.get(ctx.user_id))
             # Clear the persistent queue so cancelled work doesn't
             # come back on the next restart.
             await self._clear_persistent_queue(ctx.user_id)
-            await ctx.reply_text("Cancelling...")
+            await ctx.reply_text("Cancelled.")
             return
         if was_awaiting:
             asyncio.create_task(self._drain_message_queue(ctx.user_id))
@@ -1372,6 +1377,7 @@ class BotPlatform(ABC):
     def _cleanup_turn(self, uid: str, lock: asyncio.Lock) -> None:
         self._running_tasks.pop(uid, None)
         self._inject_queues.pop(uid, None)
+        self._cancel_acknowledged.discard(uid)
         lock.release()
 
     async def _dispatch_ai(self, ctx: BotContext, text: str) -> None:
@@ -1455,10 +1461,11 @@ class BotPlatform(ABC):
             # Wrap the reply: during shutdown the platform may be
             # tearing down and send_text can raise; that shouldn't
             # mask the fact that we handled the cancel cleanly.
-            try:
-                await ctx.reply_text("Cancelled.")
-            except Exception:
-                pass
+            if uid not in self._cancel_acknowledged:
+                try:
+                    await ctx.reply_text("Cancelled.")
+                except Exception:
+                    pass
             return
         except Exception as e:
             # Error is user-facing; consume the entry so it doesn't
@@ -1740,10 +1747,11 @@ class BotPlatform(ABC):
                 # Leave the entry on disk so restart resumes it
                 # (or, if /stop caused the cancel, cmd_stop already
                 # cleared the persistent queue).
-                try:
-                    await self.send_text(msg_chat_id, "Cancelled.")
-                except Exception:
-                    pass
+                if uid not in self._cancel_acknowledged:
+                    try:
+                        await self.send_text(msg_chat_id, "Cancelled.")
+                    except Exception:
+                        pass
                 break
             except Exception as e:
                 logger.exception("Queued AI chat failed")
