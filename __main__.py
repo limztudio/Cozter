@@ -31,6 +31,37 @@ if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
     )
 
 
+_VENV_REEXEC_ENV = "COZTER_VENV_REEXEC"
+
+
+def _running_in_venv() -> bool:
+    return sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+
+
+def _venv_python() -> str:
+    venv_dir = os.path.join(os.path.dirname(__file__), ".venv")
+    bin_dir = "Scripts" if os.name == "nt" else "bin"
+    exe = "python.exe" if os.name == "nt" else "python"
+    return os.path.join(venv_dir, bin_dir, exe)
+
+
+def _ensure_venv_and_reexec() -> None:
+    """Run daemon mode through a project-local venv on managed Python."""
+    if _running_in_venv() or os.environ.get(_VENV_REEXEC_ENV) == "1":
+        return
+
+    python = _venv_python()
+    if not os.path.exists(python):
+        venv_dir = os.path.dirname(os.path.dirname(python))
+        subprocess.check_call([sys.executable, "-m", "venv", venv_dir])
+
+    env = {**os.environ, _VENV_REEXEC_ENV: "1"}
+    os.execve(python, [python, "-m", "Cozter", *sys.argv[1:]], env)
+
+
+_ensure_venv_and_reexec()
+
+
 def _install_deps() -> None:
     """Auto-install missing requirements before any project imports."""
     req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
