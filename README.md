@@ -81,14 +81,13 @@ when the bot starts. Set
 `signal_jsonrpc_socket` to a shared Unix socket path when Cozter and
 other local scripts should reuse one `signal-cli daemon`. Cozter only
 connects to that socket; run the daemon from a service manager such as
-systemd to own the daemon lifecycle. The daemon reads its own config from
-`/home/shared/utilities/SignalDaemon/config.json` by default. A fillable
-template lives at `/home/shared/utilities/SignalDaemon/config.example.json`:
+systemd to own the daemon lifecycle. This machine's shared daemon socket is
+`/run/signal-cli/socket`.
 
 ```json
 {
   "phone_number": "+10000000000",
-  "socket_path": "/home/shared/utilities/SignalDaemon/signal-cli-jsonrpc.sock",
+  "socket_path": "/run/signal-cli/socket",
   "signal_cli_path": "signal-cli"
 }
 ```
