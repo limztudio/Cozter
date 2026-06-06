@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 _SIGNAL_TEXT_LIMIT = 4_000
 _OUTGOING_ECHO_TTL = 30.0
 _OUTGOING_ECHO_LIMIT = 200
+_INCOMING_DEDUPE_TTL = 120.0
+_INCOMING_DEDUPE_LIMIT = 500
 _LEGACY_SIGNAL_PLATFORM_PREFIX = "signal:"
 
 
@@ -67,6 +69,8 @@ class SignalBot(BotPlatform):
         self._own_sent_timestamps: set[str] = set()
         self._own_sent_timestamp_order: deque[str] = deque()
         self._recent_outgoing_texts: deque[tuple[float, str, str]] = deque()
+        self._recent_incoming_keys: set[str] = set()
+        self._recent_incoming_key_order: deque[tuple[float, str]] = deque()
 
     @property
     def platform_id(self) -> str:
@@ -376,6 +380,15 @@ class SignalBot(BotPlatform):
             is_sent_sync or _same_signal_id(sender_id, account_id)
         )
         if self._is_own_sent_echo(data, group_id, text, from_local_account):
+            return
+        incoming_key = _incoming_dedupe_key(
+            data, group_id, sender_id, text, attachments,
+        )
+        if self._is_duplicate_incoming(incoming_key):
+            logger.debug(
+                "Skipping duplicate Signal message in group %s.",
+                _short_id(group_id),
+            )
             return
         self._migrate_group_workspace_state(sender_id, group_id, account_id)
         await self._migrate_group_workspace_files(
@@ -829,6 +842,28 @@ class SignalBot(BotPlatform):
         ):
             self._recent_outgoing_texts.popleft()
 
+    def _is_duplicate_incoming(self, key: str) -> bool:
+        if not key:
+            return False
+        self._prune_incoming_keys()
+        if key in self._recent_incoming_keys:
+            return True
+        self._recent_incoming_keys.add(key)
+        self._recent_incoming_key_order.append((time.monotonic(), key))
+        while len(self._recent_incoming_key_order) > _INCOMING_DEDUPE_LIMIT:
+            _created_at, old_key = self._recent_incoming_key_order.popleft()
+            self._recent_incoming_keys.discard(old_key)
+        return False
+
+    def _prune_incoming_keys(self) -> None:
+        cutoff = time.monotonic() - _INCOMING_DEDUPE_TTL
+        while (
+            self._recent_incoming_key_order
+            and self._recent_incoming_key_order[0][0] < cutoff
+        ):
+            _created_at, old_key = self._recent_incoming_key_order.popleft()
+            self._recent_incoming_keys.discard(old_key)
+
 
 def _split_text(text: str, limit: int = _SIGNAL_TEXT_LIMIT) -> list[str]:
     if len(text) <= limit:
@@ -851,6 +886,40 @@ def _safe_error_message(exc: BaseException) -> str:
     text = re.sub(r"https://signal\.group/#[^\s]+", "<signal-group-url>", text)
     text = re.sub(r"sgnl://[^\s]+", "<signal-group-url>", text)
     return text
+
+
+def _incoming_dedupe_key(
+    data: dict[str, Any],
+    group_id: str,
+    sender_id: str,
+    text: str,
+    attachments: Any,
+) -> str:
+    timestamp = _extract_timestamp_from_value(data)
+    attachment_keys: list[str] = []
+    if isinstance(attachments, list):
+        for attachment in attachments:
+            if isinstance(attachment, dict):
+                attachment_keys.append(
+                    _attachment_id(attachment)
+                    or _attachment_filename(attachment)
+                    or json.dumps(attachment, sort_keys=True, default=str)
+                )
+            else:
+                attachment_keys.append(str(attachment))
+    if not timestamp and not text and not attachment_keys:
+        return ""
+    return json.dumps(
+        {
+            "group_id": group_id,
+            "sender_id": sender_id,
+            "timestamp": timestamp,
+            "text": text if not timestamp else "",
+            "attachments": attachment_keys,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _short_id(value: str) -> str:
