@@ -29,6 +29,7 @@ _OUTGOING_ECHO_LIMIT = 200
 _INCOMING_DEDUPE_TTL = 120.0
 _INCOMING_DEDUPE_LIMIT = 500
 _LEGACY_SIGNAL_PLATFORM_PREFIX = "signal:"
+_JSONRPC_STREAM_LIMIT = 128 * 1024 * 1024
 
 
 class SignalCliError(RuntimeError):
@@ -224,7 +225,10 @@ class SignalBot(BotPlatform):
         while True:
             try:
                 return await asyncio.wait_for(
-                    asyncio.open_unix_connection(self.jsonrpc_socket),
+                    asyncio.open_unix_connection(
+                        self.jsonrpc_socket,
+                        limit=_JSONRPC_STREAM_LIMIT,
+                    ),
                     timeout=min(1.0, max(0.1, deadline - loop.time())),
                 )
             except (OSError, asyncio.TimeoutError) as exc:
@@ -598,9 +602,9 @@ class SignalBot(BotPlatform):
     ) -> AttachmentInfo | None:
         filename = _attachment_filename(att)
         local_path = os.path.join(upload_dir, filename)
-        source_path = _attachment_local_path(att)
+        source_path = _resolve_attachment_local_path(att)
 
-        if source_path and os.path.isfile(source_path):
+        if source_path:
             shutil.copyfile(source_path, local_path)
         else:
             attachment_id = _attachment_id(att)
@@ -1258,7 +1262,14 @@ def _find_key(value: Any, key: str) -> Any:
 
 
 def _attachment_filename(att: dict[str, Any]) -> str:
-    for key in ("fileName", "filename", "name"):
+    for key in (
+        "fileName",
+        "filename",
+        "name",
+        "storedFilename",
+        "localPath",
+        "path",
+    ):
         value = att.get(key)
         if isinstance(value, str) and value.strip():
             return os.path.basename(value.strip())
@@ -1268,10 +1279,13 @@ def _attachment_filename(att: dict[str, Any]) -> str:
 
 
 def _attachment_id(att: dict[str, Any]) -> str:
-    for key in ("id", "attachmentId", "attachmentPointerId"):
+    for key in ("id", "attachmentId", "attachmentPointerId", "storedFilename"):
         value = att.get(key)
         if value:
-            return str(value)
+            value = str(value)
+            if key == "storedFilename":
+                value = os.path.basename(value)
+            return value
     return ""
 
 
@@ -1281,6 +1295,44 @@ def _attachment_local_path(att: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _resolve_attachment_local_path(att: dict[str, Any]) -> str:
+    raw_path = _attachment_local_path(att)
+    if not raw_path:
+        return ""
+
+    for candidate in _attachment_path_candidates(raw_path):
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def _attachment_path_candidates(path: str) -> list[str]:
+    if os.path.isabs(path):
+        return [path]
+
+    candidates = [path]
+    basename = os.path.basename(path)
+    for attachments_dir in _signal_cli_attachment_dirs():
+        candidates.append(os.path.join(attachments_dir, path))
+        if basename != path:
+            candidates.append(os.path.join(attachments_dir, basename))
+    return list(dict.fromkeys(candidates))
+
+
+def _signal_cli_attachment_dirs() -> list[str]:
+    data_dirs: list[str] = []
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        data_dirs.append(os.path.join(xdg_data_home, "signal-cli"))
+    data_dirs.append(os.path.expanduser("~/.local/share/signal-cli"))
+    data_dirs.append(os.path.expanduser("~/.config/signal-cli"))
+
+    return [
+        os.path.join(data_dir, "attachments")
+        for data_dir in dict.fromkeys(data_dirs)
+    ]
 
 
 def _attachment_kind(att: dict[str, Any]) -> str:
