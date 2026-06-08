@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import os
 import subprocess
@@ -94,13 +95,27 @@ def install_requirements() -> None:
 
 
 def restart_script(exit_code: int = 0) -> None:
-    """Exit so an outer supervisor restarts us.
+    """Restart the current process.
 
-    Daemon mode: systemd's ``Restart=always`` respawns on exit 0.
-    CLI mode: pass exit_code=99 so the in-process respawn loop in
+    Daemon/autostart mode re-execs this process directly. XDG autostart
+    units are generated with ``Restart=no``, so exiting would leave the
+    bot stopped after it announces an update restart.
+
+    CLI mode passes exit_code=99 so the in-process respawn loop in
     ``Cozter.__main__._cli_respawner_loop`` re-launches the bot.
     """
     logger.info("Restarting (exit code %d)...", exit_code)
+    if exit_code == 0:
+        parent_dir = os.path.dirname(MODULE_ROOT)
+        os.chdir(parent_dir)
+        with contextlib.suppress(Exception):
+            sys.stdout.flush()
+        with contextlib.suppress(Exception):
+            sys.stderr.flush()
+        os.execv(
+            sys.executable,
+            [sys.executable, "-m", "Cozter", *sys.argv[1:]],
+        )
     os._exit(exit_code)
 
 
