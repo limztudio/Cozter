@@ -61,9 +61,13 @@ class SignalBot(BotPlatform):
         self._jsonrpc_writer: asyncio.StreamWriter | None = None
         self._jsonrpc_reader_task: asyncio.Task | None = None
         self._jsonrpc_write_lock = asyncio.Lock()
+        self._jsonrpc_reconnect_lock = asyncio.Lock()
+        self._jsonrpc_reconnect_task: asyncio.Task | None = None
         self._jsonrpc_pending: dict[str, asyncio.Future] = {}
         self._jsonrpc_next_id = 0
         self._receive_subscription: int | None = None
+        self._receive_started = False
+        self._receive_subscribed = False
         self._notification_tasks: set[asyncio.Task] = set()
         self._stop_requested = asyncio.Event()
         self._own_sent_timestamps: set[str] = set()
@@ -164,6 +168,8 @@ class SignalBot(BotPlatform):
             await self.restore_queues()
             await self.start_scheduler()
             self._receive_subscription = await self._subscribe_receive()
+            self._receive_started = True
+            self._receive_subscribed = True
         except Exception:
             await self._stop_jsonrpc()
             raise
@@ -176,14 +182,17 @@ class SignalBot(BotPlatform):
     async def stop(self) -> None:
         await self.stop_scheduler()
         self._stop_requested.set()
-        if self._receive_subscription is not None:
+        subscription = self._receive_subscription
+        self._receive_subscription = None
+        self._receive_started = False
+        self._receive_subscribed = False
+        if subscription is not None:
             with contextlib.suppress(Exception):
                 await self._rpc_request(
                     "unsubscribeReceive",
-                    {"subscription": self._receive_subscription},
+                    {"subscription": subscription},
                     timeout=5,
                 )
-            self._receive_subscription = None
         for task in list(self._notification_tasks):
             task.cancel()
         if self._notification_tasks:
@@ -204,12 +213,7 @@ class SignalBot(BotPlatform):
     # ----- JSON-RPC transport --------------------------------------------
 
     async def _start_jsonrpc(self) -> None:
-        self._jsonrpc_reader, self._jsonrpc_writer = (
-            await self._open_jsonrpc_socket()
-        )
-        self._jsonrpc_reader_task = asyncio.create_task(
-            self._jsonrpc_reader_loop()
-        )
+        await self._connect_jsonrpc(resubscribe=False)
 
     async def _open_jsonrpc_socket(
         self, *, timeout: float = 15.0,
@@ -232,29 +236,79 @@ class SignalBot(BotPlatform):
                     ) from last_error
                 await asyncio.sleep(0.25)
 
-    async def _stop_jsonrpc(self) -> None:
+    def _jsonrpc_connected(self) -> bool:
+        return (
+            self._jsonrpc_writer is not None
+            and self._jsonrpc_reader_task is not None
+            and not self._jsonrpc_reader_task.done()
+        )
+
+    async def _connect_jsonrpc(self, *, resubscribe: bool) -> None:
+        async with self._jsonrpc_reconnect_lock:
+            if not self._jsonrpc_connected():
+                await self._close_jsonrpc_transport()
+                reader, writer = await self._open_jsonrpc_socket()
+                self._jsonrpc_reader = reader
+                self._jsonrpc_writer = writer
+                self._jsonrpc_reader_task = asyncio.create_task(
+                    self._jsonrpc_reader_loop(reader, writer)
+                )
+            if (
+                resubscribe
+                and self._receive_started
+                and not self._receive_subscribed
+            ):
+                self._receive_subscription = (
+                    await self._subscribe_receive_once()
+                )
+                self._receive_subscribed = True
+                logger.info(
+                    "Signal JSON-RPC receive subscription restored."
+                )
+
+    async def _close_jsonrpc_transport(self) -> None:
         writer = self._jsonrpc_writer
+        reader_task = self._jsonrpc_reader_task
         self._jsonrpc_reader = None
         self._jsonrpc_writer = None
+        self._jsonrpc_reader_task = None
+        self._receive_subscription = None
+        self._receive_subscribed = False
         for request_id, fut in list(self._jsonrpc_pending.items()):
             self._jsonrpc_pending.pop(request_id, None)
             if not fut.done():
                 fut.set_exception(SignalCliError("signal-cli JSON-RPC stopped"))
-        if self._jsonrpc_reader_task and not self._jsonrpc_reader_task.done():
-            self._jsonrpc_reader_task.cancel()
+        if (
+            reader_task is not None
+            and reader_task is not asyncio.current_task()
+            and not reader_task.done()
+        ):
+            reader_task.cancel()
         if writer is not None:
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
-        if self._jsonrpc_reader_task:
+        if (
+            reader_task is not None
+            and reader_task is not asyncio.current_task()
+        ):
             with contextlib.suppress(asyncio.CancelledError):
-                await self._jsonrpc_reader_task
-        self._jsonrpc_reader_task = None
+                await reader_task
 
-    async def _jsonrpc_reader_loop(self) -> None:
-        reader = self._jsonrpc_reader
-        if reader is None:
-            return
+    async def _stop_jsonrpc(self) -> None:
+        reconnect_task = self._jsonrpc_reconnect_task
+        self._jsonrpc_reconnect_task = None
+        if reconnect_task is not None and not reconnect_task.done():
+            reconnect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reconnect_task
+        await self._close_jsonrpc_transport()
+
+    async def _jsonrpc_reader_loop(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
         try:
             while not self._stop_requested.is_set():
                 line = await reader.readline()
@@ -282,7 +336,23 @@ class SignalBot(BotPlatform):
                     )
                     self._notification_tasks.add(task)
                     task.add_done_callback(self._notification_tasks.discard)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if not self._stop_requested.is_set():
+                logger.exception(
+                    "signal-cli JSON-RPC %s failed",
+                    self._jsonrpc_endpoint_name(),
+                )
         finally:
+            if self._jsonrpc_reader is reader:
+                self._jsonrpc_reader = None
+            if self._jsonrpc_writer is writer:
+                self._jsonrpc_writer = None
+            if self._jsonrpc_reader_task is asyncio.current_task():
+                self._jsonrpc_reader_task = None
+            self._receive_subscription = None
+            self._receive_subscribed = False
             if not self._stop_requested.is_set():
                 logger.warning(
                     "signal-cli JSON-RPC %s closed",
@@ -294,6 +364,8 @@ class SignalBot(BotPlatform):
                     fut.set_exception(
                         SignalCliError("signal-cli JSON-RPC stdout closed")
                     )
+            self._schedule_jsonrpc_reconnect()
+            writer.close()
 
     async def _handle_jsonrpc_receive(self, payload: dict[str, Any]) -> None:
         try:
@@ -312,6 +384,42 @@ class SignalBot(BotPlatform):
         result = await self._rpc_request("subscribeReceive", timeout=30)
         return int(result) if isinstance(result, int) else None
 
+    async def _subscribe_receive_once(self) -> int | None:
+        result = await self._rpc_request_once("subscribeReceive", timeout=30)
+        return int(result) if isinstance(result, int) else None
+
+    def _schedule_jsonrpc_reconnect(self) -> None:
+        if self._stop_requested.is_set() or not self._receive_started:
+            return
+        task = self._jsonrpc_reconnect_task
+        if task is not None and not task.done():
+            return
+        task = asyncio.create_task(self._jsonrpc_reconnect_loop())
+        self._jsonrpc_reconnect_task = task
+        task.add_done_callback(self._clear_jsonrpc_reconnect_task)
+
+    def _clear_jsonrpc_reconnect_task(self, task: asyncio.Task) -> None:
+        if self._jsonrpc_reconnect_task is task:
+            self._jsonrpc_reconnect_task = None
+
+    async def _jsonrpc_reconnect_loop(self) -> None:
+        delay = 1.0
+        while not self._stop_requested.is_set():
+            try:
+                await self._connect_jsonrpc(resubscribe=True)
+                logger.info("Signal JSON-RPC reconnected.")
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Signal JSON-RPC reconnect failed; retrying in %.0fs: %s",
+                    delay,
+                    _safe_error_message(exc),
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30.0)
+
     async def _rpc_request(
         self,
         method: str,
@@ -319,8 +427,33 @@ class SignalBot(BotPlatform):
         *,
         timeout: int | float | None = 60,
     ) -> Any:
+        for attempt in range(2):
+            await self._connect_jsonrpc(resubscribe=True)
+            try:
+                return await self._rpc_request_once(
+                    method, params, timeout=timeout,
+                )
+            except Exception as exc:
+                if attempt == 0 and _is_jsonrpc_transport_error(exc):
+                    logger.warning(
+                        "Signal JSON-RPC request %s failed; reconnecting: %s",
+                        method,
+                        _safe_error_message(exc),
+                    )
+                    await self._close_jsonrpc_transport()
+                    continue
+                raise
+        raise SignalCliError("signal-cli JSON-RPC request failed")
+
+    async def _rpc_request_once(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: int | float | None = 60,
+    ) -> Any:
         writer = self._jsonrpc_writer
-        if writer is None:
+        if writer is None or not self._jsonrpc_connected():
             raise SignalCliError("signal-cli JSON-RPC is not running")
         loop = asyncio.get_running_loop()
         self._jsonrpc_next_id += 1
@@ -440,9 +573,15 @@ class SignalBot(BotPlatform):
                 )
             except Exception as e:
                 logger.warning("Failed to import Signal attachment: %s", e)
-                await ctx_for_reply.reply_text(
-                    f"Failed to download attachment: {e}"
-                )
+                try:
+                    await ctx_for_reply.reply_text(
+                        f"Failed to download attachment: {e}"
+                    )
+                except Exception as reply_error:
+                    logger.warning(
+                        "Failed to report Signal attachment error: %s",
+                        reply_error,
+                    )
                 continue
             if info is None:
                 continue
@@ -886,6 +1025,23 @@ def _safe_error_message(exc: BaseException) -> str:
     text = re.sub(r"https://signal\.group/#[^\s]+", "<signal-group-url>", text)
     text = re.sub(r"sgnl://[^\s]+", "<signal-group-url>", text)
     return text
+
+
+def _is_jsonrpc_transport_error(exc: BaseException) -> bool:
+    if isinstance(exc, (ConnectionError, OSError)):
+        return True
+    if not isinstance(exc, SignalCliError):
+        return False
+    text = str(exc).casefold()
+    return any(
+        marker in text
+        for marker in (
+            "json-rpc stopped",
+            "json-rpc stdout closed",
+            "json-rpc is not running",
+            "socket is not ready",
+        )
+    )
 
 
 def _incoming_dedupe_key(
