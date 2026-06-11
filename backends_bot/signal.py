@@ -495,6 +495,14 @@ class SignalBot(BotPlatform):
         return f"socket {self.jsonrpc_socket}"
 
     async def _handle_received_item(self, item: dict[str, Any]) -> None:
+        receive_error = _format_signal_cli_receive_exception(item)
+        if receive_error:
+            logger.warning(
+                "signal-cli dropped incoming Signal receive before dispatch: %s",
+                receive_error,
+            )
+            return
+
         envelope = item.get("envelope") if isinstance(item, dict) else None
         if not isinstance(envelope, dict):
             envelope = item
@@ -1046,6 +1054,25 @@ def _is_jsonrpc_transport_error(exc: BaseException) -> bool:
             "socket is not ready",
         )
     )
+
+
+def _format_signal_cli_receive_exception(item: dict[str, Any]) -> str:
+    exc = item.get("exception")
+    if not isinstance(exc, dict):
+        return ""
+
+    exc_type = str(exc.get("type") or "").strip()
+    message = str(exc.get("message") or "").strip()
+    if exc_type and message:
+        detail = f"{exc_type}: {message}"
+    else:
+        detail = exc_type or message or json.dumps(exc, default=str)
+
+    envelope = item.get("envelope")
+    timestamp = _extract_timestamp_from_value(envelope)
+    if timestamp:
+        return f"{detail} (timestamp {timestamp})"
+    return detail
 
 
 def _incoming_dedupe_key(
