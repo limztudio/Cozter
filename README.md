@@ -187,8 +187,8 @@ to its own vocabulary:
 |---|---|---|
 | `codex` | 5 levels @ 20% each | `-c model_reasoning_effort=xhigh` |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
-| `claude_code` | binary @ 50% threshold | logged; no CLI flag exists |
-| `copilot` | always `None` | nothing; no CLI flag exists |
+| `claude_code` | 5 levels @ 20% each | `--effort max` |
+| `copilot` | 5 levels @ 20% each | `--effort max` |
 
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort

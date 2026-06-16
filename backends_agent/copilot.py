@@ -32,22 +32,49 @@ _MAX_PROMPT_CHARS = 28_000
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
-    # Copilot's model list is not exposed via --help and evolves over time.
-    # These are current defaults; users on newer CLIs can edit the list.
+    # Copilot's model list evolves by plan, policy, and rollout. These IDs
+    # mirror the CLI's model-slug convention for the currently documented
+    # Copilot model matrix.
     available_models = (
+        "auto",
+        "claude-fable-5",
         "claude-opus-4.8",
         "claude-opus-4.7",
+        "claude-opus-4.6",
+        "claude-opus-4.6-fast",
+        "claude-opus-4.5",
         "claude-sonnet-4.6",
+        "claude-sonnet-4.5",
         "claude-haiku-4.5",
         "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.3-codex",
+        "gpt-5-mini",
+        "gemini-3.5-flash",
+        "gemini-3.1-pro",
+        "gemini-3-flash",
+        "gemini-2.5-pro",
+        "mai-code-1-flash",
+        "raptor-mini",
     )
     default_model = "claude-opus-4.8"
     default_summary_model = "gpt-5.4-mini"
 
-    # Inherits the base ``convert_effort`` (returns None), since copilot
-    # has no public reasoning-effort control.
+    def convert_effort(self, percent: int) -> str | None:
+        # Copilot CLI accepts low/medium/high/xhigh/max via --effort.
+        if percent <= 0:
+            return None
+        if percent < 20:
+            return "low"
+        if percent < 40:
+            return "medium"
+        if percent < 60:
+            return "high"
+        if percent < 80:
+            return "xhigh"
+        return "max"
 
     async def launch(
         self,
@@ -59,14 +86,6 @@ class CopilotBackend(Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
-        if effort > 0:
-            # Copilot CLI has no reasoning_effort flag; log so the user
-            # knows the workspace setting is being dropped.
-            logger.info(
-                "Copilot has no reasoning_effort flag; ignoring"
-                " workspace setting %d%%",
-                effort,
-            )
         if len(prompt) > _MAX_PROMPT_CHARS:
             # Keep the tail: the user's current message is at the end of the
             # composed prompt, and the head (CAPABILITY_HINT + oldest context)
@@ -85,6 +104,9 @@ class CopilotBackend(Backend):
         ]
         if model:
             cmd += ["--model", model]
+        native_effort = self.convert_effort(effort)
+        if native_effort:
+            cmd += ["--effort", native_effort]
 
         if compaction or approval == "full":
             cmd.append("--yolo")

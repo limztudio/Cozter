@@ -665,8 +665,10 @@ class BotPlatform(ABC):
             " / 60-79 high / 80-100 xhigh\n"
             "  llama:       1-24 minimal / 25-49 low / 50-74 medium"
             " / 75-100 high\n"
-            "  claude_code: <50 ignored / >=50 max (binary)\n"
-            "  copilot:     ignored (no CLI flag)\n\n"
+            "  claude_code: 1-19 low / 20-39 medium / 40-59 high"
+            " / 60-79 xhigh / 80-100 max\n"
+            "  copilot:     1-19 low / 20-39 medium / 40-59 high"
+            " / 60-79 xhigh / 80-100 max\n\n"
             "Applies to your chat turns (not compaction/routing)."
             "\nEnter a number 0-100 (or /cancel):"
         )

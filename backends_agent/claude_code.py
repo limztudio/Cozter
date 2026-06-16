@@ -31,18 +31,23 @@ logger = logging.getLogger(__name__)
 class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
-    # Aliases ('sonnet', 'opus', 'haiku') resolve to the latest of each
-    # tier; full IDs pin a specific version. Users on newer CLIs can edit
-    # the list locally.
+    # Aliases resolve to the current default for each tier; full IDs pin a
+    # specific version. Users on newer CLIs can edit the list locally.
     available_models = (
+        "fable",
         "sonnet",
         "opus",
         "haiku",
+        "claude-fable-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
+        "opus[1m]",
+        "sonnet[1m]",
+        "claude-opus-4-8[1m]",
+        "claude-sonnet-4-6[1m]",
     )
     default_model = "sonnet"
     default_summary_model = "haiku"
@@ -54,14 +59,18 @@ class ClaudeCodeBackend(Backend):
     })
 
     def convert_effort(self, percent: int) -> str | None:
-        # Claude Code's only public "effort"-like control is the
-        # extended-thinking toggle, whose highest setting is called
-        # "max". With no finer gradation, treat the percentage as a
-        # binary toggle: above the midpoint, ask for max thinking;
-        # otherwise leave it off.
-        if percent >= 50:
-            return "max"
-        return None
+        # Claude Code accepts low/medium/high/xhigh/max via --effort.
+        if percent <= 0:
+            return None
+        if percent < 20:
+            return "low"
+        if percent < 40:
+            return "medium"
+        if percent < 60:
+            return "high"
+        if percent < 80:
+            return "xhigh"
+        return "max"
 
     async def launch(
         self,
@@ -73,19 +82,6 @@ class ClaudeCodeBackend(Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
-        native_effort = self.convert_effort(effort)
-        if native_effort:
-            # Claude Code CLI has no public reasoning-effort flag - the
-            # closest control is the model tier (sonnet < opus). Log so
-            # the user knows the workspace setting is being dropped,
-            # but show the *native* level name from convert_effort so
-            # the mapping is visibly applied.
-            logger.info(
-                "Claude Code has no reasoning_effort flag; ignoring"
-                " workspace setting %d%% (native level %r); use a"
-                " higher-tier model instead",
-                effort, native_effort,
-            )
         prefix = resolve_executable_prefix("claude") or ["claude"]
         cmd: list[str] = [
             *prefix,
@@ -96,6 +92,9 @@ class ClaudeCodeBackend(Backend):
         ]
         if model:
             cmd += ["--model", model]
+        native_effort = self.convert_effort(effort)
+        if native_effort:
+            cmd += ["--effort", native_effort]
 
         if compaction or approval == "full":
             # Compaction is a trusted internal call; same for the user's
