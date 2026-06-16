@@ -13,17 +13,16 @@ logger = logging.getLogger(__name__)
 class CodexBackend(Backend):
     name = "codex"
     executable = "codex"
+    # OpenAI's recommended Codex CLI models. gpt-5.2 and gpt-5.3-codex were
+    # superseded by the 5.4/5.5 line; users on newer CLIs can edit the list.
     available_models = (
         "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
-        "gpt-5.3-codex",
         "gpt-5.3-codex-spark",
-        "gpt-5.2-codex",
-        "gpt-5.2",
     )
     default_model = "gpt-5.5"
-    default_summary_model = "gpt-5.3-codex"
+    default_summary_model = "gpt-5.4-mini"
 
     def convert_effort(self, percent: int) -> str | None:
         # Codex CLI offers 5 levels including ``xhigh`` (above codex's

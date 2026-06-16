@@ -35,16 +35,16 @@ class CopilotBackend(Backend):
     # Copilot's model list is not exposed via --help and evolves over time.
     # These are current defaults; users on newer CLIs can edit the list.
     available_models = (
-        "claude-sonnet-4.6",
+        "claude-opus-4.8",
         "claude-opus-4.7",
-        "claude-opus-4.6",
+        "claude-sonnet-4.6",
+        "claude-haiku-4.5",
+        "gpt-5.5",
         "gpt-5.4",
-        "gpt-5.2",
-        "gpt-4o",
-        "o3",
+        "gpt-5.4-mini",
     )
-    default_model = "claude-opus-4.6"
-    default_summary_model = "gpt-5.2"
+    default_model = "claude-opus-4.8"
+    default_summary_model = "gpt-5.4-mini"
 
     # Inherits the base ``convert_effort`` (returns None), since copilot
     # has no public reasoning-effort control.
