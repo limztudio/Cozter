@@ -33,8 +33,8 @@ class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
     # Copilot's model list evolves by plan, policy, and rollout. These IDs
-    # mirror the CLI's model-slug convention for the currently documented
-    # Copilot model matrix.
+    # mirror documented CLI/model-picker slugs; availability still depends on
+    # the user's Copilot plan and organization policy.
     available_models = (
         "auto",
         "claude-fable-5",
@@ -53,14 +53,14 @@ class CopilotBackend(Backend):
         "gpt-5.3-codex",
         "gpt-5-mini",
         "gemini-3.5-flash",
-        "gemini-3.1-pro",
+        "gemini-3.1-pro-preview",
         "gemini-3-flash",
         "gemini-2.5-pro",
         "mai-code-1-flash",
         "raptor-mini",
     )
-    default_model = "claude-opus-4.8"
-    default_summary_model = "gpt-5.4-mini"
+    default_model = "claude-sonnet-4.6"
+    default_summary_model = "claude-haiku-4.5"
 
     def convert_effort(self, percent: int) -> str | None:
         # Copilot CLI accepts low/medium/high/xhigh/max via --effort.
