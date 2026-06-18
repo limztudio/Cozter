@@ -33,20 +33,24 @@ class ClaudeCodeBackend(Backend):
     executable = "claude"
     # Aliases resolve to the current default for each tier; full IDs pin a
     # specific version. Users on newer CLIs can edit the list locally.
+    # Fable/Mythos access is suspended as of 2026-06-12, so omit it here.
     available_models = (
-        "fable",
         "sonnet",
         "opus",
         "haiku",
-        "claude-fable-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
+        "claude-opus-4-5-20251101",
         "claude-sonnet-4-6",
+        "claude-sonnet-4-5-20250929",
+        "claude-haiku-4-5-20251001",
         "claude-haiku-4-5",
         "opus[1m]",
         "sonnet[1m]",
         "claude-opus-4-8[1m]",
+        "claude-opus-4-7[1m]",
+        "claude-opus-4-6[1m]",
         "claude-sonnet-4-6[1m]",
     )
     default_model = "sonnet"

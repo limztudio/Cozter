@@ -35,9 +35,10 @@ class CopilotBackend(Backend):
     # Copilot's model list evolves by plan, policy, and rollout. These IDs
     # mirror documented CLI/model-picker slugs; availability still depends on
     # the user's Copilot plan and organization policy.
+    # Claude Fable 5 is omitted while access is suspended; GPT-5.4 nano is
+    # currently restricted to the Codex VS Code extension, not Copilot CLI.
     available_models = (
         "auto",
-        "claude-fable-5",
         "claude-opus-4.8",
         "claude-opus-4.7",
         "claude-opus-4.6",
@@ -49,7 +50,6 @@ class CopilotBackend(Backend):
         "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
-        "gpt-5.4-nano",
         "gpt-5.3-codex",
         "gpt-5-mini",
         "gemini-3.5-flash",
