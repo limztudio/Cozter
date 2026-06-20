@@ -35,8 +35,10 @@ class CopilotBackend(Backend):
     # Copilot's model list evolves by plan, policy, and rollout. These IDs
     # mirror documented CLI/model-picker slugs; availability still depends on
     # the user's Copilot plan and organization policy.
-    # Claude Fable 5 is omitted while access is suspended; GPT-5.4 nano is
-    # currently restricted to the Codex VS Code extension, not Copilot CLI.
+    # Claude Fable 5 is omitted while access is suspended. GPT-5.4 nano is
+    # currently restricted to the Codex VS Code extension/utility-model
+    # surfaces, and evaluation models such as Goldeneye are intentionally not
+    # exposed as stable picker options.
     available_models = (
         "auto",
         "claude-opus-4.8",
