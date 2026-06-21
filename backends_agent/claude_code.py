@@ -32,19 +32,20 @@ class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
     # Aliases resolve to the current default for each tier; full IDs pin a
-    # specific version. Fable/Mythos access is suspended as of 2026-06-12,
-    # so omit those IDs while keeping "best" for accounts where it can fall
-    # back to the latest available Opus model. Users on newer CLIs can still
-    # add local/gateway IDs with Claude Code's custom model setting.
+    # specific version. Mythos remains limited/invitation-only, so omit it
+    # from the default picker. Users on newer CLIs can still add local or
+    # gateway IDs with Claude Code's custom model setting.
     available_models = (
         "sonnet",
         "opus",
+        "fable",
         "haiku",
         "best",
         "opusplan",
         "sonnet[1m]",
         "opus[1m]",
         "opusplan[1m]",
+        "claude-fable-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
