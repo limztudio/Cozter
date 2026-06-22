@@ -31,11 +31,13 @@ logger = logging.getLogger(__name__)
 class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
-    # Aliases resolve to the current default for each tier; full IDs pin a
-    # specific version. Mythos remains limited/invitation-only, so omit it
+    # Aliases resolve to the current default for each tier; ``default`` clears
+    # a pin and lets Claude Code choose the account-tier default. Full IDs pin
+    # a specific version. Mythos remains limited/invitation-only, so omit it
     # from the default picker. Users on newer CLIs can still add local or
     # gateway IDs with Claude Code's custom model setting.
     available_models = (
+        "default",
         "sonnet",
         "opus",
         "fable",
@@ -59,7 +61,7 @@ class ClaudeCodeBackend(Backend):
         "claude-opus-4-6[1m]",
         "claude-sonnet-4-6[1m]",
     )
-    default_model = "sonnet"
+    default_model = "default"
     default_summary_model = "haiku"
 
     # File-editing tools whose tool_use blocks we surface as kind="file"
