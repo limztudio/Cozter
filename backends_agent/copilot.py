@@ -35,14 +35,15 @@ class CopilotBackend(Backend):
     # Copilot's model list evolves by plan, policy, and rollout. These IDs
     # mirror documented CLI/model-picker slugs; availability still depends on
     # the user's Copilot plan and organization policy.
-    # GitHub lists Claude Fable 5 in the table but marks it currently
-    # unavailable. GPT-5.4 nano is restricted to the Codex VS Code extension
+    # Claude Fable 5 is plan/policy gated and carries extra data-retention
+    # requirements. GPT-5.4 nano is restricted to the Codex VS Code extension
     # and utility-model surfaces, and evaluation models such as Goldeneye are
     # intentionally not exposed as stable picker options. Gemini 3.1 Pro is a
     # public-preview display name; the Copilot API slug still carries
     # ``-preview``.
     available_models = (
         "auto",
+        "claude-fable-5",
         "claude-opus-4.8",
         "claude-opus-4.7",
         "claude-opus-4.6",
