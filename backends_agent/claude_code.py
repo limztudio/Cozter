@@ -33,9 +33,9 @@ class ClaudeCodeBackend(Backend):
     executable = "claude"
     # Aliases resolve to the current default for each tier; ``default`` clears
     # a pin and lets Claude Code choose the account-tier default. Full IDs pin
-    # a specific version. Mythos remains limited/invitation-only, so omit it
-    # from the default picker. Users on newer CLIs can still add local or
-    # gateway IDs with Claude Code's custom model setting.
+    # a specific version. Mythos remains invitation-only, so omit it from the
+    # default picker. Users on newer CLIs can still add local or gateway IDs
+    # with Claude Code's custom model setting.
     available_models = (
         "default",
         "sonnet",

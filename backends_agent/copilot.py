@@ -32,37 +32,18 @@ _MAX_PROMPT_CHARS = 28_000
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
-    # Copilot's model list evolves by plan, policy, and rollout. These IDs
-    # mirror documented CLI/model-picker slugs; availability still depends on
-    # the user's Copilot plan and organization policy.
-    # Claude Fable 5 is plan/policy gated and carries extra data-retention
-    # requirements. GPT-5.4 nano is restricted to the Codex VS Code extension
-    # and utility-model surfaces, and evaluation models such as Goldeneye are
-    # intentionally not exposed as stable picker options. Gemini 3.1 Pro is a
-    # public-preview display name; the Copilot API slug still carries
-    # ``-preview``.
+    # Copilot's CLI model picker is narrower than Copilot's broader product
+    # model catalog. These are the documented --model slugs; availability still
+    # depends on the user's Copilot plan and organization policy.
     available_models = (
         "auto",
-        "claude-fable-5",
-        "claude-opus-4.8",
-        "claude-opus-4.7",
-        "claude-opus-4.6",
-        "claude-opus-4.6-fast",
-        "claude-opus-4.5",
         "claude-sonnet-4.6",
-        "claude-sonnet-4.5",
-        "claude-haiku-4.5",
-        "gpt-5.5",
         "gpt-5.4",
-        "gpt-5.4-mini",
+        "claude-haiku-4.5",
         "gpt-5.3-codex",
-        "gpt-5-mini",
-        "gemini-3.5-flash",
         "gemini-3.1-pro-preview",
-        "gemini-3-flash",
-        "gemini-2.5-pro",
+        "gemini-3.5-flash",
         "mai-code-1-flash",
-        "raptor-mini",
     )
     default_model = "claude-sonnet-4.6"
     default_summary_model = "claude-haiku-4.5"
