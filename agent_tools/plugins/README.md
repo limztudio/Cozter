@@ -21,8 +21,10 @@ the plugin's `os.getcwd()` returns the right path.
 ## Conventions
 
 - File name `foo.py` → tool name typically `foo` (match `cls.name`).
-- File names starting with `_` are skipped by the loader. The shipped
-  example file uses this so it doesn't activate by accident.
+- File names starting with `_` are skipped by the loader, which is useful
+  for disabled examples or local scratch plugins.
+- The shipped `current_time.py` plugin is live and can be invoked through
+  the same module path pattern as any other plugin.
 
 ## Template
 

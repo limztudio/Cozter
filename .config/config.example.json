@@ -15,5 +15,6 @@
   "llama_socket_timeout": 1800,
 
   "update_check_interval": 10,
-  "recent_workspace_limit": 10
+  "recent_workspace_limit": 10,
+  "message_queue_size": 50
 }

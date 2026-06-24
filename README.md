@@ -3,8 +3,9 @@
 A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot)
 and a local llama-server HTTP backend, exposing them through Telegram,
 Slack, Signal, or a plain terminal. One bot process, multiple workspaces,
-per-workspace settings, durable sessions with automatic compaction, and
-a drop-in plugin system that works across every backend.
+per-workspace settings, durable sessions with automatic compaction,
+persistent turn queues, file attachments, and a drop-in plugin system
+that works across every backend.
 
 ## What it gives you
 
@@ -22,10 +23,17 @@ a drop-in plugin system that works across every backend.
   - CLI (`python -m Cozter -cli`) — the terminal becomes the chat
 - **Per-workspace state**, scoped to `<workspace>/.cozter/`:
   sessions, compaction history, agent choice, model, permission level,
-  reasoning effort, summary backend, colony (long-term memory)
+  reasoning effort, summary backend, colony (long-term memory), uploads,
+  generated image attachments, and schedules
 - **Durable sessions with two-layer memory**: each conversation
   auto-compacts every N turns into a scratch summary plus a persistent
   long-term-memory list, both injected into every subsequent turn
+- **Persistent turn queues**: if a user sends more work while an agent
+  turn is running, or while an update restart is pending, the messages
+  are queued on disk and restored after restart
+- **File flow in both directions**: chat uploads are saved into the
+  workspace and text-like files are inlined into the next prompt; agent
+  replies can upload workspace files or generated images back to chat
 - **Auto-update**: the bot polls origin, fast-forward-pulls, and exits
   for the supervisor (`systemd` or its equivalent) to restart it
 
@@ -38,9 +46,10 @@ python -m Cozter
 # fill in tokens and run again
 ```
 
-`requirements.txt` is auto-installed on startup. Run `python -m Cozter -cli`
-if you don't have a Telegram, Slack, or Signal setup and want to try it
-in a terminal.
+On startup, Cozter creates a project-local `.venv` when needed and
+auto-installs `requirements.txt`. Run `python -m Cozter -cli` if you
+don't have a Telegram, Slack, or Signal setup and want to try it in a
+terminal.
 
 ## Configuration
 
@@ -65,7 +74,8 @@ lives in `.config/config.example.json`):
   "llama_socket_timeout": 1800,
 
   "update_check_interval": 10,
-  "recent_workspace_limit": 10
+  "recent_workspace_limit": 10,
+  "message_queue_size": 50
 }
 ```
 
@@ -73,6 +83,10 @@ Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
 + `user_ids`, `slack_bot_token` + `slack_app_token` +
 `slack_channel_ids`, or `signal_group_urls` + `signal_jsonrpc_socket`.
 The CLI surface needs neither.
+
+`message_queue_size` caps each user's pending chat turns. The queue is
+persisted in `Cozter/.config/queue_<platform>.json`, so clean restarts,
+auto-updates, and crash recovery do not drop already accepted messages.
 
 For Signal, `signal-cli` must already be installed and registered in the
 separate daemon config; each invite URL in `signal_group_urls` is resolved
@@ -104,9 +118,17 @@ runs commands in it, and stores per-workspace state under
   so conversations resume in place instead of being re-routed
 - `settings.json` — chosen agent, model, permission, reasoning effort,
   summary backend, summary model, compact interval
+- `colony.json` — workspace-wide long-term memory consolidated across
+  sessions
+- `schedules.json` — recurring `/reserve` prompts and their last-fired
+  timestamps
+- `uploads/` — files received from Telegram, Slack, or Signal
+- `generated_images/` — external generated images copied into the
+  workspace before upload back to chat
 
 Workspaces are recorded globally in `Cozter/.config/workspaces.json`
-(per-user current pick + the recent-workspaces list).
+(per-user current pick + the recent-workspaces list). Platform turn
+queues live beside it as `queue_<platform>.json`.
 
 ## Commands
 
@@ -114,22 +136,45 @@ All chat surfaces speak the same command set:
 
 | Command | What it does |
 |---|---|
-| `/new <path>` | Create a new workspace directory and select it |
-| `/open <path-or-number>` | Switch to an existing workspace |
+| `/new` | Prompt for a new workspace directory, create it, and select it |
+| `/open [path-or-number]` | Switch to an existing workspace |
 | `/agent` | Pick the agent backend (codex / claude_code / copilot / llama) |
 | `/model` | Pick the chat model for the current backend |
 | `/summaryagent` | Pick the backend used for compaction / titling / routing |
 | `/summarymodel` | Pick the model for the summary backend |
 | `/permission` | full / auto / confirm / deny — how the agent treats tool calls |
 | `/effort` | 0–100 reasoning effort; each backend maps to its native scale |
-| `/compact` | Show compaction state / set interval / `/compact now` to force a pass |
+| `/compact [number]` | Show compaction state, or set the auto-compact interval |
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
-| `/colony` | Set the per-workspace colony-consolidation interval |
+| `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
 | `/refresh` | Drop the workspace's `.codex/` cache (use after an upgrade) |
 | `/stop` | Cancel the running agent turn |
 | `/inject <text>` | Add context to the running turn (the agent restarts with it) |
 | `/reserve`, `/schedules` | Cron-style scheduled prompts |
 | `/version`, `/cancel`, `/start` | Self-explanatory |
+
+## Files and attachments
+
+Telegram, Slack, and Signal uploads are copied into
+`<workspace>/.cozter/uploads/` before the agent sees them. The generated
+prompt includes the saved relative path, and text-like files up to
+50,000 characters are inlined directly into the prompt. Larger text files
+and binary files are referenced by path so the selected backend can inspect
+them with its normal tools.
+
+Agents can attach files back to chat by emitting a line like:
+
+```text
+[[attach: path/inside/workspace.png]]
+```
+
+The path may be relative to the workspace or an absolute path inside it.
+Generated images under `$CODEX_HOME/generated_images` and any directories
+listed in `COZTER_ATTACHMENT_ROOTS` are also accepted; Cozter copies those
+images into `.cozter/generated_images/` before uploading so chat platforms
+never receive arbitrary external paths. Replies can end with `[[await]]`
+when the agent needs a user decision; the marker is stripped and that
+user's queued work pauses until the next message arrives.
 
 ## Plugins
 
@@ -200,8 +245,8 @@ setting.
 ```
 Cozter/
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
-├── backends_bot/         chat surfaces (Telegram / Slack / CLI)
-├── agent.py              orchestrator: builds prompt, runs backend, streams events
+├── backends_bot/         chat surfaces (Telegram / Slack / Signal / CLI)
+├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
 ├── session.py            per-workspace conversation persistence
 ├── compaction.py         scratch-summary + long-term-memory rewriter
 ├── colony.py             cross-session long-term memory consolidation
@@ -235,10 +280,12 @@ them via `Backend.parse_event()` into `ChatEvent`s, and streams a
 ## Auto-update
 
 `updater.fetch_and_pull()` runs every `update_check_interval` seconds.
-If `HEAD` changed (remote update *or* manual pull while the bot was
-running), the bot installs any new `requirements.txt`, broadcasts a
-"restarting" message, and exits. The init system (`systemd Restart=always`,
-or any equivalent) brings it back.
+Update checks wait for active turns to finish, pause new intake briefly,
+and queue any messages that arrive during a pending restart. If `HEAD`
+changed (remote update *or* manual pull while the bot was running), the
+bot installs any new `requirements.txt`, broadcasts a "restarting"
+message, and exits. The init system (`systemd Restart=always`, or any
+equivalent) brings it back, and persisted queues resume after startup.
 
 ## Reading order
 
