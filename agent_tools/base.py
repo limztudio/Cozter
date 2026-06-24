@@ -14,6 +14,11 @@ import aiohttp
 # Hard cap on raw HTTP body bytes per web tool call so a pathological
 # URL can't OOM the bot.
 _MAX_FETCH_BYTES = 5 * 1024 * 1024  # 5 MB
+HTTP_USER_AGENT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 compatible; CozterAgent/1.0; +https://local"
+    )
+}
 
 
 class AgentTool(ABC):

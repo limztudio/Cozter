@@ -80,15 +80,6 @@ def set_last_session(
     _atomic_write(_last_session_path(workspace), data, cozter_dir)
 
 
-def clear_last_session(workspace: str, user_id: int | str) -> None:
-    """Forget the user's last session; next turn will route fresh."""
-    data = _load_last_session_map(workspace)
-    if data.pop(str(user_id), None) is None:
-        return
-    cozter_dir = os.path.join(workspace, COZTER_DIR)
-    _atomic_write(_last_session_path(workspace), data, cozter_dir)
-
-
 def migrate_last_session(
     workspace: str,
     source_user_ids: list[int | str] | tuple[int | str, ...],

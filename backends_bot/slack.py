@@ -23,6 +23,7 @@ from slack_bolt.adapter.socket_mode.async_handler import (
 )
 
 from .. import workspace
+from ..utils import split_text_chunks
 from .base import (
     AttachmentInfo,
     BotContext,
@@ -116,25 +117,6 @@ def _md_to_mrkdwn(text: str) -> str:
 _SLACK_MAX_CHARS = 39_000  # Slack hard-caps around 40K; stay under.
 
 
-def _split_mrkdwn(text: str, limit: int = _SLACK_MAX_CHARS) -> list[str]:
-    """Split mrkdwn text at newline boundaries so no tag is cut mid-way."""
-    if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
-    while text:
-        if len(text) <= limit:
-            chunks.append(text)
-            break
-        split_at = text.rfind("\n", 0, limit)
-        if split_at == -1:
-            chunks.append(text[:limit])
-            text = text[limit:]
-        else:
-            chunks.append(text[:split_at])
-            text = text[split_at + 1:]
-    return chunks
-
-
 # ---------------------------------------------------------------------------
 # Slack platform adapter
 # ---------------------------------------------------------------------------
@@ -188,7 +170,7 @@ class SlackBot(BotPlatform):
         client = self.app.client
         body = _md_to_mrkdwn(text) if rich else text
         last: MessageHandle | None = None
-        for chunk in _split_mrkdwn(body):
+        for chunk in split_text_chunks(body, _SLACK_MAX_CHARS):
             if not chunk.strip():
                 continue
             resp = await client.chat_postMessage(channel=chat_id, text=chunk)

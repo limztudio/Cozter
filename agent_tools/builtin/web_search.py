@@ -8,7 +8,9 @@ import urllib.parse
 
 import aiohttp
 
-from ..base import AgentTool, html_to_text, read_bounded_text
+from ..base import (
+    HTTP_USER_AGENT_HEADERS, AgentTool, html_to_text, read_bounded_text,
+)
 
 
 class WebSearchTool(AgentTool):
@@ -50,15 +52,10 @@ class WebSearchTool(AgentTool):
             + urllib.parse.urlencode({"q": query})
         )
 
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 compatible; CozterAgent/1.0; "
-                "+https://local"
-            )
-        }
-
         try:
-            async with aiohttp.ClientSession(headers=headers) as session:
+            async with aiohttp.ClientSession(
+                headers=HTTP_USER_AGENT_HEADERS,
+            ) as session:
                 async with session.get(
                     search_url,
                     timeout=aiohttp.ClientTimeout(total=20),

@@ -18,7 +18,7 @@ import asyncio
 import logging
 
 from .base import (
-    AgentResult, Backend, ChatEvent, resolve_executable_prefix,
+    AgentResult, Backend, ChatEvent, effort_band, resolve_executable_prefix,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,17 +50,9 @@ class CopilotBackend(Backend):
 
     def convert_effort(self, percent: int) -> str | None:
         # Copilot CLI accepts low/medium/high/xhigh/max via --effort.
-        if percent <= 0:
-            return None
-        if percent < 20:
-            return "low"
-        if percent < 40:
-            return "medium"
-        if percent < 60:
-            return "high"
-        if percent < 80:
-            return "xhigh"
-        return "max"
+        return effort_band(
+            percent, ("low", "medium", "high", "xhigh", "max"),
+        )
 
     async def launch(
         self,

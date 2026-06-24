@@ -7,7 +7,9 @@ import urllib.parse
 
 import aiohttp
 
-from ..base import AgentTool, html_to_text, read_bounded_text
+from ..base import (
+    HTTP_USER_AGENT_HEADERS, AgentTool, html_to_text, read_bounded_text,
+)
 
 
 class WebFetchTool(AgentTool):
@@ -48,15 +50,10 @@ class WebFetchTool(AgentTool):
             max_chars = 12_000
         max_chars = max(1_000, min(max_chars, 30_000))
 
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 compatible; CozterAgent/1.0; "
-                "+https://local"
-            )
-        }
-
         try:
-            async with aiohttp.ClientSession(headers=headers) as session:
+            async with aiohttp.ClientSession(
+                headers=HTTP_USER_AGENT_HEADERS,
+            ) as session:
                 async with session.get(
                     url,
                     allow_redirects=True,

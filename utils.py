@@ -138,6 +138,25 @@ def parse_bullets(block: str | None) -> list[str]:
     return items
 
 
+def split_text_chunks(text: str, limit: int) -> list[str]:
+    """Split text into <=limit chunks, preferring newline boundaries."""
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    while text:
+        if len(text) <= limit:
+            chunks.append(text)
+            break
+        split_at = text.rfind("\n", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    return chunks
+
+
 async def drain_llm_subprocess(
     proc: asyncio.subprocess.Process,
     backend,

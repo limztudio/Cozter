@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from .base import (
-    AgentResult, Backend, ChatEvent, resolve_executable_prefix,
+    AgentResult, Backend, ChatEvent, effort_band, resolve_executable_prefix,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,17 +28,9 @@ class CodexBackend(Backend):
         # Codex CLI offers 5 levels including ``xhigh`` (above codex's
         # own ``high``). Split 1-100 into roughly equal bands so the
         # user's percentage maps onto each level deterministically.
-        if percent <= 0:
-            return None
-        if percent < 20:
-            return "minimal"
-        if percent < 40:
-            return "low"
-        if percent < 60:
-            return "medium"
-        if percent < 80:
-            return "high"
-        return "xhigh"
+        return effort_band(
+            percent, ("minimal", "low", "medium", "high", "xhigh"),
+        )
 
     async def launch(
         self,

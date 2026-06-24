@@ -29,6 +29,14 @@ def resolve_executable_prefix(name: str) -> list[str] | None:
     return [found]
 
 
+def effort_band(percent: int, levels: tuple[str, ...]) -> str | None:
+    """Map 1-100 onto evenly sized effort *levels*; 0 disables override."""
+    if percent <= 0 or not levels:
+        return None
+    idx = min(percent * len(levels) // 100, len(levels) - 1)
+    return levels[idx]
+
+
 @dataclass
 class ChatEvent:
     """An event produced during an agent turn."""
@@ -123,8 +131,7 @@ class Backend(ABC):
         levels topping out at ``high``, claude_code is binary).
 
         Default implementation always returns ``None``, which is the
-        correct behavior for backends with no reasoning-effort control
-        (currently copilot, claude_code).
+        correct behavior for backends with no reasoning-effort control.
         """
         del percent  # unused in the default implementation
         return None

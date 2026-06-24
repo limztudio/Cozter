@@ -18,6 +18,7 @@ from telegram.ext import (
 )
 
 from .. import workspace
+from ..utils import split_text_chunks
 from .base import (
     AttachmentInfo,
     BotContext,
@@ -29,6 +30,7 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+_TELEGRAM_TEXT_LIMIT = 4096
 
 
 # ---------------------------------------------------------------------------
@@ -80,30 +82,6 @@ def _md_to_html(text: str) -> str:
     return "\n".join(result)
 
 
-def _split_html(text: str, limit: int = 4096) -> list[str]:
-    """Split text into chunks <= limit, breaking at newlines.
-
-    Cutting inside an HTML tag would make Telegram reject the message;
-    newline boundaries are safe because _md_to_html never produces tags
-    spanning multiple lines.
-    """
-    if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
-    while text:
-        if len(text) <= limit:
-            chunks.append(text)
-            break
-        split_at = text.rfind("\n", 0, limit)
-        if split_at == -1:
-            chunks.append(text[:limit])
-            text = text[limit:]
-        else:
-            chunks.append(text[:split_at])
-            text = text[split_at + 1:]
-    return chunks
-
-
 # ---------------------------------------------------------------------------
 # Telegram platform adapter
 # ---------------------------------------------------------------------------
@@ -151,7 +129,7 @@ class TelegramBot(BotPlatform):
         # Rich path: convert markdown → HTML and split for Telegram limits.
         html = _md_to_html(text)
         last: MessageHandle | None = None
-        for chunk in _split_html(html):
+        for chunk in split_text_chunks(html, _TELEGRAM_TEXT_LIMIT):
             if not chunk.strip():
                 continue
             try:

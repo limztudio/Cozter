@@ -19,6 +19,7 @@ from collections import deque
 from typing import Any
 
 from .. import schedules, session, workspace
+from ..utils import split_text_chunks
 from .base import AttachmentInfo, BotContext, BotPlatform, MessageHandle
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ class SignalBot(BotPlatform):
             return None
         group_id = self._group_id_for_chat(chat_id)
         last: MessageHandle | None = None
-        for chunk in _split_text(text):
+        for chunk in split_text_chunks(text, _SIGNAL_TEXT_LIMIT):
             self._remember_outgoing_text(group_id, chunk)
             result = await self._rpc_request(
                 "send", {"groupId": group_id, "message": chunk},
@@ -723,6 +724,34 @@ class SignalBot(BotPlatform):
     def _state_user_id(self, group_id: str) -> str:
         return f"signal-group:{group_id}"
 
+    @staticmethod
+    def _legacy_source_ids(
+        sender_id: str, group_id: str, account_id: str,
+    ) -> list[str]:
+        return list(
+            dict.fromkeys(x for x in (sender_id, account_id, group_id) if x)
+        )
+
+    def _group_workspace(self, group_id: str) -> tuple[str, str] | None:
+        target_user_id = self._state_user_id(group_id)
+        ws = workspace.get_current(target_user_id, self.platform_id)
+        if not ws or not os.path.isdir(ws):
+            return None
+        return target_user_id, ws
+
+    def _migrate_current_workspace_to_group(
+        self, source_user_id: str, group_id: str,
+    ) -> str:
+        target_user_id = self._state_user_id(group_id)
+        workspace.migrate_current_workspace(
+            source_user_id,
+            target_user_id,
+            self.platform_id,
+            source_bot_ids=(self.platform_id,),
+            source_bot_prefixes=(_LEGACY_SIGNAL_PLATFORM_PREFIX,),
+        )
+        return target_user_id
+
     def _migrate_group_workspace_state(
         self,
         sender_id: str,
@@ -732,10 +761,9 @@ class SignalBot(BotPlatform):
         target_user_id = self._state_user_id(group_id)
         if workspace.get_current(target_user_id, self.platform_id):
             return
-        source_ids = dict.fromkeys(
-            x for x in (sender_id, account_id, group_id) if x
-        )
-        for source_id in source_ids:
+        for source_id in self._legacy_source_ids(
+            sender_id, group_id, account_id,
+        ):
             if workspace.migrate_current_workspace(
                 source_id,
                 target_user_id,
@@ -755,13 +783,11 @@ class SignalBot(BotPlatform):
         group_id: str,
         account_id: str,
     ) -> None:
-        target_user_id = self._state_user_id(group_id)
-        ws = workspace.get_current(target_user_id, self.platform_id)
-        if not ws or not os.path.isdir(ws):
+        resolved = self._group_workspace(group_id)
+        if resolved is None:
             return
-        source_ids = list(
-            dict.fromkeys(x for x in (sender_id, account_id, group_id) if x)
-        )
+        target_user_id, ws = resolved
+        source_ids = self._legacy_source_ids(sender_id, group_id, account_id)
         if session.migrate_last_session(ws, source_ids, target_user_id):
             logger.info(
                 "Migrated legacy Signal last-session state into group %s.",
@@ -774,10 +800,10 @@ class SignalBot(BotPlatform):
         group_id: str,
         account_id: str,
     ) -> None:
-        target_user_id = self._state_user_id(group_id)
-        ws = workspace.get_current(target_user_id, self.platform_id)
-        if not ws or not os.path.isdir(ws):
+        resolved = self._group_workspace(group_id)
+        if resolved is None:
             return
+        _target_user_id, ws = resolved
         async with workspace.get_lock(ws):
             self._migrate_group_session_state(sender_id, group_id, account_id)
             self._migrate_group_schedule_state(sender_id, group_id, account_id)
@@ -791,13 +817,8 @@ class SignalBot(BotPlatform):
                 chat_id = str(sched.get("chat_id") or "")
                 if chat_id not in self._group_ids:
                     continue
-                target_uid = self._state_user_id(chat_id)
-                workspace.migrate_current_workspace(
-                    uid,
-                    target_uid,
-                    self.platform_id,
-                    source_bot_ids=(self.platform_id,),
-                    source_bot_prefixes=(_LEGACY_SIGNAL_PLATFORM_PREFIX,),
+                target_uid = self._migrate_current_workspace_to_group(
+                    uid, chat_id,
                 )
                 migrated += schedules.migrate_schedules(
                     ws,
@@ -831,13 +852,11 @@ class SignalBot(BotPlatform):
         group_id: str,
         account_id: str,
     ) -> None:
-        target_user_id = self._state_user_id(group_id)
-        ws = workspace.get_current(target_user_id, self.platform_id)
-        if not ws or not os.path.isdir(ws):
+        resolved = self._group_workspace(group_id)
+        if resolved is None:
             return
-        source_ids = list(
-            dict.fromkeys(x for x in (sender_id, account_id, group_id) if x)
-        )
+        target_user_id, ws = resolved
+        source_ids = self._legacy_source_ids(sender_id, group_id, account_id)
         migrated = schedules.migrate_schedules(
             ws,
             source_ids,
@@ -907,13 +926,8 @@ class SignalBot(BotPlatform):
                     if chat_id not in self._group_ids:
                         remaining.append(entry)
                         continue
-                    target_uid = self._state_user_id(chat_id)
-                    workspace.migrate_current_workspace(
-                        uid,
-                        target_uid,
-                        self.platform_id,
-                        source_bot_ids=(self.platform_id,),
-                        source_bot_prefixes=(_LEGACY_SIGNAL_PLATFORM_PREFIX,),
+                    target_uid = self._migrate_current_workspace_to_group(
+                        uid, chat_id,
                     )
                     ws = workspace.get_current(target_uid, self.platform_id)
                     if ws and os.path.isdir(ws):
@@ -1017,22 +1031,6 @@ class SignalBot(BotPlatform):
         ):
             _created_at, old_key = self._recent_incoming_key_order.popleft()
             self._recent_incoming_keys.discard(old_key)
-
-
-def _split_text(text: str, limit: int = _SIGNAL_TEXT_LIMIT) -> list[str]:
-    if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
-    while text:
-        if len(text) <= limit:
-            chunks.append(text)
-            break
-        split_at = text.rfind("\n", 0, limit)
-        if split_at == -1:
-            split_at = limit
-        chunks.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
-    return chunks
 
 
 def _safe_error_message(exc: BaseException) -> str:

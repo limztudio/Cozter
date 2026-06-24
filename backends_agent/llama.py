@@ -33,7 +33,7 @@ import aiohttp
 from .. import agent_tools as tools
 from .. import config as cfg
 from ._http_proc import HttpAgentProcess, http_error_translator
-from .base import AgentResult, Backend, ChatEvent
+from .base import AgentResult, Backend, ChatEvent, effort_band
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +69,6 @@ class LlamaBackend(Backend):
             self._cached_models = self._fetch_models()
         return self._cached_models
 
-    def refresh_models(self) -> tuple[str, ...]:
-        """Re-query the server (e.g. after a model swap)."""
-        self._cached_models = self._fetch_models()
-        return self._cached_models
-
     def _fetch_models(self) -> tuple[str, ...]:
         url = cfg.get_llama_server_url().rstrip("/") + "/v1/models"
         try:
@@ -96,15 +91,7 @@ class LlamaBackend(Backend):
     def convert_effort(self, percent: int) -> str | None:
         # llama-server / OpenAI Chat Completions support the standard
         # 4-level effort vocabulary. Split 1-100 into roughly equal bands.
-        if percent <= 0:
-            return None
-        if percent < 25:
-            return "minimal"
-        if percent < 50:
-            return "low"
-        if percent < 75:
-            return "medium"
-        return "high"
+        return effort_band(percent, ("minimal", "low", "medium", "high"))
 
     async def launch(
         self,
@@ -170,16 +157,10 @@ class LlamaBackend(Backend):
         tool_repeat_counts: dict[str, int] = {}
 
         for _ in range(max_agent_turns):
-            payload: dict[str, Any] = {
-                "messages": messages,
-                "stream": True,
-            }
-            if request_model is not None:
-                payload["model"] = request_model
-            if reasoning_effort:
-                payload["reasoning_effort"] = reasoning_effort
+            payload = _completion_payload(
+                messages, request_model, reasoning_effort, tools_schema,
+            )
             if tools_schema is not None:
-                payload["tools"] = tools_schema
                 payload["tool_choice"] = "auto"
 
             assistant_text, tool_calls = await _stream_completion(
@@ -258,14 +239,9 @@ class LlamaBackend(Backend):
             ),
         })
 
-        payload: dict[str, Any] = {
-            "messages": messages,
-            "stream": True,
-        }
-        if request_model is not None:
-            payload["model"] = request_model
-        if reasoning_effort:
-            payload["reasoning_effort"] = reasoning_effort
+        payload = _completion_payload(
+            messages, request_model, reasoning_effort,
+        )
 
         assistant_text, _ = await _stream_completion(url, payload)
 
@@ -337,6 +313,25 @@ class LlamaBackend(Backend):
 # ---------------------------------------------------------------------------
 # Streaming chat-completions client
 # ---------------------------------------------------------------------------
+
+
+def _completion_payload(
+    messages: list[dict],
+    request_model: str | None,
+    reasoning_effort: str,
+    tools_schema: list[dict] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "messages": messages,
+        "stream": True,
+    }
+    if request_model is not None:
+        payload["model"] = request_model
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
+    if tools_schema is not None:
+        payload["tools"] = tools_schema
+    return payload
 
 
 async def _stream_completion(
