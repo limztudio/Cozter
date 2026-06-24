@@ -114,7 +114,7 @@ class SignalBot(BotPlatform):
             "send",
             {
                 "groupId": group_id,
-                "editTimestamp": handle.message_id,
+                "editTimestamp": _timestamp_rpc_param(handle.message_id),
                 "message": text,
             },
         )
@@ -126,7 +126,10 @@ class SignalBot(BotPlatform):
         group_id = self._group_id_for_chat(handle.chat_id)
         await self._rpc_request(
             "remoteDelete",
-            {"groupId": group_id, "targetTimestamp": handle.message_id},
+            {
+                "groupId": group_id,
+                "targetTimestamp": _timestamp_rpc_param(handle.message_id),
+            },
         )
 
     async def send_file(self, chat_id: str, path: str) -> None:
@@ -1258,6 +1261,10 @@ def _same_signal_id(left: str, right: str) -> bool:
 def _extract_timestamp_from_value(value: Any) -> str | None:
     timestamp = _find_key(value, "timestamp")
     return str(timestamp) if timestamp is not None else None
+
+
+def _timestamp_rpc_param(value: str) -> int:
+    return int(value)
 
 
 def _attachment_payload(value: Any) -> str:
