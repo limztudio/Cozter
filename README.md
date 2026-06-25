@@ -41,15 +41,37 @@ that works across every backend.
 
 ```bash
 git clone https://github.com/limztudio/Cozter.git
+cd Cozter
+python __main__.py -cli
+```
+
+That starts the local terminal chat surface without requiring bot tokens.
+From the parent directory you can run the package form instead:
+
+```bash
+python -m Cozter -cli
+```
+
+For Telegram, Slack, or Signal daemon mode, run without `-cli`:
+
+```bash
 python -m Cozter
 # first run writes Cozter/.config/config.json and exits;
 # fill in tokens and run again
 ```
 
 On startup, Cozter creates a project-local `.venv` when needed and
-auto-installs `requirements.txt`. Run `python -m Cozter -cli` if you
-don't have a Telegram, Slack, or Signal setup and want to try it in a
-terminal.
+auto-installs `requirements.txt`.
+
+## Requirements
+
+- Python 3.10+ (the codebase uses modern type syntax)
+- One agent backend CLI or server:
+  `codex`, `claude`, `copilot`, or an OpenAI-compatible HTTP server for
+  the `llama` backend
+- Optional chat-surface dependencies:
+  Telegram uses `python-telegram-bot`, Slack uses `slack-bolt`, and
+  Signal requires a separately installed `signal-cli` daemon
 
 ## Configuration
 
@@ -87,6 +109,8 @@ The CLI surface needs neither.
 `message_queue_size` caps each user's pending chat turns. The queue is
 persisted in `Cozter/.config/queue_<platform>.json`, so clean restarts,
 auto-updates, and crash recovery do not drop already accepted messages.
+CLI mode uses its own stable platform key (`cli:local`) and does not read
+or create daemon config.
 
 For Signal, `signal-cli` must already be installed and registered in the
 separate daemon config; each invite URL in `signal_group_urls` is resolved
@@ -117,7 +141,7 @@ runs commands in it, and stores per-workspace state under
   last writing into; consulted on every turn (and across bot restarts)
   so conversations resume in place instead of being re-routed
 - `settings.json` — chosen agent, model, permission, reasoning effort,
-  summary backend, summary model, compact interval
+  summary backend, summary model, compact interval, and colony interval
 - `colony.json` — workspace-wide long-term memory consolidated across
   sessions
 - `schedules.json` — recurring `/reserve` prompts and their last-fired
@@ -129,6 +153,11 @@ runs commands in it, and stores per-workspace state under
 Workspaces are recorded globally in `Cozter/.config/workspaces.json`
 (per-user current pick + the recent-workspaces list). Platform turn
 queues live beside it as `queue_<platform>.json`.
+
+The session router is only used when there is no valid
+`last_session.json` entry, such as a new workspace, a deleted session, or
+after `/newsession`. Otherwise each user continues the same session across
+bot restarts and platform reconnects.
 
 ## Commands
 
@@ -144,14 +173,23 @@ All chat surfaces speak the same command set:
 | `/summarymodel` | Pick the model for the summary backend |
 | `/permission` | full / auto / confirm / deny — how the agent treats tool calls |
 | `/effort` | 0–100 reasoning effort; each backend maps to its native scale |
-| `/compact [number]` | Show compaction state, or set the auto-compact interval |
+| `/compact [number]` | Show compaction state, or set messages between compactions |
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
 | `/refresh` | Drop the workspace's `.codex/` cache (use after an upgrade) |
-| `/stop` | Cancel the running agent turn |
+| `/stop` | Cancel the running agent turn and clear queued work |
 | `/inject <text>` | Add context to the running turn (the agent restarts with it) |
-| `/reserve`, `/schedules` | Cron-style scheduled prompts |
+| `/reserve` | Create a recurring scheduled prompt |
+| `/schedules` | List schedules and delete one by number |
 | `/version`, `/cancel`, `/start` | Self-explanatory |
+
+Most picker commands accept either the displayed number or the literal
+name. `/open` also accepts a recent-workspace number directly as
+`/open 2`.
+
+Schedules are stored per workspace in `.cozter/schedules.json`. The
+scheduler checks every 30 seconds and records `last_fired`, so a missed
+slot fires once after restart instead of being lost.
 
 ## Files and attachments
 
@@ -178,8 +216,13 @@ user's queued work pauses until the next message arrives.
 
 ## Plugins
 
-Drop a `.py` file into `agent_tools/plugins/` and every agent picks
-it up on next restart. One file, two invocation paths:
+The built-in HTTP-toolkit includes filesystem, shell, search, and fetch
+tools: `bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`,
+`delete_file`, `copy_file`, `move_file`, `make_dir`, `list_dir`, `glob`,
+`grep`, `web_search`, and `web_fetch`.
+
+Drop a `.py` file into `agent_tools/plugins/` and every agent picks it up
+on next restart. One file, two invocation paths:
 
 - **HTTP backends** (`llama` and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
@@ -221,6 +264,31 @@ standalone script (invoked by CLI backends via `bash`). See
 `agent_tools/plugins/README.md` and the shipped `current_time.py`
 plugin.
 
+The current plugin can also be run directly from the parent directory:
+
+```bash
+Cozter/.venv/bin/python -m Cozter.agent_tools.plugins.current_time '{"timezone":"Asia/Seoul"}'
+```
+
+## Backend behavior
+
+Each backend defines its own model list and permission mapping in
+`backends_agent/`:
+
+| Backend | Launch path | Default chat model | Default summary model |
+|---|---|---|---|
+| `codex` | `codex exec --json` | `gpt-5.5` | `gpt-5.4-mini` |
+| `claude_code` | `claude --print --output-format stream-json` | `default` | `haiku` |
+| `copilot` | `copilot --output-format json` | `claude-sonnet-4.6` | `claude-haiku-4.5` |
+| `llama` | OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
+
+Permission modes are best-effort across third-party CLIs. `codex` maps
+all four modes to native sandbox/approval flags. `llama` disables typed
+tools in `deny` mode. `claude_code` uses plan mode for `deny`, but cannot
+prompt interactively for `confirm` in chat mode. `copilot` has no usable
+interactive approval flow here, so non-`full` modes run with its
+non-blocking tool flag and stricter intents are logged.
+
 ## Reasoning effort
 
 `/effort` accepts `0`–`100` and is stored per workspace. `0` means "no
@@ -257,6 +325,8 @@ Cozter/
 ├── config.py             global config.json reader
 ├── updater.py            git fetch + restart loop
 ├── utils.py              shared helpers (atomic_write, drain_queue, ...)
+├── tests/                unittest coverage for state/config fallbacks
+├── .config/config.example.json
 │
 ├── backends_agent/       agent backends (one file per agent)
 │   ├── base.py             abstract Backend; convert_effort, supports_typed_plugins
@@ -302,3 +372,19 @@ are:
 The CLI-backend files (`codex.py`, `claude_code.py`, `copilot.py`) are
 thin: each defines `launch()` (build argv, spawn subprocess) and
 `parse_event()` (translate the CLI's JSONL events to `ChatEvent`s).
+
+## Development checks
+
+Run the current unit tests from the parent directory, or set
+`PYTHONPATH` to the parent when running inside the repository:
+
+```bash
+cd ..
+Cozter/.venv/bin/python -m unittest Cozter.tests.test_state_fallbacks
+```
+
+From inside `Cozter/`:
+
+```bash
+PYTHONPATH=.. .venv/bin/python -m unittest tests.test_state_fallbacks
+```
