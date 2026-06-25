@@ -15,6 +15,7 @@ from datetime import datetime
 
 from .utils import COZTER_DIR, take_recent_lines
 from .utils import atomic_write as _atomic_write
+from .utils import load_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +52,9 @@ def _load_last_session_map(workspace: str) -> dict:
     load-bearing state, so a broken file falls back to "no last session"
     rather than blocking the turn.
     """
-    path = _last_session_path(workspace)
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Corrupt last_session file (%s): %s", path, e)
-        return {}
-    return data if isinstance(data, dict) else {}
+    return load_json_object(
+        _last_session_path(workspace), "last_session file", logger,
+    )
 
 
 def get_last_session(workspace: str, user_id: int | str) -> str | None:

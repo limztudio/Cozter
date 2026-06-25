@@ -49,6 +49,28 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
         raise
 
 
+def load_json_object(
+    path: str,
+    label: str,
+    log: logging.Logger | None = None,
+) -> dict:
+    """Load a JSON object from *path*, returning {} on missing/invalid data."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        (log or logger).warning(
+            "Corrupt or unreadable %s (%s): %s", label, path, e,
+        )
+        return {}
+    if isinstance(data, dict):
+        return data
+    (log or logger).warning("Ignoring non-object %s (%s)", label, path)
+    return {}
+
+
 async def iter_stream_lines(
     stream: asyncio.StreamReader, chunk_size: int = 64 * 1024,
 ) -> AsyncIterator[str]:

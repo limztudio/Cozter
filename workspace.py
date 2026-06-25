@@ -1,11 +1,11 @@
 import asyncio
-import json
 import logging
 import os
 
 from . import backends_agent
 from .utils import CONFIG_DIR, COZTER_DIR
 from .utils import atomic_write as _atomic_write
+from .utils import load_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -13,27 +13,14 @@ WORKSPACE_STATE_PATH = os.path.join(CONFIG_DIR, "workspaces.json")
 MAX_RECENT = 50  # cap on stored recent-workspaces list
 
 
-def _load_json(path: str, label: str) -> dict:
-    """Load a JSON file, returning {} on missing/corrupt."""
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Corrupt or unreadable %s (%s): %s", label, path, e)
-            return {}
-        if isinstance(data, dict):
-            return data
-        logger.warning("Ignoring non-object %s (%s)", label, path)
-    return {}
-
-
 def _load_all() -> dict:
     """Load workspace state.
 
     Shape: {user_id_str: {current: {bot_id: path}, recent: [path, ...]}}.
     """
-    return _load_json(WORKSPACE_STATE_PATH, "workspace state file")
+    return load_json_object(
+        WORKSPACE_STATE_PATH, "workspace state file", logger,
+    )
 
 
 def _save_all(data: dict) -> None:
@@ -253,7 +240,9 @@ def _settings_path(workspace_path: str) -> str:
 
 
 def _load_settings(workspace_path: str) -> dict:
-    return _load_json(_settings_path(workspace_path), "workspace settings")
+    return load_json_object(
+        _settings_path(workspace_path), "workspace settings", logger,
+    )
 
 
 def _save_settings(workspace_path: str, settings: dict) -> None:

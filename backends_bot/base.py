@@ -14,7 +14,6 @@ adapters only deal with framework plumbing.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -28,6 +27,7 @@ from datetime import datetime
 from .. import agent, colony, schedules, session, updater, workspace
 from ..utils import atomic_write as _atomic_write
 from ..utils import drain_queue as _drain_queue
+from ..utils import load_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +318,20 @@ class BotPlatform(ABC):
     def _expect_input(self, user_id: str, callback: Handler) -> None:
         """Arm a one-shot text-input handler for *user_id*."""
         self._pending_input[user_id] = callback
+
+    def _ensure_task_lock(self, uid: str) -> asyncio.Lock:
+        lock = self._task_locks.get(uid)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._task_locks[uid] = lock
+        return lock
+
+    def _ensure_message_queue(self, uid: str) -> asyncio.Queue:
+        q = self._message_queues.get(uid)
+        if q is None:
+            q = asyncio.Queue(maxsize=self.max_queue_size)
+            self._message_queues[uid] = q
+        return q
 
     # ----- simple commands ------------------------------------------------
 
@@ -1067,17 +1081,9 @@ class BotPlatform(ABC):
         )
 
     def _read_queue_file(self) -> dict:
-        path = self._queue_file_path()
-        if not os.path.exists(path):
-            return {}
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(
-                "Corrupt or unreadable queue file (%s): %s", path, e,
-            )
-            return {}
+        return load_json_object(
+            self._queue_file_path(), "queue file", logger,
+        )
 
     def _write_queue_file(self, data: dict) -> None:
         _atomic_write(
@@ -1144,13 +1150,8 @@ class BotPlatform(ABC):
         for uid, entries in data.items():
             if not entries:
                 continue
-            if uid not in self._task_locks:
-                self._task_locks[uid] = asyncio.Lock()
-            if uid not in self._message_queues:
-                self._message_queues[uid] = asyncio.Queue(
-                    maxsize=self.max_queue_size,
-                )
-            q = self._message_queues[uid]
+            self._ensure_task_lock(uid)
+            q = self._ensure_message_queue(uid)
             for entry in entries:
                 # Oldest-first preserves the user's original ordering.
                 try:
@@ -1275,18 +1276,10 @@ class BotPlatform(ABC):
             )
             return
 
-        # Ensure both per-user maps exist. After a fresh bot start the
-        # scheduler can fire BEFORE the user types anything, so neither
-        # _message_queues nor _task_locks may have an entry yet —
-        # _drain_message_queue's bare ``self._task_locks[uid]`` lookup
-        # would otherwise KeyError and crash the drain task silently.
-        if uid not in self._task_locks:
-            self._task_locks[uid] = asyncio.Lock()
-        if uid not in self._message_queues:
-            self._message_queues[uid] = asyncio.Queue(
-                maxsize=self.max_queue_size,
-            )
-        q = self._message_queues[uid]
+        # After a fresh bot start the scheduler can fire before the user
+        # types anything, so create the per-user lock and queue on demand.
+        self._ensure_task_lock(uid)
+        q = self._ensure_message_queue(uid)
 
         # Check capacity BEFORE announcing — otherwise a user with a full
         # queue sees "⏰ Scheduled: X" immediately followed by "Queue full
@@ -1386,13 +1379,8 @@ class BotPlatform(ABC):
         uid = ctx.user_id
         chat_id = ctx.chat_id
         if self._update_check_pending or self._update_restart_pending:
-            if uid not in self._task_locks:
-                self._task_locks[uid] = asyncio.Lock()
-            if uid not in self._message_queues:
-                self._message_queues[uid] = asyncio.Queue(
-                    maxsize=self.max_queue_size,
-                )
-            q = self._message_queues[uid]
+            self._ensure_task_lock(uid)
+            q = self._ensure_message_queue(uid)
             if q.full():
                 await ctx.reply_text("Queue full. Try again after restart.")
             else:
@@ -1409,16 +1397,10 @@ class BotPlatform(ABC):
                 await ctx.reply_text(message)
             return
 
-        if uid not in self._task_locks:
-            self._task_locks[uid] = asyncio.Lock()
-        lock = self._task_locks[uid]
+        lock = self._ensure_task_lock(uid)
 
         if lock.locked():
-            if uid not in self._message_queues:
-                self._message_queues[uid] = asyncio.Queue(
-                    maxsize=self.max_queue_size,
-                )
-            q = self._message_queues[uid]
+            q = self._ensure_message_queue(uid)
             if q.full():
                 await ctx.reply_text("Queue full. Wait or /stop first.")
             else:
@@ -1695,7 +1677,7 @@ class BotPlatform(ABC):
             return
         # Defensive: if a queue exists, a lock must too. Create on demand
         # so a missing lock doesn't crash the drain task.
-        lock = self._task_locks.setdefault(uid, asyncio.Lock())
+        lock = self._ensure_task_lock(uid)
 
         while not q.empty():
             if self._update_check_pending or self._update_restart_pending:

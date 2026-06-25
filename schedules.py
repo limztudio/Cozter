@@ -11,13 +11,13 @@ Each ``<schedule_dict>``:
     {id, days, time, command, created, chat_id, user_id, last_fired?}
 """
 
-import json
 import logging
 import os
 from datetime import datetime, time as dt_time, timedelta
 
 from .utils import COZTER_DIR
 from .utils import atomic_write as _atomic_write
+from .utils import load_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -33,17 +33,7 @@ def _path(workspace: str) -> str:
 
 
 def _load_all(workspace: str) -> dict:
-    path = _path(workspace)
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                return data
-    except (json.JSONDecodeError, OSError):
-        logger.warning("Corrupt schedules file, ignoring: %s", path)
-    return {}
+    return load_json_object(_path(workspace), "schedules file", logger)
 
 
 def _save_all(workspace: str, data: dict) -> None:
