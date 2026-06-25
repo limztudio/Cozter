@@ -52,7 +52,7 @@ def _get_nonempty_string(key: str) -> str:
 def _get_positive_int(key: str) -> int:
     """Return ``cfg[key]`` if it's an ``int > 0``, else the default."""
     val = _read_config_value(key)
-    if isinstance(val, int) and val > 0:
+    if isinstance(val, int) and not isinstance(val, bool) and val > 0:
         return val
     return _DEFAULT_CONFIG[key]
 

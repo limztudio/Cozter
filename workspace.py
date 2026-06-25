@@ -18,9 +18,13 @@ def _load_json(path: str, label: str) -> dict:
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Corrupt or unreadable %s (%s): %s", label, path, e)
+            return {}
+        if isinstance(data, dict):
+            return data
+        logger.warning("Ignoring non-object %s (%s)", label, path)
     return {}
 
 
@@ -37,16 +41,29 @@ def _save_all(data: dict) -> None:
     _atomic_write(WORKSPACE_STATE_PATH, data, CONFIG_DIR)
 
 
-def _get_user(user_id: int) -> dict:
-    return _load_all().get(str(user_id), {"current": {}, "recent": []})
+def _get_user(user_id: int | str) -> dict:
+    user_state = _load_all().get(str(user_id))
+    return user_state if isinstance(user_state, dict) else {
+        "current": {},
+        "recent": [],
+    }
 
 
-def get_current(user_id: int, bot_id: int | str = "_default") -> str | None:
-    return _get_user(user_id).get("current", {}).get(str(bot_id))
+def get_current(
+    user_id: int | str, bot_id: int | str = "_default",
+) -> str | None:
+    current = _get_user(user_id).get("current", {})
+    if not isinstance(current, dict):
+        return None
+    path = current.get(str(bot_id))
+    return path if isinstance(path, str) and path else None
 
 
-def get_recent(user_id: int, limit: int = 10) -> list[str]:
-    return _get_user(user_id).get("recent", [])[:limit]
+def get_recent(user_id: int | str, limit: int = 10) -> list[str]:
+    recent = _get_user(user_id).get("recent", [])
+    if not isinstance(recent, list):
+        return []
+    return [p for p in recent if isinstance(p, str) and p][:limit]
 
 
 def iter_current_workspaces(
@@ -67,15 +84,21 @@ def iter_current_workspaces(
 
 
 def select_workspace(
-    user_id: int, path: str, bot_id: int | str = "_default",
+    user_id: int | str, path: str, bot_id: int | str = "_default",
 ) -> None:
     """Set path as current workspace for a bot and push it to recent."""
     all_state = _load_all()
     uid = str(user_id)
     user_state = all_state.get(uid, {"current": {}, "recent": []})
+    if not isinstance(user_state, dict):
+        user_state = {"current": {}, "recent": []}
+    if not isinstance(user_state.get("current"), dict):
+        user_state["current"] = {}
     user_state["current"][str(bot_id)] = path
 
     recent = user_state.get("recent", [])
+    if not isinstance(recent, list):
+        recent = []
     if path in recent:
         recent.remove(path)
     recent.insert(0, path)
@@ -239,14 +262,28 @@ def _save_settings(workspace_path: str, settings: dict) -> None:
     _atomic_write(_settings_path(workspace_path), settings, tmp_dir)
 
 
-def _set_setting(workspace_path: str, key: str, value: str) -> None:
+def _set_setting(workspace_path: str, key: str, value: object) -> None:
     settings = _load_settings(workspace_path)
     settings[key] = value
     _save_settings(workspace_path, settings)
 
 
+def _coerce_backend_name(name: object, default: str = DEFAULT_BACKEND) -> str:
+    if isinstance(name, str) and name in AVAILABLE_BACKENDS:
+        return name
+    return default
+
+
+def _coerce_permission(permission: object) -> str:
+    return (
+        permission
+        if isinstance(permission, str) and permission in AVAILABLE_PERMISSIONS
+        else DEFAULT_PERMISSION
+    )
+
+
 def get_backend_name(workspace_path: str) -> str:
-    return _load_settings(workspace_path).get("backend", DEFAULT_BACKEND)
+    return _coerce_backend_name(_load_settings(workspace_path).get("backend"))
 
 
 def set_backend_name(workspace_path: str, name: str) -> None:
@@ -259,8 +296,9 @@ def set_backend_name(workspace_path: str, name: str) -> None:
 
 def get_summary_backend_name(workspace_path: str) -> str:
     """Backend that runs compaction / auto-titling for this workspace."""
-    return _load_settings(workspace_path).get(
-        "summary_backend", DEFAULT_SUMMARY_BACKEND,
+    return _coerce_backend_name(
+        _load_settings(workspace_path).get("summary_backend"),
+        DEFAULT_SUMMARY_BACKEND,
     )
 
 
@@ -292,13 +330,15 @@ def _model_keys(backend_name: str) -> tuple[str, str]:
 def _resolve_model(
     settings: dict, backend_name: str, summary: bool,
 ) -> str:
+    backend_name = _coerce_backend_name(backend_name)
     backend = backends_agent.get_backend(backend_name)
     model_key, summary_key = _model_keys(backend_name)
     key = summary_key if summary else model_key
     default = (
         backend.default_summary_model if summary else backend.default_model
     )
-    return settings.get(key, default)
+    configured = settings.get(key)
+    return configured if isinstance(configured, str) and configured else default
 
 
 def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
@@ -309,20 +349,24 @@ def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
     chat turns while a cheap local llama handles compaction.
     """
     s = _load_settings(workspace_path)
-    backend_name = s.get("backend", DEFAULT_BACKEND)
-    summary_backend = s.get("summary_backend", DEFAULT_SUMMARY_BACKEND)
+    backend_name = _coerce_backend_name(s.get("backend"))
+    summary_backend = _coerce_backend_name(
+        s.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
+    )
     return (
         backend_name,
         _resolve_model(s, backend_name, summary=False),
         _resolve_model(s, summary_backend, summary=True),
-        s.get("permission", DEFAULT_PERMISSION),
+        _coerce_permission(s.get("permission")),
         summary_backend,
     )
 
 
 def get_model(workspace_path: str) -> str:
     s = _load_settings(workspace_path)
-    return _resolve_model(s, s.get("backend", DEFAULT_BACKEND), summary=False)
+    return _resolve_model(
+        s, _coerce_backend_name(s.get("backend")), summary=False,
+    )
 
 
 def set_model(workspace_path: str, model: str) -> None:
@@ -334,7 +378,9 @@ def set_model(workspace_path: str, model: str) -> None:
 def get_summary_model(workspace_path: str) -> str:
     """Summary model scoped to the summary backend (not the chat backend)."""
     s = _load_settings(workspace_path)
-    summary_backend = s.get("summary_backend", DEFAULT_SUMMARY_BACKEND)
+    summary_backend = _coerce_backend_name(
+        s.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
+    )
     return _resolve_model(s, summary_backend, summary=True)
 
 
@@ -346,10 +392,15 @@ def set_summary_model(workspace_path: str, model: str) -> None:
 
 
 def get_permission(workspace_path: str) -> str:
-    return _load_settings(workspace_path).get("permission", DEFAULT_PERMISSION)
+    return _coerce_permission(_load_settings(workspace_path).get("permission"))
 
 
 def set_permission(workspace_path: str, permission: str) -> None:
+    if permission not in AVAILABLE_PERMISSIONS:
+        raise ValueError(
+            f"Unknown permission: {permission}. "
+            f"Available: {AVAILABLE_PERMISSIONS}"
+        )
     _set_setting(workspace_path, "permission", permission)
 
 

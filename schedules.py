@@ -183,6 +183,7 @@ def parse_days(text: str) -> list[str]:
     Accepts ``"all"``, comma-separated names (``"mon,wed,fri"``), or
     1-7 numbers (``"1,3,5"``). Returns ``[]`` on invalid input.
     """
+    text = text.strip().lower()
     if text == "all":
         return list(DAY_ABBREV)
     parts = [p.strip() for p in text.split(",") if p.strip()]

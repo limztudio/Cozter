@@ -51,10 +51,24 @@ def _load(workspace: str) -> dict:
         return {"items": [], "compact_count": 0}
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (json.JSONDecodeError, OSError):
         logger.warning("Corrupt colony file, ignoring: %s", path)
         return {"items": [], "compact_count": 0}
+    if not isinstance(data, dict):
+        logger.warning("Ignoring non-object colony file: %s", path)
+        return {"items": [], "compact_count": 0}
+    items = data.get("items")
+    if not isinstance(items, list):
+        items = []
+    data["items"] = [
+        item for item in items if isinstance(item, str) and item.strip()
+    ][:COLONY_CAP]
+    compact_count = data.get("compact_count", 0)
+    if not isinstance(compact_count, int) or isinstance(compact_count, bool):
+        compact_count = 0
+    data["compact_count"] = max(0, compact_count)
+    return data
 
 
 def _save(workspace: str, data: dict) -> None:
@@ -64,7 +78,7 @@ def _save(workspace: str, data: dict) -> None:
 
 
 def get_items(workspace: str) -> list[str]:
-    return _load(workspace)["items"]
+    return list(_load(workspace)["items"])
 
 
 def set_items(workspace: str, items: list[str]) -> None:
@@ -92,7 +106,10 @@ def bump_compact_count(workspace: str) -> int:
     compactions don't both observe the same count.
     """
     data = _load(workspace)
-    data["compact_count"] = int(data.get("compact_count") or 0) + 1
+    compact_count = data.get("compact_count", 0)
+    if not isinstance(compact_count, int) or isinstance(compact_count, bool):
+        compact_count = 0
+    data["compact_count"] = compact_count + 1
     _save(workspace, data)
     return data["compact_count"]
 
