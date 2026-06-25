@@ -216,7 +216,7 @@ PERMISSION_DESCRIPTIONS = {
 
 # Reasoning effort: a single 0-100 percentage. Each agent backend maps
 # the percentage to its own native scale (codex has 5 levels including
-# "xhigh", llama has 4, claude_code is binary, copilot ignores entirely).
+# "xhigh", llama has 4, claude_code and copilot both have 5).
 # This sidesteps the per-backend vocabulary problem - the user picks one
 # number and every backend reacts in its own way.
 #
