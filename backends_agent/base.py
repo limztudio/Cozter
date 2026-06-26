@@ -75,6 +75,7 @@ class Backend(ABC):
     available_models: tuple[str, ...] = ()
     default_model: str = ""
     default_summary_model: str = ""
+    effort_levels: tuple[str, ...] = ()
 
     # True for backends that consume :data:`agent_tools.TOOL_SCHEMA`
     # directly as typed tool definitions (llama and any future
@@ -125,16 +126,10 @@ class Backend(ABC):
         """Translate a 0-100 percentage to the backend's native effort form.
 
         Return ``None`` to skip sending an effort signal - either because
-        the percentage is 0 (no override) or because the backend has no
-        equivalent control. Backends override this with their own banding
-        (e.g. codex has 5 levels with ``xhigh`` at the top, llama has 4
-        levels topping out at ``high``, claude_code is binary).
-
-        Default implementation always returns ``None``, which is the
-        correct behavior for backends with no reasoning-effort control.
+        the percentage is 0 (no override) or because the backend leaves
+        :attr:`effort_levels` empty.
         """
-        del percent  # unused in the default implementation
-        return None
+        return effort_band(percent, self.effort_levels)
 
     @abstractmethod
     def parse_event(self, event: dict, result: AgentResult) -> None:

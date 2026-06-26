@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from .base import (
-    AgentResult, Backend, ChatEvent, effort_band, resolve_executable_prefix,
+    AgentResult, Backend, ChatEvent, resolve_executable_prefix,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,14 +23,8 @@ class CodexBackend(Backend):
     )
     default_model = "gpt-5.5"
     default_summary_model = "gpt-5.4-mini"
-
-    def convert_effort(self, percent: int) -> str | None:
-        # Codex CLI offers 5 levels including ``xhigh`` (above codex's
-        # own ``high``). Split 1-100 into roughly equal bands so the
-        # user's percentage maps onto each level deterministically.
-        return effort_band(
-            percent, ("minimal", "low", "medium", "high", "xhigh"),
-        )
+    # Codex CLI offers 5 levels including ``xhigh``.
+    effort_levels = ("minimal", "low", "medium", "high", "xhigh")
 
     async def launch(
         self,

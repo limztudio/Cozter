@@ -33,7 +33,7 @@ import aiohttp
 from .. import agent_tools as tools
 from .. import config as cfg
 from ._http_proc import HttpAgentProcess, http_error_translator
-from .base import AgentResult, Backend, ChatEvent, effort_band
+from .base import AgentResult, Backend, ChatEvent
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,9 @@ class LlamaBackend(Backend):
     # access. Stored as a tuple per the Backend contract.
     default_model = "auto"
     default_summary_model = "auto"
+    # llama-server / OpenAI Chat Completions support the standard
+    # 4-level effort vocabulary.
+    effort_levels = ("minimal", "low", "medium", "high")
 
     def __init__(self) -> None:
         self._cached_models: tuple[str, ...] | None = None
@@ -87,11 +90,6 @@ class LlamaBackend(Backend):
             return ("auto",)
 
     # ---- launch ---------------------------------------------------------
-
-    def convert_effort(self, percent: int) -> str | None:
-        # llama-server / OpenAI Chat Completions support the standard
-        # 4-level effort vocabulary. Split 1-100 into roughly equal bands.
-        return effort_band(percent, ("minimal", "low", "medium", "high"))
 
     async def launch(
         self,

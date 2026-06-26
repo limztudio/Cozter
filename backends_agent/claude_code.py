@@ -22,7 +22,7 @@ import logging
 import os
 
 from .base import (
-    AgentResult, Backend, ChatEvent, effort_band, resolve_executable_prefix,
+    AgentResult, Backend, ChatEvent, resolve_executable_prefix,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,18 +63,13 @@ class ClaudeCodeBackend(Backend):
     )
     default_model = "default"
     default_summary_model = "haiku"
+    effort_levels = ("low", "medium", "high", "xhigh", "max")
 
     # File-editing tools whose tool_use blocks we surface as kind="file"
     # ChatEvents (the rest of the tool name is kept as the action label).
     _FILE_TOOLS = frozenset({
         "Write", "Edit", "MultiEdit", "NotebookEdit",
     })
-
-    def convert_effort(self, percent: int) -> str | None:
-        # Claude Code accepts low/medium/high/xhigh/max via --effort.
-        return effort_band(
-            percent, ("low", "medium", "high", "xhigh", "max"),
-        )
 
     async def launch(
         self,
