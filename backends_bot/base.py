@@ -1085,6 +1085,12 @@ class BotPlatform(ABC):
             self._queue_file_path(), "queue file", logger,
         )
 
+    @staticmethod
+    def _queue_entries(value: object) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+        return [entry for entry in value if isinstance(entry, dict)]
+
     def _write_queue_file(self, data: dict) -> None:
         _atomic_write(
             self._queue_file_path(), data, workspace.CONFIG_DIR,
@@ -1102,7 +1108,9 @@ class BotPlatform(ABC):
             entry["ephemeral"] = True
         async with self._queue_file_lock:
             data = self._read_queue_file()
-            data.setdefault(uid, []).append(entry)
+            entries = self._queue_entries(data.get(uid))
+            entries.append(entry)
+            data[uid] = entries
             self._write_queue_file(data)
         return entry_id
 
@@ -1111,8 +1119,11 @@ class BotPlatform(ABC):
     ) -> None:
         async with self._queue_file_lock:
             data = self._read_queue_file()
-            entries = data.get(uid)
+            entries = self._queue_entries(data.get(uid))
             if not entries:
+                if uid in data:
+                    data.pop(uid, None)
+                    self._write_queue_file(data)
                 return
             remaining = [e for e in entries if e.get("id") != entry_id]
             if len(remaining) == len(entries):
@@ -1129,9 +1140,7 @@ class BotPlatform(ABC):
             entries = data.pop(uid, None)
             if entries is not None:
                 self._write_queue_file(data)
-                if isinstance(entries, list):
-                    return len(entries)
-                return 1
+                return len(self._queue_entries(entries)) or 1
         return 0
 
     async def restore_queues(self) -> None:
@@ -1148,6 +1157,7 @@ class BotPlatform(ABC):
 
         drained_users: list[str] = []
         for uid, entries in data.items():
+            entries = self._queue_entries(entries)
             if not entries:
                 continue
             self._ensure_task_lock(uid)

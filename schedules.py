@@ -42,11 +42,19 @@ def _save_all(workspace: str, data: dict) -> None:
     _atomic_write(_path(workspace), data, tmp_dir=target_dir)
 
 
+def _schedule_list(data: dict, user_id: str | int) -> list:
+    schedules = data.get(str(user_id), [])
+    return schedules if isinstance(schedules, list) else []
+
+
 def add_schedule(
     workspace: str, user_id: str | int, schedule: dict,
 ) -> None:
     data = _load_all(workspace)
-    data.setdefault(str(user_id), []).append(schedule)
+    key = str(user_id)
+    schedules = _schedule_list(data, key)
+    schedules.append(schedule)
+    data[key] = schedules
     _save_all(workspace, data)
 
 
@@ -55,8 +63,11 @@ def remove_schedule(
 ) -> bool:
     data = _load_all(workspace)
     key = str(user_id)
-    schedules = data.get(key, [])
-    kept = [s for s in schedules if s.get("id") != schedule_id]
+    schedules = _schedule_list(data, key)
+    kept = [
+        s for s in schedules
+        if not (isinstance(s, dict) and s.get("id") == schedule_id)
+    ]
     if len(kept) == len(schedules):
         return False
     if kept:
@@ -70,12 +81,19 @@ def remove_schedule(
 def list_schedules(
     workspace: str, user_id: str | int,
 ) -> list[dict]:
-    return list(_load_all(workspace).get(str(user_id), []))
+    return [
+        s for s in _schedule_list(_load_all(workspace), user_id)
+        if isinstance(s, dict)
+    ]
 
 
 def list_schedule_user_ids(workspace: str) -> list[str]:
     """Return user keys that currently own schedules in *workspace*."""
-    return [str(uid) for uid in _load_all(workspace)]
+    return [
+        str(uid)
+        for uid, entries in _load_all(workspace).items()
+        if isinstance(entries, list)
+    ]
 
 
 def migrate_schedules(
@@ -151,9 +169,11 @@ def update_schedule_fired(
 ) -> None:
     data = _load_all(workspace)
     key = str(user_id)
-    schedules = data.get(key, [])
+    schedules = _schedule_list(data, key)
     changed = False
     for s in schedules:
+        if not isinstance(s, dict):
+            continue
         if s.get("id") == schedule_id:
             s["last_fired"] = fired_at
             changed = True

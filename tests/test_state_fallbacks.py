@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from Cozter import colony, config, schedules, workspace
+from Cozter.backends_bot.base import BotPlatform
 
 
 class WorkspaceStateFallbackTests(unittest.TestCase):
@@ -51,6 +52,52 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             finally:
                 workspace.WORKSPACE_STATE_PATH = old_path
 
+    def test_iter_current_workspaces_ignores_malformed_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "workspaces.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "u1": "not-object",
+                    "u2": {"current": "not-object"},
+                    "u3": {"current": {"bot": "/tmp/ws"}},
+                    "u4": {"current": {"bot": ""}},
+                }, f)
+
+            old_path = workspace.WORKSPACE_STATE_PATH
+            workspace.WORKSPACE_STATE_PATH = path
+            try:
+                self.assertEqual(
+                    workspace.iter_current_workspaces("bot"),
+                    [("u3", "/tmp/ws")],
+                )
+            finally:
+                workspace.WORKSPACE_STATE_PATH = old_path
+
+    def test_workspace_migration_normalizes_target_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "workspaces.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "source": {"current": {"bot": "/tmp/ws"}},
+                    "target": {"current": "not-object", "recent": []},
+                }, f)
+
+            old_path = workspace.WORKSPACE_STATE_PATH
+            workspace.WORKSPACE_STATE_PATH = path
+            try:
+                self.assertTrue(
+                    workspace.migrate_current_workspace(
+                        "source", "target", "bot",
+                    )
+                )
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                self.assertEqual(
+                    data["target"]["current"]["bot"], "/tmp/ws",
+                )
+            finally:
+                workspace.WORKSPACE_STATE_PATH = old_path
+
     def test_set_permission_rejects_unknown_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
@@ -93,6 +140,48 @@ class ScheduleParserTests(unittest.TestCase):
         self.assertEqual(
             schedules.parse_days(" Mon, WED, 5 "),
             ["mon", "wed", "fri"],
+        )
+
+    def test_schedule_store_ignores_malformed_user_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            path = os.path.join(tmp, ".cozter", "schedules.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "u1": "not-list",
+                    "u2": [{"id": "ok"}, "not-object"],
+                    "u3": {"id": "not-list"},
+                }, f)
+
+            self.assertEqual(schedules.list_schedules(tmp, "u1"), [])
+            self.assertEqual(schedules.list_schedules(tmp, "u2"), [{"id": "ok"}])
+            self.assertEqual(schedules.list_schedule_user_ids(tmp), ["u2"])
+
+            schedules.add_schedule(tmp, "u1", {"id": "new"})
+            self.assertEqual(schedules.list_schedules(tmp, "u1"), [{"id": "new"}])
+
+    def test_schedule_mutations_skip_non_dict_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            path = os.path.join(tmp, ".cozter", "schedules.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"u1": ["not-object", {"id": "a"}]}, f)
+
+            schedules.update_schedule_fired(tmp, "u1", "a", "2026-01-01T00:00:00")
+            self.assertEqual(
+                schedules.list_schedules(tmp, "u1"),
+                [{"id": "a", "last_fired": "2026-01-01T00:00:00"}],
+            )
+            self.assertTrue(schedules.remove_schedule(tmp, "u1", "a"))
+            self.assertEqual(schedules.list_schedules(tmp, "u1"), [])
+
+
+class QueueStateFallbackTests(unittest.TestCase):
+    def test_queue_entries_filters_malformed_values(self) -> None:
+        self.assertEqual(BotPlatform._queue_entries("not-list"), [])
+        self.assertEqual(
+            BotPlatform._queue_entries([{"id": "ok"}, "not-object"]),
+            [{"id": "ok"}],
         )
 
 

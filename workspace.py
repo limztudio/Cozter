@@ -24,8 +24,9 @@ def _load_all() -> dict:
 
 
 def _save_all(data: dict) -> None:
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    _atomic_write(WORKSPACE_STATE_PATH, data, CONFIG_DIR)
+    target_dir = os.path.dirname(WORKSPACE_STATE_PATH) or "."
+    os.makedirs(target_dir, exist_ok=True)
+    _atomic_write(WORKSPACE_STATE_PATH, data, target_dir)
 
 
 def _get_user(user_id: int | str) -> dict:
@@ -64,8 +65,13 @@ def iter_current_workspaces(
     """
     pairs: list[tuple[str, str]] = []
     for uid, state in _load_all().items():
-        path = state.get("current", {}).get(str(bot_id))
-        if path:
+        if not isinstance(state, dict):
+            continue
+        current = state.get("current")
+        if not isinstance(current, dict):
+            continue
+        path = current.get(str(bot_id))
+        if isinstance(path, str) and path:
             pairs.append((uid, path))
     return pairs
 
@@ -119,7 +125,10 @@ def migrate_current_workspace(
     target_state = all_state.get(target_uid)
     if not isinstance(target_state, dict):
         target_state = {"current": {}, "recent": []}
-    target_current = target_state.setdefault("current", {})
+    target_current = target_state.get("current")
+    if not isinstance(target_current, dict):
+        target_current = {}
+        target_state["current"] = target_current
     if target_current.get(target_bot):
         return False
 
