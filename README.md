@@ -63,6 +63,12 @@ python -m Cozter
 On startup, Cozter creates a project-local `.venv` when needed and
 auto-installs `requirements.txt`.
 
+CLI mode intentionally skips daemon configuration: it does not read or
+create `.config/config.json`, and it uses the stable local platform key
+`cli:local` for workspace/session state. Daemon mode (`python -m Cozter`
+without `-cli`) validates `.config/config.json` before any platform
+starts.
+
 ## Requirements
 
 - Python 3.10+ (the codebase uses modern type syntax)
@@ -112,15 +118,18 @@ auto-updates, and crash recovery do not drop already accepted messages.
 CLI mode uses its own stable platform key (`cli:local`) and does not read
 or create daemon config.
 
-For Signal, `signal-cli` must already be installed and registered in the
-separate daemon config; each invite URL in `signal_group_urls` is resolved
-with `signal-cli listGroups` or joined with `signal-cli joinGroup --uri`
-when the bot starts. Set
-`signal_jsonrpc_socket` to a shared Unix socket path when Cozter and
-other local scripts should reuse one `signal-cli daemon`. Cozter only
-connects to that socket; run the daemon from a service manager such as
-systemd to own the daemon lifecycle. This machine's shared daemon socket is
-`/run/signal-cli/socket`.
+For Signal, `signal-cli` must already be installed, registered, and
+running as a JSON-RPC daemon. Each invite URL in `signal_group_urls` is
+resolved from the daemon's known groups or joined at startup. Set
+`signal_jsonrpc_socket` to the Unix socket exposed by that daemon, for
+example `/run/signal-cli/socket`. Cozter only connects to the socket; run
+and restart the `signal-cli daemon` from a service manager such as
+systemd.
+
+The Signal phone number, socket path, and `signal-cli` binary location are
+owned by that daemon/service setup rather than by Cozter's
+`.config/config.json`. A local daemon config or service environment might
+carry fields like:
 
 ```json
 {
@@ -153,6 +162,14 @@ runs commands in it, and stores per-workspace state under
 Workspaces are recorded globally in `Cozter/.config/workspaces.json`
 (per-user current pick + the recent-workspaces list). Platform turn
 queues live beside it as `queue_<platform>.json`.
+
+The global runtime files are deliberately small JSON documents:
+
+- `.config/config.json` — daemon chat-surface and backend settings
+- `.config/workspaces.json` — current/recent workspace selections per
+  user and platform
+- `.config/queue_<platform>.json` — persisted pending turns so accepted
+  work survives restarts, crashes, and auto-updates
 
 The session router is only used when there is no valid
 `last_session.json` entry, such as a new workspace, a deleted session, or
@@ -189,7 +206,10 @@ name. `/open` also accepts a recent-workspace number directly as
 
 Schedules are stored per workspace in `.cozter/schedules.json`. The
 scheduler checks every 30 seconds and records `last_fired`, so a missed
-slot fires once after restart instead of being lost.
+slot fires once after restart instead of being lost. Scheduled prompts run
+through the same persistent queue as user messages, but use a fresh
+ephemeral session that is deleted after the turn; they do not append to
+the user's current conversation.
 
 ## Files and attachments
 
@@ -222,7 +242,9 @@ tools: `bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`,
 `grep`, `web_search`, and `web_fetch`.
 
 Drop a `.py` file into `agent_tools/plugins/` and every agent picks it up
-on next restart. One file, two invocation paths:
+on next restart. Files whose names start with `_` are skipped, which is
+useful for disabled examples or local scratch tools. One file, two
+invocation paths:
 
 - **HTTP backends** (`llama` and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
@@ -270,6 +292,12 @@ The current plugin can also be run directly from the parent directory:
 Cozter/.venv/bin/python -m Cozter.agent_tools.plugins.current_time '{"timezone":"Asia/Seoul"}'
 ```
 
+HTTP-backend tool results are capped before they are fed back into the
+model, keeping accidental huge outputs from consuming the whole context.
+CLI backends rely on their own bundled shell tool for plugin execution, so
+the plugin prelude only exposes how to call the extra tools; it does not
+change the CLI's native tool sandbox.
+
 ## Backend behavior
 
 Each backend defines its own model list and permission mapping in
@@ -313,6 +341,7 @@ setting.
 ```
 Cozter/
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
+├── .config/              config, workspace index, and persistent queues
 ├── backends_bot/         chat surfaces (Telegram / Slack / Signal / CLI)
 ├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
 ├── session.py            per-workspace conversation persistence
@@ -322,7 +351,7 @@ Cozter/
 ├── titling.py            auto-titles new sessions from their first turn
 ├── schedules.py          /reserve cron-style scheduled prompts
 ├── workspace.py          per-workspace settings (model, permission, effort, ...)
-├── config.py             global config.json reader
+├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
 ├── utils.py              shared helpers (atomic_write, drain_queue, ...)
 ├── tests/                unittest coverage for state/config fallbacks
