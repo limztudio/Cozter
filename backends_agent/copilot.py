@@ -33,10 +33,10 @@ class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
     # Copilot's CLI model picker is narrower than Copilot's broader product
-    # catalog. These are the documented model names converted to the CLI's
-    # slug style; availability still depends on the user's Copilot plan and
-    # organization policy. Claude Fable 5 is omitted while GitHub marks it
-    # temporarily unavailable.
+    # catalog. These are the documented Copilot CLI models converted to slug
+    # style; availability still depends on the user's Copilot plan and
+    # organization policy. Models GitHub currently marks unavailable for the
+    # CLI, plus temporarily disabled Claude Fable 5, are omitted.
     available_models = (
         "auto",
         "claude-sonnet-4.6",
@@ -52,12 +52,9 @@ class CopilotBackend(Backend):
         "claude-opus-4.6-fast",
         "claude-opus-4.5",
         "gpt-5.3-codex",
-        "gemini-2.5-pro",
-        "gemini-3-flash",
         "gemini-3.1-pro-preview",
         "gemini-3.5-flash",
         "mai-code-1-flash",
-        "raptor-mini",
     )
     default_model = "claude-sonnet-4.6"
     default_summary_model = "claude-haiku-4.5"
