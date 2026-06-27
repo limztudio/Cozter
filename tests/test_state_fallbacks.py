@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import tempfile
@@ -5,6 +6,37 @@ import unittest
 
 from Cozter import colony, config, schedules, workspace
 from Cozter.backends_bot.base import BotPlatform
+
+
+class QueueRestoreBot(BotPlatform):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.drained_users: list[str] = []
+
+    @property
+    def platform_id(self) -> str:
+        return "test:queue"
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def send_text(self, chat_id: str, text: str, *, rich: bool = False):
+        return None
+
+    async def edit_text(self, handle, text: str) -> None:
+        pass
+
+    async def delete_message(self, handle) -> None:
+        pass
+
+    async def send_file(self, chat_id: str, path: str) -> None:
+        pass
+
+    async def _drain_message_queue(self, uid: str) -> None:
+        self.drained_users.append(uid)
 
 
 class WorkspaceStateFallbackTests(unittest.TestCase):
@@ -183,6 +215,58 @@ class QueueStateFallbackTests(unittest.TestCase):
             BotPlatform._queue_entries([{"id": "ok"}, "not-object"]),
             [{"id": "ok"}],
         )
+
+    def test_restore_queues_keeps_entries_over_default_capacity(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                try:
+                    bot = QueueRestoreBot(["u1"], max_queue_size=1)
+                    existing_queue = bot._ensure_message_queue("u1")
+                    existing_queue.put_nowait((
+                        "already queued", "chat", "existing-id", False,
+                    ))
+                    path = bot._queue_file_path()
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "u1": [
+                                {
+                                    "id": "first-id",
+                                    "text": "first",
+                                    "chat_id": "chat",
+                                },
+                                {
+                                    "id": "second-id",
+                                    "text": "second",
+                                    "chat_id": "chat",
+                                    "ephemeral": True,
+                                },
+                            ],
+                        }, f)
+
+                    await bot.restore_queues()
+                    await asyncio.sleep(0)
+
+                    queue = bot._message_queues["u1"]
+                    self.assertEqual(queue.qsize(), 3)
+                    self.assertEqual(
+                        queue.get_nowait(),
+                        ("already queued", "chat", "existing-id", False),
+                    )
+                    self.assertEqual(
+                        queue.get_nowait(),
+                        ("first", "chat", "first-id", False),
+                    )
+                    self.assertEqual(
+                        queue.get_nowait(),
+                        ("second", "chat", "second-id", True),
+                    )
+                    self.assertEqual(bot.drained_users, ["u1"])
+                finally:
+                    workspace.CONFIG_DIR = old_config_dir
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

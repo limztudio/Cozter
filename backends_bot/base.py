@@ -326,10 +326,19 @@ class BotPlatform(ABC):
             self._task_locks[uid] = lock
         return lock
 
-    def _ensure_message_queue(self, uid: str) -> asyncio.Queue:
+    def _ensure_message_queue(
+        self, uid: str, *, min_size: int = 0,
+    ) -> asyncio.Queue:
         q = self._message_queues.get(uid)
+        maxsize = max(self.max_queue_size, min_size)
         if q is None:
-            q = asyncio.Queue(maxsize=self.max_queue_size)
+            q = asyncio.Queue(maxsize=maxsize)
+            self._message_queues[uid] = q
+        elif q.maxsize and q.maxsize < maxsize:
+            replacement: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+            while not q.empty():
+                replacement.put_nowait(q.get_nowait())
+            q = replacement
             self._message_queues[uid] = q
         return q
 
@@ -1161,22 +1170,19 @@ class BotPlatform(ABC):
             if not entries:
                 continue
             self._ensure_task_lock(uid)
-            q = self._ensure_message_queue(uid)
+            existing_q = self._message_queues.get(uid)
+            existing_size = existing_q.qsize() if existing_q else 0
+            q = self._ensure_message_queue(
+                uid, min_size=existing_size + len(entries),
+            )
             for entry in entries:
                 # Oldest-first preserves the user's original ordering.
-                try:
-                    q.put_nowait((
-                        entry.get("text", ""),
-                        entry.get("chat_id", ""),
-                        entry.get("id", ""),
-                        bool(entry.get("ephemeral", False)),
-                    ))
-                except asyncio.QueueFull:
-                    logger.warning(
-                        "Restore dropped entry for user=%s"
-                        " (queue at capacity)", uid,
-                    )
-                    break
+                q.put_nowait((
+                    entry.get("text", ""),
+                    entry.get("chat_id", ""),
+                    entry.get("id", ""),
+                    bool(entry.get("ephemeral", False)),
+                ))
             drained_users.append(uid)
 
         for uid in drained_users:
