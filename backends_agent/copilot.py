@@ -35,8 +35,8 @@ class CopilotBackend(Backend):
     # Copilot's CLI model picker is narrower than Copilot's broader product
     # catalog. These are the documented Copilot CLI models converted to slug
     # style; availability still depends on the user's Copilot plan and
-    # organization policy. Models GitHub currently marks unavailable for the
-    # CLI, plus temporarily disabled Claude Fable 5, are omitted.
+    # organization policy. Models documented only for other Copilot surfaces,
+    # plus Claude Fable 5 while GitHub marks it unavailable, are omitted.
     available_models = (
         "auto",
         "claude-sonnet-4.6",
