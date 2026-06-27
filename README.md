@@ -60,8 +60,8 @@ python -m Cozter
 # fill in tokens and run again
 ```
 
-On startup, Cozter creates a project-local `.venv` when needed and
-auto-installs `requirements.txt`.
+On startup, Cozter re-execs through a project-local `.venv` when needed
+and installs `requirements.txt` before importing the bot runtime.
 
 CLI mode intentionally skips daemon configuration: it does not read or
 create `.config/config.json`, and it uses the stable local platform key
@@ -354,7 +354,7 @@ Cozter/
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
 ├── utils.py              shared helpers (atomic_write, drain_queue, ...)
-├── tests/                unittest coverage for state/config fallbacks
+├── tests/                unittest coverage for state/config fallbacks and agent tools
 ├── .config/config.example.json
 │
 ├── backends_agent/       agent backends (one file per agent)
@@ -405,15 +405,17 @@ thin: each defines `launch()` (build argv, spawn subprocess) and
 ## Development checks
 
 Run the current unit tests from the parent directory, or set
-`PYTHONPATH` to the parent when running inside the repository:
+`PYTHONPATH` to the parent when running inside the repository. Discovery
+covers the state/config fallback tests plus the agent-tool helper and
+built-in edit-tool tests.
 
 ```bash
 cd ..
-Cozter/.venv/bin/python -m unittest Cozter.tests.test_state_fallbacks
+Cozter/.venv/bin/python -m unittest discover -s Cozter/tests
 ```
 
 From inside `Cozter/`:
 
 ```bash
-PYTHONPATH=.. .venv/bin/python -m unittest tests.test_state_fallbacks
+PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
 ```
