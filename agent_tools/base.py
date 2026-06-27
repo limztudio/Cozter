@@ -171,6 +171,66 @@ def resolve_inside_workspace(workspace: str, path: str) -> str:
     return abs_path
 
 
+def coerce_int_arg(
+    value: object,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    """Return an int argument clamped to the provided bounds."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    number = max(minimum, number)
+    if maximum is not None:
+        number = min(number, maximum)
+    return number
+
+
+def ensure_parent_dir(path: str) -> None:
+    """Create the containing directory for *path*, if any."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+
+def summarize_path_pair(action: str, args: dict) -> str:
+    return (
+        f"{action}: {args.get('source', '?')}"
+        f" -> {args.get('destination', '?')}"
+    )
+
+
+def validate_replacement_strings(
+    old: object, new: object,
+) -> tuple[str, str] | str:
+    """Validate edit-tool replacement args.
+
+    Returns ``(old, new)`` on success, otherwise a model-facing error
+    message without a leading ``Error:`` prefix.
+    """
+    if not isinstance(old, str) or not isinstance(new, str):
+        return "old_string and new_string must be strings"
+    if old == "":
+        return "'old_string' must not be empty"
+    return old, new
+
+
+def apply_string_replacement(
+    content: str,
+    old: str,
+    new: str,
+    *,
+    replace_all: bool,
+) -> tuple[str, int, int]:
+    """Apply a validated string replacement and return updated/count/done."""
+    count = content.count(old)
+    if count == 0 or (count > 1 and not replace_all):
+        return content, count, 0
+    replacements = count if replace_all else 1
+    return content.replace(old, new, replacements), count, replacements
+
+
 async def read_bounded_text(resp: aiohttp.ClientResponse) -> str:
     """Read up to MAX_FETCH_BYTES from *resp* and decode with its charset."""
     body_bytes = await resp.content.read(_MAX_FETCH_BYTES + 1)

@@ -6,7 +6,7 @@ import asyncio
 import os
 import shutil
 
-from ..base import AgentTool
+from ..base import AgentTool, coerce_int_arg
 
 # Bash tool default timeout (model can override via the ``timeout``
 # argument up to this hard cap).
@@ -39,12 +39,12 @@ class BashTool(AgentTool):
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string"
-        timeout = args.get("timeout") or _BASH_DEFAULT_TIMEOUT
-        try:
-            timeout = int(timeout)
-        except (TypeError, ValueError):
-            timeout = _BASH_DEFAULT_TIMEOUT
-        timeout = max(1, min(timeout, _BASH_MAX_TIMEOUT))
+        timeout = coerce_int_arg(
+            args.get("timeout") or _BASH_DEFAULT_TIMEOUT,
+            default=_BASH_DEFAULT_TIMEOUT,
+            minimum=1,
+            maximum=_BASH_MAX_TIMEOUT,
+        )
 
         # Use the shell so the model can use pipes, redirection, etc.
         shell = _find_shell()

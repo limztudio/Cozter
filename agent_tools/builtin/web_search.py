@@ -9,7 +9,11 @@ import urllib.parse
 import aiohttp
 
 from ..base import (
-    HTTP_USER_AGENT_HEADERS, AgentTool, html_to_text, read_bounded_text,
+    HTTP_USER_AGENT_HEADERS,
+    AgentTool,
+    coerce_int_arg,
+    html_to_text,
+    read_bounded_text,
 )
 
 
@@ -40,12 +44,12 @@ class WebSearchTool(AgentTool):
         if not isinstance(query, str) or not query.strip():
             return "Error: 'query' must be a non-empty string"
 
-        max_results = args.get("max_results") or 5
-        try:
-            max_results = int(max_results)
-        except (TypeError, ValueError):
-            max_results = 5
-        max_results = max(1, min(max_results, 10))
+        max_results = coerce_int_arg(
+            args.get("max_results") or 5,
+            default=5,
+            minimum=1,
+            maximum=10,
+        )
 
         search_url = (
             "https://duckduckgo.com/html/?"

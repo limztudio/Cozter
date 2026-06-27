@@ -6,7 +6,7 @@ import os
 import pathlib
 import re
 
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import AgentTool, coerce_int_arg, resolve_inside_workspace
 
 # Skip grep on files bigger than this - usually binary or generated.
 _GREP_MAX_FILE_BYTES = 1_000_000  # 1 MB
@@ -73,12 +73,12 @@ class GrepTool(AgentTool):
         if not isinstance(file_glob, str) or not file_glob:
             file_glob = "**/*"
 
-        max_results = args.get("max_results") or 50
-        try:
-            max_results = int(max_results)
-        except (TypeError, ValueError):
-            max_results = 50
-        max_results = max(1, min(max_results, 200))
+        max_results = coerce_int_arg(
+            args.get("max_results") or 50,
+            default=50,
+            minimum=1,
+            maximum=200,
+        )
 
         abs_ws = os.path.realpath(workspace_path)
         results: list[str] = []

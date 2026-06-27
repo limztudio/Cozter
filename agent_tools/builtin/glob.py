@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import pathlib
 
-from ..base import AgentTool
+from ..base import AgentTool, coerce_int_arg
 
 
 class GlobTool(AgentTool):
@@ -39,12 +39,12 @@ class GlobTool(AgentTool):
         if not isinstance(pattern, str) or not pattern.strip():
             return "Error: 'pattern' must be a non-empty string"
 
-        max_results = args.get("max_results") or 100
-        try:
-            max_results = int(max_results)
-        except (TypeError, ValueError):
-            max_results = 100
-        max_results = max(1, min(max_results, 500))
+        max_results = coerce_int_arg(
+            args.get("max_results") or 100,
+            default=100,
+            minimum=1,
+            maximum=500,
+        )
 
         abs_ws = os.path.realpath(workspace_path)
         matches: list[str] = []

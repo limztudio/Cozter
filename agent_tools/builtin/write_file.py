@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
-
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import AgentTool, ensure_parent_dir, resolve_inside_workspace
 
 
 class WriteFileTool(AgentTool):
@@ -28,7 +26,7 @@ class WriteFileTool(AgentTool):
         content = args.get("content")
         if not isinstance(content, str):
             return "Error: 'content' must be a string"
-        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        ensure_parent_dir(target)
         with open(target, "w", encoding="utf-8") as f:
             f.write(content)
         return f"Wrote {len(content)} chars to {args.get('path')}"

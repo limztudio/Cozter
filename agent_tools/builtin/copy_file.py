@@ -5,7 +5,12 @@ from __future__ import annotations
 import os
 import shutil
 
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import (
+    AgentTool,
+    ensure_parent_dir,
+    resolve_inside_workspace,
+    summarize_path_pair,
+)
 
 
 class CopyFileTool(AgentTool):
@@ -37,14 +42,11 @@ class CopyFileTool(AgentTool):
         if os.path.exists(dst):
             return f"Destination already exists: {raw_dst}"
         try:
-            os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+            ensure_parent_dir(dst)
             shutil.copy2(src, dst)
         except OSError as exc:
             return f"Copy failed: {exc}"
         return f"Copied: {raw_src} -> {raw_dst}"
 
     def summarize(self, args: dict) -> str:
-        return (
-            f"copy_file: {args.get('source', '?')}"
-            f" -> {args.get('destination', '?')}"
-        )
+        return summarize_path_pair("copy_file", args)

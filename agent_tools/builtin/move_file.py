@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import (
+    AgentTool,
+    ensure_parent_dir,
+    resolve_inside_workspace,
+    summarize_path_pair,
+)
 
 
 class MoveFileTool(AgentTool):
@@ -33,14 +38,11 @@ class MoveFileTool(AgentTool):
         if os.path.exists(dst):
             return f"Destination already exists: {raw_dst}"
         try:
-            os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+            ensure_parent_dir(dst)
             os.rename(src, dst)
         except OSError as exc:
             return f"Move failed: {exc}"
         return f"Moved: {raw_src} -> {raw_dst}"
 
     def summarize(self, args: dict) -> str:
-        return (
-            f"move_file: {args.get('source', '?')}"
-            f" -> {args.get('destination', '?')}"
-        )
+        return summarize_path_pair("move_file", args)

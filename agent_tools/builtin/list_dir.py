@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import AgentTool, coerce_int_arg, resolve_inside_workspace
 
 
 class ListDirTool(AgentTool):
@@ -40,12 +40,12 @@ class ListDirTool(AgentTool):
         if not os.path.isdir(target):
             return f"Not a directory: {raw_path}"
 
-        max_results = args.get("max_results") or 200
-        try:
-            max_results = int(max_results)
-        except (TypeError, ValueError):
-            max_results = 200
-        max_results = max(1, min(max_results, 1000))
+        max_results = coerce_int_arg(
+            args.get("max_results") or 200,
+            default=200,
+            minimum=1,
+            maximum=1000,
+        )
 
         try:
             entries = sorted(os.listdir(target))

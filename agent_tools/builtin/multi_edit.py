@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import (
+    AgentTool,
+    apply_string_replacement,
+    resolve_inside_workspace,
+    validate_replacement_strings,
+)
 
 
 class MultiEditTool(AgentTool):
@@ -62,12 +67,11 @@ class MultiEditTool(AgentTool):
         for i, edit in enumerate(edits):
             if not isinstance(edit, dict):
                 return f"Edit {i}: must be an object"
-            old = edit.get("old_string")
-            new = edit.get("new_string")
-            if not isinstance(old, str) or not isinstance(new, str):
-                return f"Edit {i}: old_string/new_string must be strings"
-            if old == "":
-                return f"Edit {i}: 'old_string' must not be empty"
+            replacement = validate_replacement_strings(
+                edit.get("old_string"), edit.get("new_string"),
+            )
+            if isinstance(replacement, str):
+                return f"Edit {i}: {replacement}"
 
         with open(target, encoding="utf-8", errors="replace") as f:
             content = f.read()
@@ -77,20 +81,17 @@ class MultiEditTool(AgentTool):
             old = edit["old_string"]
             new = edit["new_string"]
             replace_all = bool(edit.get("replace_all", False))
-            count = content.count(old)
+            content, count, replacements = apply_string_replacement(
+                content, old, new, replace_all=replace_all,
+            )
             if count == 0:
                 return f"Edit {i}: old_string not found"
-            if count > 1 and not replace_all:
+            if replacements == 0:
                 return (
                     f"Edit {i}: old_string appears {count} times;"
                     " include more context or set replace_all=true."
                 )
-            if replace_all:
-                content = content.replace(old, new)
-                total_replacements += count
-            else:
-                content = content.replace(old, new, 1)
-                total_replacements += 1
+            total_replacements += replacements
 
         with open(target, "w", encoding="utf-8") as f:
             f.write(content)

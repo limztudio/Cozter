@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import (
+    AgentTool,
+    apply_string_replacement,
+    resolve_inside_workspace,
+    validate_replacement_strings,
+)
 
 
 class EditFileTool(AgentTool):
@@ -34,34 +39,29 @@ class EditFileTool(AgentTool):
 
     async def run(self, workspace_path: str, args: dict) -> str:
         target = resolve_inside_workspace(workspace_path, args.get("path", ""))
-        old = args.get("old_string")
-        new = args.get("new_string")
-        if not isinstance(old, str) or not isinstance(new, str):
-            return "Error: old_string and new_string must be strings"
-        if old == "":
-            # Replacing the empty string inserts `new` between every char,
-            # which is never what the model wants and corrupts the file.
-            return "Error: 'old_string' must not be empty"
+        replacement = validate_replacement_strings(
+            args.get("old_string"), args.get("new_string"),
+        )
+        if isinstance(replacement, str):
+            return f"Error: {replacement}"
+        old, new = replacement
         if not os.path.isfile(target):
             return f"File not found: {args.get('path')}"
         replace_all = bool(args.get("replace_all", False))
         with open(target, encoding="utf-8", errors="replace") as f:
             original = f.read()
-        count = original.count(old)
+        updated, count, n = apply_string_replacement(
+            original, old, new, replace_all=replace_all,
+        )
         if count == 0:
             return f"old_string not found in {args.get('path')}"
-        if count > 1 and not replace_all:
+        if n == 0:
             return (
                 f"old_string appears {count} times in {args.get('path')};"
                 " include more context or set replace_all=true."
             )
-        updated = (
-            original.replace(old, new) if replace_all
-            else original.replace(old, new, 1)
-        )
         with open(target, "w", encoding="utf-8") as f:
             f.write(updated)
-        n = count if replace_all else 1
         suffix = "s" if n != 1 else ""
         return f"Replaced {n} occurrence{suffix} in {args.get('path')}"
 

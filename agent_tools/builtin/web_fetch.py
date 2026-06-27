@@ -8,7 +8,11 @@ import urllib.parse
 import aiohttp
 
 from ..base import (
-    HTTP_USER_AGENT_HEADERS, AgentTool, html_to_text, read_bounded_text,
+    HTTP_USER_AGENT_HEADERS,
+    AgentTool,
+    coerce_int_arg,
+    html_to_text,
+    read_bounded_text,
 )
 
 
@@ -43,12 +47,12 @@ class WebFetchTool(AgentTool):
         if parsed.scheme not in ("http", "https"):
             return "Error: only http:// and https:// URLs are allowed"
 
-        max_chars = args.get("max_chars") or 12_000
-        try:
-            max_chars = int(max_chars)
-        except (TypeError, ValueError):
-            max_chars = 12_000
-        max_chars = max(1_000, min(max_chars, 30_000))
+        max_chars = coerce_int_arg(
+            args.get("max_chars") or 12_000,
+            default=12_000,
+            minimum=1_000,
+            maximum=30_000,
+        )
 
         try:
             async with aiohttp.ClientSession(
