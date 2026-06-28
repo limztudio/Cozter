@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from Cozter import colony, config, schedules, workspace
+from Cozter import colony, config, schedules, session, workspace
 from Cozter.backends_bot.base import BotPlatform
 
 
@@ -206,6 +206,76 @@ class ScheduleParserTests(unittest.TestCase):
             )
             self.assertTrue(schedules.remove_schedule(tmp, "u1", "a"))
             self.assertEqual(schedules.list_schedules(tmp, "u1"), [])
+
+
+class SessionStateFallbackTests(unittest.TestCase):
+    def test_session_loader_normalizes_malformed_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_dir = os.path.join(tmp, ".cozter", "sessions")
+            os.makedirs(sessions_dir)
+            with open(
+                os.path.join(sessions_dir, "abc123.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({
+                    "id": "abc123",
+                    "name": 7,
+                    "created": 8,
+                    "messages": [
+                        {"role": 4, "content": 123},
+                        "not-object",
+                    ],
+                    "summary": ["bad"],
+                    "long_term": ["keep", 5, ""],
+                    "compacted_count": True,
+                }, f)
+
+            loaded = session.load_session(tmp, "abc123")
+            self.assertIsNotNone(loaded)
+            if loaded is None:
+                self.fail("session should load after normalization")
+            self.assertEqual(loaded["name"], "abc123")
+            self.assertEqual(loaded["created"], "")
+            self.assertEqual(loaded["messages"], [
+                {"role": "?", "content": "123"},
+            ])
+            self.assertIsNone(loaded["summary"])
+            self.assertEqual(loaded["long_term"], ["keep"])
+            self.assertEqual(loaded["compacted_count"], 0)
+            self.assertEqual(session.list_sessions(tmp), [{
+                "id": "abc123",
+                "name": "abc123",
+                "created": "",
+                "message_count": 1,
+            }])
+
+    def test_session_listing_ignores_missing_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_dir = os.path.join(tmp, ".cozter", "sessions")
+            os.makedirs(sessions_dir)
+            with open(
+                os.path.join(sessions_dir, "missing-id.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({"messages": []}, f)
+
+            with self.assertLogs(session.logger, level="WARNING"):
+                self.assertEqual(session.list_sessions(tmp), [])
+
+    def test_session_helpers_tolerate_bad_runtime_shapes(self) -> None:
+        self.assertEqual(
+            session.total_message_count({
+                "compacted_count": "bad",
+                "messages": "bad",
+            }),
+            0,
+        )
+        self.assertEqual(
+            session.format_msg_line({"role": 4, "content": 123}),
+            "?: 123",
+        )
 
 
 class QueueStateFallbackTests(unittest.TestCase):

@@ -104,9 +104,88 @@ def migrate_last_session(
 # Session CRUD
 # ---------------------------------------------------------------------------
 
+def _safe_text(value: object, default: str = "") -> str:
+    """Return a string for persisted free-text fields."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return default
+    return str(value)
+
+
+def _normalize_message(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    role = value.get("role", "?")
+    if not isinstance(role, str) or not role:
+        role = "?"
+    content = _safe_text(value.get("content"))
+    return {"role": role, "content": content}
+
+
+def _normalize_session_data(value: object, *, path: str = "") -> dict | None:
+    """Return a crash-safe session dict, or None if identity is missing."""
+    if not isinstance(value, dict):
+        if path:
+            logger.warning("Ignoring non-object session file: %s", path)
+        return None
+
+    session_id = value.get("id")
+    if not isinstance(session_id, str) or not session_id:
+        if path:
+            logger.warning("Ignoring session without valid id: %s", path)
+        return None
+
+    data = dict(value)
+    name = data.get("name")
+    data["name"] = name if isinstance(name, str) and name else session_id[:8]
+    created = data.get("created")
+    data["created"] = created if isinstance(created, str) else ""
+
+    messages = data.get("messages", [])
+    if isinstance(messages, list):
+        data["messages"] = [
+            msg for msg in (_normalize_message(m) for m in messages)
+            if msg is not None
+        ]
+    else:
+        data["messages"] = []
+
+    summary = data.get("summary")
+    data["summary"] = summary if isinstance(summary, str) and summary else None
+
+    long_term = data.get("long_term", [])
+    data["long_term"] = (
+        [item for item in long_term if isinstance(item, str) and item]
+        if isinstance(long_term, list)
+        else []
+    )
+
+    compacted_count = data.get("compacted_count", 0)
+    if (
+        not isinstance(compacted_count, int)
+        or isinstance(compacted_count, bool)
+        or compacted_count < 0
+    ):
+        compacted_count = 0
+    data["compacted_count"] = compacted_count
+
+    return data
+
+
 def total_message_count(data: dict) -> int:
     """Total messages in a session (compacted + currently stored)."""
-    return data.get("compacted_count", 0) + len(data.get("messages", []))
+    compacted_count = data.get("compacted_count", 0)
+    if (
+        not isinstance(compacted_count, int)
+        or isinstance(compacted_count, bool)
+        or compacted_count < 0
+    ):
+        compacted_count = 0
+    messages = data.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
+    return compacted_count + len(messages)
 
 
 def format_msg_line(msg: dict, cap: int | None = MSG_CONTENT_MAX) -> str:
@@ -116,8 +195,12 @@ def format_msg_line(msg: dict, cap: int | None = MSG_CONTENT_MAX) -> str:
     Pass ``cap=None`` to disable truncation (used by compaction, where
     the per-call budget is large enough to afford full message text).
     """
-    role = msg.get("role", "?").capitalize()
-    content = msg.get("content", "")
+    msg = msg if isinstance(msg, dict) else {}
+    role = msg.get("role", "?")
+    if not isinstance(role, str) or not role:
+        role = "?"
+    role = role.capitalize()
+    content = _safe_text(msg.get("content"))
     if cap is not None and len(content) > cap:
         content = content[:cap] + "…"
     return f"{role}: {content}"
@@ -159,9 +242,8 @@ def list_sessions_with_data(workspace: str) -> list[dict]:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
-        # Skip files that don't carry the required identity — downstream
-        # code does data["id"] without further validation.
-        if not isinstance(data, dict) or not data.get("id"):
+        data = _normalize_session_data(data, path=fpath)
+        if data is None:
             continue
         out.append(data)
     out.sort(key=lambda d: d.get("created", ""), reverse=True)
@@ -210,10 +292,11 @@ def load_session(workspace: str, session_id: str) -> dict | None:
         return None
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (json.JSONDecodeError, OSError):
         logger.warning("Corrupt session file, ignoring: %s", path)
         return None
+    return _normalize_session_data(data, path=path)
 
 
 def save_session(workspace: str, session_id: str, data: dict) -> None:
