@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from ..base import AgentTool, ensure_parent_dir, resolve_inside_workspace
+from ..base import (
+    AgentTool,
+    ensure_parent_dir,
+    resolve_inside_workspace,
+    summarize_path,
+)
 
 
 class WriteFileTool(AgentTool):
@@ -32,4 +37,4 @@ class WriteFileTool(AgentTool):
         return f"Wrote {len(content)} chars to {args.get('path')}"
 
     def summarize(self, args: dict) -> str:
-        return f"write_file: {args.get('path', '?')}"
+        return summarize_path("write_file", args)

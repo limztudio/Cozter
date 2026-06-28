@@ -8,6 +8,7 @@ from ..base import (
     AgentTool,
     apply_string_replacement,
     resolve_inside_workspace,
+    summarize_path,
     validate_replacement_strings,
 )
 
@@ -107,4 +108,4 @@ class MultiEditTool(AgentTool):
     def summarize(self, args: dict) -> str:
         edits = args.get("edits") or []
         n = len(edits) if isinstance(edits, list) else 0
-        return f"multi_edit: {args.get('path', '?')} ({n} edits)"
+        return f"{summarize_path('multi_edit', args)} ({n} edits)"

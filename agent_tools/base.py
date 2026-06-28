@@ -194,6 +194,33 @@ def ensure_parent_dir(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
 
+def source_destination_parameters() -> dict[str, Any]:
+    """Return the common schema for tools that move data between paths."""
+    return {
+        "type": "object",
+        "properties": {
+            "source": {"type": "string"},
+            "destination": {"type": "string"},
+        },
+        "required": ["source", "destination"],
+    }
+
+
+def resolve_source_destination(
+    workspace: str, args: dict,
+) -> tuple[str, str, str, str]:
+    """Return raw and resolved source/destination paths from tool args."""
+    raw_src = args.get("source", "")
+    raw_dst = args.get("destination", "")
+    src = resolve_inside_workspace(workspace, raw_src)
+    dst = resolve_inside_workspace(workspace, raw_dst)
+    return raw_src, raw_dst, src, dst
+
+
+def summarize_path(action: str, args: dict, default: str = "?") -> str:
+    return f"{action}: {args.get('path', default)}"
+
+
 def summarize_path_pair(action: str, args: dict) -> str:
     return (
         f"{action}: {args.get('source', '?')}"

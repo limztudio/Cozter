@@ -5,6 +5,7 @@ import logging
 
 from .base import (
     AgentResult, Backend, ChatEvent, resolve_executable_prefix,
+    set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,9 +111,7 @@ class CodexBackend(Backend):
                 err = err_obj
             else:
                 err = "Unknown error"
-            result.error = err
-            result.text = f"Error: {err}"
-            result.events.append(ChatEvent(kind="text", content=result.text))
+            set_error_result(result, err)
 
         elif etype == "error":
             msg = event.get("message", "Unknown error")

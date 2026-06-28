@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import AgentTool, resolve_inside_workspace, summarize_path
 
 
 class DeleteFileTool(AgentTool):
@@ -36,4 +36,4 @@ class DeleteFileTool(AgentTool):
         return f"Deleted: {raw_path}"
 
     def summarize(self, args: dict) -> str:
-        return f"delete_file: {args.get('path', '?')}"
+        return summarize_path("delete_file", args)

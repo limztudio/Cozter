@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import AgentTool, resolve_inside_workspace, summarize_path
 
 
 class ReadFileTool(AgentTool):
@@ -72,4 +72,4 @@ class ReadFileTool(AgentTool):
         return "".join(lines)
 
     def summarize(self, args: dict) -> str:
-        return f"read_file: {args.get('path', '?')}"
+        return summarize_path("read_file", args)

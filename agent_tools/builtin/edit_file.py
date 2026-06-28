@@ -8,6 +8,7 @@ from ..base import (
     AgentTool,
     apply_string_replacement,
     resolve_inside_workspace,
+    summarize_path,
     validate_replacement_strings,
 )
 
@@ -66,4 +67,4 @@ class EditFileTool(AgentTool):
         return f"Replaced {n} occurrence{suffix} in {args.get('path')}"
 
     def summarize(self, args: dict) -> str:
-        return f"edit_file: {args.get('path', '?')}"
+        return summarize_path("edit_file", args)

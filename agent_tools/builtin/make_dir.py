@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, resolve_inside_workspace
+from ..base import AgentTool, resolve_inside_workspace, summarize_path
 
 
 class MakeDirTool(AgentTool):
@@ -35,4 +35,4 @@ class MakeDirTool(AgentTool):
         return f"Directory ready: {raw_path}"
 
     def summarize(self, args: dict) -> str:
-        return f"make_dir: {args.get('path', '?')}"
+        return summarize_path("make_dir", args)

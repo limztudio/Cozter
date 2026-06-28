@@ -19,6 +19,7 @@ import logging
 
 from .base import (
     AgentResult, Backend, ChatEvent, resolve_executable_prefix,
+    set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,9 +174,7 @@ class CopilotBackend(Backend):
                     msg = err
             if not msg:
                 msg = "Unknown error"
-            result.error = msg
-            result.text = f"Error: {msg}"
-            result.events.append(ChatEvent(kind="text", content=result.text))
+            set_error_result(result, msg)
             return
 
         # Fall through: treat as assistant text if it looks like one.

@@ -17,7 +17,7 @@ from . import (
     titling,
 )
 from . import workspace as workspace_mod
-from .backends_agent.base import AgentResult, ChatEvent
+from .backends_agent.base import AgentResult, ChatEvent, set_error_result
 from .utils import iter_stream_lines
 from .utils import drain_queue as _drain_queue
 
@@ -510,10 +510,10 @@ async def run(
             # The pinned session was deleted out from under us; bail
             # rather than silently writing into a fresh one.
             result = AgentResult()
-            result.text = (
-                f"Error: session {session_id} not found in {workspace_path}."
+            set_error_result(
+                result,
+                f"session {session_id} not found in {workspace_path}.",
             )
-            result.events.append(ChatEvent(kind="text", content=result.text))
             return result
     else:
         # Resume whatever session the user was last writing into.
@@ -586,9 +586,7 @@ async def run(
         except FileNotFoundError:
             err = f"{backend.executable} CLI not found on PATH."
             result = AgentResult()
-            result.error = err
-            result.text = f"Error: {err}"
-            result.events.append(ChatEvent(kind="text", content=result.text))
+            set_error_result(result, err)
             return result
 
         result = AgentResult()
@@ -692,9 +690,7 @@ async def run(
         msg = f"{backend.name} exited with code {proc.returncode}"
         if stderr:
             msg += f"\n{stderr}"
-        result.error = msg
-        result.text = msg
-        result.events.append(ChatEvent(kind="text", content=result.text))
+        set_error_result(result, msg, display_text=msg)
 
     # Log the original prompt (including injected context) to session.
     async with workspace_mod.get_lock(workspace_path):

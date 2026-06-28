@@ -7,7 +7,8 @@ import os
 from ..base import (
     AgentTool,
     ensure_parent_dir,
-    resolve_inside_workspace,
+    resolve_source_destination,
+    source_destination_parameters,
     summarize_path_pair,
 )
 
@@ -19,20 +20,12 @@ class MoveFileTool(AgentTool):
         " Fails if the destination already exists; parent directories"
         " of the destination are created automatically."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "source": {"type": "string"},
-            "destination": {"type": "string"},
-        },
-        "required": ["source", "destination"],
-    }
+    parameters = source_destination_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        raw_src = args.get("source", "")
-        raw_dst = args.get("destination", "")
-        src = resolve_inside_workspace(workspace_path, raw_src)
-        dst = resolve_inside_workspace(workspace_path, raw_dst)
+        raw_src, raw_dst, src, dst = resolve_source_destination(
+            workspace_path, args,
+        )
         if not os.path.exists(src):
             return f"Source not found: {raw_src}"
         if os.path.exists(dst):

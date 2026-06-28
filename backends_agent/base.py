@@ -58,6 +58,23 @@ class AgentResult:
     error: str | None = None
 
 
+def append_text_result(result: AgentResult, text: str) -> None:
+    """Record text as the latest agent reply and emit a text event."""
+    result.text = text
+    result.events.append(ChatEvent(kind="text", content=text))
+
+
+def set_error_result(
+    result: AgentResult,
+    message: str,
+    *,
+    display_text: str | None = None,
+) -> None:
+    """Record an error and emit its user-facing text event."""
+    result.error = message
+    append_text_result(result, display_text or f"Error: {message}")
+
+
 class Backend(ABC):
     """Adapter for a specific agent CLI (codex, copilot, ...).
 

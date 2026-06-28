@@ -33,7 +33,7 @@ import aiohttp
 from .. import agent_tools as tools
 from .. import config as cfg
 from ._http_proc import HttpAgentProcess, http_error_translator
-from .base import AgentResult, Backend, ChatEvent
+from .base import AgentResult, Backend, ChatEvent, set_error_result
 
 logger = logging.getLogger(__name__)
 
@@ -293,9 +293,7 @@ class LlamaBackend(Backend):
 
         if etype == "error":
             msg = event.get("message") or "Unknown error"
-            result.error = msg
-            result.text = f"Error: {msg}"
-            result.events.append(ChatEvent(kind="text", content=result.text))
+            set_error_result(result, msg)
             return
 
         logger.debug("Llama: unhandled event %r", event)

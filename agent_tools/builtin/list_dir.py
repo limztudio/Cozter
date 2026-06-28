@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, coerce_int_arg, resolve_inside_workspace
+from ..base import (
+    AgentTool,
+    coerce_int_arg,
+    resolve_inside_workspace,
+    summarize_path,
+)
 
 
 class ListDirTool(AgentTool):
@@ -66,4 +71,4 @@ class ListDirTool(AgentTool):
         return "\n".join(lines)
 
     def summarize(self, args: dict) -> str:
-        return f"list_dir: {args.get('path', '.')}"
+        return summarize_path("list_dir", args, ".")

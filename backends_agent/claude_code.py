@@ -23,6 +23,7 @@ import os
 
 from .base import (
     AgentResult, Backend, ChatEvent, resolve_executable_prefix,
+    set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,11 +148,7 @@ class ClaudeCodeBackend(Backend):
                     or event.get("result")
                     or "Unknown error"
                 )
-                result.error = err
-                result.text = f"Error: {err}"
-                result.events.append(
-                    ChatEvent(kind="text", content=result.text),
-                )
+                set_error_result(result, err)
                 return
             text = event.get("result", "")
             if (
@@ -170,9 +167,7 @@ class ClaudeCodeBackend(Backend):
 
         if etype == "error":
             msg = event.get("message") or "Unknown error"
-            result.error = msg
-            result.text = f"Error: {msg}"
-            result.events.append(ChatEvent(kind="text", content=result.text))
+            set_error_result(result, msg)
             return
 
         logger.debug(
