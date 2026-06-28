@@ -376,6 +376,32 @@ session); the orchestrator reads JSONL events from stdout, translates
 them via `Backend.parse_event()` into `ChatEvent`s, and streams a
 "Thinking..." status line to the user with the latest few tool actions.
 
+## Repository state
+
+Tracked source is intentionally small: the top-level runtime modules,
+`backends_bot/`, `backends_agent/`, `agent_tools/`, `tests/`,
+`requirements.txt`, this README, and `.config/config.example.json`.
+Everything else created by a running bot is local state.
+
+Do not commit these runtime artifacts:
+
+- `.config/config.json`, `.config/workspaces.json`, and
+  `.config/queue_<platform>.json` — local tokens, workspace selections,
+  and persisted pending messages
+- `.cozter/` — sessions, workspace settings, colony memory, schedules,
+  uploads, and generated images; this directory can appear at the repo
+  root when Cozter is used on its own checkout
+- `.log/` — rotating runtime logs and crash reports
+- `.venv/`, `__pycache__/`, `.ruff_cache/`, coverage output, and build
+  artifacts
+
+The shipped `.gitignore` keeps those out of normal commits while still
+tracking `.config/config.example.json` so new installs have a template.
+If you add a new user-facing plugin, place it under
+`agent_tools/plugins/` and commit it intentionally; files whose names
+start with `_` are ignored by the plugin loader but are not ignored by
+git.
+
 ## Auto-update
 
 `updater.fetch_and_pull()` runs every `update_check_interval` seconds.
@@ -419,3 +445,7 @@ From inside `Cozter/`:
 ```bash
 PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
 ```
+
+Before committing, run the tests and check `git status --short` for only
+intentional source or documentation edits. Runtime JSON, logs, sessions,
+virtualenv files, and caches should stay local.
