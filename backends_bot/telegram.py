@@ -25,6 +25,8 @@ from .base import (
     BotPlatform,
     COMMAND_NAMES,
     MessageHandle,
+    NO_WORKSPACE_TEXT,
+    ensure_upload_dir,
 )
 
 logger = logging.getLogger(__name__)
@@ -333,14 +335,10 @@ class TelegramBot(BotPlatform):
         if not ws or not os.path.isdir(ws):
             ctx = self._build_context(update, text="")
             if ctx:
-                await ctx.reply_text(
-                    "No workspace selected (or it was deleted)."
-                    " Use /new or /open."
-                )
+                await ctx.reply_text(NO_WORKSPACE_TEXT)
             return
 
-        upload_dir = os.path.join(ws, ".cozter", "uploads")
-        os.makedirs(upload_dir, exist_ok=True)
+        upload_dir = ensure_upload_dir(ws)
         local_path = os.path.join(upload_dir, filename)
         try:
             await tg_file.download_to_drive(local_path)

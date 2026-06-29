@@ -23,7 +23,6 @@ consolidation pass.
 """
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -32,7 +31,12 @@ from . import backends_agent, session
 from . import workspace as workspace_mod
 from .utils import COZTER_DIR
 from .utils import atomic_write as _atomic_write
-from .utils import drain_llm_subprocess, extract_marker_block, parse_bullets
+from .utils import (
+    drain_llm_subprocess,
+    extract_marker_block,
+    load_json_object,
+    parse_bullets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,18 +50,7 @@ def _path(workspace: str) -> str:
 
 
 def _load(workspace: str) -> dict:
-    path = _path(workspace)
-    if not os.path.exists(path):
-        return {"items": [], "compact_count": 0}
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        logger.warning("Corrupt colony file, ignoring: %s", path)
-        return {"items": [], "compact_count": 0}
-    if not isinstance(data, dict):
-        logger.warning("Ignoring non-object colony file: %s", path)
-        return {"items": [], "compact_count": 0}
+    data = load_json_object(_path(workspace), "colony file", logger)
     items = data.get("items")
     if not isinstance(items, list):
         items = []

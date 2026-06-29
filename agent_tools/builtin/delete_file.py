@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, resolve_inside_workspace, summarize_path
+from ..base import (
+    AgentTool,
+    path_parameters,
+    resolve_inside_workspace,
+    summarize_path,
+)
 
 
 class DeleteFileTool(AgentTool):
@@ -14,13 +19,7 @@ class DeleteFileTool(AgentTool):
         "Delete a file in the workspace. Refuses to delete directories;"
         " use bash 'rm -r' if that's intended."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string"},
-        },
-        "required": ["path"],
-    }
+    parameters = path_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
         raw_path = args.get("path", "")

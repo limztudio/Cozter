@@ -223,6 +223,17 @@ def source_destination_parameters() -> dict[str, Any]:
     }
 
 
+def path_parameters() -> dict[str, Any]:
+    """Return the common schema for tools that operate on one path."""
+    return {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+        },
+        "required": ["path"],
+    }
+
+
 def resolve_source_destination(
     workspace: str, args: dict,
 ) -> tuple[str, str, str, str]:

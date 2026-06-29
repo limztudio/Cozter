@@ -30,6 +30,8 @@ from .base import (
     BotPlatform,
     COMMAND_NAMES,
     MessageHandle,
+    NO_WORKSPACE_TEXT,
+    ensure_upload_dir,
 )
 
 logger = logging.getLogger(__name__)
@@ -311,14 +313,10 @@ class SlackBot(BotPlatform):
 
         ctx_for_reply = self._ctx(uid, channel, text=caption)
         if not ws or not os.path.isdir(ws):
-            await ctx_for_reply.reply_text(
-                "No workspace selected (or it was deleted)."
-                " Use /new or /open."
-            )
+            await ctx_for_reply.reply_text(NO_WORKSPACE_TEXT)
             return
 
-        upload_dir = os.path.join(ws, ".cozter", "uploads")
-        os.makedirs(upload_dir, exist_ok=True)
+        upload_dir = ensure_upload_dir(ws)
 
         for f in files:
             url = f.get("url_private_download") or f.get("url_private")

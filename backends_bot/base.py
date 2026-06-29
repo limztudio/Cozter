@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .. import agent, colony, schedules, session, updater, workspace
+from ..utils import COZTER_DIR
 from ..utils import atomic_write as _atomic_write
 from ..utils import drain_queue as _drain_queue
 from ..utils import load_json_object
@@ -43,6 +44,17 @@ _TEXT_EXTENSIONS = frozenset({
     ".log", ".diff", ".patch",
 })
 _INLINE_SIZE_LIMIT = 50_000
+UPLOADS_DIR = "uploads"
+NO_WORKSPACE_TEXT = (
+    "No workspace selected (or it was deleted). Use /new or /open."
+)
+
+
+def ensure_upload_dir(workspace_path: str) -> str:
+    """Return the workspace upload directory, creating it if needed."""
+    upload_dir = os.path.join(workspace_path, COZTER_DIR, UPLOADS_DIR)
+    os.makedirs(upload_dir, exist_ok=True)
+    return upload_dir
 
 # ---------------------------------------------------------------------------
 # Message handle + attachment info
@@ -1332,10 +1344,7 @@ class BotPlatform(ABC):
     async def _require_ws(self, ctx: BotContext) -> str | None:
         ws = workspace.get_current(ctx.user_id, self.platform_id)
         if not ws or not os.path.isdir(ws):
-            await ctx.reply_text(
-                "No workspace selected (or it was deleted)."
-                " Use /new or /open."
-            )
+            await ctx.reply_text(NO_WORKSPACE_TEXT)
             return None
         return ws
 

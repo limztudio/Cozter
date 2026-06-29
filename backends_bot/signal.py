@@ -20,7 +20,14 @@ from typing import Any
 
 from .. import schedules, session, workspace
 from ..utils import split_text_chunks
-from .base import AttachmentInfo, BotContext, BotPlatform, MessageHandle
+from .base import (
+    AttachmentInfo,
+    BotContext,
+    BotPlatform,
+    MessageHandle,
+    NO_WORKSPACE_TEXT,
+    ensure_upload_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -571,14 +578,10 @@ class SignalBot(BotPlatform):
         ctx_for_reply = self._ctx(sender_id, group_id, text=caption)
         ws = workspace.get_current(ctx_for_reply.user_id, self.platform_id)
         if not ws or not os.path.isdir(ws):
-            await ctx_for_reply.reply_text(
-                "No workspace selected (or it was deleted)."
-                " Use /new or /open."
-            )
+            await ctx_for_reply.reply_text(NO_WORKSPACE_TEXT)
             return
 
-        upload_dir = os.path.join(ws, ".cozter", "uploads")
-        os.makedirs(upload_dir, exist_ok=True)
+        upload_dir = ensure_upload_dir(ws)
 
         for att in attachments:
             if not isinstance(att, dict):

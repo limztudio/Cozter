@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, resolve_inside_workspace, summarize_path
+from ..base import (
+    AgentTool,
+    path_parameters,
+    resolve_inside_workspace,
+    summarize_path,
+)
 
 
 class MakeDirTool(AgentTool):
@@ -15,13 +20,7 @@ class MakeDirTool(AgentTool):
         " directory already exists. Fails if the path already exists"
         " as a file."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string"},
-        },
-        "required": ["path"],
-    }
+    parameters = path_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
         raw_path = args.get("path", "")
