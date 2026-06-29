@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
-import pathlib
 import re
 
-from ..base import AgentTool, coerce_int_arg, resolve_inside_workspace
+from ..base import (
+    AgentTool,
+    coerce_int_arg,
+    iter_workspace_files,
+    resolve_inside_workspace,
+)
 
 # Skip grep on files bigger than this - usually binary or generated.
 _GREP_MAX_FILE_BYTES = 1_000_000  # 1 MB
@@ -80,25 +84,21 @@ class GrepTool(AgentTool):
             maximum=200,
         )
 
-        abs_ws = os.path.realpath(workspace_path)
         results: list[str] = []
         try:
-            for fpath in pathlib.Path(search_root).glob(file_glob):
-                if not fpath.is_file():
-                    continue
-                real = os.path.realpath(str(fpath))
-                if not (real == abs_ws or real.startswith(abs_ws + os.sep)):
-                    continue
+            for fpath, rel, _root_rel in iter_workspace_files(
+                workspace_path, search_root, file_glob,
+            ):
                 try:
-                    if fpath.stat().st_size > _GREP_MAX_FILE_BYTES:
+                    if os.path.getsize(fpath) > _GREP_MAX_FILE_BYTES:
                         continue
-                    raw = fpath.read_bytes()
+                    with open(fpath, "rb") as f:
+                        raw = f.read()
                 except OSError:
                     continue
                 if b"\x00" in raw[:8192]:
                     continue  # likely binary
                 content = raw.decode("utf-8", errors="replace")
-                rel = os.path.relpath(str(fpath), abs_ws)
                 for lineno, line in enumerate(content.splitlines(), 1):
                     if regex.search(line):
                         if len(line) > _GREP_MAX_LINE_CHARS:

@@ -13,6 +13,7 @@ COZTER_DIR = ".cozter"  # name of the per-workspace dotfile directory
 CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.)
     os.path.dirname(os.path.abspath(__file__)), ".config",
 )
+_STDERR_CAPTURE_BYTES = 64 * 1024
 
 
 def drain_queue(
@@ -90,6 +91,32 @@ async def iter_stream_lines(
 
         for part in parts:
             yield part.decode("utf-8", errors="replace")
+
+
+async def drain_text_stream(
+    stream: asyncio.StreamReader | None,
+    *,
+    limit: int = _STDERR_CAPTURE_BYTES,
+) -> str:
+    """Drain a byte stream and return decoded text capped to *limit* bytes."""
+    if stream is None:
+        return ""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await stream.read(64 * 1024)
+        if not chunk:
+            break
+        if total < limit:
+            remaining = limit - total
+            chunks.append(chunk[:remaining])
+        total += len(chunk)
+
+    text = b"".join(chunks).decode("utf-8", errors="replace").strip()
+    if total > limit:
+        suffix = f"... [stderr truncated, {total} bytes total]"
+        text = f"{text}\n{suffix}" if text else suffix
+    return text
 
 
 def extract_marker_block(text: str, tag: str) -> str | None:
@@ -193,6 +220,7 @@ async def drain_llm_subprocess(
     running subprocess past the cancelled task.
     """
     raw = ""
+    stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
     try:
         async with asyncio.timeout(timeout):
             async for line in iter_stream_lines(proc.stdout):
@@ -218,4 +246,7 @@ async def drain_llm_subprocess(
                 await proc.wait()
             except OSError:
                 pass
+        stderr = await stderr_task
+        if stderr:
+            logger.debug("%s stderr: %s", label, stderr)
     return raw

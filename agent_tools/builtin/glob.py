@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import os
-import pathlib
 
-from ..base import AgentTool, coerce_int_arg
+from ..base import AgentTool, coerce_int_arg, iter_workspace_files
 
 
 class GlobTool(AgentTool):
@@ -49,18 +48,14 @@ class GlobTool(AgentTool):
         abs_ws = os.path.realpath(workspace_path)
         matches: list[str] = []
         try:
-            for p in pathlib.Path(abs_ws).glob(pattern):
-                # Drop matches that escape the workspace via symlinks.
-                real = os.path.realpath(str(p))
-                if not (real == abs_ws or real.startswith(abs_ws + os.sep)):
-                    continue
-                matches.append(os.path.relpath(str(p), abs_ws))
+            for _path, rel, _root_rel in iter_workspace_files(
+                abs_ws, abs_ws, pattern,
+            ):
+                matches.append(rel)
                 if len(matches) >= max_results:
                     break
         except Exception as exc:
-            # pathlib.Path.glob can raise NotImplementedError on absolute
-            # patterns in 3.11/3.12, plus OSError from filesystem trouble;
-            # surface either as a clean error to the model.
+            # Filesystem trouble should surface as a clean model-facing error.
             return f"Glob failed: {exc}"
 
         if not matches:

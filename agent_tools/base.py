@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import html
+import fnmatch
 import os
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from typing import Any
 
 import aiohttp
@@ -19,6 +21,21 @@ HTTP_USER_AGENT_HEADERS = {
         "Mozilla/5.0 compatible; CozterAgent/1.0; +https://local"
     )
 }
+DISCOVERY_SKIP_DIRS = frozenset({
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".cozter",
+    ".codex",
+})
 
 
 class AgentTool(ABC):
@@ -225,6 +242,76 @@ def summarize_path_pair(action: str, args: dict) -> str:
     return (
         f"{action}: {args.get('source', '?')}"
         f" -> {args.get('destination', '?')}"
+    )
+
+
+def iter_workspace_files(
+    workspace: str,
+    root: str,
+    pattern: str = "**/*",
+) -> Iterator[tuple[str, str, str]]:
+    """Yield files under *root* that match *pattern*.
+
+    Returns ``(absolute_path, workspace_relative_path, root_relative_path)``.
+    Common generated/cache directories are pruned unless the pattern
+    explicitly names that directory segment.
+    """
+    abs_ws = os.path.realpath(workspace)
+    abs_root = os.path.realpath(root)
+    skip_dirs = _discovery_skip_dirs(pattern)
+
+    for dirpath, dirnames, filenames in os.walk(abs_root):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for filename in filenames:
+            fpath = os.path.join(dirpath, filename)
+            real = os.path.realpath(fpath)
+            if not (real == abs_ws or real.startswith(abs_ws + os.sep)):
+                continue
+            root_rel = os.path.relpath(fpath, abs_root)
+            if not _path_matches_glob(root_rel, pattern):
+                continue
+            ws_rel = os.path.relpath(fpath, abs_ws)
+            yield fpath, ws_rel, root_rel
+
+
+def _discovery_skip_dirs(pattern: str) -> set[str]:
+    explicit_segments = set(_glob_segments(pattern))
+    return {
+        d for d in DISCOVERY_SKIP_DIRS
+        if d not in explicit_segments
+    }
+
+
+def _glob_segments(pattern: str) -> list[str]:
+    normalized = pattern.replace("\\", "/")
+    return [
+        part for part in normalized.split("/")
+        if part not in ("", ".")
+    ]
+
+
+def _path_matches_glob(rel_path: str, pattern: str) -> bool:
+    path_parts = _glob_segments(rel_path)
+    pattern_parts = _glob_segments(pattern or "**/*")
+    return _match_glob_parts(pattern_parts, path_parts)
+
+
+def _match_glob_parts(pattern_parts: list[str], path_parts: list[str]) -> bool:
+    if not pattern_parts:
+        return not path_parts
+    part = pattern_parts[0]
+    if part == "**":
+        return (
+            _match_glob_parts(pattern_parts[1:], path_parts)
+            or (
+                bool(path_parts)
+                and _match_glob_parts(pattern_parts, path_parts[1:])
+            )
+        )
+    return (
+        bool(path_parts)
+        and fnmatch.fnmatchcase(path_parts[0], part)
+        and _match_glob_parts(pattern_parts[1:], path_parts[1:])
     )
 
 

@@ -18,7 +18,7 @@ from . import (
 )
 from . import workspace as workspace_mod
 from .backends_agent.base import AgentResult, ChatEvent, set_error_result
-from .utils import iter_stream_lines
+from .utils import drain_text_stream, iter_stream_lines
 from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
@@ -591,6 +591,7 @@ async def run(
 
         result = AgentResult()
         restarting = False
+        stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
 
         # Watch inject_queue - kill subprocess when a message arrives
         async def _watch_inject() -> None:
@@ -638,6 +639,9 @@ async def run(
                 await proc.wait()
             except OSError:
                 pass
+            stderr = await stderr_task
+            if stderr:
+                logger.debug("%s stderr: %s", backend.name, stderr)
             raise
         finally:
             if inject_task and not inject_task.done():
@@ -649,11 +653,10 @@ async def run(
 
         # If we're restarting due to inject, drain pipes and any extra
         # injects that arrived while we were shutting down.
+        stderr = await stderr_task
+        if stderr:
+            logger.debug("%s stderr: %s", backend.name, stderr)
         if restarting:
-            try:
-                await proc.stderr.read()
-            except Exception:
-                pass
             _drain_queue(inject_queue, collect=injected)
             logger.info(
                 "Restarting %s with %d injected message(s)",
@@ -679,12 +682,6 @@ async def run(
 
     # Discard any inject messages that arrived after the final answer.
     _drain_queue(inject_queue)
-
-    stderr = (
-        await proc.stderr.read()
-    ).decode("utf-8", errors="replace").strip()
-    if stderr:
-        logger.debug("%s stderr: %s", backend.name, stderr)
 
     if proc.returncode != 0 and not result.events:
         msg = f"{backend.name} exited with code {proc.returncode}"

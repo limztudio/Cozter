@@ -9,6 +9,8 @@ from Cozter.agent_tools.base import (
     validate_replacement_strings,
 )
 from Cozter.agent_tools.builtin.edit_file import EditFileTool
+from Cozter.agent_tools.builtin.glob import GlobTool
+from Cozter.agent_tools.builtin.grep import GrepTool
 from Cozter.agent_tools.builtin.multi_edit import MultiEditTool
 
 
@@ -66,6 +68,59 @@ class BuiltinEditToolTests(unittest.TestCase):
                 self.assertEqual(result, "Replaced 1 occurrence in note.txt")
                 with open(path, encoding="utf-8") as f:
                     self.assertEqual(f.read(), "alpha gamma")
+
+        asyncio.run(run())
+
+
+class DiscoveryToolTests(unittest.TestCase):
+    def test_glob_skips_generated_dirs_unless_explicit(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.makedirs(os.path.join(tmp, ".venv", "pkg"))
+                with open(os.path.join(tmp, "app.py"), "w", encoding="utf-8") as f:
+                    f.write("print('app')\n")
+                with open(
+                    os.path.join(tmp, ".venv", "pkg", "hidden.py"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    f.write("print('hidden')\n")
+
+                result = await GlobTool().run(tmp, {"pattern": "**/*.py"})
+                self.assertIn("app.py", result.splitlines())
+                self.assertNotIn(".venv/pkg/hidden.py", result)
+
+                explicit = await GlobTool().run(
+                    tmp, {"pattern": ".venv/**/*.py"},
+                )
+                self.assertIn(".venv/pkg/hidden.py", explicit.splitlines())
+
+        asyncio.run(run())
+
+    def test_grep_skips_generated_dirs_unless_path_targets_them(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.makedirs(os.path.join(tmp, ".cozter", "sessions"))
+                with open(os.path.join(tmp, "app.py"), "w", encoding="utf-8") as f:
+                    f.write("needle in app\n")
+                with open(
+                    os.path.join(tmp, ".cozter", "sessions", "state.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    f.write("needle in state\n")
+
+                result = await GrepTool().run(tmp, {"pattern": "needle"})
+                self.assertIn("app.py:1: needle in app", result)
+                self.assertNotIn(".cozter/sessions/state.json", result)
+
+                explicit = await GrepTool().run(
+                    tmp, {"pattern": "needle", "path": ".cozter"},
+                )
+                self.assertIn(
+                    ".cozter/sessions/state.json:1: needle in state",
+                    explicit,
+                )
 
         asyncio.run(run())
 
