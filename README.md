@@ -198,7 +198,9 @@ All chat surfaces speak the same command set:
 | `/inject <text>` | Add context to the running turn (the agent restarts with it) |
 | `/reserve` | Create a recurring scheduled prompt |
 | `/schedules` | List schedules and delete one by number |
-| `/version`, `/cancel`, `/start` | Self-explanatory |
+| `/version` | Show the current git version and last commit date |
+| `/cancel` | Cancel a picker/wizard, pending answer, running turn, or queued work |
+| `/start` | Confirm the bot is running |
 
 Most picker commands accept either the displayed number or the literal
 name. `/open` also accepts a recent-workspace number directly as
@@ -354,7 +356,7 @@ Cozter/
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
 ├── utils.py              shared helpers (atomic_write, drain_queue, ...)
-├── tests/                unittest coverage for state/config fallbacks and agent tools
+├── tests/                unittest coverage for state/config, backend defaults, queues, and tools
 ├── .config/config.example.json
 │
 ├── backends_agent/       agent backends (one file per agent)
@@ -369,6 +371,26 @@ Cozter/
     ├── builtin/            14 built-in tools (read_file, edit_file, glob, grep, bash, web_search, ...)
     └── plugins/            user drop-in zone (current_time.py shipped as a live plugin)
 ```
+
+## Source inventory
+
+The tracked workspace is intentionally flat and small:
+
+- Top-level runtime modules: `__main__.py`, `agent.py`, `workspace.py`,
+  `session.py`, `compaction.py`, `colony.py`, `router.py`, `titling.py`,
+  `schedules.py`, `config.py`, `updater.py`, and `utils.py`
+- Chat-platform adapters: `backends_bot/base.py`, `cli.py`,
+  `telegram.py`, `slack.py`, and `signal.py`
+- Agent adapters: `backends_agent/base.py`, `_http_proc.py`,
+  `codex.py`, `claude_code.py`, `copilot.py`, and `llama.py`
+- Agent tool surface: `agent_tools/base.py`, the 14 files under
+  `agent_tools/builtin/`, and user plugins under
+  `agent_tools/plugins/`
+- Project metadata and docs: `requirements.txt`,
+  `.config/config.example.json`, `agent_tools/plugins/README.md`,
+  `.gitignore`, and this README
+- Tests: `tests/test_agent_tools.py`, `tests/test_backends_agent.py`,
+  `tests/test_state_fallbacks.py`, and `tests/test_utils.py`
 
 The agent loop in `agent.py:run()` is shared across backends. Each
 `Backend.launch()` spawns the right subprocess (or the in-process llama
@@ -386,8 +408,10 @@ Everything else created by a running bot is local state.
 Do not commit these runtime artifacts:
 
 - `.config/config.json`, `.config/workspaces.json`, and
-  `.config/queue_<platform>.json` — local tokens, workspace selections,
-  and persisted pending messages
+  `.config/queue_<platform>.json` - local tokens, workspace selections,
+  and persisted pending messages. Platform IDs are sanitized for queue
+  filenames, so a runtime key like `cli:local` becomes a filesystem-safe
+  `queue_cli_local.json`.
 - `.cozter/` — sessions, workspace settings, colony memory, schedules,
   uploads, and generated images; this directory can appear at the repo
   root when Cozter is used on its own checkout
@@ -432,8 +456,9 @@ thin: each defines `launch()` (build argv, spawn subprocess) and
 
 Run the current unit tests from the parent directory, or set
 `PYTHONPATH` to the parent when running inside the repository. Discovery
-covers the state/config fallback tests plus the agent-tool helper and
-built-in edit-tool tests.
+covers malformed state/config fallbacks, persistent queue restoration,
+schedule parsing, backend model defaults, subprocess-drain behavior,
+agent-tool helpers, and built-in discovery/edit tools.
 
 ```bash
 cd ..
