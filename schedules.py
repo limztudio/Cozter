@@ -187,12 +187,14 @@ def update_schedule_fired(
 # both the user-input wizard (``cmd_reserve``) and the scheduler tick.
 # ---------------------------------------------------------------------------
 
-def parse_days(text: str) -> list[str]:
+def parse_days(text: object) -> list[str]:
     """Parse a days spec into ordered, de-duplicated abbreviations.
 
     Accepts ``"all"``, comma-separated names (``"mon,wed,fri"``), or
     1-7 numbers (``"1,3,5"``). Returns ``[]`` on invalid input.
     """
+    if not isinstance(text, str):
+        return []
     text = text.strip().lower()
     if text == "all":
         return list(DAY_ABBREV)
@@ -215,8 +217,10 @@ def parse_days(text: str) -> list[str]:
     return list(dict.fromkeys(days))
 
 
-def parse_time(text: str) -> str | None:
+def parse_time(text: object) -> str | None:
     """Parse ``"HH:MM"`` (24-hour) into ``"HH:MM"`` (zero-padded)."""
+    if not isinstance(text, str):
+        return None
     parts = text.split(":")
     if len(parts) != 2:
         return None
@@ -230,9 +234,9 @@ def parse_time(text: str) -> str | None:
     return f"{h:02d}:{m:02d}"
 
 
-def parse_iso(value: str | None) -> datetime | None:
+def parse_iso(value: object) -> datetime | None:
     """Parse an ISO timestamp; return None for missing or malformed input."""
-    if not value:
+    if not isinstance(value, str) or not value:
         return None
     try:
         return datetime.fromisoformat(value)
@@ -247,7 +251,13 @@ def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
         return None
     h, m = map(int, parsed.split(":"))
     target = dt_time(h, m)
-    days = sched.get("days", [])
+    raw_days = sched.get("days", [])
+    if not isinstance(raw_days, list):
+        return None
+    days = [
+        day for day in raw_days
+        if isinstance(day, str) and day in DAY_ABBREV
+    ]
     if not days:
         return None
     # Walk back up to 7 days; the first day-match whose datetime

@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime
 
 from Cozter import colony, config, schedules, session, workspace
 from Cozter.backends_bot.base import BotPlatform
@@ -174,6 +175,31 @@ class ScheduleParserTests(unittest.TestCase):
             ["mon", "wed", "fri"],
         )
 
+    def test_schedule_parsers_ignore_malformed_values(self) -> None:
+        self.assertEqual(schedules.parse_days(["mon"]), [])
+        self.assertIsNone(schedules.parse_time(930))
+        self.assertIsNone(schedules.parse_iso(930))
+
+    def test_most_recent_slot_ignores_malformed_schedule_fields(self) -> None:
+        now = datetime(2026, 1, 5, 10, 0)  # Monday
+
+        self.assertIsNone(
+            schedules.most_recent_slot(
+                {"days": "mon", "time": "09:00"}, now,
+            ),
+        )
+        self.assertIsNone(
+            schedules.most_recent_slot(
+                {"days": ["mon"], "time": 900}, now,
+            ),
+        )
+        self.assertEqual(
+            schedules.most_recent_slot(
+                {"days": ["mon", 7], "time": "09:00"}, now,
+            ),
+            datetime(2026, 1, 5, 9, 0),
+        )
+
     def test_schedule_store_ignores_malformed_user_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, ".cozter"))
@@ -206,6 +232,38 @@ class ScheduleParserTests(unittest.TestCase):
             )
             self.assertTrue(schedules.remove_schedule(tmp, "u1", "a"))
             self.assertEqual(schedules.list_schedules(tmp, "u1"), [])
+
+    def test_scheduler_skips_schedule_without_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = os.path.join(tmp, "ws")
+            os.makedirs(os.path.join(ws, ".cozter"))
+            with open(
+                os.path.join(ws, ".cozter", "schedules.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({
+                    "u1": [{
+                        "days": list(schedules.DAY_ABBREV),
+                        "time": "00:00",
+                        "command": "run",
+                        "created": "2000-01-01T00:00:00",
+                        "chat_id": "u1",
+                        "user_id": "u1",
+                    }],
+                }, f)
+
+            old_path = workspace.WORKSPACE_STATE_PATH
+            workspace.WORKSPACE_STATE_PATH = os.path.join(
+                tmp, "workspaces.json",
+            )
+            try:
+                workspace.select_workspace("u1", ws, "test:queue")
+                bot = QueueRestoreBot(["u1"])
+                asyncio.run(bot._scheduler_tick())
+                self.assertEqual(bot.drained_users, [])
+            finally:
+                workspace.WORKSPACE_STATE_PATH = old_path
 
 
 class SessionStateFallbackTests(unittest.TestCase):

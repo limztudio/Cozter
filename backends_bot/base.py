@@ -1036,7 +1036,9 @@ class BotPlatform(ABC):
             return
         lines = ["Schedules:"]
         for i, s in enumerate(user_schedules, 1):
-            days_str = ",".join(s.get("days", []))
+            raw_days = s.get("days", [])
+            days = raw_days if isinstance(raw_days, list) else []
+            days_str = ",".join(d for d in days if isinstance(d, str))
             lines.append(
                 f"  {i}. [{days_str}] {s.get('time', '?')}"
                 f" — {s.get('command', '')}"
@@ -1067,10 +1069,19 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, self._receive_schedules)
             return
         removed = user_schedules[idx]
+        schedule_id = removed.get("id")
+        if not isinstance(schedule_id, str) or not schedule_id:
+            await ctx.reply_text(
+                "That schedule entry is malformed and cannot be deleted "
+                "by id. Fix or remove it from .cozter/schedules.json."
+            )
+            return
         async with workspace.get_lock(ws):
-            schedules.remove_schedule(ws, ctx.user_id, removed["id"])
+            schedules.remove_schedule(ws, ctx.user_id, schedule_id)
+        raw_days = removed.get("days", [])
+        days = raw_days if isinstance(raw_days, list) else []
         await ctx.reply_text(
-            f"Removed: [{','.join(removed.get('days', []))}]"
+            f"Removed: [{','.join(d for d in days if isinstance(d, str))}]"
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
         )
 
@@ -1255,6 +1266,9 @@ class BotPlatform(ABC):
             if not os.path.isdir(ws):
                 continue
             for sched in schedules.list_schedules(ws, uid):
+                schedule_id = sched.get("id")
+                if not isinstance(schedule_id, str) or not schedule_id:
+                    continue
                 slot = schedules.most_recent_slot(sched, now)
                 if slot is None:
                     continue
@@ -1272,12 +1286,15 @@ class BotPlatform(ABC):
         to_fire.sort(key=lambda item: item[2].get("created", ""))
 
         for uid, ws, sched, slot in to_fire:
+            schedule_id = sched.get("id")
+            if not isinstance(schedule_id, str) or not schedule_id:
+                continue
             # Persist last_fired BEFORE queueing the command, so a
             # crash between marking and queueing at worst drops the
             # fire rather than firing it twice.
             async with workspace.get_lock(ws):
                 schedules.update_schedule_fired(
-                    ws, uid, sched["id"], slot.isoformat(),
+                    ws, uid, schedule_id, slot.isoformat(),
                 )
             await self._fire_schedule(uid, sched)
 
