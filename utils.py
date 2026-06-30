@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,28 @@ async def iter_stream_lines(
 
         for part in parts:
             yield part.decode("utf-8", errors="replace")
+
+
+async def iter_json_events(
+    stream: asyncio.StreamReader,
+    *,
+    on_invalid: Callable[[str], None] | None = None,
+) -> AsyncIterator[dict]:
+    """Yield non-empty JSON objects from a line-oriented byte stream."""
+    async for line in iter_stream_lines(stream):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            if on_invalid:
+                on_invalid(line)
+            continue
+        if isinstance(event, dict):
+            yield event
+        elif on_invalid:
+            on_invalid(line)
 
 
 async def drain_text_stream(
@@ -221,18 +243,17 @@ async def drain_llm_subprocess(
     """
     raw = ""
     stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
+
+    def _capture_bare_text(line: str) -> None:
+        nonlocal raw
+        if not raw:
+            raw = line
+
     try:
         async with asyncio.timeout(timeout):
-            async for line in iter_stream_lines(proc.stdout):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    if not raw:
-                        raw = line  # bare-text fallback
-                    continue
+            async for event in iter_json_events(
+                proc.stdout, on_invalid=_capture_bare_text,
+            ):
                 text = backend.extract_agent_text(event)
                 if text:
                     raw = text

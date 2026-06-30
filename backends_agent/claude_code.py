@@ -22,8 +22,8 @@ import logging
 import os
 
 from .base import (
-    AgentResult, Backend, ChatEvent, resolve_executable_prefix,
-    set_error_result,
+    AgentResult, Backend, ChatEvent, create_prompt_subprocess,
+    resolve_executable_prefix, set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,18 +116,7 @@ class ClaudeCodeBackend(Backend):
                 )
             cmd += ["--permission-mode", "bypassPermissions"]
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=workspace_path,
-        )
-        proc.stdin.write(prompt.encode("utf-8"))
-        await proc.stdin.drain()
-        proc.stdin.close()
-        await proc.stdin.wait_closed()
-        return proc
+        return await create_prompt_subprocess(cmd, prompt, cwd=workspace_path)
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
         etype = event.get("type", "")

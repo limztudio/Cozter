@@ -5,7 +5,6 @@ auto-titling background tasks.
 """
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -18,7 +17,7 @@ from . import (
 )
 from . import workspace as workspace_mod
 from .backends_agent.base import AgentResult, ChatEvent, set_error_result
-from .utils import drain_text_stream, iter_stream_lines
+from .utils import drain_text_stream, iter_json_events
 from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
@@ -593,6 +592,9 @@ async def run(
         restarting = False
         stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
 
+        def _log_non_json_line(line: str) -> None:
+            logger.debug("Non-JSON line: %s", line)
+
         # Watch inject_queue - kill subprocess when a message arrives
         async def _watch_inject() -> None:
             nonlocal restarting
@@ -611,16 +613,9 @@ async def run(
             inject_task = asyncio.create_task(_watch_inject())
 
         try:
-            async for line in iter_stream_lines(proc.stdout):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    logger.debug("Non-JSON line: %s", line)
-                    continue
-
+            async for event in iter_json_events(
+                proc.stdout, on_invalid=_log_non_json_line,
+            ):
                 prev_count = len(result.events)
                 backend.parse_event(event, result)
 

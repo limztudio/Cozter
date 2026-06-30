@@ -75,6 +75,29 @@ def set_error_result(
     append_text_result(result, display_text or f"Error: {message}")
 
 
+async def create_prompt_subprocess(
+    cmd: list[str],
+    prompt: str,
+    *,
+    cwd: str | None = None,
+) -> asyncio.subprocess.Process:
+    """Spawn a JSONL CLI backend and write the prompt to stdin."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+    )
+    if proc.stdin is None:
+        raise RuntimeError("subprocess stdin pipe was not created")
+    proc.stdin.write(prompt.encode("utf-8"))
+    await proc.stdin.drain()
+    proc.stdin.close()
+    await proc.stdin.wait_closed()
+    return proc
+
+
 class Backend(ABC):
     """Adapter for a specific agent CLI (codex, copilot, ...).
 
