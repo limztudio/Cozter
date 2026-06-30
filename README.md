@@ -75,9 +75,13 @@ starts.
 - One agent backend CLI or server:
   `codex`, `claude`, `copilot`, or an OpenAI-compatible HTTP server for
   the `llama` backend
-- Optional chat-surface dependencies:
-  Telegram uses `python-telegram-bot`, Slack uses `slack-bolt`, and
-  Signal requires a separately installed `signal-cli` daemon
+- Python package dependencies from `requirements.txt`:
+  `python-telegram-bot`, `httpx`, `slack-bolt`, and `aiohttp`. The
+  launcher installs them into the project-local `.venv` before importing
+  the runtime.
+- Optional external services:
+  Telegram and Slack need their platform tokens; Signal also requires a
+  separately installed and running `signal-cli` JSON-RPC daemon.
 
 ## Configuration
 
@@ -342,7 +346,9 @@ setting.
 
 ```
 Cozter/
+├── __init__.py           package marker and version
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
+├── requirements.txt      Python runtime dependencies installed into .venv
 ├── .config/              config, workspace index, and persistent queues
 ├── backends_bot/         chat surfaces (Telegram / Slack / Signal / CLI)
 ├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
@@ -376,19 +382,20 @@ Cozter/
 
 The tracked workspace is intentionally flat and small:
 
-- Top-level runtime modules: `__main__.py`, `agent.py`, `workspace.py`,
-  `session.py`, `compaction.py`, `colony.py`, `router.py`, `titling.py`,
-  `schedules.py`, `config.py`, `updater.py`, and `utils.py`
+- Package entry and runtime setup: `__init__.py`, `__main__.py`,
+  `config.py`, `updater.py`, and `utils.py`
+- Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
+  `session.py`, `router.py`, `titling.py`, `compaction.py`,
+  `colony.py`, and `schedules.py`
 - Chat-platform adapters: `backends_bot/base.py`, `cli.py`,
   `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/base.py`, `_http_proc.py`,
   `codex.py`, `claude_code.py`, `copilot.py`, and `llama.py`
-- Agent tool surface: `agent_tools/base.py`, the 14 files under
-  `agent_tools/builtin/`, and user plugins under
-  `agent_tools/plugins/`
+- Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
+  the 14 files under `agent_tools/builtin/`, and user plugins plus their
+  README under `agent_tools/plugins/`
 - Project metadata and docs: `requirements.txt`,
-  `.config/config.example.json`, `agent_tools/plugins/README.md`,
-  `.gitignore`, and this README
+  `.config/config.example.json`, `.gitignore`, and this README
 - Tests: `tests/test_agent_tools.py`, `tests/test_backends_agent.py`,
   `tests/test_state_fallbacks.py`, and `tests/test_utils.py`
 
@@ -418,10 +425,14 @@ Do not commit these runtime artifacts:
 - `.log/` — rotating runtime logs and crash reports
 - `.venv/`, `__pycache__/`, `.ruff_cache/`, coverage output, and build
   artifacts
+- Local assistant/editor directories, such as `.claude/`, unless you
+  intentionally add shared project settings
 
-The shipped `.gitignore` keeps those out of normal commits while still
-tracking `.config/config.example.json` so new installs have a template.
-If you add a new user-facing plugin, place it under
+The shipped `.gitignore` keeps Cozter runtime files and common Python
+artifacts out of normal commits while still tracking
+`.config/config.example.json` so new installs have a template. Local
+assistant/editor directories may rely on your global excludes; review
+them before staging. If you add a new user-facing plugin, place it under
 `agent_tools/plugins/` and commit it intentionally; files whose names
 start with `_` are ignored by the plugin loader but are not ignored by
 git.
