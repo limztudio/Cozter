@@ -309,7 +309,7 @@ Each backend defines its own model list and permission mapping in
 |---|---|---|---|
 | `codex` | `codex exec --json` | `gpt-5.5` | `gpt-5.4-mini` |
 | `claude_code` | `claude --print --output-format stream-json` | `default` | `haiku` |
-| `copilot` | `copilot --output-format json` | `claude-sonnet-4.6` | `claude-haiku-4.5` |
+| `copilot` | `copilot --output-format json` | `auto` | `claude-haiku-4.5` |
 | `llama` | OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
 
 Permission modes are best-effort across third-party CLIs. `codex` maps

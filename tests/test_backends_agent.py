@@ -26,7 +26,9 @@ class StaticBackendModelTests(unittest.TestCase):
             "gpt-5-mini",
             "claude-fable-5",
             "claude-opus-4.8",
+            "claude-opus-4.8-fast",
             "claude-opus-4.6-fast",
+            "gemini-2.5-pro",
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)

@@ -34,9 +34,8 @@ class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
     # Copilot's CLI model picker is narrower than Copilot's broader product
-    # catalog. Include models GitHub marks CLI-capable in its generated
-    # support data, using the same slug style as the documented --model
-    # examples; availability still depends on the user's plan and policy.
+    # catalog. Include documented CLI/package slugs; availability still
+    # depends on the user's plan, org policy, and rollout cohort.
     available_models = (
         "auto",
         "claude-sonnet-4.6",
@@ -49,15 +48,17 @@ class CopilotBackend(Backend):
         "claude-haiku-4.5",
         "claude-sonnet-4.5",
         "claude-opus-4.8",
+        "claude-opus-4.8-fast",
         "claude-opus-4.7",
         "claude-opus-4.6",
         "claude-opus-4.6-fast",
         "claude-opus-4.5",
+        "gemini-2.5-pro",
         "gemini-3.1-pro-preview",
         "gemini-3.5-flash",
         "mai-code-1-flash",
     )
-    default_model = "claude-sonnet-4.6"
+    default_model = "auto"
     default_summary_model = "claude-haiku-4.5"
     effort_levels = ("low", "medium", "high", "xhigh", "max")
 
