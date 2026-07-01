@@ -16,8 +16,8 @@ import os
 from datetime import datetime, time as dt_time, timedelta
 
 from .utils import COZTER_DIR
-from .utils import atomic_write as _atomic_write
 from .utils import load_json_object
+from .utils import save_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,7 @@ def _load_all(workspace: str) -> dict:
 
 
 def _save_all(workspace: str, data: dict) -> None:
-    target_dir = os.path.join(workspace, COZTER_DIR)
-    os.makedirs(target_dir, exist_ok=True)
-    _atomic_write(_path(workspace), data, tmp_dir=target_dir)
+    save_json_object(_path(workspace), data)
 
 
 def _schedule_list(data: dict, user_id: str | int) -> list:

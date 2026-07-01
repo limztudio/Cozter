@@ -26,9 +26,9 @@ from datetime import datetime
 
 from .. import agent, colony, schedules, session, updater, workspace
 from ..utils import COZTER_DIR
-from ..utils import atomic_write as _atomic_write
 from ..utils import drain_queue as _drain_queue
 from ..utils import load_json_object
+from ..utils import save_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -1124,9 +1124,7 @@ class BotPlatform(ABC):
         return [entry for entry in value if isinstance(entry, dict)]
 
     def _write_queue_file(self, data: dict) -> None:
-        _atomic_write(
-            self._queue_file_path(), data, workspace.CONFIG_DIR,
-        )
+        save_json_object(self._queue_file_path(), data)
 
     async def _persist_enqueue(
         self, uid: str, text: str, chat_id: str,

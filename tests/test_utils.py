@@ -1,5 +1,8 @@
 import asyncio
+import json
+import os
 import sys
+import tempfile
 import unittest
 
 from Cozter import utils
@@ -68,6 +71,31 @@ class ProcessDrainTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0)
 
         asyncio.run(run())
+
+
+class JsonHelperTests(unittest.TestCase):
+    def test_save_json_object_creates_parent_and_writes_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "nested", "state.json")
+
+            utils.save_json_object(path, {"ok": True})
+
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f), {"ok": True})
+
+    def test_normalize_string_list_preserves_requested_semantics(self) -> None:
+        self.assertEqual(
+            utils.normalize_string_list([" a ", "", 3, "b"]),
+            ["a", "b"],
+        )
+        self.assertEqual(
+            utils.normalize_string_list(" a ", allow_scalar=True),
+            ["a"],
+        )
+        self.assertEqual(
+            utils.normalize_string_list([" a ", ""], strip=False),
+            [" a "],
+        )
 
 
 if __name__ == "__main__":

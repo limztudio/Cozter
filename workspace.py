@@ -4,8 +4,8 @@ import os
 
 from . import backends_agent
 from .utils import CONFIG_DIR, COZTER_DIR
-from .utils import atomic_write as _atomic_write
 from .utils import load_json_object
+from .utils import save_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +24,7 @@ def _load_all() -> dict:
 
 
 def _save_all(data: dict) -> None:
-    target_dir = os.path.dirname(WORKSPACE_STATE_PATH) or "."
-    os.makedirs(target_dir, exist_ok=True)
-    _atomic_write(WORKSPACE_STATE_PATH, data, target_dir)
+    save_json_object(WORKSPACE_STATE_PATH, data)
 
 
 def _get_user(user_id: int | str) -> dict:
@@ -255,9 +253,7 @@ def _load_settings(workspace_path: str) -> dict:
 
 
 def _save_settings(workspace_path: str, settings: dict) -> None:
-    ensure_cozter_dir(workspace_path)
-    tmp_dir = os.path.join(workspace_path, COZTER_DIR)
-    _atomic_write(_settings_path(workspace_path), settings, tmp_dir)
+    save_json_object(_settings_path(workspace_path), settings)
 
 
 def _set_setting(workspace_path: str, key: str, value: object) -> None:

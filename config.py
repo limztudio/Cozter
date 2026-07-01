@@ -3,6 +3,7 @@ import os
 import sys
 
 from .utils import CONFIG_DIR
+from .utils import normalize_string_list
 
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
@@ -110,11 +111,9 @@ def load_config() -> dict:
     # Filter whitespace-only / empty tokens so users who leave placeholders
     # in the file get a "not configured" error rather than a runtime
     # auth-failure later.
-    tg_tokens = [
-        t for t in (cfg.get("telegram_bot_tokens") or [])
-        if isinstance(t, str) and t.strip()
-    ]
-    cfg["telegram_bot_tokens"] = tg_tokens
+    cfg["telegram_bot_tokens"] = normalize_string_list(
+        cfg.get("telegram_bot_tokens") or []
+    )
     slack_bot_raw = cfg.get("slack_bot_token") or ""
     cfg["slack_bot_token"] = (
         slack_bot_raw.strip() if isinstance(slack_bot_raw, str) else ""
@@ -123,8 +122,8 @@ def load_config() -> dict:
     cfg["slack_app_token"] = (
         slack_app_raw.strip() if isinstance(slack_app_raw, str) else ""
     )
-    cfg["signal_group_urls"] = _normalize_string_list(
-        cfg.get("signal_group_urls") or []
+    cfg["signal_group_urls"] = normalize_string_list(
+        cfg.get("signal_group_urls") or [], allow_scalar=True,
     )
     signal_socket_raw = cfg.get("signal_jsonrpc_socket") or ""
     cfg["signal_jsonrpc_socket"] = (
@@ -167,10 +166,9 @@ def load_config() -> dict:
             sys.exit(1)
         # Normalize: drop non-string / whitespace-only entries so a stray
         # placeholder doesn't pass the populated-list check.
-        slack_channels = [
-            c for c in (cfg.get("slack_channel_ids") or [])
-            if isinstance(c, str) and c.strip()
-        ]
+        slack_channels = normalize_string_list(
+            cfg.get("slack_channel_ids") or []
+        )
         cfg["slack_channel_ids"] = slack_channels
         if not slack_channels:
             print(f"ERROR: 'slack_channel_ids' is empty in {CONFIG_PATH}")
@@ -189,15 +187,3 @@ def load_config() -> dict:
         sys.exit(1)
 
     return cfg
-
-
-def _normalize_string_list(value) -> list[str]:
-    if isinstance(value, str):
-        value = [value]
-    if not isinstance(value, list):
-        return []
-    return [
-        item.strip()
-        for item in value
-        if isinstance(item, str) and item.strip()
-    ]

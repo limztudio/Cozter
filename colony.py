@@ -30,12 +30,13 @@ import re
 from . import backends_agent, session
 from . import workspace as workspace_mod
 from .utils import COZTER_DIR
-from .utils import atomic_write as _atomic_write
 from .utils import (
     drain_llm_subprocess,
     extract_marker_block,
     load_json_object,
+    normalize_string_list,
     parse_bullets,
+    save_json_object,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,11 +53,7 @@ def _path(workspace: str) -> str:
 def _load(workspace: str) -> dict:
     data = load_json_object(_path(workspace), "colony file", logger)
     items = data.get("items")
-    if not isinstance(items, list):
-        items = []
-    data["items"] = [
-        item for item in items if isinstance(item, str) and item.strip()
-    ][:COLONY_CAP]
+    data["items"] = normalize_string_list(items)[:COLONY_CAP]
     compact_count = data.get("compact_count", 0)
     if not isinstance(compact_count, int) or isinstance(compact_count, bool):
         compact_count = 0
@@ -65,9 +62,7 @@ def _load(workspace: str) -> dict:
 
 
 def _save(workspace: str, data: dict) -> None:
-    target_dir = os.path.join(workspace, COZTER_DIR)
-    os.makedirs(target_dir, exist_ok=True)
-    _atomic_write(_path(workspace), data, tmp_dir=target_dir)
+    save_json_object(_path(workspace), data)
 
 
 def get_items(workspace: str) -> list[str]:
@@ -76,7 +71,7 @@ def get_items(workspace: str) -> list[str]:
 
 def set_items(workspace: str, items: list[str]) -> None:
     data = _load(workspace)
-    cleaned = [s for s in (i.strip() for i in items if i) if s]
+    cleaned = normalize_string_list(items)
     if len(cleaned) > COLONY_CAP:
         dropped = len(cleaned) - COLONY_CAP
         logger.warning(

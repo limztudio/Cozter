@@ -50,6 +50,34 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
         raise
 
 
+def save_json_object(path: str, data: dict) -> None:
+    """Create *path*'s parent directory and atomically write JSON data."""
+    target_dir = os.path.dirname(path) or "."
+    os.makedirs(target_dir, exist_ok=True)
+    atomic_write(path, data, target_dir)
+
+
+def normalize_string_list(
+    value: object,
+    *,
+    allow_scalar: bool = False,
+    strip: bool = True,
+) -> list[str]:
+    """Return non-empty strings from a list, optionally accepting one string."""
+    if isinstance(value, str) and allow_scalar:
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip() if strip else item
+        if text:
+            items.append(text)
+    return items
+
+
 def load_json_object(
     path: str,
     label: str,

@@ -14,8 +14,9 @@ import uuid
 from datetime import datetime
 
 from .utils import COZTER_DIR, take_recent_lines
-from .utils import atomic_write as _atomic_write
 from .utils import load_json_object
+from .utils import normalize_string_list
+from .utils import save_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +70,7 @@ def set_last_session(
     """Record that *user_id* is now working in *session_id*."""
     data = _load_last_session_map(workspace)
     data[str(user_id)] = session_id
-    cozter_dir = os.path.join(workspace, COZTER_DIR)
-    os.makedirs(cozter_dir, exist_ok=True)
-    _atomic_write(_last_session_path(workspace), data, cozter_dir)
+    save_json_object(_last_session_path(workspace), data)
 
 
 def migrate_last_session(
@@ -93,9 +92,7 @@ def migrate_last_session(
         if not isinstance(session_id, str) or not session_id:
             continue
         data[target_key] = session_id
-        cozter_dir = os.path.join(workspace, COZTER_DIR)
-        os.makedirs(cozter_dir, exist_ok=True)
-        _atomic_write(_last_session_path(workspace), data, cozter_dir)
+        save_json_object(_last_session_path(workspace), data)
         return True
     return False
 
@@ -155,11 +152,7 @@ def _normalize_session_data(value: object, *, path: str = "") -> dict | None:
     data["summary"] = summary if isinstance(summary, str) and summary else None
 
     long_term = data.get("long_term", [])
-    data["long_term"] = (
-        [item for item in long_term if isinstance(item, str) and item]
-        if isinstance(long_term, list)
-        else []
-    )
+    data["long_term"] = normalize_string_list(long_term, strip=False)
 
     compacted_count = data.get("compacted_count", 0)
     if (
@@ -269,8 +262,6 @@ def create_session(workspace: str, name: str | None = None) -> dict:
     The auto-compaction interval is read from workspace settings at
     compaction time, so it isn't stored on the session itself.
     """
-    sdir = _sessions_dir(workspace)
-    os.makedirs(sdir, exist_ok=True)
     session_id = uuid.uuid4().hex[:12]
     now = datetime.now().isoformat()
     data = {
@@ -282,7 +273,7 @@ def create_session(workspace: str, name: str | None = None) -> dict:
         "long_term": [],
         "compacted_count": 0,
     }
-    _atomic_write(_session_path(workspace, session_id), data, tmp_dir=sdir)
+    save_json_object(_session_path(workspace, session_id), data)
     return data
 
 
@@ -300,9 +291,7 @@ def load_session(workspace: str, session_id: str) -> dict | None:
 
 
 def save_session(workspace: str, session_id: str, data: dict) -> None:
-    sdir = _sessions_dir(workspace)
-    os.makedirs(sdir, exist_ok=True)
-    _atomic_write(_session_path(workspace, session_id), data, tmp_dir=sdir)
+    save_json_object(_session_path(workspace, session_id), data)
 
 
 def delete_session(workspace: str, session_id: str) -> bool:
@@ -405,7 +394,7 @@ def set_summary(
     data["summary"] = summary
 
     if long_term_rewrite is not None:
-        long_term = [item for item in long_term_rewrite if item]
+        long_term = normalize_string_list(long_term_rewrite, strip=False)
         if len(long_term) > LONG_TERM_CAP:
             dropped = len(long_term) - LONG_TERM_CAP
             logger.warning(
