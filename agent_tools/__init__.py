@@ -38,6 +38,7 @@ import importlib
 import json
 import logging
 import pkgutil
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -87,7 +88,14 @@ def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
 
 
 _load_subpackage("builtin", mark_as_plugin=False)
-_load_subpackage("plugins", mark_as_plugin=True)
+
+# When a plugin is invoked as ``python -m Cozter.agent_tools.plugins.name``,
+# Python imports this package before executing that module as ``__main__``.
+# Eagerly importing plugins in that narrow path preloads the target module and
+# makes runpy warn that execution may be unpredictable. Normal bot startup and
+# ordinary imports still discover plugins immediately.
+if sys.argv[0] != "-m":
+    _load_subpackage("plugins", mark_as_plugin=True)
 
 # Sort registered tools deterministically: explicit ``order`` then name.
 _TOOLS: tuple[AgentTool, ...] = tuple(

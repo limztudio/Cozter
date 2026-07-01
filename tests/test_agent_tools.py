@@ -1,5 +1,7 @@
 import asyncio
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -70,6 +72,30 @@ class BuiltinEditToolTests(unittest.TestCase):
                     self.assertEqual(f.read(), "alpha gamma")
 
         asyncio.run(run())
+
+
+class PluginScriptTests(unittest.TestCase):
+    def test_plugin_module_invocation_does_not_preload_target(self) -> None:
+        package_parent = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "Cozter.agent_tools.plugins.current_time",
+                '{"timezone":"UTC"}',
+            ],
+            cwd=package_parent,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("RuntimeWarning", proc.stderr)
+        self.assertIn("+00:00", proc.stdout.strip())
 
 
 class DiscoveryToolTests(unittest.TestCase):
