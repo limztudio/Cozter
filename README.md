@@ -22,9 +22,9 @@ that works across every backend.
   - Signal (same launcher, set `signal_group_urls` and the daemon socket)
   - CLI (`python -m Cozter -cli`) — the terminal becomes the chat
 - **Per-workspace state**, scoped to `<workspace>/.cozter/`:
-  sessions, compaction history, agent choice, model, permission level,
-  reasoning effort, summary backend, colony (long-term memory), uploads,
-  generated image attachments, and schedules
+  sessions, last-session pointers, compaction history, agent choice,
+  model, permission level, reasoning effort, summary backend, colony
+  (long-term memory), uploads, generated image attachments, and schedules
 - **Durable sessions with two-layer memory**: each conversation
   auto-compacts every N turns into a scratch summary plus a persistent
   long-term-memory list, both injected into every subsequent turn
@@ -34,6 +34,9 @@ that works across every backend.
 - **File flow in both directions**: chat uploads are saved into the
   workspace and text-like files are inlined into the next prompt; agent
   replies can upload workspace files or generated images back to chat
+- **Recurring scheduled prompts**: `/reserve` queues prompts on selected
+  weekdays and runs them in throwaway sessions so routine jobs do not
+  pollute the user's active conversation
 - **Auto-update**: the bot polls origin, fast-forward-pulls, and exits
   for the supervisor (`systemd` or its equivalent) to restart it
 
@@ -116,11 +119,13 @@ Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
 `slack_channel_ids`, or `signal_group_urls` + `signal_jsonrpc_socket`.
 The CLI surface needs neither.
 
+`recent_workspace_limit` controls how many paths `/open` shows.
 `message_queue_size` caps each user's pending chat turns. The queue is
 persisted in `Cozter/.config/queue_<platform>.json`, so clean restarts,
 auto-updates, and crash recovery do not drop already accepted messages.
-CLI mode uses its own stable platform key (`cli:local`) and does not read
-or create daemon config.
+Platform IDs are sanitized for those filenames; for example the CLI's
+stable platform key `cli:local` is stored as `queue_cli_local.json`. CLI
+mode does not read or create daemon config.
 
 For Signal, `signal-cli` must already be installed, registered, and
 running as a JSON-RPC daemon. Each invite URL in `signal_group_urls` is
@@ -210,12 +215,12 @@ Most picker commands accept either the displayed number or the literal
 name. `/open` also accepts a recent-workspace number directly as
 `/open 2`.
 
-Schedules are stored per workspace in `.cozter/schedules.json`. The
-scheduler checks every 30 seconds and records `last_fired`, so a missed
-slot fires once after restart instead of being lost. Scheduled prompts run
-through the same persistent queue as user messages, but use a fresh
-ephemeral session that is deleted after the turn; they do not append to
-the user's current conversation.
+Schedules are stored per workspace in `.cozter/schedules.json` and use
+the host's local time. The scheduler checks every 30 seconds and records
+`last_fired`, so a missed slot fires once after restart instead of being
+lost. Scheduled prompts run through the same persistent queue as user
+messages, but use a fresh ephemeral session that is deleted after the
+turn; they do not append to the user's current conversation.
 
 ## Files and attachments
 
@@ -233,12 +238,16 @@ Agents can attach files back to chat by emitting a line like:
 ```
 
 The path may be relative to the workspace or an absolute path inside it.
-Generated images under `$CODEX_HOME/generated_images` and any directories
-listed in `COZTER_ATTACHMENT_ROOTS` are also accepted; Cozter copies those
-images into `.cozter/generated_images/` before uploading so chat platforms
-never receive arbitrary external paths. Replies can end with `[[await]]`
-when the agent needs a user decision; the marker is stripped and that
-user's queued work pauses until the next message arrives.
+Generated images under `$CODEX_HOME/generated_images` (or
+`~/.codex/generated_images` when `CODEX_HOME` is unset) and any
+directories listed in `COZTER_ATTACHMENT_ROOTS` are also accepted. Cozter
+copies those images into `.cozter/generated_images/` before upload so
+chat platforms never receive arbitrary external paths. At the end of a
+run, Cozter also snapshots newly created or modified image files in the
+workspace and trusted generated-image roots and attaches them unless the
+agent already referenced them explicitly. Replies can end with
+`[[await]]` when the agent needs a user decision; the marker is stripped
+and that user's queued work pauses until the next message arrives.
 
 ## Plugins
 
@@ -322,6 +331,12 @@ tools in `deny` mode. `claude_code` uses plan mode for `deny`, but cannot
 prompt interactively for `confirm` in chat mode. `copilot` has no usable
 interactive approval flow here, so non-`full` modes run with its
 non-blocking tool flag and stricter intents are logged.
+
+The `llama` model picker queries `llama_server_url/v1/models` and falls
+back to `auto` if the server is down or returns no model IDs. The
+`copilot` backend keeps prompts under the Windows command-line limit by
+dropping the oldest composed context when a prompt exceeds its cap; the
+current user message is kept at the tail.
 
 ## Reasoning effort
 
@@ -445,7 +460,9 @@ and queue any messages that arrive during a pending restart. If `HEAD`
 changed (remote update *or* manual pull while the bot was running), the
 bot installs any new `requirements.txt`, broadcasts a "restarting"
 message, and exits. The init system (`systemd Restart=always`, or any
-equivalent) brings it back, and persisted queues resume after startup.
+equivalent) brings daemon mode back. CLI mode uses an outer respawner
+process and relaunches itself in the same terminal. Persisted queues
+resume after either path starts again.
 
 ## Reading order
 
