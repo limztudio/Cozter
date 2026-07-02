@@ -364,7 +364,7 @@ Cozter/
 ├── __init__.py           package marker and version
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
 ├── requirements.txt      Python runtime dependencies installed into .venv
-├── .config/              config, workspace index, and persistent queues
+├── .config/              runtime config dir; only config.example.json is tracked
 ├── backends_bot/         chat surfaces (Telegram / Slack / Signal / CLI)
 ├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
 ├── session.py            per-workspace conversation persistence
@@ -395,7 +395,10 @@ Cozter/
 
 ## Source inventory
 
-The tracked workspace is intentionally flat and small:
+The tracked workspace is intentionally flat and small. A complete source
+audit should use `git ls-files` so hidden tracked files, especially
+`.config/config.example.json`, are included even though `.config/*` is
+ignored for local secrets and runtime queues.
 
 - Package entry and runtime setup: `__init__.py`, `__main__.py`,
   `config.py`, `updater.py`, and `utils.py`
@@ -413,6 +416,12 @@ The tracked workspace is intentionally flat and small:
   `.config/config.example.json`, `.gitignore`, and this README
 - Tests: `tests/test_agent_tools.py`, `tests/test_backends_agent.py`,
   `tests/test_state_fallbacks.py`, and `tests/test_utils.py`
+
+The normal working checkout may also contain ignored runtime state such as
+`.venv/`, `.cozter/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
+`.log/`, and local assistant/editor directories. Treat those as local
+machine state unless a file is deliberately being promoted into tracked
+source.
 
 The agent loop in `agent.py:run()` is shared across backends. Each
 `Backend.launch()` spawns the right subprocess (or the in-process llama
@@ -451,6 +460,16 @@ them before staging. If you add a new user-facing plugin, place it under
 `agent_tools/plugins/` and commit it intentionally; files whose names
 start with `_` are ignored by the plugin loader but are not ignored by
 git.
+
+Useful audit commands before documentation or release commits:
+
+```bash
+git pull --ff-only
+git ls-files
+find . -maxdepth 2 -type d -not -path './.git*' -print | sort
+PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
+git status --short
+```
 
 ## Auto-update
 
