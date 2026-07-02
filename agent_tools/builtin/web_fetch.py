@@ -12,7 +12,10 @@ from ..base import (
     AgentTool,
     coerce_int_arg,
     html_to_text,
+    object_parameters,
     read_bounded_text,
+    require_nonempty_string_arg,
+    summarize_arg,
 )
 
 
@@ -22,9 +25,8 @@ class WebFetchTool(AgentTool):
         "Fetch a public HTTP/HTTPS URL and return readable text. Use"
         " this after web_search to inspect a page."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
+    parameters = object_parameters(
+        {
             "url": {"type": "string"},
             "max_chars": {
                 "type": "integer",
@@ -33,16 +35,14 @@ class WebFetchTool(AgentTool):
                 ),
             },
         },
-        "required": ["url"],
-    }
+        ["url"],
+    )
 
     async def run(self, workspace_path: str, args: dict) -> str:
         del workspace_path  # web tools don't need the workspace
-        url = args.get("url")
-        if not isinstance(url, str) or not url.strip():
-            return "Error: 'url' must be a non-empty string"
-
-        url = url.strip()
+        url, error = require_nonempty_string_arg(args, "url", strip=True)
+        if error:
+            return error
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return "Error: only http:// and https:// URLs are allowed"
@@ -114,7 +114,4 @@ class WebFetchTool(AgentTool):
         return f"{header}\n\n{text}"
 
     def summarize(self, args: dict) -> str:
-        url = args.get("url", "")
-        return f"web_fetch: {url[:200]}" + (
-            "..." if len(url) > 200 else ""
-        )
+        return summarize_arg("web_fetch", args, "url")

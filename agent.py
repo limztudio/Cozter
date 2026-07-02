@@ -5,6 +5,7 @@ auto-titling background tasks.
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -371,14 +372,12 @@ def _build_contextual_prompt(
 
     if colony_list:
         parts.append("[Colony]")
-        for item in colony_list:
-            parts.append(f"- {item}")
+        parts.extend(f"- {item}" for item in colony_list)
         parts.append("[End of Colony]\n")
 
     if long_term:
         parts.append("[Long-term Memory]")
-        for item in long_term:
-            parts.append(f"- {item}")
+        parts.extend(f"- {item}" for item in long_term)
         parts.append("[End of Long-term Memory]\n")
 
     if summary:
@@ -388,8 +387,7 @@ def _build_contextual_prompt(
 
     if messages:
         parts.append("[Recent Messages]")
-        for msg in messages:
-            parts.append(session.format_msg_line(msg))
+        parts.extend(session.format_msg_line(msg) for msg in messages)
         parts.append("[End of Recent Messages]\n")
 
     parts.append(
@@ -596,17 +594,17 @@ async def run(
             logger.debug("Non-JSON line: %s", line)
 
         # Watch inject_queue - kill subprocess when a message arrives
-        async def _watch_inject() -> None:
+        async def _watch_inject(
+            active_proc: asyncio.subprocess.Process = proc,
+        ) -> None:
             nonlocal restarting
             msg = await inject_queue.get()
             injected.append(msg)
             restarting = True
-            try:
-                proc.kill()
-            except OSError:
+            with contextlib.suppress(OSError):
                 # ProcessLookupError on Unix, other OSError on Windows
                 # when TerminateProcess fails (e.g., already exited).
-                pass
+                active_proc.kill()
 
         inject_task: asyncio.Task | None = None
         if inject_queue is not None:
@@ -641,10 +639,8 @@ async def run(
         finally:
             if inject_task and not inject_task.done():
                 inject_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await inject_task
-                except asyncio.CancelledError:
-                    pass
 
         # If we're restarting due to inject, drain pipes and any extra
         # injects that arrived while we were shutting down.

@@ -5,7 +5,7 @@ import logging
 
 from .base import (
     AgentResult, Backend, ChatEvent, create_prompt_subprocess,
-    resolve_executable_prefix, set_error_result,
+    executable_command, set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ class CodexBackend(Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
-        prefix = resolve_executable_prefix("codex") or ["codex"]
+        prefix = executable_command(self.executable)
         cmd = [*prefix, "exec", "--ephemeral", "--json", "-C", workspace_path]
         if model:
             cmd += ["-m", model]

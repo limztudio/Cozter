@@ -23,7 +23,7 @@ import os
 
 from .base import (
     AgentResult, Backend, ChatEvent, create_prompt_subprocess,
-    resolve_executable_prefix, set_error_result,
+    executable_command, set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ class ClaudeCodeBackend(Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
-        prefix = resolve_executable_prefix("claude") or ["claude"]
+        prefix = executable_command(self.executable)
         cmd: list[str] = [
             *prefix,
             "--print",

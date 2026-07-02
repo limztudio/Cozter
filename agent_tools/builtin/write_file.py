@@ -5,6 +5,7 @@ from __future__ import annotations
 from ..base import (
     AgentTool,
     ensure_parent_dir,
+    object_parameters,
     resolve_inside_workspace,
     summarize_path,
 )
@@ -17,14 +18,13 @@ class WriteFileTool(AgentTool):
         "Write *content* to *path*, creating parent dirs as needed."
         " Overwrites any existing file."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
+    parameters = object_parameters(
+        {
             "path": {"type": "string"},
             "content": {"type": "string"},
         },
-        "required": ["path", "content"],
-    }
+        ["path", "content"],
+    )
 
     async def run(self, workspace_path: str, args: dict) -> str:
         target = resolve_inside_workspace(workspace_path, args.get("path", ""))

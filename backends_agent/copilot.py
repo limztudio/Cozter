@@ -18,8 +18,7 @@ import asyncio
 import logging
 
 from .base import (
-    AgentResult, Backend, ChatEvent, resolve_executable_prefix,
-    set_error_result,
+    AgentResult, Backend, ChatEvent, executable_command, set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,7 +88,7 @@ class CopilotBackend(Backend):
             )
             prompt = prompt[-_MAX_PROMPT_CHARS:]
 
-        prefix = resolve_executable_prefix("copilot") or ["copilot"]
+        prefix = executable_command(self.executable)
         cmd: list[str] = [
             *prefix, "--output-format", "json", "--no-color",
         ]

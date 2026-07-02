@@ -9,6 +9,8 @@ from ..base import (
     AgentTool,
     coerce_int_arg,
     iter_workspace_files,
+    object_parameters,
+    require_nonempty_string_arg,
     resolve_inside_workspace,
 )
 
@@ -27,9 +29,8 @@ class GrepTool(AgentTool):
         " Returns matching lines as 'path:lineno: line'. Binary files"
         " and files larger than 1 MB are skipped."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
+    parameters = object_parameters(
+        {
             "pattern": {
                 "type": "string",
                 "description": "Python regex to search for.",
@@ -54,13 +55,13 @@ class GrepTool(AgentTool):
                 ),
             },
         },
-        "required": ["pattern"],
-    }
+        ["pattern"],
+    )
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        pattern_str = args.get("pattern")
-        if not isinstance(pattern_str, str) or not pattern_str.strip():
-            return "Error: 'pattern' must be a non-empty string"
+        pattern_str, error = require_nonempty_string_arg(args, "pattern")
+        if error:
+            return error
         try:
             regex = re.compile(pattern_str)
         except re.error as exc:

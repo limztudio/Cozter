@@ -13,7 +13,10 @@ from ..base import (
     AgentTool,
     coerce_int_arg,
     html_to_text,
+    object_parameters,
     read_bounded_text,
+    require_nonempty_string_arg,
+    summarize_arg,
 )
 
 
@@ -24,9 +27,8 @@ class WebSearchTool(AgentTool):
         " to find relevant pages, then use web_fetch to read a"
         " specific result."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
+    parameters = object_parameters(
+        {
             "query": {"type": "string"},
             "max_results": {
                 "type": "integer",
@@ -35,14 +37,14 @@ class WebSearchTool(AgentTool):
                 ),
             },
         },
-        "required": ["query"],
-    }
+        ["query"],
+    )
 
     async def run(self, workspace_path: str, args: dict) -> str:
         del workspace_path  # web tools don't need the workspace
-        query = args.get("query")
-        if not isinstance(query, str) or not query.strip():
-            return "Error: 'query' must be a non-empty string"
+        query, error = require_nonempty_string_arg(args, "query", strip=True)
+        if error:
+            return error
 
         max_results = coerce_int_arg(
             args.get("max_results") or 5,
@@ -95,10 +97,7 @@ class WebSearchTool(AgentTool):
         return "\n".join(results)
 
     def summarize(self, args: dict) -> str:
-        query = args.get("query", "")
-        return f"web_search: {query[:200]}" + (
-            "..." if len(query) > 200 else ""
-        )
+        return summarize_arg("web_search", args, "query")
 
 
 def _ddg_unwrap_url(url: str) -> str:

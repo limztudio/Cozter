@@ -29,6 +29,11 @@ def resolve_executable_prefix(name: str) -> list[str] | None:
     return [found]
 
 
+def executable_command(name: str) -> list[str]:
+    """Return a launch argv prefix, falling back to subprocess lookup."""
+    return resolve_executable_prefix(name) or [name]
+
+
 def effort_band(percent: int, levels: tuple[str, ...]) -> str | None:
     """Map 1-100 onto evenly sized effort *levels*; 0 disables override."""
     if percent <= 0 or not levels:

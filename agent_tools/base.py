@@ -206,32 +206,55 @@ def coerce_int_arg(
     return number
 
 
+def require_nonempty_string_arg(
+    args: dict,
+    key: str,
+    *,
+    strip: bool = False,
+) -> tuple[str | None, str | None]:
+    """Return a required string argument, or a model-facing error."""
+    value = args.get(key)
+    if not isinstance(value, str) or not value.strip():
+        return None, f"Error: '{key}' must be a non-empty string"
+    return value.strip() if strip else value, None
+
+
 def ensure_parent_dir(path: str) -> None:
     """Create the containing directory for *path*, if any."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
 
-def source_destination_parameters() -> dict[str, Any]:
-    """Return the common schema for tools that move data between paths."""
+def object_parameters(
+    properties: dict[str, Any],
+    required: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    """Return a JSON-Schema object parameter declaration."""
     return {
         "type": "object",
-        "properties": {
+        "properties": properties,
+        "required": list(required),
+    }
+
+
+def source_destination_parameters() -> dict[str, Any]:
+    """Return the common schema for tools that move data between paths."""
+    return object_parameters(
+        {
             "source": {"type": "string"},
             "destination": {"type": "string"},
         },
-        "required": ["source", "destination"],
-    }
+        ["source", "destination"],
+    )
 
 
 def path_parameters() -> dict[str, Any]:
     """Return the common schema for tools that operate on one path."""
-    return {
-        "type": "object",
-        "properties": {
+    return object_parameters(
+        {
             "path": {"type": "string"},
         },
-        "required": ["path"],
-    }
+        ["path"],
+    )
 
 
 def resolve_source_destination(
@@ -253,6 +276,21 @@ def summarize_path_pair(action: str, args: dict) -> str:
     return (
         f"{action}: {args.get('source', '?')}"
         f" -> {args.get('destination', '?')}"
+    )
+
+
+def summarize_arg(
+    action: str,
+    args: dict,
+    key: str,
+    *,
+    max_chars: int = 200,
+) -> str:
+    value = args.get(key, "")
+    if not isinstance(value, str):
+        value = str(value)
+    return f"{action}: {value[:max_chars]}" + (
+        "..." if len(value) > max_chars else ""
     )
 
 

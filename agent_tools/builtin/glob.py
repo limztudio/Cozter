@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import os
 
-from ..base import AgentTool, coerce_int_arg, iter_workspace_files
+from ..base import (
+    AgentTool,
+    coerce_int_arg,
+    iter_workspace_files,
+    object_parameters,
+    require_nonempty_string_arg,
+)
 
 
 class GlobTool(AgentTool):
@@ -14,9 +20,8 @@ class GlobTool(AgentTool):
         " ** for recursive matching (e.g. '**/*.py'). Returns sorted"
         " relative paths."
     )
-    parameters = {
-        "type": "object",
-        "properties": {
+    parameters = object_parameters(
+        {
             "pattern": {
                 "type": "string",
                 "description": (
@@ -30,13 +35,13 @@ class GlobTool(AgentTool):
                 ),
             },
         },
-        "required": ["pattern"],
-    }
+        ["pattern"],
+    )
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        pattern = args.get("pattern")
-        if not isinstance(pattern, str) or not pattern.strip():
-            return "Error: 'pattern' must be a non-empty string"
+        pattern, error = require_nonempty_string_arg(args, "pattern")
+        if error:
+            return error
 
         max_results = coerce_int_arg(
             args.get("max_results") or 100,
