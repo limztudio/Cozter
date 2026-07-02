@@ -23,16 +23,22 @@ class StaticBackendModelTests(unittest.TestCase):
         for model in (
             "gpt-5.5",
             "gpt-5.4-mini",
+            "gpt-5.4-nano",
             "gpt-5-mini",
             "claude-sonnet-5",
             "claude-fable-5",
             "claude-opus-4.8",
             "claude-opus-4.8-fast",
-            "claude-opus-4.6-fast",
             "gemini-2.5-pro",
+            "gemini-3-flash",
+            "gemini-3.1-pro",
+            "gemini-3.5-flash",
+            "raptor-mini",
+            "kimi-k2.7-code",
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)
+        self.assertNotIn("claude-opus-4.6-fast", models)
 
     def test_claude_code_picker_includes_current_models(self) -> None:
         models = ClaudeCodeBackend.available_models

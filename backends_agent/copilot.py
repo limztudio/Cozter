@@ -42,6 +42,7 @@ class CopilotBackend(Backend):
         "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
+        "gpt-5.4-nano",
         "gpt-5-mini",
         "gpt-5.3-codex",
         "claude-fable-5",
@@ -52,12 +53,15 @@ class CopilotBackend(Backend):
         "claude-opus-4.8-fast",
         "claude-opus-4.7",
         "claude-opus-4.6",
-        "claude-opus-4.6-fast",
         "claude-opus-4.5",
         "gemini-2.5-pro",
+        "gemini-3-flash",
+        "gemini-3.1-pro",
         "gemini-3.1-pro-preview",
         "gemini-3.5-flash",
         "mai-code-1-flash",
+        "raptor-mini",
+        "kimi-k2.7-code",
     )
     default_model = "auto"
     default_summary_model = "claude-haiku-4.5"
