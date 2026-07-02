@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -164,6 +166,41 @@ class ConfigFallbackTests(unittest.TestCase):
             config.CONFIG_PATH = path
             try:
                 self.assertEqual(config.get_llama_max_agent_turns(), 60)
+            finally:
+                config.CONFIG_PATH = old_path
+
+    def test_non_object_config_exits_with_clear_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump([], f)
+
+            old_path = config.CONFIG_PATH
+            config.CONFIG_PATH = path
+            try:
+                out = io.StringIO()
+                with (
+                    self.assertRaises(SystemExit) as raised,
+                    contextlib.redirect_stdout(out),
+                ):
+                    config.load_config()
+
+                self.assertEqual(raised.exception.code, 1)
+                self.assertIn("must contain a JSON object", out.getvalue())
+            finally:
+                config.CONFIG_PATH = old_path
+
+    def test_runtime_getters_reject_non_object_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump([], f)
+
+            old_path = config.CONFIG_PATH
+            config.CONFIG_PATH = path
+            try:
+                with self.assertRaisesRegex(ValueError, "JSON object"):
+                    config.get_llama_max_agent_turns()
             finally:
                 config.CONFIG_PATH = old_path
 

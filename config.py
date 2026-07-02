@@ -25,6 +25,15 @@ _DEFAULT_CONFIG = {
 }
 
 
+def _load_config_object() -> dict:
+    """Read config.json and require the top-level JSON value to be an object."""
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        cfg = json.load(f)
+    if not isinstance(cfg, dict):
+        raise ValueError("config.json must contain a JSON object")
+    return cfg
+
+
 def _read_config_value(key: str):
     """Read a single key from config.json on each call.
 
@@ -36,8 +45,7 @@ def _read_config_value(key: str):
     """
     if not os.path.exists(CONFIG_PATH):
         return None
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f).get(key)
+    return _load_config_object().get(key)
 
 
 def _get_nonempty_string(key: str) -> str:
@@ -99,10 +107,13 @@ def load_config() -> dict:
         sys.exit(0)
 
     try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg = json.load(f)
+        cfg = _load_config_object()
     except (json.JSONDecodeError, OSError) as e:
         print(f"ERROR: config.json is corrupted or unreadable: {e}")
+        print(f"Fix or delete {CONFIG_PATH}, then restart.")
+        sys.exit(1)
+    except ValueError as e:
+        print(f"ERROR: {e}")
         print(f"Fix or delete {CONFIG_PATH}, then restart.")
         sys.exit(1)
 
