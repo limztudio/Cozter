@@ -205,6 +205,30 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             finally:
                 config.CONFIG_PATH = old
 
+    def test_history_budget_falls_back_and_enforces_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(
+                workspace.get_history_budget(tmp),
+                workspace.DEFAULT_HISTORY_BUDGET,
+            )
+            with self.assertRaises(ValueError):
+                workspace.set_history_budget(
+                    tmp, workspace.MIN_HISTORY_BUDGET - 1,
+                )
+            workspace.set_history_budget(tmp, 8_000)
+            self.assertEqual(workspace.get_history_budget(tmp), 8_000)
+            # A malformed stored value falls back to the default.
+            with open(
+                os.path.join(tmp, ".cozter", "settings.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({"history_budget": "lots"}, f)
+            self.assertEqual(
+                workspace.get_history_budget(tmp),
+                workspace.DEFAULT_HISTORY_BUDGET,
+            )
+
     def test_available_models_appends_extras_without_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, ".cozter"))

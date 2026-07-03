@@ -839,6 +839,43 @@ class BotPlatform(ABC):
         ]
         await ctx.reply_text("\n".join(lines))
 
+    # ----- /context -------------------------------------------------------
+
+    async def cmd_context(self, ctx: BotContext) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        arg = ctx.args.strip().lower().split()
+        first = arg[0] if arg else ""
+
+        if first.isdigit():
+            budget = int(first)
+            try:
+                workspace.set_history_budget(ws, budget)
+            except ValueError as e:
+                await ctx.reply_text(f"Error: {e}")
+                return
+            await ctx.reply_text(
+                f"Context budget set to {budget} characters."
+            )
+            return
+
+        current = workspace.get_history_budget(ws)
+        lines = [
+            f"Context budget: {current} characters",
+            "",
+            "Colony memory, long-term memory, the session summary, and"
+            " recent messages are prepended to each turn up to this"
+            " budget; the oldest recent messages are dropped first to fit."
+            " Measured in characters as a provider-agnostic proxy for"
+            " tokens — raise it for large-context models, lower it for"
+            " small local ones.",
+            "",
+            "Usage:",
+            "  /context <number> - set the budget (characters)",
+        ]
+        await ctx.reply_text("\n".join(lines))
+
     # ----- /newsession ----------------------------------------------------
 
     async def cmd_newsession(self, ctx: BotContext) -> None:
@@ -1867,6 +1904,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "effort":       BotPlatform.cmd_effort,
         "refresh":      BotPlatform.cmd_refresh,
         "compact":      BotPlatform.cmd_compact,
+        "context":      BotPlatform.cmd_context,
         "newsession":   BotPlatform.cmd_newsession,
         "colony":       BotPlatform.cmd_colony,
         "stop":         BotPlatform.cmd_stop,

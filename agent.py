@@ -386,6 +386,7 @@ def _build_contextual_prompt(
     prompt: str,
     session_data: dict | None,
     colony_items: list[str] | None = None,
+    budget: int = MAX_HISTORY_CHARS,
 ) -> str:
     """Prepend colony + session history to the prompt for full context.
 
@@ -434,7 +435,7 @@ def _build_contextual_prompt(
 
     # Truncate if too long - drop oldest messages; colony, long-term and
     # summary are durable so they're preserved at the expense of recent msgs.
-    if len(full) > MAX_HISTORY_CHARS:
+    if len(full) > budget:
         colony_block = ""
         if colony_list:
             colony_block = (
@@ -457,7 +458,7 @@ def _build_contextual_prompt(
             len(prompt) + len(colony_block) + len(lt_block)
             + len(summary_block) + 500
         )
-        msg_budget = max(0, MAX_HISTORY_CHARS - overhead)
+        msg_budget = max(0, budget - overhead)
         if msg_budget == 0 and messages:
             logger.warning(
                 "History truncation: colony/long-term/summary fill budget; "
@@ -583,6 +584,10 @@ async def run(
         == "collaborative"
     )
 
+    # Character budget for the prepended context block; configurable per
+    # workspace so large-context models can keep more history.
+    history_budget = workspace_mod.get_history_budget(workspace_path)
+
     injected: list[str] = []
 
     while True:  # restart loop for inject
@@ -595,6 +600,7 @@ async def run(
 
         contextual_prompt = _build_contextual_prompt(
             effective_prompt, session_data, colony_items,
+            budget=history_budget,
         )
         parts = [_capability_hint(collaborative=collaborative)]
         # For backends that can't be handed typed tool definitions

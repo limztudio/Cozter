@@ -167,8 +167,9 @@ runs commands in it, and stores per-workspace state under
 - `last_session.json` — per-user pointer to the session each user was
   last writing into; consulted on every turn (and across bot restarts)
   so conversations resume in place instead of being re-routed
-- `settings.json` — chosen agent, model, permission, reasoning effort,
-  summary backend, summary model, compact interval, and colony interval
+- `settings.json` — chosen agent, model, permission, interaction style,
+  reasoning effort, summary backend, summary model, compact interval,
+  colony interval, and context budget
 - `colony.json` — workspace-wide long-term memory consolidated across
   sessions
 - `schedules.json` — recurring `/reserve` prompts and their last-fired
@@ -210,6 +211,7 @@ All chat surfaces speak the same command set:
 | `/style` | collaborative / autonomous — whether the agent asks before big/ambiguous actions or runs full-auto |
 | `/effort` | 0–100 reasoning effort; each backend maps to its native scale |
 | `/compact [number]` | Show compaction state, or set messages between compactions |
+| `/context [number]` | Show or set the per-turn context budget (characters of prepended history) |
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
 | `/refresh` | Drop the workspace's `.codex/` cache (use after an upgrade) |

@@ -517,6 +517,29 @@ def set_compact_interval(workspace_path: str, interval: int) -> None:
     _set_setting(workspace_path, "compact_interval", interval)
 
 
+# Character budget for the context block (colony + long-term memory +
+# session summary + recent messages) that agent.py prepends to each turn's
+# prompt. Measured in characters as a provider-agnostic proxy for tokens -
+# there is no single tokenizer across the codex/claude/copilot/llama
+# backends - so raise it for large-context models and lower it for small
+# local ones. agent.py drops the oldest recent messages first to fit.
+DEFAULT_HISTORY_BUDGET = 50_000
+MIN_HISTORY_BUDGET = 2_000
+
+
+def get_history_budget(workspace_path: str) -> int:
+    """Max characters of prepended context per turn (see agent.py)."""
+    return _positive_int_setting(
+        workspace_path, "history_budget", DEFAULT_HISTORY_BUDGET,
+    )
+
+
+def set_history_budget(workspace_path: str, budget: int) -> None:
+    if budget < MIN_HISTORY_BUDGET:
+        raise ValueError(f"history_budget must be >= {MIN_HISTORY_BUDGET}")
+    _set_setting(workspace_path, "history_budget", budget)
+
+
 # ---------------------------------------------------------------------------
 # Per-workspace lock — every concurrent reader/writer of a workspace's files
 # (sessions, colony, schedules, settings) takes this lock to serialize.
