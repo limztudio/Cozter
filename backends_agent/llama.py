@@ -89,6 +89,23 @@ class LlamaBackend(Backend):
             )
             return ("auto",)
 
+    def health_check(self) -> tuple[bool, str]:
+        # llama is an HTTP endpoint, not a CLI: probe /v1/models instead
+        # of looking for a binary on PATH.
+        url = cfg.get_llama_server_url().rstrip("/") + "/v1/models"
+        try:
+            with urllib.request.urlopen(url, timeout=2.0) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            return False, f"server unreachable at {url}: {exc}"
+        ids = [
+            m.get("id") for m in payload.get("data", [])
+            if isinstance(m, dict) and isinstance(m.get("id"), str)
+        ]
+        if ids:
+            return True, f"server up at {url} ({len(ids)} model(s))"
+        return True, f"server up at {url} (no models listed)"
+
     # ---- launch ---------------------------------------------------------
 
     async def launch(

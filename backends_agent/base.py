@@ -141,6 +141,19 @@ class Backend(ABC):
 
     # Behavior -------------------------------------------------------------
 
+    def health_check(self) -> tuple[bool, str]:
+        """Report whether this backend is ready to run a turn.
+
+        Default (CLI backends): the executable must resolve on PATH. HTTP
+        backends override this to probe their endpoint instead. Returns
+        ``(ok, detail)`` where *detail* is a short human-readable status.
+        Blocking (PATH / network lookups) - call it off the event loop.
+        """
+        prefix = resolve_executable_prefix(self.executable)
+        if prefix is None:
+            return False, f"{self.executable!r} not found on PATH"
+        return True, f"{self.executable} ({prefix[-1]})"
+
     @abstractmethod
     async def launch(
         self,

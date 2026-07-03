@@ -220,6 +220,7 @@ All chat surfaces speak the same command set:
 | `/reserve` | Create a recurring scheduled prompt |
 | `/schedules` | List schedules and delete one by number |
 | `/version` | Show the current git version and last commit date |
+| `/doctor` | Check each backend's readiness (CLI on PATH / llama server reachable) |
 | `/cancel` | Cancel a picker/wizard, pending answer, running turn, or queued work |
 | `/start` | Confirm the bot is running |
 

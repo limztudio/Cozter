@@ -24,7 +24,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from .. import agent, colony, schedules, session, updater, workspace
+from .. import (
+    agent, backends_agent, colony, schedules, session, updater, workspace,
+)
 from ..utils import COZTER_DIR
 from ..utils import drain_queue as _drain_queue
 from ..utils import load_json_object
@@ -365,6 +367,25 @@ class BotPlatform(ABC):
             asyncio.to_thread(updater.get_last_commit_date),
         )
         await ctx.reply_text(f"Version: {ver}\nUpdated: {date}")
+
+    async def cmd_doctor(self, ctx: BotContext) -> None:
+        """Report readiness of every backend (CLI on PATH / server up)."""
+        lines = ["Backend readiness:"]
+        for name in backends_agent.AVAILABLE_BACKENDS:
+            backend = backends_agent.get_backend(name)
+            ok, detail = await asyncio.to_thread(backend.health_check)
+            lines.append(f"  {'ok' if ok else 'XX'} {name}: {detail}")
+
+        ws = workspace.get_current(ctx.user_id, self.platform_id)
+        if ws and os.path.isdir(ws):
+            chat_backend = workspace.get_backend_name(ws)
+            summary_backend = workspace.get_summary_backend_name(ws)
+            lines.append("")
+            lines.append(
+                f"This workspace: chat={chat_backend},"
+                f" summary={summary_backend}"
+            )
+        await ctx.reply_text("\n".join(lines))
 
     async def cmd_cancel(self, ctx: BotContext) -> None:
         if ctx.had_pending:
@@ -1898,6 +1919,7 @@ def _build_command_registry() -> dict[str, Handler]:
     return {
         "start":        BotPlatform.cmd_start,
         "version":      BotPlatform.cmd_version,
+        "doctor":       BotPlatform.cmd_doctor,
         "cancel":       BotPlatform.cmd_cancel,
         "new":          BotPlatform.cmd_new,
         "open":         BotPlatform.cmd_open,
