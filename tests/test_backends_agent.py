@@ -39,28 +39,36 @@ class StaticBackendModelTests(unittest.TestCase):
         models = CopilotBackend.available_models
         for model in (
             "gpt-5.5",
+            "gpt-5.4",
             "gpt-5.4-mini",
             "gpt-5.4-nano",
             "gpt-5-mini",
+            "gpt-5.3-codex",
+            "claude-haiku-4.5",
             "claude-sonnet-5",
+            "claude-sonnet-4.6",
             "claude-fable-5",
             "claude-opus-4.8",
             "claude-opus-4.8-fast",
+            "claude-opus-4.5",
             "gemini-2.5-pro",
             "gemini-3-flash",
             "gemini-3.1-pro",
             "gemini-3.5-flash",
+            "mai-code-1-flash",
             "raptor-mini",
             "kimi-k2.7-code",
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)
         self.assertNotIn("claude-opus-4.6-fast", models)
+        self.assertNotIn("gemini-3.1-pro-preview", models)
 
     def test_claude_code_picker_includes_current_models(self) -> None:
         models = ClaudeCodeBackend.available_models
         for model in (
             "sonnet",
+            "opusplan[1m]",
             "claude-sonnet-5",
             "claude-fable-5",
             "claude-opus-4-8",
