@@ -23,18 +23,51 @@ from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
 
-CAPABILITY_HINT = (
-    "[System: To attach a file in your reply, include "
-    "\"[[attach: PATH]]\" on its own line. PATH is relative to the "
-    "workspace root, or absolute. "
-    "If you create or generate an image or file for the user to view, "
-    "make sure it is attached. "
-    "If you need a decision from the user before you can continue, "
-    "ask the question in your reply and end with \"[[await]]\". The "
-    "bot will pause — including any queued messages or scheduled "
-    "commands — until the user's next message, which you should "
-    "treat as the answer.]"
+# Shared preamble prepended to every backend's prompt. It documents the
+# out-of-band markers Cozter understands and sets the agent's working
+# disposition. Because it rides on top of whatever the underlying CLI
+# does, it is the one lever that steers every backend (codex/copilot/
+# claude_code/llama) the same way.
+#
+# Two variants: interactive turns get a "check with the user when unsure"
+# collaboration policy (the Claude-Code-style disposition — ask a short
+# question and pause via [[await]] rather than guessing). Scheduled /
+# ephemeral turns run unattended and cannot pause on [[await]], so they
+# get an autonomous "decide and proceed" policy instead.
+_ATTACH_HINT = (
+    "To attach a file in your reply, include \"[[attach: PATH]]\" on its "
+    "own line. PATH is relative to the workspace root, or absolute. If "
+    "you create or generate an image or file for the user to view, make "
+    "sure it is attached."
 )
+
+_COLLABORATION_POLICY = (
+    "Work collaboratively — this is a live conversation, not an "
+    "unattended batch job. When the request is ambiguous, underspecified, "
+    "or open to more than one reasonable interpretation, or before any "
+    "large-scope, destructive, or hard-to-reverse action, ask the user "
+    "one short, specific question instead of guessing, and end that reply "
+    "with \"[[await]]\". The bot will pause — including any queued "
+    "messages or scheduled commands — until the user's next message, "
+    "which you should treat as the answer. For small, reversible, "
+    "clearly-scoped choices, pick a sensible option, state it in one "
+    "line, and keep going; don't ask about things that wouldn't change "
+    "what the user does next."
+)
+
+_AUTONOMY_POLICY = (
+    "You are running unattended on a scheduled task — nobody is watching "
+    "in real time to answer questions mid-run. Do not ask for "
+    "confirmation; make reasonable, well-scoped decisions and finish the "
+    "task. If you are genuinely blocked, state plainly in your reply what "
+    "is missing."
+)
+
+
+def _capability_hint(interactive: bool) -> str:
+    """Build the per-turn preamble (collaboration vs autonomy policy)."""
+    policy = _COLLABORATION_POLICY if interactive else _AUTONOMY_POLICY
+    return f"[System: {_ATTACH_HINT}\n\n{policy}]"
 
 MAX_HISTORY_CHARS = 50_000
 
@@ -113,8 +146,9 @@ def _explicit_attachment_sources(
 def extract_await(text: str) -> tuple[str, bool]:
     """Detect and strip ``[[await]]`` markers from agent-emitted text.
 
-    Pairs with :data:`CAPABILITY_HINT` (which instructs the model to
-    use the marker when it needs a decision before continuing).
+    Pairs with :func:`_capability_hint` (whose interactive variant
+    instructs the model to ask and end with the marker when it needs a
+    decision before continuing).
     Returns ``(cleaned_text, awaiting)``.
     """
     if not _AWAIT_RE.search(text):
@@ -551,7 +585,7 @@ async def run(
         contextual_prompt = _build_contextual_prompt(
             effective_prompt, session_data, colony_items,
         )
-        parts = [CAPABILITY_HINT]
+        parts = [_capability_hint(interactive=not explicit_session)]
         # For backends that can't be handed typed tool definitions
         # (CLI subprocess agents whose toolset is fixed by the CLI),
         # enumerate user plugins in the prompt so the model can invoke

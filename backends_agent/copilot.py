@@ -78,7 +78,7 @@ class CopilotBackend(Backend):
     ) -> asyncio.subprocess.Process:
         if len(prompt) > _MAX_PROMPT_CHARS:
             # Keep the tail: the user's current message is at the end of the
-            # composed prompt, and the head (CAPABILITY_HINT + oldest context)
+            # composed prompt, and the head (capability-hint preamble + old context)
             # is the least costly to drop.
             logger.warning(
                 "Copilot prompt %d chars exceeds %d-char cap; "
