@@ -512,6 +512,44 @@ async def run(
     summary_backend_name: str | None = None,
     session_id: str | None = None,
 ) -> AgentResult:
+    """Run a turn, serialized per workspace.
+
+    Concurrent turns in the same workspace - a user message racing a
+    scheduled ``/reserve`` run, or two allow-listed users - would otherwise
+    interleave the agent's file edits. A dedicated per-workspace run lock
+    (separate from the file lock used for session logging/compaction, so no
+    reentrancy deadlock) forces turns to run one at a time. The lock is
+    released as soon as the turn finishes; background titling runs after.
+    """
+    async with workspace_mod.get_run_lock(workspace_path):
+        return await _run_turn(
+            prompt,
+            workspace_path,
+            user_id,
+            model=model,
+            summary_model=summary_model,
+            approval=approval,
+            on_event=on_event,
+            inject_queue=inject_queue,
+            backend_name=backend_name,
+            summary_backend_name=summary_backend_name,
+            session_id=session_id,
+        )
+
+
+async def _run_turn(
+    prompt: str,
+    workspace_path: str,
+    user_id: int,
+    model: str | None = None,
+    summary_model: str | None = None,
+    approval: str = "auto",
+    on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
+    inject_queue: asyncio.Queue[str] | None = None,
+    backend_name: str | None = None,
+    summary_backend_name: str | None = None,
+    session_id: str | None = None,
+) -> AgentResult:
     """Run the selected agent CLI with session history prepended.
 
     backend_name selects the CLI adapter (codex/copilot). When None, the

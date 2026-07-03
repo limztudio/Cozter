@@ -559,3 +559,23 @@ def get_lock(workspace_path: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _locks[workspace_path] = lock
     return lock
+
+
+_run_locks: dict[str, asyncio.Lock] = {}
+
+
+def get_run_lock(workspace_path: str) -> asyncio.Lock:
+    """Serialize whole agent turns within a workspace.
+
+    Distinct from :func:`get_lock`, which guards individual file
+    read/writes and is taken *inside* a turn (session logging, compaction).
+    A separate lock lets a turn hold this one for its full duration -
+    preventing two concurrent turns in the same workspace (e.g. a user
+    message racing a scheduled ``/reserve`` run) from interleaving file
+    edits - without deadlocking on the non-reentrant file lock.
+    """
+    lock = _run_locks.get(workspace_path)
+    if lock is None:
+        lock = asyncio.Lock()
+        _run_locks[workspace_path] = lock
+    return lock
