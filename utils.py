@@ -277,6 +277,7 @@ async def drain_llm_subprocess(
         if not raw:
             raw = line
 
+    assert proc.stdout is not None  # spawned with stdout=PIPE
     try:
         async with asyncio.timeout(timeout):
             async for event in iter_json_events(

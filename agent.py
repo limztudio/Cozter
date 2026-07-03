@@ -609,6 +609,7 @@ async def _run_turn(
     # session_data is reused on every inject restart so the session file
     # is not re-read for each iteration of the restart loop.
     if explicit_session:
+        assert session_id is not None  # explicit_session == (session_id set)
         session_data = session.load_session(workspace_path, session_id)
         if session_data is None:
             # The pinned session was deleted out from under us; bail
@@ -637,6 +638,8 @@ async def _run_turn(
                 backend_name=backend.name,
             )
 
+    # session_id is set by both resolution branches by this point.
+    assert session_id is not None
     if not explicit_session:
         # Persist for the next turn - including the next bot restart.
         session.set_last_session(workspace_path, user_id, session_id)
@@ -720,6 +723,7 @@ async def _run_turn(
             active_proc: asyncio.subprocess.Process = proc,
         ) -> None:
             nonlocal restarting
+            assert inject_queue is not None  # only scheduled when set
             msg = await inject_queue.get()
             injected.append(msg)
             restarting = True
@@ -732,6 +736,7 @@ async def _run_turn(
         if inject_queue is not None:
             inject_task = asyncio.create_task(_watch_inject())
 
+        assert proc.stdout is not None  # spawned with stdout=PIPE
         try:
             async for event in iter_json_events(
                 proc.stdout, on_invalid=_log_non_json_line,

@@ -264,7 +264,7 @@ def create_session(workspace: str, name: str | None = None) -> dict:
     """
     session_id = uuid.uuid4().hex[:12]
     now = datetime.now().isoformat()
-    data = {
+    data: dict = {
         "id": session_id,
         "name": name or f"Session {now[:10]}",
         "created": now,

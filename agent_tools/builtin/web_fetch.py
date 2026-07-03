@@ -43,6 +43,7 @@ class WebFetchTool(AgentTool):
         url, error = require_nonempty_string_arg(args, "url", strip=True)
         if error:
             return error
+        assert url is not None  # non-None once error is None
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return "Error: only http:// and https:// URLs are allowed"

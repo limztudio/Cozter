@@ -42,6 +42,7 @@ class GlobTool(AgentTool):
         pattern, error = require_nonempty_string_arg(args, "pattern")
         if error:
             return error
+        assert pattern is not None  # non-None once error is None
 
         max_results = coerce_int_arg(
             args.get("max_results") or 100,

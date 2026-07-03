@@ -62,6 +62,7 @@ class GrepTool(AgentTool):
         pattern_str, error = require_nonempty_string_arg(args, "pattern")
         if error:
             return error
+        assert pattern_str is not None  # non-None once error is None
         try:
             regex = re.compile(pattern_str)
         except re.error as exc:

@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from typing import cast
 
 from .utils import CONFIG_DIR
 from .utils import normalize_string_list
@@ -59,7 +60,7 @@ def _get_nonempty_string(key: str) -> str:
         val = val.strip()
         if val:
             return val
-    return _DEFAULT_CONFIG[key]
+    return cast(str, _DEFAULT_CONFIG[key])
 
 
 def _get_positive_int(key: str) -> int:
@@ -67,7 +68,7 @@ def _get_positive_int(key: str) -> int:
     val = _read_config_value(key)
     if isinstance(val, int) and not isinstance(val, bool) and val > 0:
         return val
-    return _DEFAULT_CONFIG[key]
+    return cast(int, _DEFAULT_CONFIG[key])
 
 
 def get_llama_server_url() -> str:
@@ -105,7 +106,7 @@ def get_llama_max_retries() -> int:
     val = _read_config_value("llama_max_retries")
     if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
         return val
-    return _DEFAULT_CONFIG["llama_max_retries"]
+    return cast(int, _DEFAULT_CONFIG["llama_max_retries"])
 
 
 def get_show_usage() -> bool:
@@ -117,7 +118,7 @@ def get_show_usage() -> bool:
     val = _read_config_value("show_usage")
     if isinstance(val, bool):
         return val
-    return _DEFAULT_CONFIG["show_usage"]
+    return cast(bool, _DEFAULT_CONFIG["show_usage"])
 
 
 def get_max_permission() -> str:
@@ -132,7 +133,7 @@ def get_max_permission() -> str:
     val = _read_config_value("max_permission")
     if isinstance(val, str) and val in ("full", "auto", "confirm", "deny"):
         return val
-    return _DEFAULT_CONFIG["max_permission"]
+    return cast(str, _DEFAULT_CONFIG["max_permission"])
 
 
 def get_extra_models(backend_name: str) -> list[str]:

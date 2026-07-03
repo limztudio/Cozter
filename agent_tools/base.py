@@ -197,7 +197,8 @@ def coerce_int_arg(
 ) -> int:
     """Return an int argument clamped to the provided bounds."""
     try:
-        number = int(value)
+        # value is an arbitrary tool arg; the except handles non-numerics.
+        number = int(value)  # type: ignore[arg-type, call-overload]
     except (TypeError, ValueError):
         number = default
     number = max(minimum, number)

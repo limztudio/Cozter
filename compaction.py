@@ -267,6 +267,7 @@ async def compact_session(
     )
 
     if not new_summary:
+        assert proc.stderr is not None  # spawned with stderr=PIPE
         stderr = (
             await proc.stderr.read()
         ).decode("utf-8", errors="replace").strip()

@@ -326,6 +326,7 @@ async def _consolidate_inner(
     )
 
     if not output:
+        assert proc.stderr is not None  # spawned with stderr=PIPE
         stderr = (
             await proc.stderr.read()
         ).decode("utf-8", errors="replace").strip()
@@ -352,12 +353,12 @@ async def _consolidate_inner(
     async with workspace_mod.get_lock(workspace_path):
         set_items(workspace_path, new_colony)
         for sid, new_lt in per_session.items():
-            data = session.load_session(workspace_path, sid)
-            if data is None:
+            sess_data = session.load_session(workspace_path, sid)
+            if sess_data is None:
                 continue
             cleaned = [item for item in new_lt if item][:session.LONG_TERM_CAP]
-            data["long_term"] = cleaned
-            session.save_session(workspace_path, sid, data)
+            sess_data["long_term"] = cleaned
+            session.save_session(workspace_path, sid, sess_data)
 
     logger.info(
         "Colony consolidated for %s: %d colony item(s); %d session(s) rewritten",

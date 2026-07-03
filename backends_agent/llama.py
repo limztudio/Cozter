@@ -69,7 +69,7 @@ class LlamaBackend(Backend):
     # ---- model discovery ------------------------------------------------
 
     @property
-    def available_models(self) -> tuple[str, ...]:
+    def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
         if self._cached_models is None:
             self._cached_models = self._fetch_models()
         return self._cached_models
@@ -110,7 +110,7 @@ class LlamaBackend(Backend):
 
     # ---- launch ---------------------------------------------------------
 
-    async def launch(
+    async def launch(  # type: ignore[override]
         self,
         workspace_path: str,
         prompt: str,
@@ -119,7 +119,7 @@ class LlamaBackend(Backend):
         *,
         compaction: bool = False,
         effort: int = 0,
-    ) -> HttpAgentProcess:  # type: ignore[override]
+    ) -> HttpAgentProcess:
         proc = HttpAgentProcess("llama agent")
         proc.start(self._run_agent(
             proc, workspace_path, prompt, model, approval, compaction,
