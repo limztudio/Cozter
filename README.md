@@ -113,7 +113,8 @@ lives in `.config/config.example.json`):
   "recent_workspace_limit": 10,
   "message_queue_size": 50,
 
-  "extra_models": {}
+  "extra_models": {},
+  "max_permission": "full"
 }
 ```
 
@@ -136,7 +137,14 @@ without editing source. Malformed entries are ignored.
 failure — a dropped connection, a read timeout, or an HTTP 429/5xx — is
 retried with exponential backoff before the turn fails. Set it to `0` to
 disable retries. Only the `llama` backend uses it; the CLI backends have
-their own process-level behavior. The queue is
+their own process-level behavior.
+
+`max_permission` (default `full`) caps the highest `/permission` mode any
+workspace may use, bot-wide, in privilege order `deny < confirm < auto <
+full`. Since `full` bypasses the sandbox (arbitrary code execution) for
+anyone on the `user_ids` allowlist, set this to `auto` to keep every
+workspace sandboxed, or `deny` for a read-only bot. `/permission` rejects
+a higher mode, and an already-stored higher value is clamped down. The queue is
 persisted in `Cozter/.config/queue_<platform>.json`, so clean restarts,
 auto-updates, and crash recovery do not drop already accepted messages.
 Platform IDs are sanitized for those filenames; for example the CLI's

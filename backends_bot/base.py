@@ -684,6 +684,12 @@ class BotPlatform(ABC):
             marker = " <-" if p == current else ""
             desc = workspace.PERMISSION_DESCRIPTIONS[p]
             lines.append(f"  {i}. {p} - {desc}{marker}")
+        ceiling = workspace.permission_ceiling()
+        if ceiling != "full":
+            lines.append(
+                f"\n(Capped at '{ceiling}' by config max_permission;"
+                " higher modes are rejected.)"
+            )
         lines.append(
             "\nTip: chat surfaces can't show a per-tool approval dialog, so"
             " 'confirm' is best-effort. For ask-before-acting behavior on"
@@ -707,7 +713,12 @@ class BotPlatform(ABC):
             )
             self._expect_input(ctx.user_id, self._receive_permission)
             return
-        workspace.set_permission(ws, perm)
+        try:
+            workspace.set_permission(ws, perm)
+        except ValueError as e:
+            await ctx.reply_text(f"{e}\nTry again (or /cancel):")
+            self._expect_input(ctx.user_id, self._receive_permission)
+            return
         desc = workspace.PERMISSION_DESCRIPTIONS[perm]
         await ctx.reply_text(f"Permission set to: {perm}\n{desc}")
 

@@ -296,6 +296,24 @@ def _coerce_permission(permission: object) -> str:
     )
 
 
+# Privilege order (low -> high). config.max_permission caps the effective
+# permission bot-wide so an operator can forbid e.g. sandbox-bypassing
+# "full" mode across every workspace.
+_PERMISSION_RANK = {"deny": 0, "confirm": 1, "auto": 2, "full": 3}
+
+
+def permission_ceiling() -> str:
+    """The highest permission any workspace may use (from config)."""
+    return _coerce_permission(config.get_max_permission())
+
+
+def _clamp_permission(permission: str) -> str:
+    ceiling = permission_ceiling()
+    if _PERMISSION_RANK[permission] > _PERMISSION_RANK[ceiling]:
+        return ceiling
+    return permission
+
+
 def get_backend_name(workspace_path: str) -> str:
     return _coerce_backend_name(_load_settings(workspace_path).get("backend"))
 
@@ -393,7 +411,7 @@ def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
         backend_name,
         _resolve_model(s, backend_name, summary=False),
         _resolve_model(s, summary_backend, summary=True),
-        _coerce_permission(s.get("permission")),
+        _clamp_permission(_coerce_permission(s.get("permission"))),
         summary_backend,
     )
 
@@ -428,7 +446,10 @@ def set_summary_model(workspace_path: str, model: str) -> None:
 
 
 def get_permission(workspace_path: str) -> str:
-    return _coerce_permission(_load_settings(workspace_path).get("permission"))
+    stored = _coerce_permission(
+        _load_settings(workspace_path).get("permission"),
+    )
+    return _clamp_permission(stored)
 
 
 def set_permission(workspace_path: str, permission: str) -> None:
@@ -436,6 +457,12 @@ def set_permission(workspace_path: str, permission: str) -> None:
         raise ValueError(
             f"Unknown permission: {permission}. "
             f"Available: {AVAILABLE_PERMISSIONS}"
+        )
+    ceiling = permission_ceiling()
+    if _PERMISSION_RANK[permission] > _PERMISSION_RANK[ceiling]:
+        raise ValueError(
+            f"permission '{permission}' exceeds the configured ceiling"
+            f" '{ceiling}' (raise max_permission in config.json to allow it)"
         )
     _set_setting(workspace_path, "permission", permission)
 

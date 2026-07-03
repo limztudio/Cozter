@@ -138,6 +138,46 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 workspace.set_permission(tmp, "maybe")
 
+    def test_max_permission_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            old = config.CONFIG_PATH
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"max_permission": "auto"}, f)
+            config.CONFIG_PATH = path
+            try:
+                self.assertEqual(config.get_max_permission(), "auto")
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump({"max_permission": "nonsense"}, f)
+                self.assertEqual(config.get_max_permission(), "full")
+            finally:
+                config.CONFIG_PATH = old
+
+    def test_permission_ceiling_clamps_and_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            def _auto_ceiling() -> str:
+                return "auto"
+
+            orig = config.get_max_permission
+            config.get_max_permission = _auto_ceiling
+            try:
+                # Setting above the ceiling is rejected.
+                with self.assertRaises(ValueError):
+                    workspace.set_permission(tmp, "full")
+                # At/below the ceiling is allowed.
+                workspace.set_permission(tmp, "auto")
+                self.assertEqual(workspace.get_permission(tmp), "auto")
+                # An already-stored higher value is clamped on read.
+                with open(
+                    os.path.join(tmp, ".cozter", "settings.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    json.dump({"permission": "full"}, f)
+                self.assertEqual(workspace.get_permission(tmp), "auto")
+            finally:
+                config.get_max_permission = orig
+
     def test_interaction_style_falls_back_to_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             # Missing setting -> default.

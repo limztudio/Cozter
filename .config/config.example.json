@@ -19,5 +19,6 @@
   "recent_workspace_limit": 10,
   "message_queue_size": 50,
 
-  "extra_models": {}
+  "extra_models": {},
+  "max_permission": "full"
 }

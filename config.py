@@ -24,6 +24,7 @@ _DEFAULT_CONFIG = {
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
     "extra_models": {},
+    "max_permission": "full",
 }
 
 
@@ -104,6 +105,21 @@ def get_llama_max_retries() -> int:
     if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
         return val
     return _DEFAULT_CONFIG["llama_max_retries"]
+
+
+def get_max_permission() -> str:
+    """Highest permission any workspace may use - an operator-wide cap.
+
+    Defaults to ``"full"`` (no cap). Set it to e.g. ``"auto"`` to forbid
+    the sandbox-bypassing ``full`` mode across every workspace, or
+    ``"deny"`` for a read-only bot. Invalid values fall back to the
+    default. Enforced in :mod:`workspace` (clamps the effective permission
+    and rejects setting a higher one via ``/permission``).
+    """
+    val = _read_config_value("max_permission")
+    if isinstance(val, str) and val in ("full", "auto", "confirm", "deny"):
+        return val
+    return _DEFAULT_CONFIG["max_permission"]
 
 
 def get_extra_models(backend_name: str) -> list[str]:
