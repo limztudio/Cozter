@@ -107,6 +107,7 @@ lives in `.config/config.example.json`):
   "llama_max_agent_turns": 60,
   "llama_tool_repeat_limit": 3,
   "llama_socket_timeout": 1800,
+  "llama_max_retries": 2,
 
   "update_check_interval": 10,
   "recent_workspace_limit": 10,
@@ -129,7 +130,13 @@ pickers on top of its built-in list, keyed by backend name — for example
 `{"codex": ["gpt-5.6"], "copilot": ["claude-opus-5.0"]}`. The built-in
 lists in `backends_agent/` are a curated snapshot that goes stale as
 providers ship new models; this lets you use a newer or private model
-without editing source. Malformed entries are ignored. The queue is
+without editing source. Malformed entries are ignored.
+
+`llama_max_retries` (default 2) is how many times a transient llama HTTP
+failure — a dropped connection, a read timeout, or an HTTP 429/5xx — is
+retried with exponential backoff before the turn fails. Set it to `0` to
+disable retries. Only the `llama` backend uses it; the CLI backends have
+their own process-level behavior. The queue is
 persisted in `Cozter/.config/queue_<platform>.json`, so clean restarts,
 auto-updates, and crash recovery do not drop already accepted messages.
 Platform IDs are sanitized for those filenames; for example the CLI's

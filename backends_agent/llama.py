@@ -22,8 +22,10 @@ Config: ``config.json``'s ``llama_server_url`` (default
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import random
 import urllib.request
 import uuid
 from typing import Any
@@ -350,24 +352,85 @@ def _completion_payload(
     return payload
 
 
+class _RetryableError(RuntimeError):
+    """A transient llama failure worth retrying (network / 429 / 5xx)."""
+
+    def __init__(
+        self, message: str, *, retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _backoff_delay(
+    attempt: int, retry_after: float | None = None,
+    *, base: float = 0.5, cap: float = 10.0,
+) -> float:
+    """Seconds to wait before retry *attempt* (1-based); honors Retry-After."""
+    if retry_after is not None:
+        return min(max(retry_after, 0.0), cap)
+    delay = min(base * (2 ** (attempt - 1)), cap)
+    return delay + random.uniform(0.0, delay * 0.25)
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a Retry-After header (delta-seconds form); ignore HTTP dates."""
+    if not value:
+        return None
+    try:
+        return max(float(value), 0.0)
+    except (TypeError, ValueError):
+        return None
+
+
 async def _stream_completion(
     base_url: str, payload: dict,
 ) -> tuple[str, list[dict]]:
-    """POST /v1/chat/completions with stream=True; return (text, tool_calls).
+    """POST /v1/chat/completions (streaming); retry transient failures.
+
+    Returns ``(text, tool_calls)``. Connection drops, read timeouts, and
+    HTTP 429/5xx are retried with exponential backoff up to
+    ``config.llama_max_retries`` times - retrying a completion is safe
+    because tool side effects only run *after* this returns. A bad status
+    or malformed response is not retried.
+    """
+    endpoint = base_url + "/v1/chat/completions"
+    sock_read = cfg.get_llama_socket_timeout()
+    max_retries = cfg.get_llama_max_retries()
+    label = f"llama-server at {base_url}"
+
+    async with http_error_translator(label, sock_read):
+        attempt = 0
+        while True:
+            try:
+                return await _stream_once(endpoint, payload, sock_read, label)
+            except _RetryableError as exc:
+                attempt += 1
+                if attempt > max_retries:
+                    raise
+                delay = _backoff_delay(attempt, exc.retry_after)
+                logger.warning(
+                    "%s transient failure (attempt %d/%d): %s;"
+                    " retrying in %.1fs",
+                    label, attempt, max_retries, exc, delay,
+                )
+                await asyncio.sleep(delay)
+
+
+async def _stream_once(
+    endpoint: str, payload: dict, sock_read: int, label: str,
+) -> tuple[str, list[dict]]:
+    """One streaming attempt; raise _RetryableError for transient failures.
 
     Parses Server-Sent Events. ``data:`` lines carry JSON deltas;
     ``data: [DONE]`` terminates the stream.
     """
-    endpoint = base_url + "/v1/chat/completions"
     text_parts: list[str] = []
     # Tool calls arrive in pieces: we accumulate by index because the
     # OpenAI streaming protocol fragments name/arguments across deltas.
     tool_buffers: dict[int, dict[str, Any]] = {}
 
-    sock_read = cfg.get_llama_socket_timeout()
-    async with http_error_translator(
-        f"llama-server at {base_url}", sock_read,
-    ):
+    try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 endpoint, json=payload,
@@ -375,11 +438,18 @@ async def _stream_completion(
                     total=None, sock_read=sock_read,
                 ),
             ) as resp:
+                if resp.status == 429 or resp.status >= 500:
+                    body = await resp.text()
+                    raise _RetryableError(
+                        f"{label} returned HTTP {resp.status}: {body[:200]}",
+                        retry_after=_parse_retry_after(
+                            resp.headers.get("Retry-After"),
+                        ),
+                    )
                 if resp.status != 200:
                     body = await resp.text()
                     raise RuntimeError(
-                        f"llama-server at {base_url} returned HTTP"
-                        f" {resp.status}: {body[:500]}"
+                        f"{label} returned HTTP {resp.status}: {body[:500]}"
                     )
                 async for raw in resp.content:
                     line = raw.decode("utf-8", errors="replace").strip()
@@ -402,6 +472,13 @@ async def _stream_completion(
                         text_parts.append(content)
                     for tc in delta.get("tool_calls") or []:
                         _merge_tool_call(tool_buffers, tc)
+    except (
+        aiohttp.ClientConnectorError,
+        aiohttp.ServerDisconnectedError,
+        aiohttp.ClientPayloadError,
+        TimeoutError,
+    ) as exc:
+        raise _RetryableError(f"{label}: {exc}") from exc
 
     # Normalize tool_buffers into the OpenAI tool_calls list shape.
     tool_calls = [

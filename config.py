@@ -19,6 +19,7 @@ _DEFAULT_CONFIG = {
     "llama_max_agent_turns": 60,
     "llama_tool_repeat_limit": 3,
     "llama_socket_timeout": 1800,
+    "llama_max_retries": 2,
     "update_check_interval": 10,
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
@@ -91,6 +92,18 @@ def get_llama_socket_timeout() -> int:
     fast server and want failures to surface quickly.
     """
     return _get_positive_int("llama_socket_timeout")
+
+
+def get_llama_max_retries() -> int:
+    """Retry attempts for transient llama HTTP failures (>= 0; 0 disables).
+
+    Uses its own reader rather than :func:`_get_positive_int` because 0 is
+    a meaningful value here ("do not retry"), not an invalid one.
+    """
+    val = _read_config_value("llama_max_retries")
+    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+        return val
+    return _DEFAULT_CONFIG["llama_max_retries"]
 
 
 def get_extra_models(backend_name: str) -> list[str]:
