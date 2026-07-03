@@ -442,7 +442,7 @@ Cozter/
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
 ├── utils.py              shared helpers (atomic_write, drain_queue, ...)
-├── tests/                unittest coverage for state/config, backend defaults, queues, and tools
+├── tests/                unittest coverage for commands, state, queues, backends, prompts, tools, and updates
 ├── .config/config.example.json
 │
 ├── backends_agent/       agent backends (one file per agent)
@@ -450,6 +450,7 @@ Cozter/
 │   ├── codex.py            wraps `codex exec`
 │   ├── claude_code.py      wraps `claude --print`
 │   ├── copilot.py          wraps `copilot`
+│   ├── _http_proc.py       process-like adapter and error handling for HTTP backends
 │   └── llama.py            in-process loop against OpenAI-compatible /v1/chat/completions
 │
 └── agent_tools/          tool surface for HTTP backends + plugin registry
@@ -477,10 +478,14 @@ ignored for local secrets and runtime queues.
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
   the 14 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
-- Project metadata and docs: `requirements.txt`,
-  `.config/config.example.json`, `.gitignore`, and this README
-- Tests: `tests/test_agent_tools.py`, `tests/test_backends_agent.py`,
-  `tests/test_state_fallbacks.py`, and `tests/test_utils.py`
+- Project metadata, CI, and docs: `requirements.txt`, `mypy.ini`,
+  `.github/workflows/ci.yml`, `.config/config.example.json`,
+  `.gitignore`, and this README
+- Tests: `tests/conftest.py` plus focused `unittest` modules for
+  agent attachments and prompts, backend event parsing and retry
+  behavior, bot commands, import binding, run locks, session picking,
+  Signal formatting, state fallbacks, thinking-status display, updater
+  behavior, utilities, and the built-in/plugin tool surface
 
 The normal working checkout may also contain ignored runtime state such as
 `.venv/`, `.cozter/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
@@ -572,8 +577,10 @@ thin: each defines `launch()` (build argv, spawn subprocess) and
 Run the current unit tests from the parent directory, or set
 `PYTHONPATH` to the parent when running inside the repository. Discovery
 covers malformed state/config fallbacks, persistent queue restoration,
-schedule parsing, backend model defaults, subprocess-drain behavior,
-agent-tool helpers, and built-in discovery/edit tools.
+schedule parsing, backend model defaults and event parsing,
+subprocess-drain behavior, prompt construction, attachment handling,
+run-lock cancellation, session picking, Signal rich-text formatting,
+updater behavior, agent-tool helpers, and built-in discovery/edit tools.
 
 ```bash
 cd ..
@@ -586,10 +593,11 @@ From inside `Cozter/`:
 PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
 ```
 
-CI (`.github/workflows/ci.yml`) also runs `ruff check` and `mypy` on every
-push and PR. mypy is adopted gradually — enforced on clean modules, with
-pre-existing type debt grandfathered per-module in `mypy.ini` (burn the
-list down over time). Run them locally the same way CI does:
+CI (`.github/workflows/ci.yml`) runs on Python 3.11 and 3.12, and also
+runs `ruff check` and `mypy` on every push and PR. mypy is adopted
+gradually — enforced on clean modules, with pre-existing type debt
+grandfathered per-module in `mypy.ini` (burn the list down over time).
+Run them locally the same way CI does:
 
 ```bash
 cd ..
