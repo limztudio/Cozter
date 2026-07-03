@@ -29,11 +29,12 @@ logger = logging.getLogger(__name__)
 # does, it is the one lever that steers every backend (codex/copilot/
 # claude_code/llama) the same way.
 #
-# Two variants: interactive turns get a "check with the user when unsure"
-# collaboration policy (the Claude-Code-style disposition — ask a short
-# question and pause via [[await]] rather than guessing). Scheduled /
-# ephemeral turns run unattended and cannot pause on [[await]], so they
-# get an autonomous "decide and proceed" policy instead.
+# Two variants: the collaboration policy (the Claude-Code-style
+# disposition — ask a short question and pause via [[await]] rather than
+# guessing) and an autonomous "decide and proceed" policy. Interactive
+# turns pick between them via the workspace's interaction-style setting
+# (see workspace.get_interaction_style); scheduled / ephemeral turns run
+# unattended and cannot pause on [[await]], so they are always autonomous.
 _ATTACH_HINT = (
     "To attach a file in your reply, include \"[[attach: PATH]]\" on its "
     "own line. PATH is relative to the workspace root, or absolute. If "
@@ -64,9 +65,9 @@ _AUTONOMY_POLICY = (
 )
 
 
-def _capability_hint(interactive: bool) -> str:
+def _capability_hint(collaborative: bool) -> str:
     """Build the per-turn preamble (collaboration vs autonomy policy)."""
-    policy = _COLLABORATION_POLICY if interactive else _AUTONOMY_POLICY
+    policy = _COLLABORATION_POLICY if collaborative else _AUTONOMY_POLICY
     return f"[System: {_ATTACH_HINT}\n\n{policy}]"
 
 MAX_HISTORY_CHARS = 50_000
@@ -572,6 +573,16 @@ async def run(
     # restart, just like session_data.
     colony_items = colony.get_items(workspace_path)
 
+    # Interactive turns honor the workspace's interaction style; scheduled/
+    # ephemeral turns (explicit_session) can't pause on [[await]], so they
+    # always run under the autonomous policy. Resolved once and reused
+    # across inject restarts.
+    collaborative = (
+        not explicit_session
+        and workspace_mod.get_interaction_style(workspace_path)
+        == "collaborative"
+    )
+
     injected: list[str] = []
 
     while True:  # restart loop for inject
@@ -585,7 +596,7 @@ async def run(
         contextual_prompt = _build_contextual_prompt(
             effective_prompt, session_data, colony_items,
         )
-        parts = [_capability_hint(interactive=not explicit_session)]
+        parts = [_capability_hint(collaborative=collaborative)]
         # For backends that can't be handed typed tool definitions
         # (CLI subprocess agents whose toolset is fixed by the CLI),
         # enumerate user plugins in the prompt so the model can invoke

@@ -198,6 +198,7 @@ All chat surfaces speak the same command set:
 | `/summaryagent` | Pick the backend used for compaction / titling / routing |
 | `/summarymodel` | Pick the model for the summary backend |
 | `/permission` | full / auto / confirm / deny — how the agent treats tool calls |
+| `/style` | collaborative / autonomous — whether the agent asks before big/ambiguous actions or runs full-auto |
 | `/effort` | 0–100 reasoning effort; each backend maps to its native scale |
 | `/compact [number]` | Show compaction state, or set messages between compactions |
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
@@ -355,6 +356,25 @@ to its own vocabulary:
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort
 parameter, so utility work stays cheap regardless of the workspace
+setting.
+
+## Interaction style
+
+`/style` chooses how collaborative the agent is on chat turns, stored per
+workspace:
+
+- `collaborative` (default) — when a request is ambiguous or before a
+  large, destructive, or hard-to-reverse action, the agent asks a short
+  question and ends with `[[await]]`, pausing the queue until you reply.
+  Small, reversible choices are made without asking. This is a
+  backend-agnostic prompt policy, so it steers every backend (codex,
+  copilot, claude_code, llama) the same way — not just the CLIs that ask
+  on their own.
+- `autonomous` — the agent decides and proceeds without asking, closer to
+  a full-auto run.
+
+Scheduled `/reserve` turns run in throwaway sessions that cannot pause for
+a reply, so they always use the autonomous policy regardless of this
 setting.
 
 ## Architecture

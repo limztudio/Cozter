@@ -138,6 +138,35 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 workspace.set_permission(tmp, "maybe")
 
+    def test_interaction_style_falls_back_to_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            # Missing setting -> default.
+            self.assertEqual(
+                workspace.get_interaction_style(tmp), "collaborative",
+            )
+            # Invalid value -> default.
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            with open(
+                os.path.join(tmp, ".cozter", "settings.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({"style": "chatty"}, f)
+            self.assertEqual(
+                workspace.get_interaction_style(tmp), "collaborative",
+            )
+
+    def test_set_interaction_style_round_trips_and_rejects_unknown(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace.set_interaction_style(tmp, "autonomous")
+            self.assertEqual(
+                workspace.get_interaction_style(tmp), "autonomous",
+            )
+            with self.assertRaises(ValueError):
+                workspace.set_interaction_style(tmp, "verbose")
+
 
 class ColonyStateFallbackTests(unittest.TestCase):
     def test_colony_state_normalizes_missing_or_invalid_keys(self) -> None:

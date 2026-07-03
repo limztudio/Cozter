@@ -231,6 +231,21 @@ PERMISSION_DESCRIPTIONS = {
     "deny": "Block all tool calls (text-only responses)",
 }
 
+# Interaction style: how collaborative the agent is on interactive chat
+# turns. It selects which policy the shared prompt preamble in
+# agent.py carries, so it steers every backend the same way (codex,
+# copilot, claude_code, llama). Scheduled/ephemeral turns cannot pause on
+# [[await]], so they always run autonomously regardless of this setting.
+AVAILABLE_STYLES = ["collaborative", "autonomous"]
+DEFAULT_STYLE = "collaborative"
+STYLE_DESCRIPTIONS = {
+    "collaborative": (
+        "Ask before big or ambiguous actions and pause for your reply"
+        " (Claude-Code-like)"
+    ),
+    "autonomous": "Decide and proceed without asking (full-auto)",
+}
+
 # Reasoning effort: a single 0-100 percentage. Each agent backend maps
 # the percentage to its own native scale (codex has 5 levels including
 # "xhigh", llama has 4, claude_code and copilot both have 5).
@@ -396,6 +411,27 @@ def set_permission(workspace_path: str, permission: str) -> None:
             f"Available: {AVAILABLE_PERMISSIONS}"
         )
     _set_setting(workspace_path, "permission", permission)
+
+
+def _coerce_style(style: object) -> str:
+    return (
+        style
+        if isinstance(style, str) and style in AVAILABLE_STYLES
+        else DEFAULT_STYLE
+    )
+
+
+def get_interaction_style(workspace_path: str) -> str:
+    return _coerce_style(_load_settings(workspace_path).get("style"))
+
+
+def set_interaction_style(workspace_path: str, style: str) -> None:
+    if style not in AVAILABLE_STYLES:
+        raise ValueError(
+            f"Unknown interaction style: {style}. "
+            f"Available: {AVAILABLE_STYLES}"
+        )
+    _set_setting(workspace_path, "style", style)
 
 
 def get_reasoning_effort(workspace_path: str) -> int:

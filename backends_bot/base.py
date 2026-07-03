@@ -684,6 +684,49 @@ class BotPlatform(ABC):
         desc = workspace.PERMISSION_DESCRIPTIONS[perm]
         await ctx.reply_text(f"Permission set to: {perm}\n{desc}")
 
+    # ----- /style ---------------------------------------------------------
+
+    async def cmd_style(self, ctx: BotContext) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        current = workspace.get_interaction_style(ws)
+        options = workspace.AVAILABLE_STYLES
+        lines = [
+            f"Current interaction style: {current}\n",
+            "Available styles:",
+        ]
+        for i, s in enumerate(options, 1):
+            marker = " <-" if s == current else ""
+            desc = workspace.STYLE_DESCRIPTIONS[s]
+            lines.append(f"  {i}. {s} - {desc}{marker}")
+        lines.append(
+            "\nCollaborative makes the agent ask before big or ambiguous"
+            " actions and pause for your reply; autonomous makes it decide"
+            " and proceed. Applies to chat turns (scheduled runs are always"
+            " autonomous)."
+        )
+        lines.append("\nEnter a number or style name (or /cancel):")
+        await ctx.reply_text("\n".join(lines))
+        self._expect_input(ctx.user_id, self._receive_style)
+
+    async def _receive_style(self, ctx: BotContext) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        text = ctx.text.strip().lower()
+        options = workspace.AVAILABLE_STYLES
+        style = self._pick_option(text, options)
+        if style is None:
+            await ctx.reply_text(
+                f"Unknown style: {text}\nTry again (or /cancel):"
+            )
+            self._expect_input(ctx.user_id, self._receive_style)
+            return
+        workspace.set_interaction_style(ws, style)
+        desc = workspace.STYLE_DESCRIPTIONS[style]
+        await ctx.reply_text(f"Interaction style set to: {style}\n{desc}")
+
     # ----- /effort --------------------------------------------------------
 
     async def cmd_effort(self, ctx: BotContext) -> None:
@@ -1820,6 +1863,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "agent":        BotPlatform.cmd_agent,
         "summaryagent": BotPlatform.cmd_summaryagent,
         "permission":   BotPlatform.cmd_permission,
+        "style":        BotPlatform.cmd_style,
         "effort":       BotPlatform.cmd_effort,
         "refresh":      BotPlatform.cmd_refresh,
         "compact":      BotPlatform.cmd_compact,
