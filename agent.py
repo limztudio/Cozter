@@ -159,6 +159,39 @@ def extract_await(text: str) -> tuple[str, bool]:
     return cleaned, True
 
 
+def _compact_tokens(n: int) -> str:
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
+def format_usage(usage: dict | None) -> str | None:
+    """Compact one-line token/cost footer from a backend's usage dict.
+
+    Returns None when there's nothing worth showing. Understands the
+    fields codex (``turn.completed``) and claude_code (``result``) expose
+    (``input_tokens`` / ``output_tokens`` / ``total_cost_usd``).
+    """
+    if not isinstance(usage, dict):
+        return None
+    parts: list[str] = []
+    inp = usage.get("input_tokens")
+    if isinstance(inp, int) and not isinstance(inp, bool):
+        parts.append(f"{_compact_tokens(inp)} in")
+    out = usage.get("output_tokens")
+    if isinstance(out, int) and not isinstance(out, bool):
+        parts.append(f"{_compact_tokens(out)} out")
+    cost = usage.get("total_cost_usd")
+    if (
+        isinstance(cost, (int, float))
+        and not isinstance(cost, bool)
+        and cost > 0
+    ):
+        cost_str = f"{cost:.4f}".rstrip("0").rstrip(".")
+        parts.append(f"${cost_str}")
+    if not parts:
+        return None
+    return "📊 " + " · ".join(parts)
+
+
 def _codex_generated_images_dir() -> str:
     codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
     return os.path.join(codex_home, "generated_images")

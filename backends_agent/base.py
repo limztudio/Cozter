@@ -61,6 +61,10 @@ class AgentResult:
     events: list[ChatEvent] = field(default_factory=list)
     text: str = "(no response)"
     error: str | None = None
+    # Token/cost usage for the turn, when the backend reports it (codex's
+    # turn.completed, claude_code's result). Backend-shaped dict; None
+    # otherwise. See agent.format_usage for the display formatter.
+    usage: dict | None = None
 
 
 def append_text_result(result: AgentResult, text: str) -> None:

@@ -93,6 +93,11 @@ class CodexBackend(Backend):
                         content=f"📄 {kind}: {path}",
                     ))
 
+        elif etype == "turn.completed":
+            usage = event.get("usage")
+            if isinstance(usage, dict):
+                result.usage = dict(usage)
+
         elif etype == "turn.failed":
             err_obj = event.get("error")
             if isinstance(err_obj, dict):

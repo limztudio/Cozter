@@ -70,6 +70,17 @@ class CodexParseTests(unittest.TestCase):
             any(e.kind == "text" and "boom" in e.content for e in r.events)
         )
 
+    def test_turn_completed_captures_usage(self) -> None:
+        r = _run(self.backend, [
+            {"type": "turn.completed", "usage": {
+                "input_tokens": 12470, "cached_input_tokens": 9600,
+                "output_tokens": 28,
+            }},
+        ])
+        assert r.usage is not None
+        self.assertEqual(r.usage["input_tokens"], 12470)
+        self.assertEqual(r.usage["output_tokens"], 28)
+
 
 class ClaudeCodeParseTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -114,6 +125,16 @@ class ClaudeCodeParseTests(unittest.TestCase):
             {"type": "result", "is_error": True, "error": "nope"},
         ])
         self.assertEqual(r.error, "nope")
+
+    def test_result_captures_usage_and_cost(self) -> None:
+        r = _run(self.backend, [
+            {"type": "result", "subtype": "success", "result": "done",
+             "usage": {"input_tokens": 100, "output_tokens": 50},
+             "total_cost_usd": 0.0123},
+        ])
+        assert r.usage is not None
+        self.assertEqual(r.usage["input_tokens"], 100)
+        self.assertEqual(r.usage["total_cost_usd"], 0.0123)
 
 
 class CopilotParseTests(unittest.TestCase):

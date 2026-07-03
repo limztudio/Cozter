@@ -25,7 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .. import (
-    agent, backends_agent, colony, schedules, session, updater, workspace,
+    agent, backends_agent, colony, config, schedules, session, updater,
+    workspace,
 )
 from ..utils import COZTER_DIR
 from ..utils import drain_queue as _drain_queue
@@ -1822,6 +1823,17 @@ class BotPlatform(ABC):
                 await self.send_text(chat_id, text, rich=True)
             for path in attach_paths:
                 await send_attachment(path)
+
+        # Compact per-turn token/cost footer, when the backend reported
+        # usage and the operator hasn't disabled it.
+        if result.usage and config.get_show_usage():
+            footer = agent.format_usage(result.usage)
+            if footer:
+                try:
+                    await self.send_text(chat_id, footer)
+                except Exception:
+                    pass
+
         if awaiting and uid is not None:
             self._awaiting_answer.add(uid)
             logger.info(

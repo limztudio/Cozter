@@ -132,6 +132,12 @@ class ClaudeCodeBackend(Backend):
             # The terminal event. If the assistant streamed text blocks
             # above, we already captured them; otherwise fall back to
             # the cumulative 'result' field.
+            usage = event.get("usage")
+            if isinstance(usage, dict):
+                result.usage = dict(usage)
+                cost = event.get("total_cost_usd")
+                if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                    result.usage["total_cost_usd"] = cost
             if event.get("is_error"):
                 err = (
                     event.get("error")

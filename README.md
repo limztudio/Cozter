@@ -114,7 +114,8 @@ lives in `.config/config.example.json`):
   "message_queue_size": 50,
 
   "extra_models": {},
-  "max_permission": "full"
+  "max_permission": "full",
+  "show_usage": true
 }
 ```
 
@@ -144,7 +145,12 @@ workspace may use, bot-wide, in privilege order `deny < confirm < auto <
 full`. Since `full` bypasses the sandbox (arbitrary code execution) for
 anyone on the `user_ids` allowlist, set this to `auto` to keep every
 workspace sandboxed, or `deny` for a read-only bot. `/permission` rejects
-a higher mode, and an already-stored higher value is clamped down. The queue is
+a higher mode, and an already-stored higher value is clamped down.
+
+`show_usage` (default `true`) appends a compact per-turn token/cost footer
+(e.g. `📊 12.5k in · 28 out · $0.01`) after each reply, for backends that
+report usage — `codex` (`turn.completed`) and `claude_code` (`result`).
+Other backends stay silent. Set it to `false` to suppress the footer. The queue is
 persisted in `Cozter/.config/queue_<platform>.json`, so clean restarts,
 auto-updates, and crash recovery do not drop already accepted messages.
 Platform IDs are sanitized for those filenames; for example the CLI's

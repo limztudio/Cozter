@@ -25,6 +25,7 @@ _DEFAULT_CONFIG = {
     "message_queue_size": 50,
     "extra_models": {},
     "max_permission": "full",
+    "show_usage": True,
 }
 
 
@@ -105,6 +106,18 @@ def get_llama_max_retries() -> int:
     if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
         return val
     return _DEFAULT_CONFIG["llama_max_retries"]
+
+
+def get_show_usage() -> bool:
+    """Whether to append a per-turn token/cost footer to replies.
+
+    Only backends that report usage (codex's turn.completed, claude_code's
+    result) produce one; others are silent regardless. Defaults to True.
+    """
+    val = _read_config_value("show_usage")
+    if isinstance(val, bool):
+        return val
+    return _DEFAULT_CONFIG["show_usage"]
 
 
 def get_max_permission() -> str:

@@ -48,5 +48,30 @@ class ContextBudgetTests(unittest.TestCase):
         self.assertEqual(out, "hi")
 
 
+class FormatUsageTests(unittest.TestCase):
+    def test_none_and_empty_return_none(self) -> None:
+        self.assertIsNone(agent.format_usage(None))
+        self.assertIsNone(agent.format_usage({}))
+        self.assertIsNone(agent.format_usage("not a dict"))
+
+    def test_tokens_and_cost(self) -> None:
+        footer = agent.format_usage({
+            "input_tokens": 12470, "output_tokens": 28,
+            "total_cost_usd": 0.0123,
+        })
+        assert footer is not None
+        self.assertIn("12.5k in", footer)
+        self.assertIn("28 out", footer)
+        self.assertIn("$0.0123", footer)
+
+    def test_tokens_only_no_cost(self) -> None:
+        footer = agent.format_usage(
+            {"input_tokens": 500, "output_tokens": 10},
+        )
+        assert footer is not None
+        self.assertIn("500 in", footer)
+        self.assertNotIn("$", footer)
+
+
 if __name__ == "__main__":
     unittest.main()
