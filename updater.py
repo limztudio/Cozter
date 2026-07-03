@@ -37,6 +37,47 @@ def _get_head_commit() -> str:
     return _git_str("rev-parse", "HEAD")
 
 
+def _working_tree_dirty() -> bool:
+    """True if the checkout has uncommitted (non-ignored) changes.
+
+    Guards the auto-pull: when Cozter manages its own repo and someone is
+    editing it (a developer, or an agent turn writing files), a
+    ``git pull`` would fight that work. Any git error - lock contention,
+    not-a-repo - is treated as dirty so we never mutate an indeterminate
+    state.
+    """
+    try:
+        result = _git("status", "--porcelain")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return True
+    if result.returncode != 0:
+        return True
+    return bool(result.stdout.strip())
+
+
+def _local_ahead_of_upstream() -> bool:
+    """True if HEAD has commits the upstream branch doesn't.
+
+    A checkout with unpushed local commits is being developed on, not
+    just deployed - auto-pulling it is at best a no-op and at worst fights
+    the developer, so skip the pull. Returns False when no upstream is
+    configured (nothing to compare) and True on any parse failure so we
+    err on the side of not mutating.
+    """
+    upstream = _git_str(
+        "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
+    )
+    if not upstream:
+        return False
+    count = _git_str("rev-list", "--count", f"{upstream}..HEAD")
+    if not count:
+        return False
+    try:
+        return int(count) > 0
+    except ValueError:
+        return True
+
+
 def init_startup_commit() -> None:
     """Snapshot the commit hash this process started with."""
     global _STARTUP_COMMIT
@@ -59,15 +100,31 @@ def fetch_and_pull() -> bool:
 
     This detects both remote updates and manual pulls that happened while
     the process was running.
+
+    The auto-pull is skipped when the working tree is dirty or the local
+    branch is ahead of its upstream - i.e. the checkout is being developed
+    on rather than merely deployed. HEAD-change detection still runs in
+    that case, so a developer's own commit or manual pull is picked up and
+    a restart is scheduled as before.
     """
     try:
         fetch = _git("fetch", "origin")
         if fetch.returncode != 0:
             logger.warning("git fetch failed: %s", fetch.stderr.strip())
 
-        pull = _git("pull", "--ff-only")
-        if pull.returncode != 0:
-            logger.warning("git pull failed: %s", pull.stderr.strip())
+        if _working_tree_dirty():
+            logger.debug(
+                "Skipping auto-pull: working tree has uncommitted changes",
+            )
+        elif _local_ahead_of_upstream():
+            logger.debug(
+                "Skipping auto-pull: local branch is ahead of upstream"
+                " (development checkout)",
+            )
+        else:
+            pull = _git("pull", "--ff-only")
+            if pull.returncode != 0:
+                logger.warning("git pull failed: %s", pull.stderr.strip())
     except (FileNotFoundError, subprocess.TimeoutExpired):
         logger.error("git not available or timed out, skipping update check")
         return False
