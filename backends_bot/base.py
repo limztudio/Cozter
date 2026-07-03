@@ -937,6 +937,74 @@ class BotPlatform(ABC):
             "Your next message goes into this fresh session.",
         )
 
+    # ----- /sessions ------------------------------------------------------
+
+    @staticmethod
+    def _pick_session(choice: str, sessions: list[dict]) -> dict | None:
+        """Resolve a /sessions selection: 1-based number, exact, or substring."""
+        choice = choice.strip()
+        if choice.isdigit():
+            idx = int(choice) - 1
+            return sessions[idx] if 0 <= idx < len(sessions) else None
+        low = choice.lower()
+        for s in sessions:
+            if s["name"].lower() == low:
+                return s
+        for s in sessions:
+            if low and low in s["name"].lower():
+                return s
+        return None
+
+    async def cmd_sessions(self, ctx: BotContext) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        arg = ctx.args.strip()
+        if arg:
+            await self._switch_session(ctx, ws, arg)
+            return
+        sessions = session.list_sessions(ws)
+        if not sessions:
+            await ctx.reply_text(
+                "No sessions yet — send a message to start one.",
+            )
+            return
+        current = session.get_last_session(ws, ctx.user_id)
+        lines = ["Sessions (newest first):"]
+        for i, s in enumerate(sessions, 1):
+            marker = " <-" if s["id"] == current else ""
+            lines.append(
+                f"  {i}. {s['name']} ({s['message_count']} msgs){marker}"
+            )
+        lines.append(
+            "\nReply with a number or name to switch, /newsession for a"
+            " fresh one (or /cancel):"
+        )
+        await ctx.reply_text("\n".join(lines))
+        self._expect_input(ctx.user_id, self._receive_session_switch)
+
+    async def _receive_session_switch(self, ctx: BotContext) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        await self._switch_session(ctx, ws, ctx.text.strip())
+
+    async def _switch_session(
+        self, ctx: BotContext, ws: str, choice: str,
+    ) -> None:
+        sessions = session.list_sessions(ws)
+        target = self._pick_session(choice, sessions)
+        if target is None:
+            await ctx.reply_text(
+                f"No session matches {choice!r}. Use /sessions to list them.",
+            )
+            return
+        session.set_last_session(ws, ctx.user_id, target["id"])
+        await ctx.reply_text(
+            f"Switched to session: {target['name']}\n"
+            "Your next message continues this conversation.",
+        )
+
     # ----- /colony --------------------------------------------------------
 
     async def cmd_colony(self, ctx: BotContext) -> None:
@@ -1985,6 +2053,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "compact":      BotPlatform.cmd_compact,
         "context":      BotPlatform.cmd_context,
         "newsession":   BotPlatform.cmd_newsession,
+        "sessions":     BotPlatform.cmd_sessions,
         "colony":       BotPlatform.cmd_colony,
         "stop":         BotPlatform.cmd_stop,
         "inject":       BotPlatform.cmd_inject,

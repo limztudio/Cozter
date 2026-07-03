@@ -234,6 +234,7 @@ All chat surfaces speak the same command set:
 | `/compact [number]` | Show compaction state, or set messages between compactions |
 | `/context [number]` | Show or set the per-turn context budget (characters of prepended history) |
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
+| `/sessions [number\|name]` | List this workspace's sessions, or switch to one |
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
 | `/refresh` | Drop the workspace's `.codex/` cache (use after an upgrade) |
 | `/stop` | Cancel the running agent turn and clear queued work |
