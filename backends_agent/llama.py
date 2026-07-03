@@ -129,11 +129,14 @@ class LlamaBackend(Backend):
         request_model: str | None = (
             None if not model or model == "auto" else model
         )
-        # Approval -> tool exposure:
-        #   * deny -> no tools at all (chat-only)
-        #   * full/auto/confirm -> tools enabled. Compaction also gets
-        #     tools off since the summarizer doesn't need them.
-        tools_enabled = approval != "deny" and not compaction
+        # Approval -> tool exposure (see _tools_for_approval):
+        #   * deny / compaction -> no tools (chat only)
+        #   * confirm -> read-only tools only (look-but-don't-touch)
+        #   * auto / full -> all tools
+        tools_schema = _tools_for_approval(approval, compaction)
+        enabled_tool_names = tuple(
+            entry["function"]["name"] for entry in tools_schema
+        ) if tools_schema else ()
 
         # Translate the 0-100 effort into llama's native vocabulary;
         # an empty result means "do not send the reasoning_effort field".
@@ -147,11 +150,10 @@ class LlamaBackend(Backend):
         messages: list[dict] = [
             {
                 "role": "system",
-                "content": _system_prompt(workspace_path, tools_enabled),
+                "content": _system_prompt(workspace_path, enabled_tool_names),
             },
             {"role": "user", "content": prompt},
         ]
-        tools_schema = tools.TOOL_SCHEMA if tools_enabled else None
         tool_repeat_counts: dict[str, int] = {}
 
         for _ in range(max_agent_turns):
@@ -191,8 +193,9 @@ class LlamaBackend(Backend):
                 return
 
             # Execute each requested tool and append the result. ``approval``
-            # is honored when tools_enabled is True, so by the time we get
-            # here every tool call is permitted.
+            # is passed through to execute_tool, which enforces the
+            # confirm-mode read-only gate as a backstop even if the model
+            # asks for a state-changing tool it wasn't offered.
             for call in tool_calls:
                 name, args = tools.parse_openai_call(call)
                 sig = tools.tool_signature(name, args)
@@ -418,21 +421,43 @@ def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _system_prompt(workspace_path: str, tools_enabled: bool) -> str:
+def _tools_for_approval(
+    approval: str, compaction: bool,
+) -> list[dict] | None:
+    """Tool schema exposed to the model for this turn, by permission.
+
+    - deny / compaction: no tools (chat only).
+    - confirm: read-only tools only. A chat bot can't prompt per tool
+      call, so confirm becomes a look-but-don't-touch surface;
+      ``execute_tool`` also blocks state-changing tools as a backstop. Use
+      /style collaborative for ask-before-acting on state changes.
+    - auto / full: the full tool set.
+    """
+    if compaction or approval == "deny":
+        return None
+    if approval == "confirm":
+        return tools.READ_ONLY_TOOL_SCHEMA or None
+    return tools.TOOL_SCHEMA
+
+
+def _system_prompt(
+    workspace_path: str, tool_names: tuple[str, ...],
+) -> str:
     """Build the per-turn system message.
 
     Embeds the current workspace path so the model is aware of where it
-    is operating; mentions the tool surface (or lack of it) so the
-    model doesn't try to call tools that aren't exposed. Rebuilt on
-    every turn, so any workspace switch is automatically reflected.
+    is operating; lists the exact tools available this turn (which may be
+    a read-only subset under the confirm permission) so the model doesn't
+    try to call tools that aren't exposed. Rebuilt on every turn, so any
+    workspace switch is automatically reflected.
     """
     parts = [
         "You are a coding assistant running inside Cozter.",
         f"Current workspace: {workspace_path}",
     ]
-    if tools_enabled:
+    if tool_names:
         parts.append(
-            f"Available tools: {', '.join(tools.TOOL_NAMES)}."
+            f"Available tools: {', '.join(tool_names)}."
             " File, shell, and discovery tools run inside this"
             " workspace. Paths may be relative to the workspace root"
             " or absolute inside it. Use list_dir/glob/grep to explore"

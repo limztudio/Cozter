@@ -342,12 +342,18 @@ private models through `extra_models` in config (see Configuration) rather
 than editing source. The `llama` backend instead discovers models live
 from its server.
 
-Permission modes are best-effort across third-party CLIs. `codex` maps
-all four modes to native sandbox/approval flags. `llama` disables typed
-tools in `deny` mode. `claude_code` uses plan mode for `deny`, but cannot
-prompt interactively for `confirm` in chat mode. `copilot` has no usable
-interactive approval flow here, so non-`full` modes run with its
-non-blocking tool flag and stricter intents are logged.
+Permission modes are best-effort across third-party CLIs, because a chat
+bot can't surface a per-tool-call approval dialog. `codex` maps all four
+modes to native sandbox/approval flags. `llama` runs the loop in-process,
+so `deny` exposes no tools and `confirm` exposes read-only tools only —
+writes and shell are withheld, and blocked as a backstop in
+`execute_tool`. `claude_code` uses plan mode for `deny` but falls back to
+non-interactive for `confirm`; `copilot` has no usable interactive
+approval flow, so non-`full` modes run with its non-blocking tool flag.
+Stricter intents a backend can't enforce are logged. For ask-before-acting
+behavior on any backend, use `/style collaborative` — it pauses the turn
+(via `[[await]]`) for your reply instead of relying on the CLI's own
+approval flow.
 
 The `llama` model picker queries `llama_server_url/v1/models` and falls
 back to `auto` if the server is down or returns no model IDs. The

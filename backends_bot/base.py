@@ -663,6 +663,12 @@ class BotPlatform(ABC):
             marker = " <-" if p == current else ""
             desc = workspace.PERMISSION_DESCRIPTIONS[p]
             lines.append(f"  {i}. {p} - {desc}{marker}")
+        lines.append(
+            "\nTip: chat surfaces can't show a per-tool approval dialog, so"
+            " 'confirm' is best-effort. For ask-before-acting behavior on"
+            " any backend use /style collaborative — it pauses the turn for"
+            " your reply."
+        )
         lines.append("\nEnter a number or mode name (or /cancel):")
         await ctx.reply_text("\n".join(lines))
         self._expect_input(ctx.user_id, self._receive_permission)

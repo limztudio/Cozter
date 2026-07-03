@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 
+from Cozter import agent_tools
 from Cozter.agent_tools.base import (
     apply_string_replacement,
     coerce_int_arg,
@@ -185,6 +186,51 @@ class DiscoveryToolTests(unittest.TestCase):
                     self.assertEqual(f.read(), "alpha beta beta")
 
         asyncio.run(run())
+
+
+class ConfirmPermissionGateTests(unittest.TestCase):
+    """confirm exposes read-only tools only; execute_tool is the backstop."""
+
+    def _execute(
+        self, name: str, args: dict, approval: str, ws: str,
+    ) -> str:
+        events: list[dict] = []
+        return asyncio.run(
+            agent_tools.execute_tool(name, args, ws, approval, events.append)
+        )
+
+    def test_confirm_blocks_state_changing_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._execute(
+                "write_file", {"path": "x.txt", "content": "hi"},
+                "confirm", tmp,
+            )
+            self.assertTrue(result.startswith("Blocked"), result)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "x.txt")))
+
+    def test_confirm_allows_read_only_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._execute("list_dir", {"path": "."}, "confirm", tmp)
+            self.assertFalse(result.startswith("Blocked"), result)
+
+    def test_auto_allows_state_changing_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._execute(
+                "write_file", {"path": "x.txt", "content": "hi"},
+                "auto", tmp,
+            )
+            self.assertFalse(result.startswith("Blocked"), result)
+            self.assertTrue(os.path.exists(os.path.join(tmp, "x.txt")))
+
+    def test_read_only_schema_excludes_mutating_tools(self) -> None:
+        names = {
+            e["function"]["name"]
+            for e in agent_tools.READ_ONLY_TOOL_SCHEMA
+        }
+        self.assertTrue(names.issubset(agent_tools.READ_ONLY_TOOL_NAMES))
+        self.assertIn("read_file", names)
+        self.assertNotIn("write_file", names)
+        self.assertNotIn("bash", names)
 
 
 if __name__ == "__main__":

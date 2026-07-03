@@ -227,8 +227,12 @@ AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"
 PERMISSION_DESCRIPTIONS = {
     "full": "Full access - bypass all approvals and sandbox",
-    "auto": "Execute all tool calls automatically (sandboxed)",
-    "confirm": "Ask before each tool call",
+    "auto": "Run tool calls automatically (sandboxed where supported)",
+    "confirm": (
+        "Cautious - chat can't prompt per tool call, so llama exposes"
+        " read-only tools only and CLI backends fall back to auto."
+        " For ask-before-acting, use /style collaborative"
+    ),
     "deny": "Block all tool calls (text-only responses)",
 }
 

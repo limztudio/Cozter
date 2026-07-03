@@ -109,6 +109,28 @@ TOOL_SCHEMA: list[dict[str, Any]] = [
 
 TOOL_NAMES: tuple[str, ...] = tuple(t.name for t in _TOOLS)
 
+# Tools that only read state - no file writes, no shell, no side effects.
+# These realize the "confirm" permission as a look-but-don't-touch surface
+# for the llama backend: a chat bot can't prompt per tool call, so confirm
+# exposes (and execute_tool permits) only these, rather than silently
+# running writes unconfirmed. Anything not listed - mutating builtins,
+# bash, and ALL plugins - is treated as unsafe and withheld. The safe
+# default for an unlisted/new tool is "withheld under confirm"; extend
+# this set when adding a genuinely read-only builtin tool.
+READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
+    "read_file",
+    "list_dir",
+    "glob",
+    "grep",
+    "web_search",
+    "web_fetch",
+})
+
+READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = [
+    entry for entry in TOOL_SCHEMA
+    if entry["function"]["name"] in READ_ONLY_TOOL_NAMES
+]
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -157,10 +179,20 @@ async def execute_tool(
         "file_action": tool.file_action if tool else None,
     })
 
-    if approval == "confirm":
-        # We can't interactively confirm in non-interactive backends, but
-        # the user asked to be told - logging is the best we can do.
-        logger.info("agent tool call (confirm mode): %s %r", name, args)
+    if approval == "confirm" and name not in READ_ONLY_TOOL_NAMES:
+        # A chat surface can't prompt per tool call, so "confirm" is a
+        # read-only gate: state-changing tools are withheld rather than run
+        # unconfirmed. (Ask-before-acting on writes is /style
+        # collaborative, which pauses the whole turn for the user's reply.)
+        logger.info("confirm mode blocked state-changing tool: %s", name)
+        result = (
+            f"Blocked: '{name}' can change state, and confirm mode only "
+            "permits read-only tools. Ask the user to switch permission to "
+            "auto or full to allow changes, or continue using read-only "
+            "tools (read_file, list_dir, glob, grep, web_search, web_fetch)."
+        )
+        emit({"type": "tool_result", "name": name, "output": result})
+        return result
 
     if tool is None:
         result = f"Unknown tool: {name}"
@@ -238,6 +270,8 @@ __all__ = [
     "AgentTool",
     "TOOL_SCHEMA",
     "TOOL_NAMES",
+    "READ_ONLY_TOOL_NAMES",
+    "READ_ONLY_TOOL_SCHEMA",
     "execute_tool",
     "tool_signature",
     "summarize_tool_use",
