@@ -77,7 +77,9 @@ class CliBot(BotPlatform):
         # so on_event prints each event as it arrives.
         return None
 
-    async def edit_text(self, handle: MessageHandle, text: str) -> None:
+    async def edit_text(
+        self, handle: MessageHandle, text: str, *, rich: bool = False,
+    ) -> None:
         # No-op: we never hand out MessageHandles, so this path is
         # unreachable for the CLI. Kept for the abstract-method contract.
         return None

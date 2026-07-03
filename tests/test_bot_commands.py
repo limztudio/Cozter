@@ -34,7 +34,9 @@ class _CmdBot(BotPlatform):
         self.replies.append(text)
         return None
 
-    async def edit_text(self, handle, text: str) -> None:
+    async def edit_text(
+        self, handle, text: str, *, rich: bool = False,
+    ) -> None:
         pass
 
     async def delete_message(self, handle) -> None:

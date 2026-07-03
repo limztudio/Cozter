@@ -29,7 +29,9 @@ class QueueRestoreBot(BotPlatform):
     async def send_text(self, chat_id: str, text: str, *, rich: bool = False):
         return None
 
-    async def edit_text(self, handle, text: str) -> None:
+    async def edit_text(
+        self, handle, text: str, *, rich: bool = False,
+    ) -> None:
         pass
 
     async def delete_message(self, handle) -> None:

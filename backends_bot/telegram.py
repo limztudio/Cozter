@@ -155,12 +155,37 @@ class TelegramBot(BotPlatform):
             )
         return last
 
-    async def edit_text(self, handle: MessageHandle, text: str) -> None:
-        await self.app.bot.edit_message_text(
-            chat_id=handle.chat_id,
-            message_id=int(handle.message_id),
-            text=text,
-        )
+    async def edit_text(
+        self, handle: MessageHandle, text: str, *, rich: bool = False,
+    ) -> None:
+        if not rich:
+            await self.app.bot.edit_message_text(
+                chat_id=handle.chat_id,
+                message_id=int(handle.message_id),
+                text=text,
+            )
+            return
+
+        html = _md_to_html(text)
+        try:
+            await self.app.bot.edit_message_text(
+                chat_id=handle.chat_id,
+                message_id=int(handle.message_id),
+                text=html,
+                parse_mode="HTML",
+            )
+        except Exception:
+            plain = re.sub(r"<[^>]+>", "", html)
+            plain = (
+                plain.replace("&lt;", "<")
+                     .replace("&gt;", ">")
+                     .replace("&amp;", "&")
+            )
+            await self.app.bot.edit_message_text(
+                chat_id=handle.chat_id,
+                message_id=int(handle.message_id),
+                text=plain,
+            )
 
     async def delete_message(self, handle: MessageHandle) -> None:
         await self.app.bot.delete_message(

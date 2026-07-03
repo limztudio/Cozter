@@ -181,10 +181,13 @@ class SlackBot(BotPlatform):
             )
         return last
 
-    async def edit_text(self, handle: MessageHandle, text: str) -> None:
+    async def edit_text(
+        self, handle: MessageHandle, text: str, *, rich: bool = False,
+    ) -> None:
         assert self.app is not None
+        body = _md_to_mrkdwn(text) if rich else text
         await self.app.client.chat_update(
-            channel=handle.chat_id, ts=handle.message_id, text=text,
+            channel=handle.chat_id, ts=handle.message_id, text=body,
         )
 
     async def delete_message(self, handle: MessageHandle) -> None:

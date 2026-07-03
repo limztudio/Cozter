@@ -38,6 +38,11 @@ _INCOMING_DEDUPE_TTL = 120.0
 _INCOMING_DEDUPE_LIMIT = 500
 _LEGACY_SIGNAL_PLATFORM_PREFIX = "signal:"
 _JSONRPC_STREAM_LIMIT = 128 * 1024 * 1024
+_SIGNAL_STYLE_BOLD = "BOLD"
+_SIGNAL_STYLE_ITALIC = "ITALIC"
+_SIGNAL_STYLE_MONOSPACE = "MONOSPACE"
+_SIGNAL_STYLE_STRIKETHROUGH = "STRIKETHROUGH"
+_SIGNAL_STYLE_SPOILER = "SPOILER"
 
 
 class SignalCliError(RuntimeError):
@@ -101,10 +106,17 @@ class SignalBot(BotPlatform):
             return None
         group_id = self._group_id_for_chat(chat_id)
         last: MessageHandle | None = None
-        for chunk in split_text_chunks(text, _SIGNAL_TEXT_LIMIT):
+        chunks = _signal_rich_text_chunks(text) if rich else [
+            (chunk, []) for chunk in split_text_chunks(text, _SIGNAL_TEXT_LIMIT)
+        ]
+        for chunk, styles in chunks:
+            if not chunk:
+                continue
             self._remember_outgoing_text(group_id, chunk)
+            params: dict[str, Any] = {"groupId": group_id, "message": chunk}
+            _add_signal_text_styles(params, styles)
             result = await self._rpc_request(
-                "send", {"groupId": group_id, "message": chunk},
+                "send", params,
             )
             timestamp = _extract_timestamp_from_value(result)
             if timestamp:
@@ -115,16 +127,25 @@ class SignalBot(BotPlatform):
                 )
         return last
 
-    async def edit_text(self, handle: MessageHandle, text: str) -> None:
+    async def edit_text(
+        self, handle: MessageHandle, text: str, *, rich: bool = False,
+    ) -> None:
         group_id = self._group_id_for_chat(handle.chat_id)
-        self._remember_outgoing_text(group_id, text)
+        message, styles = _signal_rich_text_payload(text) if rich else (
+            text, [],
+        )
+        if not message:
+            return
+        self._remember_outgoing_text(group_id, message)
+        params: dict[str, Any] = {
+            "groupId": group_id,
+            "editTimestamp": _timestamp_rpc_param(handle.message_id),
+            "message": message,
+        }
+        _add_signal_text_styles(params, styles)
         result = await self._rpc_request(
             "send",
-            {
-                "groupId": group_id,
-                "editTimestamp": _timestamp_rpc_param(handle.message_id),
-                "message": text,
-            },
+            params,
         )
         timestamp = _extract_timestamp_from_value(result)
         if timestamp:
@@ -1058,6 +1079,231 @@ def _is_jsonrpc_transport_error(exc: BaseException) -> bool:
             "socket is not ready",
         )
     )
+
+
+def _signal_rich_text_chunks(
+    text: str,
+    limit: int = _SIGNAL_TEXT_LIMIT,
+) -> list[tuple[str, list[str]]]:
+    body, spans = _md_to_signal_body_and_spans(text)
+    if not body:
+        return []
+    return [
+        (
+            chunk,
+            _signal_style_strings_for_chunk(body, spans, start, end),
+        )
+        for start, end in _signal_chunk_ranges(body, limit)
+        if (chunk := body[start:end])
+    ]
+
+
+def _signal_rich_text_payload(text: str) -> tuple[str, list[str]]:
+    body, spans = _md_to_signal_body_and_spans(text)
+    if not body:
+        return "", []
+    return body, _signal_style_strings_for_chunk(body, spans, 0, len(body))
+
+
+def _md_to_signal_body_and_spans(
+    text: str,
+) -> tuple[str, list[tuple[int, int, str]]]:
+    """Convert common Markdown to Signal text plus code-point spans."""
+    parts: list[str] = []
+    spans: list[tuple[int, int, str]] = []
+    pos = 0
+
+    def append(value: str) -> None:
+        nonlocal pos
+        if not value:
+            return
+        parts.append(value)
+        pos += len(value)
+
+    def add_span(start: int, style: str) -> None:
+        length = pos - start
+        if length > 0:
+            spans.append((start, length, style))
+
+    def parse_inline(src: str) -> None:
+        nonlocal pos
+        i = 0
+        while i < len(src):
+            marker = _signal_inline_marker_at(src, i)
+            if marker is None:
+                append(src[i])
+                i += 1
+                continue
+
+            open_marker, close_marker, style, parse_nested = marker
+            close_at = _find_signal_inline_close(src, close_marker, i)
+            if close_at < 0:
+                append(src[i])
+                i += 1
+                continue
+
+            start = pos
+            content = src[i + len(open_marker):close_at]
+            if parse_nested:
+                parse_inline(content)
+            else:
+                append(content)
+            add_span(start, style)
+            i = close_at + len(close_marker)
+
+    need_newline = False
+
+    def append_line(line: str, style: str | None = None) -> None:
+        nonlocal need_newline
+        if need_newline:
+            append("\n")
+        need_newline = True
+        start = pos
+        if style == _SIGNAL_STYLE_MONOSPACE:
+            append(line)
+        else:
+            parse_inline(line)
+        if style:
+            add_span(start, style)
+
+    in_code_block = False
+    code_buf: list[str] = []
+    for line in text.split("\n"):
+        if line.strip().startswith("```"):
+            if in_code_block:
+                if code_buf:
+                    append_line(
+                        "\n".join(code_buf),
+                        _SIGNAL_STYLE_MONOSPACE,
+                    )
+                code_buf.clear()
+                in_code_block = False
+            else:
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            code_buf.append(line)
+            continue
+
+        header = re.match(r"^#{1,6}\s+(.+)$", line)
+        if header:
+            append_line(header.group(1), _SIGNAL_STYLE_BOLD)
+        else:
+            append_line(line)
+
+    if in_code_block and code_buf:
+        append_line("\n".join(code_buf), _SIGNAL_STYLE_MONOSPACE)
+
+    return "".join(parts), spans
+
+
+def _signal_inline_marker_at(
+    text: str,
+    index: int,
+) -> tuple[str, str, str, bool] | None:
+    if text.startswith("`", index):
+        return ("`", "`", _SIGNAL_STYLE_MONOSPACE, False)
+    if text.startswith("**", index):
+        return ("**", "**", _SIGNAL_STYLE_BOLD, True)
+    if text.startswith("__", index):
+        return ("__", "__", _SIGNAL_STYLE_BOLD, True)
+    if text.startswith("~~", index):
+        return ("~~", "~~", _SIGNAL_STYLE_STRIKETHROUGH, True)
+    if text.startswith("||", index):
+        return ("||", "||", _SIGNAL_STYLE_SPOILER, True)
+    if text[index] == "*" and _single_marker_can_open(text, index):
+        return ("*", "*", _SIGNAL_STYLE_ITALIC, True)
+    if text[index] == "_" and _single_marker_can_open(text, index):
+        return ("_", "_", _SIGNAL_STYLE_ITALIC, True)
+    return None
+
+
+def _find_signal_inline_close(
+    text: str,
+    marker: str,
+    open_index: int,
+) -> int:
+    start = open_index + len(marker)
+    if marker in ("*", "_"):
+        i = text.find(marker, start)
+        while i >= 0:
+            if _single_marker_can_close(text, i):
+                return i
+            i = text.find(marker, i + 1)
+        return -1
+    return text.find(marker, start)
+
+
+def _single_marker_can_open(text: str, index: int) -> bool:
+    previous = text[index - 1] if index > 0 else ""
+    next_char = text[index + 1] if index + 1 < len(text) else ""
+    return not _is_word_char(previous) and bool(next_char.strip())
+
+
+def _single_marker_can_close(text: str, index: int) -> bool:
+    previous = text[index - 1] if index > 0 else ""
+    next_char = text[index + 1] if index + 1 < len(text) else ""
+    return bool(previous.strip()) and not _is_word_char(next_char)
+
+
+def _is_word_char(value: str) -> bool:
+    return bool(value and re.match(r"\w", value))
+
+
+def _signal_chunk_ranges(text: str, limit: int) -> list[tuple[int, int]]:
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    if len(text) <= limit:
+        return [(0, len(text))]
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    while start < len(text):
+        if len(text) - start <= limit:
+            ranges.append((start, len(text)))
+            break
+        end = text.rfind("\n", start, start + limit)
+        if end <= start:
+            end = start + limit
+        ranges.append((start, end))
+        start = end
+        while start < len(text) and text[start] == "\n":
+            start += 1
+    return ranges
+
+
+def _signal_style_strings_for_chunk(
+    body: str,
+    spans: list[tuple[int, int, str]],
+    chunk_start: int,
+    chunk_end: int,
+) -> list[str]:
+    styles: list[str] = []
+    for start, length, style in spans:
+        end = start + length
+        overlap_start = max(start, chunk_start)
+        overlap_end = min(end, chunk_end)
+        if overlap_start >= overlap_end:
+            continue
+        utf16_start = _utf16_code_units(body[chunk_start:overlap_start])
+        utf16_length = _utf16_code_units(body[overlap_start:overlap_end])
+        if utf16_length > 0:
+            styles.append(f"{utf16_start}:{utf16_length}:{style}")
+    return styles
+
+
+def _utf16_code_units(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _add_signal_text_styles(
+    params: dict[str, Any],
+    styles: list[str],
+) -> None:
+    if len(styles) == 1:
+        params["textStyle"] = styles[0]
+    elif styles:
+        params["textStyle"] = styles
 
 
 def _format_signal_cli_receive_exception(item: dict[str, Any]) -> str:

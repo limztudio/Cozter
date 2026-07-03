@@ -109,8 +109,10 @@ class BotContext:
             self.chat_id, text, rich=rich,
         )
 
-    async def edit_text(self, handle: MessageHandle, text: str) -> None:
-        await self.platform.edit_text(handle, text)
+    async def edit_text(
+        self, handle: MessageHandle, text: str, *, rich: bool = False,
+    ) -> None:
+        await self.platform.edit_text(handle, text, rich=rich)
 
     async def delete_message(self, handle: MessageHandle) -> None:
         await self.platform.delete_message(handle)
@@ -192,7 +194,7 @@ class BotPlatform(ABC):
 
     @abstractmethod
     async def edit_text(
-        self, handle: MessageHandle, text: str,
+        self, handle: MessageHandle, text: str, *, rich: bool = False,
     ) -> None:
         """Edit a previously sent message."""
 
@@ -1750,7 +1752,9 @@ class BotPlatform(ABC):
         )
         self._inject_queues[uid] = inject_q
 
-        thinking_handle = await self.send_text(chat_id, "Thinking...")
+        thinking_handle = await self.send_text(
+            chat_id, "Thinking...", rich=True,
+        )
 
         status_lines: list[str] = []
         latest_text = ""
@@ -1786,6 +1790,7 @@ class BotPlatform(ABC):
                 await self.edit_text(
                     thinking_handle,
                     self._compose_thinking_display(status_lines, latest_text),
+                    rich=True,
                 )
             except Exception:
                 pass
@@ -1926,7 +1931,7 @@ class BotPlatform(ABC):
             footer = agent.format_usage(result.usage)
             if footer:
                 try:
-                    await self.send_text(chat_id, footer)
+                    await self.send_text(chat_id, footer, rich=True)
                 except Exception:
                     pass
 
