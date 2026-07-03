@@ -561,6 +561,17 @@ From inside `Cozter/`:
 PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
 ```
 
+CI (`.github/workflows/ci.yml`) also runs `ruff check` and `mypy` on every
+push and PR. mypy is adopted gradually — enforced on clean modules, with
+pre-existing type debt grandfathered per-module in `mypy.ini` (burn the
+list down over time). Run them locally the same way CI does:
+
+```bash
+cd ..
+Cozter/.venv/bin/ruff check Cozter
+Cozter/.venv/bin/mypy --config-file Cozter/mypy.ini -p Cozter
+```
+
 Before committing, run the tests and check `git status --short` for only
 intentional source or documentation edits. Runtime JSON, logs, sessions,
 virtualenv files, and caches should stay local.

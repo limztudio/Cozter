@@ -30,11 +30,16 @@ jobs:
         working-directory: Cozter
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt ruff
+          pip install -r requirements.txt ruff mypy
 
       - name: Lint (ruff)
         working-directory: Cozter
         run: ruff check .
+
+      - name: Type check (mypy)
+        # Run from the parent so the package resolves as `Cozter`, matching
+        # the relative imports and the tests' `from Cozter...` layout.
+        run: PYTHONPATH="$PWD" mypy --config-file Cozter/mypy.ini -p Cozter
 
       - name: Tests (unittest)
         run: PYTHONPATH="$PWD" python -m unittest discover -s Cozter/tests
