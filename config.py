@@ -22,6 +22,7 @@ _DEFAULT_CONFIG = {
     "update_check_interval": 10,
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
+    "extra_models": {},
 }
 
 
@@ -90,6 +91,24 @@ def get_llama_socket_timeout() -> int:
     fast server and want failures to surface quickly.
     """
     return _get_positive_int("llama_socket_timeout")
+
+
+def get_extra_models(backend_name: str) -> list[str]:
+    """Extra model IDs to offer for *backend_name*, from config.json.
+
+    The built-in per-backend lists in ``backends_agent/`` are a curated
+    snapshot and go stale as providers ship new models. This lets users
+    expose newer or private/self-hosted models without editing source::
+
+        {"extra_models": {"codex": ["gpt-5.6"], "copilot": ["..."]}}
+
+    Malformed entries (missing key, non-object value, non-string items)
+    are ignored, returning an empty list.
+    """
+    val = _read_config_value("extra_models")
+    if not isinstance(val, dict):
+        return []
+    return normalize_string_list(val.get(backend_name))
 
 
 def load_config() -> dict:

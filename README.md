@@ -110,7 +110,9 @@ lives in `.config/config.example.json`):
 
   "update_check_interval": 10,
   "recent_workspace_limit": 10,
-  "message_queue_size": 50
+  "message_queue_size": 50,
+
+  "extra_models": {}
 }
 ```
 
@@ -120,7 +122,14 @@ Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
 The CLI surface needs neither.
 
 `recent_workspace_limit` controls how many paths `/open` shows.
-`message_queue_size` caps each user's pending chat turns. The queue is
+`message_queue_size` caps each user's pending chat turns.
+
+`extra_models` adds model IDs to a backend's `/model` and `/summarymodel`
+pickers on top of its built-in list, keyed by backend name — for example
+`{"codex": ["gpt-5.6"], "copilot": ["claude-opus-5.0"]}`. The built-in
+lists in `backends_agent/` are a curated snapshot that goes stale as
+providers ship new models; this lets you use a newer or private model
+without editing source. Malformed entries are ignored. The queue is
 persisted in `Cozter/.config/queue_<platform>.json`, so clean restarts,
 auto-updates, and crash recovery do not drop already accepted messages.
 Platform IDs are sanitized for those filenames; for example the CLI's
@@ -325,6 +334,11 @@ Each backend defines its own model list and permission mapping in
 | `claude_code` | `claude --print --output-format stream-json` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json` | `auto` | `claude-haiku-4.5` |
 | `llama` | OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
+
+The CLI-backend model lists are a hand-maintained snapshot; add newer or
+private models through `extra_models` in config (see Configuration) rather
+than editing source. The `llama` backend instead discovers models live
+from its server.
 
 Permission modes are best-effort across third-party CLIs. `codex` maps
 all four modes to native sandbox/approval flags. `llama` disables typed

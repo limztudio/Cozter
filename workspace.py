@@ -3,6 +3,7 @@ import logging
 import os
 
 from . import backends_agent
+from . import config
 from .utils import CONFIG_DIR, COZTER_DIR
 from .utils import load_json_object
 from .utils import save_json_object
@@ -319,16 +320,38 @@ def set_summary_backend_name(workspace_path: str, name: str) -> None:
     _set_setting(workspace_path, "summary_backend", name)
 
 
+def _with_extra_models(backend_name: str, base) -> list[str]:
+    """Append user-configured extra models to a backend's built-in list.
+
+    Built-in lists are a curated snapshot; ``config.extra_models`` lets
+    users add newer/private models without editing source. Built-ins come
+    first, extras keep their order, and duplicates are dropped.
+    """
+    models = list(base)
+    seen = set(models)
+    for model in config.get_extra_models(backend_name):
+        if model not in seen:
+            seen.add(model)
+            models.append(model)
+    return models
+
+
 def get_available_models(workspace_path: str) -> list[str]:
     """List models for the workspace's currently selected backend."""
     backend_name = get_backend_name(workspace_path)
-    return list(backends_agent.get_backend(backend_name).available_models)
+    return _with_extra_models(
+        backend_name,
+        backends_agent.get_backend(backend_name).available_models,
+    )
 
 
 def get_available_summary_models(workspace_path: str) -> list[str]:
     """List models for the workspace's summary backend (may differ from chat)."""
     backend_name = get_summary_backend_name(workspace_path)
-    return list(backends_agent.get_backend(backend_name).available_models)
+    return _with_extra_models(
+        backend_name,
+        backends_agent.get_backend(backend_name).available_models,
+    )
 
 
 def _model_keys(backend_name: str) -> tuple[str, str]:

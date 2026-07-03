@@ -167,6 +167,64 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 workspace.set_interaction_style(tmp, "verbose")
 
+    def test_extra_models_parsing_tolerates_malformed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "extra_models": {
+                        "codex": ["gpt-5.6", "", 123],  # non-strings dropped
+                        "copilot": "not-a-list",         # wrong type -> []
+                    },
+                }, f)
+            old = config.CONFIG_PATH
+            config.CONFIG_PATH = path
+            try:
+                self.assertEqual(config.get_extra_models("codex"), ["gpt-5.6"])
+                self.assertEqual(config.get_extra_models("copilot"), [])
+                self.assertEqual(config.get_extra_models("missing"), [])
+            finally:
+                config.CONFIG_PATH = old
+
+    def test_extra_models_missing_or_non_object_returns_empty(self) -> None:
+        # No config file (CLI mode) -> [].
+        old = config.CONFIG_PATH
+        config.CONFIG_PATH = "/nonexistent/config.json"
+        try:
+            self.assertEqual(config.get_extra_models("codex"), [])
+        finally:
+            config.CONFIG_PATH = old
+        # extra_models present but not an object -> [].
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"extra_models": ["oops"]}, f)
+            config.CONFIG_PATH = path
+            try:
+                self.assertEqual(config.get_extra_models("codex"), [])
+            finally:
+                config.CONFIG_PATH = old
+
+    def test_available_models_appends_extras_without_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            workspace.set_backend_name(tmp, "codex")
+
+            def _fake_extras(name: str) -> list[str]:
+                # "gpt-5.5" is already built-in; "gpt-5.6" is new.
+                return ["gpt-5.6", "gpt-5.5"] if name == "codex" else []
+
+            orig = config.get_extra_models
+            config.get_extra_models = _fake_extras
+            try:
+                models = workspace.get_available_models(tmp)
+            finally:
+                config.get_extra_models = orig
+
+            self.assertEqual(models[0], "gpt-5.5")   # built-ins first
+            self.assertIn("gpt-5.6", models)          # extra appended
+            self.assertEqual(models.count("gpt-5.5"), 1)  # no duplicate
+
 
 class ColonyStateFallbackTests(unittest.TestCase):
     def test_colony_state_normalizes_missing_or_invalid_keys(self) -> None:
