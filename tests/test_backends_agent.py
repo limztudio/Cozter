@@ -1,5 +1,6 @@
 import unittest
 
+from Cozter.backends_agent import copilot as copilot_mod
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
@@ -50,6 +51,16 @@ class StaticBackendModelTests(unittest.TestCase):
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)
+
+
+class CopilotPromptCapTests(unittest.TestCase):
+    def test_max_prompt_chars_is_platform_sane(self) -> None:
+        cap = copilot_mod._max_prompt_chars()
+        self.assertIsInstance(cap, int)
+        # Never below the Windows floor, never absurdly large. On POSIX
+        # (ARG_MAX ~2 MB) this lands well above the old fixed 28K cap.
+        self.assertGreaterEqual(cap, 28_000)
+        self.assertLessEqual(cap, 1_000_000)
 
 
 if __name__ == "__main__":

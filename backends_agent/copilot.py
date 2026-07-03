@@ -3,7 +3,9 @@
 Copilot's non-interactive mode (`copilot -p <prompt> --output-format json`)
 streams JSONL events to stdout. Unlike codex, copilot:
   - takes the prompt via argv (`-p`), not stdin - prompts are capped to
-    stay under Windows' ~32K CreateProcess argv limit
+    the platform's exec limit (Windows' ~32K CreateProcess command line;
+    POSIX ARG_MAX, commonly ~2 MB). copilot has no prompt-via-stdin or
+    --prompt-file path yet, so argv is the only delivery mechanism.
   - has no `-C <dir>` flag - we use the subprocess `cwd` parameter
   - has coarser permission semantics: --allow-all-tools, --yolo, or default
     (which would prompt, unusable in non-interactive mode)
@@ -16,6 +18,8 @@ and log unknown event types so the schema can be refined.
 
 import asyncio
 import logging
+import os
+import sys
 
 from .base import (
     AgentResult, Backend, ChatEvent, executable_command, set_error_result,
@@ -23,10 +27,32 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Conservative cap: CreateProcess on Windows takes a 32767-char command
-# line for the whole argv. Other flags + the executable path need room,
-# so keep the prompt itself under ~28K.
-_MAX_PROMPT_CHARS = 28_000
+# Floor applied on every platform: the Windows CreateProcess command line
+# caps at 32767 chars for the whole argv, so keep the prompt well under it.
+_WINDOWS_PROMPT_CHARS = 28_000
+
+
+def _max_prompt_chars() -> int:
+    """Largest prompt (chars) we can safely pass to copilot via ``-p``.
+
+    copilot delivers the prompt as a single argv value - it has no
+    prompt-via-stdin or ``--prompt-file`` path yet - so the OS exec limit
+    applies. Windows' CreateProcess caps the whole command line at 32767
+    chars; POSIX bounds argv + env combined by ARG_MAX (commonly ~2 MB).
+    Use a conservative fraction of ARG_MAX to leave room for env vars, the
+    executable path, and the other flags. The old fixed 28K cap truncated
+    POSIX prompts far below both the OS limit and agent.py's own 50K
+    context budget.
+    """
+    if sys.platform == "win32":
+        return _WINDOWS_PROMPT_CHARS
+    try:
+        arg_max = os.sysconf("SC_ARG_MAX")
+    except (ValueError, OSError, AttributeError):
+        arg_max = 0
+    if arg_max <= 0:
+        return 128_000
+    return max(_WINDOWS_PROMPT_CHARS, min(arg_max // 4, 1_000_000))
 
 
 class CopilotBackend(Backend):
@@ -76,17 +102,18 @@ class CopilotBackend(Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
-        if len(prompt) > _MAX_PROMPT_CHARS:
+        max_prompt_chars = _max_prompt_chars()
+        if len(prompt) > max_prompt_chars:
             # Keep the tail: the user's current message is at the end of the
             # composed prompt, and the head (capability-hint preamble + old context)
             # is the least costly to drop.
             logger.warning(
                 "Copilot prompt %d chars exceeds %d-char cap; "
                 "dropping oldest %d chars of context",
-                len(prompt), _MAX_PROMPT_CHARS,
-                len(prompt) - _MAX_PROMPT_CHARS,
+                len(prompt), max_prompt_chars,
+                len(prompt) - max_prompt_chars,
             )
-            prompt = prompt[-_MAX_PROMPT_CHARS:]
+            prompt = prompt[-max_prompt_chars:]
 
         prefix = executable_command(self.executable)
         cmd: list[str] = [
