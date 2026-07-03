@@ -1629,6 +1629,27 @@ class BotPlatform(ABC):
 
         await self._drain_message_queue(uid)
 
+    @staticmethod
+    def _compose_thinking_display(
+        status_lines: list[str], latest_text: str,
+    ) -> str:
+        """Build the live 'Thinking...' preview.
+
+        Recent tool/file activity plus the latest streamed answer text
+        (tail-truncated so the newest content is kept). Rendered into the
+        editable status message during a turn; the final reply is sent
+        separately after the message is deleted.
+        """
+        parts = ["Thinking..."]
+        if status_lines:
+            parts.append("\n".join(status_lines[-5:]))
+        text = latest_text.strip()
+        if text:
+            if len(text) > 600:
+                text = "…" + text[-600:]
+            parts.append(text)
+        return "\n\n".join(parts)
+
     async def _run_turn(
         self, uid: str, chat_id: str, text: str,
         *, session_id: str | None = None,
@@ -1664,33 +1685,40 @@ class BotPlatform(ABC):
         thinking_handle = await self.send_text(chat_id, "Thinking...")
 
         status_lines: list[str] = []
+        latest_text = ""
         last_edit = 0.0
 
         async def on_event(ev: agent.ChatEvent) -> None:
-            nonlocal last_edit
-            if ev.kind == "tool":
-                line = f"» {ev.content.split(chr(10))[0][:80]}"
+            nonlocal last_edit, latest_text
+            if ev.kind == "text":
+                if ev.content.strip():
+                    latest_text = ev.content
+            elif ev.kind == "tool":
+                status_lines.append(f"» {ev.content.split(chr(10))[0][:80]}")
             elif ev.kind == "file":
-                line = f"» {ev.content[:80]}"
+                status_lines.append(f"» {ev.content[:80]}")
             else:
                 return
-            status_lines.append(line)
             if thinking_handle is None:
-                # Platform doesn't support editable status messages
-                # (e.g. CLI mode). Emit each event as a fresh message
-                # so the user still sees progress.
-                try:
-                    await self.send_status(chat_id, line)
-                except Exception:
-                    pass
+                # Platform doesn't support editable status messages (e.g.
+                # CLI mode). Emit tool/file progress as fresh messages; the
+                # answer text arrives whole in the final reply, so skip it
+                # here to avoid printing it twice.
+                if ev.kind != "text":
+                    try:
+                        await self.send_status(chat_id, status_lines[-1])
+                    except Exception:
+                        pass
                 return
             now = asyncio.get_running_loop().time()
             if now - last_edit < 1.5:
                 return
             last_edit = now
-            display = "Thinking...\n\n" + "\n".join(status_lines[-5:])
             try:
-                await self.edit_text(thinking_handle, display)
+                await self.edit_text(
+                    thinking_handle,
+                    self._compose_thinking_display(status_lines, latest_text),
+                )
             except Exception:
                 pass
 

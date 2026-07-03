@@ -491,7 +491,10 @@ The agent loop in `agent.py:run()` is shared across backends. Each
 `Backend.launch()` spawns the right subprocess (or the in-process llama
 session); the orchestrator reads JSONL events from stdout, translates
 them via `Backend.parse_event()` into `ChatEvent`s, and streams a
-"Thinking..." status line to the user with the latest few tool actions.
+"Thinking..." status message that updates in place with the latest few
+tool actions and a live preview of the answer text as it arrives. On chat
+surfaces without editable messages (the CLI), tool progress is emitted as
+separate status lines and the full answer arrives at the end.
 
 ## Repository state
 
