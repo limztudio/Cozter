@@ -14,12 +14,14 @@ to the AI agent. Status events emitted during an AI turn print directly
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
 import sys
 import threading
 
+from ..utils import await_cancelled
 from .base import (
     AttachmentInfo,
     BotContext,
@@ -82,10 +84,10 @@ class CliBot(BotPlatform):
     ) -> None:
         # No-op: we never hand out MessageHandles, so this path is
         # unreachable for the CLI. Kept for the abstract-method contract.
-        return None
+        pass
 
     async def delete_message(self, handle: MessageHandle) -> None:
-        return None
+        pass
 
     async def send_file(self, chat_id: str, path: str) -> None:
         # Files only "exist" on the local filesystem; just point the user
@@ -124,19 +126,13 @@ class CliBot(BotPlatform):
         self._stop_requested.set()
         if self._input_task and not self._input_task.done():
             self._input_task.cancel()
-            try:
-                await self._input_task
-            except asyncio.CancelledError:
-                pass
+            await await_cancelled(self._input_task)
 
     async def wait_until_exit(self) -> None:
         """Block the caller until the input loop terminates."""
         if self._input_task is None:
             return
-        try:
-            await self._input_task
-        except asyncio.CancelledError:
-            pass
+        await await_cancelled(self._input_task)
 
     async def send_startup_messages(
         self, version: str, commit_date: str,
@@ -144,7 +140,7 @@ class CliBot(BotPlatform):
         # The start() banner already covers what the user needs; suppress
         # the per-platform startup message so the screen isn't cluttered
         # before the first input prompt.
-        return None
+        return
 
     # ----- input loop -----------------------------------------------------
 
@@ -258,12 +254,8 @@ class CliBot(BotPlatform):
 def _prepare_console() -> None:
     """Make stdout/stderr UTF-8 so tool/file emojis don't crash cp1252."""
     for stream in (sys.stdout, sys.stderr):
-        try:
+        with contextlib.suppress(AttributeError, OSError):
             stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, OSError):
-            # Older Python or non-tty stream (e.g. redirected to a file
-            # without a reconfigure-able encoding) - leave as-is.
-            pass
 
     _enable_ansi()
 
@@ -335,10 +327,8 @@ def _install_force_exit_on_sigint() -> None:
     def _force_exit() -> None:
         # Newline-prefixed so the message doesn't run into the prompt;
         # flush=True because os._exit skips the normal stdout flush.
-        try:
+        with contextlib.suppress(Exception):
             print("\n(interrupted)", flush=True)
-        except Exception:
-            pass
         os._exit(130)  # 128 + SIGINT
 
     try:

@@ -17,8 +17,10 @@ from . import (
     titling,
 )
 from . import workspace as workspace_mod
-from .backends_agent.base import AgentResult, ChatEvent, set_error_result
-from .utils import drain_text_stream, iter_json_events
+from .backends_agent.base import (
+    AgentResult, ChatEvent, append_text_result, set_error_result,
+)
+from .utils import await_cancelled, drain_text_stream, iter_json_events
 from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
@@ -766,8 +768,7 @@ async def _run_turn(
         finally:
             if inject_task and not inject_task.done():
                 inject_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await inject_task
+                await await_cancelled(inject_task)
 
         # If we're restarting due to inject, drain pipes and any extra
         # injects that arrived while we were shutting down.
@@ -836,7 +837,7 @@ async def _run_turn(
         not any(e.kind == "text" for e in result.events)
         and not any(e.kind == "attachment" for e in result.events)
     ):
-        result.events.append(ChatEvent(kind="text", content=result.text))
+        append_text_result(result, result.text)
 
     return result
 

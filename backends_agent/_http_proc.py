@@ -22,6 +22,8 @@ from collections.abc import AsyncIterator, Awaitable
 
 import aiohttp
 
+from ..utils import await_cancelled
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,10 +61,7 @@ class HttpAgentProcess:
 
     async def wait(self) -> int:
         if self._task is not None:
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+            await await_cancelled(self._task)
         return self.returncode if self.returncode is not None else 0
 
     def start(self, coro: Awaitable[None]) -> None:

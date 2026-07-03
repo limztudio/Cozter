@@ -1,11 +1,12 @@
 """Shared low-level utilities."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import tempfile
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +44,15 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
             json.dump(data, f, indent=2)
         os.replace(tmp_path, target)  # atomic on same filesystem
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise
+
+
+async def await_cancelled(task: Awaitable[object]) -> None:
+    """Await a task after cancellation, ignoring the expected cancel."""
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
 
 
 def save_json_object(path: str, data: dict) -> None:

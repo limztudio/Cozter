@@ -22,8 +22,8 @@ import logging
 import os
 
 from .base import (
-    AgentResult, Backend, ChatEvent, create_prompt_subprocess,
-    executable_command, set_error_result,
+    AgentResult, Backend, ChatEvent, append_text_result,
+    create_prompt_subprocess, executable_command, set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -152,8 +152,7 @@ class ClaudeCodeBackend(Backend):
                 and text
                 and not any(e.kind == "text" for e in result.events)
             ):
-                result.text = text
-                result.events.append(ChatEvent(kind="text", content=text))
+                append_text_result(result, text)
             return
 
         # 'user' (tool results) and 'system' (init/meta) events are noisy
@@ -197,8 +196,7 @@ class ClaudeCodeBackend(Backend):
         if btype == "text":
             text = block.get("text", "")
             if text:
-                result.text = text
-                result.events.append(ChatEvent(kind="text", content=text))
+                append_text_result(result, text)
             return
         if btype == "tool_use":
             self._emit_tool_event(block, result)

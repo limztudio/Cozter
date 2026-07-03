@@ -82,7 +82,7 @@ class AgentTool(ABC):
     is_plugin: bool = False
 
     # Populated by __init_subclass__. Read by the package's __init__.
-    registry: list["AgentTool"] = []
+    registry: list[AgentTool] = []
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

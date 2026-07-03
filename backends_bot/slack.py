@@ -372,9 +372,11 @@ async def _download_private(
     if urlparse(url).scheme not in ("http", "https"):
         raise ValueError(f"Refusing to fetch non-http url: {url!r}")
     headers = {"Authorization": f"Bearer {bot_token}"}
-    async with aiohttp.ClientSession() as s:
-        async with s.get(url, headers=headers) as resp:
-            resp.raise_for_status()
-            with open(local_path, "wb") as fp:
-                async for chunk in resp.content.iter_chunked(64 * 1024):
-                    fp.write(chunk)
+    async with (
+        aiohttp.ClientSession() as s,
+        s.get(url, headers=headers) as resp,
+    ):
+        resp.raise_for_status()
+        with open(local_path, "wb") as fp:
+            async for chunk in resp.content.iter_chunked(64 * 1024):
+                fp.write(chunk)

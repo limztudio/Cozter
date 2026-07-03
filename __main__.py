@@ -83,6 +83,7 @@ from logging.handlers import RotatingFileHandler  # noqa: E402
 from . import config as cfg  # noqa: E402
 from . import updater  # noqa: E402
 from .backends_bot import BotPlatform, create_platforms  # noqa: E402
+from .utils import await_cancelled  # noqa: E402
 
 MODULE_ROOT = os.path.dirname(__file__)
 LOG_DIR = os.path.join(MODULE_ROOT, ".log")
@@ -320,10 +321,7 @@ async def main_cli() -> None:
         await bot.wait_until_exit()
     finally:
         update_task.cancel()
-        try:
-            await update_task
-        except asyncio.CancelledError:
-            pass
+        await await_cancelled(update_task)
         await bot.stop()
 
 
@@ -380,10 +378,7 @@ async def main() -> None:
 
     logger.info("Shutting down...")
     update_task.cancel()
-    try:
-        await update_task
-    except asyncio.CancelledError:
-        pass
+    await await_cancelled(update_task)
     for bot in bots:
         await bot.notify_users("Cozter is shutting down.")
         await bot.stop()

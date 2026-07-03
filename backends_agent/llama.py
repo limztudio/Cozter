@@ -35,7 +35,9 @@ import aiohttp
 from .. import agent_tools as tools
 from .. import config as cfg
 from ._http_proc import HttpAgentProcess, http_error_translator
-from .base import AgentResult, Backend, ChatEvent, set_error_result
+from .base import (
+    AgentResult, Backend, ChatEvent, append_text_result, set_error_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -288,8 +290,7 @@ class LlamaBackend(Backend):
             text = event.get("text") or ""
             if text:
                 # Last text wins for result.text (matches codex/copilot).
-                result.text = text
-                result.events.append(ChatEvent(kind="text", content=text))
+                append_text_result(result, text)
             return
 
         if etype == "tool_use":
@@ -431,47 +432,49 @@ async def _stream_once(
     tool_buffers: dict[int, dict[str, Any]] = {}
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
                 endpoint, json=payload,
                 timeout=aiohttp.ClientTimeout(
                     total=None, sock_read=sock_read,
                 ),
-            ) as resp:
-                if resp.status == 429 or resp.status >= 500:
-                    body = await resp.text()
-                    raise _RetryableError(
-                        f"{label} returned HTTP {resp.status}: {body[:200]}",
-                        retry_after=_parse_retry_after(
-                            resp.headers.get("Retry-After"),
-                        ),
-                    )
-                if resp.status != 200:
-                    body = await resp.text()
-                    raise RuntimeError(
-                        f"{label} returned HTTP {resp.status}: {body[:500]}"
-                    )
-                async for raw in resp.content:
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[len("data:"):].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        obj = json.loads(data)
-                    except json.JSONDecodeError:
-                        logger.debug("Non-JSON SSE line: %r", data)
-                        continue
-                    choices = obj.get("choices") or []
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta") or {}
-                    content = delta.get("content")
-                    if isinstance(content, str) and content:
-                        text_parts.append(content)
-                    for tc in delta.get("tool_calls") or []:
-                        _merge_tool_call(tool_buffers, tc)
+            ) as resp,
+        ):
+            if resp.status == 429 or resp.status >= 500:
+                body = await resp.text()
+                raise _RetryableError(
+                    f"{label} returned HTTP {resp.status}: {body[:200]}",
+                    retry_after=_parse_retry_after(
+                        resp.headers.get("Retry-After"),
+                    ),
+                )
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(
+                    f"{label} returned HTTP {resp.status}: {body[:500]}"
+                )
+            async for raw in resp.content:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except json.JSONDecodeError:
+                    logger.debug("Non-JSON SSE line: %r", data)
+                    continue
+                choices = obj.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    text_parts.append(content)
+                for tc in delta.get("tool_calls") or []:
+                    _merge_tool_call(tool_buffers, tc)
     except (
         aiohttp.ClientConnectorError,
         aiohttp.ServerDisconnectedError,

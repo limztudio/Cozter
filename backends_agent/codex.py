@@ -4,8 +4,8 @@ import asyncio
 import logging
 
 from .base import (
-    AgentResult, Backend, ChatEvent, create_prompt_subprocess,
-    executable_command, set_error_result,
+    AgentResult, Backend, ChatEvent, append_text_result,
+    create_prompt_subprocess, executable_command, set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,8 +70,7 @@ class CodexBackend(Backend):
             if item_type == "agent_message":
                 text = item.get("text", "")
                 if text:
-                    result.text = text
-                    result.events.append(ChatEvent(kind="text", content=text))
+                    append_text_result(result, text)
 
             elif item_type == "command_execution":
                 cmd = item.get("command", "?")

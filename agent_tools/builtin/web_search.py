@@ -59,16 +59,18 @@ class WebSearchTool(AgentTool):
         )
 
         try:
-            async with aiohttp.ClientSession(
-                headers=HTTP_USER_AGENT_HEADERS,
-            ) as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession(
+                    headers=HTTP_USER_AGENT_HEADERS,
+                ) as session,
+                session.get(
                     search_url,
                     timeout=aiohttp.ClientTimeout(total=20),
-                ) as resp:
-                    if resp.status != 200:
-                        return f"Search failed: HTTP {resp.status}"
-                    body = await read_bounded_text(resp)
+                ) as resp,
+            ):
+                if resp.status != 200:
+                    return f"Search failed: HTTP {resp.status}"
+                body = await read_bounded_text(resp)
         except Exception as exc:
             return f"Search failed: {exc}"
 

@@ -22,7 +22,8 @@ import os
 import sys
 
 from .base import (
-    AgentResult, Backend, ChatEvent, executable_command, set_error_result,
+    AgentResult, Backend, ChatEvent, append_text_result, executable_command,
+    set_error_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -221,8 +222,7 @@ class CopilotBackend(Backend):
         # Fall through: treat as assistant text if it looks like one.
         text = self._assistant_text(event, etype)
         if text:
-            result.text = text
-            result.events.append(ChatEvent(kind="text", content=text))
+            append_text_result(result, text)
             return
 
         logger.debug("Copilot: unhandled event type=%r keys=%r",

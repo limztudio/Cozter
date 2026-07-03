@@ -14,6 +14,7 @@ adapters only deal with framework plumbing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -29,6 +30,7 @@ from .. import (
     workspace,
 )
 from ..utils import COZTER_DIR
+from ..utils import await_cancelled
 from ..utils import drain_queue as _drain_queue
 from ..utils import load_json_object
 from ..utils import save_json_object
@@ -222,6 +224,16 @@ class BotPlatform(ABC):
         with ANSI dim grey) should override.
         """
         await self.send_text(chat_id, text)
+
+    async def _send_text_best_effort(
+        self, chat_id: str, text: str, *, rich: bool = False,
+    ) -> bool:
+        """Send text and return whether it succeeded, swallowing I/O errors."""
+        try:
+            await self.send_text(chat_id, text, rich=rich)
+        except Exception:
+            return False
+        return True
 
     async def send_startup_messages(
         self, version: str, commit_date: str,
@@ -1409,10 +1421,7 @@ class BotPlatform(ABC):
     async def stop_scheduler(self) -> None:
         if self._scheduler_task and not self._scheduler_task.done():
             self._scheduler_task.cancel()
-            try:
-                await self._scheduler_task
-            except asyncio.CancelledError:
-                pass
+            await await_cancelled(self._scheduler_task)
         self._scheduler_task = None
 
     async def _scheduler_loop(self) -> None:
@@ -1517,13 +1526,10 @@ class BotPlatform(ABC):
         # queue sees "⏰ Scheduled: X" immediately followed by "Queue full
         # — dropped scheduled command: X", which is confusing.
         if q.full():
-            try:
-                await self.send_text(
-                    chat_id,
-                    f"Queue full — dropped scheduled command: {command}",
-                )
-            except Exception:
-                pass
+            await self._send_text_best_effort(
+                chat_id,
+                f"Queue full — dropped scheduled command: {command}",
+            )
             return
 
         try:
@@ -1675,10 +1681,7 @@ class BotPlatform(ABC):
             # tearing down and send_text can raise; that shouldn't
             # mask the fact that we handled the cancel cleanly.
             if uid not in self._cancel_acknowledged:
-                try:
-                    await ctx.reply_text("Cancelled.")
-                except Exception:
-                    pass
+                await self._send_text_best_effort(chat_id, "Cancelled.")
             return
         except Exception as e:
             # Error is user-facing; consume the entry so it doesn't
@@ -1688,10 +1691,7 @@ class BotPlatform(ABC):
             # stale entry for restart to replay.
             logger.exception("AI turn failed")
             await self._persist_complete(uid, entry_id)
-            try:
-                await ctx.reply_text(f"Error: {e}")
-            except Exception:
-                pass
+            await self._send_text_best_effort(chat_id, f"Error: {e}")
         else:
             await self._persist_complete(uid, entry_id)
         finally:
@@ -1777,23 +1777,19 @@ class BotPlatform(ABC):
                 # answer text arrives whole in the final reply, so skip it
                 # here to avoid printing it twice.
                 if ev.kind != "text":
-                    try:
+                    with contextlib.suppress(Exception):
                         await self.send_status(chat_id, status_lines[-1])
-                    except Exception:
-                        pass
                 return
             now = asyncio.get_running_loop().time()
             if now - last_edit < 1.5:
                 return
             last_edit = now
-            try:
+            with contextlib.suppress(Exception):
                 await self.edit_text(
                     thinking_handle,
                     self._compose_thinking_display(status_lines, latest_text),
                     rich=True,
                 )
-            except Exception:
-                pass
 
         try:
             result = await agent.run(
@@ -1806,12 +1802,10 @@ class BotPlatform(ABC):
             )
         finally:
             if thinking_handle is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await asyncio.shield(
                         self.delete_message(thinking_handle)
                     )
-                except Exception:
-                    pass
 
         # Only opt into the [[await]] pause for interactive turns —
         # ephemeral schedule turns (session_id is set) get their session
@@ -1900,13 +1894,10 @@ class BotPlatform(ABC):
                 logger.warning(
                     "Failed to send attachment %s: %s", abs_path, e,
                 )
-                try:
-                    await self.send_text(
-                        chat_id,
-                        f"Failed to attach {os.path.basename(abs_path)}: {e}",
-                    )
-                except Exception:
-                    pass
+                await self._send_text_best_effort(
+                    chat_id,
+                    f"Failed to attach {os.path.basename(abs_path)}: {e}",
+                )
 
         for ev in result.events:
             if ev.kind == "attachment":
@@ -1930,10 +1921,9 @@ class BotPlatform(ABC):
         if result.usage and config.get_show_usage():
             footer = agent.format_usage(result.usage)
             if footer:
-                try:
-                    await self.send_text(chat_id, footer, rich=True)
-                except Exception:
-                    pass
+                await self._send_text_best_effort(
+                    chat_id, footer, rich=True,
+                )
 
         if awaiting and uid is not None:
             self._awaiting_answer.add(uid)
@@ -2003,17 +1993,15 @@ class BotPlatform(ABC):
                 # (or, if /stop caused the cancel, cmd_stop already
                 # cleared the persistent queue).
                 if uid not in self._cancel_acknowledged:
-                    try:
-                        await self.send_text(msg_chat_id, "Cancelled.")
-                    except Exception:
-                        pass
+                    await self._send_text_best_effort(
+                        msg_chat_id, "Cancelled.",
+                    )
                 break
             except Exception as e:
                 logger.exception("Queued AI chat failed")
-                try:
-                    await self.send_text(msg_chat_id, f"Error: {e}")
-                except Exception:
-                    pass
+                await self._send_text_best_effort(
+                    msg_chat_id, f"Error: {e}",
+                )
                 await self._persist_complete(uid, entry_id)
             else:
                 await self._persist_complete(uid, entry_id)

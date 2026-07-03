@@ -1060,8 +1060,7 @@ class SignalBot(BotPlatform):
 def _safe_error_message(exc: BaseException) -> str:
     text = str(exc).strip() or exc.__class__.__name__
     text = re.sub(r"https://signal\.group/#[^\s]+", "<signal-group-url>", text)
-    text = re.sub(r"sgnl://[^\s]+", "<signal-group-url>", text)
-    return text
+    return re.sub(r"sgnl://[^\s]+", "<signal-group-url>", text)
 
 
 def _is_jsonrpc_transport_error(exc: BaseException) -> bool:
@@ -1445,8 +1444,7 @@ def _group_invite_urls(group: dict[str, Any]) -> list[str]:
         lowered_key = key_hint.casefold()
         text = value.strip()
         if (
-            text.startswith("https://signal.group/")
-            or text.startswith("sgnl://")
+            text.startswith(("https://signal.group/", "sgnl://"))
             or ("invite" in lowered_key and "signal.group" in text)
         ):
             urls.append(text)
