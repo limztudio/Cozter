@@ -1,19 +1,10 @@
-"""llama-server backend: in-process agent loop against an OpenAI-compatible HTTP API.
+"""llama-server backend: OpenAI-compatible in-process agent loop.
 
-Unlike codex/copilot/claude_code which delegate to a CLI subprocess,
-llama-server is just a chat-completion HTTP endpoint. To behave like an
-agent (file edits, shell, etc.) we have to run the tool-calling loop
-ourselves: send messages + tools, execute any tool_calls the model
-returns, append the results, and re-call until the model stops calling
-tools. The whole loop runs inside a fake asyncio.subprocess.Process so
-the existing orchestrator code in ``agent.py`` consumes events the same
-way it does for the CLI-backed agents.
-
-Tool definitions live in the top-level ``agent_tools/`` package (one
-file per tool, plus an :class:`AgentTool` base in
-``agent_tools/base.py``); that package is backend-agnostic and any
-chat-completion agent could drive it. This module owns the
-llama-server agent loop and HTTP plumbing only.
+llama-server is a local chat-completions endpoint with no auth. The whole
+tool-calling loop lives in :class:`OpenAIChatBackend`; this module only
+supplies llama's specifics - the local endpoint URL, dynamic model
+discovery from ``/v1/models``, and the per-loop limits from the
+``llama_*`` config knobs.
 
 Config: ``config.json``'s ``llama_server_url`` (default
 ``http://127.0.0.1:8080``). The server must speak OpenAI-compatible
@@ -22,48 +13,24 @@ Config: ``config.json``'s ``llama_server_url`` (default
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import random
 import urllib.request
-import uuid
-from typing import Any
 
-import aiohttp
-
-from .. import agent_tools as tools
 from .. import config as cfg
-from ._http_proc import HttpAgentProcess, http_error_translator
-from .base import (
-    AgentResult, Backend, ChatEvent, append_text_result, set_error_result,
-)
+from ._openai_agent import OpenAIChatBackend
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# LlamaBackend
-# ---------------------------------------------------------------------------
-
-
-class LlamaBackend(Backend):
+class LlamaBackend(OpenAIChatBackend):
     name = "llama"
     executable = "llama-server"  # only used in "not found" error text
-
-    # llama-server consumes the OpenAI-shape tools list directly, so
-    # plugins discovered in agent_tools/plugins/ become typed tool
-    # entries in TOOL_SCHEMA the same way the built-ins do. CLI backends
-    # leave this False and instead see plugins via cli_plugin_prelude().
-    supports_typed_plugins = True
 
     # The model list is populated dynamically from /v1/models on first
     # access. Stored as a tuple per the Backend contract.
     default_model = "auto"
     default_summary_model = "auto"
-    # llama-server / OpenAI Chat Completions support the standard
-    # 4-level effort vocabulary.
-    effort_levels = ("minimal", "low", "medium", "high")
 
     def __init__(self) -> None:
         self._cached_models: tuple[str, ...] | None = None
@@ -94,8 +61,8 @@ class LlamaBackend(Backend):
             return ("auto",)
 
     def health_check(self) -> tuple[bool, str]:
-        # llama is an HTTP endpoint, not a CLI: probe /v1/models instead
-        # of looking for a binary on PATH.
+        # llama is an HTTP endpoint, not a CLI: probe /v1/models instead of
+        # looking for a binary on PATH.
         url = cfg.get_llama_server_url().rstrip("/") + "/v1/models"
         try:
             with urllib.request.urlopen(url, timeout=2.0) as resp:
@@ -110,466 +77,24 @@ class LlamaBackend(Backend):
             return True, f"server up at {url} ({len(ids)} model(s))"
         return True, f"server up at {url} (no models listed)"
 
-    # ---- launch ---------------------------------------------------------
+    # ---- OpenAIChatBackend hooks ---------------------------------------
 
-    async def launch(  # type: ignore[override]
-        self,
-        workspace_path: str,
-        prompt: str,
-        model: str | None,
-        approval: str,
-        *,
-        compaction: bool = False,
-        effort: int = 0,
-    ) -> HttpAgentProcess:
-        proc = HttpAgentProcess("llama agent")
-        proc.start(self._run_agent(
-            proc, workspace_path, prompt, model, approval, compaction,
-            effort,
-        ))
-        return proc
+    def _chat_endpoint(self) -> str:
+        return cfg.get_llama_server_url().rstrip("/") + "/v1/chat/completions"
 
-    async def _run_agent(
-        self,
-        proc: HttpAgentProcess,
-        workspace_path: str,
-        prompt: str,
-        model: str | None,
-        approval: str,
-        compaction: bool,
-        effort: int,
-    ) -> None:
-        url = cfg.get_llama_server_url().rstrip("/")
-        # Per-AI-turn safety caps. Read fresh each turn so a config edit
-        # takes effect on the next message without a restart.
-        max_agent_turns = cfg.get_llama_max_agent_turns()
-        tool_repeat_limit = cfg.get_llama_tool_repeat_limit()
+    def _request_model(self, model: str | None) -> str | None:
         # ``model="auto"`` (our sentinel default) means "let the server
-        # decide" - drop the field from the request and llama-server uses
-        # whichever model it has loaded.
-        request_model: str | None = (
-            None if not model or model == "auto" else model
-        )
-        # Approval -> tool exposure (see _tools_for_approval):
-        #   * deny / compaction -> no tools (chat only)
-        #   * confirm -> read-only tools only (look-but-don't-touch)
-        #   * auto / full -> all tools
-        tools_schema = _tools_for_approval(approval, compaction)
-        enabled_tool_names = tuple(
-            entry["function"]["name"] for entry in tools_schema
-        ) if tools_schema else ()
+        # decide": drop the field and llama-server uses its loaded model.
+        return None if not model or model == "auto" else model
 
-        # Translate the 0-100 effort into llama's native vocabulary;
-        # an empty result means "do not send the reasoning_effort field".
-        reasoning_effort = self.convert_effort(effort) or ""
+    def _max_agent_turns(self) -> int:
+        return cfg.get_llama_max_agent_turns()
 
-        # Llama-server is stateless, so the model has no idea what cwd it
-        # is operating against unless we tell it. Codex/copilot/claude_code
-        # learn the workspace via their CLI's --add-dir / -C / cwd flag;
-        # llama needs it in the prompt. Refreshed every turn so /new,
-        # /open, and a bot restart automatically propagate.
-        messages: list[dict] = [
-            {
-                "role": "system",
-                "content": _system_prompt(workspace_path, enabled_tool_names),
-            },
-            {"role": "user", "content": prompt},
-        ]
-        tool_repeat_counts: dict[str, int] = {}
+    def _tool_repeat_limit(self) -> int:
+        return cfg.get_llama_tool_repeat_limit()
 
-        for _ in range(max_agent_turns):
-            payload = _completion_payload(
-                messages, request_model, reasoning_effort, tools_schema,
-            )
-            if tools_schema is not None:
-                payload["tool_choice"] = "auto"
+    def _socket_timeout(self) -> int:
+        return cfg.get_llama_socket_timeout()
 
-            assistant_text, tool_calls = await _stream_completion(
-                url, payload,
-            )
-
-            # OpenAI spec: when ``tool_calls`` is present, ``content``
-            # should be null (not ""). Some strict servers (notably
-            # llama-server in some builds) reject empty-string content
-            # alongside tool_calls.
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": assistant_text if assistant_text else None,
-            }
-            if tool_calls:
-                assistant_msg["tool_calls"] = tool_calls
-            messages.append(assistant_msg)
-
-            # Surface this turn's commentary even if more tool calls
-            # follow; otherwise the user would only see whatever the
-            # model says in the FINAL turn, losing explanations like
-            # "Let me check that file" that come before tool calls.
-            if assistant_text:
-                proc.emit({
-                    "type": "assistant_text",
-                    "text": assistant_text,
-                })
-
-            if not tool_calls:
-                return
-
-            # Execute each requested tool and append the result. ``approval``
-            # is passed through to execute_tool, which enforces the
-            # confirm-mode read-only gate as a backstop even if the model
-            # asks for a state-changing tool it wasn't offered.
-            for call in tool_calls:
-                name, args = tools.parse_openai_call(call)
-                sig = tools.tool_signature(name, args)
-                tool_repeat_counts[sig] = tool_repeat_counts.get(sig, 0) + 1
-
-                if tool_repeat_counts[sig] > tool_repeat_limit:
-                    result = (
-                        f"Skipped repeated tool call: {name}. "
-                        f"The same tool call was requested more than "
-                        f"{tool_repeat_limit} times. Stop repeating this "
-                        "call and produce the final answer using the "
-                        "information already available."
-                    )
-                    proc.emit({
-                        "type": "tool_result",
-                        "name": name,
-                        "output": result,
-                    })
-                else:
-                    result = await tools.execute_tool(
-                        name, args, workspace_path, approval, proc.emit,
-                    )
-
-                # Include ``name`` alongside tool_call_id; strict
-                # llama-server builds reject tool messages without it.
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call.get("id", ""),
-                    "name": name,
-                    "content": result,
-                })
-
-        # If we fall out of the loop, force one final no-tools response
-        # instead of returning only an error.
-        messages.append({
-            "role": "user",
-            "content": (
-                "You have reached the tool-call limit. Do not call any more"
-                " tools. Based only on the information already collected,"
-                " provide the final answer now. If something is incomplete,"
-                " clearly say what is missing."
-            ),
-        })
-
-        payload = _completion_payload(
-            messages, request_model, reasoning_effort,
-        )
-
-        assistant_text, _ = await _stream_completion(url, payload)
-
-        if assistant_text:
-            proc.emit({
-                "type": "assistant_text",
-                "text": assistant_text,
-            })
-        else:
-            proc.emit({
-                "type": "error",
-                "message": (
-                    f"llama agent exceeded {max_agent_turns} tool-call"
-                    " turns and failed to produce a final answer."
-                ),
-            })
-
-    # ---- event parsing --------------------------------------------------
-
-    def parse_event(self, event: dict, result: AgentResult) -> None:
-        etype = event.get("type", "")
-
-        if etype == "assistant_text":
-            text = event.get("text") or ""
-            if text:
-                # Last text wins for result.text (matches codex/copilot).
-                append_text_result(result, text)
-            return
-
-        if etype == "tool_use":
-            tool = event.get("name", "?")
-            inp = event.get("input") or {}
-            content = tools.summarize_tool_use(tool, inp)
-            result.events.append(ChatEvent(kind="tool", content=content))
-            if event.get("file_action"):
-                # write/edit/delete - also surface as kind="file" so the
-                # status display routes it through the file UX.
-                path = inp.get("path", "?")
-                action = event["file_action"]
-                result.events.append(ChatEvent(
-                    kind="file",
-                    content=f"📄 {action}: {path}",
-                ))
-            return
-
-        if etype == "tool_result":
-            # Already covered by the preceding tool_use event in the
-            # status display; suppress duplicate noise.
-            return
-
-        if etype == "error":
-            msg = event.get("message") or "Unknown error"
-            set_error_result(result, msg)
-            return
-
-        logger.debug("Llama: unhandled event %r", event)
-
-    def extract_agent_text(self, event: dict) -> str | None:
-        if event.get("type") == "assistant_text":
-            text = event.get("text")
-            if isinstance(text, str) and text:
-                return text
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Streaming chat-completions client
-# ---------------------------------------------------------------------------
-
-
-def _completion_payload(
-    messages: list[dict],
-    request_model: str | None,
-    reasoning_effort: str,
-    tools_schema: list[dict] | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "messages": messages,
-        "stream": True,
-    }
-    if request_model is not None:
-        payload["model"] = request_model
-    if reasoning_effort:
-        payload["reasoning_effort"] = reasoning_effort
-    if tools_schema is not None:
-        payload["tools"] = tools_schema
-    return payload
-
-
-class _RetryableError(RuntimeError):
-    """A transient llama failure worth retrying (network / 429 / 5xx)."""
-
-    def __init__(
-        self, message: str, *, retry_after: float | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.retry_after = retry_after
-
-
-def _backoff_delay(
-    attempt: int, retry_after: float | None = None,
-    *, base: float = 0.5, cap: float = 10.0,
-) -> float:
-    """Seconds to wait before retry *attempt* (1-based); honors Retry-After."""
-    if retry_after is not None:
-        return min(max(retry_after, 0.0), cap)
-    delay = min(base * (2 ** (attempt - 1)), cap)
-    return delay + random.uniform(0.0, delay * 0.25)
-
-
-def _parse_retry_after(value: str | None) -> float | None:
-    """Parse a Retry-After header (delta-seconds form); ignore HTTP dates."""
-    if not value:
-        return None
-    try:
-        return max(float(value), 0.0)
-    except (TypeError, ValueError):
-        return None
-
-
-async def _stream_completion(
-    base_url: str, payload: dict,
-) -> tuple[str, list[dict]]:
-    """POST /v1/chat/completions (streaming); retry transient failures.
-
-    Returns ``(text, tool_calls)``. Connection drops, read timeouts, and
-    HTTP 429/5xx are retried with exponential backoff up to
-    ``config.llama_max_retries`` times - retrying a completion is safe
-    because tool side effects only run *after* this returns. A bad status
-    or malformed response is not retried.
-    """
-    endpoint = base_url + "/v1/chat/completions"
-    sock_read = cfg.get_llama_socket_timeout()
-    max_retries = cfg.get_llama_max_retries()
-    label = f"llama-server at {base_url}"
-
-    async with http_error_translator(label, sock_read):
-        attempt = 0
-        while True:
-            try:
-                return await _stream_once(endpoint, payload, sock_read, label)
-            except _RetryableError as exc:
-                attempt += 1
-                if attempt > max_retries:
-                    raise
-                delay = _backoff_delay(attempt, exc.retry_after)
-                logger.warning(
-                    "%s transient failure (attempt %d/%d): %s;"
-                    " retrying in %.1fs",
-                    label, attempt, max_retries, exc, delay,
-                )
-                await asyncio.sleep(delay)
-
-
-async def _stream_once(
-    endpoint: str, payload: dict, sock_read: int, label: str,
-) -> tuple[str, list[dict]]:
-    """One streaming attempt; raise _RetryableError for transient failures.
-
-    Parses Server-Sent Events. ``data:`` lines carry JSON deltas;
-    ``data: [DONE]`` terminates the stream.
-    """
-    text_parts: list[str] = []
-    # Tool calls arrive in pieces: we accumulate by index because the
-    # OpenAI streaming protocol fragments name/arguments across deltas.
-    tool_buffers: dict[int, dict[str, Any]] = {}
-
-    try:
-        async with (
-            aiohttp.ClientSession() as session,
-            session.post(
-                endpoint, json=payload,
-                timeout=aiohttp.ClientTimeout(
-                    total=None, sock_read=sock_read,
-                ),
-            ) as resp,
-        ):
-            if resp.status == 429 or resp.status >= 500:
-                body = await resp.text()
-                raise _RetryableError(
-                    f"{label} returned HTTP {resp.status}: {body[:200]}",
-                    retry_after=_parse_retry_after(
-                        resp.headers.get("Retry-After"),
-                    ),
-                )
-            if resp.status != 200:
-                body = await resp.text()
-                raise RuntimeError(
-                    f"{label} returned HTTP {resp.status}: {body[:500]}"
-                )
-            async for raw in resp.content:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:"):].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    obj = json.loads(data)
-                except json.JSONDecodeError:
-                    logger.debug("Non-JSON SSE line: %r", data)
-                    continue
-                choices = obj.get("choices") or []
-                if not choices:
-                    continue
-                delta = choices[0].get("delta") or {}
-                content = delta.get("content")
-                if isinstance(content, str) and content:
-                    text_parts.append(content)
-                for tc in delta.get("tool_calls") or []:
-                    _merge_tool_call(tool_buffers, tc)
-    except (
-        aiohttp.ClientConnectorError,
-        aiohttp.ServerDisconnectedError,
-        aiohttp.ClientPayloadError,
-        TimeoutError,
-    ) as exc:
-        raise _RetryableError(f"{label}: {exc}") from exc
-
-    # Normalize tool_buffers into the OpenAI tool_calls list shape.
-    tool_calls = [
-        tool_buffers[idx] for idx in sorted(tool_buffers.keys())
-        if tool_buffers[idx].get("function", {}).get("name")
-    ]
-    return "".join(text_parts), tool_calls
-
-
-def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
-    """Fold a single streaming tool_call delta into the index'd buffer."""
-    idx = delta.get("index", 0)
-    # Pre-seed with a synthetic id so we always have something to put in
-    # the tool-result message's tool_call_id field; some OpenAI-compatible
-    # servers reject empty tool_call_ids. The server-provided id below
-    # overrides this if present.
-    buf = buffers.setdefault(idx, {
-        "id": f"call_{idx}_{uuid.uuid4().hex[:8]}",
-        "type": "function",
-        "function": {"name": "", "arguments": ""},
-    })
-    if "id" in delta and delta["id"]:
-        buf["id"] = delta["id"]
-    fn = delta.get("function") or {}
-    if "name" in fn and fn["name"]:
-        buf["function"]["name"] = fn["name"]
-    if "arguments" in fn and fn["arguments"] is not None:
-        # Arguments stream in as JSON-string fragments; concatenate.
-        buf["function"]["arguments"] += fn["arguments"]
-
-
-# ---------------------------------------------------------------------------
-# System prompt
-# ---------------------------------------------------------------------------
-
-
-def _tools_for_approval(
-    approval: str, compaction: bool,
-) -> list[dict] | None:
-    """Tool schema exposed to the model for this turn, by permission.
-
-    - deny / compaction: no tools (chat only).
-    - confirm: read-only tools only. A chat bot can't prompt per tool
-      call, so confirm becomes a look-but-don't-touch surface;
-      ``execute_tool`` also blocks state-changing tools as a backstop. Use
-      /style collaborative for ask-before-acting on state changes.
-    - auto / full: the full tool set.
-    """
-    if compaction or approval == "deny":
-        return None
-    if approval == "confirm":
-        return tools.READ_ONLY_TOOL_SCHEMA or None
-    return tools.TOOL_SCHEMA
-
-
-def _system_prompt(
-    workspace_path: str, tool_names: tuple[str, ...],
-) -> str:
-    """Build the per-turn system message.
-
-    Embeds the current workspace path so the model is aware of where it
-    is operating; lists the exact tools available this turn (which may be
-    a read-only subset under the confirm permission) so the model doesn't
-    try to call tools that aren't exposed. Rebuilt on every turn, so any
-    workspace switch is automatically reflected.
-    """
-    parts = [
-        "You are a coding assistant running inside Cozter.",
-        f"Current workspace: {workspace_path}",
-    ]
-    if tool_names:
-        parts.append(
-            f"Available tools: {', '.join(tool_names)}."
-            " File, shell, and discovery tools run inside this"
-            " workspace. Paths may be relative to the workspace root"
-            " or absolute inside it. Use list_dir/glob/grep to explore"
-            " the workspace before reading or editing files; prefer"
-            " specific patterns like '**/*.py' over '**/*' to avoid"
-            " noise from .git, node_modules, etc. For large files,"
-            " pass *offset* and *limit* to read_file. Web tools use"
-            " this client's internet connection - web_search to find"
-            " pages, then web_fetch to read specific URLs. Do not"
-            " repeat the same tool call. Once you have enough"
-            " information, stop using tools and provide the final"
-            " answer."
-        )
-    else:
-        parts.append(
-            "No tools are available this turn - respond in plain text."
-        )
-    return "\n".join(parts)
+    def _max_retries(self) -> int:
+        return cfg.get_llama_max_retries()
