@@ -300,8 +300,8 @@ and that user's queued work pauses until the next message arrives.
 
 The built-in HTTP-toolkit includes filesystem, shell, search, and fetch
 tools: `bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`,
-`delete_file`, `copy_file`, `move_file`, `make_dir`, `list_dir`, `glob`,
-`grep`, `web_search`, and `web_fetch`.
+`delete_file`, `copy_file`, `move_file`, `make_dir`, `list_dir`, `tree`,
+`glob`, `grep`, `web_search`, and `web_fetch`.
 
 Drop a `.py` file into `agent_tools/plugins/` and every agent picks it up
 on next restart. Files whose names start with `_` are skipped, which is

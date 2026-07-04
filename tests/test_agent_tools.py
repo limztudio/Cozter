@@ -15,6 +15,7 @@ from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin.grep import GrepTool
 from Cozter.agent_tools.builtin.multi_edit import MultiEditTool
+from Cozter.agent_tools.builtin.tree import TreeTool
 
 
 class AgentToolHelperTests(unittest.TestCase):
@@ -36,6 +37,10 @@ class AgentToolHelperTests(unittest.TestCase):
         self.assertEqual(
             validate_replacement_strings("", "new"),
             "'old_string' must not be empty",
+        )
+        self.assertEqual(
+            validate_replacement_strings("same", "same"),
+            "old_string and new_string are identical; nothing to change",
         )
         self.assertEqual(
             apply_string_replacement(
@@ -231,6 +236,65 @@ class ConfirmPermissionGateTests(unittest.TestCase):
         self.assertIn("read_file", names)
         self.assertNotIn("write_file", names)
         self.assertNotIn("bash", names)
+
+
+class ParseOpenAICallTests(unittest.TestCase):
+    def test_string_arguments(self) -> None:
+        name, args = agent_tools.parse_openai_call(
+            {"function": {"name": "read_file",
+                          "arguments": '{"path": "a.py"}'}},
+        )
+        self.assertEqual(name, "read_file")
+        self.assertEqual(args, {"path": "a.py"})
+
+    def test_dict_arguments_are_accepted(self) -> None:
+        # GLM / Z.ai and some local runtimes return an already-parsed
+        # object instead of a JSON string; it must not crash.
+        _, args = agent_tools.parse_openai_call(
+            {"function": {"name": "x", "arguments": {"path": "b.py"}}},
+        )
+        self.assertEqual(args, {"path": "b.py"})
+
+    def test_missing_or_bad_arguments_yield_empty(self) -> None:
+        for raw in (None, "", "not json", "[1, 2]"):
+            _, args = agent_tools.parse_openai_call(
+                {"function": {"name": "x", "arguments": raw}},
+            )
+            self.assertEqual(args, {}, f"raw={raw!r}")
+
+
+class TreeToolTests(unittest.TestCase):
+    @staticmethod
+    def _touch(path: str) -> None:
+        with open(path, "w", encoding="utf-8"):
+            pass
+
+    def test_tree_shows_structure_and_skips_noise(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.makedirs(os.path.join(tmp, "src", "pkg"))
+                os.makedirs(os.path.join(tmp, ".git", "objects"))
+                self._touch(os.path.join(tmp, "README.md"))
+                self._touch(os.path.join(tmp, "src", "main.py"))
+                self._touch(os.path.join(tmp, "src", "pkg", "util.py"))
+                out = await TreeTool().run(tmp, {})
+                for marker in ("src/", "main.py", "pkg/", "util.py",
+                               "README.md"):
+                    self.assertIn(marker, out)
+                self.assertNotIn(".git", out)  # noise dir skipped
+
+        asyncio.run(run())
+
+    def test_tree_depth_limits_recursion(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.makedirs(os.path.join(tmp, "a", "b", "c"))
+                self._touch(os.path.join(tmp, "a", "b", "c", "deep.py"))
+                out = await TreeTool().run(tmp, {"depth": 1})
+                self.assertIn("a/", out)
+                self.assertNotIn("deep.py", out)  # beyond depth 1
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":

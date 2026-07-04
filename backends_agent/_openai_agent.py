@@ -458,9 +458,14 @@ def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
     fn = delta.get("function") or {}
     if "name" in fn and fn["name"]:
         buf["function"]["name"] = fn["name"]
-    if "arguments" in fn and fn["arguments"] is not None:
+    args_frag = fn.get("arguments")
+    if isinstance(args_frag, str):
         # Arguments stream in as JSON-string fragments; concatenate.
-        buf["function"]["arguments"] += fn["arguments"]
+        buf["function"]["arguments"] += args_frag
+    elif isinstance(args_frag, dict):
+        # Some servers (GLM / Z.ai, some local runtimes) send the whole
+        # arguments object in one delta instead of string fragments.
+        buf["function"]["arguments"] = json.dumps(args_frag)
 
 
 # ---------------------------------------------------------------------------

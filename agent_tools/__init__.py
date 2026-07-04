@@ -120,6 +120,7 @@ TOOL_NAMES: tuple[str, ...] = tuple(t.name for t in _TOOLS)
 READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
     "read_file",
     "list_dir",
+    "tree",
     "glob",
     "grep",
     "web_search",
@@ -152,10 +153,18 @@ def parse_openai_call(call: dict) -> tuple[str, dict]:
     """
     fn = call.get("function") or {}
     name = fn.get("name", "")
-    raw = fn.get("arguments") or "{}"
-    try:
-        args = json.loads(raw)
-    except json.JSONDecodeError:
+    raw = fn.get("arguments")
+    # Per the OpenAI spec, ``arguments`` is a JSON-encoded string, but some
+    # servers (GLM / Z.ai and various local runtimes) return an already
+    # parsed object. Accept both; anything else -> no args.
+    if isinstance(raw, dict):
+        args = raw
+    elif isinstance(raw, str) and raw.strip():
+        try:
+            args = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+    else:
         args = {}
     if not isinstance(args, dict):
         args = {}

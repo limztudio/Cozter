@@ -377,6 +377,8 @@ def validate_replacement_strings(
         return "old_string and new_string must be strings"
     if old == "":
         return "'old_string' must not be empty"
+    if old == new:
+        return "old_string and new_string are identical; nothing to change"
     return old, new
 
 
