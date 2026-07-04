@@ -1,11 +1,11 @@
 # Cozter
 
 A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot)
-and a local llama-server HTTP backend, exposing them through Telegram,
-Slack, Signal, or a plain terminal. One bot process, multiple workspaces,
-per-workspace settings, durable sessions with automatic compaction,
-persistent turn queues, file attachments, and a drop-in plugin system
-that works across every backend.
+and OpenAI-compatible HTTP backends (local llama-server and Z.ai), exposing
+them through Telegram, Slack, Signal, or a plain terminal. One bot process,
+multiple workspaces, per-workspace settings, durable sessions with
+automatic compaction, persistent turn queues, file attachments, and a
+drop-in plugin system that works across every backend.
 
 ## What it gives you
 
@@ -78,9 +78,9 @@ starts.
 ## Requirements
 
 - Python 3.10+ (the codebase uses modern type syntax)
-- One agent backend CLI or server:
-  `codex`, `claude`, `copilot`, or an OpenAI-compatible HTTP server for
-  the `llama` backend
+- One agent backend CLI, server, or API key:
+  `codex`, `claude`, `copilot`, an OpenAI-compatible HTTP server for the
+  `llama` backend, or Z.ai credentials for the `zai` backend
 - Python package dependencies from `requirements.txt`:
   `python-telegram-bot`, `httpx`, `slack-bolt`, and `aiohttp`. The
   launcher installs them into the project-local `.venv` before importing
@@ -236,7 +236,7 @@ All chat surfaces speak the same command set:
 |---|---|
 | `/new` | Prompt for a new workspace directory, create it, and select it |
 | `/open [path-or-number]` | Switch to an existing workspace |
-| `/agent` | Pick the agent backend (codex / claude_code / copilot / llama) |
+| `/agent` | Pick the agent backend (codex / claude_code / copilot / llama / zai) |
 | `/model` | Pick the chat model for the current backend |
 | `/summaryagent` | Pick the backend used for compaction / titling / routing |
 | `/summarymodel` | Pick the model for the summary backend |
@@ -254,7 +254,7 @@ All chat surfaces speak the same command set:
 | `/reserve` | Create a recurring scheduled prompt |
 | `/schedules` | List schedules and delete one by number |
 | `/version` | Show the current git version and last commit date |
-| `/doctor` | Check each backend's readiness (CLI on PATH / llama server reachable) |
+| `/doctor` | Check each backend's readiness (CLI on PATH / HTTP backend configured or reachable) |
 | `/cancel` | Cancel a picker/wizard, pending answer, running turn, or queued work |
 | `/start` | Confirm the bot is running |
 
@@ -308,9 +308,9 @@ on next restart. Files whose names start with `_` are skipped, which is
 useful for disabled examples or local scratch tools. One file, two
 invocation paths:
 
-- **HTTP backends** (`llama` and any future API backend) see plugins
+- **HTTP backends** (`llama`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
-  the 14 built-in tools in `agent_tools/builtin/`
+  the 16 built-in tools in `agent_tools/builtin/`
 - **CLI backends** (`codex`, `claude_code`, `copilot`) can't have
   external tools injected into their fixed toolkit. The bot
   instead lists each plugin in their prompt and tells the model to
@@ -429,8 +429,8 @@ workspace:
   question and ends with `[[await]]`, pausing the queue until you reply.
   Small, reversible choices are made without asking. This is a
   backend-agnostic prompt policy, so it steers every backend (codex,
-  copilot, claude_code, llama) the same way — not just the CLIs that ask
-  on their own.
+  copilot, claude_code, llama, zai) the same way — not just the CLIs that
+  ask on their own.
 - `autonomous` — the agent decides and proceeds without asking, closer to
   a full-auto run.
 
@@ -467,11 +467,13 @@ Cozter/
 │   ├── claude_code.py      wraps `claude --print`
 │   ├── copilot.py          wraps `copilot`
 │   ├── _http_proc.py       process-like adapter and error handling for HTTP backends
-│   └── llama.py            in-process loop against OpenAI-compatible /v1/chat/completions
+│   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop
+│   ├── llama.py            local /v1/chat/completions backend hooks
+│   └── zai.py              Z.ai /api/paas/v4/chat/completions backend hooks
 │
 └── agent_tools/          tool surface for HTTP backends + plugin registry
     ├── base.py             AgentTool ABC; run_as_script; resolve_inside_workspace; html_to_text
-    ├── builtin/            14 built-in tools (read_file, edit_file, glob, grep, bash, web_search, ...)
+    ├── builtin/            16 built-in tools (read_file, edit_file, glob, grep, bash, web_search, ...)
     └── plugins/            user drop-in zone (current_time.py shipped as a live plugin)
 ```
 
@@ -490,9 +492,10 @@ ignored for local secrets and runtime queues.
 - Chat-platform adapters: `backends_bot/base.py`, `cli.py`,
   `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/base.py`, `_http_proc.py`,
-  `codex.py`, `claude_code.py`, `copilot.py`, and `llama.py`
+  `_openai_agent.py`, `codex.py`, `claude_code.py`, `copilot.py`,
+  `llama.py`, and `zai.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
-  the 14 files under `agent_tools/builtin/`, and user plugins plus their
+  the 16 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
 - Project metadata, CI, and docs: `requirements.txt`, `mypy.ini`,
   `.github/workflows/ci.yml`, `.config/config.example.json`,
@@ -510,13 +513,14 @@ machine state unless a file is deliberately being promoted into tracked
 source.
 
 The agent loop in `agent.py:run()` is shared across backends. Each
-`Backend.launch()` spawns the right subprocess (or the in-process llama
-session); the orchestrator reads JSONL events from stdout, translates
-them via `Backend.parse_event()` into `ChatEvent`s, and streams a
-"Thinking..." status message that updates in place with the latest few
-tool actions and a live preview of the answer text as it arrives. On chat
-surfaces without editable messages (the CLI), tool progress is emitted as
-separate status lines and the full answer arrives at the end.
+`Backend.launch()` spawns the right subprocess or starts an in-process
+OpenAI-compatible HTTP session; the orchestrator reads JSONL events from
+stdout, translates them via `Backend.parse_event()` into `ChatEvent`s,
+and streams a "Thinking..." status message that updates in place with the
+latest few tool actions and a live preview of the answer text as it
+arrives. On chat surfaces without editable messages (the CLI), tool
+progress is emitted as separate status lines and the full answer arrives
+at the end.
 
 ## Repository state
 
@@ -579,9 +583,11 @@ are:
 
 1. `__main__.py` → `backends_bot/base.py` to see how a turn enters the system
 2. `agent.py:run()` to see the orchestrator
-3. `backends_agent/llama.py` for the full HTTP agent loop including
-   the tool dispatcher
-4. `agent_tools/__init__.py` for the auto-discovery and plugin
+3. `backends_agent/_openai_agent.py` for the full HTTP agent loop and
+   tool dispatcher
+4. `backends_agent/llama.py` and `backends_agent/zai.py` for concrete
+   HTTP backend hooks
+5. `agent_tools/__init__.py` for the auto-discovery and plugin
    bridging
 
 The CLI-backend files (`codex.py`, `claude_code.py`, `copilot.py`) are
