@@ -133,19 +133,19 @@ async def iter_json_events(
 ) -> AsyncIterator[dict]:
     """Yield non-empty JSON objects from a line-oriented byte stream."""
     async for line in iter_stream_lines(stream):
-        line = line.strip()
-        if not line:
+        stripped = line.strip()
+        if not stripped:
             continue
         try:
-            event = json.loads(line)
+            event = json.loads(stripped)
         except json.JSONDecodeError:
             if on_invalid:
-                on_invalid(line)
+                on_invalid(stripped)
             continue
         if isinstance(event, dict):
             yield event
         elif on_invalid:
-            on_invalid(line)
+            on_invalid(stripped)
 
 
 async def drain_text_stream(

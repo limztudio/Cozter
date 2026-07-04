@@ -33,6 +33,7 @@ from .base import (
     NO_WORKSPACE_TEXT,
     ensure_upload_dir,
 )
+from .formatting import render_fenced_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -69,51 +70,33 @@ def _md_to_mrkdwn(text: str) -> str:
       - Strikethrough is single ``~`` (not ``~~``).
       - Code blocks use triple backticks (same as input).
     """
-    lines = text.split("\n")
-    result: list[str] = []
-    in_code_block = False
-    code_buf: list[str] = []
+    return render_fenced_markdown(
+        text,
+        render_line=_mrkdwn_line,
+        render_code_block=_mrkdwn_code_block,
+    )
 
-    for line in lines:
-        if line.strip().startswith("```"):
-            if in_code_block:
-                # Emit the accumulated block as-is, escaped for safety.
-                result.append("```")
-                result.extend(_escape_mrkdwn(x) for x in code_buf)
-                result.append("```")
-                code_buf.clear()
-                in_code_block = False
-            else:
-                in_code_block = True
-            continue
 
-        if in_code_block:
-            code_buf.append(line)
-            continue
+def _mrkdwn_line(line: str) -> str:
+    line = _escape_mrkdwn(line)
+    # Bold first, into placeholders, so the single-asterisk italic
+    # regex below can't mis-match the `*bold*` we're about to emit.
+    # Headers -> bold (Slack has no heading syntax).
+    line = re.sub(r"^#{1,6}\s+(.+)$", _bold_sub, line)
+    line = re.sub(r"\*\*(.+?)\*\*", _bold_sub, line)
+    line = re.sub(r"__(.+?)__", _bold_sub, line)
+    # Italic: single `*text*` -> `_text_`; leave `_text_` as-is since
+    # that's already valid mrkdwn.
+    line = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"_\1_", line)
+    # Strikethrough: `~~text~~` -> `~text~`.
+    line = re.sub(r"~~(.+?)~~", r"~\1~", line)
+    # Swap bold placeholders back to Slack's single-asterisk bold.
+    return line.replace(_BOLD_OPEN, "*").replace(_BOLD_CLOSE, "*")
 
-        line = _escape_mrkdwn(line)
-        # Bold first, into placeholders, so the single-asterisk italic
-        # regex below can't mis-match the `*bold*` we're about to emit.
-        # Headers -> bold (Slack has no heading syntax).
-        line = re.sub(r"^#{1,6}\s+(.+)$", _bold_sub, line)
-        line = re.sub(r"\*\*(.+?)\*\*", _bold_sub, line)
-        line = re.sub(r"__(.+?)__", _bold_sub, line)
-        # Italic: single `*text*` → `_text_`; leave `_text_` as-is since
-        # that's already valid mrkdwn.
-        line = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"_\1_", line)
-        # Strikethrough: `~~text~~` → `~text~`.
-        line = re.sub(r"~~(.+?)~~", r"~\1~", line)
-        # Swap bold placeholders back to Slack's single-asterisk bold.
-        line = line.replace(_BOLD_OPEN, "*").replace(_BOLD_CLOSE, "*")
-        # Inline code stays as `text`.
-        result.append(line)
 
-    if in_code_block and code_buf:
-        result.append("```")
-        result.extend(_escape_mrkdwn(x) for x in code_buf)
-        result.append("```")
-
-    return "\n".join(result)
+def _mrkdwn_code_block(lines: list[str]) -> list[str]:
+    # Emit the accumulated block as-is, escaped for safety.
+    return ["```", *(_escape_mrkdwn(line) for line in lines), "```"]
 
 
 _SLACK_MAX_CHARS = 39_000  # Slack hard-caps around 40K; stay under.

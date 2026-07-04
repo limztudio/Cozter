@@ -94,7 +94,7 @@ def _strip_git_prefix(path: str) -> str:
 
 
 def _header_path(raw: str) -> str | None:
-    raw = raw.split("\t")[0].strip()
+    raw = raw.split("\t", 1)[0].strip()
     return None if raw == "/dev/null" else _strip_git_prefix(raw)
 
 

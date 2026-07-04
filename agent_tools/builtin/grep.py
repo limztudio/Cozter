@@ -103,9 +103,12 @@ class GrepTool(AgentTool):
                 content = raw.decode("utf-8", errors="replace")
                 for lineno, line in enumerate(content.splitlines(), 1):
                     if regex.search(line):
+                        display_line = line
                         if len(line) > _GREP_MAX_LINE_CHARS:
-                            line = line[:_GREP_MAX_LINE_CHARS] + "..."
-                        results.append(f"{rel}:{lineno}: {line}")
+                            display_line = (
+                                line[:_GREP_MAX_LINE_CHARS] + "..."
+                            )
+                        results.append(f"{rel}:{lineno}: {display_line}")
                         if len(results) >= max_results:
                             break
                 if len(results) >= max_results:

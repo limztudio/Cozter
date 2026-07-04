@@ -28,6 +28,7 @@ from .base import (
     NO_WORKSPACE_TEXT,
     ensure_upload_dir,
 )
+from .formatting import render_fenced_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -47,41 +48,27 @@ def _escape_html(text: str) -> str:
 
 def _md_to_html(text: str) -> str:
     """Convert common Markdown to Telegram-compatible HTML."""
-    lines = text.split("\n")
-    result: list[str] = []
-    in_code_block = False
-    code_buf: list[str] = []
+    return render_fenced_markdown(
+        text,
+        render_line=_html_line,
+        render_code_block=_html_code_block,
+    )
 
-    for line in lines:
-        if line.strip().startswith("```"):
-            if in_code_block:
-                escaped = _escape_html("\n".join(code_buf))
-                result.append(f"<pre>{escaped}</pre>")
-                code_buf.clear()
-                in_code_block = False
-            else:
-                in_code_block = True
-            continue
 
-        if in_code_block:
-            code_buf.append(line)
-            continue
+def _html_line(line: str) -> str:
+    line = _escape_html(line)
+    line = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", line)
+    line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
+    line = re.sub(r"__(.+?)__", r"<b>\1</b>", line)
+    line = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", line)
+    line = re.sub(r"(?<!\w)_([^_]+?)_(?!\w)", r"<i>\1</i>", line)
+    line = re.sub(r"`([^`]+?)`", r"<code>\1</code>", line)
+    return re.sub(r"~~(.+?)~~", r"<s>\1</s>", line)
 
-        line = _escape_html(line)
-        line = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", line)
-        line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
-        line = re.sub(r"__(.+?)__", r"<b>\1</b>", line)
-        line = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", line)
-        line = re.sub(r"(?<!\w)_([^_]+?)_(?!\w)", r"<i>\1</i>", line)
-        line = re.sub(r"`([^`]+?)`", r"<code>\1</code>", line)
-        line = re.sub(r"~~(.+?)~~", r"<s>\1</s>", line)
-        result.append(line)
 
-    if in_code_block and code_buf:
-        escaped = _escape_html("\n".join(code_buf))
-        result.append(f"<pre>{escaped}</pre>")
-
-    return "\n".join(result)
+def _html_code_block(lines: list[str]) -> list[str]:
+    escaped = _escape_html("\n".join(lines))
+    return [f"<pre>{escaped}</pre>"]
 
 
 # ---------------------------------------------------------------------------

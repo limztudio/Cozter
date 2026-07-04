@@ -85,12 +85,15 @@ class TreeTool(AgentTool):
             if is_dir and entry.name in DISCOVERY_SKIP_DIRS:
                 continue
             lines.append(f"{indent}{entry.name}{'/' if is_dir else ''}")
-            if is_dir and level + 1 < max_depth:
-                if self._walk(
+            if (
+                is_dir
+                and level + 1 < max_depth
+                and self._walk(
                     entry.path, level + 1, max_depth,
                     indent + "  ", lines, max_entries,
-                ):
-                    return True
+                )
+            ):
+                return True
         return False
 
     def summarize(self, args: dict) -> str:

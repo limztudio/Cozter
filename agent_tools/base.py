@@ -117,7 +117,7 @@ class AgentTool(ABC):
     async def run(self, workspace_path: str, args: dict) -> str:
         """Execute the tool and return a string the model can read."""
 
-    def summarize(self, args: dict) -> str:
+    def summarize(self, _args: dict) -> str:
         """One-line summary for the agent's status display."""
         return self.name
 
@@ -158,7 +158,7 @@ class AgentTool(ABC):
         tool = cls()
         try:
             result = asyncio.run(tool.run(os.getcwd(), args))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"Error: tool {cls.__name__} failed: {exc}", file=sys.stderr)
             sys.exit(1)
         print(result)

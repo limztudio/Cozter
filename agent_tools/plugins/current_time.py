@@ -33,7 +33,7 @@ class CurrentTimeTool(AgentTool):
             try:
                 from zoneinfo import ZoneInfo
                 return datetime.now(ZoneInfo(tz_name)).isoformat()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 return f"Invalid timezone {tz_name!r}: {exc}"
         return datetime.now().isoformat()
 

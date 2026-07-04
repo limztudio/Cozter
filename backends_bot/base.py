@@ -1387,8 +1387,8 @@ class BotPlatform(ABC):
             return
 
         drained_users: list[str] = []
-        for uid, entries in data.items():
-            entries = self._queue_entries(entries)
+        for uid, raw_entries in data.items():
+            entries = self._queue_entries(raw_entries)
             if not entries:
                 continue
             self._ensure_task_lock(uid)
