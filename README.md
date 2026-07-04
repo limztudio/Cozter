@@ -149,7 +149,7 @@ your Z.ai account and paste it here. `zai_base_url` defaults to
 `/chat/completions` is appended); override it for a regional endpoint.
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
 mirror the llama knobs for the cloud call. Select `zai` with `/agent`, pick
-a model with `/model` (default `glm-5.2`), and add newer GLM ids via
+a model with `/model` (default `glm-5.2`), and add private or regional GLM ids via
 `extra_models` (`{"zai": ["glm-…"]}`).
 
 `max_permission` (default `full`) caps the highest `/permission` mode any
@@ -410,6 +410,7 @@ to its own vocabulary:
 |---|---|---|
 | `codex` | 5 levels @ 20% each | `-c model_reasoning_effort=xhigh` |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
+| `zai` | 2 levels @ 50% each | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | 5 levels @ 20% each | `--effort max` |
 | `copilot` | 5 levels @ 20% each | `--effort max` |
 

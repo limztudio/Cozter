@@ -1,6 +1,6 @@
 """Z.ai (Zhipu GLM) backend: OpenAI-compatible cloud API.
 
-Z.ai serves the GLM models (glm-5.2, glm-4.7, ...) through an
+Z.ai serves the GLM models (glm-5.2, glm-5.1, glm-4.7, ...) through an
 OpenAI-compatible endpoint at ``https://api.z.ai/api/paas/v4`` with Bearer
 auth. It reuses the shared :class:`OpenAIChatBackend` loop; this module
 supplies only Z.ai's specifics - the endpoint, the Authorization header
@@ -10,7 +10,7 @@ Config: ``config.json``'s ``zai_api_key`` (required to use it),
 ``zai_base_url`` (default ``https://api.z.ai/api/paas/v4``, already
 includes the version so only ``/chat/completions`` is appended),
 ``zai_socket_timeout``, and ``zai_max_retries``. Pick the model with
-``/model`` (or set the workspace default); add newer GLM ids via
+``/model`` (or set the workspace default); add private or regional GLM ids via
 ``extra_models`` in config without editing source.
 """
 
@@ -24,20 +24,31 @@ class ZaiBackend(OpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
-    # A snapshot of Z.ai's GLM lineup (glm-5.2 is the current flagship).
-    # The exact set evolves; add newer ids via config `extra_models` - the
-    # /model picker merges them - rather than editing this list.
+    # A snapshot of Z.ai's current text-model lineup (glm-5.2 is the
+    # current flagship). The exact set evolves; add private/regional ids via
+    # config `extra_models` - the /model picker merges them - rather than
+    # editing this list locally.
     available_models = (
         "glm-5.2",
+        "glm-5.1",
+        "glm-5",
+        "glm-5-turbo",
         "glm-4.7",
+        "glm-4.7-flashx",
+        "glm-4.7-flash",
         "glm-4.6",
         "glm-4.5",
+        "glm-4.5-x",
         "glm-4.5-air",
+        "glm-4.5-airx",
         "glm-4.5-flash",
-        "glm-4-air",
+        "glm-4-32b-0414-128k",
     )
     default_model = "glm-5.2"
     default_summary_model = "glm-4.5-flash"
+    # GLM-5.2 documents only high/max reasoning_effort values. 0 still
+    # skips the field so the server default applies.
+    effort_levels = ("high", "max")
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 

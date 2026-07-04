@@ -127,6 +127,24 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
 
+    def test_picker_includes_current_text_models(self) -> None:
+        models = ZaiBackend.available_models
+        for model in (
+            "glm-5.2",
+            "glm-5.1",
+            "glm-5",
+            "glm-5-turbo",
+            "glm-4.7",
+            "glm-4.7-flashx",
+            "glm-4.7-flash",
+            "glm-4.5-x",
+            "glm-4.5-airx",
+            "glm-4-32b-0414-128k",
+        ):
+            with self.subTest(model=model):
+                self.assertIn(model, models)
+        self.assertNotIn("glm-4-air", models)
+
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
         # Z.ai's base already carries /api/paas/v4, so no extra /v1.
         endpoint = ZaiBackend()._chat_endpoint()
@@ -176,6 +194,14 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertEqual(backend._request_model("glm-4.7"), "glm-4.7")
         self.assertEqual(backend._request_model(None), "glm-5.2")
         self.assertEqual(backend._request_model(""), "glm-5.2")
+
+    def test_effort_maps_to_glm_supported_levels(self) -> None:
+        backend = ZaiBackend()
+        self.assertIsNone(backend.convert_effort(0))
+        self.assertEqual(backend.convert_effort(1), "high")
+        self.assertEqual(backend.convert_effort(49), "high")
+        self.assertEqual(backend.convert_effort(50), "max")
+        self.assertEqual(backend.convert_effort(100), "max")
 
 
 if __name__ == "__main__":
