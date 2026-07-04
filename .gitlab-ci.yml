@@ -1,0 +1,48 @@
+# GitLab CI — mirrors .github/workflows/ci.yml.
+#
+# Runs the same three gates on every push to main and on merge requests,
+# across Python 3.11 & 3.12:
+#   1. ruff lint
+#   2. mypy type check
+#   3. unittest
+#
+# The repo root carries __init__.py, so the checked-out project *is* the
+# `Cozter` package. Tests import it as `from Cozter... import` and mypy runs
+# `mypy -p Cozter`, both of which only resolve when the package directory is
+# literally named `Cozter` on PYTHONPATH. The GitHub workflow gets this via
+# `actions/checkout: path: Cozter`; GitLab checks out into $CI_PROJECT_DIR
+# (named after the project, not "Cozter"), so we symlink it to a fresh `Cozter`
+# path in a temp dir and point PYTHONPATH there.
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  key:
+    files:
+      - requirements.txt
+  paths:
+    - .cache/pip
+
+stages:
+  - test
+
+test:
+  stage: test
+  image: python:${PYTHON_VERSION}-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.11", "3.12"]
+  before_script:
+    - COZTER_LINK_DIR="$(mktemp -d)"
+    - ln -s "$CI_PROJECT_DIR" "$COZTER_LINK_DIR/Cozter"
+    - export PYTHONPATH="$COZTER_LINK_DIR"
+    - python -m pip install --upgrade pip
+    - pip install -r requirements.txt ruff mypy
+  script:
+    - ruff check .
+    - mypy --config-file mypy.ini -p Cozter
+    - python -m unittest discover -s tests
