@@ -15,6 +15,11 @@
   "llama_socket_timeout": 1800,
   "llama_max_retries": 2,
 
+  "zai_api_key": "",
+  "zai_base_url": "https://api.z.ai/api/paas/v4",
+  "zai_socket_timeout": 300,
+  "zai_max_retries": 2,
+
   "update_check_interval": 10,
   "recent_workspace_limit": 10,
   "message_queue_size": 50,

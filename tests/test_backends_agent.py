@@ -7,6 +7,7 @@ from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
 from Cozter.backends_agent.llama import LlamaBackend
+from Cozter.backends_agent.zai import ZaiBackend
 
 
 class _DummyBackend(Backend):
@@ -117,6 +118,64 @@ class BackendHealthCheckTests(unittest.TestCase):
             config.get_llama_server_url = orig
         self.assertFalse(ok)
         self.assertIn("unreachable", detail)
+
+
+class ZaiBackendTests(unittest.TestCase):
+    def test_defaults_are_selectable(self) -> None:
+        models = ZaiBackend.available_models
+        self.assertEqual(len(models), len(set(models)))
+        self.assertIn(ZaiBackend.default_model, models)
+        self.assertIn(ZaiBackend.default_summary_model, models)
+
+    def test_chat_endpoint_appends_only_chat_completions(self) -> None:
+        # Z.ai's base already carries /api/paas/v4, so no extra /v1.
+        endpoint = ZaiBackend()._chat_endpoint()
+        self.assertTrue(endpoint.endswith("/chat/completions"))
+        self.assertNotIn("/v1/chat/completions", endpoint)
+
+    def test_auth_headers_reflect_key(self) -> None:
+        def _key() -> str:
+            return "secret-key"
+
+        def _nokey() -> str:
+            return ""
+
+        orig = config.get_zai_api_key
+        try:
+            config.get_zai_api_key = _key
+            self.assertEqual(
+                ZaiBackend()._auth_headers(),
+                {"Authorization": "Bearer secret-key"},
+            )
+            config.get_zai_api_key = _nokey
+            self.assertEqual(ZaiBackend()._auth_headers(), {})
+        finally:
+            config.get_zai_api_key = orig
+
+    def test_health_check_reflects_key(self) -> None:
+        def _key() -> str:
+            return "k"
+
+        def _nokey() -> str:
+            return ""
+
+        orig = config.get_zai_api_key
+        try:
+            config.get_zai_api_key = _nokey
+            ok, detail = ZaiBackend().health_check()
+            self.assertFalse(ok)
+            self.assertIn("no API key", detail)
+            config.get_zai_api_key = _key
+            ok, _ = ZaiBackend().health_check()
+            self.assertTrue(ok)
+        finally:
+            config.get_zai_api_key = orig
+
+    def test_request_model_falls_back_to_default(self) -> None:
+        backend = ZaiBackend()
+        self.assertEqual(backend._request_model("glm-4.7"), "glm-4.7")
+        self.assertEqual(backend._request_model(None), "glm-5.2")
+        self.assertEqual(backend._request_model(""), "glm-5.2")
 
 
 if __name__ == "__main__":

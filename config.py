@@ -21,6 +21,10 @@ _DEFAULT_CONFIG = {
     "llama_tool_repeat_limit": 3,
     "llama_socket_timeout": 1800,
     "llama_max_retries": 2,
+    "zai_api_key": "",
+    "zai_base_url": "https://api.z.ai/api/paas/v4",
+    "zai_socket_timeout": 300,
+    "zai_max_retries": 2,
     "update_check_interval": 10,
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
@@ -134,6 +138,30 @@ def get_max_permission() -> str:
     if isinstance(val, str) and val in ("full", "auto", "confirm", "deny"):
         return val
     return cast(str, _DEFAULT_CONFIG["max_permission"])
+
+
+def get_zai_api_key() -> str:
+    """Z.ai (Zhipu GLM) API key for the ``zai`` backend; "" if unset."""
+    val = _read_config_value("zai_api_key")
+    return val.strip() if isinstance(val, str) else ""
+
+
+def get_zai_base_url() -> str:
+    """Base URL for Z.ai's OpenAI-compatible endpoint (includes the version)."""
+    return _get_nonempty_string("zai_base_url")
+
+
+def get_zai_socket_timeout() -> int:
+    """Per-socket-read timeout (seconds) for zai HTTP calls."""
+    return _get_positive_int("zai_socket_timeout")
+
+
+def get_zai_max_retries() -> int:
+    """Retry attempts for transient zai HTTP failures (>= 0; 0 disables)."""
+    val = _read_config_value("zai_max_retries")
+    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+        return val
+    return cast(int, _DEFAULT_CONFIG["zai_max_retries"])
 
 
 def get_extra_models(backend_name: str) -> list[str]:

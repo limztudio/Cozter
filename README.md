@@ -9,13 +9,16 @@ that works across every backend.
 
 ## What it gives you
 
-- **Four interchangeable agent backends**, picked per workspace:
+- **Five interchangeable agent backends**, picked per workspace:
   - `codex` — OpenAI's CLI (`codex exec`)
   - `claude_code` — Anthropic's CLI (`claude --print`)
   - `copilot` — GitHub's CLI
   - `llama` — any OpenAI-compatible HTTP server (llama-server, LM Studio,
     Mistral API, etc.); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
+  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.2`, `glm-4.7`, …);
+    OpenAI-compatible, so it shares the in-process loop — set `zai_api_key`
+    in config
 - **Four chat surfaces**, selected at launch:
   - Telegram (`python -m Cozter`)
   - Slack (Socket Mode; same launcher, set `slack_bot_token` in config)
@@ -139,6 +142,15 @@ failure — a dropped connection, a read timeout, or an HTTP 429/5xx — is
 retried with exponential backoff before the turn fails. Set it to `0` to
 disable retries. Only the `llama` backend uses it; the CLI backends have
 their own process-level behavior.
+
+`zai_api_key` enables the `zai` backend (Z.ai / Zhipu GLM) — get one from
+your Z.ai account and paste it here. `zai_base_url` defaults to
+`https://api.z.ai/api/paas/v4` (already includes the version, so only
+`/chat/completions` is appended); override it for a regional endpoint.
+`zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
+mirror the llama knobs for the cloud call. Select `zai` with `/agent`, pick
+a model with `/model` (default `glm-5.2`), and add newer GLM ids via
+`extra_models` (`{"zai": ["glm-…"]}`).
 
 `max_permission` (default `full`) caps the highest `/permission` mode any
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <
@@ -359,11 +371,14 @@ Each backend defines its own model list and permission mapping in
 | `claude_code` | `claude --print --output-format stream-json` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json` | `auto` | `claude-haiku-4.5` |
 | `llama` | OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
+| `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-flash` |
 
 The CLI-backend model lists are a hand-maintained snapshot; add newer or
 private models through `extra_models` in config (see Configuration) rather
 than editing source. The `llama` backend instead discovers models live
-from its server.
+from its server. `llama` and `zai` share one in-process OpenAI-compatible
+agent loop (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer
+auth header and points at Z.ai's endpoint.
 
 Permission modes are best-effort across third-party CLIs, because a chat
 bot can't surface a per-tool-call approval dialog. `codex` maps all four
