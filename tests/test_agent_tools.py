@@ -11,6 +11,7 @@ from Cozter.agent_tools.base import (
     coerce_int_arg,
     validate_replacement_strings,
 )
+from Cozter.agent_tools.builtin.apply_patch import ApplyPatchTool
 from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin.grep import GrepTool
@@ -295,6 +296,91 @@ class TreeToolTests(unittest.TestCase):
                 self.assertNotIn("deep.py", out)  # beyond depth 1
 
         asyncio.run(run())
+
+
+class ApplyPatchToolTests(unittest.TestCase):
+    @staticmethod
+    def _write(path: str, text: str) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def _run(self, ws: str, patch: str) -> str:
+        return asyncio.run(ApplyPatchTool().run(ws, {"patch": patch}))
+
+    def test_modify(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "foo.txt")
+            self._write(p, "line1\nline2\nline3\n")
+            out = self._run(tmp, (
+                "--- a/foo.txt\n+++ b/foo.txt\n@@ -1,3 +1,3 @@\n"
+                " line1\n-line2\n+line2-changed\n line3\n"
+            ))
+            self.assertIn("applied", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "line1\nline2-changed\nline3\n")
+
+    def test_create(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self._run(tmp, (
+                "--- /dev/null\n+++ b/new/dir/created.txt\n"
+                "@@ -0,0 +1,2 @@\n+hello\n+world\n"
+            ))
+            self.assertIn("created", out)
+            created = os.path.join(tmp, "new", "dir", "created.txt")
+            with open(created, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "hello\nworld\n")
+
+    def test_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "gone.txt")
+            self._write(p, "bye\n")
+            out = self._run(
+                tmp, "--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n",
+            )
+            self.assertIn("deleted", out)
+            self.assertFalse(os.path.exists(p))
+
+    def test_multi_hunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "m.txt")
+            self._write(p, "\n".join(f"L{i}" for i in range(1, 11)) + "\n")
+            out = self._run(tmp, (
+                "--- a/m.txt\n+++ b/m.txt\n"
+                "@@ -1,2 +1,2 @@\n L1\n-L2\n+L2x\n"
+                "@@ -9,2 +9,2 @@\n L9\n-L10\n+L10x\n"
+            ))
+            self.assertIn("2 hunk", out)
+            with open(p, encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("L2x", content)
+            self.assertIn("L10x", content)
+            self.assertNotIn("\nL2\n", content)
+
+    def test_context_not_found_leaves_file_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "c.txt")
+            self._write(p, "alpha\nbeta\n")
+            out = self._run(tmp, (
+                "--- a/c.txt\n+++ b/c.txt\n@@ -1,2 +1,2 @@\n"
+                " nonexistent-context\n-beta\n+gamma\n"
+            ))
+            self.assertIn("did not apply", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "alpha\nbeta\n")
+
+    def test_fuzzy_trailing_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "w.txt")
+            # File has trailing spaces the patch context omits: the fuzzy
+            # fallback still applies (context trailing ws normalizes to the
+            # patch's form).
+            self._write(p, "keep  \ndrop\n")
+            out = self._run(tmp, (
+                "--- a/w.txt\n+++ b/w.txt\n@@ -1,2 +1,1 @@\n keep\n-drop\n"
+            ))
+            self.assertIn("applied", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "keep\n")
 
 
 if __name__ == "__main__":
