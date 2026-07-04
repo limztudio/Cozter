@@ -44,7 +44,7 @@ class OpenAIChatBackend(Backend):
     # tool entries in TOOL_SCHEMA the same way the built-ins do.
     supports_typed_plugins = True
     # OpenAI Chat Completions supports the standard 4-level effort words.
-    effort_levels = ("minimal", "low", "medium", "high")
+    effort_levels: tuple[str, ...] = ("minimal", "low", "medium", "high")
 
     # ---- hooks a concrete backend overrides ----------------------------
 
