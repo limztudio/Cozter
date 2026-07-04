@@ -46,10 +46,14 @@ drop-in plugin system that works across every backend.
 ## Quick start
 
 ```bash
-git clone https://github.com/limztudio/Cozter.git
+git clone https://gitlab.com/mgneh/cozter.git
 cd Cozter
 python __main__.py -cli
 ```
+
+The primary remote is **GitLab** (`git@gitlab.com:mgneh/cozter.git`). GitHub
+(`github.com/limztudio/Cozter`) is kept as a read-only mirror; pull from
+GitLab to stay current.
 
 That starts the local terminal chat surface without requiring bot tokens.
 From the parent directory you can run the package form instead:
@@ -498,7 +502,7 @@ ignored for local secrets and runtime queues.
   the 16 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
 - Project metadata, CI, and docs: `requirements.txt`, `mypy.ini`,
-  `.github/workflows/ci.yml`, `.config/config.example.json`,
+  `.gitlab-ci.yml`, `.github/workflows/ci.yml`, `.config/config.example.json`,
   `.gitignore`, and this README
 - Tests: `tests/conftest.py` plus focused `unittest` modules for
   agent attachments and prompts, backend event parsing and retry
@@ -615,8 +619,10 @@ From inside `Cozter/`:
 PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
 ```
 
-CI (`.github/workflows/ci.yml`) runs on Python 3.11 and 3.12, and also
-runs `ruff check` and `mypy` on every push and PR. mypy is adopted
+CI runs on Python 3.11 and 3.12 and runs `ruff check` and `mypy` on every
+push and merge request / PR. The canonical pipeline is `.gitlab-ci.yml`
+(GitLab CI, the primary remote); `.github/workflows/ci.yml` mirrors it on
+GitHub. mypy is adopted
 gradually — enforced on clean modules, with pre-existing type debt
 grandfathered per-module in `mypy.ini` (burn the list down over time).
 Run them locally the same way CI does:
