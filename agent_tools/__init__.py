@@ -51,6 +51,19 @@ logger = logging.getLogger(__name__)
 _TOOL_RESULT_MAX = 4_000
 
 
+def tool_timeout() -> int:
+    """Wall-clock ceiling (seconds) for a single ``execute_tool`` call.
+
+    Lazy import of ``config`` avoids an import cycle at module load
+    (``config`` is a leaf module, but importing it eagerly here would
+    pull it in before the package is fully initialized in some entry
+    orders). Read fresh each call so a config change takes effect on
+    the next tool invocation without a restart.
+    """
+    from .. import config as cfg  # local import: avoid load-time cycle
+    return cfg.get_tool_timeout()
+
+
 # ---------------------------------------------------------------------------
 # Tool discovery: import every sibling module to trigger self-registration
 # ---------------------------------------------------------------------------

@@ -25,6 +25,25 @@ _DEFAULT_CONFIG = {
     "zai_base_url": "https://api.z.ai/api/paas/v4",
     "zai_socket_timeout": 300,
     "zai_max_retries": 2,
+    # Hard backstop: the wall-clock ceiling on a single agent turn and on
+    # a single tool call, so a wedged backend/tool can never leave
+    # has_active_turns() true forever (which otherwise stalls the
+    # auto-update loop indefinitely). See backends_bot/base.py.
+    "turn_timeout": 600,
+    "tool_timeout": 120,
+    # Hard ceiling on how long the auto-update loop will wait for an
+    # active turn to finish before it force-breaks the wait. No turn
+    # should run longer than turn_timeout (it is cancelled at that
+    # bound), so if this ceiling is reached the turn-tracking state
+    # itself is wedged (leaked task, un-released lock) and the loop
+    # should proceed/abandon rather than hang the daemon forever.
+    # Defaults to 2x turn_timeout so even generous slack never trips it
+    # on a legitimate run, but a genuinely stuck state is recovered.
+    "update_idle_timeout": 1200,
+    # Interval (seconds) between automatic faulthandler traceback
+    # dumps. 0 disables the periodic dump; the on-demand SIGUSR1
+    # dump always works regardless. See __main__._enable_diagnostics.
+    "dump_traceback_interval": 0,
     "update_check_interval": 10,
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
@@ -71,6 +90,18 @@ def _get_positive_int(key: str) -> int:
     """Return ``cfg[key]`` if it's an ``int > 0``, else the default."""
     val = _read_config_value(key)
     if isinstance(val, int) and not isinstance(val, bool) and val > 0:
+        return val
+    return cast(int, _DEFAULT_CONFIG[key])
+
+
+def _get_non_negative_int(key: str) -> int:
+    """Return ``cfg[key]`` if it's an ``int >= 0``, else the default.
+
+    Like :func:`_get_positive_int` but permits 0 (used as an "off" flag
+    for optional periodic features such as the traceback dump).
+    """
+    val = _read_config_value(key)
+    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
         return val
     return cast(int, _DEFAULT_CONFIG[key])
 
@@ -162,6 +193,54 @@ def get_zai_max_retries() -> int:
     if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
         return val
     return cast(int, _DEFAULT_CONFIG["zai_max_retries"])
+
+
+def get_turn_timeout() -> int:
+    """Wall-clock ceiling (seconds) for a single agent turn.
+
+    A hard backstop so a wedged backend (e.g. an HTTP streaming call that
+    trickles keepalive bytes and never completes) can't leave
+    ``has_active_turns()`` true forever — which would otherwise stall the
+    auto-update loop indefinitely. Defaults to 600s (10 min), which is
+    generous enough not to trip on legitimately long tool-heavy turns.
+    """
+    return _get_positive_int("turn_timeout")
+
+
+def get_tool_timeout() -> int:
+    """Wall-clock ceiling (seconds) for a single agent tool call.
+
+    Even built-ins like ``bash`` enforce their own per-call timeout, but
+    a plugin or a custom tool can hang (blocking I/O, infinite loop) and
+    block the whole turn. This wraps every ``execute_tool`` call as a
+    safety net. Defaults to 120s, matching bash's hard cap.
+    """
+    return _get_positive_int("tool_timeout")
+
+
+def get_update_idle_timeout() -> int:
+    """Ceiling (seconds) the update loop waits for active turns to finish.
+
+    A turn is cancelled at :func:`get_turn_timeout`, so no legitimate
+    active state should survive past that. If the wait reaches this
+    ceiling the turn-tracking state itself is wedged (a leaked task or
+    an un-released lock) and the loop force-breaks out of the wait and
+    dumps diagnostics, rather than hanging the daemon on
+    ``Delaying update check until active turn(s) finish`` forever.
+    Defaults to 1200s (2x the default turn_timeout).
+    """
+    return _get_positive_int("update_idle_timeout")
+
+
+def get_dump_traceback_interval() -> int:
+    """Interval (seconds) between automatic thread-traceback dumps.
+
+    Implemented via ``faulthandler.dump_traceback_later`` so a wedged
+    daemon (deadlock, busy loop in C) leaves periodic evidence in the
+    log even though no Python exception is raised. 0 disables the
+    periodic dump; the on-demand ``SIGUSR1`` dump always works.
+    """
+    return _get_non_negative_int("dump_traceback_interval")
 
 
 def get_extra_models(backend_name: str) -> list[str]:

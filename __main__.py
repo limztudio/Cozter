@@ -76,6 +76,7 @@ _install_deps()
 import asyncio  # noqa: E402
 import logging  # noqa: E402
 import signal  # noqa: E402
+import threading  # noqa: E402
 import traceback  # noqa: E402
 from datetime import datetime  # noqa: E402
 from logging.handlers import RotatingFileHandler  # noqa: E402
@@ -138,6 +139,132 @@ def log_crash(exc: BaseException) -> str:
 logger = logging.getLogger(__name__)
 
 
+# File object that faulthandler and the SIGUSR1 dump write into. Opened
+# lazily so tests can import this module without a writable .log/ dir,
+# and so the path reflects the configured LOG_DIR even if it is created
+# after import time.
+_dump_file = None
+
+
+def _get_dump_file():
+    """Open (once) and return the diagnostics dump file handle.
+
+    Writes diagnostics into ``.log/diagnostics.log`` so a SIGUSR1 dump
+    or a faulthandler crash capture lands somewhere greppable alongside
+    the main log, rather than only to the original stderr of the
+    daemon (which systemd may rotate away).
+    """
+    global _dump_file
+    if _dump_file is None:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        _dump_file = open(
+            os.path.join(LOG_DIR, "diagnostics.log"), "a", encoding="utf-8",
+        )
+    return _dump_file
+
+
+def dump_runtime_diagnostics(
+    bots: list[BotPlatform] | None = None, *, reason: str = "",
+) -> None:
+    """Dump asyncio tasks, active threads, and turn state to the log.
+
+    Triggered on-demand by SIGUSR1, and reusable from the stuck-wait
+    critical path. Uses ``Task.print_stack`` (stable across Python
+    versions, unlike ``asyncio.dump_traceback``) and renders into the
+    diagnostics file plus the logger so it shows up regardless of how
+    the daemon was launched.
+
+    *bots* is optional so this can be called before platforms exist or
+    from contexts that only want the task/thread dump.
+    """
+    label = f" ({reason})" if reason else ""
+    f = _get_dump_file()
+    f.write(f"\n===== diagnostics dump{label} @ {datetime.now().isoformat()} =====\n")
+    f.flush()
+
+    # asyncio tasks: each Task carries its own stack; print_stack writes
+    # to *f*. Capture names too for a quick at-a-glance summary.
+    try:
+        tasks = [t for t in asyncio.all_tasks() if not t.done()]
+        f.write(
+            f"-- asyncio tasks ({len(tasks)} pending) --\n"
+        )
+        for t in tasks:
+            try:
+                t.print_stack(file=f)
+            except Exception as exc:  # pragma: no cover - defensive
+                f.write(f"  (failed to print task {t}: {exc})\n")
+    except Exception as exc:  # pragma: no cover - defensive
+        f.write(f"  (failed to enumerate tasks: {exc})\n")
+    f.flush()
+
+    # Native threads (codex/zai subprocess readers, signal threads, etc.).
+    threads = threading.enumerate()
+    frames = sys._current_frames()
+    f.write(f"-- active threads ({len(threads)}) --\n")
+    for thread in threads:
+        f.write(
+            f"\n--- thread {thread.name} "
+            f"(ident={thread.ident}, daemon={thread.daemon}) ---\n"
+        )
+        if thread.ident is None:
+            f.write("  (thread has no ident)\n")
+            continue
+        frame = frames.get(thread.ident)
+        if frame is None:
+            f.write("  (no Python frame available)\n")
+            continue
+        f.writelines(traceback.format_stack(frame))
+    f.flush()
+
+    # Per-platform turn-tracking state, when platforms are available.
+    if bots:
+        f.write("-- bot turn state --\n")
+        for bot in bots:
+            try:
+                has = bot.has_active_turns()
+                diag = bot.stuck_turn_diagnostics() if has else "<idle>"
+            except Exception as exc:  # pragma: no cover - defensive
+                has, diag = None, f"<error: {exc}>"
+            f.write(
+                f"  {_bot_label(bot)}: has_active_turns={has} {diag}\n"
+            )
+        f.flush()
+
+    logger.info("Runtime diagnostics dumped to diagnostics.log%s", label)
+
+
+def _enable_faulthandler() -> None:
+    """Enable faulthandler so faults dump all threads to the log.
+
+    Catches segfaults (SIGSEGV etc.) and, via dump_traceback_later, a
+    wedged main thread that holds the GIL without making progress.
+    Writes into the diagnostics file so output survives systemd log
+    rotation. Kept best-effort: if faulthandler is unavailable or the
+    file isn't writable yet, the daemon still runs.
+    """
+    try:
+        import faulthandler
+    except ImportError:  # pragma: no cover - stdlib on all supported Py
+        return
+    try:
+        faulthandler.enable(file=_get_dump_file(), all_threads=True)
+    except Exception:
+        logger.exception("Failed to enable faulthandler")
+
+    interval = cfg.get_dump_traceback_interval()
+    if interval > 0:
+        try:
+            # repeat=True keeps it firing every ``interval`` seconds for
+            # the life of the process; a one-shot dump is rarely enough
+            # to catch a transient wedge.
+            faulthandler.dump_traceback_later(
+                interval, repeat=True, file=_get_dump_file(),
+            )
+        except Exception:
+            logger.exception("Failed to enable periodic traceback dump")
+
+
 def _bot_label(bot: BotPlatform) -> str:
     try:
         return bot.platform_id
@@ -148,14 +275,37 @@ def _bot_label(bot: BotPlatform) -> str:
 async def _wait_for_update_idle(
     bots: list[BotPlatform], *, log_message: str,
 ) -> None:
-    """Wait until no platform is actively producing an agent reply."""
+    """Wait until no platform is actively producing an agent reply.
+
+    Has a hard ceiling (``config.get_update_idle_timeout``): no turn
+    runs longer than ``turn_timeout`` (it is cancelled at that bound),
+    so if the wait blows past the ceiling the turn-tracking state
+    itself is wedged — a leaked task or an un-released lock — and we
+    force-break out with a critical log + per-bot diagnostics rather
+    than hanging the daemon on ``Delaying update check`` forever.
+    """
     last_log = 0.0
-    loop = asyncio.get_running_loop()
+    deadline = loop_start = asyncio.get_running_loop().time()
+    deadline += cfg.get_update_idle_timeout()
     while True:
         active = [bot for bot in bots if bot.has_active_turns()]
         if not active:
             return
-        now = loop.time()
+        now = asyncio.get_running_loop().time()
+        if now >= deadline:
+            waited = int(now - loop_start)
+            logger.critical(
+                "Update idle wait exceeded ceiling of %ds after ~%ds; "
+                "force-breaking. Stuck turn-tracking state indicates a "
+                "leaked task or un-released lock. Diagnostics: %s",
+                cfg.get_update_idle_timeout(), waited,
+                {bot.platform_id: bot.stuck_turn_diagnostics() for bot in active},
+            )
+            # Full task/thread dump so the force-break leaves the
+            # evidence needed to root-cause the wedged state, not just
+            # the summary above.
+            dump_runtime_diagnostics(active, reason="update-idle-force-break")
+            return
         if now - last_log >= _UPDATE_IDLE_LOG_SEC:
             logger.info(
                 "%s: %s",
@@ -357,6 +507,21 @@ async def main() -> None:
         except NotImplementedError:
             signal.signal(sig, lambda *_: _signal_handler())
 
+    # SIGUSR1 dumps asyncio tasks + threads + per-bot turn state into
+    # diagnostics.log on demand, without restarting. From the host:
+    #   kill -USR1 $(systemctl show -p MainPID --value app-Cozter@autostart)
+    # It's Windows-incompatible (add_signal_handler raises), so guard it.
+    if hasattr(signal, "SIGUSR1"):
+        try:
+            loop.add_signal_handler(
+                signal.SIGUSR1,
+                lambda: dump_runtime_diagnostics(bots, reason="SIGUSR1"),
+            )
+        except (NotImplementedError, ValueError):
+            # NotImplementedError on Windows; ValueError if the signal
+            # can't be registered in this context. Neither is fatal.
+            pass
+
     for bot in bots:
         await bot.start()
 
@@ -386,6 +551,9 @@ async def main() -> None:
 
 def run() -> None:
     setup_logging()
+    # faulthandler before anything else: if the daemon segfaults or
+    # wedges in C, this is the only thing that emits where it stuck.
+    _enable_faulthandler()
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

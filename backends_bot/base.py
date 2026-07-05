@@ -282,6 +282,39 @@ class BotPlatform(ABC):
             return True
         return any(lock.locked() for lock in self._task_locks.values())
 
+    def stuck_turn_diagnostics(self) -> str:
+        """Human-readable dump of turn-tracking state, for stuck waits.
+
+        Called when the update loop's idle wait blows past its ceiling
+        (``update_idle_timeout``) so the critical log names the exact
+        uid(s) still holding state, plus whether it's a not-yet-done
+        task, a held lock, or both — the key evidence for diagnosing a
+        wedged ``has_active_turns()`` that would otherwise only surface
+        as repeated ``Delaying update check`` lines.
+        """
+        tasks = {
+            uid: task for uid, task in self._running_tasks.items()
+            if not task.done()
+        }
+        locks = {
+            uid for uid, lock in self._task_locks.items() if lock.locked()
+        }
+        parts: list[str] = []
+        if tasks:
+            # Report the uid (the dict key) plus the task's own name and
+            # done/cancelled flags for completeness. The task itself is
+            # the coroutine running _run_turn; its default asyncio name
+            # is "Task-N", but cancelled() distinguishes a task that was
+            # signalled to stop but hasn't unwound its finally yet.
+            names = [
+                f"{uid}(cancelled={task.cancelled()})"
+                for uid, task in tasks.items()
+            ]
+            parts.append("running_tasks=[" + ", ".join(names) + "]")
+        if locks:
+            parts.append("held_locks=[" + ", ".join(sorted(locks)) + "]")
+        return "; ".join(parts) or "<no stuck state found>"
+
     # ----- event dispatch hooks (called by platform adapters) -------------
 
     def authorized(self, user_id: str, chat_id: str) -> bool:
@@ -1792,14 +1825,46 @@ class BotPlatform(ABC):
                 )
 
         try:
-            result = await agent.run(
-                text, ws, user_id=uid,
-                model=model, summary_model=summary_model, approval=perm,
-                on_event=on_event, inject_queue=inject_q,
-                backend_name=backend_name,
-                summary_backend_name=summary_backend,
-                session_id=session_id,
-            )
+            # Hard backstop so a wedged backend (a codex/zai subprocess
+            # that trickles keepalive bytes and never completes, or an
+            # HTTP stream stuck in a retry storm) can't leave this task
+            # — and therefore has_active_turns() — true forever. That
+            # would otherwise stall the auto-update loop indefinitely
+            # ("Delaying update check until active turn(s) finish" on
+            # repeat). On timeout we cancel into agent.run's existing
+            # CancelledError path, which kills the subprocess; we then
+            # synthesize an error result instead of re-raising, so the
+            # queue entry is completed (not replayed after restart)
+            # and _send_result still runs to post a user-facing reply.
+            try:
+                result = await asyncio.wait_for(
+                    agent.run(
+                        text, ws, user_id=uid,
+                        model=model, summary_model=summary_model,
+                        approval=perm,
+                        on_event=on_event, inject_queue=inject_q,
+                        backend_name=backend_name,
+                        summary_backend_name=summary_backend,
+                        session_id=session_id,
+                    ),
+                    timeout=config.get_turn_timeout(),
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Turn for %s exceeded turn_timeout=%ds; aborting",
+                    uid, config.get_turn_timeout(),
+                )
+                result = agent.AgentResult()
+                agent.set_error_result(
+                    result,
+                    (
+                        f"The turn timed out after"
+                        f" {config.get_turn_timeout()}s and was aborted."
+                        " The agent may have been stuck on a tool or"
+                        " backend call. Please retry, or /cancel to"
+                        " clear any queued work."
+                    ),
+                )
         finally:
             if thinking_handle is not None:
                 with contextlib.suppress(Exception):
