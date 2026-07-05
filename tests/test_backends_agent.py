@@ -36,6 +36,15 @@ class StaticBackendModelTests(unittest.TestCase):
                 self.assertIn(backend_cls.default_model, models)
                 self.assertIn(backend_cls.default_summary_model, models)
 
+    def test_codex_picker_includes_current_codex_models(self) -> None:
+        models = CodexBackend.available_models
+        for model in ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"):
+            with self.subTest(model=model):
+                self.assertIn(model, models)
+        # Retired Codex-lineage ids must not appear in the picker.
+        self.assertNotIn("gpt-5.2-codex", models)
+        self.assertNotIn("gpt-5.1-codex", models)
+
     def test_copilot_picker_includes_current_cli_capable_models(self) -> None:
         models = CopilotBackend.available_models
         for model in (

@@ -116,6 +116,11 @@ lives in `.config/config.example.json`):
   "llama_socket_timeout": 1800,
   "llama_max_retries": 2,
 
+  "zai_api_key": "",
+  "zai_base_url": "https://api.z.ai/api/paas/v4",
+  "zai_socket_timeout": 300,
+  "zai_max_retries": 2,
+
   "update_check_interval": 10,
   "recent_workspace_limit": 10,
   "message_queue_size": 50,
@@ -166,12 +171,14 @@ a higher mode, and an already-stored higher value is clamped down.
 `show_usage` (default `true`) appends a compact per-turn token/cost footer
 (e.g. `📊 12.5k in · 28 out · $0.01`) after each reply, for backends that
 report usage — `codex` (`turn.completed`) and `claude_code` (`result`).
-Other backends stay silent. Set it to `false` to suppress the footer. The queue is
-persisted in `Cozter/.config/queue_<platform>.json`, so clean restarts,
-auto-updates, and crash recovery do not drop already accepted messages.
-Platform IDs are sanitized for those filenames; for example the CLI's
-stable platform key `cli:local` is stored as `queue_cli_local.json`. CLI
-mode does not read or create daemon config.
+Other backends stay silent. Set it to `false` to suppress the footer.
+
+Pending chat turns are persisted in
+`Cozter/.config/queue_<platform>.json`, so clean restarts, auto-updates,
+and crash recovery do not drop already accepted messages. Platform IDs
+are sanitized for those filenames; for example the CLI's stable platform
+key `cli:local` is stored as `queue_cli_local.json`. CLI mode does not
+read or create daemon config.
 
 For Signal, `signal-cli` must already be installed, registered, and
 running as a JSON-RPC daemon. Each invite URL in `signal_group_urls` is
