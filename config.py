@@ -42,7 +42,7 @@ _DEFAULT_CONFIG = {
     "update_idle_timeout": 1200,
     # Interval (seconds) between automatic faulthandler traceback
     # dumps. 0 disables the periodic dump; the on-demand SIGUSR1
-    # dump always works regardless. See __main__._enable_diagnostics.
+    # dump always works regardless. See __main__._enable_faulthandler.
     "dump_traceback_interval": 0,
     "update_check_interval": 10,
     "recent_workspace_limit": 10,

@@ -26,13 +26,18 @@ def _load_main_module():
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
     sys.path = [
-        p for p in sys.path if os.path.abspath(p) != "/home/utilities/AutoStart"
+        p for p in sys.path
+        if os.path.abspath(p) not in {
+            os.path.abspath(workspace_pkg_parent),
+            "/home/utilities/AutoStart",
+        }
     ]
-    if workspace_pkg_parent not in sys.path:
-        sys.path.insert(0, workspace_pkg_parent)
+    sys.path.insert(0, workspace_pkg_parent)
 
     real_check_call = subprocess.check_call
+    old_reexec = os.environ.get("COZTER_VENV_REEXEC")
     subprocess.check_call = lambda *a, **kw: 0
+    os.environ["COZTER_VENV_REEXEC"] = "1"
     try:
         import importlib
         import Cozter.__main__ as main_mod
@@ -40,6 +45,10 @@ def _load_main_module():
         return main_mod
     finally:
         subprocess.check_call = real_check_call
+        if old_reexec is None:
+            os.environ.pop("COZTER_VENV_REEXEC", None)
+        else:
+            os.environ["COZTER_VENV_REEXEC"] = old_reexec
 
 
 class _StubBot:
