@@ -172,7 +172,9 @@ your Z.ai account and paste it here. `zai_base_url` defaults to
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
 mirror the llama knobs for the cloud call. Select `zai` with `/agent`, pick
 a model with `/model` (default `glm-5.2`), and add private or regional GLM ids via
-`extra_models` (`{"zai": ["glm-…"]}`).
+`extra_models` (`{"zai": ["glm-…"]}`). Long z.ai coding turns automatically
+continue into another tool-enabled segment when Cozter's internal tool-call
+segment limit is reached, instead of stopping for a manual "continue".
 
 `max_permission` (default `full`) caps the highest `/permission` mode any
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <

@@ -66,6 +66,9 @@ class OpenAIChatBackend(Backend):
     def _tool_repeat_limit(self) -> int:
         return 3
 
+    def _auto_continue_after_tool_limit(self) -> bool:
+        return False
+
     def _socket_timeout(self) -> int:
         return 300
 
@@ -136,101 +139,132 @@ class OpenAIChatBackend(Backend):
         ]
         tool_repeat_counts: dict[str, int] = {}
 
-        for _ in range(max_agent_turns):
-            payload = _completion_payload(
-                messages, request_model, reasoning_effort, tools_schema,
-            )
-            if tools_schema is not None:
-                payload["tool_choice"] = "auto"
+        segment = 1
+        while True:
+            for _ in range(max_agent_turns):
+                payload = _completion_payload(
+                    messages, request_model, reasoning_effort, tools_schema,
+                )
+                if tools_schema is not None:
+                    payload["tool_choice"] = "auto"
 
-            assistant_text, tool_calls = await _stream_completion(
-                endpoint, payload, headers, sock_read, max_retries, self.name,
-            )
+                assistant_text, tool_calls = await _stream_completion(
+                    endpoint, payload, headers, sock_read, max_retries,
+                    self.name,
+                )
 
-            # OpenAI spec: when ``tool_calls`` is present, ``content`` should
-            # be null (not ""). Some strict servers reject empty-string
-            # content alongside tool_calls.
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": assistant_text if assistant_text else None,
-            }
-            if tool_calls:
-                assistant_msg["tool_calls"] = tool_calls
-            messages.append(assistant_msg)
+                # OpenAI spec: when ``tool_calls`` is present, ``content``
+                # should be null (not ""). Some strict servers reject
+                # empty-string content alongside tool_calls.
+                assistant_msg: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": assistant_text if assistant_text else None,
+                }
+                if tool_calls:
+                    assistant_msg["tool_calls"] = tool_calls
+                messages.append(assistant_msg)
 
-            # Surface this turn's commentary even if more tool calls follow;
-            # otherwise the user would only see whatever the model says in
-            # the FINAL turn, losing "Let me check that file" narration.
-            if assistant_text:
-                proc.emit({"type": "assistant_text", "text": assistant_text})
-
-            if not tool_calls:
-                return
-
-            # Execute each requested tool and append the result. ``approval``
-            # is passed through to execute_tool, which enforces the
-            # confirm-mode read-only gate as a backstop even if the model
-            # asks for a state-changing tool it wasn't offered.
-            for call in tool_calls:
-                name, args = tools.parse_openai_call(call)
-                sig = tools.tool_signature(name, args)
-                tool_repeat_counts[sig] = tool_repeat_counts.get(sig, 0) + 1
-
-                if tool_repeat_counts[sig] > tool_repeat_limit:
-                    result = (
-                        f"Skipped repeated tool call: {name}. "
-                        f"The same tool call was requested more than "
-                        f"{tool_repeat_limit} times. Stop repeating this "
-                        "call and produce the final answer using the "
-                        "information already available."
-                    )
+                # Surface this turn's commentary even if more tool calls
+                # follow; otherwise the user would only see whatever the
+                # model says in the FINAL turn, losing "Let me check that
+                # file" narration.
+                if assistant_text:
                     proc.emit({
-                        "type": "tool_result", "name": name, "output": result,
+                        "type": "assistant_text",
+                        "text": assistant_text,
                     })
-                else:
-                    # Hard backstop so a plugin or custom tool that
-                    # hangs (blocking I/O, infinite loop) can't wedge
-                    # the whole agent turn — which would otherwise
-                    # stall has_active_turns() and the update loop.
-                    # The builtin bash tool enforces its own cap; this
-                    # covers everything else. On timeout we feed the
-                    # model an error result so the turn can continue
-                    # (e.g. retry with a different approach) rather
-                    # than silently dropping the call.
-                    try:
-                        result = await asyncio.wait_for(
-                            tools.execute_tool(
-                                name, args, workspace_path,
-                                approval, proc.emit,
-                            ),
-                            timeout=tools.tool_timeout(),
-                        )
-                    except asyncio.TimeoutError:
-                        logger.error(
-                            "%s tool %s exceeded tool_timeout=%ds",
-                            self.name, name, tools.tool_timeout(),
-                        )
+
+                if not tool_calls:
+                    return
+
+                # Execute each requested tool and append the result.
+                # ``approval`` is passed through to execute_tool, which
+                # enforces the confirm-mode read-only gate as a backstop
+                # even if the model asks for a state-changing tool it
+                # wasn't offered.
+                for call in tool_calls:
+                    name, args = tools.parse_openai_call(call)
+                    sig = tools.tool_signature(name, args)
+                    tool_repeat_counts[sig] = (
+                        tool_repeat_counts.get(sig, 0) + 1
+                    )
+
+                    if tool_repeat_counts[sig] > tool_repeat_limit:
                         result = (
-                            f"Tool {name} timed out after"
-                            f" {tools.tool_timeout()}s and was aborted."
-                            " It may be stuck on blocking I/O or an"
-                            " infinite loop. Try a narrower request"
-                            " or a different approach."
+                            f"Skipped repeated tool call: {name}. "
+                            f"The same tool call was requested more than "
+                            f"{tool_repeat_limit} times. Stop repeating this "
+                            "call and produce the final answer using the "
+                            "information already available."
                         )
                         proc.emit({
                             "type": "tool_result",
                             "name": name,
                             "output": result,
                         })
+                    else:
+                        # Hard backstop so a plugin or custom tool that
+                        # hangs (blocking I/O, infinite loop) can't wedge
+                        # the whole agent turn - which would otherwise
+                        # stall has_active_turns() and the update loop.
+                        # The builtin bash tool enforces its own cap; this
+                        # covers everything else. On timeout we feed the
+                        # model an error result so the turn can continue
+                        # (e.g. retry with a different approach) rather
+                        # than silently dropping the call.
+                        try:
+                            result = await asyncio.wait_for(
+                                tools.execute_tool(
+                                    name, args, workspace_path,
+                                    approval, proc.emit,
+                                ),
+                                timeout=tools.tool_timeout(),
+                            )
+                        except asyncio.TimeoutError:
+                            logger.error(
+                                "%s tool %s exceeded tool_timeout=%ds",
+                                self.name, name, tools.tool_timeout(),
+                            )
+                            result = (
+                                f"Tool {name} timed out after"
+                                f" {tools.tool_timeout()}s and was aborted."
+                                " It may be stuck on blocking I/O or an"
+                                " infinite loop. Try a narrower request"
+                                " or a different approach."
+                            )
+                            proc.emit({
+                                "type": "tool_result",
+                                "name": name,
+                                "output": result,
+                            })
 
-                # Include ``name`` alongside tool_call_id; strict servers
-                # reject tool messages without it.
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": call.get("id", ""),
-                    "name": name,
-                    "content": result,
-                })
+                    # Include ``name`` alongside tool_call_id; strict
+                    # servers reject tool messages without it.
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.get("id", ""),
+                        "name": name,
+                        "content": result,
+                    })
+
+            if not self._auto_continue_after_tool_limit():
+                break
+
+            segment += 1
+            logger.info(
+                "%s reached %d tool-call turns; continuing segment %d",
+                self.name, max_agent_turns, segment,
+            )
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You reached Cozter's internal tool-call segment "
+                    "limit. Continue the same task automatically without "
+                    "asking the user. Use more tools if needed, but do not "
+                    "repeat completed tool calls unless the inputs or "
+                    "workspace state have changed."
+                ),
+            })
 
         # If we fall out of the loop, force one final no-tools response
         # instead of returning only an error.

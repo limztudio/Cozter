@@ -65,6 +65,12 @@ class ZaiBackend(OpenAIChatBackend):
         # Z.ai requires a model field; fall back to the configured default.
         return model or self.default_model
 
+    def _auto_continue_after_tool_limit(self) -> bool:
+        # Long z.ai coding runs can legitimately need more tool turns than
+        # Cozter's per-segment guard. Keep going in a fresh segment instead
+        # of forcing a no-tools final answer.
+        return True
+
     def _socket_timeout(self) -> int:
         return cfg.get_zai_socket_timeout()
 

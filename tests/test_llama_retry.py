@@ -9,6 +9,8 @@ contacted.
 """
 
 import asyncio
+import copy
+import json
 import unittest
 
 from Cozter.backends_agent import _openai_agent as oa
@@ -70,6 +72,120 @@ class OpenAIRetryLoopTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self._run(once)
         self.assertEqual(calls["n"], 3)  # initial + 2 retries
+
+
+class _ToolLimitBackend(oa.OpenAIChatBackend):
+    name = "limit-test"
+
+    def __init__(self, *, auto_continue: bool) -> None:
+        self.auto_continue = auto_continue
+
+    def _chat_endpoint(self) -> str:
+        return "http://x/chat/completions"
+
+    def _auth_headers(self) -> dict[str, str]:
+        return {}
+
+    def _request_model(self, model: str | None) -> str:
+        return model or "model"
+
+    def _max_agent_turns(self) -> int:
+        return 1
+
+    def _auto_continue_after_tool_limit(self) -> bool:
+        return self.auto_continue
+
+
+class _CaptureProc:
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def emit(self, event: dict) -> None:
+        self.events.append(event)
+
+
+def _tool_call(call_id: str, path: str) -> dict:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "arguments": json.dumps({"path": path}),
+        },
+    }
+
+
+class OpenAIToolLimitTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._orig_stream = oa._stream_completion
+        self._orig_execute = oa.tools.execute_tool
+
+    def tearDown(self) -> None:
+        oa._stream_completion = self._orig_stream
+        oa.tools.execute_tool = self._orig_execute
+
+    def test_auto_continue_keeps_tools_enabled_after_limit(self) -> None:
+        calls: list[dict] = []
+
+        async def stream(*args, **kwargs):
+            payload = args[1]
+            calls.append(copy.deepcopy(payload))
+            if len(calls) <= 2:
+                return "", [_tool_call(f"call-{len(calls)}", "x.txt")]
+            return "done", []
+
+        async def execute_tool(name, args, workspace_path, approval, emit):
+            emit({"type": "tool_use", "name": name, "input": args})
+            return f"{name} ok"
+
+        oa._stream_completion = stream
+        oa.tools.execute_tool = execute_tool
+
+        proc = _CaptureProc()
+        asyncio.run(_ToolLimitBackend(auto_continue=True)._run_agent(
+            proc, "/tmp", "work", None, "auto", False, 0,
+        ))
+
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all("tools" in payload for payload in calls))
+        self.assertIn(
+            "internal tool-call segment limit",
+            calls[1]["messages"][-1]["content"],
+        )
+        self.assertEqual(
+            [e for e in proc.events if e.get("type") == "assistant_text"],
+            [{"type": "assistant_text", "text": "done"}],
+        )
+
+    def test_non_continuing_backend_still_uses_no_tools_fallback(self) -> None:
+        calls: list[dict] = []
+
+        async def stream(*args, **kwargs):
+            payload = args[1]
+            calls.append(copy.deepcopy(payload))
+            if len(calls) == 1:
+                return "", [_tool_call("call-1", "x.txt")]
+            return "", []
+
+        async def execute_tool(name, args, workspace_path, approval, emit):
+            return f"{name} ok"
+
+        oa._stream_completion = stream
+        oa.tools.execute_tool = execute_tool
+
+        proc = _CaptureProc()
+        asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
+            proc, "/tmp", "work", None, "auto", False, 0,
+        ))
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("tools", calls[0])
+        self.assertNotIn("tools", calls[1])
+        self.assertTrue(any(
+            e.get("type") == "error"
+            and "exceeded 1 tool-call turns" in e.get("message", "")
+            for e in proc.events
+        ))
 
 
 if __name__ == "__main__":
