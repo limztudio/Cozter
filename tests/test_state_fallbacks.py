@@ -257,14 +257,18 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({
                     "extra_models": {
-                        "codex": ["gpt-5.6", "", 123],  # non-strings dropped
+                        # non-string entries are dropped.
+                        "codex": ["private-codex-model", "", 123],
                         "copilot": "not-a-list",         # wrong type -> []
                     },
                 }, f)
             old = config.CONFIG_PATH
             config.CONFIG_PATH = path
             try:
-                self.assertEqual(config.get_extra_models("codex"), ["gpt-5.6"])
+                self.assertEqual(
+                    config.get_extra_models("codex"),
+                    ["private-codex-model"],
+                )
                 self.assertEqual(config.get_extra_models("copilot"), [])
                 self.assertEqual(config.get_extra_models("missing"), [])
             finally:
@@ -319,8 +323,10 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             workspace.set_backend_name(tmp, "codex")
 
             def _fake_extras(name: str) -> list[str]:
-                # "gpt-5.5" is already built-in; "gpt-5.6" is new.
-                return ["gpt-5.6", "gpt-5.5"] if name == "codex" else []
+                # "gpt-5.5" is already built-in; the private id is new.
+                if name == "codex":
+                    return ["private-codex-model", "gpt-5.5"]
+                return []
 
             orig = config.get_extra_models
             config.get_extra_models = _fake_extras
@@ -330,7 +336,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 config.get_extra_models = orig
 
             self.assertEqual(models[0], "gpt-5.5")   # built-ins first
-            self.assertIn("gpt-5.6", models)          # extra appended
+            self.assertIn("private-codex-model", models)  # extra appended
             self.assertEqual(models.count("gpt-5.5"), 1)  # no duplicate
 
 

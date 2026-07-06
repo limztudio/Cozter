@@ -228,7 +228,12 @@ def get_extra_models(backend_name: str) -> list[str]:
     snapshot and go stale as providers ship new models. This lets users
     expose newer or private/self-hosted models without editing source::
 
-        {"extra_models": {"codex": ["gpt-5.6"], "copilot": ["..."]}}
+        {
+            "extra_models": {
+                "codex": ["my-private-codex-model"],
+                "copilot": ["..."],
+            }
+        }
 
     Malformed entries (missing key, non-object value, non-string items)
     are ignored, returning an empty list.

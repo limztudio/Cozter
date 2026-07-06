@@ -154,7 +154,7 @@ available either way.
 
 `extra_models` adds model IDs to a backend's `/model` and `/summarymodel`
 pickers on top of its built-in list, keyed by backend name — for example
-`{"codex": ["gpt-5.6"], "copilot": ["claude-opus-5.0"]}`. The built-in
+`{"codex": ["my-private-codex-model"], "copilot": ["claude-opus-5.0"]}`. The built-in
 lists in `backends_agent/` are a curated snapshot that goes stale as
 providers ship new models; this lets you use a newer or private model
 without editing source. Malformed entries are ignored.
