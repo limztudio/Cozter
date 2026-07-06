@@ -22,7 +22,6 @@ compaction; when ``compact_count % colony_interval == 0`` we run the
 consolidation pass.
 """
 
-import asyncio
 import logging
 import os
 import re
@@ -31,6 +30,7 @@ from . import backends_agent, session
 from . import workspace as workspace_mod
 from .utils import COZTER_DIR
 from .utils import (
+    create_background_task,
     drain_llm_subprocess,
     extract_marker_block,
     load_json_object,
@@ -207,9 +207,13 @@ def maybe_trigger(
         "Colony pass triggered (count=%d, interval=%d)",
         compact_count, interval,
     )
-    asyncio.create_task(consolidate(
-        workspace_path, summary_model, backend_name=backend_name,
-    ))
+    create_background_task(
+        consolidate(
+            workspace_path, summary_model, backend_name=backend_name,
+        ),
+        name="colony-consolidate",
+        log=logger,
+    )
 
 
 async def consolidate(

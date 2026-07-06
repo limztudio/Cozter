@@ -21,7 +21,7 @@ import signal
 import sys
 import threading
 
-from ..utils import await_cancelled
+from ..utils import await_cancelled, create_background_task
 from .base import (
     AttachmentInfo,
     BotContext,
@@ -224,8 +224,10 @@ class CliBot(BotPlatform):
             # "Queued (X/N)." feedback) instead of having it sit
             # silently in the CLI's line buffer waiting for the
             # current await to return.
-            asyncio.create_task(
+            create_background_task(
                 self.dispatch_text(self._ctx(text=line)),
+                name="cli-dispatch",
+                log=logger,
             )
 
     def _ctx(

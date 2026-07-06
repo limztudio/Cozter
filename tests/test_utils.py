@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -96,6 +97,30 @@ class JsonHelperTests(unittest.TestCase):
             utils.normalize_string_list([" a ", ""], strip=False),
             [" a "],
         )
+
+
+class BackgroundTaskTests(unittest.TestCase):
+    def test_create_background_task_logs_unhandled_exception(self) -> None:
+        async def run() -> list[str]:
+            log = logging.getLogger("Cozter.tests.background_task")
+
+            async def fail() -> None:
+                raise RuntimeError("boom")
+
+            with self.assertLogs(log, level="ERROR") as captured:
+                task = utils.create_background_task(
+                    fail(), name="test-failure", log=log,
+                )
+                while not task.done():
+                    await asyncio.sleep(0)
+                await asyncio.sleep(0)
+            return captured.output
+
+        output = asyncio.run(run())
+        self.assertTrue(
+            any("Background task test-failure failed" in line for line in output),
+        )
+        self.assertTrue(any("RuntimeError: boom" in line for line in output))
 
 
 if __name__ == "__main__":

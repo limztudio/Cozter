@@ -6,7 +6,8 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,8 @@ CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.
     os.path.dirname(os.path.abspath(__file__)), ".config",
 )
 _STDERR_CAPTURE_BYTES = 64 * 1024
+_BackgroundResult = TypeVar("_BackgroundResult")
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 
 
 def drain_queue(
@@ -53,6 +56,35 @@ async def await_cancelled(task: Awaitable[object]) -> None:
     """Await a task after cancellation, ignoring the expected cancel."""
     with contextlib.suppress(asyncio.CancelledError):
         await task
+
+
+def create_background_task(
+    coro: Coroutine[Any, Any, _BackgroundResult],
+    *,
+    name: str,
+    log: logging.Logger | None = None,
+) -> asyncio.Task[_BackgroundResult]:
+    """Start a background task and log unhandled exceptions when it exits."""
+    task = asyncio.create_task(coro, name=name)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(
+        lambda done: _finalize_background_task(done, name, log or logger),
+    )
+    return task
+
+
+def _finalize_background_task(
+    task: asyncio.Task[Any],
+    name: str,
+    log: logging.Logger,
+) -> None:
+    _BACKGROUND_TASKS.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception:
+        log.exception("Background task %s failed", name)
 
 
 def save_json_object(path: str, data: dict) -> None:

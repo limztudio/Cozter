@@ -31,6 +31,7 @@ from .. import (
 )
 from ..utils import COZTER_DIR
 from ..utils import await_cancelled
+from ..utils import create_background_task
 from ..utils import drain_queue as _drain_queue
 from ..utils import load_json_object
 from ..utils import save_json_object
@@ -236,6 +237,13 @@ class BotPlatform(ABC):
             return False
         return True
 
+    def _start_queue_drain(self, uid: str) -> None:
+        create_background_task(
+            self._drain_message_queue(uid),
+            name=f"{self.platform_id}:drain:{uid}",
+            log=logger,
+        )
+
     async def send_startup_messages(
         self, version: str, commit_date: str,
     ) -> None:
@@ -261,7 +269,7 @@ class BotPlatform(ABC):
         if not self._update_restart_pending:
             await self.start_scheduler()
             for uid in list(self._message_queues):
-                asyncio.create_task(self._drain_message_queue(uid))
+                self._start_queue_drain(uid)
 
     async def begin_update_restart(self) -> None:
         """Pause new AI turns while an auto-update restart is pending."""
@@ -275,7 +283,7 @@ class BotPlatform(ABC):
         self._update_restart_pending = False
         await self.start_scheduler()
         for uid in list(self._message_queues):
-            asyncio.create_task(self._drain_message_queue(uid))
+            self._start_queue_drain(uid)
 
     def has_active_turns(self) -> bool:
         """Return True while any agent reply is still in progress."""
@@ -1179,7 +1187,7 @@ class BotPlatform(ABC):
             await ctx.reply_text("Cancelled.")
             return
         if was_awaiting:
-            asyncio.create_task(self._drain_message_queue(ctx.user_id))
+            self._start_queue_drain(ctx.user_id)
             await ctx.reply_text(
                 "Cleared pending question; resuming queued work."
             )
@@ -1487,7 +1495,7 @@ class BotPlatform(ABC):
             drained_users.append(uid)
 
         for uid in drained_users:
-            asyncio.create_task(self._drain_message_queue(uid))
+            self._start_queue_drain(uid)
 
     # ----- Scheduler loop ------------------------------------------------
 
@@ -1626,7 +1634,7 @@ class BotPlatform(ABC):
         # Kick the queue drainer in a background task; if a turn is
         # already running, _drain_message_queue breaks out immediately
         # and the running handler's own drain-after-turn picks up later.
-        asyncio.create_task(self._drain_message_queue(uid))
+        self._start_queue_drain(uid)
 
     # ----- AI chat + file -------------------------------------------------
 
@@ -1743,7 +1751,7 @@ class BotPlatform(ABC):
                 # drain task so the entry we just put isn't orphaned.
                 # If a drain is already active it will no-op on the
                 # locked() check at the top of the loop.
-                asyncio.create_task(self._drain_message_queue(uid))
+                self._start_queue_drain(uid)
             return
 
         # Direct path: persist BEFORE acquiring the lock so a crash

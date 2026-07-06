@@ -20,7 +20,12 @@ from . import workspace as workspace_mod
 from .backends_agent.base import (
     AgentResult, ChatEvent, append_text_result, set_error_result,
 )
-from .utils import await_cancelled, drain_text_stream, iter_json_events
+from .utils import (
+    await_cancelled,
+    create_background_task,
+    drain_text_stream,
+    iter_json_events,
+)
 from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
@@ -838,10 +843,14 @@ async def _run_turn(
     # in that case spawning is harmless (the task just bails on its
     # own is_default_name check after a fresh load).
     if session.is_default_name(session_data.get("name")):
-        asyncio.create_task(titling.maybe_auto_title(
-            workspace_path, session_id, summary_model,
-            backend_name=summary_backend,
-        ))
+        create_background_task(
+            titling.maybe_auto_title(
+                workspace_path, session_id, summary_model,
+                backend_name=summary_backend,
+            ),
+            name=f"auto-title:{session_id}",
+            log=logger,
+        )
 
     if (
         not any(e.kind == "text" for e in result.events)
