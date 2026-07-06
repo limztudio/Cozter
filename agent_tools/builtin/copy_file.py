@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 
 from ..base import (
@@ -11,6 +10,7 @@ from ..base import (
     resolve_source_destination,
     source_destination_parameters,
     summarize_path_pair,
+    validate_source_destination,
 )
 
 
@@ -28,12 +28,10 @@ class CopyFileTool(AgentTool):
         raw_src, raw_dst, src, dst = resolve_source_destination(
             workspace_path, args,
         )
-        if not os.path.exists(src):
-            return f"Source not found: {raw_src}"
-        if not os.path.isfile(src):
-            return f"Not a file (refusing to copy): {raw_src}"
-        if os.path.exists(dst):
-            return f"Destination already exists: {raw_dst}"
+        if error := validate_source_destination(
+            raw_src, raw_dst, src, dst, file_action="copy",
+        ):
+            return error
         try:
             ensure_parent_dir(dst)
             shutil.copy2(src, dst)

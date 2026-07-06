@@ -10,6 +10,7 @@ from ..base import (
     resolve_source_destination,
     source_destination_parameters,
     summarize_path_pair,
+    validate_source_destination,
 )
 
 
@@ -26,10 +27,8 @@ class MoveFileTool(AgentTool):
         raw_src, raw_dst, src, dst = resolve_source_destination(
             workspace_path, args,
         )
-        if not os.path.exists(src):
-            return f"Source not found: {raw_src}"
-        if os.path.exists(dst):
-            return f"Destination already exists: {raw_dst}"
+        if error := validate_source_destination(raw_src, raw_dst, src, dst):
+            return error
         try:
             ensure_parent_dir(dst)
             os.rename(src, dst)

@@ -269,6 +269,24 @@ def resolve_source_destination(
     return raw_src, raw_dst, src, dst
 
 
+def validate_source_destination(
+    raw_src: str,
+    raw_dst: str,
+    src: str,
+    dst: str,
+    *,
+    file_action: str | None = None,
+) -> str | None:
+    """Return a model-facing preflight error for source/destination tools."""
+    if not os.path.exists(src):
+        return f"Source not found: {raw_src}"
+    if file_action is not None and not os.path.isfile(src):
+        return f"Not a file (refusing to {file_action}): {raw_src}"
+    if os.path.exists(dst):
+        return f"Destination already exists: {raw_dst}"
+    return None
+
+
 def summarize_path(action: str, args: dict, default: str = "?") -> str:
     return f"{action}: {args.get('path', default)}"
 

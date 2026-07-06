@@ -774,6 +774,19 @@ class SignalBot(BotPlatform):
             return None
         return target_user_id, ws
 
+    def _legacy_group_state(
+        self,
+        sender_id: str,
+        group_id: str,
+        account_id: str,
+    ) -> tuple[str, str, list[str]] | None:
+        resolved = self._group_workspace(group_id)
+        if resolved is None:
+            return None
+        target_user_id, ws = resolved
+        source_ids = self._legacy_source_ids(sender_id, group_id, account_id)
+        return target_user_id, ws, source_ids
+
     def _migrate_current_workspace_to_group(
         self, source_user_id: str, group_id: str,
     ) -> str:
@@ -818,11 +831,10 @@ class SignalBot(BotPlatform):
         group_id: str,
         account_id: str,
     ) -> None:
-        resolved = self._group_workspace(group_id)
-        if resolved is None:
+        state = self._legacy_group_state(sender_id, group_id, account_id)
+        if state is None:
             return
-        target_user_id, ws = resolved
-        source_ids = self._legacy_source_ids(sender_id, group_id, account_id)
+        target_user_id, ws, source_ids = state
         if session.migrate_last_session(ws, source_ids, target_user_id):
             logger.info(
                 "Migrated legacy Signal last-session state into group %s.",
@@ -887,11 +899,10 @@ class SignalBot(BotPlatform):
         group_id: str,
         account_id: str,
     ) -> None:
-        resolved = self._group_workspace(group_id)
-        if resolved is None:
+        state = self._legacy_group_state(sender_id, group_id, account_id)
+        if state is None:
             return
-        target_user_id, ws = resolved
-        source_ids = self._legacy_source_ids(sender_id, group_id, account_id)
+        target_user_id, ws, source_ids = state
         migrated = schedules.migrate_schedules(
             ws,
             source_ids,

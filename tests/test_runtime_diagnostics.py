@@ -36,7 +36,7 @@ def _load_main_module():
 
     real_check_call = subprocess.check_call
     old_reexec = os.environ.get("COZTER_VENV_REEXEC")
-    subprocess.check_call = lambda *a, **kw: 0
+    subprocess.check_call = lambda *_args, **_kwargs: 0
     os.environ["COZTER_VENV_REEXEC"] = "1"
     try:
         import importlib

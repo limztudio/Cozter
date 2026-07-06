@@ -708,18 +708,12 @@ class BotPlatform(ABC):
         self._expect_input(ctx.user_id, self._receive_agent)
 
     async def _receive_agent(self, ctx: BotContext) -> None:
-        ws = await self._require_ws(ctx)
-        if ws is None:
+        selected = await self._receive_backend_choice(
+            ctx, retry_handler=self._receive_agent,
+        )
+        if selected is None:
             return
-        text = ctx.text.strip()
-        options = workspace.AVAILABLE_BACKENDS
-        name = self._pick_option(text, options)
-        if name is None:
-            await ctx.reply_text(
-                f"Unknown agent: {text}\nTry again (or /cancel):"
-            )
-            self._expect_input(ctx.user_id, self._receive_agent)
-            return
+        ws, name = selected
         workspace.set_backend_name(ws, name)
         _, model, summary_model, _, summary_backend = (
             workspace.get_run_config(ws)
@@ -733,6 +727,25 @@ class BotPlatform(ABC):
             f"Summary agent: {summary_backend}\n"
             f"Summary model: {summary_model}"
         )
+
+    async def _receive_backend_choice(
+        self,
+        ctx: BotContext,
+        *,
+        retry_handler: Callable[[BotContext], Awaitable[None]],
+    ) -> tuple[str, str] | None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return None
+        text = ctx.text.strip()
+        name = self._pick_option(text, workspace.AVAILABLE_BACKENDS)
+        if name is None:
+            await ctx.reply_text(
+                f"Unknown agent: {text}\nTry again (or /cancel):"
+            )
+            self._expect_input(ctx.user_id, retry_handler)
+            return None
+        return ws, name
 
     # ----- /summaryagent --------------------------------------------------
 
@@ -754,18 +767,12 @@ class BotPlatform(ABC):
         self._expect_input(ctx.user_id, self._receive_summaryagent)
 
     async def _receive_summaryagent(self, ctx: BotContext) -> None:
-        ws = await self._require_ws(ctx)
-        if ws is None:
+        selected = await self._receive_backend_choice(
+            ctx, retry_handler=self._receive_summaryagent,
+        )
+        if selected is None:
             return
-        text = ctx.text.strip()
-        options = workspace.AVAILABLE_BACKENDS
-        name = self._pick_option(text, options)
-        if name is None:
-            await ctx.reply_text(
-                f"Unknown agent: {text}\nTry again (or /cancel):"
-            )
-            self._expect_input(ctx.user_id, self._receive_summaryagent)
-            return
+        ws, name = selected
         workspace.set_summary_backend_name(ws, name)
         summary_model = workspace.get_summary_model(ws)
         await ctx.reply_text(
@@ -1835,12 +1842,8 @@ class BotPlatform(ABC):
         lock.acquire(), so /stop can cancel this turn during any of
         its await points.
         """
-        ws = workspace.get_current(uid, self.platform_id)
-        if not ws or not os.path.isdir(ws):
-            await self.send_text(
-                chat_id,
-                "Workspace not available (deleted?). Use /new or /open.",
-            )
+        ws = await self._current_workspace_for_turn(uid, chat_id)
+        if ws is None:
             return
         backend_name, model, summary_model, perm, summary_backend = (
             workspace.get_run_config(ws)
@@ -1925,12 +1928,8 @@ class BotPlatform(ABC):
         It never becomes the user's current session — interactive
         chat continues against whatever session was current before.
         """
-        ws = workspace.get_current(uid, self.platform_id)
-        if not ws or not os.path.isdir(ws):
-            await self.send_text(
-                chat_id,
-                "Workspace not available (deleted?). Use /new or /open.",
-            )
+        ws = await self._current_workspace_for_turn(uid, chat_id)
+        if ws is None:
             return
 
         # Distinguishable name — the auto-router keys off session
@@ -1955,6 +1954,18 @@ class BotPlatform(ABC):
                     "Failed to delete ephemeral session %s", sid,
                     exc_info=True,
                 )
+
+    async def _current_workspace_for_turn(
+        self, uid: str, chat_id: str,
+    ) -> str | None:
+        ws = workspace.get_current(uid, self.platform_id)
+        if not ws or not os.path.isdir(ws):
+            await self.send_text(
+                chat_id,
+                "Workspace not available (deleted?). Use /new or /open.",
+            )
+            return None
+        return ws
 
     async def _send_result(
         self, chat_id: str, ws: str, result: agent.AgentResult,
