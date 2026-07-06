@@ -147,6 +147,41 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         # a failure here would surface as an exception, not a silent skip.
         self._main._enable_faulthandler()
 
+    def test_update_idle_diagnostic_keeps_waiting_for_active_turn(self):
+        bot = _StubBot("test:active", active=True, diag="still-running")
+        reasons: list[str] = []
+        sleeps = 0
+
+        async def fake_sleep(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            bot._active = False
+
+        old_timeout = self._main.cfg.get_update_idle_timeout
+        old_dump = self._main.dump_runtime_diagnostics
+        old_sleep = self._main.asyncio.sleep
+        old_critical = self._main.logger.critical
+        self._main.cfg.get_update_idle_timeout = lambda: 0
+        self._main.dump_runtime_diagnostics = (
+            lambda _bots, *, reason: reasons.append(reason)
+        )
+        self._main.asyncio.sleep = fake_sleep
+        self._main.logger.critical = lambda *args, **kwargs: None
+        try:
+            asyncio.run(
+                self._main._wait_for_update_idle(
+                    [bot], log_message="waiting in test",
+                )
+            )
+        finally:
+            self._main.cfg.get_update_idle_timeout = old_timeout
+            self._main.dump_runtime_diagnostics = old_dump
+            self._main.asyncio.sleep = old_sleep
+            self._main.logger.critical = old_critical
+
+        self.assertEqual(reasons, ["update-idle-still-waiting"])
+        self.assertGreaterEqual(sleeps, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

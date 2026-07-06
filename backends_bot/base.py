@@ -1852,46 +1852,15 @@ class BotPlatform(ABC):
                 )
 
         try:
-            # Hard backstop so a wedged backend (a codex/zai subprocess
-            # that trickles keepalive bytes and never completes, or an
-            # HTTP stream stuck in a retry storm) can't leave this task
-            # — and therefore has_active_turns() — true forever. That
-            # would otherwise stall the auto-update loop indefinitely
-            # ("Delaying update check until active turn(s) finish" on
-            # repeat). On timeout we cancel into agent.run's existing
-            # CancelledError path, which kills the subprocess; we then
-            # synthesize an error result instead of re-raising, so the
-            # queue entry is completed (not replayed after restart)
-            # and _send_result still runs to post a user-facing reply.
-            try:
-                result = await asyncio.wait_for(
-                    agent.run(
-                        text, ws, user_id=uid,
-                        model=model, summary_model=summary_model,
-                        approval=perm,
-                        on_event=on_event, inject_queue=inject_q,
-                        backend_name=backend_name,
-                        summary_backend_name=summary_backend,
-                        session_id=session_id,
-                    ),
-                    timeout=config.get_turn_timeout(),
-                )
-            except asyncio.TimeoutError:
-                logger.error(
-                    "Turn for %s exceeded turn_timeout=%ds; aborting",
-                    uid, config.get_turn_timeout(),
-                )
-                result = agent.AgentResult()
-                agent.set_error_result(
-                    result,
-                    (
-                        f"The turn timed out after"
-                        f" {config.get_turn_timeout()}s and was aborted."
-                        " The agent may have been stuck on a tool or"
-                        " backend call. Please retry, or /cancel to"
-                        " clear any queued work."
-                    ),
-                )
+            result = await agent.run(
+                text, ws, user_id=uid,
+                model=model, summary_model=summary_model,
+                approval=perm,
+                on_event=on_event, inject_queue=inject_q,
+                backend_name=backend_name,
+                summary_backend_name=summary_backend,
+                session_id=session_id,
+            )
         finally:
             if thinking_handle is not None:
                 with contextlib.suppress(Exception):

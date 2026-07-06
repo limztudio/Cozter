@@ -402,7 +402,7 @@ class ConfigFallbackTests(unittest.TestCase):
 
 class RuntimeHardeningConfigTests(unittest.TestCase):
     """Defaults, overrides, and malformed-value fallback for the
-    turn/tool/update-idle/dump-traceback config getters added by the
+    tool/update-idle/dump-traceback config getters added by the
     runtime-hardening work."""
 
     def _with_config(self, body):
@@ -418,7 +418,6 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
         old = config.CONFIG_PATH
         config.CONFIG_PATH = "/nonexistent/config.json"
         try:
-            self.assertEqual(config.get_turn_timeout(), 600)
             self.assertEqual(config.get_tool_timeout(), 120)
             self.assertEqual(config.get_update_idle_timeout(), 1200)
             # 0 means "disabled": the periodic dump is off by default,
@@ -429,12 +428,10 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
 
     def test_positive_getters_honor_config_overrides(self) -> None:
         old, tmp = self._with_config({
-            "turn_timeout": 30,
             "tool_timeout": 5,
             "update_idle_timeout": 90,
         })
         try:
-            self.assertEqual(config.get_turn_timeout(), 30)
             self.assertEqual(config.get_tool_timeout(), 5)
             self.assertEqual(config.get_update_idle_timeout(), 90)
         finally:
@@ -467,7 +464,6 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
 
     def test_positive_getters_reject_zero_and_non_ints(self) -> None:
         for key, getter, default in [
-            ("turn_timeout", config.get_turn_timeout, 600),
             ("tool_timeout", config.get_tool_timeout, 120),
             ("update_idle_timeout", config.get_update_idle_timeout, 1200),
         ]:

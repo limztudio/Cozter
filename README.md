@@ -121,6 +121,9 @@ lives in `.config/config.example.json`):
   "zai_socket_timeout": 300,
   "zai_max_retries": 2,
 
+  "tool_timeout": 120,
+  "update_idle_timeout": 1200,
+  "dump_traceback_interval": 0,
   "update_check_interval": 10,
   "recent_workspace_limit": 10,
   "message_queue_size": 50,
@@ -138,6 +141,16 @@ The CLI surface needs neither.
 
 `recent_workspace_limit` controls how many paths `/open` shows.
 `message_queue_size` caps each user's pending chat turns.
+
+Agent turns do not have a wall-clock timeout; long-running work is
+allowed to finish. `tool_timeout` (default 120s) still caps each
+individual tool call for HTTP backends, so one wedged plugin call cannot
+block the agent loop indefinitely. `update_idle_timeout` (default 1200s)
+controls how often the auto-update loop dumps diagnostics while waiting
+for active turns; it keeps waiting instead of restarting through active
+work. `dump_traceback_interval` (default 0) enables optional periodic
+thread dumps when set above zero; on-demand `SIGUSR1` diagnostics remain
+available either way.
 
 `extra_models` adds model IDs to a backend's `/model` and `/summarymodel`
 pickers on top of its built-in list, keyed by backend name — for example

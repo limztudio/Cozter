@@ -25,20 +25,14 @@ _DEFAULT_CONFIG = {
     "zai_base_url": "https://api.z.ai/api/paas/v4",
     "zai_socket_timeout": 300,
     "zai_max_retries": 2,
-    # Hard backstop: the wall-clock ceiling on a single agent turn and on
-    # a single tool call, so a wedged backend/tool can never leave
-    # has_active_turns() true forever (which otherwise stalls the
-    # auto-update loop indefinitely). See backends_bot/base.py.
-    "turn_timeout": 600,
+    # Hard backstop on a single tool call, so a wedged plugin/custom tool
+    # cannot block the whole turn indefinitely. Agent turns themselves are
+    # not wall-clock limited; long-running work is allowed to finish.
     "tool_timeout": 120,
-    # Hard ceiling on how long the auto-update loop will wait for an
-    # active turn to finish before it force-breaks the wait. No turn
-    # should run longer than turn_timeout (it is cancelled at that
-    # bound), so if this ceiling is reached the turn-tracking state
-    # itself is wedged (leaked task, un-released lock) and the loop
-    # should proceed/abandon rather than hang the daemon forever.
-    # Defaults to 2x turn_timeout so even generous slack never trips it
-    # on a legitimate run, but a genuinely stuck state is recovered.
+    # Diagnostic interval for the auto-update loop while it is waiting on
+    # active turns. Reaching this interval emits stuck-turn diagnostics and
+    # then continues waiting; it does not cancel the turn or force an update
+    # restart through active work.
     "update_idle_timeout": 1200,
     # Interval (seconds) between automatic faulthandler traceback
     # dumps. 0 disables the periodic dump; the on-demand SIGUSR1
@@ -195,18 +189,6 @@ def get_zai_max_retries() -> int:
     return cast(int, _DEFAULT_CONFIG["zai_max_retries"])
 
 
-def get_turn_timeout() -> int:
-    """Wall-clock ceiling (seconds) for a single agent turn.
-
-    A hard backstop so a wedged backend (e.g. an HTTP streaming call that
-    trickles keepalive bytes and never completes) can't leave
-    ``has_active_turns()`` true forever — which would otherwise stall the
-    auto-update loop indefinitely. Defaults to 600s (10 min), which is
-    generous enough not to trip on legitimately long tool-heavy turns.
-    """
-    return _get_positive_int("turn_timeout")
-
-
 def get_tool_timeout() -> int:
     """Wall-clock ceiling (seconds) for a single agent tool call.
 
@@ -219,15 +201,11 @@ def get_tool_timeout() -> int:
 
 
 def get_update_idle_timeout() -> int:
-    """Ceiling (seconds) the update loop waits for active turns to finish.
+    """Diagnostic interval while the update loop waits for active turns.
 
-    A turn is cancelled at :func:`get_turn_timeout`, so no legitimate
-    active state should survive past that. If the wait reaches this
-    ceiling the turn-tracking state itself is wedged (a leaked task or
-    an un-released lock) and the loop force-breaks out of the wait and
-    dumps diagnostics, rather than hanging the daemon on
-    ``Delaying update check until active turn(s) finish`` forever.
-    Defaults to 1200s (2x the default turn_timeout).
+    Long-running turns are allowed to finish. If the wait reaches this
+    interval, the loop dumps diagnostics and continues waiting instead of
+    restarting through active work. Defaults to 1200s.
     """
     return _get_positive_int("update_idle_timeout")
 

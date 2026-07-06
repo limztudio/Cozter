@@ -277,35 +277,29 @@ async def _wait_for_update_idle(
 ) -> None:
     """Wait until no platform is actively producing an agent reply.
 
-    Has a hard ceiling (``config.get_update_idle_timeout``): no turn
-    runs longer than ``turn_timeout`` (it is cancelled at that bound),
-    so if the wait blows past the ceiling the turn-tracking state
-    itself is wedged — a leaked task or an un-released lock — and we
-    force-break out with a critical log + per-bot diagnostics rather
-    than hanging the daemon on ``Delaying update check`` forever.
+    Long-running turns are allowed to finish. If the wait exceeds
+    ``config.get_update_idle_timeout()``, emit diagnostics and continue
+    waiting instead of restarting through active work.
     """
     last_log = 0.0
-    deadline = loop_start = asyncio.get_running_loop().time()
-    deadline += cfg.get_update_idle_timeout()
+    last_diag = loop_start = asyncio.get_running_loop().time()
     while True:
         active = [bot for bot in bots if bot.has_active_turns()]
         if not active:
             return
         now = asyncio.get_running_loop().time()
-        if now >= deadline:
+        if now - last_diag >= cfg.get_update_idle_timeout():
             waited = int(now - loop_start)
             logger.critical(
-                "Update idle wait exceeded ceiling of %ds after ~%ds; "
-                "force-breaking. Stuck turn-tracking state indicates a "
-                "leaked task or un-released lock. Diagnostics: %s",
+                "Update idle wait has waited at least %ds after ~%ds; "
+                "continuing to wait for active turn(s). Diagnostics: %s",
                 cfg.get_update_idle_timeout(), waited,
                 {bot.platform_id: bot.stuck_turn_diagnostics() for bot in active},
             )
-            # Full task/thread dump so the force-break leaves the
-            # evidence needed to root-cause the wedged state, not just
-            # the summary above.
-            dump_runtime_diagnostics(active, reason="update-idle-force-break")
-            return
+            # Full task/thread dump so a stuck wait leaves the evidence
+            # needed to root-cause it, while preserving active work.
+            dump_runtime_diagnostics(active, reason="update-idle-still-waiting")
+            last_diag = now
         if now - last_log >= _UPDATE_IDLE_LOG_SEC:
             logger.info(
                 "%s: %s",
