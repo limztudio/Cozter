@@ -705,29 +705,40 @@ class SignalBot(BotPlatform):
         return resolved
 
     async def _resolve_group_id(self, group_url: str) -> str:
-        group_id = await self._find_group_id_by_url(group_url)
-        if group_id:
-            return group_id
+        group = await self._find_group_by_url(group_url)
+        if group:
+            group_id = _group_id(group)
+            if _signal_group_is_member(group):
+                return group_id
 
+        joined_group_id = ""
         try:
             joined = await self._rpc_request("joinGroup", {"uri": group_url})
-            group_id = _first_group_id_from_value(joined)
-            if group_id:
-                return group_id
+            joined_group_id = _first_group_id_from_value(joined)
         except SignalCliError as e:
             if "already" not in str(e).casefold():
                 raise
 
-        group_id = await self._find_group_id_by_url(group_url)
-        if group_id:
-            return group_id
+        group = await self._find_group_by_url(group_url)
+        if group:
+            group_id = _group_id(group)
+            if _signal_group_is_member(group):
+                return group_id
+            raise RuntimeError(
+                "Signal group URL resolved but the bot is not a member: "
+                f"{group_url!r}"
+            )
+        if joined_group_id:
+            return joined_group_id
 
         raise RuntimeError(
             "Signal group URL could not be resolved after joinGroup: "
             f"{group_url!r}"
         )
 
-    async def _find_group_id_by_url(self, group_url: str) -> str | None:
+    async def _find_group_by_url(
+        self, group_url: str,
+    ) -> dict[str, Any] | None:
         groups = await self._rpc_request("listGroups")
         wanted = _normalize_group_url(group_url)
         for group in _extract_groups_from_value(groups):
@@ -736,7 +747,7 @@ class SignalBot(BotPlatform):
                 continue
             for url in _group_invite_urls(group):
                 if _normalize_group_url(url) == wanted:
-                    return group_id
+                    return group
         return None
 
     def _group_id_for_chat(self, chat_id: str) -> str:
@@ -1424,6 +1435,10 @@ def _group_id(group: dict[str, Any]) -> str:
         if normalized:
             return normalized
     return ""
+
+
+def _signal_group_is_member(group: dict[str, Any]) -> bool:
+    return group.get("isMember") is not False
 
 
 def _group_invite_urls(group: dict[str, Any]) -> list[str]:
