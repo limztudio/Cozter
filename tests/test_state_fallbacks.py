@@ -9,7 +9,7 @@ import shutil
 from datetime import datetime
 
 from Cozter import colony, config, schedules, session, workspace
-from Cozter.backends_bot.base import BotPlatform
+from Cozter.backends_bot.base import BotContext, BotPlatform
 
 
 class QueueRestoreBot(BotPlatform):
@@ -740,6 +740,58 @@ class QueueStateFallbackTests(unittest.TestCase):
                     )
                     self.assertFalse(bot._ensure_task_lock("u1").locked())
                 finally:
+                    workspace.CONFIG_DIR = old_config_dir
+
+        asyncio.run(run())
+
+    def test_answer_while_lock_held_resumes_paused_queue(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                try:
+                    bot = QueueDrainBot()
+                    q = bot._ensure_message_queue("u1")
+                    old_id = await bot._persist_enqueue(
+                        "u1", "old queued", "chat",
+                    )
+                    q.put_nowait(("old queued", "chat", old_id, False))
+                    lock = bot._ensure_task_lock("u1")
+                    await lock.acquire()
+                    bot._awaiting_answer.add("u1")
+                    ctx = BotContext(
+                        user_id="u1",
+                        chat_id="chat",
+                        text="answer",
+                        command=None,
+                        args="",
+                        attachment=None,
+                        platform=bot,
+                    )
+
+                    await bot._dispatch_ai(ctx, "answer")
+                    await asyncio.sleep(0)
+
+                    self.assertNotIn("u1", bot._awaiting_answer)
+                    self.assertEqual(q.qsize(), 2)
+                    first = q.get_nowait()
+                    second = q.get_nowait()
+                    self.assertEqual(first[0], "answer")
+                    self.assertEqual(second[0], "old queued")
+                    q.put_nowait(first)
+                    q.put_nowait(second)
+
+                    lock.release()
+                    await bot._drain_message_queue("u1")
+
+                    self.assertEqual(
+                        bot.ran,
+                        [("chat", "answer"), ("chat", "old queued")],
+                    )
+                    self.assertFalse(bot._ensure_task_lock("u1").locked())
+                finally:
+                    if bot._ensure_task_lock("u1").locked():
+                        bot._ensure_task_lock("u1").release()
                     workspace.CONFIG_DIR = old_config_dir
 
         asyncio.run(run())

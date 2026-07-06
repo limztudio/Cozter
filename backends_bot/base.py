@@ -431,6 +431,25 @@ class BotPlatform(ABC):
             q.put_nowait(entry)
         return selected
 
+    @staticmethod
+    def _promote_queue_entry(
+        q: asyncio.Queue, entry_id: str,
+    ) -> None:
+        """Move a queued entry to the front, preserving all others."""
+        selected: QueueEntry | None = None
+        buffered: list[QueueEntry] = []
+        while not q.empty():
+            entry = q.get_nowait()
+            if selected is None and entry[2] == entry_id:
+                selected = entry
+            else:
+                buffered.append(entry)
+
+        if selected is not None:
+            q.put_nowait(selected)
+        for entry in buffered:
+            q.put_nowait(entry)
+
     # ----- simple commands ------------------------------------------------
 
     async def cmd_start(self, ctx: BotContext) -> None:
@@ -1699,10 +1718,22 @@ class BotPlatform(ABC):
             if q.full():
                 await ctx.reply_text("Queue full. Wait or /stop first.")
             else:
+                was_awaiting = uid in self._awaiting_answer
                 entry_id = await self._persist_enqueue(
                     uid, text, chat_id,
                 )
                 await q.put((text, chat_id, entry_id, False))
+                if was_awaiting:
+                    # The user answered while the previous turn was still
+                    # sending/cleaning up. Resume the queue and make this
+                    # answer run before older normal backlog.
+                    self._awaiting_answer.discard(uid)
+                    self._promote_queue_entry(q, entry_id)
+                    logger.info(
+                        "User %s answered while turn was finishing;"
+                        " queue resumed",
+                        uid,
+                    )
                 await ctx.reply_text(
                     f"Queued ({q.qsize()}/{self.max_queue_size})."
                 )
