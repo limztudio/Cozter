@@ -50,12 +50,12 @@ _COLLABORATION_POLICY = (
     "or open to more than one reasonable interpretation, or before any "
     "large-scope, destructive, or hard-to-reverse action, ask the user "
     "one short, specific question instead of guessing, and end that reply "
-    "with \"[[await]]\". The bot will pause — including any queued "
-    "messages or scheduled commands — until the user's next message, "
-    "which you should treat as the answer. For small, reversible, "
-    "clearly-scoped choices, pick a sensible option, state it in one "
-    "line, and keep going; don't ask about things that wouldn't change "
-    "what the user does next."
+    "with \"[[await]]\". The bot will pause normal queued chat work until "
+    "the user's next message, which you should treat as the answer. "
+    "Scheduled /reserve tasks are autonomous and may still run while the "
+    "chat queue is paused. For small, reversible, clearly-scoped choices, "
+    "pick a sensible option, state it in one line, and keep going; don't "
+    "ask about things that wouldn't change what the user does next."
 )
 
 _AUTONOMY_POLICY = (
@@ -71,6 +71,18 @@ def _capability_hint(collaborative: bool) -> str:
     """Build the per-turn preamble (collaboration vs autonomy policy)."""
     policy = _COLLABORATION_POLICY if collaborative else _AUTONOMY_POLICY
     return f"[System: {_ATTACH_HINT}\n\n{policy}]"
+
+
+def _is_collaborative_turn(
+    workspace_path: str, *, explicit_session: bool,
+) -> bool:
+    """Return whether this turn may pause for a live user answer."""
+    return (
+        not explicit_session
+        and workspace_mod.get_interaction_style(workspace_path)
+        == "collaborative"
+    )
+
 
 MAX_HISTORY_CHARS = 50_000
 
@@ -654,10 +666,8 @@ async def _run_turn(
     # ephemeral turns (explicit_session) can't pause on [[await]], so they
     # always run under the autonomous policy. Resolved once and reused
     # across inject restarts.
-    collaborative = (
-        not explicit_session
-        and workspace_mod.get_interaction_style(workspace_path)
-        == "collaborative"
+    collaborative = _is_collaborative_turn(
+        workspace_path, explicit_session=explicit_session,
     )
 
     # Character budget for the prepended context block; configurable per

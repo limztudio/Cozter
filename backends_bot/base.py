@@ -125,6 +125,7 @@ class BotContext:
 
 # Handler signature: callback taking a BotContext.
 Handler = Callable[[BotContext], Awaitable[None]]
+QueueEntry = tuple[str, str, str, bool]
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +404,32 @@ class BotPlatform(ABC):
             q = replacement
             self._message_queues[uid] = q
         return q
+
+    @staticmethod
+    def _pop_next_queue_entry(
+        q: asyncio.Queue, *, ephemeral_only: bool = False,
+    ) -> QueueEntry | None:
+        """Pop the next runnable queue entry.
+
+        When a collaborative turn is awaiting an answer, normal chat
+        entries must remain paused, but scheduled ``/reserve`` entries
+        are independent ephemeral runs and may continue.
+        """
+        if not ephemeral_only:
+            return q.get_nowait()
+
+        selected: QueueEntry | None = None
+        buffered: list[QueueEntry] = []
+        while not q.empty():
+            entry = q.get_nowait()
+            if selected is None and entry[3]:
+                selected = entry
+            else:
+                buffered.append(entry)
+
+        for entry in buffered:
+            q.put_nowait(entry)
+        return selected
 
     # ----- simple commands ------------------------------------------------
 
@@ -2010,17 +2037,23 @@ class BotPlatform(ABC):
                 break
             if lock.locked():
                 break
-            # Agent ended its last reply with [[await]] — pause the queue
-            # until the user sends an answer (which clears the flag in
-            # _dispatch_ai).
-            if uid in self._awaiting_answer:
-                break
             await lock.acquire()
             try:
-                text, msg_chat_id, entry_id, ephemeral = q.get_nowait()
+                entry = self._pop_next_queue_entry(
+                    q,
+                    ephemeral_only=uid in self._awaiting_answer,
+                )
             except asyncio.QueueEmpty:
                 lock.release()
                 break
+            if entry is None:
+                # Agent ended its last interactive reply with [[await]].
+                # Leave normal chat entries paused until the user sends
+                # an answer, but scheduled ephemeral entries above can
+                # still drain while the queue is in that state.
+                lock.release()
+                break
+            text, msg_chat_id, entry_id, ephemeral = entry
 
             # Entries survive across restarts, which means a user may
             # have been de-authorized between persist and drain. Drop

@@ -5,9 +5,10 @@ to a character budget, dropping the oldest recent messages first. A larger
 budget must keep more history; the user's new message is always present.
 """
 
+import tempfile
 import unittest
 
-from Cozter import agent
+from Cozter import agent, workspace
 
 
 def _messages(n: int) -> list[dict]:
@@ -46,6 +47,23 @@ class ContextBudgetTests(unittest.TestCase):
     def test_no_context_returns_prompt_unchanged(self) -> None:
         out = agent._build_contextual_prompt("hi", None)
         self.assertEqual(out, "hi")
+
+
+class PromptPolicyTests(unittest.TestCase):
+    def test_explicit_session_turn_is_autonomous(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace.set_interaction_style(tmp, "collaborative")
+
+            self.assertTrue(
+                agent._is_collaborative_turn(
+                    tmp, explicit_session=False,
+                ),
+            )
+            self.assertFalse(
+                agent._is_collaborative_turn(
+                    tmp, explicit_session=True,
+                ),
+            )
 
 
 class FormatUsageTests(unittest.TestCase):

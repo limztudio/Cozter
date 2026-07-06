@@ -45,6 +45,47 @@ class QueueRestoreBot(BotPlatform):
         self.drained_users.append(uid)
 
 
+class QueueDrainBot(BotPlatform):
+    def __init__(self) -> None:
+        super().__init__(["u1"], max_queue_size=5)
+        self.ran: list[tuple[str, str]] = []
+
+    @property
+    def platform_id(self) -> str:
+        return "test:queue"
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def send_text(self, chat_id: str, text: str, *, rich: bool = False):
+        return None
+
+    async def edit_text(
+        self, handle, text: str, *, rich: bool = False,
+    ) -> None:
+        pass
+
+    async def delete_message(self, handle) -> None:
+        pass
+
+    async def send_file(self, chat_id: str, path: str) -> None:
+        pass
+
+    async def _run_turn(
+        self, uid: str, chat_id: str, text: str,
+        *, session_id: str | None = None,
+    ) -> None:
+        self.ran.append(("chat", text))
+
+    async def _run_ephemeral_turn(
+        self, uid: str, chat_id: str, text: str,
+    ) -> None:
+        self.ran.append(("scheduled", text))
+
+
 class WorkspaceStateFallbackTests(unittest.TestCase):
     def test_invalid_workspace_settings_fall_back_to_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -662,6 +703,46 @@ class QueueStateFallbackTests(unittest.TestCase):
                         ("second", "chat", "second-id", True),
                     )
                     self.assertEqual(bot.drained_users, ["u1"])
+                finally:
+                    workspace.CONFIG_DIR = old_config_dir
+
+        asyncio.run(run())
+
+    def test_awaiting_answer_does_not_block_scheduled_entries(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                try:
+                    bot = QueueDrainBot()
+                    q = bot._ensure_message_queue("u1")
+                    q.put_nowait((
+                        "chat waits", "chat", "chat-id", False,
+                    ))
+                    q.put_nowait((
+                        "scheduled runs", "chat", "sched-id", True,
+                    ))
+                    q.put_nowait((
+                        "chat still waits", "chat", "chat-2-id", False,
+                    ))
+                    bot._awaiting_answer.add("u1")
+
+                    await bot._drain_message_queue("u1")
+
+                    self.assertEqual(
+                        bot.ran, [("scheduled", "scheduled runs")],
+                    )
+                    self.assertIn("u1", bot._awaiting_answer)
+                    self.assertEqual(q.qsize(), 2)
+                    self.assertEqual(
+                        q.get_nowait(),
+                        ("chat waits", "chat", "chat-id", False),
+                    )
+                    self.assertEqual(
+                        q.get_nowait(),
+                        ("chat still waits", "chat", "chat-2-id", False),
+                    )
+                    self.assertFalse(bot._ensure_task_lock("u1").locked())
                 finally:
                     workspace.CONFIG_DIR = old_config_dir
 

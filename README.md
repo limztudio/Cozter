@@ -278,7 +278,9 @@ the host's local time. The scheduler checks every 30 seconds and records
 `last_fired`, so a missed slot fires once after restart instead of being
 lost. Scheduled prompts run through the same persistent queue as user
 messages, but use a fresh ephemeral session that is deleted after the
-turn; they do not append to the user's current conversation.
+turn; they do not append to the user's current conversation. They run
+autonomously and can continue even while normal chat work is paused
+waiting for a collaborative `[[await]]` answer.
 
 ## Files and attachments
 
@@ -447,7 +449,8 @@ workspace:
 
 Scheduled `/reserve` turns run in throwaway sessions that cannot pause for
 a reply, so they always use the autonomous policy regardless of this
-setting.
+setting. They can also drain past a paused collaborative chat queue;
+ordinary queued chat still waits for the user's answer.
 
 ## Architecture
 
