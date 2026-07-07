@@ -239,6 +239,41 @@ class ConfirmPermissionGateTests(unittest.TestCase):
         self.assertNotIn("bash", names)
 
 
+class ExecuteToolTimeoutTests(unittest.TestCase):
+    def test_execute_tool_enforces_configured_timeout(self) -> None:
+        class SlowTool:
+            file_action = None
+
+            async def run(self, workspace_path: str, args: dict) -> str:
+                del workspace_path, args
+                await asyncio.sleep(60)
+                return "finished"
+
+        async def run() -> tuple[str, list[dict]]:
+            events: list[dict] = []
+            return (
+                await agent_tools.execute_tool(
+                    "slow_test", {}, "/tmp", "auto", events.append,
+                ),
+                events,
+            )
+
+        original_tools = agent_tools._BY_NAME
+        original_timeout = agent_tools.tool_timeout
+        agent_tools._BY_NAME = {**original_tools, "slow_test": SlowTool()}
+        agent_tools.tool_timeout = lambda: 0.01
+        try:
+            result, events = asyncio.run(run())
+        finally:
+            agent_tools._BY_NAME = original_tools
+            agent_tools.tool_timeout = original_timeout
+
+        self.assertIn("Tool slow_test timed out after 0.01s", result)
+        self.assertEqual(events[0]["type"], "tool_use")
+        self.assertEqual(events[-1]["type"], "tool_result")
+        self.assertEqual(events[-1]["output"], result)
+
+
 class ParseOpenAICallTests(unittest.TestCase):
     def test_string_arguments(self) -> None:
         name, args = agent_tools.parse_openai_call(

@@ -34,6 +34,7 @@ Backends consume:
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import logging
@@ -219,8 +220,19 @@ async def execute_tool(
     if tool is None:
         result = f"Unknown tool: {name}"
     else:
+        timeout = tool_timeout()
         try:
-            result = await tool.run(workspace_path, args)
+            result = await asyncio.wait_for(
+                tool.run(workspace_path, args),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error("Tool %s exceeded tool_timeout=%ss", name, timeout)
+            result = (
+                f"Tool {name} timed out after {timeout:g}s and was aborted."
+                " It may be stuck on blocking I/O or an infinite loop. Try a"
+                " narrower request or a different approach."
+            )
         except Exception as exc:
             result = f"Tool {name} failed: {exc}"
 

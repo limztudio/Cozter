@@ -203,40 +203,11 @@ class OpenAIChatBackend(Backend):
                             "output": result,
                         })
                     else:
-                        # Hard backstop so a plugin or custom tool that
-                        # hangs (blocking I/O, infinite loop) can't wedge
-                        # the whole agent turn - which would otherwise
-                        # stall has_active_turns() and the update loop.
-                        # The builtin bash tool enforces its own cap; this
-                        # covers everything else. On timeout we feed the
-                        # model an error result so the turn can continue
-                        # (e.g. retry with a different approach) rather
-                        # than silently dropping the call.
-                        try:
-                            result = await asyncio.wait_for(
-                                tools.execute_tool(
-                                    name, args, workspace_path,
-                                    approval, proc.emit,
-                                ),
-                                timeout=tools.tool_timeout(),
-                            )
-                        except asyncio.TimeoutError:
-                            logger.error(
-                                "%s tool %s exceeded tool_timeout=%ds",
-                                self.name, name, tools.tool_timeout(),
-                            )
-                            result = (
-                                f"Tool {name} timed out after"
-                                f" {tools.tool_timeout()}s and was aborted."
-                                " It may be stuck on blocking I/O or an"
-                                " infinite loop. Try a narrower request"
-                                " or a different approach."
-                            )
-                            proc.emit({
-                                "type": "tool_result",
-                                "name": name,
-                                "output": result,
-                            })
+                        # execute_tool owns permission checks, status events,
+                        # result truncation, and the per-tool timeout.
+                        result = await tools.execute_tool(
+                            name, args, workspace_path, approval, proc.emit,
+                        )
 
                     # Include ``name`` alongside tool_call_id; strict
                     # servers reject tool messages without it.
