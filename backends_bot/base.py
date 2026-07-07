@@ -458,6 +458,38 @@ class BotPlatform(ABC):
         for entry in buffered:
             q.put_nowait(entry)
 
+    async def _persist_promote(
+        self, uid: str, entry_id: str,
+    ) -> None:
+        """Move a persisted queue entry to the front for restart parity."""
+        async with self._queue_file_lock:
+            data = self._read_queue_file()
+            entries = self._queue_entries(data.get(uid))
+            selected: dict | None = None
+            remaining: list[dict] = []
+            for entry in entries:
+                if selected is None and entry.get("id") == entry_id:
+                    selected = entry
+                else:
+                    remaining.append(entry)
+            if selected is None:
+                return
+            data[uid] = [selected, *remaining]
+            self._write_queue_file(data)
+
+    async def _resume_awaiting_answer(
+        self, uid: str, q: asyncio.Queue, entry_id: str, *,
+        reason: str,
+    ) -> bool:
+        """Clear an answer pause and promote the answer before backlog."""
+        if uid not in self._awaiting_answer:
+            return False
+        self._awaiting_answer.discard(uid)
+        self._promote_queue_entry(q, entry_id)
+        await self._persist_promote(uid, entry_id)
+        logger.info("User %s answered while %s; queue resumed", uid, reason)
+        return True
+
     # ----- simple commands ------------------------------------------------
 
     async def cmd_start(self, ctx: BotContext) -> None:
@@ -1717,6 +1749,9 @@ class BotPlatform(ABC):
                     uid, text, chat_id,
                 )
                 await q.put((text, chat_id, entry_id, False))
+                await self._resume_awaiting_answer(
+                    uid, q, entry_id, reason="update was pending",
+                )
                 if self._update_restart_pending:
                     message = (
                         "Update restart pending. Queued for after restart."
@@ -1739,15 +1774,8 @@ class BotPlatform(ABC):
                 )
                 await q.put((text, chat_id, entry_id, False))
                 if was_awaiting:
-                    # The user answered while the previous turn was still
-                    # sending/cleaning up. Resume the queue and make this
-                    # answer run before older normal backlog.
-                    self._awaiting_answer.discard(uid)
-                    self._promote_queue_entry(q, entry_id)
-                    logger.info(
-                        "User %s answered while turn was finishing;"
-                        " queue resumed",
-                        uid,
+                    await self._resume_awaiting_answer(
+                        uid, q, entry_id, reason="turn was finishing",
                     )
                 await ctx.reply_text(
                     f"Queued ({q.qsize()}/{self.max_queue_size})."

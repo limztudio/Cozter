@@ -802,6 +802,59 @@ class QueueStateFallbackTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_answer_during_update_check_resumes_paused_queue(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                try:
+                    bot = QueueDrainBot()
+                    q = bot._ensure_message_queue("u1")
+                    old_id = await bot._persist_enqueue(
+                        "u1", "old queued", "chat",
+                    )
+                    q.put_nowait(("old queued", "chat", old_id, False))
+                    bot._awaiting_answer.add("u1")
+                    bot._update_check_pending = True
+                    ctx = BotContext(
+                        user_id="u1",
+                        chat_id="chat",
+                        text="answer",
+                        command=None,
+                        args="",
+                        attachment=None,
+                        platform=bot,
+                    )
+
+                    await bot._dispatch_ai(ctx, "answer")
+
+                    self.assertNotIn("u1", bot._awaiting_answer)
+                    self.assertEqual(q.qsize(), 2)
+                    first = q.get_nowait()
+                    second = q.get_nowait()
+                    self.assertEqual(first[0], "answer")
+                    self.assertEqual(second[0], "old queued")
+                    persisted = bot._read_queue_file()["u1"]
+                    self.assertEqual(
+                        [entry["text"] for entry in persisted],
+                        ["answer", "old queued"],
+                    )
+                    q.put_nowait(first)
+                    q.put_nowait(second)
+
+                    bot._update_check_pending = False
+                    await bot._drain_message_queue("u1")
+
+                    self.assertEqual(
+                        bot.ran,
+                        [("chat", "answer"), ("chat", "old queued")],
+                    )
+                    self.assertFalse(bot._ensure_task_lock("u1").locked())
+                finally:
+                    workspace.CONFIG_DIR = old_config_dir
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()
