@@ -476,7 +476,7 @@ Cozter/
 ├── requirements.txt      Python runtime dependencies installed into .venv
 ├── py.typed              marks the package as typed for downstream checkers
 ├── .config/              runtime config dir; only config.example.json is tracked
-├── backends_bot/         chat surfaces (Telegram / Slack / Signal / CLI)
+├── backends_bot/         chat surfaces and shared chat formatting
 ├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
 ├── session.py            per-workspace conversation persistence
 ├── compaction.py         scratch-summary + long-term-memory rewriter
@@ -519,8 +519,8 @@ ignored for local secrets and runtime queues.
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
   `colony.py`, and `schedules.py`
-- Chat-platform adapters: `backends_bot/base.py`, `cli.py`,
-  `telegram.py`, `slack.py`, and `signal.py`
+- Chat-platform adapters: `backends_bot/base.py`, `formatting.py`,
+  `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/base.py`, `_http_proc.py`,
   `_openai_agent.py`, `codex.py`, `claude_code.py`, `copilot.py`,
   `llama.py`, and `zai.py`
@@ -533,8 +533,9 @@ ignored for local secrets and runtime queues.
 - Tests: `tests/conftest.py` plus focused `unittest` modules for
   agent attachments and prompts, backend event parsing and retry
   behavior, bot commands, import binding, run locks, session picking,
-  Signal formatting, state fallbacks, thinking-status display, updater
-  behavior, utilities, and the built-in/plugin tool surface
+  platform and Signal formatting, runtime diagnostics, state fallbacks,
+  thinking-status display, updater behavior, utilities, and the
+  built-in/plugin tool surface
 
 The normal working checkout may also contain ignored runtime state such as
 `.venv/`, `.cozter/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
@@ -548,7 +549,8 @@ that owns them:
 - Config keys and defaults: `config.py`'s `_DEFAULT_CONFIG` and
   `.config/config.example.json`
 - Commands and command behavior: `backends_bot/base.py`, with platform
-  registration in `telegram.py`, `slack.py`, `signal.py`, and `cli.py`
+  registration in `telegram.py`, `slack.py`, `signal.py`, and `cli.py`;
+  shared fenced-Markdown rendering lives in `backends_bot/formatting.py`
 - Backend names, model defaults, effort bands, and health checks:
   `backends_agent/__init__.py` plus the concrete backend modules
 - Tool/plugin behavior: `agent_tools/__init__.py`, `agent_tools/base.py`,
@@ -586,7 +588,7 @@ Do not commit these runtime artifacts:
 - `.cozter/` — sessions, workspace settings, colony memory, schedules,
   uploads, and generated images; this directory can appear at the repo
   root when Cozter is used on its own checkout
-- `.log/` — rotating runtime logs and crash reports
+- `.log/` - rotating runtime logs, diagnostics dumps, and crash reports
 - `.venv/`, `__pycache__/`, `.ruff_cache/`, coverage output, and build
   artifacts
 - Local assistant/editor directories, such as `.claude/`, unless you
@@ -623,6 +625,20 @@ equivalent) brings daemon mode back. CLI mode uses an outer respawner
 process and relaunches itself in the same terminal. Persisted queues
 resume after either path starts again.
 
+## Runtime diagnostics
+
+`__main__.py` writes rotating warning/error logs to `.log/cozter.log`.
+Unhandled exceptions also get timestamped crash files in `.log/`, and
+asyncio/thread dumps go to `.log/diagnostics.log`. On Unix-like hosts,
+send `SIGUSR1` to the running daemon process to dump tasks, thread
+stacks, and per-platform active-turn state without restarting it.
+
+If `dump_traceback_interval` is set above zero, faulthandler emits
+periodic stack dumps to the same diagnostics file. The auto-update path
+uses the same machinery when it has waited longer than
+`update_idle_timeout` for active turns to finish: it records diagnostics
+and keeps waiting instead of killing in-flight work.
+
 ## Reading order
 
 If you want to understand the codebase, the high-leverage entry points
@@ -648,8 +664,9 @@ Run the current unit tests from the parent directory, or set
 covers malformed state/config fallbacks, persistent queue restoration,
 schedule parsing, backend model defaults and event parsing,
 subprocess-drain behavior, prompt construction, attachment handling,
-run-lock cancellation, session picking, Signal rich-text formatting,
-updater behavior, agent-tool helpers, and built-in discovery/edit tools.
+run-lock cancellation, session picking, platform/Signal rich-text
+formatting, runtime diagnostics, updater behavior, agent-tool helpers,
+and built-in discovery/edit tools.
 
 ```bash
 cd ..
