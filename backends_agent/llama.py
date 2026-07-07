@@ -48,10 +48,7 @@ class LlamaBackend(OpenAIChatBackend):
         try:
             with urllib.request.urlopen(url, timeout=2.0) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
-            ids = tuple(
-                m["id"] for m in payload.get("data", [])
-                if isinstance(m, dict) and isinstance(m.get("id"), str)
-            )
+            ids = _model_ids(payload)
             return ids or ("auto",)
         except Exception as exc:
             logger.debug(
@@ -69,10 +66,7 @@ class LlamaBackend(OpenAIChatBackend):
                 payload = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
             return False, f"server unreachable at {url}: {exc}"
-        ids = [
-            m.get("id") for m in payload.get("data", [])
-            if isinstance(m, dict) and isinstance(m.get("id"), str)
-        ]
+        ids = _model_ids(payload)
         if ids:
             return True, f"server up at {url} ({len(ids)} model(s))"
         return True, f"server up at {url} (no models listed)"
@@ -98,3 +92,11 @@ class LlamaBackend(OpenAIChatBackend):
 
     def _max_retries(self) -> int:
         return cfg.get_llama_max_retries()
+
+
+def _model_ids(payload: dict) -> tuple[str, ...]:
+    """Extract valid model IDs from an OpenAI-style /models payload."""
+    return tuple(
+        model["id"] for model in payload.get("data", [])
+        if isinstance(model, dict) and isinstance(model.get("id"), str)
+    )

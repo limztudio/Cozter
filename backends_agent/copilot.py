@@ -23,7 +23,7 @@ import sys
 
 from .base import (
     AgentResult, Backend, ChatEvent, append_text_result, executable_command,
-    set_error_result,
+    set_error_result, truncate_status_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -185,11 +185,9 @@ class CopilotBackend(Backend):
             output = event.get("output") or event.get("result") or ""
             if isinstance(output, (dict, list)):
                 output = str(output)
-            if len(output) > 200:
-                output = output[:200] + "..."
             content = f"{tool} done"
             if output:
-                content += f"\n{output}"
+                content += f"\n{truncate_status_text(output)}"
             result.events.append(ChatEvent(kind="tool", content=content))
             return
 

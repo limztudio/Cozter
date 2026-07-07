@@ -42,13 +42,13 @@ def get_backend(name: str | None) -> Backend:
 
 
 __all__ = [
-    "Backend",
-    "CodexBackend",
-    "CopilotBackend",
-    "ClaudeCodeBackend",
-    "LlamaBackend",
-    "ZaiBackend",
     "AVAILABLE_BACKENDS",
     "DEFAULT_BACKEND",
+    "Backend",
+    "ClaudeCodeBackend",
+    "CodexBackend",
+    "CopilotBackend",
+    "LlamaBackend",
+    "ZaiBackend",
     "get_backend",
 ]

@@ -6,6 +6,7 @@ import logging
 from .base import (
     AgentResult, Backend, ChatEvent, append_text_result,
     create_prompt_subprocess, executable_command, set_error_result,
+    truncate_status_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,9 +80,7 @@ class CodexBackend(Backend):
                 output = item.get("aggregated_output", "")
                 summary = f"$ {cmd} (exit {exit_code})"
                 if output:
-                    if len(output) > 200:
-                        output = output[:200] + "..."
-                    summary += f"\n{output}"
+                    summary += f"\n{truncate_status_text(output)}"
                 result.events.append(ChatEvent(kind="tool", content=summary))
 
             elif item_type == "file_change":

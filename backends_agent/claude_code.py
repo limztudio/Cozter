@@ -24,6 +24,7 @@ import os
 from .base import (
     AgentResult, Backend, ChatEvent, append_text_result,
     create_prompt_subprocess, executable_command, set_error_result,
+    truncate_status_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -222,9 +223,10 @@ class ClaudeCodeBackend(Backend):
         # Bash gets the command itself; other tools get just their name.
         if tool == "Bash":
             cmd = inp.get("command") or "?"
-            if len(cmd) > 200:
-                cmd = cmd[:200] + "..."
-            result.events.append(ChatEvent(kind="tool", content=f"$ {cmd}"))
+            result.events.append(ChatEvent(
+                kind="tool",
+                content=f"$ {truncate_status_text(cmd)}",
+            ))
             return
 
         # Best-effort summary for generic tools.

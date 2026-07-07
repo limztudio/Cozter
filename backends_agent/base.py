@@ -84,6 +84,12 @@ def set_error_result(
     append_text_result(result, display_text or f"Error: {message}")
 
 
+def truncate_status_text(text: object, *, limit: int = 200) -> str:
+    """Return a clipped preview for status events."""
+    value = text if isinstance(text, str) else str(text)
+    return value if len(value) <= limit else value[:limit] + "..."
+
+
 async def create_prompt_subprocess(
     cmd: list[str],
     prompt: str,

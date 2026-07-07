@@ -105,6 +105,6 @@ class WebSearchTool(AgentTool):
 def _ddg_unwrap_url(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     qs = urllib.parse.parse_qs(parsed.query)
-    if "uddg" in qs and qs["uddg"]:
+    if qs.get("uddg"):
         return qs["uddg"][0]
     return url

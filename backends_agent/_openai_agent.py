@@ -489,10 +489,10 @@ def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
         "type": "function",
         "function": {"name": "", "arguments": ""},
     })
-    if "id" in delta and delta["id"]:
+    if delta.get("id"):
         buf["id"] = delta["id"]
     fn = delta.get("function") or {}
-    if "name" in fn and fn["name"]:
+    if fn.get("name"):
         buf["function"]["name"] = fn["name"]
     args_frag = fn.get("arguments")
     if isinstance(args_frag, str):
