@@ -14,21 +14,13 @@ logger = logging.getLogger(__name__)
 class CodexBackend(Backend):
     name = "codex"
     executable = "codex"
-    # OpenAI's Codex CLI/API model snapshot. gpt-5.5 remains the
-    # recommended default; gpt-5.6 is partner-gated preview, so keep it
-    # selectable for eligible accounts but do not promote it to default.
-    # gpt-5.3-codex is the long-term-support agentic coding model
-    # (recommended replacement for the retired gpt-5.2-codex, committed
-    # through Feb 2027 in Copilot). Older Codex-lineage ids (gpt-5-codex
-    # through gpt-5.2-codex) were removed from the picker and shut down on
-    # the API (July 2026). Spark is a Pro-only research-preview option.
+    # OpenAI's Codex model snapshot. Keep this to the documented Codex
+    # picker models; API-only, private, and provider-routed models can still
+    # be added through config.extra_models.
     available_models = (
         "gpt-5.5",
-        "gpt-5.6",
         "gpt-5.4",
         "gpt-5.4-mini",
-        "gpt-5.4-nano",
-        "gpt-5.3-codex",
         "gpt-5.3-codex-spark",
     )
     default_model = "gpt-5.5"
