@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import shutil
 
 from ..base import AgentTool, coerce_int_arg
@@ -57,6 +58,7 @@ class BashTool(AgentTool):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=workspace_path,
+                start_new_session=os.name != "nt",
             )
         except FileNotFoundError:
             return "Error: shell not found"
@@ -65,19 +67,11 @@ class BashTool(AgentTool):
             async with asyncio.timeout(timeout):
                 stdout, _ = await proc.communicate()
         except TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except OSError:
-                pass
+            await _kill_command_tree(proc)
             return f"Error: command timed out after {timeout}s"
         except asyncio.CancelledError:
             # /stop fired mid-command - kill the shell so we don't leak it.
-            try:
-                proc.kill()
-                await proc.wait()
-            except OSError:
-                pass
+            await _kill_command_tree(proc)
             raise
 
         output = stdout.decode("utf-8", errors="replace")
@@ -105,3 +99,23 @@ def _find_shell() -> list[str] | None:
     if sh:
         return [sh, "-c"]
     return None
+
+
+async def _kill_command_tree(proc: asyncio.subprocess.Process) -> None:
+    """Terminate the shell and any children it spawned."""
+    if proc.returncode is not None:
+        return
+    try:
+        if os.name == "nt":
+            proc.kill()
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+        await proc.wait()
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except OSError:
+            return

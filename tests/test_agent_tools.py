@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 from Cozter import agent_tools
@@ -12,6 +13,7 @@ from Cozter.agent_tools.base import (
     validate_replacement_strings,
 )
 from Cozter.agent_tools.builtin.apply_patch import ApplyPatchTool
+from Cozter.agent_tools.builtin.bash import BashTool
 from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin.grep import GrepTool
@@ -79,6 +81,55 @@ class BuiltinEditToolTests(unittest.TestCase):
                     self.assertEqual(f.read(), "alpha gamma")
 
         asyncio.run(run())
+
+
+class BashToolTests(unittest.TestCase):
+    @staticmethod
+    def _process_is_running(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        if os.name == "posix":
+            try:
+                with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+                    stat = f.read()
+            except OSError:
+                return True
+            parts = stat.split()
+            if len(parts) > 2 and parts[2] == "Z":
+                return False
+        return True
+
+    @unittest.skipIf(os.name == "nt", "POSIX process group behavior")
+    def test_timeout_kills_child_process_group(self) -> None:
+        async def run() -> tuple[str, int]:
+            with tempfile.TemporaryDirectory() as tmp:
+                pid_path = os.path.join(tmp, "child.pid")
+                result = await BashTool().run(
+                    tmp,
+                    {
+                        "command": "sleep 30 & echo $! > child.pid; wait",
+                        "timeout": 1,
+                    },
+                )
+                with open(pid_path, encoding="utf-8") as f:
+                    child_pid = int(f.read().strip())
+                return result, child_pid
+
+        result, child_pid = asyncio.run(run())
+        self.assertIn("timed out after 1s", result)
+
+        deadline = time.monotonic() + 2
+        while self._process_is_running(child_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        self.assertFalse(
+            self._process_is_running(child_pid),
+            f"child process {child_pid} survived bash tool timeout",
+        )
 
 
 class PluginScriptTests(unittest.TestCase):
