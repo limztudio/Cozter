@@ -685,10 +685,12 @@ push and merge request / PR. The canonical pipeline is `.gitlab-ci.yml`
 GitHub. mypy is adopted
 gradually — enforced on clean modules, with pre-existing type debt
 grandfathered per-module in `mypy.ini` (burn the list down over time).
-Run them locally the same way CI does:
+`requirements.txt` contains runtime dependencies only, so install the CI
+tooling explicitly before running the lint and type gates locally:
 
 ```bash
 cd ..
+Cozter/.venv/bin/python -m pip install -r Cozter/requirements.txt ruff mypy
 Cozter/.venv/bin/ruff check Cozter
 Cozter/.venv/bin/mypy --config-file Cozter/mypy.ini -p Cozter
 ```
