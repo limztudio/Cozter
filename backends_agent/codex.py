@@ -41,13 +41,16 @@ class CodexBackend(Backend):
     ) -> asyncio.subprocess.Process:
         prefix = executable_command(self.executable)
         cmd = [*prefix, "exec", "--ephemeral", "--json", "-C", workspace_path]
-        if model:
-            cmd += ["-m", model]
-        native_effort = self.convert_effort(effort)
-        if native_effort:
+        self.append_model_effort_args(
+            cmd,
+            model,
+            effort,
+            model_flag="-m",
+            effort_flag="-c",
             # Codex CLI exposes reasoning effort via the generic config
             # override flag. Unknown levels are rejected by the CLI.
-            cmd += ["-c", f"model_reasoning_effort={native_effort}"]
+            effort_template="model_reasoning_effort={effort}",
+        )
 
         if compaction or approval == "full":
             # Compaction is a trusted internal LLM call with no tool use;

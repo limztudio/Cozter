@@ -199,6 +199,26 @@ class Backend(ABC):
         """
         return effort_band(percent, self.effort_levels)
 
+    def append_model_effort_args(
+        self,
+        cmd: list[str],
+        model: str | None,
+        effort: int,
+        *,
+        model_flag: str,
+        effort_flag: str,
+        effort_template: str = "{effort}",
+    ) -> None:
+        """Append optional model and reasoning-effort CLI arguments."""
+        if model:
+            cmd += [model_flag, model]
+        native_effort = self.convert_effort(effort)
+        if native_effort:
+            cmd += [
+                effort_flag,
+                effort_template.format(effort=native_effort),
+            ]
+
     @abstractmethod
     def parse_event(self, event: dict, result: AgentResult) -> None:
         """Mutate *result* based on a single parsed JSON event line."""

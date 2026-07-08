@@ -165,6 +165,40 @@ class BackendHealthCheckTests(unittest.TestCase):
         ok, _ = self._dummy("sh").health_check()
         self.assertTrue(ok)
 
+    def test_append_model_effort_args(self) -> None:
+        backend = self._dummy("sh")
+        backend.effort_levels = ("low", "high")
+        cmd = ["tool"]
+
+        backend.append_model_effort_args(
+            cmd,
+            "chosen-model",
+            50,
+            model_flag="--model",
+            effort_flag="--effort",
+        )
+
+        self.assertEqual(
+            cmd,
+            ["tool", "--model", "chosen-model", "--effort", "high"],
+        )
+
+    def test_append_model_effort_args_supports_templates(self) -> None:
+        backend = self._dummy("sh")
+        backend.effort_levels = ("low", "high")
+        cmd = ["tool"]
+
+        backend.append_model_effort_args(
+            cmd,
+            None,
+            1,
+            model_flag="-m",
+            effort_flag="-c",
+            effort_template="model_reasoning_effort={effort}",
+        )
+
+        self.assertEqual(cmd, ["tool", "-c", "model_reasoning_effort=low"])
+
     def test_llama_health_check_unreachable(self) -> None:
         def _dead_url() -> str:
             return "http://127.0.0.1:1"
