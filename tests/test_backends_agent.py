@@ -1,3 +1,6 @@
+import json
+import shutil
+import subprocess
 import unittest
 
 from Cozter import config
@@ -52,6 +55,45 @@ class StaticBackendModelTests(unittest.TestCase):
         self.assertNotIn("gpt-5.3-codex", models)
         self.assertNotIn("gpt-5.2-codex", models)
         self.assertNotIn("gpt-5.1-codex", models)
+
+    def test_codex_picker_matches_installed_cli_catalog(self) -> None:
+        codex = shutil.which("codex")
+        if not codex:
+            self.skipTest("codex CLI is not installed")
+
+        try:
+            proc = subprocess.run(
+                [codex, "debug", "models"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            self.skipTest("codex debug models timed out")
+
+        if proc.returncode != 0:
+            self.skipTest(f"codex debug models failed: {proc.stderr.strip()}")
+
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            self.fail(f"codex debug models returned invalid JSON: {exc}")
+
+        catalog = payload.get("models")
+        if not isinstance(catalog, list):
+            self.fail("codex debug models returned no models list")
+
+        visible_models = tuple(
+            model["slug"]
+            for model in catalog
+            if isinstance(model, dict)
+            and model.get("visibility") == "list"
+            and isinstance(model.get("slug"), str)
+        )
+        if not visible_models:
+            self.skipTest("codex debug models returned no visible models")
+
+        self.assertEqual(CodexBackend.available_models, visible_models)
 
     def test_copilot_picker_includes_current_cli_capable_models(self) -> None:
         models = CopilotBackend.available_models
