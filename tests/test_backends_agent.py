@@ -132,6 +132,8 @@ class StaticBackendModelTests(unittest.TestCase):
             "claude-sonnet-5",
             "claude-fable-5",
             "claude-opus-4-8",
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)
@@ -291,9 +293,11 @@ class ZaiBackendTests(unittest.TestCase):
     def test_effort_maps_to_glm_supported_levels(self) -> None:
         backend = ZaiBackend()
         self.assertIsNone(backend.convert_effort(0))
-        self.assertEqual(backend.convert_effort(1), "high")
-        self.assertEqual(backend.convert_effort(49), "high")
-        self.assertEqual(backend.convert_effort(50), "max")
+        self.assertEqual(backend.convert_effort(1), "low")
+        self.assertEqual(backend.convert_effort(20), "medium")
+        self.assertEqual(backend.convert_effort(40), "high")
+        self.assertEqual(backend.convert_effort(60), "xhigh")
+        self.assertEqual(backend.convert_effort(80), "max")
         self.assertEqual(backend.convert_effort(100), "max")
 
 

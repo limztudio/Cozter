@@ -438,7 +438,7 @@ to its own vocabulary:
 |---|---|---|
 | `codex` | 5 levels @ 20% each | `-c model_reasoning_effort=xhigh` |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
-| `zai` | 2 levels @ 50% each | `payload["reasoning_effort"] = "max"` |
+| `zai` | 5 levels @ 20% each | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | 5 levels @ 20% each | `--effort max` |
 | `copilot` | 5 levels @ 20% each | `--effort max` |
 

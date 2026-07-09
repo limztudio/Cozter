@@ -34,8 +34,8 @@ class ZaiBackend(OpenAIChatBackend):
         "glm-5",
         "glm-5-turbo",
         "glm-4.7",
-        "glm-4.7-flashx",
         "glm-4.7-flash",
+        "glm-4.7-flashx",
         "glm-4.6",
         "glm-4.5",
         "glm-4.5-x",
@@ -46,9 +46,9 @@ class ZaiBackend(OpenAIChatBackend):
     )
     default_model = "glm-5.2"
     default_summary_model = "glm-4.5-flash"
-    # GLM-5.2 documents only high/max reasoning_effort values. 0 still
-    # skips the field so the server default applies.
-    effort_levels = ("high", "max")
+    # GLM-5.2 accepts OpenAI-compatible aliases: low/medium map to high
+    # server-side, and xhigh maps to max. 0 still skips the field.
+    effort_levels = ("low", "medium", "high", "xhigh", "max")
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 
