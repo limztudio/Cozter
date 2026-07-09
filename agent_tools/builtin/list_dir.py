@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any, ClassVar
 
 from ..base import (
     AgentTool,
@@ -18,7 +19,7 @@ class ListDirTool(AgentTool):
         "List the entries of a directory in the workspace. Directories"
         " are shown with a trailing slash."
     )
-    parameters = {
+    parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "path": {

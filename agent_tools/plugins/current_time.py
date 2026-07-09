@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any, ClassVar
 
 from ..base import AgentTool
 
@@ -13,7 +14,7 @@ class CurrentTimeTool(AgentTool):
         "Return the current date and time as an ISO 8601 string."
         " Optionally accepts an IANA timezone name."
     )
-    parameters = {
+    parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "timezone": {

@@ -24,6 +24,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
+from typing import ClassVar
 
 from .. import (
     agent, backends_agent, colony, config, schedules, session, updater,
@@ -2169,7 +2170,7 @@ class BotPlatform(ABC):
 
     # Command registry --------------------------------------------------
     # Populated at class body end to avoid forward-reference issues.
-    _COMMANDS: dict[str, Handler] = {}
+    _COMMANDS: ClassVar[dict[str, Handler]] = {}
 
 
 def _build_command_registry() -> dict[str, Handler]:

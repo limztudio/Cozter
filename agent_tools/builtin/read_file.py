@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any, ClassVar
 
 from ..base import AgentTool, resolve_inside_workspace, summarize_path
 
@@ -14,7 +15,7 @@ class ReadFileTool(AgentTool):
         " returns the full file. Pass *offset* and *limit* to read only"
         " a line range (useful for large files)."
     )
-    parameters = {
+    parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "path": {

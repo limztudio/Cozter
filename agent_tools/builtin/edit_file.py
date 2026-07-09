@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any, ClassVar
 
 from ..base import (
     AgentTool,
@@ -21,7 +22,7 @@ class EditFileTool(AgentTool):
         " *new_string* in *path*. By default requires a unique match;"
         " pass *replace_all*=true to replace every occurrence."
     )
-    parameters = {
+    parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "path": {"type": "string"},

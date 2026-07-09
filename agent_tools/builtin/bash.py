@@ -6,6 +6,7 @@ import asyncio
 import os
 import signal
 import shutil
+from typing import Any, ClassVar
 
 from ..base import AgentTool, coerce_int_arg
 
@@ -21,7 +22,7 @@ class BashTool(AgentTool):
         "Run a shell command in the workspace. Use sparingly; prefer"
         " read_file/write_file/edit_file for file ops."
     )
-    parameters = {
+    parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "command": {"type": "string"},

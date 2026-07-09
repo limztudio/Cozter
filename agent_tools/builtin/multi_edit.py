@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any, ClassVar
 
 from ..base import (
     AgentTool,
@@ -23,7 +24,7 @@ class MultiEditTool(AgentTool):
         " ambiguous without replace_all), no changes are written - so"
         " the file is never left in a partially-edited state."
     )
-    parameters = {
+    parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "path": {"type": "string"},

@@ -8,7 +8,7 @@ import os
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, ClassVar
 
 import aiohttp
 
@@ -68,11 +68,11 @@ class AgentTool(ABC):
     to ``__init__.py`` or any backend module are needed.
     """
 
-    name: str = ""
-    description: str = ""
-    parameters: dict[str, Any] = {}
-    file_action: str | None = None
-    order: int = 100
+    name: ClassVar[str] = ""
+    description: ClassVar[str] = ""
+    parameters: ClassVar[dict[str, Any]] = {}
+    file_action: ClassVar[str | None] = None
+    order: ClassVar[int] = 100
 
     # Whether this tool was loaded from ``agent_tools/plugins/`` (True)
     # vs ``agent_tools/builtin/`` (False). Set by the package loader
@@ -82,7 +82,7 @@ class AgentTool(ABC):
     is_plugin: bool = False
 
     # Populated by __init_subclass__. Read by the package's __init__.
-    registry: list[AgentTool] = []
+    registry: ClassVar[list[AgentTool]] = []
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

@@ -275,8 +275,7 @@ async def _consolidate_inner(
 
     parts: list[str] = ["Current colony list:"]
     if existing_colony:
-        for it in existing_colony:
-            parts.append(f"- {it}")
+        parts.extend(f"- {it}" for it in existing_colony)
     else:
         parts.append("(empty)")
     parts.append("")
@@ -291,8 +290,7 @@ async def _consolidate_inner(
             f"Session: {name}",
             f"[SESSION:{sid}]",
         ]
-        for it in lt:
-            block_lines.append(f"- {it}")
+        block_lines.extend(f"- {it}" for it in lt)
         block_lines.append("[/SESSION]")
         block_lines.append("")
         block = "\n".join(block_lines)

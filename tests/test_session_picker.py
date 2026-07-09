@@ -1,12 +1,13 @@
 """Tests for the /sessions selection helper (number / name / substring)."""
 
 import unittest
+from typing import ClassVar
 
 from Cozter.backends_bot.base import BotPlatform
 
 
 class SessionPickerTests(unittest.TestCase):
-    SESSIONS = [
+    SESSIONS: ClassVar[list[dict[str, int | str]]] = [
         {"id": "aaa", "name": "Alpha work", "message_count": 3},
         {"id": "bbb", "name": "Beta notes", "message_count": 0},
         {"id": "ccc", "name": "Session 2026-07-03", "message_count": 10},
