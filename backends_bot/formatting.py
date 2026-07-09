@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 
 
@@ -40,3 +41,13 @@ def render_fenced_markdown(
         result.extend(render_code_block(code_buf))
 
     return "\n".join(result)
+
+
+def strip_html_markup(text: str) -> str:
+    """Drop simple HTML tags and unescape the entities we emit."""
+    plain = re.sub(r"<[^>]+>", "", text)
+    return (
+        plain.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+    )

@@ -16,7 +16,7 @@ from . import backends_agent, colony, session, titling
 from . import workspace as workspace_mod
 from .utils import (
     drain_llm_subprocess, extract_marker_block, parse_bullets,
-    strip_marker_block, take_recent_lines,
+    launch_internal_backend, strip_marker_block, take_recent_lines,
 )
 
 logger = logging.getLogger(__name__)
@@ -250,16 +250,17 @@ async def compact_session(
         "Running %s compaction for session %s", backend.name, session_id,
     )
 
-    try:
-        proc = await backend.launch(
-            workspace_path, full_prompt, summary_model, approval="full",
-            compaction=True,
-        )
-    except FileNotFoundError:
-        logger.error(
-            "%s CLI not found on PATH - cannot compact session",
-            backend.executable,
-        )
+    proc = await launch_internal_backend(
+        backend,
+        workspace_path,
+        full_prompt,
+        summary_model,
+        log=logger,
+        missing_executable_message=(
+            "%s CLI not found on PATH - cannot compact session"
+        ),
+    )
+    if proc is None:
         return ("", None, None)
 
     new_summary = await drain_llm_subprocess(

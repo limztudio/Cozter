@@ -33,6 +33,7 @@ from .utils import (
     create_background_task,
     drain_llm_subprocess,
     extract_marker_block,
+    launch_internal_backend,
     load_json_object,
     normalize_string_list,
     parse_bullets,
@@ -311,16 +312,17 @@ async def _consolidate_inner(
 
     full_prompt = f"{CONSOLIDATE_PROMPT}\n\n" + "\n".join(parts)
 
-    try:
-        proc = await backend.launch(
-            workspace_path, full_prompt, summary_model, approval="full",
-            compaction=True,
-        )
-    except FileNotFoundError:
-        logger.error(
-            "%s CLI not found on PATH - cannot consolidate colony",
-            backend.executable,
-        )
+    proc = await launch_internal_backend(
+        backend,
+        workspace_path,
+        full_prompt,
+        summary_model,
+        log=logger,
+        missing_executable_message=(
+            "%s CLI not found on PATH - cannot consolidate colony"
+        ),
+    )
+    if proc is None:
         return False
 
     output = await drain_llm_subprocess(

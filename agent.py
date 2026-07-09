@@ -25,6 +25,7 @@ from .utils import (
     create_background_task,
     drain_text_stream,
     iter_json_events,
+    kill_and_wait,
 )
 from .utils import drain_queue as _drain_queue
 
@@ -771,11 +772,7 @@ async def _run_turn(
                 "%s run cancelled, killing subprocess %d",
                 backend.name, proc.pid,
             )
-            try:
-                proc.kill()
-                await proc.wait()
-            except OSError:
-                pass
+            await kill_and_wait(proc)
             stderr = await stderr_task
             if stderr:
                 logger.debug("%s stderr: %s", backend.name, stderr)

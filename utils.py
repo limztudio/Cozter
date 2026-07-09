@@ -87,6 +87,13 @@ def _finalize_background_task(
         log.exception("Background task %s failed", name)
 
 
+async def kill_and_wait(proc: asyncio.subprocess.Process) -> None:
+    """Kill a subprocess and wait for it, ignoring already-exited races."""
+    with contextlib.suppress(OSError):
+        proc.kill()
+        await proc.wait()
+
+
 def save_json_object(path: str, data: dict) -> None:
     """Create *path*'s parent directory and atomically write JSON data."""
     target_dir = os.path.dirname(path) or "."
@@ -328,12 +335,28 @@ async def drain_llm_subprocess(
         logger.warning("%s timed out after %ds", label, timeout)
     finally:
         if proc.returncode is None:
-            try:
-                proc.kill()
-                await proc.wait()
-            except OSError:
-                pass
+            await kill_and_wait(proc)
         stderr = await stderr_task
         if stderr:
             logger.debug("%s stderr: %s", label, stderr)
     return raw
+
+
+async def launch_internal_backend(
+    backend,
+    workspace_path: str,
+    prompt: str,
+    model: str | None,
+    *,
+    log: logging.Logger,
+    missing_executable_message: str,
+    missing_level: int = logging.ERROR,
+) -> asyncio.subprocess.Process | None:
+    """Launch an internal no-tools backend call, returning None if missing."""
+    try:
+        return await backend.launch(
+            workspace_path, prompt, model, approval="full", compaction=True,
+        )
+    except FileNotFoundError:
+        log.log(missing_level, missing_executable_message, backend.executable)
+        return None

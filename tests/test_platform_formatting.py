@@ -1,5 +1,6 @@
 import unittest
 
+from Cozter.backends_bot.formatting import strip_html_markup
 from Cozter.backends_bot.slack import _md_to_mrkdwn
 from Cozter.backends_bot.telegram import _md_to_html
 
@@ -34,6 +35,15 @@ class PlatformFormattingTests(unittest.TestCase):
             "&lt;x&gt;\n"
             "```",
         )
+
+    def test_strip_html_markup_removes_tags_and_unescapes_entities(
+        self,
+    ) -> None:
+        out = strip_html_markup(
+            "<b>Title</b>\n<pre>&lt;x &amp; y&gt;</pre>"
+        )
+
+        self.assertEqual(out, "Title\n<x & y>")
 
 
 if __name__ == "__main__":

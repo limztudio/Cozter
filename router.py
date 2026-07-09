@@ -6,7 +6,7 @@ import logging
 import re
 
 from . import backends_agent, session
-from .utils import drain_llm_subprocess
+from .utils import drain_llm_subprocess, launch_internal_backend
 
 logger = logging.getLogger(__name__)
 
@@ -112,16 +112,16 @@ async def select_or_create_session(
     body = _build_router_prompt(prompt, sessions_data)
     full_prompt = f"{ROUTER_PROMPT}\n\n{body}"
 
-    try:
-        proc = await backend.launch(
-            workspace_path, full_prompt, summary_model, approval="full",
-            compaction=True,
-        )
-    except FileNotFoundError:
-        logger.warning(
-            "%s CLI not found - router falling back to NEW",
-            backend.executable,
-        )
+    proc = await launch_internal_backend(
+        backend,
+        workspace_path,
+        full_prompt,
+        summary_model,
+        log=logger,
+        missing_executable_message="%s CLI not found - router falling back to NEW",
+        missing_level=logging.WARNING,
+    )
+    if proc is None:
         data = session.create_session(workspace_path)
         return (data["id"], data)
 

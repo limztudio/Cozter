@@ -29,6 +29,7 @@ from .base import (
     ensure_upload_dir,
 )
 from .formatting import render_fenced_markdown
+from .formatting import strip_html_markup
 
 logger = logging.getLogger(__name__)
 
@@ -126,12 +127,7 @@ class TelegramBot(BotPlatform):
                     chat_id=chat_id, text=chunk, parse_mode="HTML",
                 )
             except Exception:
-                plain = re.sub(r"<[^>]+>", "", chunk)
-                plain = (
-                    plain.replace("&lt;", "<")
-                         .replace("&gt;", ">")
-                         .replace("&amp;", "&")
-                )
+                plain = strip_html_markup(chunk)
                 if not plain.strip():
                     continue
                 msg = await self.app.bot.send_message(
@@ -162,12 +158,7 @@ class TelegramBot(BotPlatform):
                 parse_mode="HTML",
             )
         except Exception:
-            plain = re.sub(r"<[^>]+>", "", html)
-            plain = (
-                plain.replace("&lt;", "<")
-                     .replace("&gt;", ">")
-                     .replace("&amp;", "&")
-            )
+            plain = strip_html_markup(html)
             await self.app.bot.edit_message_text(
                 chat_id=handle.chat_id,
                 message_id=int(handle.message_id),
