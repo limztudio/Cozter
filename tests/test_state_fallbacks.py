@@ -111,7 +111,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 workspace.get_run_config(tmp)
             )
             self.assertEqual(backend, "codex")
-            self.assertEqual(model, "gpt-5.5")
+            self.assertEqual(model, "gpt-5.6-sol")
             self.assertEqual(summary_model, "gpt-5.4-mini")
             self.assertEqual(permission, "auto")
             self.assertEqual(summary_backend, "codex")
@@ -323,9 +323,9 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             workspace.set_backend_name(tmp, "codex")
 
             def _fake_extras(name: str) -> list[str]:
-                # "gpt-5.5" is already built-in; the private id is new.
+                # "gpt-5.6-sol" is already built-in; the private id is new.
                 if name == "codex":
-                    return ["private-codex-model", "gpt-5.5"]
+                    return ["private-codex-model", "gpt-5.6-sol"]
                 return []
 
             orig = config.get_extra_models
@@ -335,9 +335,9 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             finally:
                 config.get_extra_models = orig
 
-            self.assertEqual(models[0], "gpt-5.5")   # built-ins first
+            self.assertEqual(models[0], "gpt-5.6-sol")  # built-ins first
             self.assertIn("private-codex-model", models)  # extra appended
-            self.assertEqual(models.count("gpt-5.5"), 1)  # no duplicate
+            self.assertEqual(models.count("gpt-5.6-sol"), 1)  # no duplicate
 
 
 class ColonyStateFallbackTests(unittest.TestCase):

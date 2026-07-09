@@ -396,11 +396,11 @@ Each backend defines its own model list and permission mapping in
 
 | Backend | Launch path | Default chat model | Default summary model |
 |---|---|---|---|
-| `codex` | `codex exec --json` | `gpt-5.5` | `gpt-5.4-mini` |
+| `codex` | `codex exec --json` | `gpt-5.6-sol` | `gpt-5.4-mini` |
 | `claude_code` | `claude --print --output-format stream-json` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json` | `auto` | `claude-haiku-4.5` |
 | `llama` | OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
-| `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-flash` |
+| `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-air` |
 
 The CLI-backend model lists are a hand-maintained snapshot; add newer or
 private models through `extra_models` in config (see Configuration) rather

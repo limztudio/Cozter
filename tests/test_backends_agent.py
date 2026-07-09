@@ -42,6 +42,9 @@ class StaticBackendModelTests(unittest.TestCase):
     def test_codex_picker_includes_current_codex_models(self) -> None:
         models = CodexBackend.available_models
         for model in (
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
             "gpt-5.5",
             "gpt-5.4",
             "gpt-5.4-mini",
@@ -50,7 +53,6 @@ class StaticBackendModelTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertIn(model, models)
         # Deprecated or non-Codex-picker ids must not appear in the picker.
-        self.assertNotIn("gpt-5.6", models)
         self.assertNotIn("gpt-5.4-nano", models)
         self.assertNotIn("gpt-5.3-codex", models)
         self.assertNotIn("gpt-5.2-codex", models)
@@ -98,6 +100,9 @@ class StaticBackendModelTests(unittest.TestCase):
     def test_copilot_picker_includes_current_cli_capable_models(self) -> None:
         models = CopilotBackend.available_models
         for model in (
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
             "gpt-5.5",
             "gpt-5.4",
             "gpt-5.4-mini",
@@ -129,11 +134,16 @@ class StaticBackendModelTests(unittest.TestCase):
         for model in (
             "sonnet",
             "opusplan[1m]",
+            "fable[1m]",
             "claude-sonnet-5",
             "claude-fable-5",
             "claude-opus-4-8",
+            "claude-opus-4-7-fast",
+            "claude-opus-4-6-20251101",
             "claude-opus-4-5",
+            "claude-sonnet-4-6-20251114",
             "claude-sonnet-4-5",
+            "claude-sonnet-4-5-20250929[1m]",
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)
@@ -230,15 +240,14 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-5",
             "glm-5-turbo",
             "glm-4.7",
-            "glm-4.7-flashx",
-            "glm-4.7-flash",
-            "glm-4.5-x",
-            "glm-4.5-airx",
-            "glm-4-32b-0414-128k",
+            "glm-4.6",
+            "glm-4.5",
+            "glm-4.5-air",
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)
         self.assertNotIn("glm-4-air", models)
+        self.assertNotIn("glm-4.5-flash", models)
 
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
         # Z.ai's base already carries /api/paas/v4, so no extra /v1.

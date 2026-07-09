@@ -48,15 +48,20 @@ class ClaudeCodeBackend(Backend):
         "opusplan",
         "sonnet[1m]",
         "opus[1m]",
+        "fable[1m]",
         "opusplan[1m]",
         "claude-fable-5",
         "claude-sonnet-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
+        "claude-opus-4-7-fast",
         "claude-opus-4-6",
+        "claude-opus-4-6-fast",
+        "claude-opus-4-6-20251101",
         "claude-opus-4-5",
         "claude-opus-4-5-20251101",
         "claude-sonnet-4-6",
+        "claude-sonnet-4-6-20251114",
         "claude-sonnet-4-5",
         "claude-sonnet-4-5-20250929",
         "claude-haiku-4-5-20251001",
@@ -65,6 +70,7 @@ class ClaudeCodeBackend(Backend):
         "claude-opus-4-7[1m]",
         "claude-opus-4-6[1m]",
         "claude-sonnet-4-6[1m]",
+        "claude-sonnet-4-5-20250929[1m]",
     )
     default_model = "default"
     default_summary_model = "haiku"

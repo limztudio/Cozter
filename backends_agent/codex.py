@@ -19,12 +19,15 @@ class CodexBackend(Backend):
     # picker models; API-only, private, and provider-routed models can still
     # be added through config.extra_models.
     available_models = (
+        "gpt-5.6-sol",
         "gpt-5.5",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5.3-codex-spark",
     )
-    default_model = "gpt-5.5"
+    default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.4-mini"
     # Codex CLI offers 5 levels including ``xhigh``.
     effort_levels = ("minimal", "low", "medium", "high", "xhigh")
