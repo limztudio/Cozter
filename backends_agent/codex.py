@@ -20,17 +20,19 @@ class CodexBackend(Backend):
     # be added through config.extra_models.
     available_models = (
         "gpt-5.6-sol",
-        "gpt-5.5",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
+        "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5.3-codex-spark",
     )
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.4-mini"
-    # Codex CLI offers 5 levels including ``xhigh``.
-    effort_levels = ("minimal", "low", "medium", "high", "xhigh")
+    # Every model in the current Codex CLI picker accepts these four levels.
+    # Newer models also expose max/ultra, but sending those to an older picker
+    # model makes the CLI reject the turn, so use the common supported set.
+    effort_levels = ("low", "medium", "high", "xhigh")
 
     async def launch(
         self,

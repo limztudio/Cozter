@@ -64,36 +64,32 @@ class CopilotBackend(Backend):
     # depends on the user's plan, org policy, and rollout cohort.
     available_models = (
         "auto",
-        "claude-sonnet-4.6",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.4-nano",
-        "gpt-5-mini",
-        "gpt-5.3-codex",
-        "claude-fable-5",
-        "claude-haiku-4.5",
         "claude-sonnet-5",
+        "claude-sonnet-4.6",
         "claude-sonnet-4.5",
+        "claude-haiku-4.5",
+        "claude-fable-5",
         "claude-opus-4.8",
         "claude-opus-4.8-fast",
         "claude-opus-4.7",
         "claude-opus-4.6",
         "claude-opus-4.5",
-        "gemini-2.5-pro",
-        "gemini-3-flash",
-        "gemini-3.1-pro",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.3-codex",
+        "gpt-5.4-mini",
+        "gpt-5-mini",
+        "gemini-3.1-pro-preview",
         "gemini-3.5-flash",
-        "mai-code-1-flash",
-        "raptor-mini",
         "kimi-k2.7-code",
     )
     default_model = "auto"
     default_summary_model = "claude-haiku-4.5"
-    effort_levels = ("low", "medium", "high", "xhigh", "max")
+    # ``none`` is represented by Cozter's effort=0 (omit the flag).
+    effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
 
     async def launch(
         self,

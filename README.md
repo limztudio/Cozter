@@ -437,11 +437,11 @@ to its own vocabulary:
 
 | Backend | Bands | What gets sent at 100% |
 |---|---|---|
-| `codex` | 5 levels @ 20% each | `-c model_reasoning_effort=xhigh` |
+| `codex` | 4 common levels @ 25% each | `-c model_reasoning_effort=xhigh` |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
 | `zai` | 5 levels @ 20% each | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | 5 levels @ 20% each | `--effort max` |
-| `copilot` | 5 levels @ 20% each | `--effort max` |
+| `copilot` | 6 explicit levels | `--effort max` |
 
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort

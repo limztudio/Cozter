@@ -41,7 +41,7 @@ class StaticBackendModelTests(unittest.TestCase):
 
     def test_codex_picker_includes_current_codex_models(self) -> None:
         models = CodexBackend.available_models
-        for model in (
+        self.assertEqual(models, (
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
@@ -49,14 +49,19 @@ class StaticBackendModelTests(unittest.TestCase):
             "gpt-5.4",
             "gpt-5.4-mini",
             "gpt-5.3-codex-spark",
-        ):
-            with self.subTest(model=model):
-                self.assertIn(model, models)
-        # Deprecated or non-Codex-picker ids must not appear in the picker.
-        self.assertNotIn("gpt-5.4-nano", models)
-        self.assertNotIn("gpt-5.3-codex", models)
-        self.assertNotIn("gpt-5.2-codex", models)
-        self.assertNotIn("gpt-5.1-codex", models)
+        ))
+
+    def test_codex_effort_uses_levels_supported_by_every_picker_model(
+        self,
+    ) -> None:
+        backend = CodexBackend()
+        self.assertEqual(
+            backend.effort_levels,
+            ("low", "medium", "high", "xhigh"),
+        )
+        self.assertIsNone(backend.convert_effort(0))
+        self.assertEqual(backend.convert_effort(1), "low")
+        self.assertEqual(backend.convert_effort(100), "xhigh")
 
     def test_codex_picker_matches_installed_cli_catalog(self) -> None:
         codex = shutil.which("codex")
@@ -97,37 +102,83 @@ class StaticBackendModelTests(unittest.TestCase):
 
         self.assertEqual(CodexBackend.available_models, visible_models)
 
-    def test_copilot_picker_includes_current_cli_capable_models(self) -> None:
-        models = CopilotBackend.available_models
-        for model in (
+    def test_copilot_picker_matches_current_cli_capable_models(self) -> None:
+        self.assertEqual(CopilotBackend.available_models, (
+            "auto",
+            "claude-sonnet-5",
+            "claude-sonnet-4.6",
+            "claude-sonnet-4.5",
+            "claude-haiku-4.5",
+            "claude-fable-5",
+            "claude-opus-4.8",
+            "claude-opus-4.8-fast",
+            "claude-opus-4.7",
+            "claude-opus-4.6",
+            "claude-opus-4.5",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
             "gpt-5.5",
             "gpt-5.4",
-            "gpt-5.4-mini",
-            "gpt-5.4-nano",
-            "gpt-5-mini",
             "gpt-5.3-codex",
-            "claude-haiku-4.5",
-            "claude-sonnet-5",
-            "claude-sonnet-4.6",
-            "claude-fable-5",
-            "claude-opus-4.8",
-            "claude-opus-4.8-fast",
-            "claude-opus-4.5",
-            "gemini-2.5-pro",
-            "gemini-3-flash",
-            "gemini-3.1-pro",
+            "gpt-5.4-mini",
+            "gpt-5-mini",
+            "gemini-3.1-pro-preview",
             "gemini-3.5-flash",
-            "mai-code-1-flash",
-            "raptor-mini",
             "kimi-k2.7-code",
-        ):
-            with self.subTest(model=model):
-                self.assertIn(model, models)
-        self.assertNotIn("claude-opus-4.6-fast", models)
-        self.assertNotIn("gemini-3.1-pro-preview", models)
+        ))
+
+    def test_copilot_effort_matches_current_cli_choices(self) -> None:
+        backend = CopilotBackend()
+        self.assertEqual(
+            backend.effort_levels,
+            ("minimal", "low", "medium", "high", "xhigh", "max"),
+        )
+        self.assertIsNone(backend.convert_effort(0))
+        self.assertEqual(backend.convert_effort(1), "minimal")
+        self.assertEqual(backend.convert_effort(100), "max")
+
+    def test_copilot_picker_matches_installed_cli_catalog(self) -> None:
+        copilot = shutil.which("copilot")
+        if not copilot:
+            self.skipTest("copilot CLI is not installed")
+
+        try:
+            proc = subprocess.run(
+                [copilot, "help", "config"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            self.skipTest("copilot help config timed out")
+
+        if proc.returncode != 0:
+            self.skipTest(
+                f"copilot help config failed: {proc.stderr.strip()}",
+            )
+
+        models: list[str] = []
+        in_model_section = False
+        for line in proc.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("`model`:"):
+                in_model_section = True
+                continue
+            if not in_model_section:
+                continue
+            if stripped.startswith('- "') and stripped.endswith('"'):
+                models.append(stripped[3:-1])
+                continue
+            if models and stripped:
+                break
+
+        if not models:
+            self.skipTest("copilot help config returned no model catalog")
+
+        # ``auto`` is Cozter's supported sentinel and is not repeated in the
+        # CLI's concrete-model configuration list.
+        self.assertEqual(CopilotBackend.available_models[1:], tuple(models))
 
     def test_claude_code_picker_includes_current_models(self) -> None:
         models = ClaudeCodeBackend.available_models
@@ -233,21 +284,22 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertIn(ZaiBackend.default_summary_model, models)
 
     def test_picker_includes_current_text_models(self) -> None:
-        models = ZaiBackend.available_models
-        for model in (
+        self.assertEqual(ZaiBackend.available_models, (
             "glm-5.2",
             "glm-5.1",
             "glm-5",
             "glm-5-turbo",
             "glm-4.7",
+            "glm-4.7-flash",
+            "glm-4.7-flashx",
             "glm-4.6",
             "glm-4.5",
+            "glm-4.5-x",
             "glm-4.5-air",
-        ):
-            with self.subTest(model=model):
-                self.assertIn(model, models)
-        self.assertNotIn("glm-4-air", models)
-        self.assertNotIn("glm-4.5-flash", models)
+            "glm-4.5-airx",
+            "glm-4.5-flash",
+            "glm-4-32b-0414-128k",
+        ))
 
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
         # Z.ai's base already carries /api/paas/v4, so no extra /v1.

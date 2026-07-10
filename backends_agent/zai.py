@@ -24,8 +24,8 @@ class ZaiBackend(OpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
-    # Snapshot from Z.ai's OpenAI-compatible /models endpoint (glm-5.2 is the
-    # current flagship). The exact set evolves; add private/regional ids via
+    # Snapshot of Z.ai's documented text-model catalog plus GLM-5.2, the
+    # current flagship. The exact set evolves; add private/regional ids via
     # config `extra_models` - the /model picker merges them.
     available_models = (
         "glm-5.2",
@@ -33,9 +33,15 @@ class ZaiBackend(OpenAIChatBackend):
         "glm-5",
         "glm-5-turbo",
         "glm-4.7",
+        "glm-4.7-flash",
+        "glm-4.7-flashx",
         "glm-4.6",
         "glm-4.5",
+        "glm-4.5-x",
         "glm-4.5-air",
+        "glm-4.5-airx",
+        "glm-4.5-flash",
+        "glm-4-32b-0414-128k",
     )
     default_model = "glm-5.2"
     default_summary_model = "glm-4.5-air"
