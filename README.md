@@ -488,7 +488,7 @@ Cozter/
 ├── workspace.py          per-workspace settings (model, permission, effort, ...)
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
-├── utils.py              shared helpers (atomic_write, drain_queue, ...)
+├── utils.py              shared state, queue, and backend-process helpers
 ├── tests/                unittest coverage for commands, state, queues, backends, prompts, tools, and updates
 ├── .config/config.example.json
 │
@@ -507,6 +507,31 @@ Cozter/
     ├── builtin/            16 built-in tools (read_file, edit_file, glob, grep, bash, web_search, ...)
     └── plugins/            user drop-in zone (current_time.py shipped as a live plugin)
 ```
+
+## Process and tool safety
+
+Cozter owns the lifetime of every backend process it starts. User-facing
+turns drain stderr concurrently with streamed JSON events, and every exit
+path — normal completion, cancellation, an injected restart, event-parse
+failure, or chat-delivery failure — reaps the child process and its drain
+tasks. This prevents a failed callback or `/stop` from leaving an agent CLI
+running in the background.
+
+Internal LLM jobs (routing, session titling, compaction, and colony
+consolidation) all go through `utils.run_internal_backend()`. The shared
+runner applies each job's timeout, consumes stdout and stderr without pipe
+deadlocks, kills timed-out or cancelled children, and logs stderr when a
+backend exits without an assistant response. HTTP backends expose the same
+process-shaped contract through `backends_agent/_http_proc.py`, so the
+orchestrator uses one cleanup model for CLI and API agents.
+
+The built-in file tools also fail closed at workspace boundaries. In
+particular, `apply_patch` will not use a create patch to overwrite an existing
+file, and a delete patch must match the current file and remove all of its
+content before the file is unlinked. Failed hunks leave the target in place.
+Regression coverage for these paths lives in
+`tests/test_agent_process_cleanup.py`, `tests/test_utils.py`, and
+`tests/test_agent_tools.py`.
 
 ## Source inventory
 
@@ -532,10 +557,10 @@ ignored for local secrets and runtime queues.
   `.gitlab-ci.yml`, `.github/workflows/ci.yml`, `.config/config.example.json`,
   `.gitignore`, and this README
 - Tests: `tests/conftest.py` plus focused `unittest` modules for
-  agent attachments and prompts, backend event parsing and retry
-  behavior, bot commands, import binding, run locks, session picking,
-  platform and Signal formatting, runtime diagnostics, state fallbacks,
-  thinking-status display, updater behavior, utilities, and the
+  agent attachments, prompts, and process cleanup; backend event parsing
+  and retry behavior; bot commands; import binding; run locks and session
+  picking; platform and Signal formatting; runtime diagnostics; state
+  fallbacks; thinking-status display; updater behavior; utilities; and the
   built-in/plugin tool surface
 
 The normal working checkout may also contain ignored runtime state such as
@@ -671,10 +696,10 @@ Run the current unit tests from the parent directory, or set
 `PYTHONPATH` to the parent when running inside the repository. Discovery
 covers malformed state/config fallbacks, persistent queue restoration,
 schedule parsing, backend model defaults and event parsing,
-subprocess-drain behavior, prompt construction, attachment handling,
-run-lock cancellation, session picking, platform/Signal rich-text
-formatting, runtime diagnostics, updater behavior, agent-tool helpers,
-and built-in discovery/edit tools.
+subprocess draining and exceptional-path cleanup, prompt construction,
+attachment handling, run-lock cancellation, session picking,
+platform/Signal rich-text formatting, runtime diagnostics, updater behavior,
+agent-tool helpers, and built-in discovery/edit/patch safety.
 
 ```bash
 cd ..
