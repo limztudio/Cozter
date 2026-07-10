@@ -6,7 +6,7 @@ import logging
 import re
 
 from . import backends_agent, session
-from .utils import drain_llm_subprocess, launch_internal_backend
+from .utils import run_internal_backend
 
 logger = logging.getLogger(__name__)
 
@@ -112,20 +112,20 @@ async def select_or_create_session(
     body = _build_router_prompt(prompt, sessions_data)
     full_prompt = f"{ROUTER_PROMPT}\n\n{body}"
 
-    proc = await launch_internal_backend(
+    raw = await run_internal_backend(
         backend,
         workspace_path,
         full_prompt,
         summary_model,
+        timeout=ROUTER_TIMEOUT,
+        label="Router",
         log=logger,
         missing_executable_message="%s CLI not found - router falling back to NEW",
         missing_level=logging.WARNING,
     )
-    if proc is None:
+    if raw is None:
         data = session.create_session(workspace_path)
         return (data["id"], data)
-
-    raw = await drain_llm_subprocess(proc, backend, ROUTER_TIMEOUT, "Router")
 
     valid_ids = {s["id"] for s in sessions_data}
     decision = _parse_router_output(raw, valid_ids) if raw else None

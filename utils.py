@@ -305,6 +305,8 @@ async def drain_llm_subprocess(
     backend,
     timeout: float,
     label: str,
+    *,
+    log: logging.Logger | None = None,
 ) -> str:
     """Drain JSON event lines from an internal LLM subprocess and return
     the last agent text emitted, or an empty string on timeout/no output.
@@ -313,7 +315,9 @@ async def drain_llm_subprocess(
     cancellation — so /stop or any other exception path can't leak a
     running subprocess past the cancelled task.
     """
+    active_log = log or logger
     raw = ""
+    finished = False
     stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
 
     def _capture_bare_text(line: str) -> None:
@@ -331,32 +335,55 @@ async def drain_llm_subprocess(
                 if text:
                     raw = text
             await proc.wait()
+            finished = True
     except TimeoutError:
-        logger.warning("%s timed out after %ds", label, timeout)
+        finished = True
+        active_log.warning("%s timed out after %ds", label, timeout)
     finally:
         if proc.returncode is None:
             await kill_and_wait(proc)
         stderr = await stderr_task
-        if stderr:
-            logger.debug("%s stderr: %s", label, stderr)
+        if finished and not raw:
+            suffix = f": {stderr}" if stderr else ""
+            active_log.warning(
+                "%s produced no output (exit %s)%s",
+                label,
+                proc.returncode,
+                suffix,
+            )
+        elif stderr:
+            active_log.debug("%s stderr: %s", label, stderr)
     return raw
 
 
-async def launch_internal_backend(
+async def run_internal_backend(
     backend,
     workspace_path: str,
     prompt: str,
     model: str | None,
     *,
+    timeout: float,
+    label: str,
     log: logging.Logger,
     missing_executable_message: str,
     missing_level: int = logging.ERROR,
-) -> asyncio.subprocess.Process | None:
-    """Launch an internal no-tools backend call, returning None if missing."""
+) -> str | None:
+    """Launch and drain an internal no-tools backend call.
+
+    Return ``None`` when the backend executable is missing and an empty
+    string when it runs without producing an agent response.
+    """
     try:
-        return await backend.launch(
+        proc = await backend.launch(
             workspace_path, prompt, model, approval="full", compaction=True,
         )
     except FileNotFoundError:
         log.log(missing_level, missing_executable_message, backend.executable)
         return None
+    return await drain_llm_subprocess(
+        proc,
+        backend,
+        timeout,
+        label,
+        log=log,
+    )

@@ -205,8 +205,8 @@ class Backend(ABC):
         model: str | None,
         effort: int,
         *,
-        model_flag: str,
-        effort_flag: str,
+        model_flag: str = "--model",
+        effort_flag: str = "--effort",
         effort_template: str = "{effort}",
     ) -> None:
         """Append optional model and reasoning-effort CLI arguments."""

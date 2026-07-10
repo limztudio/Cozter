@@ -73,6 +73,36 @@ class ProcessDrainTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_drain_llm_subprocess_reports_stderr_when_output_is_empty(self) -> None:
+        async def run() -> None:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                "import sys; print('backend diagnostic', file=sys.stderr)",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            log = logging.getLogger("Cozter.tests.empty_llm_output")
+
+            with self.assertLogs(log, level="WARNING") as captured:
+                text = await utils.drain_llm_subprocess(
+                    proc,
+                    StubBackend(),
+                    5,
+                    "test",
+                    log=log,
+                )
+
+            self.assertEqual(text, "")
+            self.assertTrue(
+                any(
+                    "backend diagnostic" in line
+                    for line in captured.output
+                ),
+            )
+
+        asyncio.run(run())
+
 
 class JsonHelperTests(unittest.TestCase):
     def test_save_json_object_creates_parent_and_writes_json(self) -> None:

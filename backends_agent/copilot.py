@@ -118,13 +118,7 @@ class CopilotBackend(Backend):
         cmd: list[str] = [
             *prefix, "--output-format", "json", "--no-color",
         ]
-        self.append_model_effort_args(
-            cmd,
-            model,
-            effort,
-            model_flag="--model",
-            effort_flag="--effort",
-        )
+        self.append_model_effort_args(cmd, model, effort)
 
         if compaction or approval == "full":
             cmd.append("--yolo")

@@ -100,13 +100,7 @@ class ClaudeCodeBackend(Backend):
             "--verbose",  # required by claude when stream-json is set
             "--no-session-persistence",  # we manage sessions ourselves
         ]
-        self.append_model_effort_args(
-            cmd,
-            model,
-            effort,
-            model_flag="--model",
-            effort_flag="--effort",
-        )
+        self.append_model_effort_args(cmd, model, effort)
 
         if compaction or approval == "full":
             # Compaction is a trusted internal call; same for the user's

@@ -15,8 +15,8 @@ import logging
 from . import backends_agent, colony, session, titling
 from . import workspace as workspace_mod
 from .utils import (
-    drain_llm_subprocess, extract_marker_block, parse_bullets,
-    launch_internal_backend, strip_marker_block, take_recent_lines,
+    extract_marker_block, parse_bullets, run_internal_backend,
+    strip_marker_block, take_recent_lines,
 )
 
 logger = logging.getLogger(__name__)
@@ -250,32 +250,19 @@ async def compact_session(
         "Running %s compaction for session %s", backend.name, session_id,
     )
 
-    proc = await launch_internal_backend(
+    new_summary = await run_internal_backend(
         backend,
         workspace_path,
         full_prompt,
         summary_model,
+        timeout=COMPACT_TIMEOUT,
+        label=f"Compaction (session {session_id})",
         log=logger,
         missing_executable_message=(
             "%s CLI not found on PATH - cannot compact session"
         ),
     )
-    if proc is None:
-        return ("", None, None)
-
-    new_summary = await drain_llm_subprocess(
-        proc, backend, COMPACT_TIMEOUT, f"Compaction (session {session_id})",
-    )
-
     if not new_summary:
-        assert proc.stderr is not None  # spawned with stderr=PIPE
-        stderr = (
-            await proc.stderr.read()
-        ).decode("utf-8", errors="replace").strip()
-        logger.warning(
-            "Compaction produced no summary (exit %d): %s",
-            proc.returncode, stderr,
-        )
         return ("", None, None)
 
     summary, long_term, title = _parse_output(new_summary)

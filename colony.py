@@ -31,12 +31,11 @@ from . import workspace as workspace_mod
 from .utils import COZTER_DIR
 from .utils import (
     create_background_task,
-    drain_llm_subprocess,
     extract_marker_block,
-    launch_internal_backend,
     load_json_object,
     normalize_string_list,
     parse_bullets,
+    run_internal_backend,
     save_json_object,
 )
 
@@ -312,32 +311,19 @@ async def _consolidate_inner(
 
     full_prompt = f"{CONSOLIDATE_PROMPT}\n\n" + "\n".join(parts)
 
-    proc = await launch_internal_backend(
+    output = await run_internal_backend(
         backend,
         workspace_path,
         full_prompt,
         summary_model,
+        timeout=CONSOLIDATE_TIMEOUT,
+        label=f"Colony ({workspace_path})",
         log=logger,
         missing_executable_message=(
             "%s CLI not found on PATH - cannot consolidate colony"
         ),
     )
-    if proc is None:
-        return False
-
-    output = await drain_llm_subprocess(
-        proc, backend, CONSOLIDATE_TIMEOUT, f"Colony ({workspace_path})",
-    )
-
     if not output:
-        assert proc.stderr is not None  # spawned with stderr=PIPE
-        stderr = (
-            await proc.stderr.read()
-        ).decode("utf-8", errors="replace").strip()
-        logger.warning(
-            "Colony consolidation produced no output (exit %d): %s",
-            proc.returncode, stderr,
-        )
         return False
 
     new_colony, per_session = _parse_consolidate_output(output)

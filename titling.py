@@ -11,7 +11,7 @@ import logging
 
 from . import backends_agent, session
 from . import workspace as workspace_mod
-from .utils import drain_llm_subprocess, launch_internal_backend
+from .utils import run_internal_backend
 
 logger = logging.getLogger(__name__)
 
@@ -119,21 +119,17 @@ async def generate(
 
     full_prompt = f"{TITLE_PROMPT}\n\n" + "\n".join(parts)
 
-    proc = await launch_internal_backend(
+    raw = await run_internal_backend(
         backend,
         workspace_path,
         full_prompt,
         summary_model,
+        timeout=TITLE_TIMEOUT,
+        label=f"Title (session {session_id})",
         log=logger,
         missing_executable_message=(
             "%s CLI not found on PATH - cannot title session"
         ),
         missing_level=logging.WARNING,
-    )
-    if proc is None:
-        return None
-
-    raw = await drain_llm_subprocess(
-        proc, backend, TITLE_TIMEOUT, f"Title (session {session_id})",
     )
     return clean_title(raw) if raw else None
