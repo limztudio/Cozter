@@ -416,6 +416,18 @@ class ApplyPatchToolTests(unittest.TestCase):
             with open(created, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "hello\nworld\n")
 
+    def test_create_does_not_overwrite_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "existing.txt")
+            self._write(p, "keep me\n")
+            out = self._run(tmp, (
+                "--- /dev/null\n+++ b/existing.txt\n"
+                "@@ -0,0 +1 @@\n+replacement\n"
+            ))
+            self.assertIn("already exists", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "keep me\n")
+
     def test_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             p = os.path.join(tmp, "gone.txt")
@@ -425,6 +437,19 @@ class ApplyPatchToolTests(unittest.TestCase):
             )
             self.assertIn("deleted", out)
             self.assertFalse(os.path.exists(p))
+
+    def test_delete_requires_matching_hunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "keep.txt")
+            self._write(p, "actual content\n")
+            out = self._run(tmp, (
+                "--- a/keep.txt\n+++ /dev/null\n"
+                "@@ -1 +0,0 @@\n-expected content\n"
+            ))
+            self.assertIn("did not apply", out)
+            self.assertIn("not deleted", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "actual content\n")
 
     def test_multi_hunk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

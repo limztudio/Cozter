@@ -772,21 +772,23 @@ async def _run_turn(
                 "%s run cancelled, killing subprocess %d",
                 backend.name, proc.pid,
             )
-            await kill_and_wait(proc)
-            stderr = await stderr_task
-            if stderr:
-                logger.debug("%s stderr: %s", backend.name, stderr)
             raise
         finally:
+            # Event parsing and chat-platform callbacks can fail just like
+            # cancellation can. Never let any exceptional stream exit leave
+            # the backend (or its stderr drain task) running in the
+            # background.
+            if proc.returncode is None:
+                await kill_and_wait(proc)
             if inject_task and not inject_task.done():
                 inject_task.cancel()
                 await await_cancelled(inject_task)
+            stderr = await stderr_task
+        if stderr:
+            logger.debug("%s stderr: %s", backend.name, stderr)
 
         # If we're restarting due to inject, drain pipes and any extra
         # injects that arrived while we were shutting down.
-        stderr = await stderr_task
-        if stderr:
-            logger.debug("%s stderr: %s", backend.name, stderr)
         if restarting:
             _drain_queue(inject_queue, collect=injected)
             logger.info(

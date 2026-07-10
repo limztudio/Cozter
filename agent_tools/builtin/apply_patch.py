@@ -168,10 +168,16 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
             target = resolve_inside_workspace(workspace_path, fp.old_path)
         except ValueError as exc:
             return f"{fp.old_path}: skipped ({exc})"
-        if os.path.isfile(target):
-            os.remove(target)
-            return f"{fp.old_path}: deleted"
-        return f"{fp.old_path}: already absent"
+        if not os.path.isfile(target):
+            return f"{fp.old_path}: already absent"
+        file_lines, _had_nl = _read_file_lines(target)
+        applied = _apply_hunks(file_lines, fp.hunks)
+        if isinstance(applied, str):
+            return f"{fp.old_path}: {applied}; not deleted"
+        if applied:
+            return f"{fp.old_path}: deletion patch did not remove all content"
+        os.remove(target)
+        return f"{fp.old_path}: deleted"
 
     if fp.new_path is None:
         return f"{label}: skipped (no target path)"
@@ -183,6 +189,8 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
 
     # Creation: --- /dev/null
     if fp.old_path is None:
+        if os.path.exists(target):
+            return f"{fp.new_path}: skipped (file already exists)"
         new_lines: list[str] = []
         for h in fp.hunks:
             new_lines.extend(h.new)
@@ -196,12 +204,7 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     # Modification
     if not os.path.isfile(target):
         return f"{fp.new_path}: skipped (file not found)"
-    with open(target, encoding="utf-8", errors="replace") as f:
-        content = f.read()
-    had_nl = content.endswith("\n")
-    file_lines = content.split("\n")
-    if had_nl and file_lines and file_lines[-1] == "":
-        file_lines.pop()  # drop the trailing "" left by the final newline
+    file_lines, had_nl = _read_file_lines(target)
 
     applied = _apply_hunks(file_lines, fp.hunks)
     if isinstance(applied, str):
@@ -213,6 +216,17 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     with open(target, "w", encoding="utf-8") as f:
         f.write(out)
     return f"{fp.new_path}: applied {len(fp.hunks)} hunk(s)"
+
+
+def _read_file_lines(path: str) -> tuple[list[str], bool]:
+    """Read a text file into patch lines and preserve its final-newline bit."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    had_nl = content.endswith("\n")
+    lines = content.split("\n")
+    if had_nl and lines and lines[-1] == "":
+        lines.pop()  # drop the trailing "" left by the final newline
+    return lines, had_nl
 
 
 def _apply_hunks(lines: list[str], hunks: list[_Hunk]) -> list[str] | str:
