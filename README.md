@@ -386,6 +386,10 @@ Cozter/.venv/bin/python -m Cozter.agent_tools.plugins.current_time '{"timezone":
 
 HTTP-backend tool results are capped before they are fed back into the
 model, keeping accidental huge outputs from consuming the whole context.
+The `web_search` and `web_fetch` tools also cap downloaded response bodies
+at 5 MiB. Their shared reader consumes chunked or slow responses until EOF
+or that ceiling instead of treating a short network read as the complete
+body; `web_fetch` then applies its separate `max_chars` output limit.
 CLI backends rely on their own bundled shell tool for plugin execution, so
 the plugin prelude only exposes how to call the extra tools; it does not
 change the CLI's native tool sandbox.
@@ -580,7 +584,9 @@ that owns them:
 - Backend names, model defaults, effort bands, and health checks:
   `backends_agent/__init__.py` plus the concrete backend modules
 - Tool/plugin behavior: `agent_tools/__init__.py`, `agent_tools/base.py`,
-  `agent_tools/builtin/`, and `agent_tools/plugins/README.md`
+  `agent_tools/builtin/`, and `agent_tools/plugins/README.md`; shared
+  validation, workspace-boundary checks, and bounded HTTP response reading
+  live in `agent_tools/base.py`
 - Workspace, session, queue, schedule, compaction, and colony state:
   `workspace.py`, `session.py`, `schedules.py`, `compaction.py`, and
   `colony.py`
