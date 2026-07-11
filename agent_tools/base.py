@@ -417,7 +417,18 @@ def apply_string_replacement(
 
 async def read_bounded_text(resp: aiohttp.ClientResponse) -> str:
     """Read up to MAX_FETCH_BYTES from *resp* and decode with its charset."""
-    body_bytes = await resp.content.read(_MAX_FETCH_BYTES + 1)
+    chunks: list[bytes] = []
+    remaining = _MAX_FETCH_BYTES
+    while remaining:
+        # StreamReader.read(n) may return fewer than n bytes before EOF, so a
+        # single large read can silently truncate a chunked/slow response.
+        chunk = await resp.content.read(min(64 * 1024, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+
+    body_bytes = b"".join(chunks)
     encoding = resp.charset or "utf-8"
     return body_bytes.decode(encoding, errors="replace")
 

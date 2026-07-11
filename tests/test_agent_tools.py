@@ -5,11 +5,13 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from Cozter import agent_tools
 from Cozter.agent_tools.base import (
     apply_string_replacement,
     coerce_int_arg,
+    read_bounded_text,
     validate_replacement_strings,
 )
 from Cozter.agent_tools.builtin.apply_patch import ApplyPatchTool
@@ -57,6 +59,51 @@ class AgentToolHelperTests(unittest.TestCase):
             ),
             ("x b x", 2, 2),
         )
+
+    def test_read_bounded_text_accumulates_partial_reads(self) -> None:
+        class ChunkedContent:
+            def __init__(self, chunks: list[bytes]) -> None:
+                self.chunks = chunks
+
+            async def read(self, limit: int) -> bytes:
+                if not self.chunks:
+                    return b""
+                chunk = self.chunks.pop(0)
+                self.chunks[:0] = [chunk[limit:]] if len(chunk) > limit else []
+                return chunk[:limit]
+
+        class Response:
+            charset = "utf-8"
+
+            def __init__(self, chunks: list[bytes]) -> None:
+                self.content = ChunkedContent(chunks)
+
+        async def run() -> None:
+            response = Response([b"first-", b"second-", b"third"])
+            self.assertEqual(
+                await read_bounded_text(response),  # type: ignore[arg-type]
+                "first-second-third",
+            )
+
+        asyncio.run(run())
+
+    def test_read_bounded_text_stops_at_byte_cap(self) -> None:
+        class Content:
+            async def read(self, limit: int) -> bytes:
+                return b"abcdefgh"[:limit]
+
+        class Response:
+            content = Content()
+            charset = "utf-8"
+
+        async def run() -> None:
+            with mock.patch("Cozter.agent_tools.base._MAX_FETCH_BYTES", 5):
+                self.assertEqual(
+                    await read_bounded_text(Response()),  # type: ignore[arg-type]
+                    "abcde",
+                )
+
+        asyncio.run(run())
 
 
 class BuiltinEditToolTests(unittest.TestCase):
