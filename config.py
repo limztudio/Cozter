@@ -129,13 +129,10 @@ def get_llama_socket_timeout() -> int:
 def get_llama_max_retries() -> int:
     """Retry attempts for transient llama HTTP failures (>= 0; 0 disables).
 
-    Uses its own reader rather than :func:`_get_positive_int` because 0 is
-    a meaningful value here ("do not retry"), not an invalid one.
+    Zero is meaningful here ("do not retry"), so this uses the shared
+    non-negative integer reader rather than :func:`_get_positive_int`.
     """
-    val = _read_config_value("llama_max_retries")
-    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
-        return val
-    return cast(int, _DEFAULT_CONFIG["llama_max_retries"])
+    return _get_non_negative_int("llama_max_retries")
 
 
 def get_show_usage() -> bool:
@@ -183,10 +180,7 @@ def get_zai_socket_timeout() -> int:
 
 def get_zai_max_retries() -> int:
     """Retry attempts for transient zai HTTP failures (>= 0; 0 disables)."""
-    val = _read_config_value("zai_max_retries")
-    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
-        return val
-    return cast(int, _DEFAULT_CONFIG["zai_max_retries"])
+    return _get_non_negative_int("zai_max_retries")
 
 
 def get_tool_timeout() -> int:

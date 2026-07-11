@@ -579,13 +579,19 @@ def set_history_budget(workspace_path: str, budget: int) -> None:
 _locks: dict[str, asyncio.Lock] = {}
 
 
-def get_lock(workspace_path: str) -> asyncio.Lock:
-    """Return the per-workspace asyncio lock; creates it on first use."""
-    lock = _locks.get(workspace_path)
+def _lock_for(
+    registry: dict[str, asyncio.Lock], workspace_path: str,
+) -> asyncio.Lock:
+    lock = registry.get(workspace_path)
     if lock is None:
         lock = asyncio.Lock()
-        _locks[workspace_path] = lock
+        registry[workspace_path] = lock
     return lock
+
+
+def get_lock(workspace_path: str) -> asyncio.Lock:
+    """Return the per-workspace asyncio lock; creates it on first use."""
+    return _lock_for(_locks, workspace_path)
 
 
 _run_locks: dict[str, asyncio.Lock] = {}
@@ -601,8 +607,4 @@ def get_run_lock(workspace_path: str) -> asyncio.Lock:
     message racing a scheduled ``/reserve`` run) from interleaving file
     edits - without deadlocking on the non-reentrant file lock.
     """
-    lock = _run_locks.get(workspace_path)
-    if lock is None:
-        lock = asyncio.Lock()
-        _run_locks[workspace_path] = lock
-    return lock
+    return _lock_for(_run_locks, workspace_path)
