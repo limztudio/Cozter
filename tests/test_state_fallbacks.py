@@ -112,7 +112,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             )
             self.assertEqual(backend, "codex")
             self.assertEqual(model, "gpt-5.6-sol")
-            self.assertEqual(summary_model, "gpt-5.4-mini")
+            self.assertEqual(summary_model, "gpt-5.6-luna")
             self.assertEqual(permission, "auto")
             self.assertEqual(summary_backend, "codex")
 

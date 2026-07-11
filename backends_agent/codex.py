@@ -28,7 +28,7 @@ class CodexBackend(Backend):
         "gpt-5.3-codex-spark",
     )
     default_model = "gpt-5.6-sol"
-    default_summary_model = "gpt-5.4-mini"
+    default_summary_model = "gpt-5.6-luna"
     # Every model in the current Codex CLI picker accepts these four levels.
     # Newer models also expose max/ultra, but sending those to an older picker
     # model makes the CLI reject the turn, so use the common supported set.
