@@ -275,6 +275,12 @@ class BackendHealthCheckTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("unreachable", detail)
 
+    def test_llama_effort_uses_openai_request_shape(self) -> None:
+        self.assertEqual(
+            LlamaBackend()._effort_fields(100),
+            {"reasoning_effort": "high"},
+        )
+
 
 class ZaiBackendTests(unittest.TestCase):
     def test_defaults_are_selectable(self) -> None:
@@ -285,17 +291,16 @@ class ZaiBackendTests(unittest.TestCase):
 
     def test_picker_includes_current_text_models(self) -> None:
         self.assertEqual(ZaiBackend.available_models, (
-            "glm-5.2",
             "glm-5.1",
-            "glm-5",
             "glm-5-turbo",
+            "glm-5",
             "glm-4.7",
             "glm-4.7-flash",
             "glm-4.7-flashx",
             "glm-4.6",
             "glm-4.5",
-            "glm-4.5-x",
             "glm-4.5-air",
+            "glm-4.5-x",
             "glm-4.5-airx",
             "glm-4.5-flash",
             "glm-4-32b-0414-128k",
@@ -348,18 +353,28 @@ class ZaiBackendTests(unittest.TestCase):
     def test_request_model_falls_back_to_default(self) -> None:
         backend = ZaiBackend()
         self.assertEqual(backend._request_model("glm-4.7"), "glm-4.7")
-        self.assertEqual(backend._request_model(None), "glm-5.2")
-        self.assertEqual(backend._request_model(""), "glm-5.2")
+        self.assertEqual(backend._request_model(None), "glm-5.1")
+        self.assertEqual(backend._request_model(""), "glm-5.1")
 
-    def test_effort_maps_to_glm_supported_levels(self) -> None:
+    def test_effort_uses_glm_thinking_request_shape(self) -> None:
         backend = ZaiBackend()
-        self.assertIsNone(backend.convert_effort(0))
-        self.assertEqual(backend.convert_effort(1), "low")
-        self.assertEqual(backend.convert_effort(20), "medium")
-        self.assertEqual(backend.convert_effort(40), "high")
-        self.assertEqual(backend.convert_effort(60), "xhigh")
-        self.assertEqual(backend.convert_effort(80), "max")
-        self.assertEqual(backend.convert_effort(100), "max")
+        self.assertEqual(backend._effort_fields(0), {})
+        self.assertEqual(
+            backend._effort_fields(1),
+            {"thinking": {"type": "disabled"}},
+        )
+        self.assertEqual(
+            backend._effort_fields(49),
+            {"thinking": {"type": "disabled"}},
+        )
+        self.assertEqual(
+            backend._effort_fields(50),
+            {"thinking": {"type": "enabled"}},
+        )
+        self.assertEqual(
+            backend._effort_fields(100),
+            {"thinking": {"type": "enabled"}},
+        )
 
 
 if __name__ == "__main__":

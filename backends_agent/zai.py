@@ -1,6 +1,6 @@
 """Z.ai (Zhipu GLM) backend: OpenAI-compatible cloud API.
 
-Z.ai serves the GLM models (glm-5.2, glm-5.1, glm-4.7, ...) through an
+Z.ai serves the GLM models (glm-5.1, glm-5, glm-4.7, ...) through an
 OpenAI-compatible endpoint at ``https://api.z.ai/api/paas/v4`` with Bearer
 auth. It reuses the shared :class:`OpenAIChatBackend` loop; this module
 supplies only Z.ai's specifics - the endpoint, the Authorization header
@@ -24,30 +24,30 @@ class ZaiBackend(OpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
-    # Snapshot of Z.ai's documented text-model catalog plus GLM-5.2, the
-    # current flagship. The exact set evolves; add private/regional ids via
-    # config `extra_models` - the /model picker merges them.
+    # Snapshot of the model enum documented by Z.ai's Chat Completion API.
+    # The exact set evolves; add private/regional ids via config
+    # `extra_models` - the /model picker merges them.
     available_models = (
-        "glm-5.2",
         "glm-5.1",
-        "glm-5",
         "glm-5-turbo",
+        "glm-5",
         "glm-4.7",
         "glm-4.7-flash",
         "glm-4.7-flashx",
         "glm-4.6",
         "glm-4.5",
-        "glm-4.5-x",
         "glm-4.5-air",
+        "glm-4.5-x",
         "glm-4.5-airx",
         "glm-4.5-flash",
         "glm-4-32b-0414-128k",
     )
-    default_model = "glm-5.2"
+    default_model = "glm-5.1"
     default_summary_model = "glm-4.5-air"
-    # GLM-5.2 accepts OpenAI-compatible aliases: low/medium map to high
-    # server-side, and xhigh maps to max. 0 still skips the field.
-    effort_levels = ("low", "medium", "high", "xhigh", "max")
+    # Z.ai exposes thinking as an enabled/disabled switch. 0 still skips the
+    # field so the model's default applies; 1-49 disable it and 50-100 enable
+    # it explicitly.
+    effort_levels = ("disabled", "enabled")
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 
@@ -63,6 +63,12 @@ class ZaiBackend(OpenAIChatBackend):
     def _request_model(self, model: str | None) -> str:
         # Z.ai requires a model field; fall back to the configured default.
         return model or self.default_model
+
+    def _effort_fields(self, percent: int) -> dict:
+        native_effort = self.convert_effort(percent)
+        if not native_effort:
+            return {}
+        return {"thinking": {"type": native_effort}}
 
     def _auto_continue_after_tool_limit(self) -> bool:
         # Long z.ai coding runs can legitimately need more tool turns than

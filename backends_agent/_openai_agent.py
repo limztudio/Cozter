@@ -60,6 +60,16 @@ class OpenAIChatBackend(Backend):
         """Model id to send, or None to omit the field entirely."""
         return model or None
 
+    def _effort_fields(self, percent: int) -> dict[str, Any]:
+        """Provider-specific request fields for a reasoning-effort override.
+
+        OpenAI-compatible servers conventionally accept
+        ``reasoning_effort``. Providers with a different request shape can
+        override this hook without duplicating the agent loop.
+        """
+        native_effort = self.convert_effort(percent)
+        return {"reasoning_effort": native_effort} if native_effort else {}
+
     def _max_agent_turns(self) -> int:
         return 40
 
@@ -122,9 +132,9 @@ class OpenAIChatBackend(Backend):
             entry["function"]["name"] for entry in tools_schema
         ) if tools_schema else ()
 
-        # Translate the 0-100 effort into the native vocabulary; an empty
-        # result means "do not send the reasoning_effort field".
-        reasoning_effort = self.convert_effort(effort) or ""
+        # Translate the 0-100 effort into provider-native request fields. An
+        # empty mapping means "do not override the server default".
+        effort_fields = self._effort_fields(effort)
 
         # The endpoint is stateless, so the model has no idea what cwd it is
         # operating against unless we tell it. CLI backends learn the
@@ -143,7 +153,7 @@ class OpenAIChatBackend(Backend):
         while True:
             for _ in range(max_agent_turns):
                 payload = _completion_payload(
-                    messages, request_model, reasoning_effort, tools_schema,
+                    messages, request_model, effort_fields, tools_schema,
                 )
                 if tools_schema is not None:
                     payload["tool_choice"] = "auto"
@@ -249,7 +259,7 @@ class OpenAIChatBackend(Backend):
             ),
         })
 
-        payload = _completion_payload(messages, request_model, reasoning_effort)
+        payload = _completion_payload(messages, request_model, effort_fields)
         assistant_text, _ = await _stream_completion(
             endpoint, payload, headers, sock_read, max_retries, self.name,
         )
@@ -320,7 +330,7 @@ class OpenAIChatBackend(Backend):
 def _completion_payload(
     messages: list[dict],
     request_model: str | None,
-    reasoning_effort: str,
+    effort_fields: dict[str, Any],
     tools_schema: list[dict] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -329,8 +339,7 @@ def _completion_payload(
     }
     if request_model is not None:
         payload["model"] = request_model
-    if reasoning_effort:
-        payload["reasoning_effort"] = reasoning_effort
+    payload.update(effort_fields)
     if tools_schema is not None:
         payload["tools"] = tools_schema
     return payload
