@@ -387,9 +387,12 @@ Cozter/.venv/bin/python -m Cozter.agent_tools.plugins.current_time '{"timezone":
 HTTP-backend tool results are capped before they are fed back into the
 model, keeping accidental huge outputs from consuming the whole context.
 The `web_search` and `web_fetch` tools also cap downloaded response bodies
-at 5 MiB. Their shared reader consumes chunked or slow responses until EOF
-or that ceiling instead of treating a short network read as the complete
-body; `web_fetch` then applies its separate `max_chars` output limit.
+at 5 MiB. Both tools use the shared `open_http_response()` request setup and
+`read_bounded_text()` reader in `agent_tools/base.py`, so their user agent,
+timeouts, redirect policy, decoding, and response ceiling stay consistent.
+The reader consumes chunked or slow responses until EOF or that ceiling
+instead of treating a short network read as the complete body; `web_fetch`
+then applies its separate `max_chars` output limit.
 CLI backends rely on their own bundled shell tool for plugin execution, so
 the plugin prelude only exposes how to call the extra tools; it does not
 change the CLI's native tool sandbox.
@@ -481,7 +484,7 @@ Cozter/
 ├── requirements.txt      Python runtime dependencies installed into .venv
 ├── py.typed              marks the package as typed for downstream checkers
 ├── .config/              runtime config dir; only config.example.json is tracked
-├── backends_bot/         chat surfaces and shared chat formatting
+├── backends_bot/         chat surfaces and shared fenced-Markdown formatting
 ├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
 ├── session.py            per-workspace conversation persistence
 ├── compaction.py         scratch-summary + long-term-memory rewriter
@@ -507,7 +510,7 @@ Cozter/
 │   └── zai.py              Z.ai /api/paas/v4/chat/completions backend hooks
 │
 └── agent_tools/          tool surface for HTTP backends + plugin registry
-    ├── base.py             AgentTool ABC; run_as_script; resolve_inside_workspace; html_to_text
+    ├── base.py             AgentTool ABC; path/argument validation and shared HTTP helpers
     ├── builtin/            16 built-in tools (read_file, edit_file, glob, grep, bash, web_search, ...)
     └── plugins/            user drop-in zone (current_time.py shipped as a live plugin)
 ```
@@ -580,13 +583,14 @@ that owns them:
   `.config/config.example.json`
 - Commands and command behavior: `backends_bot/base.py`, with platform
   registration in `telegram.py`, `slack.py`, `signal.py`, and `cli.py`;
-  shared fenced-Markdown rendering lives in `backends_bot/formatting.py`
+  shared fenced-Markdown segmentation and rendering live in
+  `backends_bot/formatting.py`, including Signal's styled-span input
 - Backend names, model defaults, effort bands, and health checks:
   `backends_agent/__init__.py` plus the concrete backend modules
 - Tool/plugin behavior: `agent_tools/__init__.py`, `agent_tools/base.py`,
   `agent_tools/builtin/`, and `agent_tools/plugins/README.md`; shared
-  validation, workspace-boundary checks, and bounded HTTP response reading
-  live in `agent_tools/base.py`
+  validation, workspace-boundary checks, HTTP request setup, and bounded
+  response reading live in `agent_tools/base.py`
 - Workspace, session, queue, schedule, compaction, and colony state:
   `workspace.py`, `session.py`, `schedules.py`, `compaction.py`, and
   `colony.py`
