@@ -3,11 +3,42 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 
 LineRenderer = Callable[[str], str]
 CodeBlockRenderer = Callable[[list[str]], list[str]]
+
+
+def iter_fenced_markdown(
+    text: str,
+) -> Iterator[tuple[bool, list[str]]]:
+    """Yield normal lines and grouped fenced-code lines.
+
+    The boolean is true for code blocks. Normal lines are yielded one at a
+    time so callers can apply line-oriented Markdown rules without rebuilding
+    the fence state machine.
+    """
+    in_code_block = False
+    code_buf: list[str] = []
+
+    for source_line in text.split("\n"):
+        if source_line.strip().startswith("```"):
+            if in_code_block:
+                yield True, code_buf
+                code_buf = []
+                in_code_block = False
+            else:
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            code_buf.append(source_line)
+        else:
+            yield False, [source_line]
+
+    if in_code_block and code_buf:
+        yield True, code_buf
 
 
 def render_fenced_markdown(
@@ -18,27 +49,11 @@ def render_fenced_markdown(
 ) -> str:
     """Render Markdown lines while preserving fenced code block grouping."""
     result: list[str] = []
-    in_code_block = False
-    code_buf: list[str] = []
-
-    for source_line in text.split("\n"):
-        if source_line.strip().startswith("```"):
-            if in_code_block:
-                result.extend(render_code_block(code_buf))
-                code_buf.clear()
-                in_code_block = False
-            else:
-                in_code_block = True
-            continue
-
-        if in_code_block:
-            code_buf.append(source_line)
-            continue
-
-        result.append(render_line(source_line))
-
-    if in_code_block and code_buf:
-        result.extend(render_code_block(code_buf))
+    for is_code, lines in iter_fenced_markdown(text):
+        if is_code:
+            result.extend(render_code_block(lines))
+        else:
+            result.append(render_line(lines[0]))
 
     return "\n".join(result)
 

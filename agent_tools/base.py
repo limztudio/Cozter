@@ -7,7 +7,8 @@ import fnmatch
 import os
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from typing import Any, ClassVar
 
 import aiohttp
@@ -430,6 +431,25 @@ async def read_bounded_text(resp: aiohttp.ClientResponse) -> str:
     body_bytes = b"".join(chunks)
     encoding = resp.charset or "utf-8"
     return body_bytes.decode(encoding, errors="replace")
+
+
+@asynccontextmanager
+async def open_http_response(
+    url: str,
+    *,
+    timeout: int,
+    allow_redirects: bool = True,
+) -> AsyncIterator[aiohttp.ClientResponse]:
+    """Open one HTTP request with the shared web-tool client settings."""
+    async with (
+        aiohttp.ClientSession(headers=HTTP_USER_AGENT_HEADERS) as session,
+        session.get(
+            url,
+            allow_redirects=allow_redirects,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as response,
+    ):
+        yield response
 
 
 def html_to_text(value: str) -> str:

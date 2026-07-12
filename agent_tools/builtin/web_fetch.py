@@ -5,14 +5,12 @@ from __future__ import annotations
 import re
 import urllib.parse
 
-import aiohttp
-
 from ..base import (
-    HTTP_USER_AGENT_HEADERS,
     AgentTool,
     coerce_int_arg,
     html_to_text,
     object_parameters,
+    open_http_response,
     read_bounded_text,
     require_nonempty_string_arg,
     summarize_arg,
@@ -56,22 +54,15 @@ class WebFetchTool(AgentTool):
         )
 
         try:
-            async with (
-                aiohttp.ClientSession(
-                    headers=HTTP_USER_AGENT_HEADERS,
-                ) as session,
-                session.get(
-                    url,
-                    allow_redirects=True,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                ) as resp,
-            ):
-                final_url = str(resp.url)
-                content_type = resp.headers.get("content-type", "")
+            async with open_http_response(
+                url, timeout=30, allow_redirects=True,
+            ) as response:
+                final_url = str(response.url)
+                content_type = response.headers.get("content-type", "")
 
-                if resp.status >= 400:
+                if response.status >= 400:
                     return (
-                        f"Fetch failed: HTTP {resp.status} for"
+                        f"Fetch failed: HTTP {response.status} for"
                         f" {final_url}"
                     )
 
@@ -87,7 +78,7 @@ class WebFetchTool(AgentTool):
                         f"'{content_type}', not readable text."
                     )
 
-                body = await read_bounded_text(resp)
+                body = await read_bounded_text(response)
         except Exception as exc:
             return f"Fetch failed: {exc}"
 

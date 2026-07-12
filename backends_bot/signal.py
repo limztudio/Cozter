@@ -28,6 +28,7 @@ from .base import (
     NO_WORKSPACE_TEXT,
     ensure_upload_dir,
 )
+from .formatting import iter_fenced_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -1187,34 +1188,18 @@ def _md_to_signal_body_and_spans(
         if style:
             add_span(start, style)
 
-    in_code_block = False
-    code_buf: list[str] = []
-    for line in text.split("\n"):
-        if line.strip().startswith("```"):
-            if in_code_block:
-                if code_buf:
-                    append_line(
-                        "\n".join(code_buf),
-                        _SIGNAL_STYLE_MONOSPACE,
-                    )
-                code_buf.clear()
-                in_code_block = False
-            else:
-                in_code_block = True
+    for is_code, lines in iter_fenced_markdown(text):
+        if is_code:
+            if lines:
+                append_line("\n".join(lines), _SIGNAL_STYLE_MONOSPACE)
             continue
 
-        if in_code_block:
-            code_buf.append(line)
-            continue
-
+        line = lines[0]
         header = re.match(r"^#{1,6}\s+(.+)$", line)
         if header:
             append_line(header.group(1), _SIGNAL_STYLE_BOLD)
         else:
             append_line(line)
-
-    if in_code_block and code_buf:
-        append_line("\n".join(code_buf), _SIGNAL_STYLE_MONOSPACE)
 
     return "".join(parts), spans
 

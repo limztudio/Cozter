@@ -6,14 +6,12 @@ import html
 import re
 import urllib.parse
 
-import aiohttp
-
 from ..base import (
-    HTTP_USER_AGENT_HEADERS,
     AgentTool,
     coerce_int_arg,
     html_to_text,
     object_parameters,
+    open_http_response,
     read_bounded_text,
     require_nonempty_string_arg,
     summarize_arg,
@@ -59,18 +57,12 @@ class WebSearchTool(AgentTool):
         )
 
         try:
-            async with (
-                aiohttp.ClientSession(
-                    headers=HTTP_USER_AGENT_HEADERS,
-                ) as session,
-                session.get(
-                    search_url,
-                    timeout=aiohttp.ClientTimeout(total=20),
-                ) as resp,
-            ):
-                if resp.status != 200:
-                    return f"Search failed: HTTP {resp.status}"
-                body = await read_bounded_text(resp)
+            async with open_http_response(
+                search_url, timeout=20,
+            ) as response:
+                if response.status != 200:
+                    return f"Search failed: HTTP {response.status}"
+                body = await read_bounded_text(response)
         except Exception as exc:
             return f"Search failed: {exc}"
 
