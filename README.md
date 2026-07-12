@@ -444,7 +444,7 @@ maps the percentage to its own vocabulary and request shape:
 
 | Backend | Bands | What gets sent at 100% |
 |---|---|---|
-| `codex` | 4 common levels @ 25% each | `-c model_reasoning_effort=xhigh` |
+| `codex` | Model-aware: 4–6 levels | `ultra` (Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
 | `zai` | GLM-5.2: 7 levels; older GLM: thinking toggle | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | 5 levels @ 20% each | `--effort max` |

@@ -29,10 +29,25 @@ class CodexBackend(Backend):
     )
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.6-luna"
-    # Every model in the current Codex CLI picker accepts these four levels.
-    # Newer models also expose max/ultra, but sending those to an older picker
-    # model makes the CLI reject the turn, so use the common supported set.
-    effort_levels = ("low", "medium", "high", "xhigh")
+    common_effort_levels = ("low", "medium", "high", "xhigh")
+    effort_levels = (*common_effort_levels, "max", "ultra")
+    model_effort_levels = {
+        "gpt-5.6-sol": effort_levels,
+        "gpt-5.6-terra": effort_levels,
+        "gpt-5.6-luna": (*common_effort_levels, "max"),
+        "gpt-5.5": common_effort_levels,
+        "gpt-5.4": common_effort_levels,
+        "gpt-5.4-mini": common_effort_levels,
+        "gpt-5.3-codex-spark": common_effort_levels,
+    }
+
+    def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
+        """Return the effort vocabulary accepted by the selected model."""
+        selected_model = model or self.default_model
+        return self.model_effort_levels.get(
+            selected_model,
+            self.common_effort_levels,
+        )
 
     async def launch(
         self,
@@ -55,6 +70,7 @@ class CodexBackend(Backend):
             # Codex CLI exposes reasoning effort via the generic config
             # override flag. Unknown levels are rejected by the CLI.
             effort_template="model_reasoning_effort={effort}",
+            effort_levels=self.effort_levels_for_model(model),
         )
 
         if compaction or approval == "full":

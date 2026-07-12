@@ -208,11 +208,16 @@ class Backend(ABC):
         model_flag: str = "--model",
         effort_flag: str = "--effort",
         effort_template: str = "{effort}",
+        effort_levels: tuple[str, ...] | None = None,
     ) -> None:
         """Append optional model and reasoning-effort CLI arguments."""
         if model:
             cmd += [model_flag, model]
-        native_effort = self.convert_effort(effort)
+        native_effort = (
+            effort_band(effort, effort_levels)
+            if effort_levels is not None
+            else self.convert_effort(effort)
+        )
         if native_effort:
             cmd += [
                 effort_flag,

@@ -51,17 +51,29 @@ class StaticBackendModelTests(unittest.TestCase):
             "gpt-5.3-codex-spark",
         ))
 
-    def test_codex_effort_uses_levels_supported_by_every_picker_model(
+    def test_codex_effort_uses_levels_supported_by_selected_picker_model(
         self,
     ) -> None:
         backend = CodexBackend()
         self.assertEqual(
             backend.effort_levels,
-            ("low", "medium", "high", "xhigh"),
+            ("low", "medium", "high", "xhigh", "max", "ultra"),
         )
         self.assertIsNone(backend.convert_effort(0))
         self.assertEqual(backend.convert_effort(1), "low")
-        self.assertEqual(backend.convert_effort(100), "xhigh")
+        self.assertEqual(backend.convert_effort(100), "ultra")
+        self.assertEqual(
+            backend.effort_levels_for_model("gpt-5.6-luna"),
+            ("low", "medium", "high", "xhigh", "max"),
+        )
+        self.assertEqual(
+            backend.effort_levels_for_model("gpt-5.4"),
+            ("low", "medium", "high", "xhigh"),
+        )
+        self.assertEqual(
+            backend.effort_levels_for_model("custom-model"),
+            ("low", "medium", "high", "xhigh"),
+        )
 
     def test_codex_picker_matches_installed_cli_catalog(self) -> None:
         codex = shutil.which("codex")
@@ -101,6 +113,18 @@ class StaticBackendModelTests(unittest.TestCase):
             self.skipTest("codex debug models returned no visible models")
 
         self.assertEqual(CodexBackend.available_models, visible_models)
+
+        catalog_efforts = {
+            model["slug"]: tuple(
+                level["effort"]
+                for level in model.get("supported_reasoning_levels", ())
+            )
+            for model in catalog
+            if isinstance(model, dict)
+            and model.get("visibility") == "list"
+            and isinstance(model.get("slug"), str)
+        }
+        self.assertEqual(CodexBackend.model_effort_levels, catalog_efforts)
 
     def test_copilot_picker_matches_current_cli_capable_models(self) -> None:
         self.assertEqual(CopilotBackend.available_models, (
