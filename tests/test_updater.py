@@ -78,6 +78,36 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
             f"pull should run on a clean, current checkout; calls={calls}",
         )
 
+    def test_failed_ahead_comparison_skips_pull(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def _run(*args: str) -> subprocess.CompletedProcess:
+            calls.append(args)
+            if args[0] == "rev-parse" and args[-1] == "@{u}":
+                return subprocess.CompletedProcess(
+                    args, 0, stdout="origin/main\n", stderr="",
+                )
+            if args[0] == "rev-list":
+                return subprocess.CompletedProcess(
+                    args, 128, stdout="", stderr="bad revision",
+                )
+            stdout = "abc123\n" if args[-1] == "HEAD" else ""
+            return subprocess.CompletedProcess(
+                args, 0, stdout=stdout, stderr="",
+            )
+
+        original = updater._git
+        updater._git = _run
+        try:
+            updater.fetch_and_pull()
+        finally:
+            updater._git = original
+
+        self.assertFalse(
+            self._pulled(calls),
+            "pull should be skipped when local/upstream comparison fails",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

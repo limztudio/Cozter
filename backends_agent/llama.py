@@ -94,9 +94,22 @@ class LlamaBackend(OpenAIChatBackend):
         return cfg.get_llama_max_retries()
 
 
-def _model_ids(payload: dict) -> tuple[str, ...]:
-    """Extract valid model IDs from an OpenAI-style /models payload."""
-    return tuple(
-        model["id"] for model in payload.get("data", [])
-        if isinstance(model, dict) and isinstance(model.get("id"), str)
-    )
+def _model_ids(payload: object) -> tuple[str, ...]:
+    """Extract unique, non-empty IDs from an OpenAI-style models payload."""
+    if not isinstance(payload, dict):
+        return ()
+    models = payload.get("data")
+    if not isinstance(models, list):
+        return ()
+
+    ids: list[str] = []
+    seen: set[str] = set()
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        model_id = model.get("id")
+        if not isinstance(model_id, str) or not model_id or model_id in seen:
+            continue
+        ids.append(model_id)
+        seen.add(model_id)
+    return tuple(ids)

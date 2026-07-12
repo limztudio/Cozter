@@ -64,14 +64,33 @@ def _local_ahead_of_upstream() -> bool:
     configured (nothing to compare) and True on any parse failure so we
     err on the side of not mutating.
     """
-    upstream = _git_str(
-        "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
-    )
+    try:
+        upstream_result = _git(
+            "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return True
+    # A non-zero rev-parse normally means this branch has no configured
+    # upstream. There is nothing to compare in that case, so preserve the
+    # existing no-upstream behavior and let ``git pull`` report its own
+    # actionable error if one is attempted.
+    if upstream_result.returncode != 0:
+        return False
+    upstream = upstream_result.stdout.strip()
     if not upstream:
         return False
-    count = _git_str("rev-list", "--count", f"{upstream}..HEAD")
-    if not count:
-        return False
+    try:
+        count_result = _git(
+            "rev-list", "--count", f"{upstream}..HEAD",
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return True
+    # Once an upstream resolved, failure to compare it with HEAD is an
+    # indeterminate state. Treat it as locally ahead so auto-update never
+    # mutates a checkout whose safety could not be established.
+    if count_result.returncode != 0:
+        return True
+    count = count_result.stdout.strip()
     try:
         return int(count) > 0
     except ValueError:

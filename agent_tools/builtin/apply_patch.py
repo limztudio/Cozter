@@ -11,6 +11,7 @@ than silently dropped.
 from __future__ import annotations
 
 import os
+import re
 
 from ..base import (
     AgentTool,
@@ -25,10 +26,27 @@ class _PatchError(Exception):
 
 
 class _Hunk:
-    def __init__(self, start: int) -> None:
+    def __init__(
+        self,
+        start: int,
+        old_count: int | None = None,
+        new_count: int | None = None,
+    ) -> None:
         self.start = start  # 1-based line in the old file (a hint)
+        self.old_count = old_count
+        self.new_count = new_count
         self.old: list[str] = []  # context + deleted lines (content only)
         self.new: list[str] = []  # context + added lines (content only)
+
+    @property
+    def complete(self) -> bool:
+        """Whether the declared old/new line counts have been consumed."""
+        return (
+            self.old_count is not None
+            and self.new_count is not None
+            and len(self.old) >= self.old_count
+            and len(self.new) >= self.new_count
+        )
 
 
 class _FilePatch:
@@ -98,13 +116,20 @@ def _header_path(raw: str) -> str | None:
     return None if raw == "/dev/null" else _strip_git_prefix(raw)
 
 
-def _parse_hunk_start(header: str) -> int:
-    # @@ -oldStart,oldCount +newStart,newCount @@
-    try:
-        old = header.split("-", 1)[1].split(" ", 1)[0]
-        return int(old.split(",", 1)[0])
-    except (IndexError, ValueError):
-        return 1
+def _parse_hunk_header(
+    header: str,
+) -> tuple[int, int | None, int | None]:
+    """Return the old start and declared old/new counts from a hunk header."""
+    match = re.match(
+        r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@",
+        header,
+    )
+    if match is None:
+        return 1, None, None
+    start = int(match.group(1))
+    old_count = int(match.group(2) or "1")
+    new_count = int(match.group(3) or "1")
+    return start, old_count, new_count
 
 
 def _parse_patch(text: str) -> list[_FilePatch]:
@@ -114,11 +139,23 @@ def _parse_patch(text: str) -> list[_FilePatch]:
     pending_old: str | None = None
 
     for line in text.splitlines():
+        # File-header-looking content is legal inside a hunk: deleting a line
+        # that starts with ``--`` produces ``--- ...`` in the diff, and adding
+        # one that starts with ``++`` produces ``+++ ...``. Only recognize the
+        # next file header once the current hunk's declared counts are full.
+        if hunk is not None and hunk.complete:
+            hunk = None
         if line.startswith("--- "):
+            if hunk is not None:
+                hunk.old.append(line[1:])
+                continue
             pending_old = _header_path(line[4:])
             hunk = None
             continue
         if line.startswith("+++ "):
+            if hunk is not None:
+                hunk.new.append(line[1:])
+                continue
             current = _FilePatch(pending_old, _header_path(line[4:]))
             patches.append(current)
             pending_old = None
@@ -127,7 +164,8 @@ def _parse_patch(text: str) -> list[_FilePatch]:
         if line.startswith("@@"):
             if current is None:
                 raise _PatchError("hunk (@@) before any file header")
-            hunk = _Hunk(_parse_hunk_start(line))
+            start, old_count, new_count = _parse_hunk_header(line)
+            hunk = _Hunk(start, old_count, new_count)
             current.hunks.append(hunk)
             continue
         if hunk is None:

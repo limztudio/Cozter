@@ -265,6 +265,23 @@ def load_config() -> dict:
 
     cfg = {**_DEFAULT_CONFIG, **cfg}
 
+    # These values are consumed directly from the returned mapping by the
+    # launcher/platform constructors rather than through the defensive getter
+    # helpers above. Normalize them here so malformed JSON cannot crash
+    # ``asyncio.sleep`` or queue sizing later in startup/message handling.
+    for key in (
+        "update_check_interval",
+        "recent_workspace_limit",
+        "message_queue_size",
+    ):
+        value = cfg.get(key)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 1
+        ):
+            cfg[key] = _DEFAULT_CONFIG[key]
+
     # Filter whitespace-only / empty tokens so users who leave placeholders
     # in the file get a "not configured" error rather than a runtime
     # auth-failure later.

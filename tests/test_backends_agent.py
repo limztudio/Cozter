@@ -9,7 +9,7 @@ from Cozter.backends_agent.base import Backend
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
-from Cozter.backends_agent.llama import LlamaBackend
+from Cozter.backends_agent.llama import LlamaBackend, _model_ids
 from Cozter.backends_agent.zai import ZaiBackend
 
 
@@ -265,6 +265,24 @@ class BackendHealthCheckTests(unittest.TestCase):
         self.assertEqual(
             LlamaBackend()._effort_fields(100),
             {"reasoning_effort": "high"},
+        )
+
+    def test_llama_model_ids_tolerate_malformed_payloads(self) -> None:
+        for payload in (None, [], {}, {"data": None}, {"data": {}}):
+            with self.subTest(payload=payload):
+                self.assertEqual(_model_ids(payload), ())
+
+        self.assertEqual(
+            _model_ids({
+                "data": [
+                    {"id": "model-a"},
+                    {"id": ""},
+                    {"id": "model-a"},
+                    {"id": "model-b"},
+                    "bad entry",
+                ],
+            }),
+            ("model-a", "model-b"),
         )
 
 

@@ -540,6 +540,21 @@ class ApplyPatchToolTests(unittest.TestCase):
             with open(p, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "keep\n")
 
+    def test_file_header_markers_inside_hunk_are_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "markers.txt")
+            self._write(p, "-- old marker\nplain\n")
+            out = self._run(tmp, (
+                "--- a/markers.txt\n+++ b/markers.txt\n"
+                "@@ -1,2 +1,2 @@\n"
+                "--- old marker\n"
+                "+++ new marker\n"
+                " plain\n"
+            ))
+            self.assertIn("applied", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "++ new marker\nplain\n")
+
 
 if __name__ == "__main__":
     unittest.main()

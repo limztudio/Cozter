@@ -405,6 +405,31 @@ class ConfigFallbackTests(unittest.TestCase):
             finally:
                 config.CONFIG_PATH = old_path
 
+    def test_load_config_normalizes_directly_consumed_positive_ints(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "telegram_bot_tokens": ["token"],
+                    "user_ids": [123],
+                    "update_check_interval": "fast",
+                    "recent_workspace_limit": True,
+                    "message_queue_size": 0,
+                }, f)
+
+            old_path = config.CONFIG_PATH
+            config.CONFIG_PATH = path
+            try:
+                loaded = config.load_config()
+            finally:
+                config.CONFIG_PATH = old_path
+
+            self.assertEqual(loaded["update_check_interval"], 10)
+            self.assertEqual(loaded["recent_workspace_limit"], 10)
+            self.assertEqual(loaded["message_queue_size"], 50)
+
 
 class RuntimeHardeningConfigTests(unittest.TestCase):
     """Defaults, overrides, and malformed-value fallback for the
