@@ -105,37 +105,23 @@ class StaticBackendModelTests(unittest.TestCase):
     def test_copilot_picker_matches_current_cli_capable_models(self) -> None:
         self.assertEqual(CopilotBackend.available_models, (
             "auto",
-            "claude-sonnet-5",
             "claude-sonnet-4.6",
-            "claude-sonnet-4.5",
             "claude-haiku-4.5",
-            "claude-fable-5",
-            "claude-opus-4.8",
-            "claude-opus-4.8-fast",
-            "claude-opus-4.7",
-            "claude-opus-4.6",
-            "claude-opus-4.5",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-            "gpt-5.5",
             "gpt-5.4",
             "gpt-5.3-codex",
-            "gpt-5.4-mini",
-            "gpt-5-mini",
             "gemini-3.1-pro-preview",
             "gemini-3.5-flash",
-            "kimi-k2.7-code",
+            "mai-code-1-flash",
         ))
 
     def test_copilot_effort_matches_current_cli_choices(self) -> None:
         backend = CopilotBackend()
         self.assertEqual(
             backend.effort_levels,
-            ("minimal", "low", "medium", "high", "xhigh", "max"),
+            ("low", "medium", "high", "xhigh", "max"),
         )
         self.assertIsNone(backend.convert_effort(0))
-        self.assertEqual(backend.convert_effort(1), "minimal")
+        self.assertEqual(backend.convert_effort(1), "low")
         self.assertEqual(backend.convert_effort(100), "max")
 
     def test_copilot_picker_matches_installed_cli_catalog(self) -> None:
@@ -291,6 +277,7 @@ class ZaiBackendTests(unittest.TestCase):
 
     def test_picker_includes_current_text_models(self) -> None:
         self.assertEqual(ZaiBackend.available_models, (
+            "glm-5.2",
             "glm-5.1",
             "glm-5-turbo",
             "glm-5",
@@ -353,26 +340,42 @@ class ZaiBackendTests(unittest.TestCase):
     def test_request_model_falls_back_to_default(self) -> None:
         backend = ZaiBackend()
         self.assertEqual(backend._request_model("glm-4.7"), "glm-4.7")
-        self.assertEqual(backend._request_model(None), "glm-5.1")
-        self.assertEqual(backend._request_model(""), "glm-5.1")
+        self.assertEqual(backend._request_model(None), "glm-5.2")
+        self.assertEqual(backend._request_model(""), "glm-5.2")
 
-    def test_effort_uses_glm_thinking_request_shape(self) -> None:
+    def test_glm_5_2_effort_uses_reasoning_request_shape(self) -> None:
         backend = ZaiBackend()
-        self.assertEqual(backend._effort_fields(0), {})
+        self.assertEqual(backend._effort_fields(0, "glm-5.2"), {})
         self.assertEqual(
-            backend._effort_fields(1),
+            backend._effort_fields(1, "glm-5.2"),
+            {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "none",
+            },
+        )
+        self.assertEqual(
+            backend._effort_fields(50, "glm-5.2"),
+            {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "medium",
+            },
+        )
+        self.assertEqual(
+            backend._effort_fields(100, "glm-5.2"),
+            {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "max",
+            },
+        )
+
+    def test_older_glm_effort_uses_thinking_switch(self) -> None:
+        backend = ZaiBackend()
+        self.assertEqual(
+            backend._effort_fields(49, "glm-5.1"),
             {"thinking": {"type": "disabled"}},
         )
         self.assertEqual(
-            backend._effort_fields(49),
-            {"thinking": {"type": "disabled"}},
-        )
-        self.assertEqual(
-            backend._effort_fields(50),
-            {"thinking": {"type": "enabled"}},
-        )
-        self.assertEqual(
-            backend._effort_fields(100),
+            backend._effort_fields(50, "glm-5.1"),
             {"thinking": {"type": "enabled"}},
         )
 

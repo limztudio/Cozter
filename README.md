@@ -16,7 +16,7 @@ drop-in plugin system that works across every backend.
   - `llama` — any OpenAI-compatible HTTP server (llama-server, LM Studio,
     Mistral API, etc.); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
-  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.1`, `glm-4.7`, …);
+  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.2`, `glm-5.1`, …);
     OpenAI-compatible, so it shares the in-process loop — set `zai_api_key`
     in config
 - **Four chat surfaces**, selected at launch:
@@ -172,7 +172,7 @@ your Z.ai account and paste it here. `zai_base_url` defaults to
 `/chat/completions` is appended); override it for a regional endpoint.
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
 mirror the llama knobs for the cloud call. Select `zai` with `/agent`, pick
-a model with `/model` (default `glm-5.1`), and add private or regional GLM
+a model with `/model` (default `glm-5.2`), and add private or regional GLM
 ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai coding turns
 automatically continue into another tool-enabled segment when Cozter's
 internal tool-call segment limit is reached, instead of stopping for a
@@ -405,7 +405,7 @@ Each backend defines its own model list and permission mapping in
 | `claude_code` | `claude --print --output-format stream-json` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json` | `auto` | `claude-haiku-4.5` |
 | `llama` | OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
-| `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.1` | `glm-4.5-air` |
+| `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-air` |
 
 The CLI-backend model lists are a hand-maintained snapshot; add newer or
 private models through `extra_models` in config (see Configuration) rather
@@ -443,9 +443,9 @@ maps the percentage to its own vocabulary and request shape:
 |---|---|---|
 | `codex` | 4 common levels @ 25% each | `-c model_reasoning_effort=xhigh` |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
-| `zai` | thinking off below 50%, on at 50%+ | `payload["thinking"]["type"] = "enabled"` |
+| `zai` | GLM-5.2: 7 levels; older GLM: thinking toggle | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | 5 levels @ 20% each | `--effort max` |
-| `copilot` | 6 explicit levels | `--effort max` |
+| `copilot` | 5 levels @ 20% each | `--effort max` |
 
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort

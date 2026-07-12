@@ -60,12 +60,18 @@ class OpenAIChatBackend(Backend):
         """Model id to send, or None to omit the field entirely."""
         return model or None
 
-    def _effort_fields(self, percent: int) -> dict[str, Any]:
+    def _effort_fields(
+        self,
+        percent: int,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         """Provider-specific request fields for a reasoning-effort override.
 
         OpenAI-compatible servers conventionally accept
         ``reasoning_effort``. Providers with a different request shape can
-        override this hook without duplicating the agent loop.
+        override this hook without duplicating the agent loop. ``model`` is
+        the resolved request model so providers can account for model-specific
+        parameter support.
         """
         native_effort = self.convert_effort(percent)
         return {"reasoning_effort": native_effort} if native_effort else {}
@@ -134,7 +140,7 @@ class OpenAIChatBackend(Backend):
 
         # Translate the 0-100 effort into provider-native request fields. An
         # empty mapping means "do not override the server default".
-        effort_fields = self._effort_fields(effort)
+        effort_fields = self._effort_fields(effort, request_model)
 
         # The endpoint is stateless, so the model has no idea what cwd it is
         # operating against unless we tell it. CLI backends learn the

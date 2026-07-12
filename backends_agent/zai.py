@@ -1,6 +1,6 @@
 """Z.ai (Zhipu GLM) backend: OpenAI-compatible cloud API.
 
-Z.ai serves the GLM models (glm-5.1, glm-5, glm-4.7, ...) through an
+Z.ai serves the GLM models (glm-5.2, glm-5.1, glm-5, ...) through an
 OpenAI-compatible endpoint at ``https://api.z.ai/api/paas/v4`` with Bearer
 auth. It reuses the shared :class:`OpenAIChatBackend` loop; this module
 supplies only Z.ai's specifics - the endpoint, the Authorization header
@@ -28,6 +28,7 @@ class ZaiBackend(OpenAIChatBackend):
     # The exact set evolves; add private/regional ids via config
     # `extra_models` - the /model picker merges them.
     available_models = (
+        "glm-5.2",
         "glm-5.1",
         "glm-5-turbo",
         "glm-5",
@@ -42,12 +43,13 @@ class ZaiBackend(OpenAIChatBackend):
         "glm-4.5-flash",
         "glm-4-32b-0414-128k",
     )
-    default_model = "glm-5.1"
+    default_model = "glm-5.2"
     default_summary_model = "glm-4.5-air"
-    # Z.ai exposes thinking as an enabled/disabled switch. 0 still skips the
-    # field so the model's default applies; 1-49 disable it and 50-100 enable
-    # it explicitly.
-    effort_levels = ("disabled", "enabled")
+    # GLM-5.2 accepts seven reasoning-effort values. Other current text models
+    # expose only the thinking switch, handled separately in _effort_fields.
+    effort_levels = (
+        "none", "minimal", "low", "medium", "high", "xhigh", "max",
+    )
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 
@@ -64,11 +66,23 @@ class ZaiBackend(OpenAIChatBackend):
         # Z.ai requires a model field; fall back to the configured default.
         return model or self.default_model
 
-    def _effort_fields(self, percent: int) -> dict:
-        native_effort = self.convert_effort(percent)
-        if not native_effort:
+    def _effort_fields(
+        self,
+        percent: int,
+        model: str | None = None,
+    ) -> dict:
+        if percent <= 0:
             return {}
-        return {"thinking": {"type": native_effort}}
+        if model == "glm-5.2":
+            return {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": self.convert_effort(percent),
+            }
+        return {
+            "thinking": {
+                "type": "enabled" if percent >= 50 else "disabled",
+            },
+        }
 
     def _auto_continue_after_tool_limit(self) -> bool:
         # Long z.ai coding runs can legitimately need more tool turns than

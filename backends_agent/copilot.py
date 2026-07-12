@@ -59,37 +59,24 @@ def _max_prompt_chars() -> int:
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
-    # Copilot's CLI model picker is narrower than Copilot's broader product
-    # catalog. Include documented CLI/package slugs; availability still
-    # depends on the user's plan, org policy, and rollout cohort.
+    # Snapshot of the models documented for Copilot CLI. The broader Copilot
+    # product catalog contains additional models that this CLI surface does
+    # not expose; availability can still depend on plan and organization
+    # policy.
     available_models = (
         "auto",
-        "claude-sonnet-5",
         "claude-sonnet-4.6",
-        "claude-sonnet-4.5",
         "claude-haiku-4.5",
-        "claude-fable-5",
-        "claude-opus-4.8",
-        "claude-opus-4.8-fast",
-        "claude-opus-4.7",
-        "claude-opus-4.6",
-        "claude-opus-4.5",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
         "gpt-5.4",
         "gpt-5.3-codex",
-        "gpt-5.4-mini",
-        "gpt-5-mini",
         "gemini-3.1-pro-preview",
         "gemini-3.5-flash",
-        "kimi-k2.7-code",
+        "mai-code-1-flash",
     )
     default_model = "auto"
     default_summary_model = "claude-haiku-4.5"
-    # ``none`` is represented by Cozter's effort=0 (omit the flag).
-    effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
+    # No override is represented by Cozter's effort=0 (omit the flag).
+    effort_levels = ("low", "medium", "high", "xhigh", "max")
 
     async def launch(
         self,
