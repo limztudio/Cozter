@@ -59,19 +59,37 @@ def _max_prompt_chars() -> int:
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
-    # Snapshot of the models documented for Copilot CLI. The broader Copilot
-    # product catalog contains additional models that this CLI surface does
-    # not expose; availability can still depend on plan and organization
-    # policy.
+    # Docs-derived and unverified: these slugs come from GitHub's published
+    # Copilot documentation, not from the CLI itself, and have never been
+    # checked against the catalog `copilot help config` prints. The strict
+    # check (test_copilot_picker_matches_installed_cli_catalog) does compare
+    # this tuple to the installed CLI, but skips wherever `copilot` is absent,
+    # as it was here - run it on a machine that has the CLI to confirm the
+    # exact slugs and their order. `auto` is accepted by --model but is not
+    # part of that catalog. Availability also depends on plan and org policy.
     available_models = (
         "auto",
+        "claude-sonnet-5",
         "claude-sonnet-4.6",
+        "claude-sonnet-4.5",
         "claude-haiku-4.5",
+        "claude-fable-5",
+        "claude-opus-4.8",
+        "claude-opus-4.8-fast",
+        "claude-opus-4.7",
+        "claude-opus-4.6",
+        "claude-opus-4.5",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
         "gpt-5.4",
         "gpt-5.3-codex",
+        "gpt-5.4-mini",
+        "gpt-5-mini",
         "gemini-3.1-pro-preview",
         "gemini-3.5-flash",
-        "mai-code-1-flash",
+        "kimi-k2.7-code",
     )
     default_model = "auto"
     default_summary_model = "claude-haiku-4.5"

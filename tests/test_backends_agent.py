@@ -127,15 +127,34 @@ class StaticBackendModelTests(unittest.TestCase):
         self.assertEqual(CodexBackend.model_effort_levels, catalog_efforts)
 
     def test_copilot_picker_matches_current_cli_capable_models(self) -> None:
+        """Change-detector for the docs-derived tuple, not CLI verification.
+
+        test_copilot_picker_matches_installed_cli_catalog is the authority on
+        the real slugs, and it skips wherever the CLI is not installed.
+        """
         self.assertEqual(CopilotBackend.available_models, (
             "auto",
+            "claude-sonnet-5",
             "claude-sonnet-4.6",
+            "claude-sonnet-4.5",
             "claude-haiku-4.5",
+            "claude-fable-5",
+            "claude-opus-4.8",
+            "claude-opus-4.8-fast",
+            "claude-opus-4.7",
+            "claude-opus-4.6",
+            "claude-opus-4.5",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
             "gpt-5.4",
             "gpt-5.3-codex",
+            "gpt-5.4-mini",
+            "gpt-5-mini",
             "gemini-3.1-pro-preview",
             "gemini-3.5-flash",
-            "mai-code-1-flash",
+            "kimi-k2.7-code",
         ))
 
     def test_copilot_effort_matches_current_cli_choices(self) -> None:
