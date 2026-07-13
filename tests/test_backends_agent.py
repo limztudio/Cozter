@@ -34,7 +34,10 @@ class StaticBackendModelTests(unittest.TestCase):
             CopilotBackend,
         ):
             with self.subTest(backend=backend_cls.name):
-                models = backend_cls.available_models
+                # Instantiate: CopilotBackend exposes available_models as an
+                # instance property (it probes the installed CLI), while the
+                # others keep it as a plain class attribute.
+                models = backend_cls().available_models
                 self.assertEqual(len(models), len(set(models)))
                 self.assertIn(backend_cls.default_model, models)
                 self.assertIn(backend_cls.default_summary_model, models)
@@ -126,36 +129,39 @@ class StaticBackendModelTests(unittest.TestCase):
         }
         self.assertEqual(CodexBackend.model_effort_levels, catalog_efforts)
 
-    def test_copilot_picker_matches_current_cli_capable_models(self) -> None:
-        """Change-detector for the docs-derived tuple, not CLI verification.
+    def test_copilot_fallback_models_are_current_and_deduped(self) -> None:
+        """The fallback list is the picker's safety net, so keep it clean.
 
-        test_copilot_picker_matches_installed_cli_catalog is the authority on
-        the real slugs, and it skips wherever the CLI is not installed.
+        available_models is now discovered from the installed CLI at runtime
+        (see CopilotBackend._discover_models); this tuple only ships when the
+        CLI is absent or its catalog can't be parsed. ``auto`` leads and every
+        default/tier model must stay present so the picker is never empty or
+        self-inconsistent.
         """
-        self.assertEqual(CopilotBackend.available_models, (
-            "auto",
-            "claude-sonnet-5",
-            "claude-sonnet-4.6",
-            "claude-sonnet-4.5",
-            "claude-haiku-4.5",
-            "claude-fable-5",
-            "claude-opus-4.8",
-            "claude-opus-4.8-fast",
-            "claude-opus-4.7",
-            "claude-opus-4.6",
-            "claude-opus-4.5",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-            "gpt-5.5",
-            "gpt-5.4",
-            "gpt-5.3-codex",
-            "gpt-5.4-mini",
-            "gpt-5-mini",
-            "gemini-3.1-pro-preview",
-            "gemini-3.5-flash",
-            "kimi-k2.7-code",
-        ))
+        models = copilot_mod._FALLBACK_MODELS
+        self.assertEqual(models[0], "auto")
+        self.assertEqual(len(models), len(set(models)))
+        self.assertIn(CopilotBackend.default_model, models)
+        self.assertIn(CopilotBackend.default_summary_model, models)
+        for tier_model in CopilotBackend.tier_models.values():
+            self.assertIn(tier_model, models)
+
+    def test_copilot_help_config_parser_extracts_slugs(self) -> None:
+        sample = (
+            "  `model`: AI model to use.\n"
+            '    - "claude-sonnet-5"\n'
+            '    - "claude-opus-4.8-fast"\n'
+            '    - "claude-sonnet-5"\n'  # duplicate is dropped
+            "\n"
+            "  `contextTier`: tiered-pricing window.\n"
+        )
+        self.assertEqual(
+            copilot_mod._parse_help_config_models(sample),
+            ("claude-sonnet-5", "claude-opus-4.8-fast"),
+        )
+        self.assertEqual(
+            copilot_mod._parse_help_config_models("no model section"), (),
+        )
 
     def test_copilot_effort_matches_current_cli_choices(self) -> None:
         backend = CopilotBackend()
@@ -206,8 +212,9 @@ class StaticBackendModelTests(unittest.TestCase):
             self.skipTest("copilot help config returned no model catalog")
 
         # ``auto`` is Cozter's supported sentinel and is not repeated in the
-        # CLI's concrete-model configuration list.
-        self.assertEqual(CopilotBackend.available_models[1:], tuple(models))
+        # CLI's concrete-model configuration list. available_models is an
+        # instance property (it probes the CLI), so read it off a backend.
+        self.assertEqual(CopilotBackend().available_models[1:], tuple(models))
 
     def test_claude_code_picker_includes_current_models(self) -> None:
         models = ClaudeCodeBackend.available_models

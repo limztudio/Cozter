@@ -19,6 +19,8 @@ and log unknown event types so the schema can be refined.
 import asyncio
 import logging
 import os
+import shutil
+import subprocess
 import sys
 
 from .base import (
@@ -59,38 +61,9 @@ def _max_prompt_chars() -> int:
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
-    # Docs-derived and unverified: these slugs come from GitHub's published
-    # Copilot documentation, not from the CLI itself, and have never been
-    # checked against the catalog `copilot help config` prints. The strict
-    # check (test_copilot_picker_matches_installed_cli_catalog) does compare
-    # this tuple to the installed CLI, but skips wherever `copilot` is absent,
-    # as it was here - run it on a machine that has the CLI to confirm the
-    # exact slugs and their order. `auto` is accepted by --model but is not
-    # part of that catalog. Availability also depends on plan and org policy.
-    available_models = (
-        "auto",
-        "claude-sonnet-5",
-        "claude-sonnet-4.6",
-        "claude-sonnet-4.5",
-        "claude-haiku-4.5",
-        "claude-fable-5",
-        "claude-opus-4.8",
-        "claude-opus-4.8-fast",
-        "claude-opus-4.7",
-        "claude-opus-4.6",
-        "claude-opus-4.5",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.3-codex",
-        "gpt-5.4-mini",
-        "gpt-5-mini",
-        "gemini-3.1-pro-preview",
-        "gemini-3.5-flash",
-        "kimi-k2.7-code",
-    )
+    # Cozter's sentinel: `auto` is accepted by `--model` but never appears in
+    # the CLI's concrete-model list, so it is prepended to whatever the
+    # installed binary reports rather than discovered from it.
     default_model = "auto"
     default_summary_model = "claude-haiku-4.5"
     # The high tier stays on the Sonnet line rather than reaching for Opus or
@@ -103,6 +76,67 @@ class CopilotBackend(Backend):
     }
     # No override is represented by Cozter's effort=0 (omit the flag).
     effort_levels = ("low", "medium", "high", "xhigh", "max")
+
+    def __init__(self) -> None:
+        # Discovered once per process: the backend is a process-wide
+        # singleton (see backends_agent.__init__._BACKENDS), so caching on
+        # the instance avoids re-shelling out to `copilot help config` on
+        # every picker open. ``None`` means "not yet probed"; a probe that
+        # finds nothing falls back to _FALLBACK_MODELS.
+        self._cached_models: tuple[str, ...] | None = None
+
+    # ---- model discovery -----------------------------------------------
+
+    @property
+    def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
+        """Models the installed Copilot CLI accepts.
+
+        Discovered at first access by parsing ``copilot help config``, which
+        lists the binary's concrete model slugs. This tracks the installed
+        CLI version/build rather than a hand-maintained tuple, so the picker
+        only ever offers models the CLI on this host actually recognizes.
+        ``auto`` is always first. Falls back to :data:`_FALLBACK_MODELS`
+        when the CLI is absent or the catalog can't be parsed.
+        """
+        if self._cached_models is None:
+            self._cached_models = self._discover_models()
+        return self._cached_models
+
+    def _discover_models(self) -> tuple[str, ...]:
+        binary = shutil.which(self.executable)
+        if binary is None:
+            logger.debug(
+                "copilot not on PATH; using fallback model list"
+            )
+            return _FALLBACK_MODELS
+        prefix = executable_command(self.executable)
+        try:
+            proc = subprocess.run(
+                prefix + ["help", "config"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            logger.debug(
+                "copilot help config probe failed (%s); using fallback",
+                exc,
+            )
+            return _FALLBACK_MODELS
+        if proc.returncode != 0:
+            logger.debug(
+                "copilot help config exited %d (%s); using fallback",
+                proc.returncode, proc.stderr.strip()[:200],
+            )
+            return _FALLBACK_MODELS
+        models = _parse_help_config_models(proc.stdout)
+        if not models:
+            logger.debug(
+                "copilot help config yielded no model catalog; "
+                "using fallback"
+            )
+            return _FALLBACK_MODELS
+        return ("auto", *models)
 
     async def launch(
         self,
@@ -286,3 +320,59 @@ class CopilotBackend(Backend):
         if path:
             return f"{tool}: {path}"
         return tool
+
+
+def _parse_help_config_models(text: str) -> tuple[str, ...]:
+    """Extract concrete model slugs from ``copilot help config`` output.
+
+    The ``model`` setting section renders each choice as an indented
+    ``- "slug"`` line. Returns slugs in document order, de-duplicated.
+    """
+    models: list[str] = []
+    seen: set[str] = set()
+    in_model_section = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("`model`:"):
+            in_model_section = True
+            continue
+        if not in_model_section:
+            continue
+        if stripped.startswith('- "') and stripped.endswith('"'):
+            slug = stripped[3:-1]
+            if slug and slug not in seen:
+                seen.add(slug)
+                models.append(slug)
+            continue
+        # The first non-empty, non-choice line after choices ends the section.
+        if models and stripped:
+            break
+    return tuple(models)
+
+
+# Safety net used when the Copilot CLI is absent or its catalog can't be
+# parsed. Kept current with the 1.0.70 binary so the picker is never empty.
+_FALLBACK_MODELS = (
+    "auto",
+    "claude-sonnet-5",
+    "claude-sonnet-4.6",
+    "claude-sonnet-4.5",
+    "claude-haiku-4.5",
+    "claude-fable-5",
+    "claude-opus-4.8",
+    "claude-opus-4.8-fast",
+    "claude-opus-4.7",
+    "claude-opus-4.6",
+    "claude-opus-4.5",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.3-codex",
+    "gpt-5.4-mini",
+    "gpt-5-mini",
+    "gemini-3.1-pro-preview",
+    "gemini-3.5-flash",
+    "kimi-k2.7-code",
+)
