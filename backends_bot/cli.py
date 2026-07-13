@@ -6,9 +6,10 @@ replies to stdout. Used for local development and for users who don't
 want to set up Telegram or Slack.
 
 Commands work the same as the other adapters: lines starting with ``/``
-are slash commands, everything else is treated as a chat message routed
-to the AI agent. Status events emitted during an AI turn print directly
-(since the terminal can't edit prior lines).
+are slash commands, and registered commands may also use ``\\`` as a
+message-friendly prefix. Everything else is treated as a chat message
+routed to the AI agent. Status events emitted during an AI turn print
+directly (since the terminal can't edit prior lines).
 """
 
 from __future__ import annotations

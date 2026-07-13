@@ -364,11 +364,29 @@ class BotPlatform(ABC):
         await handler(self, ctx)
 
     async def dispatch_text(self, ctx: BotContext) -> None:
-        """Entry point for plain text messages (not slash commands)."""
+        """Entry point for plain text and backslash command aliases."""
         if not self.authorized(ctx.user_id, ctx.chat_id):
             return
         if not ctx.text or not ctx.text.strip():
             return
+
+        # Message-based surfaces such as Slack may reserve slash commands
+        # for workspace-installed integrations.  Accept ``\open`` (and the
+        # other registered names) as ordinary-message aliases so users do
+        # not need a separately installed Slack slash command.  Only promote
+        # known commands: arbitrary backslash-prefixed text is valid chat
+        # input, especially for paths and LaTeX.
+        text = ctx.text.strip()
+        if text.startswith("\\"):
+            parts = text[1:].split(None, 1)
+            command = parts[0].split("@", 1)[0] if parts else ""
+            if command.lower() in self._COMMANDS:
+                ctx.text = ""
+                ctx.command = command
+                ctx.args = parts[1] if len(parts) > 1 else ""
+                await self.dispatch_command(ctx)
+                return
+
         pending = self._pending_input.pop(ctx.user_id, None)
         if pending is not None:
             # Multi-step flow continuation; handler decides whether to

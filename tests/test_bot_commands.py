@@ -17,8 +17,9 @@ from Cozter.backends_bot.base import BotContext, BotPlatform
 
 class _CmdBot(BotPlatform):
     def __init__(self) -> None:
-        super().__init__([])
+        super().__init__(["u1"])
         self.replies: list[str] = []
+        self.ai_texts: list[str] = []
 
     @property
     def platform_id(self) -> str:
@@ -44,6 +45,9 @@ class _CmdBot(BotPlatform):
 
     async def send_file(self, chat_id: str, path: str) -> None:
         pass
+
+    async def _ai_chat(self, ctx: BotContext) -> None:
+        self.ai_texts.append(ctx.text)
 
 
 class BotCommandTests(unittest.TestCase):
@@ -71,6 +75,28 @@ class BotCommandTests(unittest.TestCase):
 
     def _run(self, coro) -> None:
         asyncio.run(coro)
+
+    # -- text command aliases ---------------------------------------------
+    def test_backslash_command_alias_dispatches_with_arguments(self) -> None:
+        self._run(self.bot.dispatch_text(self._ctx(text=r"\context 8000")))
+
+        self.assertEqual(workspace.get_history_budget(self.ws), 8000)
+        self.assertEqual(self.bot.ai_texts, [])
+
+    def test_unknown_backslash_text_remains_chat_input(self) -> None:
+        text = r"\newcommand is LaTeX, not a Cozter command"
+        self._run(self.bot.dispatch_text(self._ctx(text=text)))
+
+        self.assertEqual(self.bot.ai_texts, [text])
+
+    def test_backslash_cancel_exits_pending_input_flow(self) -> None:
+        self._run(self.bot.cmd_open(self._ctx()))
+        self.assertIn(self.uid, self.bot._pending_input)
+
+        self._run(self.bot.dispatch_text(self._ctx(text=r"\cancel")))
+
+        self.assertNotIn(self.uid, self.bot._pending_input)
+        self.assertEqual(self._last(), "Cancelled.")
 
     # -- /permission -------------------------------------------------------
     def test_permission_flow_sets_value(self) -> None:
