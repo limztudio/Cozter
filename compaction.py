@@ -21,6 +21,10 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
+# A reply can finish while a previous post-turn compaction is still running.
+# Do not let both snapshots race to summarize and rewrite the same session.
+_in_flight: set[tuple[str, str]] = set()
+
 
 KEEP_RECENT_AFTER_COMPACT = 5
 MAX_SUMMARY_CHARS = 80_000  # ~20K tokens - safe for most models
@@ -122,6 +126,12 @@ async def maybe_compact(
     Compaction runs outside the workspace lock so other requests
     aren't stalled.
     """
+    key = (workspace_path, session_id)
+    if key in _in_flight:
+        logger.debug("Compaction already in progress for session %s", session_id)
+        return
+
+    _in_flight.add(key)
     try:
         data = session.load_session(workspace_path, session_id)
         if data is None:
@@ -176,6 +186,8 @@ async def maybe_compact(
         )
     except Exception:
         logger.error("Compaction check failed", exc_info=True)
+    finally:
+        _in_flight.discard(key)
 
 
 async def compact_session(

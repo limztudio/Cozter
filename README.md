@@ -138,7 +138,7 @@ lives in `.config/config.example.json`):
   "tool_timeout": 120,
   "update_idle_timeout": 1200,
   "dump_traceback_interval": 0,
-  "update_check_interval": 10,
+  "update_check_interval": 300,
   "recent_workspace_limit": 10,
   "message_queue_size": 50,
 
@@ -734,21 +734,21 @@ git status --short
 
 ## Auto-update
 
-`updater.fetch_and_pull()` runs every `update_check_interval` seconds.
-It fetches `origin`, then fast-forward-pulls only when the working tree is
-clean and the local branch is not ahead of its upstream. Dirty checkouts
-and branches with local commits are treated as development state and are
-left alone, so an auto-update pass does not fight an in-progress edit or
-an unpushed commit.
+`updater.check_for_update()` runs every `update_check_interval` seconds
+(five minutes by default). It fetches `origin` without blocking message
+intake, then checks whether the clean local branch is behind its upstream.
+Dirty checkouts and branches with local commits are treated as development
+state and are left alone, so an auto-update pass does not fight an
+in-progress edit or an unpushed commit.
 
-Update checks wait for active turns to finish, pause new intake briefly,
-and queue any messages that arrive during a pending restart. If `HEAD`
-changed (remote update, manual pull, or a local commit while the bot was
-running), the bot installs any new `requirements.txt`, broadcasts a
-"restarting" message, and exits. The init system, such as `systemd` with
-`Restart=always`, brings daemon mode back. CLI mode uses an outer
-respawner process and relaunches itself in the same terminal. Persisted
-queues resume after either path starts again.
+Only when an update is available does Cozter pause new AI turns, wait for
+active turns to finish, fast-forward-pull, install any changed
+`requirements.txt`, broadcast a "restarting" message, and exit. Manual
+pulls and local commits while the bot is running also trigger this safe
+restart path. The init system, such as `systemd` with `Restart=always`,
+brings daemon mode back. CLI mode uses an outer respawner process and
+relaunches itself in the same terminal. Persisted queues resume after
+either path starts again.
 
 ## Runtime diagnostics
 

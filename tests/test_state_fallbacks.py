@@ -446,7 +446,7 @@ class ConfigFallbackTests(unittest.TestCase):
             finally:
                 config.CONFIG_PATH = old_path
 
-            self.assertEqual(loaded["update_check_interval"], 10)
+            self.assertEqual(loaded["update_check_interval"], 300)
             self.assertEqual(loaded["recent_workspace_limit"], 10)
             self.assertEqual(loaded["message_queue_size"], 50)
 

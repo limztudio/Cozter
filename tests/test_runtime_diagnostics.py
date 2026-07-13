@@ -215,5 +215,37 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         self.assertGreaterEqual(sleeps, 1)
 
 
+class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_no_update_check_does_not_pause_message_intake(self):
+        main = _load_main_module()
+
+        class _Bot:
+            begin_calls = 0
+
+            async def begin_update_check(self):
+                self.begin_calls += 1
+
+        sleeps = 0
+
+        async def fake_sleep(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps > 1:
+                raise asyncio.CancelledError
+
+        bot = _Bot()
+        with (
+            mock.patch.object(main.asyncio, "sleep", side_effect=fake_sleep),
+            mock.patch.object(
+                main.updater, "check_for_update", return_value=False,
+            ) as check_mock,
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await main.update_loop([bot], interval=1)
+
+        check_mock.assert_called_once_with()
+        self.assertEqual(bot.begin_calls, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

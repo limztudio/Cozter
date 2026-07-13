@@ -928,6 +928,29 @@ async def run(
         )
 
 
+async def _run_post_turn_maintenance(
+    workspace_path: str,
+    session_id: str,
+    summary_model: str | None,
+    summary_backend: str,
+) -> None:
+    """Run non-critical session maintenance after the user reply is ready.
+
+    Compaction can require another full model call. Keeping it out of the
+    foreground turn means chat platforms can deliver the completed answer
+    immediately. Titling follows compaction so a title emitted by the
+    compactor wins over the lightweight auto-title fallback.
+    """
+    await compaction.maybe_compact(
+        workspace_path, session_id, summary_model,
+        backend_name=summary_backend,
+    )
+    await titling.maybe_auto_title(
+        workspace_path, session_id, summary_model,
+        backend_name=summary_backend,
+    )
+
+
 async def _run_turn(
     prompt: str,
     workspace_path: str,
@@ -1115,27 +1138,17 @@ async def _run_turn(
     async with workspace_mod.get_lock(workspace_path):
         _log_to_session(workspace_path, session_id, effective_prompt, result)
 
-    await compaction.maybe_compact(
-        workspace_path, session_id, summary_model,
-        backend_name=summary_backend,
+    # Compaction may take another model round-trip. The answer is already
+    # complete, so keep it out of the foreground turn; Slack can post the
+    # result as soon as ``agent.run`` returns. The helper preserves the old
+    # compaction-before-title ordering.
+    create_background_task(
+        _run_post_turn_maintenance(
+            workspace_path, session_id, summary_model, summary_backend,
+        ),
+        name=f"post-turn-maintenance:{session_id}",
+        log=logger,
     )
-
-    # Auto-title sessions whose name still matches the default
-    # "Session YYYY-MM-DD" pattern. The in-memory snapshot reflects
-    # the name as it was at run start; a session with a custom name
-    # is no longer a candidate for renaming, so skip the spawn entirely.
-    # compaction above could have set a fresh title via [TITLE] —
-    # in that case spawning is harmless (the task just bails on its
-    # own is_default_name check after a fresh load).
-    if session.is_default_name(session_data.get("name")):
-        create_background_task(
-            titling.maybe_auto_title(
-                workspace_path, session_id, summary_model,
-                backend_name=summary_backend,
-            ),
-            name=f"auto-title:{session_id}",
-            log=logger,
-        )
 
     if (
         not any(e.kind == "text" for e in result.events)

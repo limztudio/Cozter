@@ -119,6 +119,80 @@ def get_last_commit_date() -> str:
     return _git_str("log", "-1", "--format=%ci", default="(unknown)")
 
 
+def _head_changed() -> bool:
+    """Return whether the checkout no longer matches the running process."""
+    current = _get_head_commit()
+    if current and _STARTUP_COMMIT and current != _STARTUP_COMMIT:
+        logger.info("Code changed: %s -> %s", _STARTUP_COMMIT[:8], current[:8])
+        return True
+    return False
+
+
+def _fetch_origin() -> bool:
+    """Refresh remote refs without modifying the working tree."""
+    try:
+        fetch = _git("fetch", "origin")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        logger.error("git not available or timed out, skipping update check")
+        return False
+    if fetch.returncode != 0:
+        logger.warning("git fetch failed: %s", fetch.stderr.strip())
+        return False
+    return True
+
+
+def _remote_update_available() -> bool:
+    """Return whether the fetched upstream is ahead without pulling it."""
+    try:
+        if _working_tree_dirty():
+            logger.debug(
+                "Skipping auto-pull: working tree has uncommitted changes",
+            )
+            return False
+        if _local_ahead_of_upstream():
+            logger.debug(
+                "Skipping auto-pull: local branch is ahead of or lacks a "
+                "tracking upstream (development checkout)",
+            )
+            return False
+
+        upstream_result = _git(
+            "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
+        )
+        if upstream_result.returncode != 0:
+            return False
+        upstream = upstream_result.stdout.strip()
+        if not upstream:
+            return False
+        behind_result = _git("rev-list", "--count", f"HEAD..{upstream}")
+        if behind_result.returncode != 0:
+            logger.warning(
+                "Could not compare local HEAD with upstream: %s",
+                behind_result.stderr.strip(),
+            )
+            return False
+        try:
+            return int(behind_result.stdout.strip()) > 0
+        except ValueError:
+            return False
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        logger.error("git not available or timed out, skipping update check")
+        return False
+
+
+def check_for_update() -> bool:
+    """Fetch safely and report whether an update/restart is needed.
+
+    Fetch only touches Git's remote refs, so normal message intake can stay
+    live while this check runs. Pulling is deliberately deferred until the
+    runtime has paused new turns and existing turns have finished.
+    """
+    fetched = _fetch_origin()
+    if _head_changed():
+        return True
+    return fetched and _remote_update_available()
+
+
 def fetch_and_pull() -> bool:
     """Fetch origin, pull if behind; return True if disk HEAD changed.
 
@@ -131,11 +205,9 @@ def fetch_and_pull() -> bool:
     that case, so a developer's own commit or manual pull is picked up and
     a restart is scheduled as before.
     """
+    if not _fetch_origin():
+        return _head_changed()
     try:
-        fetch = _git("fetch", "origin")
-        if fetch.returncode != 0:
-            logger.warning("git fetch failed: %s", fetch.stderr.strip())
-
         if _working_tree_dirty():
             logger.debug(
                 "Skipping auto-pull: working tree has uncommitted changes",
@@ -153,12 +225,7 @@ def fetch_and_pull() -> bool:
         logger.error("git not available or timed out, skipping update check")
         return False
 
-    # Compare disk HEAD to the commit we started with
-    current = _get_head_commit()
-    if current and _STARTUP_COMMIT and current != _STARTUP_COMMIT:
-        logger.info("Code changed: %s -> %s", _STARTUP_COMMIT[:8], current[:8])
-        return True
-    return False
+    return _head_changed()
 
 
 def install_requirements() -> None:

@@ -38,7 +38,9 @@ _DEFAULT_CONFIG = {
     # dumps. 0 disables the periodic dump; the on-demand SIGUSR1
     # dump always works regardless. See __main__._enable_faulthandler.
     "dump_traceback_interval": 0,
-    "update_check_interval": 10,
+    # Fetches are cheap and non-blocking, but five minutes avoids needless
+    # network churn for a long-running service.
+    "update_check_interval": 300,
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
     "extra_models": {},

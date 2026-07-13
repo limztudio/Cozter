@@ -135,6 +135,45 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
             "pull should be skipped when the branch has no upstream",
         )
 
+    def test_check_for_update_detects_remote_commit_without_pulling(self) -> None:
+        calls: list[tuple[str, ...]] = []
+        with (
+            mock.patch.object(updater, "_git", _fake_git({
+                "origin": "",
+                "HEAD": "abc123",
+                "--porcelain": "",
+                "@{u}": "origin/main",
+                "origin/main..HEAD": "0",
+                "HEAD..origin/main": "1",
+            }, calls)),
+            mock.patch.object(updater, "_STARTUP_COMMIT", "abc123"),
+        ):
+            available = updater.check_for_update()
+
+        self.assertTrue(available)
+        self.assertFalse(
+            self._pulled(calls),
+            f"check must not alter the checkout; calls={calls}",
+        )
+
+    def test_check_for_update_returns_false_when_upstream_is_current(self) -> None:
+        calls: list[tuple[str, ...]] = []
+        with (
+            mock.patch.object(updater, "_git", _fake_git({
+                "origin": "",
+                "HEAD": "abc123",
+                "--porcelain": "",
+                "@{u}": "origin/main",
+                "origin/main..HEAD": "0",
+                "HEAD..origin/main": "0",
+            }, calls)),
+            mock.patch.object(updater, "_STARTUP_COMMIT", "abc123"),
+        ):
+            available = updater.check_for_update()
+
+        self.assertFalse(available)
+        self.assertFalse(self._pulled(calls))
+
 
 class RestartScriptTests(unittest.TestCase):
     def test_windows_update_exits_for_the_supervisor(self) -> None:

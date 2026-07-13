@@ -23,7 +23,7 @@
   "tool_timeout": 120,
   "update_idle_timeout": 1200,
   "dump_traceback_interval": 0,
-  "update_check_interval": 10,
+  "update_check_interval": 300,
   "recent_workspace_limit": 10,
   "message_queue_size": 50,
 

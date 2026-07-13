@@ -320,7 +320,7 @@ async def _wait_for_update_idle(
 async def _restart_after_update(
     bots: list[BotPlatform], restart_code: int,
 ) -> None:
-    """Pause intake, wait for active replies, then restart for an update."""
+    """Pause intake, safely pull, then restart for an update."""
     prepared: list[BotPlatform] = []
     try:
         for bot in bots:
@@ -332,6 +332,15 @@ async def _restart_after_update(
                 "Update ready; waiting for active turn(s) before restart"
             ),
         )
+        # Only now is it safe to alter files under the live checkout. A new
+        # turn cannot start while update-restart is pending, and all earlier
+        # turns have completed.
+        changed = await asyncio.to_thread(updater.fetch_and_pull)
+        if not changed:
+            logger.info("Update no longer requires a restart; resuming intake")
+            for bot in prepared:
+                await bot.cancel_update_restart()
+            return
         await asyncio.to_thread(updater.install_requirements)
     except Exception:
         for bot in prepared:
@@ -360,7 +369,7 @@ async def _restart_after_update(
 async def update_loop(
     bots: list[BotPlatform], interval: int, restart_code: int = 0,
 ) -> None:
-    """Periodically fetch, pull, and restart if disk HEAD changed.
+    """Periodically fetch and restart only when an update is available.
 
     restart_code is the exit code used when an update is found. The
     daemon uses 0 (systemd's Restart=always respawns); CLI mode uses
@@ -368,41 +377,14 @@ async def update_loop(
     """
     while True:
         await asyncio.sleep(interval)
-        prepared: list[BotPlatform] = []
         try:
-            if any(bot.has_active_turns() for bot in bots):
-                await _wait_for_update_idle(
-                    bots,
-                    log_message=(
-                        "Delaying update check until active turn(s) finish"
-                    ),
-                )
-            for bot in bots:
-                await bot.begin_update_check()
-                prepared.append(bot)
-            await _wait_for_update_idle(
-                bots,
-                log_message=(
-                    "Delaying update check until active turn(s) finish"
-                ),
-            )
-            changed = await asyncio.to_thread(updater.fetch_and_pull)
-            if changed:
+            update_available = await asyncio.to_thread(updater.check_for_update)
+            if update_available:
                 logger.info(
                     "New version detected; restart pending after active turns",
                 )
                 await _restart_after_update(bots, restart_code)
-            else:
-                for bot in prepared:
-                    await bot.cancel_update_check()
         except Exception:
-            for bot in prepared:
-                try:
-                    await bot.cancel_update_check()
-                except Exception:
-                    logger.exception(
-                        "Failed to resume bot after aborted update check",
-                    )
             logger.exception("Update check failed")
 
 
@@ -453,7 +435,7 @@ async def main_cli() -> None:
     # spurious config.json with daemon-only fields on first run and
     # print misleading "fill in your tokens" messages. Match the
     # daemon's default interval directly.
-    cli_interval = 10
+    cli_interval = 300
 
     updater.init_startup_commit()
     logger.info(
