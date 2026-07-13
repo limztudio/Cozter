@@ -307,6 +307,29 @@ def load_config() -> dict:
         if isinstance(signal_socket_raw, str) else ""
     )
 
+    # Telegram user IDs may be written as ints or strings, and as a list or a
+    # bare scalar. Coerce to a clean list of string IDs: a bare int would make
+    # the platform constructor's ``[str(t) for t in ids]`` raise TypeError
+    # (crash-restart loop, since the config is reread identically on restart),
+    # and a bare string would iterate into single characters, silently locking
+    # out the real user. ``normalize_string_list`` can't be reused here because
+    # it drops non-string items (i.e. every integer ID).
+    raw_user_ids = cfg.get("user_ids")
+    if isinstance(raw_user_ids, (str, int)) and not isinstance(
+        raw_user_ids, bool,
+    ):
+        raw_user_ids = [raw_user_ids]
+    if isinstance(raw_user_ids, list):
+        cfg["user_ids"] = [
+            str(uid).strip()
+            for uid in raw_user_ids
+            if isinstance(uid, (str, int))
+            and not isinstance(uid, bool)
+            and str(uid).strip()
+        ]
+    else:
+        cfg["user_ids"] = []
+
     has_telegram = bool(cfg["telegram_bot_tokens"])
     has_slack = bool(cfg["slack_bot_token"])
     has_signal = bool(cfg["signal_group_urls"] or cfg["signal_jsonrpc_socket"])

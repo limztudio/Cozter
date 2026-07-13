@@ -642,7 +642,7 @@ class BotPlatform(ABC):
         self, ctx: BotContext, text: str, *, rearm_on_error: bool,
     ) -> None:
         recent = workspace.get_recent(ctx.user_id, self.recent_limit)
-        if text.isdigit():
+        if text.isdecimal():
             idx = int(text) - 1
             if 0 <= idx < len(recent):
                 path = recent[idx]
@@ -690,7 +690,7 @@ class BotPlatform(ABC):
             await ctx.reply_text(self._flexible_summary(ws))
             return
         current = workspace.get_model(ws)
-        options = workspace.get_available_models(ws)
+        options = await asyncio.to_thread(workspace.get_available_models, ws)
         lines = [
             f"Current model: {current} (backend: {backend_name})\n",
             "Available models:",
@@ -705,7 +705,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
         text = ctx.text.strip()
-        options = workspace.get_available_models(ws)
+        options = await asyncio.to_thread(workspace.get_available_models, ws)
         model = self._pick_option(text, options)
         if model is None:
             await ctx.reply_text(
@@ -724,7 +724,9 @@ class BotPlatform(ABC):
             return
         current = workspace.get_summary_model(ws)
         summary_backend = workspace.get_summary_backend_name(ws)
-        options = workspace.get_available_summary_models(ws)
+        options = await asyncio.to_thread(
+            workspace.get_available_summary_models, ws,
+        )
         lines = [
             f"Current summary model: {current}"
             f" (summary agent: {summary_backend})\n",
@@ -740,7 +742,9 @@ class BotPlatform(ABC):
         if ws is None:
             return
         text = ctx.text.strip()
-        options = workspace.get_available_summary_models(ws)
+        options = await asyncio.to_thread(
+            workspace.get_available_summary_models, ws,
+        )
         model = self._pick_option(text, options)
         if model is None:
             await ctx.reply_text(
@@ -1154,7 +1158,7 @@ class BotPlatform(ABC):
         arg = ctx.args.strip().lower().split()
         first = arg[0] if arg else ""
 
-        if first.isdigit():
+        if first.isdecimal():
             interval = int(first)
             try:
                 workspace.set_compact_interval(ws, interval)
@@ -1190,7 +1194,7 @@ class BotPlatform(ABC):
         arg = ctx.args.strip().lower().split()
         first = arg[0] if arg else ""
 
-        if first.isdigit():
+        if first.isdecimal():
             budget = int(first)
             try:
                 workspace.set_history_budget(ws, budget)
@@ -1246,7 +1250,7 @@ class BotPlatform(ABC):
     def _pick_session(choice: str, sessions: list[dict]) -> dict | None:
         """Resolve a /sessions selection: 1-based number, exact, or substring."""
         choice = choice.strip()
-        if choice.isdigit():
+        if choice.isdecimal():
             idx = int(choice) - 1
             return sessions[idx] if 0 <= idx < len(sessions) else None
         low = choice.lower()
@@ -1335,7 +1339,7 @@ class BotPlatform(ABC):
                 )
             return
 
-        if first.isdigit():
+        if first.isdecimal():
             n = int(first)
             try:
                 workspace.set_colony_interval(ws, n)
@@ -1545,7 +1549,7 @@ class BotPlatform(ABC):
             return
         user_schedules = schedules.list_schedules(ws, ctx.user_id)
         text = ctx.text.strip()
-        if not text.isdigit():
+        if not text.isdecimal():
             await ctx.reply_text(
                 "Invalid input. Enter a number or /cancel:"
             )
@@ -2320,7 +2324,7 @@ class BotPlatform(ABC):
     @staticmethod
     def _pick_option(text: str, options: list[str]) -> str | None:
         text = text.strip()
-        if text.isdigit():
+        if text.isdecimal():
             idx = int(text) - 1
             if 0 <= idx < len(options):
                 return options[idx]

@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import os
+import signal
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from typing import Any, TypeVar
@@ -45,6 +46,13 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+            # fsync before the rename so the data is durably on disk. Without
+            # it, a power loss can land the rename while the file's blocks are
+            # still zero, leaving a truncated/empty target - which readers
+            # treat as "absent" and silently reset to defaults (e.g. a "deny"
+            # permission would revert to the more permissive default).
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp_path, target)  # atomic on same filesystem
     except Exception:
         with contextlib.suppress(OSError):
@@ -87,10 +95,37 @@ def _finalize_background_task(
         log.exception("Background task %s failed", name)
 
 
-async def kill_and_wait(proc: asyncio.subprocess.Process) -> None:
-    """Kill a subprocess and wait for it, ignoring already-exited races."""
+def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL a subprocess - its whole process group if it leads one.
+
+    CLI backends are spawned with ``start_new_session`` so each leads a new
+    process group. Killing only the parent PID orphans the grandchildren the
+    CLI spawns (builds, test runs, MCP servers via its own bash tool): they
+    are reparented to init and keep running - and mutating the workspace -
+    after /stop or an inject-restart. Signalling the group reaps them too.
+
+    Guarded so we never signal our own group (which would kill the bot):
+    a process that isn't a group leader (its pgid equals ours) or the
+    fake HttpAgentProcess (pid <= 0, whose ``kill()`` just cancels a task)
+    falls back to a single-target ``proc.kill()``.
+    """
+    pid = getattr(proc, "pid", None)
+    if os.name != "nt" and isinstance(pid, int) and pid > 0:
+        try:
+            pgid = os.getpgid(pid)
+            if pgid != os.getpgid(0):
+                os.killpg(pgid, signal.SIGKILL)
+                return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # already gone or no permission - fall back below
     with contextlib.suppress(OSError):
         proc.kill()
+
+
+async def kill_and_wait(proc: asyncio.subprocess.Process) -> None:
+    """Kill a subprocess (its group if it leads one) and reap it."""
+    terminate_process_group(proc)
+    with contextlib.suppress(OSError):
         await proc.wait()
 
 

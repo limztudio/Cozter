@@ -208,7 +208,10 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
             return f"{fp.old_path}: skipped ({exc})"
         if not os.path.isfile(target):
             return f"{fp.old_path}: already absent"
-        file_lines, _had_nl = _read_file_lines(target)
+        try:
+            file_lines, _had_nl, _crlf = _read_file_lines(target)
+        except UnicodeDecodeError:
+            return f"{fp.old_path}: not valid UTF-8 (binary?); not deleted"
         applied = _apply_hunks(file_lines, fp.hunks)
         if isinstance(applied, str):
             return f"{fp.old_path}: {applied}; not deleted"
@@ -233,16 +236,20 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
         for h in fp.hunks:
             new_lines.extend(h.new)
         ensure_parent_dir(target)
-        with open(target, "w", encoding="utf-8") as f:
-            f.write("\n".join(new_lines))
-            if new_lines:
-                f.write("\n")
+        out = "\n".join(new_lines)
+        if new_lines:
+            out += "\n"
+        with open(target, "w", encoding="utf-8", newline="") as f:
+            f.write(out)
         return f"{fp.new_path}: created ({len(new_lines)} lines)"
 
     # Modification
     if not os.path.isfile(target):
         return f"{fp.new_path}: skipped (file not found)"
-    file_lines, had_nl = _read_file_lines(target)
+    try:
+        file_lines, had_nl, uses_crlf = _read_file_lines(target)
+    except UnicodeDecodeError:
+        return f"{fp.new_path}: not valid UTF-8 (binary?); not patched"
 
     applied = _apply_hunks(file_lines, fp.hunks)
     if isinstance(applied, str):
@@ -251,20 +258,33 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     out = "\n".join(applied)
     if had_nl:
         out += "\n"
-    with open(target, "w", encoding="utf-8") as f:
+    if uses_crlf:
+        out = out.replace("\n", "\r\n")
+    with open(target, "w", encoding="utf-8", newline="") as f:
         f.write(out)
     return f"{fp.new_path}: applied {len(fp.hunks)} hunk(s)"
 
 
-def _read_file_lines(path: str) -> tuple[list[str], bool]:
-    """Read a text file into patch lines and preserve its final-newline bit."""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        content = f.read()
+def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
+    """Read a text file into patch lines; preserve final-newline & CRLF bits.
+
+    Reads bytes and decodes strict UTF-8 so a binary/non-UTF-8 file raises
+    ``UnicodeDecodeError`` (caught by the caller) instead of being silently
+    rewritten with every undecodable byte replaced by U+FFFD. ``\\r\\n`` is
+    normalized to ``\\n`` for hunk matching; the returned ``uses_crlf`` flag
+    lets the writer restore the original line endings.
+    """
+    with open(path, "rb") as f:
+        raw = f.read()
+    content = raw.decode("utf-8")  # UnicodeDecodeError on binary -> caller
+    uses_crlf = "\r\n" in content
+    if uses_crlf:
+        content = content.replace("\r\n", "\n")
     had_nl = content.endswith("\n")
     lines = content.split("\n")
     if had_nl and lines and lines[-1] == "":
         lines.pop()  # drop the trailing "" left by the final newline
-    return lines, had_nl
+    return lines, had_nl, uses_crlf
 
 
 def _apply_hunks(lines: list[str], hunks: list[_Hunk]) -> list[str] | str:

@@ -20,6 +20,7 @@ import json
 import logging
 import random
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aiohttp
@@ -85,6 +86,19 @@ class OpenAIChatBackend(Backend):
     def _auto_continue_after_tool_limit(self) -> bool:
         return False
 
+    def _max_segments(self) -> int:
+        """Hard cap on auto-continue segments.
+
+        Only relevant when :meth:`_auto_continue_after_tool_limit` is True:
+        without it the segment loop has no exit when the model keeps calling
+        tools and never returns a tool-free answer, so it would re-plan
+        forever (unbounded API calls, unbounded message growth). Each segment
+        is up to :meth:`_max_agent_turns` tool-call turns, so the default
+        bounds a run at 8 x 40 = 320 tool turns before a final answer is
+        forced.
+        """
+        return 8
+
     def _socket_timeout(self) -> int:
         return 300
 
@@ -126,6 +140,7 @@ class OpenAIChatBackend(Backend):
         # Per-AI-turn safety caps. Read fresh each turn so a config edit
         # takes effect on the next message without a restart.
         max_agent_turns = self._max_agent_turns()
+        max_segments = self._max_segments()
         tool_repeat_limit = self._tool_repeat_limit()
         request_model = self._request_model(model)
 
@@ -235,6 +250,16 @@ class OpenAIChatBackend(Backend):
                     })
 
             if not self._auto_continue_after_tool_limit():
+                break
+            if segment >= max_segments:
+                # Auto-continue is on but we've hit the ceiling: stop looping
+                # and fall through to force a final no-tools answer, rather
+                # than re-planning segments (and billing) without end.
+                logger.warning(
+                    "%s hit the %d-segment cap (%d tool turns each);"
+                    " forcing a final answer",
+                    self.name, max_segments, max_agent_turns,
+                )
                 break
 
             segment += 1
@@ -456,8 +481,8 @@ async def _stream_once(
                 raise RuntimeError(
                     f"{label} returned HTTP {resp.status}: {body[:500]}"
                 )
-            async for raw in resp.content:
-                line = raw.decode("utf-8", errors="replace").strip()
+            async for line in _iter_sse_lines(resp.content):
+                line = line.strip()
                 if not line.startswith("data:"):
                     continue
                 data = line[len("data:"):].strip()
@@ -491,6 +516,37 @@ async def _stream_once(
         if tool_buffers[idx].get("function", {}).get("name")
     ]
     return "".join(text_parts), tool_calls
+
+
+async def _iter_sse_lines(
+    content: aiohttp.StreamReader,
+) -> AsyncIterator[str]:
+    """Yield decoded lines from an SSE body without any line-length limit.
+
+    aiohttp's built-in line iteration (``async for line in resp.content``)
+    uses ``readline()``, which raises ``LineTooLong`` once a single line
+    exceeds its internal high-water mark (~512 KiB). A model that emits a
+    large tool-argument object or content block as one SSE ``data:`` line
+    (GLM/Z.ai and some local runtimes send whole objects per delta) trips
+    that; ``LineTooLong`` is not a ``ClientError``, so it escapes the retry
+    handler and surfaces as a bare "loop crashed", discarding text already
+    streamed this turn. Reading raw chunks and splitting on ``\\n`` ourselves
+    has no length cap. Splitting on the ``\\n`` byte never splits a multi-byte
+    UTF-8 sequence, so decoding each complete line is safe.
+    """
+    buffer = bytearray()
+    async for chunk in content.iter_any():
+        buffer.extend(chunk)
+        start = 0
+        while True:
+            nl = buffer.find(b"\n", start)
+            if nl < 0:
+                break
+            yield bytes(buffer[start:nl]).decode("utf-8", errors="replace")
+            start = nl + 1
+        del buffer[:start]
+    if buffer:
+        yield bytes(buffer).decode("utf-8", errors="replace")
 
 
 def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:

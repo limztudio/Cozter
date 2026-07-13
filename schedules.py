@@ -201,7 +201,7 @@ def parse_days(text: object) -> list[str]:
         return []
     days: list[str] = []
     for p in parts:
-        if p.isdigit():
+        if p.isdecimal():
             n = int(p)
             if not (1 <= n <= 7):
                 return []

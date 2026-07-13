@@ -5,7 +5,6 @@ auto-titling background tasks.
 """
 
 import asyncio
-import contextlib
 import logging
 import os
 import re
@@ -28,6 +27,7 @@ from .utils import (
     iter_json_events,
     kill_and_wait,
     run_internal_backend,
+    terminate_process_group,
 )
 from .utils import drain_queue as _drain_queue
 
@@ -628,10 +628,10 @@ async def _drive_backend(
         if injected is not None:
             injected.append(msg)
         restarting = True
-        with contextlib.suppress(OSError):
-            # ProcessLookupError on Unix, other OSError on Windows
-            # when TerminateProcess fails (e.g., already exited).
-            active_proc.kill()
+        # Kill the whole process group (not just the parent PID) so a CLI
+        # backend's grandchildren - a build/test command it shelled out to -
+        # don't keep running and mutating the workspace after the restart.
+        terminate_process_group(active_proc)
 
     inject_task: asyncio.Task | None = None
     if inject_queue is not None:
@@ -684,6 +684,54 @@ async def _drive_backend(
         set_error_result(result, msg, display_text=msg)
 
     return result, False
+
+
+async def _run_with_inject_watch(
+    coro: Awaitable[str | None],
+    inject_queue: asyncio.Queue[str] | None,
+    injected: list[str] | None,
+) -> tuple[str | None, bool]:
+    """Run *coro* (an internal-backend call) but abandon it if a message
+    arrives on *inject_queue* first.
+
+    The flexible planner and merge steps call the summary backend directly
+    rather than through :func:`_drive_backend`, so they don't watch the inject
+    queue. Without this, an ``/inject`` sent during those windows (the merge in
+    particular can run for minutes) would sit in the queue unread and then be
+    discarded when the turn completes - even though ``cmd_inject`` already told
+    the user "Injected." Racing the call against the queue lets the inject
+    abandon the pipeline and replan, matching how the worker steps behave.
+
+    Returns ``(text, restarting)``; *text* is None when *restarting* is True.
+    When *inject_queue* is None the call runs unwatched (unchanged behavior).
+    """
+    call_task: asyncio.Task[str | None] = asyncio.ensure_future(coro)
+    if inject_queue is None:
+        return await call_task, False
+    watch_task: asyncio.Task[str] = asyncio.ensure_future(inject_queue.get())
+    try:
+        await asyncio.wait(
+            {call_task, watch_task}, return_when=asyncio.FIRST_COMPLETED,
+        )
+    except asyncio.CancelledError:
+        call_task.cancel()
+        watch_task.cancel()
+        await await_cancelled(call_task)
+        await await_cancelled(watch_task)
+        raise
+    if watch_task.done() and not watch_task.cancelled():
+        # Inject arrived first (or in the same tick): abandon the call and
+        # signal a restart so the new message is folded into a replanned turn.
+        msg = watch_task.result()
+        if injected is not None:
+            injected.append(msg)
+        call_task.cancel()
+        await await_cancelled(call_task)
+        return None, True
+    # The call finished first; stop watching without consuming a message.
+    watch_task.cancel()
+    await await_cancelled(watch_task)
+    return call_task.result(), False
 
 
 # ------------------------------------------------------------------
@@ -754,21 +802,27 @@ async def _run_flexible(
     await status(
         f"flexible: planning with {summary_backend.name}/{summary_model}"
     )
-    raw_plan = await run_internal_backend(
-        summary_backend,
-        workspace_path,
-        flexible.build_plan_prompt(
-            contextual_prompt, collaborative=collaborative,
+    raw_plan, restarting = await _run_with_inject_watch(
+        run_internal_backend(
+            summary_backend,
+            workspace_path,
+            flexible.build_plan_prompt(
+                contextual_prompt, collaborative=collaborative,
+            ),
+            summary_model,
+            timeout=flexible.PLAN_TIMEOUT,
+            label="Flexible planner",
+            log=logger,
+            missing_executable_message=(
+                "%s CLI not found - flexible falling back to a single task"
+            ),
+            missing_level=logging.WARNING,
         ),
-        summary_model,
-        timeout=flexible.PLAN_TIMEOUT,
-        label="Flexible planner",
-        log=logger,
-        missing_executable_message=(
-            "%s CLI not found - flexible falling back to a single task"
-        ),
-        missing_level=logging.WARNING,
+        inject_queue,
+        injected,
     )
+    if restarting:
+        return AgentResult(), True
     plan = flexible.parse_plan(raw_plan or "", request)
 
     # The planner is the only step allowed to stop the turn and ask: the
@@ -871,22 +925,28 @@ async def _run_flexible(
     await status(
         f"flexible: merging with {summary_backend.name}/{summary_model}"
     )
-    merged = await run_internal_backend(
-        summary_backend,
-        workspace_path,
-        flexible.build_merge_prompt(
-            contextual_prompt, plan, reports,
-            collaborative=collaborative, blocked=blocked,
+    merged, restarting = await _run_with_inject_watch(
+        run_internal_backend(
+            summary_backend,
+            workspace_path,
+            flexible.build_merge_prompt(
+                contextual_prompt, plan, reports,
+                collaborative=collaborative, blocked=blocked,
+            ),
+            summary_model,
+            timeout=flexible.MERGE_TIMEOUT,
+            label="Flexible merge",
+            log=logger,
+            missing_executable_message=(
+                "%s CLI not found - flexible returning the raw worker reports"
+            ),
+            missing_level=logging.WARNING,
         ),
-        summary_model,
-        timeout=flexible.MERGE_TIMEOUT,
-        label="Flexible merge",
-        log=logger,
-        missing_executable_message=(
-            "%s CLI not found - flexible returning the raw worker reports"
-        ),
-        missing_level=logging.WARNING,
+        inject_queue,
+        injected,
     )
+    if restarting:
+        return AgentResult(), True
     final = (merged or "").strip() or flexible.merge_fallback(plan, reports)
 
     # The merge writes the reply the user reads, so it is the one step

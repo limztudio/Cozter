@@ -373,6 +373,7 @@ def set_summary(
     keep_recent: int = 10,
     long_term_rewrite: list[str] | None = None,
     title: str | None = None,
+    summarized_count: int | None = None,
 ) -> None:
     """Store a compacted summary, keeping only the last *keep_recent* messages.
 
@@ -383,14 +384,29 @@ def set_summary(
     title, when provided and non-empty, replaces the session name. The
     compaction prompt asks the model for a short title alongside the
     summary so the user-visible name reflects the latest topic.
+
+    summarized_count is how many messages existed (and were thus covered by
+    *summary*) when the compaction snapshot was taken. Compaction runs outside
+    the workspace lock, so a concurrent turn can append messages while the
+    summary is being computed; trimming against the *current* length would
+    drop those newer, un-summarized messages. Trimming against the snapshot
+    count instead keeps everything appended since. None (manual/legacy callers)
+    falls back to the current length.
     """
     data = load_session(workspace, session_id)
     if data is None:
         return
     msgs = data.get("messages", [])
-    trimmed = max(0, len(msgs) - keep_recent)
+    basis = len(msgs) if summarized_count is None else min(
+        summarized_count, len(msgs),
+    )
+    trimmed = max(0, basis - keep_recent)
     data["compacted_count"] = data.get("compacted_count", 0) + trimmed
-    data["messages"] = msgs[-keep_recent:] if keep_recent else []
+    # Keep everything from the trim point onward: the last *keep_recent* of the
+    # summarized prefix (raw context continuity) plus any messages appended
+    # after the snapshot. msgs[trimmed:] reduces to msgs[-keep_recent:] in the
+    # no-race case.
+    data["messages"] = msgs[trimmed:]
     data["summary"] = summary
 
     if long_term_rewrite is not None:

@@ -8,9 +8,11 @@ from typing import Any, ClassVar
 from ..base import (
     AgentTool,
     apply_string_replacement,
+    read_text_for_edit,
     resolve_inside_workspace,
     summarize_path,
     validate_replacement_strings,
+    write_text_after_edit,
 )
 
 
@@ -50,8 +52,10 @@ class EditFileTool(AgentTool):
         if not os.path.isfile(target):
             return f"File not found: {args.get('path')}"
         replace_all = bool(args.get("replace_all", False))
-        with open(target, encoding="utf-8", errors="replace") as f:
-            original = f.read()
+        loaded = read_text_for_edit(target)
+        if isinstance(loaded, str):
+            return f"Error: {loaded}"
+        original, uses_crlf = loaded
         updated, count, n = apply_string_replacement(
             original, old, new, replace_all=replace_all,
         )
@@ -62,8 +66,7 @@ class EditFileTool(AgentTool):
                 f"old_string appears {count} times in {args.get('path')};"
                 " include more context or set replace_all=true."
             )
-        with open(target, "w", encoding="utf-8") as f:
-            f.write(updated)
+        write_text_after_edit(target, updated, uses_crlf=uses_crlf)
         suffix = "s" if n != 1 else ""
         return f"Replaced {n} occurrence{suffix} in {args.get('path')}"
 

@@ -215,12 +215,21 @@ class TelegramBot(BotPlatform):
             | filters.VOICE
             | filters.VIDEO_NOTE
         )
+        # ``filters.UpdateType.MESSAGE`` restricts these handlers to genuine
+        # new messages. Without it, an edited message also matches (its text
+        # lives in ``update.edited_message``, so ``update.message`` is None)
+        # and ``_on_text`` / ``_on_file`` would crash dereferencing it - a
+        # crash on the very common action of fixing a typo in a prior message.
         self.app.add_handler(
-            MessageHandler(attachment_filter, self._on_file),
+            MessageHandler(
+                attachment_filter & filters.UpdateType.MESSAGE,
+                self._on_file,
+            ),
         )
         self.app.add_handler(
             MessageHandler(
-                filters.TEXT & ~filters.COMMAND, self._on_text,
+                filters.TEXT & ~filters.COMMAND & filters.UpdateType.MESSAGE,
+                self._on_text,
             ),
         )
 

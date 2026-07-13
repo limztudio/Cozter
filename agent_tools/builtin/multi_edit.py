@@ -8,9 +8,11 @@ from typing import Any, ClassVar
 from ..base import (
     AgentTool,
     apply_string_replacement,
+    read_text_for_edit,
     resolve_inside_workspace,
     summarize_path,
     validate_replacement_strings,
+    write_text_after_edit,
 )
 
 
@@ -75,8 +77,10 @@ class MultiEditTool(AgentTool):
             if isinstance(replacement, str):
                 return f"Edit {i}: {replacement}"
 
-        with open(target, encoding="utf-8", errors="replace") as f:
-            content = f.read()
+        loaded = read_text_for_edit(target)
+        if isinstance(loaded, str):
+            return f"Error: {loaded}"
+        content, uses_crlf = loaded
 
         total_replacements = 0
         for i, edit in enumerate(edits):
@@ -95,8 +99,7 @@ class MultiEditTool(AgentTool):
                 )
             total_replacements += replacements
 
-        with open(target, "w", encoding="utf-8") as f:
-            f.write(content)
+        write_text_after_edit(target, content, uses_crlf=uses_crlf)
 
         n = total_replacements
         rsuffix = "s" if n != 1 else ""

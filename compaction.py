@@ -137,6 +137,11 @@ async def maybe_compact(
         if data is None:
             return
         msgs = data.get("messages", [])
+        # Snapshot count: how many messages this compaction will summarize.
+        # A concurrent turn can append more while the summary runs (compaction
+        # is deliberately outside the lock), so set_summary must trim against
+        # this, not the grown on-disk length, or those newer messages are lost.
+        snapshot_count = len(msgs)
         interval = workspace_mod.get_compact_interval(workspace_path)
         if interval <= 0 or len(msgs) < interval:
             return
@@ -173,6 +178,7 @@ async def maybe_compact(
                 keep_recent=KEEP_RECENT_AFTER_COMPACT,
                 long_term_rewrite=new_long_term,
                 title=new_title,
+                summarized_count=snapshot_count,
             )
             colony_count = colony.bump_compact_count(workspace_path)
         lt_count = len(new_long_term) if new_long_term is not None else "?"

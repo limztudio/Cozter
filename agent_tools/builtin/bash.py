@@ -15,6 +15,13 @@ from ..base import AgentTool, coerce_int_arg
 _BASH_DEFAULT_TIMEOUT = 30
 _BASH_MAX_TIMEOUT = 120
 
+# Hard ceiling on captured output. A command like ``yes`` or ``cat /dev/zero``
+# emits gigabytes well within the timeout; buffering it whole (as
+# ``communicate()`` does) would OOM the bot before the timeout ever fires.
+# Only the first few KB reach the model anyway (execute_tool caps the result),
+# so once we hit this we stop reading and kill the command tree.
+_BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024  # 4 MB
+
 
 class BashTool(AgentTool):
     name = "bash"
@@ -64,9 +71,22 @@ class BashTool(AgentTool):
         except FileNotFoundError:
             return "Error: shell not found"
 
+        if proc.stdout is None:  # PIPE was requested, so this is defensive
+            await _kill_command_tree(proc)
+            return "Error: could not capture command output"
+
+        truncated = False
         try:
             async with asyncio.timeout(timeout):
-                stdout, _ = await proc.communicate()
+                stdout, truncated = await _read_capped(
+                    proc.stdout, _BASH_MAX_OUTPUT_BYTES,
+                )
+                if truncated:
+                    # Runaway output - stop draining and reap the tree so a
+                    # firehose command can't hold memory or keep running.
+                    await _kill_command_tree(proc)
+                else:
+                    await proc.wait()
         except TimeoutError:
             await _kill_command_tree(proc)
             return f"Error: command timed out after {timeout}s"
@@ -76,6 +96,12 @@ class BashTool(AgentTool):
             raise
 
         output = stdout.decode("utf-8", errors="replace")
+        if truncated:
+            note = (
+                f"\n... [output truncated at {_BASH_MAX_OUTPUT_BYTES} bytes;"
+                " command killed]"
+            )
+            return (output + note) if output else note.lstrip()
         rc = proc.returncode
         if rc == 0:
             return output or "(no output)"
@@ -100,6 +126,31 @@ def _find_shell() -> list[str] | None:
     if sh:
         return [sh, "-c"]
     return None
+
+
+async def _read_capped(
+    stream: asyncio.StreamReader, limit: int,
+) -> tuple[bytes, bool]:
+    """Read *stream* to EOF or until *limit* bytes, whichever comes first.
+
+    Returns ``(data, truncated)``. ``data`` is at most *limit* bytes; a slice
+    at the cap may split a multi-byte UTF-8 sequence, which the caller's
+    ``decode(errors="replace")`` handles.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    truncated = False
+    while True:
+        chunk = await stream.read(64 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            truncated = True
+            break
+    data = b"".join(chunks)
+    return (data[:limit] if truncated else data), truncated
 
 
 async def _kill_command_tree(proc: asyncio.subprocess.Process) -> None:

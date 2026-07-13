@@ -45,6 +45,13 @@ _SIGNAL_STYLE_MONOSPACE = "MONOSPACE"
 _SIGNAL_STYLE_STRIKETHROUGH = "STRIKETHROUGH"
 _SIGNAL_STYLE_SPOILER = "SPOILER"
 
+# JSON-RPC methods that make signal-cli dispatch a Signal message. If the
+# socket drops after signal-cli acted but before its response returns, an
+# automatic retry would deliver a duplicate, so these are not retried on a
+# transport error (a rare lost reply is preferable to a visible duplicate).
+# ``remoteDelete`` is intentionally omitted: re-deleting is idempotent.
+_NON_IDEMPOTENT_RPC_METHODS = frozenset({"send"})
+
 
 class SignalCliError(RuntimeError):
     """Raised when the signal-cli JSON-RPC socket is unavailable."""
@@ -472,12 +479,19 @@ class SignalBot(BotPlatform):
                 )
             except Exception as exc:
                 if attempt == 0 and _is_jsonrpc_transport_error(exc):
+                    # Close so the next request reconnects, regardless of
+                    # whether we retry this one.
+                    await self._close_jsonrpc_transport()
+                    if method in _NON_IDEMPOTENT_RPC_METHODS:
+                        # signal-cli may already have dispatched the message
+                        # before the socket dropped; retrying risks a
+                        # duplicate, so surface the error instead.
+                        raise
                     logger.warning(
                         "Signal JSON-RPC request %s failed; reconnecting: %s",
                         method,
                         _safe_error_message(exc),
                     )
-                    await self._close_jsonrpc_transport()
                     continue
                 raise
         raise SignalCliError("signal-cli JSON-RPC request failed")

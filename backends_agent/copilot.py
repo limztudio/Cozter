@@ -156,6 +156,10 @@ class CopilotBackend(Backend):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workspace_path,
+            # Own process group so a /stop or inject-restart kills the whole
+            # tree, not just the copilot parent (see
+            # utils.terminate_process_group). POSIX only; no-op on Windows.
+            start_new_session=os.name != "nt",
         )
 
     _TOOL_USE_TYPES = ("tool_use", "tool_call", "tool_start", "tool")

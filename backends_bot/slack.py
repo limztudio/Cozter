@@ -135,17 +135,26 @@ def _split_slack_markdown(
     if len(text) <= limit:
         return [text]
 
-    fence_wrap_reserve = 0
+    # A split inside a fence adds a prefix (the reopened opener + "\n") to the
+    # continuation chunk and a suffix ("\n" + the closing marker) to the
+    # preceding chunk. The prefix reopens the fence active at the END of the
+    # previous chunk while the suffix closes the fence active at the END of the
+    # current chunk - which can be a DIFFERENT fence. Reserve the independent
+    # maxima so the worst-case prefix+suffix pairing still fits; a single
+    # combined max (opener+marker of the same fence) can under-reserve when a
+    # long-opener fence and a long-marker fence interleave across a boundary.
+    max_opener = 0
+    max_marker = 0
     for line in text.splitlines():
         fence = _fence_open(line)
         if fence is None:
             continue
         opener, marker = fence
-        # A continuation needs the full opener plus a newline, while the
-        # preceding chunk needs a newline plus its closing marker.
-        fence_wrap_reserve = max(
-            fence_wrap_reserve, len(opener) + len(marker) + 2,
-        )
+        max_opener = max(max_opener, len(opener))
+        max_marker = max(max_marker, len(marker))
+    fence_wrap_reserve = (
+        max_opener + max_marker + 2 if (max_opener or max_marker) else 0
+    )
     if limit <= fence_wrap_reserve:
         # A single fence line is longer than a Slack Markdown block. We
         # cannot preserve that malformed/exceptional fence, but still send

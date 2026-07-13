@@ -415,6 +415,48 @@ def apply_string_replacement(
     return content.replace(old, new, replacements), count, replacements
 
 
+def read_text_for_edit(path: str) -> tuple[str, bool] | str:
+    """Read a UTF-8 text file for in-place editing.
+
+    Returns ``(text, uses_crlf)``: *text* has any ``\\r\\n`` normalized to
+    ``\\n`` so newline-based match strings still match a CRLF file, and
+    *uses_crlf* records the file's convention so :func:`write_text_after_edit`
+    can restore it byte-for-byte. Returns a model-facing error string (no
+    ``Error:`` prefix) if the file is not valid UTF-8 - a read-modify-write
+    edit would otherwise replace every non-UTF-8 byte in the whole file with
+    U+FFFD, silently corrupting content the edit never touched, so we refuse.
+    """
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as exc:
+        return f"could not read file: {exc}"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return (
+            "file is not valid UTF-8 (binary or another encoding); refusing"
+            " to edit it because rewriting would corrupt its bytes"
+        )
+    uses_crlf = "\r\n" in text
+    if uses_crlf:
+        text = text.replace("\r\n", "\n")
+    return text, uses_crlf
+
+
+def write_text_after_edit(path: str, text: str, *, uses_crlf: bool) -> None:
+    """Write edited *text* back, restoring CRLF endings and never translating.
+
+    ``newline=""`` disables the platform newline translation open() would
+    otherwise apply on write (which turns every ``\\n`` into ``\\r\\n`` on
+    Windows), so only the bytes the edit actually changed differ on disk.
+    """
+    if uses_crlf:
+        text = text.replace("\n", "\r\n")
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
 async def read_bounded_text(resp: aiohttp.ClientResponse) -> str:
     """Read up to MAX_FETCH_BYTES from *resp* and decode with its charset."""
     chunks: list[bytes] = []

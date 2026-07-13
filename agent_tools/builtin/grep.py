@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 
@@ -86,33 +87,18 @@ class GrepTool(AgentTool):
             maximum=200,
         )
 
-        results: list[str] = []
+        # regex.search on adversarial input (catastrophic backtracking) is
+        # CPU-bound and cannot be interrupted at an await point, so running it
+        # inline would wedge the single event loop for every user - and the
+        # execute_tool timeout, which can only fire at an await, could never
+        # abort it. Run the whole scan in a worker thread: the loop stays
+        # responsive and the tool timeout can return cleanly (the runaway
+        # thread is abandoned rather than freezing the bot).
         try:
-            for fpath, rel, _root_rel in iter_workspace_files(
-                workspace_path, search_root, file_glob,
-            ):
-                try:
-                    if os.path.getsize(fpath) > _GREP_MAX_FILE_BYTES:
-                        continue
-                    with open(fpath, "rb") as f:
-                        raw = f.read()
-                except OSError:
-                    continue
-                if b"\x00" in raw[:8192]:
-                    continue  # likely binary
-                content = raw.decode("utf-8", errors="replace")
-                for lineno, line in enumerate(content.splitlines(), 1):
-                    if regex.search(line):
-                        display_line = line
-                        if len(line) > _GREP_MAX_LINE_CHARS:
-                            display_line = (
-                                line[:_GREP_MAX_LINE_CHARS] + "..."
-                            )
-                        results.append(f"{rel}:{lineno}: {display_line}")
-                        if len(results) >= max_results:
-                            break
-                if len(results) >= max_results:
-                    break
+            results = await asyncio.to_thread(
+                self._scan,
+                workspace_path, search_root, file_glob, regex, max_results,
+            )
         except Exception as exc:
             return f"Grep failed: {exc}"
 
@@ -123,6 +109,38 @@ class GrepTool(AgentTool):
         if len(results) >= max_results:
             summary += f"\n(stopped at {max_results} matches)"
         return summary
+
+    @staticmethod
+    def _scan(
+        workspace_path: str,
+        search_root: str,
+        file_glob: str,
+        regex: re.Pattern[str],
+        max_results: int,
+    ) -> list[str]:
+        results: list[str] = []
+        for fpath, rel, _root_rel in iter_workspace_files(
+            workspace_path, search_root, file_glob,
+        ):
+            try:
+                if os.path.getsize(fpath) > _GREP_MAX_FILE_BYTES:
+                    continue
+                with open(fpath, "rb") as f:
+                    raw = f.read()
+            except OSError:
+                continue
+            if b"\x00" in raw[:8192]:
+                continue  # likely binary
+            content = raw.decode("utf-8", errors="replace")
+            for lineno, line in enumerate(content.splitlines(), 1):
+                if regex.search(line):
+                    display_line = line
+                    if len(line) > _GREP_MAX_LINE_CHARS:
+                        display_line = line[:_GREP_MAX_LINE_CHARS] + "..."
+                    results.append(f"{rel}:{lineno}: {display_line}")
+                    if len(results) >= max_results:
+                        return results
+        return results
 
     def summarize(self, args: dict) -> str:
         return f"grep: {args.get('pattern', '?')}"
