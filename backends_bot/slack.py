@@ -198,6 +198,7 @@ class SlackBot(BotPlatform):
             self.app.command(f"/{name}")(self._make_command_handler(name))
 
         self.app.event("message")(self._on_message)
+        self.app.event("app_mention")(self._on_app_mention)
 
         self._handler = AsyncSocketModeHandler(self.app, self.app_token)
         # Restore in-flight / queued messages before connecting so new
@@ -264,12 +265,19 @@ class SlackBot(BotPlatform):
                 logger.exception("Slack command /%s failed", name)
         return handler
 
-    async def _on_message(self, event, **_kwargs) -> None:
+    async def _on_message(
+        self, event, *, _from_app_mention: bool = False, **_kwargs,
+    ) -> None:
         if event.get("subtype") not in self._ALLOWED_SUBTYPES:
             return
         uid = str(event.get("user") or "")
         channel = str(event.get("channel") or "")
-        if event.get("bot_id") or not uid or not channel:
+        if (
+            event.get("bot_id")
+            or uid == self._bot_user_id
+            or not uid
+            or not channel
+        ):
             return
         # Slack authorization is channel-scoped: only process events from
         # channels on the allowlist. This is checked before any download
@@ -278,6 +286,14 @@ class SlackBot(BotPlatform):
             return
 
         text = (event.get("text") or "").strip()
+        # If Slack delivers both ``message`` and ``app_mention`` for the
+        # same post, let the latter own it.  It strips the bot marker before
+        # dispatching, so the input is processed exactly once.
+        marker = (
+            f"<@{self._bot_user_id}>" if self._bot_user_id is not None else ""
+        )
+        if not _from_app_mention and marker and marker in text:
+            return
         files = event.get("files") or []
 
         if files:
@@ -288,6 +304,24 @@ class SlackBot(BotPlatform):
             return
 
         await self.dispatch_text(self._ctx(uid, channel, text=text))
+
+    async def _on_app_mention(self, event, **_kwargs) -> None:
+        """Handle a direct Slack mention as ordinary input.
+
+        Slack sends a distinct ``app_mention`` event instead of ``message``
+        whenever the bot is tagged.  Remove this bot's markup so aliases
+        such as ``@Cozter \\open`` reach the shared backslash-command parser.
+        """
+        text = str(event.get("text") or "")
+        if self._bot_user_id is None:
+            return
+        marker = f"<@{self._bot_user_id}>"
+        if marker not in text:
+            return
+        text = text.replace(marker, "").strip()
+        await self._on_message(
+            {**event, "text": text}, _from_app_mention=True,
+        )
 
     async def _handle_files(
         self, event: dict, files: list[dict], caption: str,
