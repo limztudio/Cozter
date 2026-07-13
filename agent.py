@@ -13,8 +13,8 @@ import shutil
 from collections.abc import Awaitable, Callable
 
 from . import (
-    agent_tools, backends_agent, colony, compaction, router, session,
-    titling,
+    agent_tools, backends_agent, colony, compaction, flexible, router,
+    session, titling,
 )
 from . import workspace as workspace_mod
 from .backends_agent.base import (
@@ -26,6 +26,7 @@ from .utils import (
     drain_text_stream,
     iter_json_events,
     kill_and_wait,
+    run_internal_backend,
 )
 from .utils import drain_queue as _drain_queue
 
@@ -549,6 +550,343 @@ def _build_contextual_prompt(
 
 
 # ------------------------------------------------------------------
+# Backend execution
+# ------------------------------------------------------------------
+
+class BackendUnavailable(Exception):
+    """A backend's CLI is not installed on this machine."""
+
+    def __init__(self, backend) -> None:
+        super().__init__(f"{backend.executable} CLI not found on PATH.")
+
+
+def _build_backend_prompt(
+    backend, contextual_prompt: str, *, collaborative: bool,
+) -> str:
+    """Wrap a prompt in the preamble and plugin list *backend* needs.
+
+    For backends that can't be handed typed tool definitions (CLI
+    subprocess agents whose toolset is fixed by the CLI), user plugins are
+    enumerated in the prompt so the model can invoke them via its own
+    bash/shell tool. HTTP backends with typed tools see plugins via
+    TOOL_SCHEMA. Chat-only HTTP backends opt out via
+    supports_plugin_prelude=False, since they have no shell to invoke the
+    prelude'd commands either.
+    """
+    parts = [_capability_hint(collaborative=collaborative)]
+    if not backend.supports_typed_plugins and backend.supports_plugin_prelude:
+        prelude = agent_tools.cli_plugin_prelude()
+        if prelude:
+            parts.append(prelude)
+    parts.append(contextual_prompt)
+    return "\n\n".join(parts)
+
+
+async def _drive_backend(
+    backend,
+    workspace_path: str,
+    full_prompt: str,
+    model: str | None,
+    approval: str,
+    *,
+    effort: int,
+    on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
+    inject_queue: asyncio.Queue[str] | None = None,
+    injected: list[str] | None = None,
+) -> tuple[AgentResult, bool]:
+    """Launch *backend*, stream its events, and collect the result.
+
+    Returns ``(result, restarting)``. *restarting* is True when a message
+    arrived on *inject_queue* mid-run: the subprocess was killed, the
+    message appended to *injected*, and the caller should rebuild the
+    prompt and drive the backend again.
+
+    Raises :exc:`BackendUnavailable` when the CLI isn't installed.
+    """
+    try:
+        proc = await backend.launch(
+            workspace_path, full_prompt, model, approval, effort=effort,
+        )
+    except FileNotFoundError as e:
+        raise BackendUnavailable(backend) from e
+
+    result = AgentResult()
+    restarting = False
+    stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
+
+    def _log_non_json_line(line: str) -> None:
+        logger.debug("Non-JSON line: %s", line)
+
+    # Watch inject_queue - kill subprocess when a message arrives
+    async def _watch_inject(
+        active_proc: asyncio.subprocess.Process = proc,
+    ) -> None:
+        nonlocal restarting
+        assert inject_queue is not None  # only scheduled when set
+        msg = await inject_queue.get()
+        if injected is not None:
+            injected.append(msg)
+        restarting = True
+        with contextlib.suppress(OSError):
+            # ProcessLookupError on Unix, other OSError on Windows
+            # when TerminateProcess fails (e.g., already exited).
+            active_proc.kill()
+
+    inject_task: asyncio.Task | None = None
+    if inject_queue is not None:
+        inject_task = asyncio.create_task(_watch_inject())
+
+    assert proc.stdout is not None  # spawned with stdout=PIPE
+    try:
+        async for event in iter_json_events(
+            proc.stdout, on_invalid=_log_non_json_line,
+        ):
+            prev_count = len(result.events)
+            backend.parse_event(event, result)
+
+            if on_event:
+                for ev in result.events[prev_count:]:
+                    await on_event(ev)
+
+        await proc.wait()
+    except asyncio.CancelledError:
+        logger.info(
+            "%s run cancelled, killing subprocess %d",
+            backend.name, proc.pid,
+        )
+        raise
+    finally:
+        # Event parsing and chat-platform callbacks can fail just like
+        # cancellation can. Never let any exceptional stream exit leave
+        # the backend (or its stderr drain task) running in the
+        # background.
+        if proc.returncode is None:
+            await kill_and_wait(proc)
+        if inject_task and not inject_task.done():
+            inject_task.cancel()
+            await await_cancelled(inject_task)
+        stderr = await stderr_task
+    if stderr:
+        logger.debug("%s stderr: %s", backend.name, stderr)
+
+    if restarting:
+        return result, True
+
+    if proc.returncode != 0 and not result.events:
+        msg = f"{backend.name} exited with code {proc.returncode}"
+        if stderr:
+            msg += f"\n{stderr}"
+        set_error_result(result, msg, display_text=msg)
+
+    return result, False
+
+
+# ------------------------------------------------------------------
+# Flexible agent — plan, route by difficulty, merge
+# ------------------------------------------------------------------
+
+# Usage fields format_usage knows how to display; summed across the
+# workers so a flexible turn reports one total rather than N partials.
+_USAGE_TOTAL_FIELDS = ("input_tokens", "output_tokens", "total_cost_usd")
+
+
+def _accumulate_usage(totals: dict, usage: dict | None) -> None:
+    if not isinstance(usage, dict):
+        return
+    for field in _USAGE_TOTAL_FIELDS:
+        value = usage.get(field)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            totals[field] = totals.get(field, 0) + value
+
+
+def _split_attach_markers(text: str) -> tuple[str, list[str]]:
+    """Pull ``[[attach: ...]]`` markers out of a worker's report.
+
+    Workers' text never reaches the user - only the merged answer does -
+    so their attachment markers have to be carried over by hand or the
+    files they meant to send would be dropped along with the text.
+    """
+    markers = [m.group(0) for m in _ATTACH_RE.finditer(text)]
+    if not markers:
+        return text, []
+    cleaned = _ATTACH_RE.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, markers
+
+
+async def _run_flexible(
+    contextual_prompt: str,
+    request: str,
+    workspace_path: str,
+    *,
+    approval: str,
+    effort: int,
+    collaborative: bool,
+    summary_backend_name: str,
+    summary_model: str | None,
+    on_event: Callable[[ChatEvent], Awaitable[None]] | None,
+    inject_queue: asyncio.Queue[str] | None,
+    injected: list[str],
+) -> tuple[AgentResult, bool]:
+    """Run one turn of the ``flexible`` meta-agent.
+
+    Three phases: the summary agent understands the request and splits it
+    into difficulty-graded sub-tasks; each sub-task runs as a full agent
+    turn on the agent+model bound to its tier; the summary agent merges
+    the workers' reports into the one reply the user sees.
+
+    Returns ``(result, restarting)`` like :func:`_drive_backend` - an
+    inject mid-pipeline abandons the run and replans with the new context.
+    """
+    summary_backend = backends_agent.get_backend(summary_backend_name)
+    tiers = workspace_mod.get_flexible_run_config(workspace_path)
+
+    async def status(text: str) -> None:
+        if on_event:
+            await on_event(ChatEvent(kind="tool", content=text))
+
+    # 1. Understand the request and split it by difficulty.
+    await status(
+        f"flexible: planning with {summary_backend.name}/{summary_model}"
+    )
+    raw_plan = await run_internal_backend(
+        summary_backend,
+        workspace_path,
+        flexible.build_plan_prompt(
+            contextual_prompt, collaborative=collaborative,
+        ),
+        summary_model,
+        timeout=flexible.PLAN_TIMEOUT,
+        label="Flexible planner",
+        log=logger,
+        missing_executable_message=(
+            "%s CLI not found - flexible falling back to a single task"
+        ),
+        missing_level=logging.WARNING,
+    )
+    plan = flexible.parse_plan(raw_plan or "", request)
+
+    # The planner is the only step allowed to stop the turn and ask: the
+    # workers run mid-pipeline, where nobody is reading their questions.
+    if plan.question:
+        if collaborative:
+            result = AgentResult()
+            append_text_result(result, f"{plan.question}\n\n[[await]]")
+            return result, False
+        plan = flexible.fallback_plan(request)
+
+    logger.info(
+        "Flexible plan: %s",
+        ", ".join(f"[{t.tier}] {t.instruction[:60]}" for t in plan.subtasks),
+    )
+
+    # 2. Route each sub-task to the agent+model bound to its tier.
+    result = AgentResult()
+    reports: list[str] = []
+    attach_markers: list[str] = []
+    usage_totals: dict = {}
+    blocked: list[int] = []
+    total = len(plan.subtasks)
+
+    for i, task in enumerate(plan.subtasks):
+        tier_backend_name, tier_model = tiers[task.tier]
+        tier_backend = backends_agent.get_backend(tier_backend_name)
+        await status(
+            f"flexible [{i + 1}/{total}] {task.tier} ·"
+            f" {tier_backend_name}/{tier_model}: {task.instruction}"
+        )
+        sub_result, restarting = await _drive_backend(
+            tier_backend,
+            workspace_path,
+            _build_backend_prompt(
+                tier_backend,
+                flexible.build_subtask_prompt(
+                    contextual_prompt, plan, i, reports,
+                ),
+                collaborative=False,
+            ),
+            tier_model,
+            approval,
+            effort=effort,
+            on_event=on_event,
+            inject_queue=inject_queue,
+            injected=injected,
+        )
+        if restarting:
+            return result, True
+
+        # The workers' tool/file events are the visible trace of the turn
+        # and stream through as usual. Their *text* is internal - it goes
+        # to the merge step, not to the user - so it is kept out of the
+        # events the bot renders as chat messages.
+        result.events.extend(
+            ev for ev in sub_result.events if ev.kind != "text"
+        )
+        _accumulate_usage(usage_totals, sub_result.usage)
+
+        if sub_result.error:
+            logger.warning(
+                "Flexible sub-task %d/%d (%s/%s) failed: %s",
+                i + 1, total, tier_backend_name, tier_model, sub_result.error,
+            )
+
+        report, worker_awaiting = extract_await(sub_result.text)
+        report, markers = _split_attach_markers(report)
+        attach_markers.extend(markers)
+        reports.append(report.strip())
+
+        # Workers run under the autonomy policy, so one that asks anyway is
+        # genuinely stuck. Remember that: the merge step below has to end
+        # the turn on that question *and* pause the queue, or the user's
+        # answer lands as an unrelated new turn.
+        if worker_awaiting:
+            blocked.append(i)
+
+    # 3. Merge the reports into the single reply the user sees.
+    await status(
+        f"flexible: merging with {summary_backend.name}/{summary_model}"
+    )
+    merged = await run_internal_backend(
+        summary_backend,
+        workspace_path,
+        flexible.build_merge_prompt(
+            contextual_prompt, plan, reports,
+            collaborative=collaborative, blocked=blocked,
+        ),
+        summary_model,
+        timeout=flexible.MERGE_TIMEOUT,
+        label="Flexible merge",
+        log=logger,
+        missing_executable_message=(
+            "%s CLI not found - flexible returning the raw worker reports"
+        ),
+        missing_level=logging.WARNING,
+    )
+    final = (merged or "").strip() or flexible.merge_fallback(plan, reports)
+
+    # The merge writes the reply the user reads, so it is the one step
+    # downstream of the planner allowed to end the turn on a question and
+    # pause the queue. Pull the marker off wherever the merge put it and
+    # re-add it last, so the pause still happens when a worker blocked and
+    # the merge relayed its question without one. An unattended turn has
+    # nobody to answer, so it never pauses - a marker there would strand
+    # the run.
+    final, merge_awaiting = extract_await(final)
+    final = final.strip()
+
+    for marker in attach_markers:
+        if marker not in final:
+            final += f"\n\n{marker}"
+
+    if collaborative and (merge_awaiting or blocked):
+        final += "\n\n[[await]]"
+
+    append_text_result(result, final)
+    result.usage = usage_totals or None
+    return result, False
+
+
+# ------------------------------------------------------------------
 # Main run function
 # ------------------------------------------------------------------
 
@@ -619,6 +957,17 @@ async def _run_turn(
                    and restarted with the injected context appended.
     """
     backend = backends_agent.get_backend(backend_name)
+    is_flexible = backend.name == flexible.BACKEND_NAME
+
+    # The session router, compaction, auto-titling, and (on a flexible
+    # turn) the planner and merge steps all run on the summary backend -
+    # which may differ from the chat backend, and is the backend the
+    # caller's summary_model was resolved against. Flexible is a
+    # meta-agent with no CLI of its own, so it can never fill that role:
+    # fall back to a real backend rather than recursing into itself.
+    summary_backend = summary_backend_name or (
+        backends_agent.DEFAULT_DIRECT_BACKEND if is_flexible else backend.name
+    )
 
     # Track whether the caller pinned a specific session: when True
     # (ephemeral schedule runs), we do NOT update the user's
@@ -655,7 +1004,7 @@ async def _run_turn(
         else:
             session_id, session_data = await router.select_or_create_session(
                 prompt, workspace_path, summary_model,
-                backend_name=backend.name,
+                backend_name=summary_backend,
             )
 
     # session_id is set by both resolution branches by this point.
@@ -681,6 +1030,7 @@ async def _run_turn(
     history_budget = workspace_mod.get_history_budget(workspace_path)
 
     injected: list[str] = []
+    effort = workspace_mod.get_reasoning_effort(workspace_path)
 
     while True:  # restart loop for inject
         effective_prompt = prompt
@@ -694,98 +1044,43 @@ async def _run_turn(
             effective_prompt, session_data, colony_items,
             budget=history_budget,
         )
-        parts = [_capability_hint(collaborative=collaborative)]
-        # For backends that can't be handed typed tool definitions
-        # (CLI subprocess agents whose toolset is fixed by the CLI),
-        # enumerate user plugins in the prompt so the model can invoke
-        # them via its own bash/shell tool. HTTP backends with typed
-        # tools see plugins via TOOL_SCHEMA. Chat-only HTTP backends
-        # opt out via supports_plugin_prelude=False, since they have
-        # no shell to invoke the prelude'd commands either.
-        if (
-            not backend.supports_typed_plugins
-            and backend.supports_plugin_prelude
-        ):
-            prelude = agent_tools.cli_plugin_prelude()
-            if prelude:
-                parts.append(prelude)
-        parts.append(contextual_prompt)
-        full_prompt = "\n\n".join(parts)
-        logger.info(
-            "Running %s (prompt %d chars, context %d chars)",
-            backend.name, len(prompt), len(contextual_prompt),
-        )
 
         attachment_images_before = _snapshot_attachment_images(workspace_path)
 
         try:
-            proc = await backend.launch(
-                workspace_path, full_prompt, model, approval,
-                effort=workspace_mod.get_reasoning_effort(workspace_path),
-            )
-        except FileNotFoundError:
-            err = f"{backend.executable} CLI not found on PATH."
+            if is_flexible:
+                result, restarting = await _run_flexible(
+                    contextual_prompt, effective_prompt, workspace_path,
+                    approval=approval,
+                    effort=effort,
+                    collaborative=collaborative,
+                    summary_backend_name=summary_backend,
+                    summary_model=summary_model,
+                    on_event=on_event,
+                    inject_queue=inject_queue,
+                    injected=injected,
+                )
+            else:
+                logger.info(
+                    "Running %s (prompt %d chars, context %d chars)",
+                    backend.name, len(prompt), len(contextual_prompt),
+                )
+                result, restarting = await _drive_backend(
+                    backend, workspace_path,
+                    _build_backend_prompt(
+                        backend, contextual_prompt,
+                        collaborative=collaborative,
+                    ),
+                    model, approval,
+                    effort=effort,
+                    on_event=on_event,
+                    inject_queue=inject_queue,
+                    injected=injected,
+                )
+        except BackendUnavailable as e:
             result = AgentResult()
-            set_error_result(result, err)
+            set_error_result(result, str(e))
             return result
-
-        result = AgentResult()
-        restarting = False
-        stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
-
-        def _log_non_json_line(line: str) -> None:
-            logger.debug("Non-JSON line: %s", line)
-
-        # Watch inject_queue - kill subprocess when a message arrives
-        async def _watch_inject(
-            active_proc: asyncio.subprocess.Process = proc,
-        ) -> None:
-            nonlocal restarting
-            assert inject_queue is not None  # only scheduled when set
-            msg = await inject_queue.get()
-            injected.append(msg)
-            restarting = True
-            with contextlib.suppress(OSError):
-                # ProcessLookupError on Unix, other OSError on Windows
-                # when TerminateProcess fails (e.g., already exited).
-                active_proc.kill()
-
-        inject_task: asyncio.Task | None = None
-        if inject_queue is not None:
-            inject_task = asyncio.create_task(_watch_inject())
-
-        assert proc.stdout is not None  # spawned with stdout=PIPE
-        try:
-            async for event in iter_json_events(
-                proc.stdout, on_invalid=_log_non_json_line,
-            ):
-                prev_count = len(result.events)
-                backend.parse_event(event, result)
-
-                if on_event:
-                    for ev in result.events[prev_count:]:
-                        await on_event(ev)
-
-            await proc.wait()
-        except asyncio.CancelledError:
-            logger.info(
-                "%s run cancelled, killing subprocess %d",
-                backend.name, proc.pid,
-            )
-            raise
-        finally:
-            # Event parsing and chat-platform callbacks can fail just like
-            # cancellation can. Never let any exceptional stream exit leave
-            # the backend (or its stderr drain task) running in the
-            # background.
-            if proc.returncode is None:
-                await kill_and_wait(proc)
-            if inject_task and not inject_task.done():
-                inject_task.cancel()
-                await await_cancelled(inject_task)
-            stderr = await stderr_task
-        if stderr:
-            logger.debug("%s stderr: %s", backend.name, stderr)
 
         # If we're restarting due to inject, drain pipes and any extra
         # injects that arrived while we were shutting down.
@@ -816,19 +1111,10 @@ async def _run_turn(
     # Discard any inject messages that arrived after the final answer.
     _drain_queue(inject_queue)
 
-    if proc.returncode != 0 and not result.events:
-        msg = f"{backend.name} exited with code {proc.returncode}"
-        if stderr:
-            msg += f"\n{stderr}"
-        set_error_result(result, msg, display_text=msg)
-
     # Log the original prompt (including injected context) to session.
     async with workspace_mod.get_lock(workspace_path):
         _log_to_session(workspace_path, session_id, effective_prompt, result)
 
-    # Compaction + titling intentionally use the summary backend, which
-    # may differ from the chat backend (e.g. chat=llama, summary=codex).
-    summary_backend = summary_backend_name or backend.name
     await compaction.maybe_compact(
         workspace_path, session_id, summary_model,
         backend_name=summary_backend,
@@ -888,8 +1174,20 @@ def _format_session_response(
     Tool and file events are intermediate 'thinking' — the text reply
     already summarizes what was done, and skipping them keeps the saved
     history (and the context fed to future turns) compact.
+
+    ``[[await]]`` is stripped: it is a control marker the bot consumes,
+    not something the assistant said. Logging it would replay it as
+    conversation on every later turn — and into compaction summaries and
+    auto-titles — teaching the model to emit it when nothing is blocked.
     """
-    text_parts = [ev.content for ev in result.events if ev.kind == "text"]
+    text_parts: list[str] = []
+    for ev in result.events:
+        if ev.kind != "text":
+            continue
+        cleaned, _ = extract_await(ev.content)
+        cleaned = cleaned.strip()
+        if cleaned:
+            text_parts.append(cleaned)
     attachment_parts: list[str] = []
     ws_real = os.path.realpath(workspace_path)
     for ev in result.events:
@@ -906,4 +1204,5 @@ def _format_session_response(
         attachment_parts.append(f"[Attachment: {path}]")
     if text_parts or attachment_parts:
         return "\n\n".join([*text_parts, *attachment_parts])
-    return result.text
+    cleaned, _ = extract_await(result.text)
+    return cleaned.strip() or result.text

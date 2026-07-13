@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import re
@@ -524,7 +525,9 @@ class BotPlatform(ABC):
     async def cmd_doctor(self, ctx: BotContext) -> None:
         """Report readiness of every backend (CLI on PATH / server up)."""
         lines = ["Backend readiness:"]
-        for name in backends_agent.AVAILABLE_BACKENDS:
+        # Only the direct backends have anything to probe — flexible is a
+        # meta-agent whose readiness is exactly its tiers' readiness.
+        for name in backends_agent.DIRECT_BACKENDS:
             backend = backends_agent.get_backend(name)
             ok, detail = await asyncio.to_thread(backend.health_check)
             lines.append(f"  {'ok' if ok else 'XX'} {name}: {detail}")
@@ -538,6 +541,11 @@ class BotPlatform(ABC):
                 f"This workspace: chat={chat_backend},"
                 f" summary={summary_backend}"
             )
+            if chat_backend == workspace.FLEXIBLE_BACKEND:
+                for tier, (name, model) in workspace.get_flexible_run_config(
+                    ws,
+                ).items():
+                    lines.append(f"  flexible {tier:<4} = {name}/{model}")
         await ctx.reply_text("\n".join(lines))
 
     async def cmd_cancel(self, ctx: BotContext) -> None:
@@ -675,17 +683,20 @@ class BotPlatform(ABC):
         ws = await self._require_ws(ctx)
         if ws is None:
             return
-        current = workspace.get_model(ws)
         backend_name = workspace.get_backend_name(ws)
+        # Flexible carries one model per difficulty tier rather than one
+        # of its own, so there is nothing here to pick from.
+        if backend_name == workspace.FLEXIBLE_BACKEND:
+            await ctx.reply_text(self._flexible_summary(ws))
+            return
+        current = workspace.get_model(ws)
         options = workspace.get_available_models(ws)
         lines = [
             f"Current model: {current} (backend: {backend_name})\n",
             "Available models:",
+            *self._option_lines(options, current),
+            "\nEnter a number or model name (or /cancel):",
         ]
-        for i, m in enumerate(options, 1):
-            marker = " <-" if m == current else ""
-            lines.append(f"  {i}. {m}{marker}")
-        lines.append("\nEnter a number or model name (or /cancel):")
         await ctx.reply_text("\n".join(lines))
         self._expect_input(ctx.user_id, self._receive_model)
 
@@ -718,11 +729,9 @@ class BotPlatform(ABC):
             f"Current summary model: {current}"
             f" (summary agent: {summary_backend})\n",
             "Available models:",
+            *self._option_lines(options, current),
+            "\nEnter a number or model name (or /cancel):",
         ]
-        for i, m in enumerate(options, 1):
-            marker = " <-" if m == current else ""
-            lines.append(f"  {i}. {m}{marker}")
-        lines.append("\nEnter a number or model name (or /cancel):")
         await ctx.reply_text("\n".join(lines))
         self._expect_input(ctx.user_id, self._receive_summarymodel)
 
@@ -750,22 +759,32 @@ class BotPlatform(ABC):
             return
         current = workspace.get_backend_name(ws)
         options = workspace.AVAILABLE_BACKENDS
-        lines = [f"Current agent: {current}\n", "Available agents:"]
-        for i, name in enumerate(options, 1):
-            marker = " <-" if name == current else ""
-            lines.append(f"  {i}. {name}{marker}")
-        lines.append("\nEnter a number or agent name (or /cancel):")
+        lines = [
+            f"Current agent: {current}\n",
+            "Available agents:",
+            *self._option_lines(options, current),
+            f"\n{workspace.FLEXIBLE_BACKEND} splits each request by"
+            " difficulty and routes the parts to its low/mid/high agents.",
+            "\nEnter a number or agent name (or /cancel):",
+        ]
         await ctx.reply_text("\n".join(lines))
         self._expect_input(ctx.user_id, self._receive_agent)
 
     async def _receive_agent(self, ctx: BotContext) -> None:
         selected = await self._receive_backend_choice(
-            ctx, retry_handler=self._receive_agent,
+            ctx,
+            options=workspace.AVAILABLE_BACKENDS,
+            retry_handler=self._receive_agent,
         )
         if selected is None:
             return
         ws, name = selected
         workspace.set_backend_name(ws, name)
+        if name == workspace.FLEXIBLE_BACKEND:
+            await ctx.reply_text(
+                f"Agent set to: {name}\n\n{self._flexible_summary(ws)}"
+            )
+            return
         _, model, summary_model, _, summary_backend = (
             workspace.get_run_config(ws)
         )
@@ -783,13 +802,14 @@ class BotPlatform(ABC):
         self,
         ctx: BotContext,
         *,
+        options: list[str],
         retry_handler: Callable[[BotContext], Awaitable[None]],
     ) -> tuple[str, str] | None:
         ws = await self._require_ws(ctx)
         if ws is None:
             return None
         text = ctx.text.strip()
-        name = self._pick_option(text, workspace.AVAILABLE_BACKENDS)
+        name = self._pick_option(text, options)
         if name is None:
             await ctx.reply_text(
                 f"Unknown agent: {text}\nTry again (or /cancel):"
@@ -798,6 +818,128 @@ class BotPlatform(ABC):
             return None
         return ws, name
 
+    @staticmethod
+    def _option_lines(options: list[str], current: str) -> list[str]:
+        """Number a picker's options and mark the active one."""
+        return [
+            f"  {i}. {name}{' <-' if name == current else ''}"
+            for i, name in enumerate(options, 1)
+        ]
+
+    @staticmethod
+    def _flexible_summary(ws: str) -> str:
+        """Describe how the flexible agent is currently wired up."""
+        lines = [
+            "The flexible agent has no single model — it splits your"
+            " request and routes each part to a difficulty tier:",
+            "",
+        ]
+        for tier, (name, model) in workspace.get_flexible_run_config(
+            ws,
+        ).items():
+            lines.append(
+                f"  {tier:<4} {name}/{model}"
+                f" — {workspace.FLEXIBLE_TIER_DESCRIPTIONS[tier]}"
+            )
+        lines.append(
+            "\nPlanning and merging run on the summary agent:"
+            f" {workspace.get_summary_backend_name(ws)}"
+            f"/{workspace.get_summary_model(ws)}"
+        )
+        lines.append(
+            "\nRebind a tier with /agent_flexible_<tier> or"
+            " /model_flexible_<tier>, where <tier> is "
+            + "|".join(workspace.FLEXIBLE_TIERS)
+            + "."
+        )
+        return "\n".join(lines)
+
+    # ----- /agent_flexible_<tier>, /model_flexible_<tier> ------------------
+
+    async def _show_flexible_agent(self, ctx: BotContext, tier: str) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        current = workspace.get_flexible_backend_name(ws, tier)
+        # Flexible itself is excluded: a tier pointing back at the
+        # meta-agent would plan and split forever.
+        options = workspace.DIRECT_BACKENDS
+        lines = [
+            f"Flexible {tier} tier —"
+            f" {workspace.FLEXIBLE_TIER_DESCRIPTIONS[tier]}",
+            f"Current agent: {current}\n",
+            "Available agents:",
+            *self._option_lines(options, current),
+            "\nEnter a number or agent name (or /cancel):",
+        ]
+        await ctx.reply_text("\n".join(lines))
+        self._expect_input(
+            ctx.user_id,
+            functools.partial(self._receive_flexible_agent, tier=tier),
+        )
+
+    async def _receive_flexible_agent(
+        self, ctx: BotContext, *, tier: str,
+    ) -> None:
+        selected = await self._receive_backend_choice(
+            ctx,
+            options=workspace.DIRECT_BACKENDS,
+            retry_handler=functools.partial(
+                self._receive_flexible_agent, tier=tier,
+            ),
+        )
+        if selected is None:
+            return
+        ws, name = selected
+        workspace.set_flexible_backend_name(ws, tier, name)
+        await ctx.reply_text(
+            f"Flexible {tier} agent set to: {name}\n"
+            f"Flexible {tier} model: {workspace.get_flexible_model(ws, tier)}"
+        )
+
+    async def _show_flexible_model(self, ctx: BotContext, tier: str) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        current = workspace.get_flexible_model(ws, tier)
+        backend_name = workspace.get_flexible_backend_name(ws, tier)
+        options = workspace.get_available_flexible_models(ws, tier)
+        lines = [
+            f"Flexible {tier} tier —"
+            f" {workspace.FLEXIBLE_TIER_DESCRIPTIONS[tier]}",
+            f"Current model: {current} (agent: {backend_name})\n",
+            "Available models:",
+            *self._option_lines(options, current),
+            "\nEnter a number or model name (or /cancel):",
+        ]
+        await ctx.reply_text("\n".join(lines))
+        self._expect_input(
+            ctx.user_id,
+            functools.partial(self._receive_flexible_model, tier=tier),
+        )
+
+    async def _receive_flexible_model(
+        self, ctx: BotContext, *, tier: str,
+    ) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        text = ctx.text.strip()
+        model = self._pick_option(
+            text, workspace.get_available_flexible_models(ws, tier),
+        )
+        if model is None:
+            await ctx.reply_text(
+                f"Unknown model: {text}\nTry again (or /cancel):"
+            )
+            self._expect_input(
+                ctx.user_id,
+                functools.partial(self._receive_flexible_model, tier=tier),
+            )
+            return
+        workspace.set_flexible_model(ws, tier, model)
+        await ctx.reply_text(f"Flexible {tier} model set to: {model}")
+
     # ----- /summaryagent --------------------------------------------------
 
     async def cmd_summaryagent(self, ctx: BotContext) -> None:
@@ -805,21 +947,23 @@ class BotPlatform(ABC):
         if ws is None:
             return
         current = workspace.get_summary_backend_name(ws)
-        options = workspace.AVAILABLE_BACKENDS
+        # The summary agent runs compaction, titling, and flexible's plan
+        # and merge steps — all real turns, which flexible cannot serve.
+        options = workspace.DIRECT_BACKENDS
         lines = [
             f"Current summary agent: {current}\n",
             "Available agents:",
+            *self._option_lines(options, current),
+            "\nEnter a number or agent name (or /cancel):",
         ]
-        for i, name in enumerate(options, 1):
-            marker = " <-" if name == current else ""
-            lines.append(f"  {i}. {name}{marker}")
-        lines.append("\nEnter a number or agent name (or /cancel):")
         await ctx.reply_text("\n".join(lines))
         self._expect_input(ctx.user_id, self._receive_summaryagent)
 
     async def _receive_summaryagent(self, ctx: BotContext) -> None:
         selected = await self._receive_backend_choice(
-            ctx, retry_handler=self._receive_summaryagent,
+            ctx,
+            options=workspace.DIRECT_BACKENDS,
+            retry_handler=self._receive_summaryagent,
         )
         if selected is None:
             return
@@ -2191,6 +2335,29 @@ class BotPlatform(ABC):
     _COMMANDS: ClassVar[dict[str, Handler]] = {}
 
 
+def _flexible_tier_commands() -> dict[str, Handler]:
+    """One /agent_flexible_<tier> and /model_flexible_<tier> per tier.
+
+    Generated rather than written out so a new difficulty tier is a
+    one-line change in :mod:`Cozter.flexible` instead of six here.
+    """
+    commands: dict[str, Handler] = {}
+    for tier in workspace.FLEXIBLE_TIERS:
+        commands[f"agent_flexible_{tier}"] = _flexible_command(
+            BotPlatform._show_flexible_agent, tier,
+        )
+        commands[f"model_flexible_{tier}"] = _flexible_command(
+            BotPlatform._show_flexible_model, tier,
+        )
+    return commands
+
+
+def _flexible_command(show: Callable, tier: str) -> Handler:
+    async def command(self: BotPlatform, ctx: BotContext) -> None:
+        await show(self, ctx, tier)
+    return command
+
+
 def _build_command_registry() -> dict[str, Handler]:
     return {
         "start":        BotPlatform.cmd_start,
@@ -2203,6 +2370,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "summarymodel": BotPlatform.cmd_summarymodel,
         "agent":        BotPlatform.cmd_agent,
         "summaryagent": BotPlatform.cmd_summaryagent,
+        **_flexible_tier_commands(),
         "permission":   BotPlatform.cmd_permission,
         "style":        BotPlatform.cmd_style,
         "effort":       BotPlatform.cmd_effort,

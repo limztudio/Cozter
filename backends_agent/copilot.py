@@ -75,6 +75,11 @@ class CopilotBackend(Backend):
     )
     default_model = "auto"
     default_summary_model = "claude-haiku-4.5"
+    tier_models = {
+        "low": "claude-haiku-4.5",
+        "mid": "gpt-5.4",
+        "high": "claude-sonnet-4.6",
+    }
     # No override is represented by Cozter's effort=0 (omit the flag).
     effort_levels = ("low", "medium", "high", "xhigh", "max")
 

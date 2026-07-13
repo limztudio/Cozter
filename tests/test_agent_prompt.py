@@ -66,6 +66,34 @@ class PromptPolicyTests(unittest.TestCase):
             )
 
 
+class SessionResponseTests(unittest.TestCase):
+    """[[await]] is a control marker the bot consumes, not conversation."""
+
+    def _result(self, *texts: str) -> agent.AgentResult:
+        result = agent.AgentResult()
+        for text in texts:
+            result.events.append(agent.ChatEvent(kind="text", content=text))
+            result.text = text
+        return result
+
+    def test_await_marker_is_not_logged_to_session_history(self) -> None:
+        # Logged as-is, the marker replays as something the assistant "said"
+        # on every later turn — and into compaction summaries and auto-titles
+        # — teaching the model to emit it when nothing is blocked.
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = agent._format_session_response(
+                self._result("Which retry path?\n\n[[await]]"), tmp,
+            )
+        self.assertEqual(saved, "Which retry path?")
+
+    def test_a_text_event_that_is_only_a_marker_is_dropped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = agent._format_session_response(
+                self._result("Done.", "[[await]]"), tmp,
+            )
+        self.assertEqual(saved, "Done.")
+
+
 class FormatUsageTests(unittest.TestCase):
     def test_none_and_empty_return_none(self) -> None:
         self.assertIsNone(agent.format_usage(None))

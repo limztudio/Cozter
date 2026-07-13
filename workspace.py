@@ -4,6 +4,7 @@ import os
 
 from . import backends_agent
 from . import config
+from . import flexible
 from .utils import CONFIG_DIR, COZTER_DIR
 from .utils import load_json_object
 from .utils import save_json_object
@@ -216,12 +217,26 @@ def ensure_cozter_dir(path: str) -> None:
 # ---------------------------------------------------------------------------
 
 AVAILABLE_BACKENDS = backends_agent.AVAILABLE_BACKENDS
+# Backends that own a real turn. ``flexible`` is a meta-agent that routes
+# to these, so it can be a chat agent but never a summary agent nor one of
+# its own difficulty tiers - either would recurse.
+DIRECT_BACKENDS = backends_agent.DIRECT_BACKENDS
 DEFAULT_BACKEND = backends_agent.DEFAULT_BACKEND
+FLEXIBLE_BACKEND = backends_agent.FLEXIBLE_BACKEND
 # Compaction + auto-titling default to codex regardless of which agent
 # runs the chat turns - codex is the cheapest summarizer for most users.
 # Both the agent and the model under it are independently configurable
 # via /summaryagent and /summarymodel.
-DEFAULT_SUMMARY_BACKEND = "codex"
+DEFAULT_SUMMARY_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
+
+# The flexible agent's difficulty tiers. Each binds an agent and a model,
+# set with /agent_flexible_<tier> and /model_flexible_<tier>. All three
+# start on the default direct backend so a fresh workspace works without
+# any setup; the per-backend tier_models tables pick sensibly sized models
+# within whichever agent a tier points at.
+FLEXIBLE_TIERS = flexible.TIERS
+FLEXIBLE_TIER_DESCRIPTIONS = flexible.TIER_DESCRIPTIONS
+DEFAULT_FLEXIBLE_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
 
 AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"
@@ -282,8 +297,20 @@ def _set_setting(workspace_path: str, key: str, value: object) -> None:
     _save_settings(workspace_path, settings)
 
 
-def _coerce_backend_name(name: object, default: str = DEFAULT_BACKEND) -> str:
-    if isinstance(name, str) and name in AVAILABLE_BACKENDS:
+def _coerce_backend_name(
+    name: object,
+    default: str = DEFAULT_BACKEND,
+    *,
+    allowed: list[str] | None = None,
+) -> str:
+    """Validate a stored backend name, falling back to *default*.
+
+    *allowed* narrows the accepted set - summary agents and flexible's
+    tiers pass DIRECT_BACKENDS so a stale ``flexible`` value in an old
+    settings file can never route back into the meta-agent.
+    """
+    options = AVAILABLE_BACKENDS if allowed is None else allowed
+    if isinstance(name, str) and name in options:
         return name
     return default
 
@@ -327,17 +354,21 @@ def set_backend_name(workspace_path: str, name: str) -> None:
 
 
 def get_summary_backend_name(workspace_path: str) -> str:
-    """Backend that runs compaction / auto-titling for this workspace."""
+    """Backend that runs compaction / auto-titling for this workspace.
+
+    Also the agent that plans and merges every ``flexible`` turn.
+    """
     return _coerce_backend_name(
         _load_settings(workspace_path).get("summary_backend"),
         DEFAULT_SUMMARY_BACKEND,
+        allowed=DIRECT_BACKENDS,
     )
 
 
 def set_summary_backend_name(workspace_path: str, name: str) -> None:
-    if name not in AVAILABLE_BACKENDS:
+    if name not in DIRECT_BACKENDS:
         raise ValueError(
-            f"Unknown backend: {name}. Available: {AVAILABLE_BACKENDS}"
+            f"Unknown summary backend: {name}. Available: {DIRECT_BACKENDS}"
         )
     _set_setting(workspace_path, "summary_backend", name)
 
@@ -376,23 +407,44 @@ def get_available_summary_models(workspace_path: str) -> list[str]:
     )
 
 
-def _model_keys(backend_name: str) -> tuple[str, str]:
-    """Return (model_key, summary_key) for the given backend."""
-    return f"{backend_name}_model", f"{backend_name}_summary_model"
+# A model is stored per (backend, role) so each agent keeps its own model
+# memory: switch agents and back, and the model you had set returns.
+# Roles ("scopes"): "" the chat model (``codex_model``), "summary" the
+# summary model (``codex_summary_model``), and ``flexible_<tier>`` each of
+# the flexible agent's difficulty tiers (``codex_flexible_high_model``).
+CHAT_SCOPE = ""
+SUMMARY_SCOPE = "summary"
+
+
+def _flexible_scope(tier: str) -> str:
+    return f"flexible_{tier}"
+
+
+def _model_key(backend_name: str, scope: str = CHAT_SCOPE) -> str:
+    """Return the settings key holding *backend_name*'s model for *scope*."""
+    if not scope:
+        return f"{backend_name}_model"
+    return f"{backend_name}_{scope}_model"
+
+
+def _default_model(backend, scope: str) -> str:
+    if scope == SUMMARY_SCOPE:
+        return backend.default_summary_model
+    prefix = _flexible_scope("")
+    if scope.startswith(prefix):
+        return backend.tier_model(scope[len(prefix):])
+    return backend.default_model
 
 
 def _resolve_model(
-    settings: dict, backend_name: str, summary: bool,
+    settings: dict, backend_name: str, scope: str = CHAT_SCOPE,
 ) -> str:
     backend_name = _coerce_backend_name(backend_name)
     backend = backends_agent.get_backend(backend_name)
-    model_key, summary_key = _model_keys(backend_name)
-    key = summary_key if summary else model_key
-    default = (
-        backend.default_summary_model if summary else backend.default_model
-    )
-    configured = settings.get(key)
-    return configured if isinstance(configured, str) and configured else default
+    configured = settings.get(_model_key(backend_name, scope))
+    if isinstance(configured, str) and configured:
+        return configured
+    return _default_model(backend, scope)
 
 
 def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
@@ -406,11 +458,12 @@ def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
     backend_name = _coerce_backend_name(s.get("backend"))
     summary_backend = _coerce_backend_name(
         s.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
+        allowed=DIRECT_BACKENDS,
     )
     return (
         backend_name,
-        _resolve_model(s, backend_name, summary=False),
-        _resolve_model(s, summary_backend, summary=True),
+        _resolve_model(s, backend_name),
+        _resolve_model(s, summary_backend, SUMMARY_SCOPE),
         _clamp_permission(_coerce_permission(s.get("permission"))),
         summary_backend,
     )
@@ -418,15 +471,12 @@ def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
 
 def get_model(workspace_path: str) -> str:
     s = _load_settings(workspace_path)
-    return _resolve_model(
-        s, _coerce_backend_name(s.get("backend")), summary=False,
-    )
+    return _resolve_model(s, _coerce_backend_name(s.get("backend")))
 
 
 def set_model(workspace_path: str, model: str) -> None:
     backend_name = get_backend_name(workspace_path)
-    model_key, _ = _model_keys(backend_name)
-    _set_setting(workspace_path, model_key, model)
+    _set_setting(workspace_path, _model_key(backend_name), model)
 
 
 def get_summary_model(workspace_path: str) -> str:
@@ -434,15 +484,98 @@ def get_summary_model(workspace_path: str) -> str:
     s = _load_settings(workspace_path)
     summary_backend = _coerce_backend_name(
         s.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
+        allowed=DIRECT_BACKENDS,
     )
-    return _resolve_model(s, summary_backend, summary=True)
+    return _resolve_model(s, summary_backend, SUMMARY_SCOPE)
 
 
 def set_summary_model(workspace_path: str, model: str) -> None:
     """Store the summary model under the summary backend's key."""
     summary_backend = get_summary_backend_name(workspace_path)
-    _, summary_key = _model_keys(summary_backend)
-    _set_setting(workspace_path, summary_key, model)
+    _set_setting(
+        workspace_path, _model_key(summary_backend, SUMMARY_SCOPE), model,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Flexible agent — one (agent, model) pair per difficulty tier
+# ---------------------------------------------------------------------------
+
+def _validate_tier(tier: str) -> None:
+    if tier not in FLEXIBLE_TIERS:
+        raise ValueError(
+            f"Unknown flexible tier: {tier}. Available: {FLEXIBLE_TIERS}"
+        )
+
+
+def _flexible_backend_key(tier: str) -> str:
+    return f"flexible_{tier}_backend"
+
+
+def _resolve_flexible_backend(settings: dict, tier: str) -> str:
+    return _coerce_backend_name(
+        settings.get(_flexible_backend_key(tier)),
+        DEFAULT_FLEXIBLE_BACKEND,
+        allowed=DIRECT_BACKENDS,
+    )
+
+
+def get_flexible_backend_name(workspace_path: str, tier: str) -> str:
+    """Agent that runs *tier*'s sub-tasks on a flexible turn."""
+    _validate_tier(tier)
+    return _resolve_flexible_backend(_load_settings(workspace_path), tier)
+
+
+def set_flexible_backend_name(
+    workspace_path: str, tier: str, name: str,
+) -> None:
+    _validate_tier(tier)
+    if name not in DIRECT_BACKENDS:
+        raise ValueError(
+            f"Unknown agent: {name}. Available: {DIRECT_BACKENDS}"
+        )
+    _set_setting(workspace_path, _flexible_backend_key(tier), name)
+
+
+def get_flexible_model(workspace_path: str, tier: str) -> str:
+    _validate_tier(tier)
+    s = _load_settings(workspace_path)
+    return _resolve_model(
+        s, _resolve_flexible_backend(s, tier), _flexible_scope(tier),
+    )
+
+
+def set_flexible_model(workspace_path: str, tier: str, model: str) -> None:
+    backend_name = get_flexible_backend_name(workspace_path, tier)
+    _set_setting(
+        workspace_path,
+        _model_key(backend_name, _flexible_scope(tier)),
+        model,
+    )
+
+
+def get_available_flexible_models(workspace_path: str, tier: str) -> list[str]:
+    """List models for the agent bound to *tier*."""
+    backend_name = get_flexible_backend_name(workspace_path, tier)
+    return _with_extra_models(
+        backend_name,
+        backends_agent.get_backend(backend_name).available_models,
+    )
+
+
+def get_flexible_run_config(
+    workspace_path: str,
+) -> dict[str, tuple[str, str]]:
+    """Return ``{tier: (agent, model)}`` for every flexible tier."""
+    s = _load_settings(workspace_path)
+    resolved: dict[str, tuple[str, str]] = {}
+    for tier in FLEXIBLE_TIERS:
+        backend_name = _resolve_flexible_backend(s, tier)
+        resolved[tier] = (
+            backend_name,
+            _resolve_model(s, backend_name, _flexible_scope(tier)),
+        )
+    return resolved
 
 
 def get_permission(workspace_path: str) -> str:

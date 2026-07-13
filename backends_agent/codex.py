@@ -29,6 +29,11 @@ class CodexBackend(Backend):
     )
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.6-luna"
+    tier_models = {
+        "low": "gpt-5.4-mini",
+        "mid": "gpt-5.6-luna",
+        "high": "gpt-5.6-sol",
+    }
     common_effort_levels = ("low", "medium", "high", "xhigh")
     effort_levels = (*common_effort_levels, "max", "ultra")
     model_effort_levels = {

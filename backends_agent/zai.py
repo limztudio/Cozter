@@ -45,6 +45,7 @@ class ZaiBackend(OpenAIChatBackend):
     )
     default_model = "glm-5.2"
     default_summary_model = "glm-4.5-air"
+    tier_models = {"low": "glm-4.5-air", "mid": "glm-4.7", "high": "glm-5.2"}
     # GLM-5.2 accepts seven reasoning-effort values. Other current text models
     # expose only the thinking switch, handled separately in _effort_fields.
     effort_levels = (

@@ -74,6 +74,7 @@ class ClaudeCodeBackend(Backend):
     )
     default_model = "default"
     default_summary_model = "haiku"
+    tier_models = {"low": "haiku", "mid": "sonnet", "high": "opus"}
     effort_levels = ("low", "medium", "high", "xhigh", "max")
 
     # File-editing tools whose tool_use blocks we surface as kind="file"

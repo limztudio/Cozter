@@ -132,6 +132,12 @@ class Backend(ABC):
     default_summary_model: str = ""
     effort_levels: tuple[str, ...] = ()
 
+    # Default model per difficulty tier of the ``flexible`` meta-agent,
+    # keyed by "low"/"mid"/"high" (see :mod:`Cozter.flexible`). Backends
+    # whose catalog has no meaningful cheap/strong spread leave this empty
+    # and fall back to :attr:`default_model` for every tier.
+    tier_models: dict[str, str] = {}
+
     # True for backends that consume :data:`agent_tools.TOOL_SCHEMA`
     # directly as typed tool definitions (llama and any future
     # OpenAI-shape HTTP backend). False for CLI subprocess backends
@@ -189,6 +195,10 @@ class Backend(ABC):
         (server defaults apply). 1-100 are translated to each backend's
         native vocabulary via :meth:`convert_effort`.
         """
+
+    def tier_model(self, tier: str) -> str:
+        """Default model for one of flexible's difficulty tiers."""
+        return self.tier_models.get(tier) or self.default_model
 
     def convert_effort(self, percent: int) -> str | None:
         """Translate a 0-100 percentage to the backend's native effort form.

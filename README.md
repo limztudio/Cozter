@@ -268,9 +268,11 @@ reserved or unavailable.
 |---|---|
 | `/new` | Prompt for a new workspace directory, create it, and select it |
 | `/open [path-or-number]` | Switch to an existing workspace |
-| `/agent` | Pick the agent backend (codex / claude_code / copilot / llama / zai) |
+| `/agent` | Pick the agent backend (flexible / codex / claude_code / copilot / llama / zai) |
 | `/model` | Pick the chat model for the current backend |
-| `/summaryagent` | Pick the backend used for compaction / titling / routing |
+| `/agent_flexible_{low,mid,high}` | Pick the agent the flexible tier routes to |
+| `/model_flexible_{low,mid,high}` | Pick the model the flexible tier routes to |
+| `/summaryagent` | Pick the backend used for compaction / titling / routing, and for flexible's plan + merge |
 | `/summarymodel` | Pick the model for the summary backend |
 | `/permission` | full / auto / confirm / deny — how the agent treats tool calls |
 | `/style` | collaborative / autonomous — whether the agent asks before big/ambiguous actions or runs full-auto |
@@ -401,10 +403,66 @@ CLI backends rely on their own bundled shell tool for plugin execution, so
 the plugin prelude only exposes how to call the extra tools; it does not
 change the CLI's native tool sandbox.
 
+## The flexible agent
+
+`flexible` is the default agent. It is not a CLI of its own — it is a
+meta-agent that spends a cheap summary-model call to size the work up
+front, then pays for the expensive model only where the work is actually
+hard. One turn is three phases:
+
+1. **Understand and split.** The summary agent (`/summaryagent`,
+   `/summarymodel`) restates what you asked for and splits it into
+   sub-tasks, grading each one `low`, `mid`, or `high`.
+2. **Route.** Each sub-task runs as a full agent turn — real tools, real
+   file edits — on the agent and model bound to its difficulty tier. They
+   run one at a time, in order, and each worker sees the reports of the
+   ones before it.
+3. **Merge.** The summary agent folds the workers' reports into the single
+   reply you see. The workers' own text never reaches the chat; their tool
+   and file events still stream into the live status display.
+
+The grading rubric the planner is held to:
+
+| Tier | When | Example |
+|---|---|---|
+| `low` | Straightforward, well-scoped work with clear intent | Add a small validation check, or extend an existing function with clearly defined behavior |
+| `mid` | Some reasoning required, but the problem stays bounded | Write unit tests for an existing method with known inputs and outputs |
+| `high` | Ambiguity, complex logic, or deeper system understanding | Refactor a system with unclear dependencies, or debug a non-obvious issue |
+
+Each tier carries its own agent and model, so tiers can straddle
+backends — a local `llama` for the easy parts, `claude_code` on `opus` for
+the hard ones:
+
+```
+/agent_flexible_low     -> claude_code        /model_flexible_low   -> haiku
+/agent_flexible_mid     -> codex              /model_flexible_mid   -> gpt-5.6-luna
+/agent_flexible_high    -> claude_code        /model_flexible_high  -> opus
+```
+
+Defaults put all three tiers on `codex` (`gpt-5.4-mini` / `gpt-5.6-luna` /
+`gpt-5.6-sol`); pointing a tier at another agent picks that agent's
+cheap/mid/strong models automatically (its `tier_models` table). `/model`
+and `/doctor` print the current wiring. A tier can only point at a *direct*
+backend — never at `flexible` itself, which would plan forever.
+
+Two behaviors are worth knowing. Under `/style collaborative`, the turn can
+stop and wait for you (`[[await]]`) at either end of the pipeline: the
+planner may ask **one** clarifying question instead of guessing, and the
+merge step may end its reply on a question it genuinely needs answered
+before the work can continue. The workers in between never stop to ask,
+since nobody is reading them mid-pipeline. Under `/style autonomous` — and
+on scheduled `/reserve` runs, which are always autonomous — nothing pauses:
+a question the merge model emits anyway is stripped rather than left to
+strand a run nobody is watching. And when planning fails outright (summary
+CLI missing, unparseable output), the turn degrades to a single `high`-tier
+sub-task carrying the original request, so a botched split never quietly
+downgrades hard work to a weak model.
+
 ## Backend behavior
 
 Each backend defines its own model list and permission mapping in
-`backends_agent/`:
+`backends_agent/`. `flexible` is omitted — it owns no CLI and no model of
+its own, only the three tiers above.
 
 | Backend | Launch path | Default chat model | Default summary model |
 |---|---|---|---|
@@ -555,12 +613,12 @@ ignored for local secrets and runtime queues.
   `config.py`, `updater.py`, and `utils.py`
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
-  `colony.py`, and `schedules.py`
+  `colony.py`, `flexible.py`, and `schedules.py`
 - Chat-platform adapters: `backends_bot/base.py`, `formatting.py`,
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/base.py`, `_http_proc.py`,
   `_openai_agent.py`, `codex.py`, `claude_code.py`, `copilot.py`,
-  `llama.py`, and `zai.py`
+  `flexible.py`, `llama.py`, and `zai.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
   the 16 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
@@ -591,6 +649,9 @@ that owns them:
   `backends_bot/formatting.py`, including Signal's styled-span input
 - Backend names, model defaults, effort bands, and health checks:
   `backends_agent/__init__.py` plus the concrete backend modules
+- Flexible's tiers, grading rubric, planner/merge prompts, and plan
+  parsing: `flexible.py`; its orchestration loop lives in
+  `agent.py:_run_flexible()` and its per-tier settings in `workspace.py`
 - Tool/plugin behavior: `agent_tools/__init__.py`, `agent_tools/base.py`,
   `agent_tools/builtin/`, and `agent_tools/plugins/README.md`; shared
   validation, workspace-boundary checks, HTTP request setup, and bounded
@@ -603,13 +664,16 @@ that owns them:
 
 The agent loop in `agent.py:run()` is shared across backends. Each
 `Backend.launch()` spawns the right subprocess or starts an in-process
-OpenAI-compatible HTTP session; the orchestrator reads JSONL events from
-stdout, translates them via `Backend.parse_event()` into `ChatEvent`s,
-and streams a "Thinking..." status message that updates in place with the
-latest few tool actions and a live preview of the answer text as it
-arrives. On chat surfaces without editable messages (the CLI), tool
-progress is emitted as separate status lines and the full answer arrives
-at the end.
+OpenAI-compatible HTTP session; `agent.py:_drive_backend()` reads JSONL
+events from stdout, translates them via `Backend.parse_event()` into
+`ChatEvent`s, and streams a "Thinking..." status message that updates in
+place with the latest few tool actions and a live preview of the answer
+text as it arrives. On chat surfaces without editable messages (the CLI),
+tool progress is emitted as separate status lines and the full answer
+arrives at the end. `flexible` is the one agent that never reaches
+`Backend.launch()` itself: `agent.py:_run_flexible()` intercepts it and
+drives one `_drive_backend()` pass per sub-task instead, on whichever
+backend that sub-task's tier points at.
 
 ## Repository state
 

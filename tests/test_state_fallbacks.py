@@ -96,25 +96,45 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 encoding="utf-8",
             ) as f:
                 json.dump({
+                    # "flexible" is a valid chat agent but never a valid
+                    # summary agent — it has no CLI to run one on.
                     "backend": "missing",
-                    "summary_backend": "also-missing",
+                    "summary_backend": "flexible",
                     "permission": "bad",
                     "codex_model": 123,
                     "codex_summary_model": "",
                 }, f)
 
-            self.assertEqual(workspace.get_backend_name(tmp), "codex")
+            self.assertEqual(workspace.get_backend_name(tmp), "flexible")
             self.assertEqual(workspace.get_summary_backend_name(tmp), "codex")
             self.assertEqual(workspace.get_permission(tmp), "auto")
 
             backend, model, summary_model, permission, summary_backend = (
                 workspace.get_run_config(tmp)
             )
-            self.assertEqual(backend, "codex")
-            self.assertEqual(model, "gpt-5.6-sol")
+            self.assertEqual(backend, "flexible")
+            # Flexible carries a model per difficulty tier, not one of its own.
+            self.assertEqual(model, "")
             self.assertEqual(summary_model, "gpt-5.6-luna")
             self.assertEqual(permission, "auto")
             self.assertEqual(summary_backend, "codex")
+
+    def test_invalid_model_falls_back_to_backend_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            with open(
+                os.path.join(tmp, ".cozter", "settings.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({
+                    "backend": "codex",
+                    "codex_model": 123,
+                    "codex_summary_model": "",
+                }, f)
+
+            self.assertEqual(workspace.get_model(tmp), "gpt-5.6-sol")
+            self.assertEqual(workspace.get_summary_model(tmp), "gpt-5.6-luna")
 
     def test_workspace_index_ignores_non_object_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
