@@ -8,6 +8,7 @@ no real repository is touched.
 
 import subprocess
 import unittest
+from unittest import mock
 
 from Cozter import updater
 
@@ -107,6 +108,53 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
             self._pulled(calls),
             "pull should be skipped when local/upstream comparison fails",
         )
+
+    def test_missing_upstream_skips_pull(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def _run(*args: str) -> subprocess.CompletedProcess:
+            calls.append(args)
+            if args[0] == "rev-parse" and args[-1] == "@{u}":
+                return subprocess.CompletedProcess(
+                    args, 128, stdout="", stderr="no upstream",
+                )
+            stdout = "abc123\n" if args[-1] == "HEAD" else ""
+            return subprocess.CompletedProcess(
+                args, 0, stdout=stdout, stderr="",
+            )
+
+        original = updater._git
+        updater._git = _run
+        try:
+            updater.fetch_and_pull()
+        finally:
+            updater._git = original
+
+        self.assertFalse(
+            self._pulled(calls),
+            "pull should be skipped when the branch has no upstream",
+        )
+
+
+class RestartScriptTests(unittest.TestCase):
+    def test_windows_update_exits_for_the_supervisor(self) -> None:
+        with (
+            mock.patch.object(updater.os, "name", "nt"),
+            mock.patch.object(updater.os, "_exit") as exit_mock,
+            mock.patch.object(updater.os, "execv") as execv_mock,
+        ):
+            updater.restart_script()
+
+        exit_mock.assert_called_once_with(
+            updater.WINDOWS_SUPERVISOR_RESTART_EXIT_CODE,
+        )
+        execv_mock.assert_not_called()
+
+    def test_nonzero_restart_code_is_preserved(self) -> None:
+        with mock.patch.object(updater.os, "_exit") as exit_mock:
+            updater.restart_script(99)
+
+        exit_mock.assert_called_once_with(99)
 
 
 if __name__ == "__main__":

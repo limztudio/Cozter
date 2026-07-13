@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 def _load_main_module():
@@ -64,6 +65,37 @@ class _StubBot:
 
     def stuck_turn_diagnostics(self) -> str:
         return self._diag
+
+
+class VenvBootstrapTests(unittest.TestCase):
+    def test_windows_bootstrap_waits_for_venv_child(self) -> None:
+        main = _load_main_module()
+        with (
+            mock.patch.object(main, "_running_in_venv", return_value=False),
+            mock.patch.dict(
+                main.os.environ, {main._VENV_REEXEC_ENV: ""}, clear=False,
+            ),
+            mock.patch.object(main.os.path, "exists", return_value=True),
+            mock.patch.object(main.os, "name", "nt"),
+            mock.patch.object(
+                main.subprocess, "call", return_value=23,
+            ) as call_mock,
+            mock.patch.object(
+                main.os, "_exit", side_effect=SystemExit,
+            ) as exit_mock,
+            mock.patch.object(main.os, "execve") as execve_mock,
+        ):
+            python = main._venv_python()
+            with self.assertRaises(SystemExit):
+                main._ensure_venv_and_reexec()
+
+        call_mock.assert_called_once()
+        args, kwargs = call_mock.call_args
+        self.assertEqual(args[0], [python, "-m", "Cozter", *main.sys.argv[1:]])
+        self.assertEqual(kwargs["cwd"], main._pkg_parent)
+        self.assertEqual(kwargs["env"][main._VENV_REEXEC_ENV], "1")
+        exit_mock.assert_called_once_with(23)
+        execve_mock.assert_not_called()
 
 
 class DumpRuntimeDiagnosticsTests(unittest.TestCase):

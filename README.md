@@ -74,6 +74,19 @@ python -m Cozter
 On startup, Cozter re-execs through a project-local `.venv` when needed
 and installs `requirements.txt` before importing the bot runtime.
 
+### Windows Task Scheduler
+
+For a long-running Windows deployment, use `run_cozter.ps1` as the task
+action rather than a global Python executable. For a checkout at
+`D:\Cozter`, set:
+
+- **Program/script:** `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+- **Arguments:** `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "D:\Cozter\run_cozter.ps1"`
+- **Start in:** `D:\`
+
+The script runs the project venv directly and restarts Cozter after updates
+or failures, so Task Scheduler keeps a single supervised service process.
+
 CLI mode intentionally skips daemon configuration: it does not read or
 create `.config/config.json`, and it uses the stable local platform key
 `cli:local` for workspace/session state. Daemon mode (`python -m Cozter`

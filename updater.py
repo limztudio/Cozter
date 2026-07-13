@@ -15,6 +15,11 @@ _STARTUP_COMMIT: str | None = None
 
 _GIT_TIMEOUT = 30  # seconds — prevents hung network calls from blocking forever
 
+# A Windows supervisor (such as run_cozter.ps1) treats this as a normal
+# self-update restart.  It is non-zero so Task Scheduler recovery can also
+# restart a directly launched task if configured to do so.
+WINDOWS_SUPERVISOR_RESTART_EXIT_CODE = 75
+
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     """Run a git command with a timeout, returning the CompletedProcess."""
@@ -56,13 +61,13 @@ def _working_tree_dirty() -> bool:
 
 
 def _local_ahead_of_upstream() -> bool:
-    """True if HEAD has commits the upstream branch doesn't.
+    """True when automatic pulling is unsafe for the current checkout.
 
     A checkout with unpushed local commits is being developed on, not
     just deployed - auto-pulling it is at best a no-op and at worst fights
-    the developer, so skip the pull. Returns False when no upstream is
-    configured (nothing to compare) and True on any parse failure so we
-    err on the side of not mutating.
+    the developer, so skip the pull. A branch without a tracking upstream
+    is also not a deploy target, so skip it instead of issuing a bare
+    ``git pull`` that fails on every update interval.
     """
     try:
         upstream_result = _git(
@@ -71,14 +76,13 @@ def _local_ahead_of_upstream() -> bool:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return True
     # A non-zero rev-parse normally means this branch has no configured
-    # upstream. There is nothing to compare in that case, so preserve the
-    # existing no-upstream behavior and let ``git pull`` report its own
-    # actionable error if one is attempted.
+    # upstream. Do not issue a bare ``git pull`` in that state: it cannot
+    # choose a branch and only produces repeated error logs.
     if upstream_result.returncode != 0:
-        return False
+        return True
     upstream = upstream_result.stdout.strip()
     if not upstream:
-        return False
+        return True
     try:
         count_result = _git(
             "rev-list", "--count", f"{upstream}..HEAD",
@@ -137,8 +141,8 @@ def fetch_and_pull() -> bool:
             )
         elif _local_ahead_of_upstream():
             logger.debug(
-                "Skipping auto-pull: local branch is ahead of upstream"
-                " (development checkout)",
+                "Skipping auto-pull: local branch is ahead of or lacks a "
+                "tracking upstream (development checkout)",
             )
         else:
             pull = _git("pull", "--ff-only")
@@ -182,6 +186,12 @@ def restart_script(exit_code: int = 0) -> None:
     """
     logger.info("Restarting (exit code %d)...", exit_code)
     if exit_code == 0:
+        if os.name == "nt":
+            # Windows Task Scheduler should supervise the next process.
+            # Avoid os.execv(), whose Windows process handoff is unreliable
+            # in this runtime, and let the supervisor relaunch Cozter.
+            os._exit(WINDOWS_SUPERVISOR_RESTART_EXIT_CODE)
+            return
         parent_dir = os.path.dirname(MODULE_ROOT)
         os.chdir(parent_dir)
         with contextlib.suppress(Exception):

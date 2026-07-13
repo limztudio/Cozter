@@ -56,7 +56,14 @@ def _ensure_venv_and_reexec() -> None:
         subprocess.check_call([sys.executable, "-m", "venv", venv_dir])
 
     env = {**os.environ, _VENV_REEXEC_ENV: "1"}
-    os.execve(python, [python, "-m", "Cozter", *sys.argv[1:]], env)
+    args = [python, "-m", "Cozter", *sys.argv[1:]]
+    if os.name == "nt":
+        # Python 3.13's Windows os.execve() path can crash in the CRT while
+        # copying the environment.  Keep the launcher alive while its venv
+        # child runs instead, so a supervisor can observe its exit status.
+        rc = subprocess.call(args, env=env, cwd=_pkg_parent)
+        os._exit(rc)
+    os.execve(python, args, env)
 
 
 _ensure_venv_and_reexec()
