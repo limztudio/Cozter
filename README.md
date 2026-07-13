@@ -441,7 +441,7 @@ The grading rubric the planner is held to:
 |---|---|---|
 | `low` | Straightforward, well-scoped work with clear intent | Add a small validation check, or extend an existing function with clearly defined behavior |
 | `mid` | Some reasoning required, but the problem stays bounded | Write unit tests for an existing method with known inputs and outputs |
-| `high` | Ambiguity, complex logic, or deeper system understanding | Refactor a system with unclear dependencies, or debug a non-obvious issue |
+| `high` | Only when the task involves ambiguity, complex logic, or deeper system understanding | Refactor a system with unclear dependencies, or debug a non-obvious issue |
 
 Each tier carries its own agent and model, so tiers can straddle
 backends — a local `llama` for the easy parts, `claude_code` on `opus` for

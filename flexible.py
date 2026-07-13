@@ -32,7 +32,9 @@ FALLBACK_TIER = "high"
 TIER_DESCRIPTIONS = {
     "low": "Straightforward, well-scoped work with clear intent",
     "mid": "Some reasoning needed, but the problem stays bounded",
-    "high": "Ambiguity, complex logic, or deeper system understanding",
+    "high": (
+        "Only for ambiguity, complex logic, or deeper system understanding"
+    ),
 }
 
 # Bounds the fan-out: each sub-task is a full agent turn, so an
@@ -50,8 +52,8 @@ _RUBRIC = (
     "mid  - some reasoning is required, but the problem stays bounded.\n"
     "       Example: write unit tests for an existing method with known\n"
     "       inputs and outputs.\n"
-    "high - the task involves ambiguity, complex logic, or deeper system\n"
-    "       understanding.\n"
+    "high - ONLY when the task involves ambiguity, complex logic, or\n"
+    "       deeper system understanding.\n"
     "       Example: refactor a system with unclear dependencies, or debug\n"
     "       a non-obvious issue."
 )
