@@ -2046,7 +2046,7 @@ class BotPlatform(ABC):
         self._inject_queues[uid] = inject_q
 
         thinking_handle = await self.send_text(
-            chat_id, "Thinking...", rich=True,
+            chat_id, "Thinking...",
         )
 
         status_lines: list[str] = []
@@ -2081,7 +2081,6 @@ class BotPlatform(ABC):
                 await self.edit_text(
                     thinking_handle,
                     self._compose_thinking_display(status_lines, latest_text),
-                    rich=True,
                 )
 
         try:

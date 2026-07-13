@@ -21,7 +21,8 @@ drop-in plugin system that works across every backend.
     in config
 - **Four chat surfaces**, selected at launch:
   - Telegram (`python -m Cozter`)
-  - Slack (Socket Mode; same launcher, set `slack_bot_token` in config)
+  - Slack (Socket Mode; native Markdown rendering for AI replies; same
+    launcher, set `slack_bot_token` in config)
   - Signal (same launcher, set `signal_group_urls` and the daemon socket)
   - CLI (`python -m Cozter -cli`) — the terminal becomes the chat
 - **Per-workspace state**, scoped to `<workspace>/.cozter/`:
@@ -790,7 +791,7 @@ covers malformed state/config fallbacks, persistent queue restoration,
 schedule parsing, backend model defaults and event parsing,
 subprocess draining and exceptional-path cleanup, prompt construction,
 attachment handling, run-lock cancellation, session picking,
-platform/Signal rich-text formatting, runtime diagnostics, updater behavior,
+platform/Slack/Signal rich-text formatting, runtime diagnostics, updater behavior,
 agent-tool helpers, and built-in discovery/edit/patch safety.
 
 ```bash

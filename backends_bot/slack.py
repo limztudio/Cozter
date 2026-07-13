@@ -5,7 +5,8 @@ Slack's non-interactive flows differ from Telegram in several ways:
   - Events and commands originate from different APIs but both land here.
   - There is no native multi-step "ConversationHandler"; we rely on the
     base class's ``_pending_input`` state for follow-ups.
-  - Rich text uses mrkdwn (`*bold*`, `_italic_`, `` `code` ``).
+  - Rich AI replies use Slack's native Markdown blocks so headings, tables,
+    task lists, links, and syntax-highlighted code render as intended.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import (
     AsyncSocketModeHandler,
 )
+from slack_sdk.errors import SlackApiError
 
 from .. import workspace
 from ..utils import split_text_chunks
@@ -100,6 +102,108 @@ def _mrkdwn_code_block(lines: list[str]) -> list[str]:
 
 
 _SLACK_MAX_CHARS = 39_000  # Slack hard-caps around 40K; stay under.
+_SLACK_MARKDOWN_LIMIT = 12_000  # Cumulative Markdown-block text per payload.
+
+
+def _split_slack_markdown(
+    text: str, limit: int = _SLACK_MARKDOWN_LIMIT,
+) -> list[str]:
+    """Split Markdown for Slack while balancing any fenced code blocks.
+
+    Slack limits all Markdown-block text in one payload to 12,000
+    characters. A long AI reply therefore becomes multiple Slack messages.
+    When a split falls inside a fenced block, close the current block and
+    reopen it (including its language hint) in the next message.
+    """
+    longest_fence = max(
+        (
+            len(line.strip())
+            for line in text.splitlines()
+            if re.match(r"^\s*```", line)
+        ),
+        default=3,
+    )
+    # A continuation may need the opening fence plus a newline, and the
+    # previous message may need a newline plus the closing fence.
+    fence_wrap_reserve = longest_fence + 5
+    if limit <= fence_wrap_reserve:
+        raise ValueError("limit must leave room for a fenced-code boundary")
+    if len(text) <= limit:
+        return [text]
+
+    # Keep raw chunks deliberately below Slack's limit. That leaves enough
+    # room to close/reopen even the longest fence in the response.
+    raw_chunks = split_text_chunks(text, limit - fence_wrap_reserve)
+    chunks: list[str] = []
+    active_fence: str | None = None
+
+    for index, raw_chunk in enumerate(raw_chunks):
+        prefix = f"{active_fence}\n" if active_fence else ""
+        for line in raw_chunk.splitlines():
+            if not re.match(r"^\s*```", line):
+                continue
+            active_fence = line.strip() if active_fence is None else None
+
+        chunk = prefix + raw_chunk
+        if active_fence and index < len(raw_chunks) - 1:
+            if not chunk.endswith("\n"):
+                chunk += "\n"
+            chunk += "```"
+        chunks.append(chunk)
+
+    return chunks
+
+
+def _markdown_block_rejected(error: SlackApiError) -> bool:
+    """Whether Slack rejected the new Markdown block type for this app."""
+    response = getattr(error, "response", None)
+    code = response.get("error") if response is not None else None
+    return code in {"invalid_arguments", "invalid_blocks"}
+
+
+async def _post_rich_markdown(client, chat_id: str, markdown: str) -> dict:
+    """Post one native-Markdown payload, falling back to legacy mrkdwn."""
+    try:
+        return await client.chat_postMessage(
+            channel=chat_id,
+            text=markdown,
+            blocks=[{"type": "markdown", "text": markdown}],
+        )
+    except SlackApiError as error:
+        if not _markdown_block_rejected(error):
+            raise
+        logger.warning(
+            "Slack Markdown blocks unavailable; falling back to mrkdwn: %s",
+            error,
+        )
+        return await client.chat_postMessage(
+            channel=chat_id, text=_md_to_mrkdwn(markdown),
+        )
+
+
+async def _update_rich_markdown(
+    client, handle: MessageHandle, markdown: str,
+) -> None:
+    """Update a short rich message, with legacy mrkdwn fallback."""
+    try:
+        await client.chat_update(
+            channel=handle.chat_id,
+            ts=handle.message_id,
+            text=markdown,
+            blocks=[{"type": "markdown", "text": markdown}],
+        )
+    except SlackApiError as error:
+        if not _markdown_block_rejected(error):
+            raise
+        logger.warning(
+            "Slack Markdown blocks unavailable; falling back to mrkdwn: %s",
+            error,
+        )
+        await client.chat_update(
+            channel=handle.chat_id,
+            ts=handle.message_id,
+            text=_md_to_mrkdwn(markdown),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -153,9 +257,18 @@ class SlackBot(BotPlatform):
             return None
         assert self.app is not None
         client = self.app.client
-        body = _md_to_mrkdwn(text) if rich else text
         last: MessageHandle | None = None
-        for chunk in split_text_chunks(body, _SLACK_MAX_CHARS):
+        if rich:
+            for chunk in _split_slack_markdown(text):
+                if not chunk.strip():
+                    continue
+                resp = await _post_rich_markdown(client, chat_id, chunk)
+                last = MessageHandle(
+                    chat_id=str(chat_id), message_id=str(resp["ts"]),
+                )
+            return last
+
+        for chunk in split_text_chunks(text, _SLACK_MAX_CHARS):
             if not chunk.strip():
                 continue
             resp = await client.chat_postMessage(channel=chat_id, text=chunk)
@@ -168,9 +281,24 @@ class SlackBot(BotPlatform):
         self, handle: MessageHandle, text: str, *, rich: bool = False,
     ) -> None:
         assert self.app is not None
-        body = _md_to_mrkdwn(text) if rich else text
+        if not rich:
+            await self.app.client.chat_update(
+                channel=handle.chat_id, ts=handle.message_id, text=text,
+            )
+            return
+
+        chunks = _split_slack_markdown(text)
+        if len(chunks) == 1:
+            await _update_rich_markdown(self.app.client, handle, chunks[0])
+            return
+
+        # A message handle can only update one Slack message. Rich reply
+        # chunks are posted separately, so preserve the old readable mrkdwn
+        # behavior for an unusually large editable status message.
         await self.app.client.chat_update(
-            channel=handle.chat_id, ts=handle.message_id, text=body,
+            channel=handle.chat_id,
+            ts=handle.message_id,
+            text=_md_to_mrkdwn(text),
         )
 
     async def delete_message(self, handle: MessageHandle) -> None:
