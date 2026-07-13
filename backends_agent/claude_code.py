@@ -33,11 +33,25 @@ logger = logging.getLogger(__name__)
 class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
-    # Aliases resolve to the current default for each tier; ``default`` clears
-    # a pin and lets Claude Code choose the account-tier default. Full IDs pin
-    # a specific version. Mythos remains invitation-only, so omit it from the
-    # default picker. Users on newer CLIs can still add local or gateway IDs
-    # with Claude Code's custom model setting.
+    # Mirrors the model registry embedded in the Claude Code CLI. Aliases
+    # resolve to the current default for each tier; ``default`` clears a pin
+    # and lets Claude Code choose the account-tier default. Full IDs pin a
+    # specific version. Mythos stays out of the picker: it ships only to
+    # Project Glasswing participants. Users can still add gateway or local IDs
+    # through config.extra_models.
+    #
+    # Three rules the CLI enforces, each of which this tuple has gotten wrong
+    # before - check them before adding an entry:
+    #   - A dated snapshot exists only where the API publishes one (Opus 4.5,
+    #     Sonnet 4.5, Haiku 4.5). From Opus/Sonnet 4.6 on, the ID is undated
+    #     and inventing a date suffix 404s.
+    #   - ``[1m]`` is only valid on models whose registry entry sets
+    #     supports_1m_suffix. Sonnet 5, Fable 5, and Mythos 5 are natively 1M,
+    #     so they take no suffix (the CLI strips one if given).
+    #   - Fast mode is a session toggle (``/fast``) on Opus 4.8/4.7, not a
+    #     model ID. The ``claude-opus-4-*-fast`` strings are retired API IDs:
+    #     4.6-fast silently degrades to standard Opus 4.6, and 4.7-fast errors
+    #     once removed.
     available_models = (
         "default",
         "sonnet",
@@ -54,18 +68,14 @@ class ClaudeCodeBackend(Backend):
         "claude-sonnet-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
-        "claude-opus-4-7-fast",
         "claude-opus-4-6",
-        "claude-opus-4-6-fast",
-        "claude-opus-4-6-20251101",
         "claude-opus-4-5",
         "claude-opus-4-5-20251101",
         "claude-sonnet-4-6",
-        "claude-sonnet-4-6-20251114",
         "claude-sonnet-4-5",
         "claude-sonnet-4-5-20250929",
-        "claude-haiku-4-5-20251001",
         "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
         "claude-opus-4-8[1m]",
         "claude-opus-4-7[1m]",
         "claude-opus-4-6[1m]",

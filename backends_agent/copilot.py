@@ -93,10 +93,13 @@ class CopilotBackend(Backend):
     )
     default_model = "auto"
     default_summary_model = "claude-haiku-4.5"
+    # The high tier stays on the Sonnet line rather than reaching for Opus or
+    # Fable: it is meant for genuinely hard work, not for the most expensive
+    # model available. Sonnet 5 supersedes the 4.6 that used to sit here.
     tier_models = {
         "low": "claude-haiku-4.5",
         "mid": "gpt-5.4",
-        "high": "claude-sonnet-4.6",
+        "high": "claude-sonnet-5",
     }
     # No override is represented by Cozter's effort=0 (omit the flag).
     effort_levels = ("low", "medium", "high", "xhigh", "max")

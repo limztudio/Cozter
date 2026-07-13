@@ -215,18 +215,44 @@ class StaticBackendModelTests(unittest.TestCase):
             "sonnet",
             "opusplan[1m]",
             "fable[1m]",
-            "claude-sonnet-5",
             "claude-fable-5",
+            "claude-sonnet-5",
             "claude-opus-4-8",
-            "claude-opus-4-7-fast",
-            "claude-opus-4-6-20251101",
+            "claude-opus-4-8[1m]",
+            "claude-opus-4-7",
+            "claude-opus-4-6",
             "claude-opus-4-5",
-            "claude-sonnet-4-6-20251114",
+            "claude-opus-4-5-20251101",
+            "claude-sonnet-4-6",
             "claude-sonnet-4-5",
+            "claude-haiku-4-5",
             "claude-sonnet-4-5-20250929[1m]",
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)
+
+    def test_claude_code_picker_excludes_ids_the_cli_rejects(self) -> None:
+        """Guard the three ID shapes Claude Code's model registry refuses.
+
+        Every one of these shipped in the picker at some point. The rules
+        they violate are spelled out on ClaudeCodeBackend.available_models.
+        """
+        models = ClaudeCodeBackend.available_models
+        for model in (
+            # No dated snapshot is published from Opus/Sonnet 4.6 on, so a
+            # date suffix here 404s.
+            "claude-opus-4-6-20251101",
+            "claude-sonnet-4-6-20251114",
+            # Fast mode is the /fast session toggle, not a model ID.
+            "claude-opus-4-6-fast",
+            "claude-opus-4-7-fast",
+            "claude-opus-4-8-fast",
+            # Natively 1M, so these carry no [1m] suffix.
+            "claude-sonnet-5[1m]",
+            "claude-fable-5[1m]",
+        ):
+            with self.subTest(model=model):
+                self.assertNotIn(model, models)
 
 
 class CopilotPromptCapTests(unittest.TestCase):
