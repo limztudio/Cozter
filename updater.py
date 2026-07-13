@@ -249,28 +249,30 @@ def restart_script(exit_code: int = 0) -> None:
     units are generated with ``Restart=no``, so exiting would leave the
     bot stopped after it announces an update restart.
 
+    Windows daemon launches always hand restart responsibility to a
+    supervisor. ``run_cozter.ps1`` is the normal supervisor, and the venv
+    bootstrap supplies one for a direct ``python -m Cozter`` launch. This
+    avoids recursively spawning a Python child and retaining every prior
+    Python process as a waiting parent after an update.
+
     CLI mode passes exit_code=99 so the in-process respawn loop in
     ``Cozter.__main__._cli_respawner_loop`` re-launches the bot.
     """
     logger.info("Restarting (exit code %d)...", exit_code)
     if exit_code == 0:
-        parent_dir = os.path.dirname(MODULE_ROOT)
-        if os.name == "nt" and os.environ.get(WINDOWS_SUPERVISOR_ENV) == "1":
-            # Windows Task Scheduler should supervise the next process.
+        if os.name == "nt":
+            if os.environ.get(WINDOWS_SUPERVISOR_ENV) != "1":
+                logger.warning(
+                    "Windows restart requested without %s; exiting for "
+                    "the bootstrap supervisor",
+                    WINDOWS_SUPERVISOR_ENV,
+                )
             # Avoid os.execv(), whose Windows process handoff is unreliable
-            # in this runtime, and let the supervisor relaunch Cozter.
+            # in this runtime. The supervisor relaunches Cozter without
+            # retaining this process as another Python ancestor.
             os._exit(WINDOWS_SUPERVISOR_RESTART_EXIT_CODE)
             return
-        if os.name == "nt":
-            # Preserve restart behavior for direct/manual Windows launches
-            # until they are moved behind run_cozter.ps1.  The parent waits
-            # for the replacement so it remains visible to its supervisor.
-            rc = subprocess.call(
-                [sys.executable, "-m", "Cozter", *sys.argv[1:]],
-                cwd=parent_dir,
-            )
-            os._exit(rc)
-            return
+        parent_dir = os.path.dirname(MODULE_ROOT)
         os.chdir(parent_dir)
         with contextlib.suppress(Exception):
             sys.stdout.flush()
