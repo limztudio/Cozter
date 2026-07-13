@@ -32,6 +32,7 @@ if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
 
 
 _VENV_REEXEC_ENV = "COZTER_VENV_REEXEC"
+_WINDOWS_CHILD_RESTART_DELAY_SEC = 1
 
 
 def _running_in_venv() -> bool:
@@ -59,10 +60,18 @@ def _ensure_venv_and_reexec() -> None:
     args = [python, "-m", "Cozter", *sys.argv[1:]]
     if os.name == "nt":
         # Python 3.13's Windows os.execve() path can crash in the CRT while
-        # copying the environment.  Keep the launcher alive while its venv
-        # child runs instead, so a supervisor can observe its exit status.
-        rc = subprocess.call(args, env=env, cwd=_pkg_parent)
-        os._exit(rc)
+        # copying the environment.  Keep this launcher as a *single*
+        # supervisor for the venv child instead.  Direct Task Scheduler
+        # launches otherwise have no supervisor: each self-update would
+        # spawn a child and leave its Python parent waiting forever.
+        from . import updater
+
+        env[updater.WINDOWS_SUPERVISOR_ENV] = "1"
+        while True:
+            rc = subprocess.call(args, env=env, cwd=_pkg_parent)
+            if rc != updater.WINDOWS_SUPERVISOR_RESTART_EXIT_CODE:
+                os._exit(rc)
+            time.sleep(_WINDOWS_CHILD_RESTART_DELAY_SEC)
     os.execve(python, args, env)
 
 

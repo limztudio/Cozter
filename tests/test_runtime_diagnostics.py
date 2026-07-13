@@ -68,7 +68,7 @@ class _StubBot:
 
 
 class VenvBootstrapTests(unittest.TestCase):
-    def test_windows_bootstrap_waits_for_venv_child(self) -> None:
+    def test_windows_bootstrap_supervises_venv_restarts(self) -> None:
         main = _load_main_module()
         with (
             mock.patch.object(main, "_running_in_venv", return_value=False),
@@ -78,8 +78,11 @@ class VenvBootstrapTests(unittest.TestCase):
             mock.patch.object(main.os.path, "exists", return_value=True),
             mock.patch.object(main.os, "name", "nt"),
             mock.patch.object(
-                main.subprocess, "call", return_value=23,
+                main.subprocess, "call", side_effect=[
+                    main.updater.WINDOWS_SUPERVISOR_RESTART_EXIT_CODE, 23,
+                ],
             ) as call_mock,
+            mock.patch.object(main.time, "sleep") as sleep_mock,
             mock.patch.object(
                 main.os, "_exit", side_effect=SystemExit,
             ) as exit_mock,
@@ -89,11 +92,17 @@ class VenvBootstrapTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 main._ensure_venv_and_reexec()
 
-        call_mock.assert_called_once()
+        self.assertEqual(call_mock.call_count, 2)
         args, kwargs = call_mock.call_args
         self.assertEqual(args[0], [python, "-m", "Cozter", *main.sys.argv[1:]])
         self.assertEqual(kwargs["cwd"], main._pkg_parent)
         self.assertEqual(kwargs["env"][main._VENV_REEXEC_ENV], "1")
+        self.assertEqual(
+            kwargs["env"][main.updater.WINDOWS_SUPERVISOR_ENV], "1",
+        )
+        sleep_mock.assert_called_once_with(
+            main._WINDOWS_CHILD_RESTART_DELAY_SEC,
+        )
         exit_mock.assert_called_once_with(23)
         execve_mock.assert_not_called()
 
