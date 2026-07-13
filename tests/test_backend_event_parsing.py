@@ -70,6 +70,33 @@ class CodexParseTests(unittest.TestCase):
             any(e.kind == "text" and "boom" in e.content for e in r.events)
         )
 
+    def test_stream_error_sets_error(self) -> None:
+        """Codex can emit this and still exit 0, so nothing else catches it."""
+        r = _run(self.backend, [
+            {"type": "error", "message": "usage limit reached"},
+        ])
+        self.assertEqual(r.error, "usage limit reached")
+        self.assertIn("usage limit reached", r.text)
+
+    def test_a_recovered_stream_error_still_yields_the_answer(self) -> None:
+        """A retried error must not bury the reply the model went on to give."""
+        r = _run(self.backend, [
+            {"type": "error", "message": "transient hiccup"},
+            {"type": "item.completed",
+             "item": {"type": "agent_message", "text": "hello world"}},
+        ])
+        self.assertEqual(r.text, "hello world")
+
+    def test_a_late_stream_error_never_overwrites_the_answer(self) -> None:
+        """An error trailing the reply is recorded, not shown in its place."""
+        r = _run(self.backend, [
+            {"type": "item.completed",
+             "item": {"type": "agent_message", "text": "hello world"}},
+            {"type": "error", "message": "disconnected while closing"},
+        ])
+        self.assertEqual(r.text, "hello world")
+        self.assertEqual(r.error, "disconnected while closing")
+
     def test_turn_completed_captures_usage(self) -> None:
         r = _run(self.backend, [
             {"type": "turn.completed", "usage": {

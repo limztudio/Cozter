@@ -838,7 +838,27 @@ async def _run_flexible(
         report, worker_awaiting = extract_await(sub_result.text)
         report, markers = _split_attach_markers(report)
         attach_markers.extend(markers)
-        reports.append(report.strip())
+        report = report.strip()
+
+        # A worker that says nothing at all has failed, whatever its exit
+        # code claimed. Saying nothing is a legitimate outcome for a direct
+        # turn, but never for a sub-task: an empty report tells the merge
+        # step nothing, and if the merge is broken too - it usually is, since
+        # a misconfigured agent tends to break every step at once - it leaves
+        # the user with a blank answer and no idea which tier went quiet.
+        # Name the tier instead, so it reaches the user either way.
+        if not report:
+            report = (
+                f"(no output: {tier_backend_name}/{tier_model} ended the"
+                " sub-task without a reply"
+                + (f" - {sub_result.error}" if sub_result.error else "")
+                + ")"
+            )
+        elif sub_result.error:
+            # Half an answer and a failure. The merge step has to be told,
+            # or it presents the half it got as the finished job.
+            report += f"\n\n(the agent then failed: {sub_result.error})"
+        reports.append(report)
 
         # Workers run under the autonomy policy, so one that asks anyway is
         # genuinely stuck. Remember that: the merge step below has to end

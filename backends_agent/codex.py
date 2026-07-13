@@ -137,8 +137,20 @@ class CodexBackend(Backend):
             set_error_result(result, err)
 
         elif etype == "error":
+            # A stream-level failure (expired auth, usage limit, dropped
+            # connection) does not always come with a turn.failed, and codex
+            # can still exit 0 after one. Recording it is the only thing
+            # standing between that and a turn that silently says nothing -
+            # which the flexible merge step would read as an empty worker
+            # report.
             msg = event.get("message", "Unknown error")
             logger.warning("Codex stream error: %s", msg)
+            if result.text:
+                # The model already answered. Keep the error, but never let
+                # a late one overwrite the reply the user is owed.
+                result.error = msg
+            else:
+                set_error_result(result, msg)
 
     def extract_agent_text(self, event: dict) -> str | None:
         if event.get("type") != "item.completed":

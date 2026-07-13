@@ -407,6 +407,10 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         ``AgentResult.text`` starts empty rather than holding the
         "(no response)" placeholder, precisely so the merge step cannot
         mistake it for a report and relay it to the user as the reply.
+
+        A misconfigured agent breaks every step at once, so the merge is
+        stubbed out too: the reply the user is left with has to name the
+        tier that went quiet, or there is nothing to act on.
         """
         async def silent_worker(
             backend, ws_path, prompt, model, approval, **kwargs,
@@ -424,6 +428,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
+            low_agent, low_model = workspace.get_flexible_run_config(ws)["low"]
             with mock.patch.object(
                 agent, "run_internal_backend", silent_merge,
             ), mock.patch.object(agent, "_drive_backend", silent_worker):
@@ -436,8 +441,38 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertNotIn("(no response)", result.text)
-        # The reply names the knob the user has to go fix.
-        self.assertIn("/agent_flexible_low", result.text)
+        # The reply names the agent+model that went quiet, so the user knows
+        # which tier to go fix rather than staring at a blank answer.
+        self.assertIn(f"{low_agent}/{low_model}", result.text)
+
+    async def test_a_failing_worker_reports_why_it_went_quiet(self) -> None:
+        """A backend error must reach the user, not just the journal."""
+        async def failing_worker(
+            backend, ws_path, prompt, model, approval, **kwargs,
+        ):
+            result = AgentResult()
+            result.error = "429 usage limit reached"
+            return result, False
+
+        async def silent_merge(backend, ws_path, prompt, model, **kwargs):
+            if kwargs["label"] == "Flexible planner":
+                return self.plan_output
+            return ""  # the same broken agent runs the merge
+
+        with tempfile.TemporaryDirectory() as ws:
+            workspace.ensure_cozter_dir(ws)
+            with mock.patch.object(
+                agent, "run_internal_backend", silent_merge,
+            ), mock.patch.object(agent, "_drive_backend", failing_worker):
+                result, _ = await agent._run_flexible(
+                    "context", "user message", ws,
+                    approval="auto", effort=0, collaborative=False,
+                    summary_backend_name="codex",
+                    summary_model="gpt-5.6-luna",
+                    on_event=None, inject_queue=None, injected=[],
+                )
+
+        self.assertIn("429 usage limit reached", result.text)
 
 
 if __name__ == "__main__":
