@@ -18,7 +18,8 @@ from . import (
 )
 from . import workspace as workspace_mod
 from .backends_agent.base import (
-    AgentResult, ChatEvent, append_text_result, set_error_result,
+    NO_RESPONSE_TEXT, AgentResult, ChatEvent, append_text_result,
+    set_error_result,
 )
 from .utils import (
     await_cancelled,
@@ -672,7 +673,11 @@ async def _drive_backend(
     if restarting:
         return result, True
 
-    if proc.returncode != 0 and not result.events:
+    # Keyed on the *text*, not on the events: a backend that streamed tool
+    # calls and then died still owes the caller an answer, and leaving it
+    # textless would hand the flexible merge step an empty worker report
+    # with no hint of what went wrong.
+    if proc.returncode != 0 and not result.text:
         msg = f"{backend.name} exited with code {proc.returncode}"
         if stderr:
             msg += f"\n{stderr}"
@@ -873,6 +878,21 @@ async def _run_flexible(
     # the run.
     final, merge_awaiting = extract_await(final)
     final = final.strip()
+
+    # Every worker came back empty *and* the merge model had nothing to
+    # add. Report that as the failure it is - a bare placeholder here
+    # reads as an answer and tells the user nothing about which tier
+    # broke.
+    if not final:
+        logger.warning(
+            "Flexible produced no text: %d worker report(s) all empty",
+            len(reports),
+        )
+        final = (
+            "The workers produced no output for this turn. Check the agent"
+            " and model bound to each difficulty tier with"
+            " /agent_flexible_low, _mid, and _high."
+        )
 
     for marker in attach_markers:
         if marker not in final:
@@ -1154,7 +1174,7 @@ async def _run_turn(
         not any(e.kind == "text" for e in result.events)
         and not any(e.kind == "attachment" for e in result.events)
     ):
-        append_text_result(result, result.text)
+        append_text_result(result, result.text or NO_RESPONSE_TEXT)
 
     return result
 

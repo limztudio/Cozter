@@ -49,6 +49,16 @@ class ChatEvent:
     content: str
 
 
+# Shown when a turn ends with nothing to say. It is a *presentation*
+# fallback applied at the point of reply, never a value stored on a
+# result: ``AgentResult.text`` starts empty so "the backend produced no
+# text" stays distinguishable from "the backend said '(no response)'".
+# The flexible agent feeds each worker's text to its merge step as that
+# worker's report, so a placeholder parked in ``text`` would be read back
+# as content and relayed to the user verbatim.
+NO_RESPONSE_TEXT = "(no response)"
+
+
 @dataclass
 class AgentResult:
     """Collected result from a single agent run.
@@ -59,7 +69,7 @@ class AgentResult:
     set it consistently rather than only writing to ``text``.
     """
     events: list[ChatEvent] = field(default_factory=list)
-    text: str = "(no response)"
+    text: str = ""
     error: str | None = None
     # Token/cost usage for the turn, when the backend reports it (codex's
     # turn.completed, claude_code's result). Backend-shaped dict; None

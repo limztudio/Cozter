@@ -321,7 +321,12 @@ def build_merge_prompt(
 
 
 def merge_fallback(plan: Plan, results: list[str]) -> str:
-    """Concatenate worker reports when the merge model is unavailable."""
+    """Concatenate worker reports when the merge model is unavailable.
+
+    Returns an empty string when no worker had anything to say; the
+    caller turns that into a user-facing failure. Minting a placeholder
+    here would let "nobody answered" reach the user dressed as an answer.
+    """
     if len(results) == 1:
         return results[0]
     parts: list[str] = []
@@ -329,4 +334,4 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
         if not text:
             continue
         parts.append(f"**{i + 1}. {task.instruction}**\n\n{text}")
-    return "\n\n".join(parts) if parts else "(no response)"
+    return "\n\n".join(parts)

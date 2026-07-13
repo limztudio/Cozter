@@ -399,6 +399,46 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("low report", result.text)
         self.assertIn("high report", result.text)
 
+    async def test_textless_workers_never_reply_with_a_placeholder(
+        self,
+    ) -> None:
+        """A worker that says nothing must not be quoted back as an answer.
+
+        ``AgentResult.text`` starts empty rather than holding the
+        "(no response)" placeholder, precisely so the merge step cannot
+        mistake it for a report and relay it to the user as the reply.
+        """
+        async def silent_worker(
+            backend, ws_path, prompt, model, approval, **kwargs,
+        ):
+            result = AgentResult()
+            # Tool events but no text - the shape a backend leaves behind
+            # when it dies partway through a turn.
+            result.events.append(ChatEvent(kind="tool", content="ran a tool"))
+            return result, False
+
+        async def silent_merge(backend, ws_path, prompt, model, **kwargs):
+            if kwargs["label"] == "Flexible planner":
+                return self.plan_output
+            return ""  # the merge model had nothing to add either
+
+        with tempfile.TemporaryDirectory() as ws:
+            workspace.ensure_cozter_dir(ws)
+            with mock.patch.object(
+                agent, "run_internal_backend", silent_merge,
+            ), mock.patch.object(agent, "_drive_backend", silent_worker):
+                result, _ = await agent._run_flexible(
+                    "context", "user message", ws,
+                    approval="auto", effort=0, collaborative=False,
+                    summary_backend_name="codex",
+                    summary_model="gpt-5.6-luna",
+                    on_event=None, inject_queue=None, injected=[],
+                )
+
+        self.assertNotIn("(no response)", result.text)
+        # The reply names the knob the user has to go fix.
+        self.assertIn("/agent_flexible_low", result.text)
+
 
 if __name__ == "__main__":
     unittest.main()
