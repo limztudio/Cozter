@@ -102,6 +102,47 @@ class SlackFormattingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(chunks[1].startswith("```python\n"))
         self.assertLessEqual(max(map(len, chunks)), _SLACK_MARKDOWN_LIMIT)
 
+    def test_long_markdown_preserves_nonstandard_fence_markers(self) -> None:
+        source = (
+            "````python\n"
+            "```not-a-close\n"
+            + ("print('x')\n" * 100)
+            + "````\n"
+        )
+
+        chunks = _split_slack_markdown(source, limit=250)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= 250 for chunk in chunks))
+        self.assertTrue(all(chunk.count("````") == 2 for chunk in chunks))
+        self.assertTrue(chunks[1].startswith("````python\n"))
+
+    def test_long_markdown_preserves_tilde_fences(self) -> None:
+        source = "~~~python\n" + ("print('x')\n" * 100) + "~~~\n"
+
+        chunks = _split_slack_markdown(source, limit=250)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= 250 for chunk in chunks))
+        self.assertTrue(all(chunk.count("~~~") == 2 for chunk in chunks))
+        self.assertTrue(chunks[1].startswith("~~~python\n"))
+
+    def test_long_unclosed_fence_is_closed_in_final_chunk(self) -> None:
+        source = "```python\n" + ("print('x')\n" * 100)
+
+        chunks = _split_slack_markdown(source, limit=250)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= 250 for chunk in chunks))
+        self.assertTrue(chunks[-1].endswith("```"))
+
+    def test_oversized_fence_opener_still_sends_bounded_chunks(self) -> None:
+        source = "```" + ("python " * 100)
+
+        chunks = _split_slack_markdown(source, limit=100)
+
+        self.assertTrue(all(len(chunk) <= 100 for chunk in chunks))
+
 
 if __name__ == "__main__":
     unittest.main()

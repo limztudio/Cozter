@@ -103,6 +103,23 @@ def _mrkdwn_code_block(lines: list[str]) -> list[str]:
 
 _SLACK_MAX_CHARS = 39_000  # Slack hard-caps around 40K; stay under.
 _SLACK_MARKDOWN_LIMIT = 12_000  # Cumulative Markdown-block text per payload.
+_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,}).*$")
+
+
+def _fence_open(line: str) -> tuple[str, str] | None:
+    """Return the original opener and marker for a fenced code block."""
+    match = _FENCE_OPEN_RE.match(line)
+    if match is None:
+        return None
+    return line.strip(), match.group(1)
+
+
+def _fence_closes(line: str, marker: str) -> bool:
+    """Whether *line* is a valid close for the active fenced block."""
+    character = re.escape(marker[0])
+    return re.fullmatch(
+        rf"\s*{character}{{{len(marker)},}}\s*", line,
+    ) is not None
 
 
 def _split_slack_markdown(
@@ -115,40 +132,46 @@ def _split_slack_markdown(
     When a split falls inside a fenced block, close the current block and
     reopen it (including its language hint) in the next message.
     """
-    longest_fence = max(
-        (
-            len(line.strip())
-            for line in text.splitlines()
-            if re.match(r"^\s*```", line)
-        ),
-        default=3,
-    )
-    # A continuation may need the opening fence plus a newline, and the
-    # previous message may need a newline plus the closing fence.
-    fence_wrap_reserve = longest_fence + 5
-    if limit <= fence_wrap_reserve:
-        raise ValueError("limit must leave room for a fenced-code boundary")
     if len(text) <= limit:
         return [text]
+
+    fence_wrap_reserve = 0
+    for line in text.splitlines():
+        fence = _fence_open(line)
+        if fence is None:
+            continue
+        opener, marker = fence
+        # A continuation needs the full opener plus a newline, while the
+        # preceding chunk needs a newline plus its closing marker.
+        fence_wrap_reserve = max(
+            fence_wrap_reserve, len(opener) + len(marker) + 2,
+        )
+    if limit <= fence_wrap_reserve:
+        # A single fence line is longer than a Slack Markdown block. We
+        # cannot preserve that malformed/exceptional fence, but still send
+        # the reply as bounded chunks rather than dropping it with an error.
+        return split_text_chunks(text, limit)
 
     # Keep raw chunks deliberately below Slack's limit. That leaves enough
     # room to close/reopen even the longest fence in the response.
     raw_chunks = split_text_chunks(text, limit - fence_wrap_reserve)
     chunks: list[str] = []
-    active_fence: str | None = None
+    active_fence: tuple[str, str] | None = None
 
-    for index, raw_chunk in enumerate(raw_chunks):
-        prefix = f"{active_fence}\n" if active_fence else ""
+    for raw_chunk in raw_chunks:
+        prefix = f"{active_fence[0]}\n" if active_fence else ""
         for line in raw_chunk.splitlines():
-            if not re.match(r"^\s*```", line):
+            if active_fence is not None:
+                if _fence_closes(line, active_fence[1]):
+                    active_fence = None
                 continue
-            active_fence = line.strip() if active_fence is None else None
+            active_fence = _fence_open(line)
 
         chunk = prefix + raw_chunk
-        if active_fence and index < len(raw_chunks) - 1:
+        if active_fence:
             if not chunk.endswith("\n"):
                 chunk += "\n"
-            chunk += "```"
+            chunk += active_fence[1]
         chunks.append(chunk)
 
     return chunks
