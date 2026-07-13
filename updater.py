@@ -19,6 +19,7 @@ _GIT_TIMEOUT = 30  # seconds — prevents hung network calls from blocking forev
 # self-update restart.  It is non-zero so Task Scheduler recovery can also
 # restart a directly launched task if configured to do so.
 WINDOWS_SUPERVISOR_RESTART_EXIT_CODE = 75
+WINDOWS_SUPERVISOR_ENV = "COZTER_WINDOWS_SUPERVISED"
 
 
 def _git(*args: str) -> subprocess.CompletedProcess:
@@ -186,13 +187,23 @@ def restart_script(exit_code: int = 0) -> None:
     """
     logger.info("Restarting (exit code %d)...", exit_code)
     if exit_code == 0:
-        if os.name == "nt":
+        parent_dir = os.path.dirname(MODULE_ROOT)
+        if os.name == "nt" and os.environ.get(WINDOWS_SUPERVISOR_ENV) == "1":
             # Windows Task Scheduler should supervise the next process.
             # Avoid os.execv(), whose Windows process handoff is unreliable
             # in this runtime, and let the supervisor relaunch Cozter.
             os._exit(WINDOWS_SUPERVISOR_RESTART_EXIT_CODE)
             return
-        parent_dir = os.path.dirname(MODULE_ROOT)
+        if os.name == "nt":
+            # Preserve restart behavior for direct/manual Windows launches
+            # until they are moved behind run_cozter.ps1.  The parent waits
+            # for the replacement so it remains visible to its supervisor.
+            rc = subprocess.call(
+                [sys.executable, "-m", "Cozter", *sys.argv[1:]],
+                cwd=parent_dir,
+            )
+            os._exit(rc)
+            return
         os.chdir(parent_dir)
         with contextlib.suppress(Exception):
             sys.stdout.flush()

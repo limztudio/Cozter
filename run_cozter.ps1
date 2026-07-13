@@ -15,6 +15,7 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 }
 
 Set-Location -LiteralPath $packageParent
+$env:COZTER_WINDOWS_SUPERVISED = "1"
 while ($true) {
     & $python -m Cozter
     $exitCode = $LASTEXITCODE

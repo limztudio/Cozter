@@ -140,6 +140,10 @@ class RestartScriptTests(unittest.TestCase):
     def test_windows_update_exits_for_the_supervisor(self) -> None:
         with (
             mock.patch.object(updater.os, "name", "nt"),
+            mock.patch.dict(
+                updater.os.environ,
+                {updater.WINDOWS_SUPERVISOR_ENV: "1"},
+            ),
             mock.patch.object(updater.os, "_exit") as exit_mock,
             mock.patch.object(updater.os, "execv") as execv_mock,
         ):
@@ -148,6 +152,34 @@ class RestartScriptTests(unittest.TestCase):
         exit_mock.assert_called_once_with(
             updater.WINDOWS_SUPERVISOR_RESTART_EXIT_CODE,
         )
+        execv_mock.assert_not_called()
+
+    def test_unsupervised_windows_update_waits_for_replacement(self) -> None:
+        with (
+            mock.patch.object(updater.os, "name", "nt"),
+            mock.patch.dict(
+                updater.os.environ,
+                {updater.WINDOWS_SUPERVISOR_ENV: ""},
+            ),
+            mock.patch.object(updater.os, "chdir") as chdir_mock,
+            mock.patch.object(
+                updater.subprocess, "call", return_value=23,
+            ) as call_mock,
+            mock.patch.object(
+                updater.os, "_exit", side_effect=SystemExit,
+            ) as exit_mock,
+            mock.patch.object(updater.os, "execv") as execv_mock,
+        ):
+            with self.assertRaises(SystemExit):
+                updater.restart_script()
+
+        parent_dir = updater.os.path.dirname(updater.MODULE_ROOT)
+        call_mock.assert_called_once_with(
+            [updater.sys.executable, "-m", "Cozter", *updater.sys.argv[1:]],
+            cwd=parent_dir,
+        )
+        exit_mock.assert_called_once_with(23)
+        chdir_mock.assert_not_called()
         execv_mock.assert_not_called()
 
     def test_nonzero_restart_code_is_preserved(self) -> None:
