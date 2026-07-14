@@ -907,7 +907,9 @@ class BotPlatform(ABC):
             return
         current = workspace.get_flexible_model(ws, tier)
         backend_name = workspace.get_flexible_backend_name(ws, tier)
-        options = workspace.get_available_flexible_models(ws, tier)
+        options = await asyncio.to_thread(
+            workspace.get_available_flexible_models, ws, tier,
+        )
         lines = [
             f"Flexible {tier} tier —"
             f" {workspace.FLEXIBLE_TIER_DESCRIPTIONS[tier]}",
@@ -929,9 +931,10 @@ class BotPlatform(ABC):
         if ws is None:
             return
         text = ctx.text.strip()
-        model = self._pick_option(
-            text, workspace.get_available_flexible_models(ws, tier),
+        options = await asyncio.to_thread(
+            workspace.get_available_flexible_models, ws, tier,
         )
+        model = self._pick_option(text, options)
         if model is None:
             await ctx.reply_text(
                 f"Unknown model: {text}\nTry again (or /cancel):"

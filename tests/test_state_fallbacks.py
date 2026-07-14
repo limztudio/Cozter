@@ -7,6 +7,8 @@ import tempfile
 import unittest
 import shutil
 from datetime import datetime
+from types import SimpleNamespace
+from unittest import mock
 
 from Cozter import colony, config, schedules, session, workspace
 from Cozter.backends_bot.base import BotContext, BotPlatform
@@ -343,21 +345,27 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             workspace.set_backend_name(tmp, "codex")
 
             def _fake_extras(name: str) -> list[str]:
-                # "gpt-5.6-sol" is already built-in; the private id is new.
+                # "base-model" is already supplied by the backend; the
+                # private id is new.
                 if name == "codex":
-                    return ["private-codex-model", "gpt-5.6-sol"]
+                    return ["private-codex-model", "base-model"]
                 return []
 
-            orig = config.get_extra_models
-            config.get_extra_models = _fake_extras
-            try:
+            with (
+                mock.patch.object(
+                    workspace.backends_agent,
+                    "get_backend",
+                    return_value=SimpleNamespace(
+                        available_models=("base-model",),
+                    ),
+                ),
+                mock.patch.object(config, "get_extra_models", _fake_extras),
+            ):
                 models = workspace.get_available_models(tmp)
-            finally:
-                config.get_extra_models = orig
 
-            self.assertEqual(models[0], "gpt-5.6-sol")  # built-ins first
+            self.assertEqual(models[0], "base-model")  # backend first
             self.assertIn("private-codex-model", models)  # extra appended
-            self.assertEqual(models.count("gpt-5.6-sol"), 1)  # no duplicate
+            self.assertEqual(models.count("base-model"), 1)  # no duplicate
 
 
 class ColonyStateFallbackTests(unittest.TestCase):

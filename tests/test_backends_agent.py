@@ -2,8 +2,10 @@ import json
 import shutil
 import subprocess
 import unittest
+from unittest import mock
 
 from Cozter import config
+from Cozter.backends_agent import codex as codex_mod
 from Cozter.backends_agent import copilot as copilot_mod
 from Cozter.backends_agent.base import Backend
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
@@ -26,24 +28,20 @@ class _DummyBackend(Backend):
         return None
 
 
-class StaticBackendModelTests(unittest.TestCase):
-    def test_static_backend_defaults_are_selectable(self) -> None:
+class BackendModelTests(unittest.TestCase):
+    def test_backend_catalogs_are_nonempty_and_deduped(self) -> None:
         for backend_cls in (
             CodexBackend,
             ClaudeCodeBackend,
             CopilotBackend,
         ):
             with self.subTest(backend=backend_cls.name):
-                # Instantiate: CopilotBackend exposes available_models as an
-                # instance property (it probes the installed CLI), while the
-                # others keep it as a plain class attribute.
                 models = backend_cls().available_models
+                self.assertTrue(models)
                 self.assertEqual(len(models), len(set(models)))
-                self.assertIn(backend_cls.default_model, models)
-                self.assertIn(backend_cls.default_summary_model, models)
 
-    def test_codex_picker_includes_current_codex_models(self) -> None:
-        models = CodexBackend.available_models
+    def test_codex_fallback_models_are_current_and_selectable(self) -> None:
+        models = codex_mod._FALLBACK_MODELS
         self.assertEqual(models, (
             "gpt-5.6-sol",
             "gpt-5.6-terra",
@@ -53,11 +51,19 @@ class StaticBackendModelTests(unittest.TestCase):
             "gpt-5.4-mini",
             "gpt-5.3-codex-spark",
         ))
+        self.assertIn(CodexBackend.default_model, models)
+        self.assertIn(CodexBackend.default_summary_model, models)
+        for model in CodexBackend.tier_models.values():
+            self.assertIn(model, models)
 
     def test_codex_effort_uses_levels_supported_by_selected_picker_model(
         self,
     ) -> None:
         backend = CodexBackend()
+        backend._cached_model_catalog = (
+            codex_mod._FALLBACK_MODELS,
+            codex_mod._FALLBACK_MODEL_EFFORT_LEVELS,
+        )
         self.assertEqual(
             backend.effort_levels,
             ("low", "medium", "high", "xhigh", "max", "ultra"),
@@ -78,6 +84,144 @@ class StaticBackendModelTests(unittest.TestCase):
             ("low", "medium", "high", "xhigh"),
         )
 
+    def test_codex_catalog_parser_uses_only_visible_models(self) -> None:
+        payload = {
+            "models": [
+                {
+                    "slug": "company-fast",
+                    "visibility": "list",
+                    "supported_reasoning_levels": [
+                        {"effort": "low"},
+                        {"effort": "high"},
+                        {"effort": "low"},
+                        {"effort": 123},
+                    ],
+                },
+                {"slug": "hidden-model", "visibility": "hidden"},
+                {
+                    "slug": "company-fast", "visibility": "list",
+                },
+                {
+                    "slug": "company-fixed",
+                    "visibility": "list",
+                    "supported_reasoning_levels": [],
+                },
+                {"slug": "", "visibility": "list"},
+            ],
+        }
+
+        models, efforts = codex_mod._parse_debug_models_catalog(
+            json.dumps(payload).encode("utf-8"),
+        )
+
+        self.assertEqual(models, ("company-fast", "company-fixed"))
+        self.assertEqual(efforts, {
+            "company-fast": ("low", "high"),
+            "company-fixed": (),
+        })
+
+    def test_codex_catalog_parser_rejects_invalid_output(self) -> None:
+        self.assertEqual(
+            codex_mod._parse_debug_models_catalog(b"\xff\xfe\x00"),
+            ((), {}),
+        )
+
+    def test_codex_discovery_caches_company_catalog(self) -> None:
+        payload = json.dumps({
+            "models": [{
+                "slug": "company-model",
+                "visibility": "list",
+                "supported_reasoning_levels": [{"effort": "medium"}],
+            }],
+        }).encode("utf-8")
+        completed = subprocess.CompletedProcess(
+            ["codex", "debug", "models"], 0, stdout=payload, stderr=b"",
+        )
+        with (
+            mock.patch.object(codex_mod.shutil, "which", return_value="codex"),
+            mock.patch.object(
+                codex_mod, "executable_command", return_value=["codex"],
+            ),
+            mock.patch.object(
+                codex_mod.subprocess, "run", return_value=completed,
+            ) as run_mock,
+        ):
+            backend = CodexBackend()
+            self.assertEqual(backend.available_models, ("company-model",))
+            self.assertEqual(backend.available_models, ("company-model",))
+            self.assertEqual(
+                backend.model_effort_levels,
+                {"company-model": ("medium",)},
+            )
+
+        run_mock.assert_called_once_with(
+            ["codex", "debug", "models"],
+            capture_output=True,
+            timeout=codex_mod._MODEL_DISCOVERY_TIMEOUT_SEC,
+        )
+
+    def test_codex_discovery_falls_back_after_failed_probes(self) -> None:
+        failed = subprocess.CompletedProcess(
+            ["codex", "debug", "models"], 1, stdout=b"", stderr=b"bad",
+        )
+        with (
+            mock.patch.object(codex_mod.shutil, "which", return_value="codex"),
+            mock.patch.object(
+                codex_mod, "executable_command", return_value=["codex"],
+            ),
+            mock.patch.object(
+                codex_mod.subprocess, "run", side_effect=[failed, failed],
+            ) as run_mock,
+        ):
+            backend = CodexBackend()
+            self.assertEqual(backend.available_models, codex_mod._FALLBACK_MODELS)
+            self.assertEqual(
+                backend.model_effort_levels,
+                codex_mod._FALLBACK_MODEL_EFFORT_LEVELS,
+            )
+
+        self.assertEqual(run_mock.call_count, 2)
+
+    def test_codex_discovery_recovers_from_stale_reasoning_config(self) -> None:
+        failed = subprocess.CompletedProcess(
+            ["codex", "debug", "models"], 1, stdout=b"", stderr=b"bad",
+        )
+        recovered = subprocess.CompletedProcess(
+            ["codex", "debug", "models"],
+            0,
+            stdout=json.dumps({
+                "models": [{
+                    "slug": "company-model",
+                    "visibility": "list",
+                }],
+            }).encode("utf-8"),
+            stderr=b"",
+        )
+        with (
+            mock.patch.object(codex_mod.shutil, "which", return_value="codex"),
+            mock.patch.object(
+                codex_mod, "executable_command", return_value=["codex"],
+            ),
+            mock.patch.object(
+                codex_mod.subprocess,
+                "run",
+                side_effect=[failed, recovered],
+            ) as run_mock,
+        ):
+            self.assertEqual(
+                CodexBackend().available_models,
+                ("company-model",),
+            )
+
+        self.assertEqual(run_mock.call_count, 2)
+        self.assertEqual(
+            run_mock.call_args_list[1].args[0],
+            [
+                "codex", "-c", 'model_reasoning_effort="high"',
+                "debug", "models",
+            ],
+        )
+
     def test_codex_picker_matches_installed_cli_catalog(self) -> None:
         codex = shutil.which("codex")
         if not codex:
@@ -87,47 +231,26 @@ class StaticBackendModelTests(unittest.TestCase):
             proc = subprocess.run(
                 [codex, "debug", "models"],
                 capture_output=True,
-                text=True,
                 timeout=15,
             )
         except subprocess.TimeoutExpired:
             self.skipTest("codex debug models timed out")
 
         if proc.returncode != 0:
-            self.skipTest(f"codex debug models failed: {proc.stderr.strip()}")
+            self.skipTest(
+                "codex debug models failed: "
+                f"{codex_mod._stderr_preview(proc.stderr)}",
+            )
 
-        try:
-            payload = json.loads(proc.stdout)
-        except json.JSONDecodeError as exc:
-            self.fail(f"codex debug models returned invalid JSON: {exc}")
-
-        catalog = payload.get("models")
-        if not isinstance(catalog, list):
-            self.fail("codex debug models returned no models list")
-
-        visible_models = tuple(
-            model["slug"]
-            for model in catalog
-            if isinstance(model, dict)
-            and model.get("visibility") == "list"
-            and isinstance(model.get("slug"), str)
+        visible_models, catalog_efforts = (
+            codex_mod._parse_debug_models_catalog(proc.stdout)
         )
         if not visible_models:
             self.skipTest("codex debug models returned no visible models")
 
-        self.assertEqual(CodexBackend.available_models, visible_models)
-
-        catalog_efforts = {
-            model["slug"]: tuple(
-                level["effort"]
-                for level in model.get("supported_reasoning_levels", ())
-            )
-            for model in catalog
-            if isinstance(model, dict)
-            and model.get("visibility") == "list"
-            and isinstance(model.get("slug"), str)
-        }
-        self.assertEqual(CodexBackend.model_effort_levels, catalog_efforts)
+        backend = CodexBackend()
+        self.assertEqual(backend.available_models, visible_models)
+        self.assertEqual(backend.model_effort_levels, catalog_efforts)
 
     def test_copilot_fallback_models_are_current_and_deduped(self) -> None:
         """The fallback list is the picker's safety net, so keep it clean.
