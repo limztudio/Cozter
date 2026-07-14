@@ -175,6 +175,34 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
         self.assertFalse(self._pulled(calls))
 
 
+class UpdaterRequirementsTests(unittest.TestCase):
+    def test_updated_requirements_install_has_a_timeout(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with (
+            mock.patch.object(updater.os.path, "exists", return_value=True),
+            mock.patch.object(
+                updater.subprocess, "run", return_value=completed,
+            ) as run,
+        ):
+            updater.install_requirements()
+
+        self.assertEqual(
+            run.call_args.kwargs["timeout"], updater._PIP_INSTALL_TIMEOUT,
+        )
+
+    def test_updated_requirements_timeout_is_reported(self) -> None:
+        with (
+            mock.patch.object(updater.os.path, "exists", return_value=True),
+            mock.patch.object(
+                updater.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired("pip", 1),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "pip install timed out"):
+                updater.install_requirements()
+
+
 class RestartScriptTests(unittest.TestCase):
     def test_windows_update_exits_for_the_supervisor(self) -> None:
         with (

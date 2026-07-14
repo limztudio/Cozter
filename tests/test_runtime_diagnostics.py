@@ -1,10 +1,10 @@
 """Behavioral tests for the runtime-diagnostics plumbing in ``__main__``.
 
-``__main__`` runs ``pip install -r requirements.txt`` at import time via
-``_install_deps()``, which the rest of the suite deliberately avoids by not
-importing it. We neutralize that call before importing so these tests stay
-hermetic and don't hit the network, while still exercising the real
-``dump_runtime_diagnostics`` / ``_enable_faulthandler`` code paths.
+``__main__`` checks whether a fresh virtual environment is missing required
+runtime modules at import time. We neutralize its dependency-repair call
+before importing so these tests stay hermetic and don't hit the network, while
+still exercising the real ``dump_runtime_diagnostics`` / ``_enable_faulthandler``
+code paths.
 """
 
 import asyncio
@@ -68,6 +68,48 @@ class _StubBot:
 
 
 class VenvBootstrapTests(unittest.TestCase):
+    def test_dependency_bootstrap_skips_pip_when_runtime_is_complete(self) -> None:
+        main = _load_main_module()
+        with (
+            mock.patch.object(main, "find_spec", return_value=object()) as find,
+            mock.patch.object(main.subprocess, "check_call") as install,
+        ):
+            main._install_deps()
+
+        self.assertEqual(find.call_count, len(main._REQUIRED_RUNTIME_MODULES))
+        install.assert_not_called()
+
+    def test_dependency_bootstrap_installs_only_when_a_module_is_missing(self) -> None:
+        main = _load_main_module()
+        missing_module = main._REQUIRED_RUNTIME_MODULES[-1]
+
+        def find(module: str):
+            return None if module == missing_module else object()
+
+        with (
+            mock.patch.object(main, "find_spec", side_effect=find),
+            mock.patch.object(main.subprocess, "check_call") as install,
+        ):
+            main._install_deps()
+
+        install.assert_called_once()
+        args, kwargs = install.call_args
+        self.assertEqual(args[0][:4], [main.sys.executable, "-m", "pip", "install"])
+        self.assertEqual(kwargs["timeout"], main._DEPENDENCY_INSTALL_TIMEOUT_SEC)
+
+    def test_dependency_bootstrap_reports_a_bounded_install_timeout(self) -> None:
+        main = _load_main_module()
+        with (
+            mock.patch.object(main, "find_spec", return_value=None),
+            mock.patch.object(
+                main.subprocess,
+                "check_call",
+                side_effect=subprocess.TimeoutExpired("pip", 1),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Timed out installing"):
+                main._install_deps()
+
     def test_windows_bootstrap_supervises_venv_restarts(self) -> None:
         main = _load_main_module()
         with (

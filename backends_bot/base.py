@@ -53,6 +53,10 @@ _TEXT_EXTENSIONS = frozenset({
 })
 _INLINE_SIZE_LIMIT = 50_000
 UPLOADS_DIR = "uploads"
+# Status previews are useful, but they must never hold up the model stream or
+# the final answer when a platform API call is slow or a Socket Mode
+# connection is being refreshed.
+_STATUS_OPERATION_TIMEOUT_SEC = 4.0
 NO_WORKSPACE_TEXT = (
     "No workspace selected (or it was deleted). Use /new or /open."
 )
@@ -238,6 +242,31 @@ class BotPlatform(ABC):
         except Exception:
             return False
         return True
+
+    async def _run_status_operation(
+        self, operation: Awaitable[object], *, action: str,
+    ) -> object | None:
+        """Run noncritical status I/O without delaying a chat reply.
+
+        Thinking previews can be posted, edited, or deleted independently of
+        the answer. A transient platform API stall should therefore be bounded
+        and best-effort rather than backpressure the agent event stream.
+        """
+        try:
+            return await asyncio.wait_for(
+                operation, timeout=_STATUS_OPERATION_TIMEOUT_SEC,
+            )
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            logger.debug(
+                "Timed out %s after %.1fs",
+                action,
+                _STATUS_OPERATION_TIMEOUT_SEC,
+            )
+        except Exception:
+            logger.debug("Failed %s", action, exc_info=True)
+        return None
 
     def _start_queue_drain(self, uid: str) -> None:
         create_background_task(
@@ -2011,8 +2040,8 @@ class BotPlatform(ABC):
 
         Recent tool/file activity plus the latest streamed answer text
         (tail-truncated so the newest content is kept). Rendered into the
-        editable status message during a turn; the final reply is sent
-        separately after the message is deleted.
+        editable status message during a turn. The final reply is sent
+        independently, so a slow status cleanup cannot delay it.
         """
         parts = ["Thinking..."]
         if status_lines:
@@ -2052,16 +2081,35 @@ class BotPlatform(ABC):
         )
         self._inject_queues[uid] = inject_q
 
-        thinking_handle = await self.send_text(
-            chat_id, "Thinking...",
+        thinking_result = await self._run_status_operation(
+            self.send_text(chat_id, "Thinking..."),
+            action="posting the Thinking status",
+        )
+        thinking_handle = (
+            thinking_result
+            if isinstance(thinking_result, MessageHandle) else None
         )
 
         status_lines: list[str] = []
         latest_text = ""
         last_edit = 0.0
+        pending_status: str | None = None
+        status_edit_task: asyncio.Task[object] | None = None
+
+        async def flush_status_edits() -> None:
+            """Coalesce preview updates while prior platform I/O is pending."""
+            nonlocal pending_status
+            while pending_status is not None:
+                display = pending_status
+                pending_status = None
+                await self._run_status_operation(
+                    self.edit_text(thinking_handle, display),
+                    action="updating the Thinking status",
+                )
 
         async def on_event(ev: agent.ChatEvent) -> None:
             nonlocal last_edit, latest_text
+            nonlocal pending_status, status_edit_task
             if ev.kind == "text":
                 if ev.content.strip():
                     latest_text = ev.content
@@ -2077,17 +2125,23 @@ class BotPlatform(ABC):
                 # answer text arrives whole in the final reply, so skip it
                 # here to avoid printing it twice.
                 if ev.kind != "text":
-                    with contextlib.suppress(Exception):
-                        await self.send_status(chat_id, status_lines[-1])
+                    await self._run_status_operation(
+                        self.send_status(chat_id, status_lines[-1]),
+                        action="sending a progress status",
+                    )
                 return
             now = asyncio.get_running_loop().time()
             if now - last_edit < 1.5:
                 return
             last_edit = now
-            with contextlib.suppress(Exception):
-                await self.edit_text(
-                    thinking_handle,
-                    self._compose_thinking_display(status_lines, latest_text),
+            pending_status = self._compose_thinking_display(
+                status_lines, latest_text,
+            )
+            if status_edit_task is None or status_edit_task.done():
+                status_edit_task = create_background_task(
+                    flush_status_edits(),
+                    name=f"{self.platform_id}:status-edit:{uid}",
+                    log=logger,
                 )
 
         try:
@@ -2101,11 +2155,20 @@ class BotPlatform(ABC):
                 session_id=session_id,
             )
         finally:
+            if status_edit_task is not None and not status_edit_task.done():
+                status_edit_task.cancel()
             if thinking_handle is not None:
-                with contextlib.suppress(Exception):
-                    await asyncio.shield(
-                        self.delete_message(thinking_handle)
-                    )
+                # The answer must not wait for a stale status message to be
+                # removed. The bounded best-effort cleanup also prevents an
+                # in-flight Slack chat.delete from holding the reply hostage.
+                create_background_task(
+                    self._run_status_operation(
+                        self.delete_message(thinking_handle),
+                        action="deleting the Thinking status",
+                    ),
+                    name=f"{self.platform_id}:status-delete:{uid}",
+                    log=logger,
+                )
 
         # Only opt into the [[await]] pause for interactive turns —
         # ephemeral schedule turns (session_id is set) get their session

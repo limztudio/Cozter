@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import time
+from importlib.util import find_spec
 
 # Re-launch as module if run as `python Cozter` (no package context).
 # Forward any CLI args (e.g. -cli) so flags survive the re-exec.
@@ -33,6 +34,16 @@ if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
 
 _VENV_REEXEC_ENV = "COZTER_VENV_REEXEC"
 _WINDOWS_CHILD_RESTART_DELAY_SEC = 1
+# A dependency bootstrap is only a recovery path for a newly-created venv.
+# It must not leave a scheduled Slack service hung forever before it has even
+# opened its Socket Mode connection.
+_DEPENDENCY_INSTALL_TIMEOUT_SEC = 180
+_REQUIRED_RUNTIME_MODULES = (
+    "aiohttp",
+    "httpx",
+    "slack_bolt",
+    "telegram",
+)
 
 
 def _running_in_venv() -> bool:
@@ -79,12 +90,39 @@ _ensure_venv_and_reexec()
 
 
 def _install_deps() -> None:
-    """Auto-install missing requirements before any project imports."""
+    """Install requirements only when a newly-created venv is incomplete.
+
+    ``pip install -r`` is deliberately not run on every daemon start: pip may
+    contact an index even when every dependency is already installed, which
+    blocks Socket Mode startup. Normal code updates still install their
+    declared requirements through :func:`updater.install_requirements` before
+    the restart.
+    """
     req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
-    if os.path.exists(req_file):
+    if not os.path.exists(req_file):
+        return
+
+    missing = [
+        name for name in _REQUIRED_RUNTIME_MODULES if find_spec(name) is None
+    ]
+    if not missing:
+        return
+
+    try:
+        print(
+            "Cozter: installing missing runtime dependencies: "
+            + ", ".join(missing),
+            file=sys.stderr,
+        )
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "-q", "-r", req_file],
+            timeout=_DEPENDENCY_INSTALL_TIMEOUT_SEC,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "Timed out installing missing runtime dependencies after "
+            f"{_DEPENDENCY_INSTALL_TIMEOUT_SEC}s: {', '.join(missing)}"
+        ) from exc
 
 
 _install_deps()

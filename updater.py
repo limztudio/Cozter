@@ -14,6 +14,11 @@ _STARTUP_COMMIT: str | None = None
 
 
 _GIT_TIMEOUT = 30  # seconds — prevents hung network calls from blocking forever
+# Dependency installation only runs after an update (or while repairing a
+# missing fresh-venv dependency), but it must still be bounded: intake is
+# paused during an update restart and an unbounded pip process would queue
+# chat messages indefinitely.
+_PIP_INSTALL_TIMEOUT = 180
 
 # A Windows supervisor (such as run_cozter.ps1) treats this as a normal
 # self-update restart.  It is non-zero so Task Scheduler recovery can also
@@ -232,10 +237,19 @@ def install_requirements() -> None:
     """Install updated requirements if the file exists."""
     if os.path.exists(REQUIREMENTS_PATH):
         logger.info("Installing updated requirements...")
-        pip = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_PATH],
-            cwd=MODULE_ROOT, capture_output=True, text=True,
-        )
+        try:
+            pip = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_PATH],
+                cwd=MODULE_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=_PIP_INSTALL_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as exc:
+            logger.error(
+                "pip install timed out after %ds", _PIP_INSTALL_TIMEOUT,
+            )
+            raise RuntimeError("pip install timed out") from exc
         if pip.returncode != 0:
             logger.error("pip install failed: %s", pip.stderr.strip())
             raise RuntimeError("pip install failed")
