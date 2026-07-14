@@ -189,6 +189,27 @@ class CopilotParseTests(unittest.TestCase):
         ])
         self.assertEqual(r.text, "answer")
 
+    def test_current_cli_nested_assistant_message(self) -> None:
+        """Copilot CLI 1.0.70 wraps final output under ``data.content``."""
+        event = {
+            "type": "assistant.message",
+            "data": {"content": "answer"},
+        }
+        r = _run(self.backend, [event])
+        self.assertEqual(r.text, "answer")
+        # Internal calls (planning, merging, compaction) use this separate
+        # extraction path instead of ``parse_event``.
+        self.assertEqual(self.backend.extract_agent_text(event), "answer")
+
+    def test_current_cli_uses_final_message_not_partial_deltas(self) -> None:
+        r = _run(self.backend, [
+            {"type": "assistant.message_delta",
+             "data": {"deltaContent": "ans"}},
+            {"type": "assistant.message", "data": {"content": "answer"}},
+        ])
+        self.assertEqual(r.text, "answer")
+        self.assertEqual([event.content for event in r.events], ["answer"])
+
     def test_error_sets_error(self) -> None:
         r = _run(self.backend, [
             {"type": "error", "message": "bad"},

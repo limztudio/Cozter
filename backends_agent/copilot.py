@@ -360,7 +360,7 @@ class CopilotBackend(Backend):
     _ERROR_TYPES = ("error", "turn.failed", "failed")
     _ASSISTANT_TYPES = (
         "assistant_message", "agent_message", "message",
-        "completion", "response", "text",
+        "completion", "response", "text", "assistant.message",
     )
     _NON_AGENT_TYPES = frozenset(
         _TOOL_USE_TYPES + _TOOL_RESULT_TYPES + _FILE_TYPES + _ERROR_TYPES
@@ -456,14 +456,23 @@ class CopilotBackend(Backend):
     @staticmethod
     def _extract_text(event: dict) -> str | None:
         """Pull text content from an event using best-effort key probing."""
-        for key in ("text", "content", "message"):
-            val = event.get(key)
-            if isinstance(val, str) and val.strip():
-                return val
-            if isinstance(val, dict):
-                inner = val.get("text") or val.get("content")
-                if isinstance(inner, str) and inner.strip():
-                    return inner
+        # Copilot CLI 1.0.70 wraps streamed assistant output in an event
+        # envelope: ``{"type": "assistant.message", "data":
+        # {"content": "..."}}``.  Older builds put the content directly
+        # on the event, so accept both shapes.
+        payloads = [event]
+        data = event.get("data")
+        if isinstance(data, dict):
+            payloads.append(data)
+        for payload in payloads:
+            for key in ("text", "content", "message"):
+                val = payload.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val
+                if isinstance(val, dict):
+                    inner = val.get("text") or val.get("content")
+                    if isinstance(inner, str) and inner.strip():
+                        return inner
         return None
 
     @staticmethod
