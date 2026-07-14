@@ -38,8 +38,10 @@ TIER_DESCRIPTIONS = {
 }
 
 # Bounds the fan-out: each sub-task is a full agent turn, so an
-# over-eager planner would otherwise turn one message into a dozen runs.
-MAX_SUBTASKS = 6
+# over-eager planner would otherwise turn one message into unbounded runs.
+# Twelve leaves room for genuinely broad work without making an accidental
+# plan prohibitively slow or expensive.
+MAX_SUBTASKS = 12
 
 PLAN_TIMEOUT = 120  # seconds; on timeout the planner falls back to one task
 MERGE_TIMEOUT = 180  # seconds; on timeout the worker reports are concatenated

@@ -48,10 +48,22 @@ class PlanParsingTests(unittest.TestCase):
 
     def test_subtask_count_is_capped(self) -> None:
         raw = "[PLAN]\n" + "".join(
-            f"{i}. [low] task {i}\n" for i in range(1, 20)
+            f"{i}. [low] task {i}\n"
+            for i in range(1, flexible.MAX_SUBTASKS + 8)
         ) + "[/PLAN]"
         plan = flexible.parse_plan(raw, "req")
         self.assertEqual(len(plan.subtasks), flexible.MAX_SUBTASKS)
+        self.assertEqual(
+            plan.subtasks[-1].instruction,
+            f"task {flexible.MAX_SUBTASKS}",
+        )
+
+    def test_planner_prompt_advertises_the_expanded_subtask_limit(self) -> None:
+        prompt = flexible.build_plan_prompt("context", collaborative=False)
+        self.assertIn(
+            f"At most {flexible.MAX_SUBTASKS} sub-tasks.",
+            prompt,
+        )
 
     def test_lines_with_an_unknown_tier_are_skipped(self) -> None:
         plan = flexible.parse_plan(

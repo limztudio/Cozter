@@ -428,7 +428,7 @@ hard. One turn is three phases:
 
 1. **Understand and split.** The summary agent (`/summaryagent`,
    `/summarymodel`) restates what you asked for and splits it into
-   sub-tasks, grading each one `low`, `mid`, or `high`.
+   up to 12 sub-tasks, grading each one `low`, `mid`, or `high`.
 2. **Route.** Each sub-task runs as a full agent turn — real tools, real
    file edits — on the agent and model bound to its difficulty tier. They
    run one at a time, in order, and each worker sees the reports of the
