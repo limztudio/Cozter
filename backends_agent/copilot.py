@@ -29,6 +29,7 @@ import queue
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -47,6 +48,7 @@ _MODEL_DISCOVERY_TIMEOUT_SEC = 12
 _MODEL_CATALOG_TTL_SEC = 60
 _MODEL_FAILURE_RETRY_SEC = 15
 _MAX_ACP_MESSAGES_PER_REQUEST = 100
+_COPILOT_HOME_FILES = ("config.json", "settings.json")
 
 # ``auto`` is accepted by Copilot even if a named-model catalog cannot be
 # queried. Do not fall back to the generic models from ``copilot help``:
@@ -77,6 +79,35 @@ def _max_prompt_chars() -> int:
     return max(_WINDOWS_PROMPT_CHARS, min(arg_max // 4, 1_000_000))
 
 
+def _create_isolated_copilot_home() -> str:
+    """Create a short-lived Copilot home with just account metadata.
+
+    Copilot CLI persists every prompt-mode invocation under ``~/.copilot``.
+    Cozter already owns the durable conversation history, and Flexible can
+    make several CLI calls per user turn.  A private home keeps those runs
+    out of Copilot's visible history; the local account/settings metadata is
+    copied so the CLI can still use the user's OS-backed authentication.
+    """
+    home = tempfile.mkdtemp(prefix="cozter-copilot-")
+    source_home = os.environ.get("COPILOT_HOME") or os.path.join(
+        os.path.expanduser("~"), ".copilot",
+    )
+    try:
+        for name in _COPILOT_HOME_FILES:
+            source = os.path.join(source_home, name)
+            if os.path.isfile(source):
+                shutil.copy2(source, os.path.join(home, name))
+    except OSError:
+        shutil.rmtree(home, ignore_errors=True)
+        raise
+    return home
+
+
+def _remove_isolated_copilot_home(home: str) -> None:
+    """Discard temporary Copilot session state without touching user history."""
+    shutil.rmtree(home, ignore_errors=True)
+
+
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
@@ -105,6 +136,8 @@ class CopilotBackend(Backend):
         self._catalog_expires_at = 0.0
         self._fallback_expires_at = 0.0
         self._models_lock = threading.Lock()
+        self._process_homes: dict[int, str] = {}
+        self._process_homes_lock = threading.Lock()
 
     def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
         """Return the effort vocabulary supported by a selected model.
@@ -198,7 +231,11 @@ class CopilotBackend(Backend):
         )
 
         proc: subprocess.Popen[str] | None = None
+        isolated_home: str | None = None
         try:
+            isolated_home = _create_isolated_copilot_home()
+            env = os.environ.copy()
+            env["COPILOT_HOME"] = isolated_home
             proc = subprocess.Popen(
                 [
                     *prefix,
@@ -218,6 +255,7 @@ class CopilotBackend(Backend):
                 encoding="utf-8",
                 errors="replace",
                 cwd=os.getcwd(),
+                env=env,
             )
             if proc.stdout is None:
                 logger.debug("copilot ACP started without stdout")
@@ -290,6 +328,8 @@ class CopilotBackend(Backend):
         finally:
             if proc is not None:
                 _stop_acp_process(proc, kill_tree=uses_windows_cmd_shim)
+            if isolated_home is not None:
+                _remove_isolated_copilot_home(isolated_home)
 
     async def launch(
         self,
@@ -341,18 +381,46 @@ class CopilotBackend(Backend):
             cmd.append("--allow-all-tools")
 
         cmd += ["-p", prompt]
+        isolated_home = _create_isolated_copilot_home()
+        env = os.environ.copy()
+        env["COPILOT_HOME"] = isolated_home
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=workspace_path,
+                env=env,
+                # Own process group so a /stop or inject-restart kills the
+                # whole tree, not just the copilot parent (see
+                # utils.terminate_process_group). POSIX only; no-op on
+                # Windows.
+                start_new_session=os.name != "nt",
+            )
+        except BaseException:
+            _remove_isolated_copilot_home(isolated_home)
+            raise
 
-        return await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=workspace_path,
-            # Own process group so a /stop or inject-restart kills the whole
-            # tree, not just the copilot parent (see
-            # utils.terminate_process_group). POSIX only; no-op on Windows.
-            start_new_session=os.name != "nt",
-        )
+        # The shared drain paths call ``cleanup_process`` after reaping this
+        # process, including cancellation and injected-message restarts.
+        if isinstance(proc.pid, int):
+            with self._process_homes_lock:
+                self._process_homes[proc.pid] = isolated_home
+        else:  # Defensive fallback for a nonstandard Process implementation.
+            _remove_isolated_copilot_home(isolated_home)
+        return proc
+
+    async def cleanup_process(
+        self, proc: asyncio.subprocess.Process,
+    ) -> None:
+        """Remove this launch's private Copilot home after it exits."""
+        home: str | None = None
+        if isinstance(proc.pid, int):
+            with self._process_homes_lock:
+                home = self._process_homes.pop(proc.pid, None)
+        if home is not None:
+            await asyncio.to_thread(_remove_isolated_copilot_home, home)
 
     _TOOL_USE_TYPES = ("tool_use", "tool_call", "tool_start", "tool")
     _TOOL_RESULT_TYPES = ("tool_result", "tool_output", "tool_end")

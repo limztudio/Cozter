@@ -1,9 +1,11 @@
 import asyncio
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -265,6 +267,46 @@ class BackendModelTests(unittest.TestCase):
         self.assertEqual(CopilotBackend.tier_models, {})
         self.assertFalse(CopilotBackend.allow_unverified_extra_models)
 
+    def test_copilot_isolated_home_copies_metadata_not_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_home = os.path.join(temp_dir, "source")
+            isolated_home = os.path.join(temp_dir, "isolated")
+            os.mkdir(source_home)
+            os.mkdir(isolated_home)
+            for name, content in (
+                ("config.json", '{"lastLoggedInUser":"account"}'),
+                ("settings.json", '{"model":"auto"}'),
+            ):
+                with open(os.path.join(source_home, name), "w", encoding="utf-8") as file:
+                    file.write(content)
+            history_dir = os.path.join(source_home, "session-state")
+            os.mkdir(history_dir)
+            with open(
+                os.path.join(history_dir, "history.jsonl"),
+                "w",
+                encoding="utf-8",
+            ) as file:
+                file.write("old conversation")
+
+            with (
+                mock.patch.dict(
+                    copilot_mod.os.environ,
+                    {"COPILOT_HOME": source_home},
+                    clear=False,
+                ),
+                mock.patch.object(
+                    copilot_mod.tempfile,
+                    "mkdtemp",
+                    return_value=isolated_home,
+                ),
+            ):
+                created_home = copilot_mod._create_isolated_copilot_home()
+
+            self.assertEqual(created_home, isolated_home)
+            for name in ("config.json", "settings.json"):
+                self.assertTrue(os.path.isfile(os.path.join(isolated_home, name)))
+            self.assertFalse(os.path.exists(os.path.join(isolated_home, "session-state")))
+
     def test_copilot_acp_parser_extracts_account_model_values(self) -> None:
         payload = {
             "sessionId": "catalog-only-session",
@@ -349,15 +391,26 @@ class BackendModelTests(unittest.TestCase):
         proc.stdout = io.StringIO(responses)
         proc.poll.return_value = None
 
-        with (
-            mock.patch.object(copilot_mod.shutil, "which", return_value="copilot"),
-            mock.patch.object(copilot_mod, "executable_command", return_value=["copilot"]),
-            mock.patch.object(copilot_mod.subprocess, "Popen", return_value=proc) as popen,
-        ):
-            self.assertEqual(
-                CopilotBackend().available_models,
-                ("auto", "allowed-only"),
-            )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            isolated_home = os.path.join(temp_dir, "copilot-home")
+            os.mkdir(isolated_home)
+            with (
+                mock.patch.object(copilot_mod.shutil, "which", return_value="copilot"),
+                mock.patch.object(copilot_mod, "executable_command", return_value=["copilot"]),
+                mock.patch.object(
+                    copilot_mod,
+                    "_create_isolated_copilot_home",
+                    return_value=isolated_home,
+                ),
+                mock.patch.object(copilot_mod.subprocess, "Popen", return_value=proc) as popen,
+            ):
+                self.assertEqual(
+                    CopilotBackend().available_models,
+                    ("auto", "allowed-only"),
+                )
+
+            self.assertEqual(popen.call_args.kwargs["env"]["COPILOT_HOME"], isolated_home)
+            self.assertFalse(os.path.exists(isolated_home))
 
         command = popen.call_args.args[0]
         self.assertIn("--acp", command)
@@ -449,26 +502,44 @@ class BackendModelTests(unittest.TestCase):
 
     def test_copilot_auto_omits_unsupported_reasoning_effort(self) -> None:
         async def launch(model: str | None) -> tuple[str, ...]:
-            with (
-                mock.patch.object(
-                    copilot_mod,
-                    "executable_command",
-                    return_value=["copilot"],
-                ),
-                mock.patch.object(
-                    copilot_mod.asyncio,
-                    "create_subprocess_exec",
-                    new_callable=mock.AsyncMock,
-                ) as create_process,
-            ):
-                await CopilotBackend().launch(
-                    "C:/workspace",
-                    "hello",
-                    model,
-                    "auto",
-                    effort=100,
+            with tempfile.TemporaryDirectory() as temp_dir:
+                isolated_home = os.path.join(temp_dir, "copilot-home")
+                os.mkdir(isolated_home)
+                proc = mock.MagicMock()
+                proc.pid = 123
+                backend = CopilotBackend()
+                with (
+                    mock.patch.object(
+                        copilot_mod,
+                        "executable_command",
+                        return_value=["copilot"],
+                    ),
+                    mock.patch.object(
+                        copilot_mod,
+                        "_create_isolated_copilot_home",
+                        return_value=isolated_home,
+                    ),
+                    mock.patch.object(
+                        copilot_mod.asyncio,
+                        "create_subprocess_exec",
+                        new_callable=mock.AsyncMock,
+                        return_value=proc,
+                    ) as create_process,
+                ):
+                    await backend.launch(
+                        "C:/workspace",
+                        "hello",
+                        model,
+                        "auto",
+                        effort=100,
+                    )
+                self.assertEqual(
+                    create_process.await_args.kwargs["env"]["COPILOT_HOME"],
+                    isolated_home,
                 )
-            return create_process.await_args.args
+                await backend.cleanup_process(proc)
+                self.assertFalse(os.path.exists(isolated_home))
+                return create_process.await_args.args
 
         auto_command = asyncio.run(launch("auto"))
         self.assertIn("--model", auto_command)

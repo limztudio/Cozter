@@ -15,6 +15,14 @@ class StubBackend:
         return event.get("text")
 
 
+class CleanupStubBackend(StubBackend):
+    def __init__(self) -> None:
+        self.cleaned = False
+
+    async def cleanup_process(self, _proc: asyncio.subprocess.Process) -> None:
+        self.cleaned = True
+
+
 class ProcessDrainTests(unittest.TestCase):
     def test_iter_json_events_skips_invalid_lines(self) -> None:
         async def run() -> None:
@@ -64,12 +72,12 @@ class ProcessDrainTests(unittest.TestCase):
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            text = await utils.drain_llm_subprocess(
-                proc, StubBackend(), 5, "test",
-            )
+            backend = CleanupStubBackend()
+            text = await utils.drain_llm_subprocess(proc, backend, 5, "test")
 
             self.assertEqual(text, "done")
             self.assertEqual(proc.returncode, 0)
+            self.assertTrue(backend.cleaned)
 
         asyncio.run(run())
 

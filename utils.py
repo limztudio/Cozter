@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 import os
@@ -127,6 +128,25 @@ async def kill_and_wait(proc: asyncio.subprocess.Process) -> None:
     terminate_process_group(proc)
     with contextlib.suppress(OSError):
         await proc.wait()
+
+
+async def cleanup_backend_process(
+    backend: object,
+    proc: asyncio.subprocess.Process,
+    *,
+    log: logging.Logger = logger,
+) -> None:
+    """Run an optional backend cleanup hook after its process is reaped."""
+    cleanup = getattr(backend, "cleanup_process", None)
+    if not callable(cleanup):
+        return
+    try:
+        result = cleanup(proc)
+        if inspect.isawaitable(result):
+            await result
+    except Exception:
+        name = getattr(backend, "name", type(backend).__name__)
+        log.warning("%s backend cleanup failed", name, exc_info=True)
 
 
 def save_json_object(path: str, data: dict) -> None:
@@ -377,7 +397,10 @@ async def drain_llm_subprocess(
     finally:
         if proc.returncode is None:
             await kill_and_wait(proc)
-        stderr = await stderr_task
+        try:
+            stderr = await stderr_task
+        finally:
+            await cleanup_backend_process(backend, proc, log=active_log)
         if finished and not raw:
             suffix = f": {stderr}" if stderr else ""
             active_log.warning(

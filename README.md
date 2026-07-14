@@ -518,7 +518,10 @@ fallback if the account cannot be queried. Copilot uses a short ACP handshake
 without sending a prompt, and refreshes a successful account catalog
 periodically. The `copilot` backend keeps prompts under the Windows
 command-line limit by dropping the oldest composed context when a prompt
-exceeds its cap; the current user message is kept at the tail.
+exceeds its cap; the current user message is kept at the tail. Each Copilot
+run also uses a short-lived private CLI home, so its planner, worker, and
+merge calls do not appear in Copilot's session history; Cozter's workspace
+session remains the durable conversation record.
 
 ## Reasoning effort
 

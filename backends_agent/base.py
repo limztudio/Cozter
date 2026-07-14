@@ -216,6 +216,17 @@ class Backend(ABC):
         native vocabulary via :meth:`convert_effort`.
         """
 
+    async def cleanup_process(
+        self, proc: asyncio.subprocess.Process,
+    ) -> None:
+        """Release backend-specific resources after *proc* has stopped.
+
+        Most backends have nothing beyond the subprocess itself to clean up.
+        A backend that creates per-launch temporary state can override this;
+        the normal and internal drain paths call it after reaping the process.
+        """
+        return None
+
     def tier_model(self, tier: str) -> str:
         """Default model for one of flexible's difficulty tiers."""
         return self.tier_models.get(tier) or self.default_model

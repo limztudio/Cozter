@@ -22,6 +22,7 @@ from .backends_agent.base import (
 )
 from .utils import (
     await_cancelled,
+    cleanup_backend_process,
     create_background_task,
     drain_text_stream,
     iter_json_events,
@@ -666,7 +667,10 @@ async def _drive_backend(
         if inject_task and not inject_task.done():
             inject_task.cancel()
             await await_cancelled(inject_task)
-        stderr = await stderr_task
+        try:
+            stderr = await stderr_task
+        finally:
+            await cleanup_backend_process(backend, proc, log=logger)
     if stderr:
         logger.debug("%s stderr: %s", backend.name, stderr)
 

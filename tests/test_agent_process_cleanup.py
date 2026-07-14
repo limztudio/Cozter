@@ -17,6 +17,7 @@ class _StreamingBackend:
 
     def __init__(self) -> None:
         self.proc: asyncio.subprocess.Process | None = None
+        self.cleaned = False
 
     async def launch(self, *_args, **_kwargs) -> asyncio.subprocess.Process:
         script = (
@@ -32,6 +33,9 @@ class _StreamingBackend:
             stderr=asyncio.subprocess.PIPE,
         )
         return self.proc
+
+    async def cleanup_process(self, _proc: asyncio.subprocess.Process) -> None:
+        self.cleaned = True
 
     @staticmethod
     def parse_event(_event: dict, result) -> None:
@@ -62,6 +66,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                         )
 
             assert backend.proc is not None
+            self.assertTrue(backend.cleaned)
             try:
                 self.assertIsNotNone(backend.proc.returncode)
             finally:
