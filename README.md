@@ -9,7 +9,12 @@ drop-in plugin system that works across every backend.
 
 ## What it gives you
 
-- **Five interchangeable agent backends**, picked per workspace:
+- **A default meta-agent plus five direct agent backends**, picked per
+  workspace:
+  - `flexible` (default) — a meta-agent that sizes the work with a cheap
+    summary-model call, splits it into up to 12 sub-tasks, routes each to
+    the agent+model bound to its difficulty tier (`low` / `mid` / `high`),
+    then merges the reports into one reply. Tiers can straddle backends
   - `codex` — OpenAI's CLI (`codex exec`)
   - `claude_code` — Anthropic's CLI (`claude --print`)
   - `copilot` — GitHub's CLI
@@ -579,6 +584,7 @@ Cozter/
 ├── router.py             session picker for first-turn-in-workspace (subsequent turns reuse last_session.json)
 ├── titling.py            auto-titles new sessions from their first turn
 ├── schedules.py          /reserve cron-style scheduled prompts
+├── flexible.py           flexible meta-agent prompt construction + plan/merge parsing
 ├── workspace.py          per-workspace settings (model, permission, effort, ...)
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
@@ -591,6 +597,7 @@ Cozter/
 │   ├── codex.py            wraps `codex exec`
 │   ├── claude_code.py      wraps `claude --print`
 │   ├── copilot.py          wraps `copilot`
+│   ├── flexible.py         flexible meta-agent backend (no CLI of its own)
 │   ├── _http_proc.py       process-like adapter and error handling for HTTP backends
 │   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop
 │   ├── llama.py            local /v1/chat/completions backend hooks
