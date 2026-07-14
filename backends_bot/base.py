@@ -14,7 +14,6 @@ adapters only deal with framework plumbing.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import functools
 import logging
 import os
