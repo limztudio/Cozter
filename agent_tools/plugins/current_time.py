@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, ClassVar
 
 from ..base import AgentTool
@@ -32,6 +32,10 @@ class CurrentTimeTool(AgentTool):
         tz_name = args.get("timezone")
         if tz_name:
             try:
+                # UTC is built into Python and must work even on minimal
+                # Windows hosts without the optional IANA tzdata package.
+                if tz_name.strip().upper() == "UTC":
+                    return datetime.now(timezone.utc).isoformat()
                 from zoneinfo import ZoneInfo
                 return datetime.now(ZoneInfo(tz_name)).isoformat()
             except Exception as exc:

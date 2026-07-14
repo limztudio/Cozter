@@ -14,14 +14,23 @@ The JSONL event schema is not formally documented. ``parse_event`` and
 ``extract_agent_text`` use best-effort key probing (``text``/``content``
 for assistant messages, ``tool_use``/``tool_call`` for tool invocations)
 and log unknown event types so the schema can be refined.
+
+For the model picker, the CLI's help text is deliberately *not* used: it
+lists model names understood by the binary, including names disabled for an
+account by an enterprise policy. The ACP session configuration API exposes
+the authenticated account's model selector instead.
 """
 
 import asyncio
+import json
 import logging
 import os
+import queue
 import shutil
 import subprocess
 import sys
+import threading
+import time
 
 from .base import (
     AgentResult, Backend, ChatEvent, append_text_result, executable_command,
@@ -33,6 +42,16 @@ logger = logging.getLogger(__name__)
 # Floor applied on every platform: the Windows CreateProcess command line
 # caps at 32767 chars for the whole argv, so keep the prompt well under it.
 _WINDOWS_PROMPT_CHARS = 28_000
+_ACP_PROTOCOL_VERSION = 1
+_MODEL_DISCOVERY_TIMEOUT_SEC = 12
+_MODEL_CATALOG_TTL_SEC = 60
+_MODEL_FAILURE_RETRY_SEC = 15
+_MAX_ACP_MESSAGES_PER_REQUEST = 100
+
+# ``auto`` is accepted by Copilot even if a named-model catalog cannot be
+# queried. Do not fall back to the generic models from ``copilot help``:
+# those names may be disabled for this account or enterprise.
+_FALLBACK_MODELS = ("auto",)
 
 
 def _max_prompt_chars() -> int:
@@ -61,82 +80,205 @@ def _max_prompt_chars() -> int:
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
-    # Cozter's sentinel: `auto` is accepted by `--model` but never appears in
-    # the CLI's concrete-model list, so it is prepended to whatever the
-    # installed binary reports rather than discovered from it.
+    # ``auto`` is policy-aware: Copilot chooses from models allowed for the
+    # signed-in account. It is also the only safe default before ACP has
+    # returned an account-specific catalog.
     default_model = "auto"
-    default_summary_model = "claude-haiku-4.5"
-    # The high tier stays on the Sonnet line rather than reaching for Opus or
-    # Fable: it is meant for genuinely hard work, not for the most expensive
-    # model available. Sonnet 5 supersedes the 4.6 that used to sit here.
-    tier_models = {
-        "low": "claude-haiku-4.5",
-        "mid": "gpt-5.4",
-        "high": "claude-sonnet-5",
-    }
+    default_summary_model = "auto"
+    # A static tier mapping could select a model forbidden for an enterprise
+    # account before the picker is ever opened. Let all unset Copilot tiers
+    # use the policy-aware ``default_model`` instead.
+    tier_models: dict[str, str] = {}
+    # An ACP list is authoritative for this account, so ``extra_models`` must
+    # not inject arbitrary, unverified names back into a picker.
+    allow_unverified_extra_models = False
     # No override is represented by Cozter's effort=0 (omit the flag).
     effort_levels = ("low", "medium", "high", "xhigh", "max")
 
     def __init__(self) -> None:
-        # Discovered once per process: the backend is a process-wide
-        # singleton (see backends_agent.__init__._BACKENDS), so caching on
-        # the instance avoids re-shelling out to `copilot help config` on
-        # every picker open. ``None`` means "not yet probed"; a probe that
-        # finds nothing falls back to _FALLBACK_MODELS.
+        # The backend is a process-wide singleton. Cache only an ACP result,
+        # never a failed probe: a transient sign-in/network failure should
+        # keep the picker fail-closed to ``auto`` but recover on its next
+        # open. Refresh successful results periodically so changed enterprise
+        # policy is reflected without restarting Cozter.
         self._cached_models: tuple[str, ...] | None = None
+        self._catalog_expires_at = 0.0
+        self._fallback_expires_at = 0.0
+        self._models_lock = threading.Lock()
 
     # ---- model discovery -----------------------------------------------
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
-        """Models the installed Copilot CLI accepts.
+        """Named models enabled for the authenticated Copilot account.
 
-        Discovered at first access by parsing ``copilot help config``, which
-        lists the binary's concrete model slugs. This tracks the installed
-        CLI version/build rather than a hand-maintained tuple, so the picker
-        only ever offers models the CLI on this host actually recognizes.
-        ``auto`` is always first. Falls back to :data:`_FALLBACK_MODELS`
-        when the CLI is absent or the catalog can't be parsed.
+        ACP's ``session/new`` response contains the account-aware model
+        selector. The generic CLI help catalog is intentionally never used,
+        because it can advertise models this account cannot select. If ACP
+        cannot produce a structured selector, return only ``auto``.
         """
-        if self._cached_models is None:
-            self._cached_models = self._discover_models()
-        return self._cached_models
+        now = time.monotonic()
+        if (
+            self._cached_models is not None
+            and now < self._catalog_expires_at
+        ):
+            return self._cached_models
+        if now < self._fallback_expires_at:
+            return _FALLBACK_MODELS
 
-    def _discover_models(self) -> tuple[str, ...]:
+        with self._models_lock:
+            now = time.monotonic()
+            if (
+                self._cached_models is not None
+                and now < self._catalog_expires_at
+            ):
+                return self._cached_models
+            if now < self._fallback_expires_at:
+                return _FALLBACK_MODELS
+
+            # An expired catalog must not keep displaying names that a newly
+            # applied policy might have removed. A failed refresh therefore
+            # deliberately falls back to only ``auto`` rather than this old
+            # value.
+            self._cached_models = None
+            models = self._discover_models()
+            if models is not None:
+                self._cached_models = models
+                self._catalog_expires_at = (
+                    time.monotonic() + _MODEL_CATALOG_TTL_SEC
+                )
+                self._fallback_expires_at = 0.0
+                return models
+            # This is a short retry throttle, not a model-list cache: it
+            # prevents an absent/broken CLI from spawning a new process for
+            # each input while still recovering quickly after sign-in.
+            self._fallback_expires_at = (
+                time.monotonic() + _MODEL_FAILURE_RETRY_SEC
+            )
+            return _FALLBACK_MODELS
+
+    def resolve_configured_model(self, model: str) -> str:
+        """Keep stored Copilot choices inside a fresh ACP catalog.
+
+        This intentionally does not launch ACP from a chat turn. Until a
+        picker has obtained a fresh account catalog (or after its short TTL),
+        ``auto`` is safer than forwarding a possibly policy-disabled stored
+        model ID to the CLI.
+        """
+        models = self._cached_models
+        if (
+            models is not None
+            and time.monotonic() < self._catalog_expires_at
+            and model in models
+        ):
+            return model
+        return self.default_model
+
+    def _discover_models(self) -> tuple[str, ...] | None:
         binary = shutil.which(self.executable)
         if binary is None:
-            logger.debug(
-                "copilot not on PATH; using fallback model list"
-            )
-            return _FALLBACK_MODELS
+            logger.debug("copilot not on PATH; model picker is auto-only")
+            return None
         prefix = executable_command(self.executable)
+        uses_windows_cmd_shim = (
+            os.name == "nt"
+            and bool(prefix)
+            and os.path.basename(prefix[0]).casefold() == "cmd.exe"
+        )
+
+        proc: subprocess.Popen[str] | None = None
         try:
-            proc = subprocess.run(
-                prefix + ["help", "config"],
-                capture_output=True,
+            proc = subprocess.Popen(
+                [
+                    *prefix,
+                    "--acp",
+                    "--stdio",
+                    "--disable-builtin-mcps",
+                    "--no-auto-update",
+                    "--no-custom-instructions",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                # ACP's protocol output belongs exclusively on stdout. Do not
+                # leave stderr piped: a verbose CLI failure could otherwise
+                # block this small metadata-only probe.
+                stderr=subprocess.DEVNULL,
                 text=True,
-                timeout=15,
+                encoding="utf-8",
+                errors="replace",
+                cwd=os.getcwd(),
             )
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            logger.debug(
-                "copilot help config probe failed (%s); using fallback",
-                exc,
+            if proc.stdout is None:
+                logger.debug("copilot ACP started without stdout")
+                return None
+
+            messages: queue.Queue[str | None] = queue.Queue()
+            reader = threading.Thread(
+                target=_read_acp_stdout,
+                args=(proc.stdout, messages),
+                daemon=True,
             )
-            return _FALLBACK_MODELS
-        if proc.returncode != 0:
-            logger.debug(
-                "copilot help config exited %d (%s); using fallback",
-                proc.returncode, proc.stderr.strip()[:200],
+            reader.start()
+            deadline = time.monotonic() + _MODEL_DISCOVERY_TIMEOUT_SEC
+
+            initialized = _acp_request(
+                proc,
+                messages,
+                request_id=1,
+                method="initialize",
+                params={
+                    "protocolVersion": _ACP_PROTOCOL_VERSION,
+                    "clientCapabilities": {},
+                    "clientInfo": {
+                        "name": "cozter-model-catalog",
+                        "version": "1",
+                    },
+                },
+                deadline=deadline,
             )
-            return _FALLBACK_MODELS
-        models = _parse_help_config_models(proc.stdout)
-        if not models:
-            logger.debug(
-                "copilot help config yielded no model catalog; "
-                "using fallback"
+            if initialized is None:
+                logger.debug("copilot ACP initialization did not succeed")
+                return None
+            if not _acp_notification(proc, "initialized", {}):
+                logger.debug("copilot ACP initialized notification failed")
+                return None
+
+            session = _acp_request(
+                proc,
+                messages,
+                request_id=2,
+                method="session/new",
+                params={"cwd": os.path.abspath(os.getcwd()), "mcpServers": []},
+                deadline=deadline,
             )
-            return _FALLBACK_MODELS
-        return ("auto", *models)
+            if session is None:
+                logger.debug("copilot ACP session setup did not succeed")
+                return None
+
+            models = _parse_acp_model_options(session)
+            if not models:
+                logger.debug(
+                    "copilot ACP session yielded no structured model selector",
+                )
+                return None
+
+            # The session has no prompt and is used only for its catalog. If
+            # this ACP build supports it, explicitly free any session-side
+            # resources before ending the process.
+            _close_acp_session_if_supported(
+                proc,
+                messages,
+                initialized,
+                session,
+                deadline=min(deadline, time.monotonic() + 2),
+            )
+            return models
+        except OSError as exc:
+            logger.debug("copilot ACP catalog probe failed (%s)", exc)
+            return None
+        finally:
+            if proc is not None:
+                _stop_acp_process(proc, kill_tree=uses_windows_cmd_shim)
 
     async def launch(
         self,
@@ -322,57 +464,249 @@ class CopilotBackend(Backend):
         return tool
 
 
-def _parse_help_config_models(text: str) -> tuple[str, ...]:
-    """Extract concrete model slugs from ``copilot help config`` output.
+def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
+    """Extract the ACP session's account-aware model selector.
 
-    The ``model`` setting section renders each choice as an indented
-    ``- "slug"`` line. Returns slugs in document order, de-duplicated.
+    Copilot's session metadata has an ``availableModels`` list with exact
+    model IDs. ACP's standard ``configOptions`` model selector is retained
+    as a compatibility fallback for builds that do not expose that metadata.
     """
+    if not isinstance(payload, dict):
+        return ()
+
+    models_metadata = payload.get("models")
+    if isinstance(models_metadata, dict):
+        models = _catalog_model_ids(
+            models_metadata.get("availableModels"), key="modelId",
+        )
+        if models:
+            return models
+
+    config_options = payload.get("configOptions")
+    if not isinstance(config_options, list):
+        return ()
+
+    for option in config_options:
+        if not isinstance(option, dict):
+            continue
+        category = option.get("category")
+        option_id = option.get("id")
+        is_model_selector = (
+            isinstance(category, str) and category.casefold() == "model"
+        ) or (
+            isinstance(option_id, str) and option_id.casefold() == "model"
+        )
+        if not is_model_selector or option.get("type") != "select":
+            continue
+        values = option.get("options")
+        models = _catalog_model_ids(values, key="value")
+        if models:
+            return models
+    return ()
+
+
+def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
+    """Normalize a structured ACP model list and always lead with auto."""
+    if not isinstance(values, list):
+        return ()
+
     models: list[str] = []
     seen: set[str] = set()
-    in_model_section = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("`model`:"):
-            in_model_section = True
+    for value in values:
+        if not isinstance(value, dict):
             continue
-        if not in_model_section:
+        model = value.get(key)
+        if not isinstance(model, str):
             continue
-        if stripped.startswith('- "') and stripped.endswith('"'):
-            slug = stripped[3:-1]
-            if slug and slug not in seen:
-                seen.add(slug)
-                models.append(slug)
-            continue
-        # The first non-empty, non-choice line after choices ends the section.
-        if models and stripped:
-            break
-    return tuple(models)
+        model = model.strip()
+        if model and model not in seen:
+            seen.add(model)
+            if model != "auto":
+                models.append(model)
+    # Auto is an official Copilot model-selection sentinel. It remains
+    # available even when an ACP catalog lists concrete models only.
+    return ("auto", *models) if models or "auto" in seen else ()
 
 
-# Safety net used when the Copilot CLI is absent or its catalog can't be
-# parsed. Kept current with the 1.0.70 binary so the picker is never empty.
-_FALLBACK_MODELS = (
-    "auto",
-    "claude-sonnet-5",
-    "claude-sonnet-4.6",
-    "claude-sonnet-4.5",
-    "claude-haiku-4.5",
-    "claude-fable-5",
-    "claude-opus-4.8",
-    "claude-opus-4.8-fast",
-    "claude-opus-4.7",
-    "claude-opus-4.6",
-    "claude-opus-4.5",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.3-codex",
-    "gpt-5.4-mini",
-    "gpt-5-mini",
-    "gemini-3.1-pro-preview",
-    "gemini-3.5-flash",
-    "kimi-k2.7-code",
-)
+def _read_acp_stdout(
+    stdout: object, messages: queue.Queue[str | None],
+) -> None:
+    """Move ACP's line-delimited stdout into a timeout-capable queue."""
+    # ``stdout`` is a TextIOWrapper from Popen. Keep this tiny adapter loosely
+    # typed so tests can provide an in-memory stream without a subprocess.
+    try:
+        readline = getattr(stdout, "readline", None)
+        if not callable(readline):
+            return
+        while True:
+            try:
+                line = readline()
+            except (OSError, ValueError):
+                return
+            if not line:
+                return
+            if isinstance(line, str):
+                messages.put(line)
+    finally:
+        # EOF lets the requester fail immediately instead of waiting out the
+        # whole discovery timeout after a CLI startup error.
+        messages.put(None)
+
+
+def _acp_notification(
+    proc: subprocess.Popen[str], method: str, params: dict,
+) -> bool:
+    """Send an ACP notification (a JSON-RPC message without an id)."""
+    if proc.stdin is None:
+        return False
+    try:
+        proc.stdin.write(json.dumps({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        }) + "\n")
+        proc.stdin.flush()
+    except (BrokenPipeError, OSError):
+        return False
+    return True
+
+
+def _acp_request(
+    proc: subprocess.Popen[str],
+    messages: queue.Queue[str | None],
+    *,
+    request_id: int,
+    method: str,
+    params: dict,
+    deadline: float | None = None,
+) -> dict | None:
+    """Send one ACP request and return its object result before timeout."""
+    if proc.stdin is None:
+        return None
+    try:
+        proc.stdin.write(json.dumps({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params,
+        }) + "\n")
+        proc.stdin.flush()
+    except (BrokenPipeError, OSError):
+        return None
+
+    if deadline is None:
+        deadline = time.monotonic() + _MODEL_DISCOVERY_TIMEOUT_SEC
+    for _ in range(_MAX_ACP_MESSAGES_PER_REQUEST):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            line = messages.get(timeout=remaining)
+        except queue.Empty:
+            return None
+        if line is None:
+            return None
+        try:
+            message = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(message, dict):
+            continue
+        if message.get("id") == request_id:
+            result = message.get("result")
+            return result if isinstance(result, dict) else None
+        # A metadata-only handshake should not need a client request. Reject
+        # one explicitly rather than leave the ACP server blocked on an
+        # unhandled request until this probe's timeout.
+        if "method" in message and "id" in message:
+            _reject_acp_request(proc, message.get("id"))
+    return None
+
+
+def _reject_acp_request(proc: subprocess.Popen[str], request_id: object) -> None:
+    if proc.stdin is None:
+        return
+    try:
+        proc.stdin.write(json.dumps({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32601,
+                "message": "Cozter model discovery supports no ACP callbacks",
+            },
+        }) + "\n")
+        proc.stdin.flush()
+    except (BrokenPipeError, OSError):
+        return
+
+
+def _close_acp_session_if_supported(
+    proc: subprocess.Popen[str],
+    messages: queue.Queue[str | None],
+    initialized: dict,
+    session: dict,
+    *,
+    deadline: float,
+) -> None:
+    """Best-effort close of the empty ACP session used for discovery."""
+    capabilities = initialized.get("agentCapabilities")
+    session_capabilities = (
+        capabilities.get("sessionCapabilities")
+        if isinstance(capabilities, dict) else None
+    )
+    if not isinstance(session_capabilities, dict):
+        return
+    if "close" not in session_capabilities:
+        return
+    session_id = session.get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        return
+    _acp_request(
+        proc,
+        messages,
+        request_id=3,
+        method="session/close",
+        params={"sessionId": session_id},
+        deadline=deadline,
+    )
+
+
+def _stop_acp_process(
+    proc: subprocess.Popen[str], *, kill_tree: bool = False,
+) -> None:
+    """Close and terminate a short-lived catalog-only ACP process."""
+    if proc.stdin is not None:
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
+    if kill_tree:
+        # A .cmd shim runs beneath cmd.exe. Terminating only that parent can
+        # leave its Copilot/Node child alive on Windows, so tear down the
+        # process tree rooted at the PID we created above.
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    for stream in (proc.stdout, proc.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass

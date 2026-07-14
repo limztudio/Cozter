@@ -110,6 +110,15 @@ class FlexibleSettingsTests(unittest.TestCase):
                 workspace.get_flexible_model(ws, "low"), "gpt-5.4-mini",
             )
 
+    def test_copilot_tier_and_summary_defaults_use_policy_aware_auto(self) -> None:
+        with tempfile.TemporaryDirectory() as ws:
+            workspace.ensure_cozter_dir(ws)
+            workspace.set_flexible_backend_name(ws, "high", "copilot")
+            workspace.set_summary_backend_name(ws, "copilot")
+
+            self.assertEqual(workspace.get_flexible_model(ws, "high"), "auto")
+            self.assertEqual(workspace.get_summary_model(ws), "auto")
+
     def test_each_tier_agent_remembers_its_own_model(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)

@@ -335,10 +335,10 @@ def iter_workspace_files(
             real = os.path.realpath(fpath)
             if not (real == abs_ws or real.startswith(abs_ws + os.sep)):
                 continue
-            root_rel = os.path.relpath(fpath, abs_root)
+            root_rel = os.path.relpath(fpath, abs_root).replace(os.sep, "/")
             if not _path_matches_glob(root_rel, pattern):
                 continue
-            ws_rel = os.path.relpath(fpath, abs_ws)
+            ws_rel = os.path.relpath(fpath, abs_ws).replace(os.sep, "/")
             yield fpath, ws_rel, root_rel
 
 

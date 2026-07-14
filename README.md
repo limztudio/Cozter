@@ -169,10 +169,11 @@ available either way.
 
 `extra_models` adds model IDs to a backend's `/model` and `/summarymodel`
 pickers on top of its built-in list, keyed by backend name — for example
-`{"codex": ["my-private-codex-model"], "copilot": ["claude-opus-5.0"]}`. The built-in
-lists in `backends_agent/` are a curated snapshot that goes stale as
-providers ship new models; this lets you use a newer or private model
-without editing source. Malformed entries are ignored.
+`{"codex": ["my-private-codex-model"]}`. It is useful for static or
+self-hosted catalogs. Copilot deliberately ignores unverified extras: its
+picker uses the authenticated account's policy-controlled catalog, so an
+arbitrary configured ID cannot be shown if the account cannot use it.
+Malformed entries are ignored.
 
 `llama_max_retries` (default 2) is how many times a transient llama HTTP
 failure — a dropped connection, a read timeout, or an HTTP 429/5xx — is
@@ -483,16 +484,19 @@ its own, only the three tiers above.
 |---|---|---|---|
 | `codex` | `codex exec --json` | `gpt-5.6-sol` | `gpt-5.6-luna` |
 | `claude_code` | `claude --print --output-format stream-json` | `default` | `haiku` |
-| `copilot` | `copilot --output-format json` | `auto` | `claude-haiku-4.5` |
+| `copilot` | `copilot --output-format json` | `auto` | `auto` |
 | `llama` | OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-air` |
 
-The CLI-backend model lists are a hand-maintained snapshot; add newer or
-private models through `extra_models` in config (see Configuration) rather
-than editing source. The `llama` backend instead discovers models live
-from its server. `llama` and `zai` share one in-process OpenAI-compatible
-agent loop (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer
-auth header and points at Z.ai's endpoint.
+Codex discovers its visible local CLI catalog, while Copilot queries its
+authenticated ACP model selector and fails closed to `auto` if that catalog
+cannot be read. This keeps enterprise-disabled Copilot models out of the
+picker; a stored Copilot choice also uses `auto` until it appears in a fresh
+catalog. Claude Code has no safe non-interactive account catalog, so it keeps
+a curated list that `extra_models` can extend. Llama and Z.ai discover models
+live from their configured HTTP endpoints. `llama` and `zai` share one
+in-process OpenAI-compatible agent loop (`backends_agent/_openai_agent.py`);
+`zai` just adds the Bearer auth header and points at Z.ai's endpoint.
 
 Permission modes are best-effort across third-party CLIs, because a chat
 bot can't surface a per-tool-call approval dialog. `codex` maps all four
@@ -508,10 +512,13 @@ behavior on any backend, use `/style collaborative` — it pauses the turn
 approval flow.
 
 The `llama` model picker queries `llama_server_url/v1/models` and falls
-back to `auto` if the server is down or returns no model IDs. The
-`copilot` backend keeps prompts under the Windows command-line limit by
-dropping the oldest composed context when a prompt exceeds its cap; the
-current user message is kept at the tail.
+back to `auto` if the server is down or returns no model IDs. The `zai`
+picker queries the configured Z.ai `/models` endpoint and retains its curated
+fallback if the account cannot be queried. Copilot uses a short ACP handshake
+without sending a prompt, and refreshes a successful account catalog
+periodically. The `copilot` backend keeps prompts under the Windows
+command-line limit by dropping the oldest composed context when a prompt
+exceeds its cap; the current user message is kept at the tail.
 
 ## Reasoning effort
 

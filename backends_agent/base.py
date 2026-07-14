@@ -143,6 +143,11 @@ class Backend(ABC):
     name: str = ""
     executable: str = ""  # binary name used in "CLI not found" messages
     available_models: tuple[str, ...] = ()
+    # Static/curated catalogs may be extended with explicit
+    # ``config.extra_models`` entries. Backends that discover an
+    # account-authoritative catalog can turn this off so unverified IDs are
+    # never put back into the picker.
+    allow_unverified_extra_models: bool = True
     default_model: str = ""
     default_summary_model: str = ""
     effort_levels: tuple[str, ...] = ()
@@ -214,6 +219,18 @@ class Backend(ABC):
     def tier_model(self, tier: str) -> str:
         """Default model for one of flexible's difficulty tiers."""
         return self.tier_models.get(tier) or self.default_model
+
+    def resolve_configured_model(self, model: str) -> str:
+        """Return an explicit stored model that is safe to launch.
+
+        Most backends intentionally preserve a user-configured model ID even
+        when it is not part of their static catalog; it may be a private
+        endpoint model. Account-authoritative backends can override this to
+        fail closed when a cached policy catalog no longer contains it.
+        This method must not perform blocking discovery because workspace
+        settings are read on the bot's event loop before a turn begins.
+        """
+        return model
 
     def convert_effort(self, percent: int) -> str | None:
         """Translate a 0-100 percentage to the backend's native effort form.

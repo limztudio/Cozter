@@ -367,6 +367,31 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             self.assertIn("private-codex-model", models)  # extra appended
             self.assertEqual(models.count("base-model"), 1)  # no duplicate
 
+    def test_authoritative_catalog_does_not_append_unverified_extras(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            workspace.set_backend_name(tmp, "copilot")
+
+            with (
+                mock.patch.object(
+                    workspace.backends_agent,
+                    "get_backend",
+                    return_value=SimpleNamespace(
+                        available_models=("auto", "company-allowed"),
+                        allow_unverified_extra_models=False,
+                    ),
+                ),
+                mock.patch.object(
+                    config,
+                    "get_extra_models",
+                    return_value=["company-allowed", "blocked-model"],
+                ),
+            ):
+                self.assertEqual(
+                    workspace.get_available_models(tmp),
+                    ["auto", "company-allowed"],
+                )
+
 
 class ColonyStateFallbackTests(unittest.TestCase):
     def test_colony_state_normalizes_missing_or_invalid_keys(self) -> None:

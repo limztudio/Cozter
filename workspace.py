@@ -373,14 +373,23 @@ def set_summary_backend_name(workspace_path: str, name: str) -> None:
     _set_setting(workspace_path, "summary_backend", name)
 
 
-def _with_extra_models(backend_name: str, base) -> list[str]:
+def _with_extra_models(
+    backend_name: str,
+    base,
+    *,
+    allow_unverified_extras: bool = True,
+) -> list[str]:
     """Append user-configured extra models to a backend's built-in list.
 
     Built-in lists are a curated snapshot; ``config.extra_models`` lets
     users add newer/private models without editing source. Built-ins come
-    first, extras keep their order, and duplicates are dropped.
+    first, extras keep their order, and duplicates are dropped. An
+    account-authoritative backend can disable unverified extras so a policy
+    restricted picker never shows an unavailable model.
     """
     models = list(base)
+    if not allow_unverified_extras:
+        return models
     seen = set(models)
     for model in config.get_extra_models(backend_name):
         if model not in seen:
@@ -389,22 +398,27 @@ def _with_extra_models(backend_name: str, base) -> list[str]:
     return models
 
 
+def _available_models_for_backend(backend_name: str) -> list[str]:
+    backend = backends_agent.get_backend(backend_name)
+    return _with_extra_models(
+        backend_name,
+        backend.available_models,
+        allow_unverified_extras=getattr(
+            backend, "allow_unverified_extra_models", True,
+        ),
+    )
+
+
 def get_available_models(workspace_path: str) -> list[str]:
     """List models for the workspace's currently selected backend."""
     backend_name = get_backend_name(workspace_path)
-    return _with_extra_models(
-        backend_name,
-        backends_agent.get_backend(backend_name).available_models,
-    )
+    return _available_models_for_backend(backend_name)
 
 
 def get_available_summary_models(workspace_path: str) -> list[str]:
     """List models for the workspace's summary backend (may differ from chat)."""
     backend_name = get_summary_backend_name(workspace_path)
-    return _with_extra_models(
-        backend_name,
-        backends_agent.get_backend(backend_name).available_models,
-    )
+    return _available_models_for_backend(backend_name)
 
 
 # A model is stored per (backend, role) so each agent keeps its own model
@@ -443,7 +457,7 @@ def _resolve_model(
     backend = backends_agent.get_backend(backend_name)
     configured = settings.get(_model_key(backend_name, scope))
     if isinstance(configured, str) and configured:
-        return configured
+        return backend.resolve_configured_model(configured)
     return _default_model(backend, scope)
 
 
@@ -557,10 +571,7 @@ def set_flexible_model(workspace_path: str, tier: str, model: str) -> None:
 def get_available_flexible_models(workspace_path: str, tier: str) -> list[str]:
     """List models for the agent bound to *tier*."""
     backend_name = get_flexible_backend_name(workspace_path, tier)
-    return _with_extra_models(
-        backend_name,
-        backends_agent.get_backend(backend_name).available_models,
-    )
+    return _available_models_for_backend(backend_name)
 
 
 def get_flexible_run_config(

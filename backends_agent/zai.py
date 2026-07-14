@@ -16,33 +16,65 @@ includes the version so only ``/chat/completions`` is appended),
 
 from __future__ import annotations
 
+import json
+import logging
+import threading
+import urllib.request
+
 from .. import config as cfg
 from ._openai_agent import OpenAIChatBackend
+
+logger = logging.getLogger(__name__)
+
+
+# Safety net for unavailable/unauthorized model discovery.  The installed
+# account's ``/models`` catalog is preferred whenever it can be queried.
+_FALLBACK_MODELS = (
+    "glm-5.2",
+    "glm-5.1",
+    "glm-5-turbo",
+    "glm-5",
+    "glm-4.7",
+    "glm-4.7-flash",
+    "glm-4.7-flashx",
+    "glm-4.6",
+    "glm-4.5",
+    "glm-4.5-air",
+    "glm-4.5-x",
+    "glm-4.5-airx",
+    "glm-4.5-flash",
+    "glm-4-32b-0414-128k",
+)
+_MODEL_DISCOVERY_TIMEOUT_SEC = 10
+
+
+def _model_ids(payload: object) -> tuple[str, ...]:
+    """Extract unique non-empty model IDs from an OpenAI-style response."""
+    if not isinstance(payload, dict):
+        return ()
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return ()
+
+    ids: list[str] = []
+    seen: set[str] = set()
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        model_id = entry.get("id")
+        if not isinstance(model_id, str):
+            continue
+        model_id = model_id.strip()
+        if model_id and model_id not in seen:
+            seen.add(model_id)
+            ids.append(model_id)
+    return tuple(ids)
 
 
 class ZaiBackend(OpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
-    # Snapshot of the model enum documented by Z.ai's Chat Completion API.
-    # The exact set evolves; add private/regional ids via config
-    # `extra_models` - the /model picker merges them.
-    available_models = (
-        "glm-5.2",
-        "glm-5.1",
-        "glm-5-turbo",
-        "glm-5",
-        "glm-4.7",
-        "glm-4.7-flash",
-        "glm-4.7-flashx",
-        "glm-4.6",
-        "glm-4.5",
-        "glm-4.5-air",
-        "glm-4.5-x",
-        "glm-4.5-airx",
-        "glm-4.5-flash",
-        "glm-4-32b-0414-128k",
-    )
     default_model = "glm-5.2"
     default_summary_model = "glm-4.5-air"
     tier_models = {"low": "glm-4.5-air", "mid": "glm-4.7", "high": "glm-5.2"}
@@ -51,6 +83,56 @@ class ZaiBackend(OpenAIChatBackend):
     effort_levels = (
         "none", "minimal", "low", "medium", "high", "xhigh", "max",
     )
+
+    def __init__(self) -> None:
+        # The backend is process-wide, so one account-specific lookup is
+        # sufficient and avoids an HTTP round trip for every picker open.
+        self._cached_models: tuple[str, ...] | None = None
+        self._models_lock = threading.Lock()
+
+    # ---- model discovery -----------------------------------------------
+
+    @property
+    def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
+        """Models exposed by the configured Z.ai account.
+
+        Z.ai's OpenAI-compatible ``/models`` endpoint can include private or
+        plan-specific IDs that a public static list cannot know.  Any missing
+        key, endpoint failure, malformed response, or empty catalog falls
+        back to the curated list above.
+        """
+        if self._cached_models is None:
+            with self._models_lock:
+                if self._cached_models is None:
+                    self._cached_models = self._fetch_models()
+        return self._cached_models
+
+    def _models_endpoint(self) -> str:
+        return cfg.get_zai_base_url().rstrip("/") + "/models"
+
+    def _fetch_models(self) -> tuple[str, ...]:
+        key = cfg.get_zai_api_key()
+        if not key:
+            logger.debug("Z.ai API key is unset; using fallback model list")
+            return _FALLBACK_MODELS
+
+        url = self._models_endpoint()
+        request = urllib.request.Request(
+            url, headers={"Authorization": f"Bearer {key}"}, method="GET",
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            logger.debug(
+                "Could not query Z.ai models at %s (%s); using fallback",
+                url, exc,
+            )
+            return _FALLBACK_MODELS
+
+        return _model_ids(payload) or _FALLBACK_MODELS
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 

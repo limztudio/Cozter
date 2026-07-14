@@ -33,6 +33,11 @@ logger = logging.getLogger(__name__)
 class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
+    # Claude Code has no safe non-interactive catalog command.  In
+    # particular, a managed Bedrock/Vertex/Foundry login cannot be enumerated
+    # through Anthropic's public API, and probing candidate IDs can make a
+    # billable request.  Keep this curated fallback plus config.extra_models
+    # until the CLI exposes an account-aware model-list interface.
     # Mirrors the model registry embedded in the Claude Code CLI. Aliases
     # resolve to the current default for each tier; ``default`` clears a pin
     # and lets Claude Code choose the account-tier default. Full IDs pin a

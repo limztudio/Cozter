@@ -1,6 +1,9 @@
+import io
 import json
 import shutil
 import subprocess
+import sys
+import time
 import unittest
 from unittest import mock
 
@@ -12,6 +15,7 @@ from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
 from Cozter.backends_agent.llama import LlamaBackend, _model_ids
+from Cozter.backends_agent import zai as zai_mod
 from Cozter.backends_agent.zai import ZaiBackend
 
 
@@ -252,38 +256,178 @@ class BackendModelTests(unittest.TestCase):
         self.assertEqual(backend.available_models, visible_models)
         self.assertEqual(backend.model_effort_levels, catalog_efforts)
 
-    def test_copilot_fallback_models_are_current_and_deduped(self) -> None:
-        """The fallback list is the picker's safety net, so keep it clean.
+    def test_copilot_fallback_is_policy_safe_auto_only(self) -> None:
+        """A failed account probe must never revive generic model names."""
+        self.assertEqual(copilot_mod._FALLBACK_MODELS, ("auto",))
+        self.assertEqual(CopilotBackend.default_model, "auto")
+        self.assertEqual(CopilotBackend.default_summary_model, "auto")
+        self.assertEqual(CopilotBackend.tier_models, {})
+        self.assertFalse(CopilotBackend.allow_unverified_extra_models)
 
-        available_models is now discovered from the installed CLI at runtime
-        (see CopilotBackend._discover_models); this tuple only ships when the
-        CLI is absent or its catalog can't be parsed. ``auto`` leads and every
-        default/tier model must stay present so the picker is never empty or
-        self-inconsistent.
-        """
-        models = copilot_mod._FALLBACK_MODELS
-        self.assertEqual(models[0], "auto")
-        self.assertEqual(len(models), len(set(models)))
-        self.assertIn(CopilotBackend.default_model, models)
-        self.assertIn(CopilotBackend.default_summary_model, models)
-        for tier_model in CopilotBackend.tier_models.values():
-            self.assertIn(tier_model, models)
+    def test_copilot_acp_parser_extracts_account_model_values(self) -> None:
+        payload = {
+            "sessionId": "catalog-only-session",
+            "configOptions": [
+                {
+                    "id": "mode",
+                    "category": "mode",
+                    "type": "select",
+                    "options": [{"value": "ask"}],
+                },
+                {
+                    "id": "model",
+                    "category": "model",
+                    "type": "select",
+                    "options": [
+                        {"value": " auto "},
+                        {"value": "company-allowed"},
+                        {"value": " company-allowed "},
+                        {"value": ""},
+                        {"value": 42},
+                        "bad",
+                    ],
+                },
+            ],
+        }
+        self.assertEqual(
+            copilot_mod._parse_acp_model_options(payload),
+            ("auto", "company-allowed"),
+        )
 
-    def test_copilot_help_config_parser_extracts_slugs(self) -> None:
-        sample = (
-            "  `model`: AI model to use.\n"
-            '    - "claude-sonnet-5"\n'
-            '    - "claude-opus-4.8-fast"\n'
-            '    - "claude-sonnet-5"\n'  # duplicate is dropped
-            "\n"
-            "  `contextTier`: tiered-pricing window.\n"
-        )
+    def test_copilot_acp_metadata_catalog_beats_config_fallback(self) -> None:
         self.assertEqual(
-            copilot_mod._parse_help_config_models(sample),
-            ("claude-sonnet-5", "claude-opus-4.8-fast"),
+            copilot_mod._parse_acp_model_options({
+                "models": {
+                    "availableModels": [
+                        {"modelId": "company-allowed"},
+                        {"modelId": "company-allowed"},
+                    ],
+                },
+                "configOptions": [{
+                    "id": "model", "category": "model",
+                    "type": "select",
+                    "options": [{"value": "generic-but-blocked"}],
+                }],
+            }),
+            ("auto", "company-allowed"),
         )
+
+    def test_copilot_acp_parser_rejects_missing_or_malformed_selector(self) -> None:
+        for payload in (
+            None,
+            {},
+            {"configOptions": {}},
+            {"configOptions": []},
+            {"configOptions": [{"id": "model", "type": "boolean"}]},
+            {"configOptions": [{"id": "not-model", "type": "select",
+                                "options": [{"value": "blocked"}]}]},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(copilot_mod._parse_acp_model_options(payload), ())
+
+    def test_copilot_discovery_uses_acp_not_generic_help_catalog(self) -> None:
+        responses = "\n".join((
+            json.dumps({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {"protocolVersion": 1, "agentCapabilities": {}},
+            }),
+            json.dumps({
+                "jsonrpc": "2.0", "id": 2,
+                "result": {
+                    "sessionId": "catalog-only-session",
+                    "configOptions": [{
+                        "id": "model", "category": "model",
+                        "type": "select",
+                        "options": [{"value": "allowed-only"}],
+                    }],
+                },
+            }),
+        )) + "\n"
+        proc = mock.MagicMock()
+        proc.stdin = mock.MagicMock()
+        proc.stdout = io.StringIO(responses)
+        proc.poll.return_value = None
+
+        with (
+            mock.patch.object(copilot_mod.shutil, "which", return_value="copilot"),
+            mock.patch.object(copilot_mod, "executable_command", return_value=["copilot"]),
+            mock.patch.object(copilot_mod.subprocess, "Popen", return_value=proc) as popen,
+        ):
+            self.assertEqual(
+                CopilotBackend().available_models,
+                ("auto", "allowed-only"),
+            )
+
+        command = popen.call_args.args[0]
+        self.assertIn("--acp", command)
+        self.assertIn("--stdio", command)
+        self.assertNotIn("help", command)
+        sent = [
+            json.loads(call.args[0])
+            for call in proc.stdin.write.call_args_list
+        ]
+        self.assertIn(
+            {"jsonrpc": "2.0", "method": "initialized", "params": {}},
+            sent,
+        )
+        proc.terminate.assert_called_once()
+
+    def test_copilot_retries_failures_and_caches_only_success(self) -> None:
+        backend = CopilotBackend()
+        with mock.patch.object(
+            backend,
+            "_discover_models",
+            side_effect=[None, ("auto", "allowed-only")],
+        ) as discover:
+            self.assertEqual(backend.available_models, ("auto",))
+            # A short fallback throttle prevents an unavailable CLI from
+            # spawning another ACP process for every picker interaction.
+            self.assertEqual(backend.available_models, ("auto",))
+            self.assertEqual(discover.call_count, 1)
+            backend._fallback_expires_at = 0
+            self.assertEqual(
+                backend.available_models,
+                ("auto", "allowed-only"),
+            )
+            self.assertEqual(
+                backend.available_models,
+                ("auto", "allowed-only"),
+            )
+
+        self.assertEqual(discover.call_count, 2)
+
+    def test_copilot_stale_configured_model_fails_closed_to_auto(self) -> None:
+        backend = CopilotBackend()
+        backend._cached_models = ("auto", "company-allowed")
+        backend._catalog_expires_at = time.monotonic() + 60
         self.assertEqual(
-            copilot_mod._parse_help_config_models("no model section"), (),
+            backend.resolve_configured_model("company-allowed"),
+            "company-allowed",
+        )
+        self.assertEqual(backend.resolve_configured_model("blocked-model"), "auto")
+
+        backend._catalog_expires_at = 0
+        self.assertEqual(
+            backend.resolve_configured_model("company-allowed"), "auto",
+        )
+
+    def test_copilot_cmd_shim_cleanup_kills_its_process_tree(self) -> None:
+        proc = mock.MagicMock()
+        proc.pid = 12345
+        proc.stdin = None
+        proc.stdout = None
+        proc.stderr = None
+        proc.poll.return_value = 0
+
+        with mock.patch.object(copilot_mod.subprocess, "run") as taskkill:
+            copilot_mod._stop_acp_process(proc, kill_tree=True)
+
+        taskkill.assert_called_once_with(
+            ["taskkill", "/PID", "12345", "/T", "/F"],
+            stdout=copilot_mod.subprocess.DEVNULL,
+            stderr=copilot_mod.subprocess.DEVNULL,
+            timeout=2,
+            check=False,
         )
 
     def test_copilot_effort_matches_current_cli_choices(self) -> None:
@@ -295,49 +439,6 @@ class BackendModelTests(unittest.TestCase):
         self.assertIsNone(backend.convert_effort(0))
         self.assertEqual(backend.convert_effort(1), "low")
         self.assertEqual(backend.convert_effort(100), "max")
-
-    def test_copilot_picker_matches_installed_cli_catalog(self) -> None:
-        copilot = shutil.which("copilot")
-        if not copilot:
-            self.skipTest("copilot CLI is not installed")
-
-        try:
-            proc = subprocess.run(
-                [copilot, "help", "config"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-        except subprocess.TimeoutExpired:
-            self.skipTest("copilot help config timed out")
-
-        if proc.returncode != 0:
-            self.skipTest(
-                f"copilot help config failed: {proc.stderr.strip()}",
-            )
-
-        models: list[str] = []
-        in_model_section = False
-        for line in proc.stdout.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("`model`:"):
-                in_model_section = True
-                continue
-            if not in_model_section:
-                continue
-            if stripped.startswith('- "') and stripped.endswith('"'):
-                models.append(stripped[3:-1])
-                continue
-            if models and stripped:
-                break
-
-        if not models:
-            self.skipTest("copilot help config returned no model catalog")
-
-        # ``auto`` is Cozter's supported sentinel and is not repeated in the
-        # CLI's concrete-model configuration list. available_models is an
-        # instance property (it probes the CLI), so read it off a backend.
-        self.assertEqual(CopilotBackend().available_models[1:], tuple(models))
 
     def test_claude_code_picker_includes_current_models(self) -> None:
         models = ClaudeCodeBackend.available_models
@@ -409,8 +510,8 @@ class BackendHealthCheckTests(unittest.TestCase):
         self.assertIn("not found", detail)
 
     def test_present_executable_reports_healthy(self) -> None:
-        # "sh" is on PATH on the CI runner and every POSIX dev box.
-        ok, _ = self._dummy("sh").health_check()
+        # The interpreter running this test exists on every supported OS.
+        ok, _ = self._dummy(sys.executable).health_check()
         self.assertTrue(ok)
 
     def test_append_model_effort_args(self) -> None:
@@ -486,14 +587,14 @@ class BackendHealthCheckTests(unittest.TestCase):
 
 
 class ZaiBackendTests(unittest.TestCase):
-    def test_defaults_are_selectable(self) -> None:
-        models = ZaiBackend.available_models
+    def test_fallback_models_are_current_and_selectable(self) -> None:
+        models = zai_mod._FALLBACK_MODELS
         self.assertEqual(len(models), len(set(models)))
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
 
-    def test_picker_includes_current_text_models(self) -> None:
-        self.assertEqual(ZaiBackend.available_models, (
+    def test_fallback_picker_includes_current_text_models(self) -> None:
+        self.assertEqual(zai_mod._FALLBACK_MODELS, (
             "glm-5.2",
             "glm-5.1",
             "glm-5-turbo",
@@ -509,6 +610,72 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-4.5-flash",
             "glm-4-32b-0414-128k",
         ))
+
+    def test_model_ids_tolerate_malformed_payloads(self) -> None:
+        for payload in (None, [], {}, {"data": None}, {"data": {}}):
+            with self.subTest(payload=payload):
+                self.assertEqual(zai_mod._model_ids(payload), ())
+
+        self.assertEqual(
+            zai_mod._model_ids({
+                "data": [
+                    {"id": "glm-company"},
+                    {"id": " glm-private "},
+                    {"id": "glm-company"},
+                    {"id": ""},
+                    {"id": 123},
+                    "bad",
+                ],
+            }),
+            ("glm-company", "glm-private"),
+        )
+
+    def test_available_models_queries_configured_account_once(self) -> None:
+        response = mock.MagicMock()
+        response.read.return_value = json.dumps({
+            "data": [{"id": "glm-company"}, {"id": "glm-private"}],
+        }).encode("utf-8")
+        response.__enter__.return_value = response
+        with (
+            mock.patch.object(zai_mod.cfg, "get_zai_api_key", return_value="key"),
+            mock.patch.object(
+                zai_mod.cfg,
+                "get_zai_base_url",
+                return_value="https://models.example.test/v4/",
+            ),
+            mock.patch.object(
+                zai_mod.urllib.request,
+                "urlopen",
+                return_value=response,
+            ) as urlopen_mock,
+        ):
+            backend = ZaiBackend()
+            self.assertEqual(
+                backend.available_models,
+                ("glm-company", "glm-private"),
+            )
+            self.assertEqual(
+                backend.available_models,
+                ("glm-company", "glm-private"),
+            )
+
+        urlopen_mock.assert_called_once()
+        request = urlopen_mock.call_args.args[0]
+        self.assertEqual(request.full_url, "https://models.example.test/v4/models")
+        self.assertEqual(request.get_header("Authorization"), "Bearer key")
+        self.assertEqual(
+            urlopen_mock.call_args.kwargs["timeout"],
+            zai_mod._MODEL_DISCOVERY_TIMEOUT_SEC,
+        )
+
+    def test_available_models_falls_back_without_key(self) -> None:
+        with (
+            mock.patch.object(zai_mod.cfg, "get_zai_api_key", return_value=""),
+            mock.patch.object(zai_mod.urllib.request, "urlopen") as urlopen_mock,
+        ):
+            self.assertEqual(ZaiBackend().available_models, zai_mod._FALLBACK_MODELS)
+
+        urlopen_mock.assert_not_called()
 
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
         # Z.ai's base already carries /api/paas/v4, so no extra /v1.
