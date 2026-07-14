@@ -532,7 +532,7 @@ maps the percentage to its own vocabulary and request shape:
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
 | `zai` | GLM-5.2: 7 levels; older GLM: thinking toggle | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | 5 levels @ 20% each | `--effort max` |
-| `copilot` | 5 levels @ 20% each | `--effort max` |
+| `copilot` | 5 levels @ 20% each for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
 
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort

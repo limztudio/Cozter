@@ -106,6 +106,17 @@ class CopilotBackend(Backend):
         self._fallback_expires_at = 0.0
         self._models_lock = threading.Lock()
 
+    def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
+        """Return the effort vocabulary supported by a selected model.
+
+        Copilot's policy-aware ``auto`` selector rejects ``--effort``.  It
+        is also the implicit selector when no model is supplied.  Explicit,
+        account-approved model IDs retain the normal Copilot effort scale.
+        """
+        if not model or model.strip().casefold() == "auto":
+            return ()
+        return self.effort_levels
+
     # ---- model discovery -----------------------------------------------
 
     @property
@@ -307,7 +318,12 @@ class CopilotBackend(Backend):
         cmd: list[str] = [
             *prefix, "--output-format", "json", "--no-color",
         ]
-        self.append_model_effort_args(cmd, model, effort)
+        self.append_model_effort_args(
+            cmd,
+            model,
+            effort,
+            effort_levels=self.effort_levels_for_model(model),
+        )
 
         if compaction or approval == "full":
             cmd.append("--yolo")

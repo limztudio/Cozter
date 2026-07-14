@@ -268,7 +268,8 @@ STYLE_DESCRIPTIONS = {
 
 # Reasoning effort: a single 0-100 percentage. Each agent backend maps
 # the percentage to its own native scale (codex has 5 levels including
-# "xhigh", llama has 4, claude_code and copilot both have 5).
+# "xhigh", llama has 4, and claude_code has 5. Copilot has 5 for named
+# models; its policy-aware ``auto`` selector delegates effort to the CLI.
 # This sidesteps the per-backend vocabulary problem - the user picks one
 # number and every backend reacts in its own way.
 #

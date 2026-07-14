@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import shutil
@@ -439,6 +440,50 @@ class BackendModelTests(unittest.TestCase):
         self.assertIsNone(backend.convert_effort(0))
         self.assertEqual(backend.convert_effort(1), "low")
         self.assertEqual(backend.convert_effort(100), "max")
+        self.assertEqual(backend.effort_levels_for_model("auto"), ())
+        self.assertEqual(backend.effort_levels_for_model(None), ())
+        self.assertEqual(
+            backend.effort_levels_for_model("company-allowed"),
+            backend.effort_levels,
+        )
+
+    def test_copilot_auto_omits_unsupported_reasoning_effort(self) -> None:
+        async def launch(model: str | None) -> tuple[str, ...]:
+            with (
+                mock.patch.object(
+                    copilot_mod,
+                    "executable_command",
+                    return_value=["copilot"],
+                ),
+                mock.patch.object(
+                    copilot_mod.asyncio,
+                    "create_subprocess_exec",
+                    new_callable=mock.AsyncMock,
+                ) as create_process,
+            ):
+                await CopilotBackend().launch(
+                    "C:/workspace",
+                    "hello",
+                    model,
+                    "auto",
+                    effort=100,
+                )
+            return create_process.await_args.args
+
+        auto_command = asyncio.run(launch("auto"))
+        self.assertIn("--model", auto_command)
+        self.assertIn("auto", auto_command)
+        self.assertNotIn("--effort", auto_command)
+
+        implicit_auto_command = asyncio.run(launch(None))
+        self.assertNotIn("--model", implicit_auto_command)
+        self.assertNotIn("--effort", implicit_auto_command)
+
+        named_command = asyncio.run(launch("company-allowed"))
+        self.assertIn("--model", named_command)
+        self.assertIn("company-allowed", named_command)
+        self.assertIn("--effort", named_command)
+        self.assertIn("max", named_command)
 
     def test_claude_code_picker_includes_current_models(self) -> None:
         models = ClaudeCodeBackend.available_models
