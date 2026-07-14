@@ -880,7 +880,7 @@ class QueueStateFallbackTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_answer_during_update_check_resumes_paused_queue(self) -> None:
+    def test_answer_during_update_restart_resumes_paused_queue(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 old_config_dir = workspace.CONFIG_DIR
@@ -893,7 +893,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     )
                     q.put_nowait(("old queued", "chat", old_id, False))
                     bot._awaiting_answer.add("u1")
-                    bot._update_check_pending = True
+                    bot._update_restart_pending = True
                     ctx = BotContext(
                         user_id="u1",
                         chat_id="chat",
@@ -920,7 +920,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     q.put_nowait(first)
                     q.put_nowait(second)
 
-                    bot._update_check_pending = False
+                    bot._update_restart_pending = False
                     await bot._drain_message_queue("u1")
 
                     self.assertEqual(

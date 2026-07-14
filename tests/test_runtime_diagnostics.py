@@ -267,14 +267,14 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
 
 
 class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
-    async def test_no_update_check_does_not_pause_message_intake(self):
+    async def test_no_update_does_not_pause_message_intake(self):
         main = _load_main_module()
 
         class _Bot:
-            begin_calls = 0
+            restart_calls = 0
 
-            async def begin_update_check(self):
-                self.begin_calls += 1
+            async def begin_update_restart(self):
+                self.restart_calls += 1
 
         sleeps = 0
 
@@ -295,7 +295,8 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
                 await main.update_loop([bot], interval=1)
 
         check_mock.assert_called_once_with()
-        self.assertEqual(bot.begin_calls, 0)
+        # No update found, so intake must not be paused for a restart.
+        self.assertEqual(bot.restart_calls, 0)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ from .backends_agent.base import (
     set_error_result,
 )
 from .utils import (
+    COZTER_DIR,
     await_cancelled,
     cleanup_backend_process,
     create_background_task,
@@ -289,7 +290,7 @@ def _copy_generated_image_into_workspace(
     if src_real == ws_real or src_real.startswith(ws_real + os.sep):
         return src_real
 
-    dest_dir = os.path.join(workspace_path, ".cozter", "generated_images")
+    dest_dir = os.path.join(workspace_path, COZTER_DIR, "generated_images")
     try:
         os.makedirs(dest_dir, exist_ok=True)
         dest = _unique_path(dest_dir, _safe_generated_image_name(src_real, ext))

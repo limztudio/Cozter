@@ -18,7 +18,7 @@ import logging
 import urllib.request
 
 from .. import config as cfg
-from ._openai_agent import OpenAIChatBackend
+from ._openai_agent import OpenAIChatBackend, extract_model_ids
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class LlamaBackend(OpenAIChatBackend):
         try:
             with urllib.request.urlopen(url, timeout=2.0) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
-            ids = _model_ids(payload)
+            ids = extract_model_ids(payload)
             return ids or ("auto",)
         except Exception as exc:
             logger.debug(
@@ -66,7 +66,7 @@ class LlamaBackend(OpenAIChatBackend):
                 payload = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
             return False, f"server unreachable at {url}: {exc}"
-        ids = _model_ids(payload)
+        ids = extract_model_ids(payload)
         if ids:
             return True, f"server up at {url} ({len(ids)} model(s))"
         return True, f"server up at {url} (no models listed)"
@@ -92,24 +92,3 @@ class LlamaBackend(OpenAIChatBackend):
 
     def _max_retries(self) -> int:
         return cfg.get_llama_max_retries()
-
-
-def _model_ids(payload: object) -> tuple[str, ...]:
-    """Extract unique, non-empty IDs from an OpenAI-style models payload."""
-    if not isinstance(payload, dict):
-        return ()
-    models = payload.get("data")
-    if not isinstance(models, list):
-        return ()
-
-    ids: list[str] = []
-    seen: set[str] = set()
-    for model in models:
-        if not isinstance(model, dict):
-            continue
-        model_id = model.get("id")
-        if not isinstance(model_id, str) or not model_id or model_id in seen:
-            continue
-        ids.append(model_id)
-        seen.add(model_id)
-    return tuple(ids)

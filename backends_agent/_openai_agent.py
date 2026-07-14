@@ -34,6 +34,35 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
+def extract_model_ids(payload: object) -> tuple[str, ...]:
+    """Extract unique, non-empty IDs from an OpenAI-style ``/models`` payload.
+
+    Shared by every OpenAI-compatible backend (llama-server, Z.ai) so the
+    parsing of ``{"data": [{"id": ...}, ...}`` lives in one place. IDs are
+    stripped of surrounding whitespace; duplicates and empties are dropped
+    while preserving first-seen order.
+    """
+    if not isinstance(payload, dict):
+        return ()
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return ()
+
+    ids: list[str] = []
+    seen: set[str] = set()
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        model_id = entry.get("id")
+        if not isinstance(model_id, str):
+            continue
+        model_id = model_id.strip()
+        if model_id and model_id not in seen:
+            seen.add(model_id)
+            ids.append(model_id)
+    return tuple(ids)
+
+
 class OpenAIChatBackend(Backend):
     """Backend that drives an OpenAI-compatible chat-completions endpoint.
 

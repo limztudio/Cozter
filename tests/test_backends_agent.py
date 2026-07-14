@@ -17,7 +17,8 @@ from Cozter.backends_agent.base import Backend
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
-from Cozter.backends_agent.llama import LlamaBackend, _model_ids
+from Cozter.backends_agent.llama import LlamaBackend
+from Cozter.backends_agent._openai_agent import extract_model_ids
 from Cozter.backends_agent import zai as zai_mod
 from Cozter.backends_agent.zai import ZaiBackend
 
@@ -686,10 +687,10 @@ class BackendHealthCheckTests(unittest.TestCase):
     def test_llama_model_ids_tolerate_malformed_payloads(self) -> None:
         for payload in (None, [], {}, {"data": None}, {"data": {}}):
             with self.subTest(payload=payload):
-                self.assertEqual(_model_ids(payload), ())
+                self.assertEqual(extract_model_ids(payload), ())
 
         self.assertEqual(
-            _model_ids({
+            extract_model_ids({
                 "data": [
                     {"id": "model-a"},
                     {"id": ""},
@@ -730,10 +731,10 @@ class ZaiBackendTests(unittest.TestCase):
     def test_model_ids_tolerate_malformed_payloads(self) -> None:
         for payload in (None, [], {}, {"data": None}, {"data": {}}):
             with self.subTest(payload=payload):
-                self.assertEqual(zai_mod._model_ids(payload), ())
+                self.assertEqual(extract_model_ids(payload), ())
 
         self.assertEqual(
-            zai_mod._model_ids({
+            extract_model_ids({
                 "data": [
                     {"id": "glm-company"},
                     {"id": " glm-private "},

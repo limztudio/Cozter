@@ -198,7 +198,6 @@ class BotPlatform(ABC):
         self._scheduler_task: asyncio.Task | None = None
         # Set when an auto-update has been pulled and the process is
         # waiting for active AI replies to finish before restarting.
-        self._update_check_pending = False
         self._update_restart_pending = False
         # Serializes read-modify-write on the persistent-queue file so
         # concurrent enqueue/complete calls don't clobber each other.
@@ -315,28 +314,13 @@ class BotPlatform(ABC):
         )
         await self.notify_users(msg)
 
-    async def begin_update_check(self) -> None:
-        """Pause new AI turns while an auto-update check/pull is in flight."""
-        self._update_check_pending = True
-        await self.stop_scheduler()
-
-    async def cancel_update_check(self) -> None:
-        """Resume normal processing after an update check found no update."""
-        self._update_check_pending = False
-        if not self._update_restart_pending:
-            await self.start_scheduler()
-            for uid in list(self._message_queues):
-                self._start_queue_drain(uid)
-
     async def begin_update_restart(self) -> None:
         """Pause new AI turns while an auto-update restart is pending."""
-        self._update_check_pending = False
         self._update_restart_pending = True
         await self.stop_scheduler()
 
     async def cancel_update_restart(self) -> None:
         """Resume normal processing if an update restart is aborted."""
-        self._update_check_pending = False
         self._update_restart_pending = False
         await self.start_scheduler()
         for uid in list(self._message_queues):
@@ -1967,7 +1951,7 @@ class BotPlatform(ABC):
     async def _dispatch_ai(self, ctx: BotContext, text: str) -> None:
         uid = ctx.user_id
         chat_id = ctx.chat_id
-        if self._update_check_pending or self._update_restart_pending:
+        if self._update_restart_pending:
             self._ensure_task_lock(uid)
             q = self._ensure_message_queue(uid)
             if q.full():
@@ -1980,13 +1964,9 @@ class BotPlatform(ABC):
                 await self._resume_awaiting_answer(
                     uid, q, entry_id, reason="update was pending",
                 )
-                if self._update_restart_pending:
-                    message = (
-                        "Update restart pending. Queued for after restart."
-                    )
-                else:
-                    message = "Update check in progress. Queued briefly."
-                await ctx.reply_text(message)
+                await ctx.reply_text(
+                    "Update restart pending. Queued for after restart."
+                )
             return
 
         lock = self._ensure_task_lock(uid)
@@ -2344,7 +2324,7 @@ class BotPlatform(ABC):
         lock = self._ensure_task_lock(uid)
 
         while not q.empty():
-            if self._update_check_pending or self._update_restart_pending:
+            if self._update_restart_pending:
                 break
             if lock.locked():
                 break

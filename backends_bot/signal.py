@@ -1162,7 +1162,6 @@ def _md_to_signal_body_and_spans(
             spans.append((start, length, style))
 
     def parse_inline(src: str) -> None:
-        nonlocal pos
         i = 0
         while i < len(src):
             marker = _signal_inline_marker_at(src, i)

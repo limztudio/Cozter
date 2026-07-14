@@ -22,7 +22,7 @@ import threading
 import urllib.request
 
 from .. import config as cfg
-from ._openai_agent import OpenAIChatBackend
+from ._openai_agent import OpenAIChatBackend, extract_model_ids
 
 logger = logging.getLogger(__name__)
 
@@ -46,29 +46,6 @@ _FALLBACK_MODELS = (
     "glm-4-32b-0414-128k",
 )
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
-
-
-def _model_ids(payload: object) -> tuple[str, ...]:
-    """Extract unique non-empty model IDs from an OpenAI-style response."""
-    if not isinstance(payload, dict):
-        return ()
-    data = payload.get("data")
-    if not isinstance(data, list):
-        return ()
-
-    ids: list[str] = []
-    seen: set[str] = set()
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        model_id = entry.get("id")
-        if not isinstance(model_id, str):
-            continue
-        model_id = model_id.strip()
-        if model_id and model_id not in seen:
-            seen.add(model_id)
-            ids.append(model_id)
-    return tuple(ids)
 
 
 class ZaiBackend(OpenAIChatBackend):
@@ -132,7 +109,7 @@ class ZaiBackend(OpenAIChatBackend):
             )
             return _FALLBACK_MODELS
 
-        return _model_ids(payload) or _FALLBACK_MODELS
+        return extract_model_ids(payload) or _FALLBACK_MODELS
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 
