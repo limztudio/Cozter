@@ -562,6 +562,42 @@ class BackendUnavailable(Exception):
         super().__init__(f"{backend.executable} CLI not found on PATH.")
 
 
+def _take_pending_injections(
+    inject_queue: asyncio.Queue[str] | None,
+    injected: list[str] | None,
+) -> bool:
+    """Collect injections that landed while a phase was winding down.
+
+    A backend watcher is cancelled during normal teardown.  A user message
+    can arrive in that small handoff window, after the watcher stopped but
+    before the next phase (or final return) takes over.  Treat it as an
+    interrupt rather than silently dropping an already acknowledged
+    ``/inject``.
+    """
+    pending: list[str] = []
+    _drain_queue(inject_queue, collect=pending)
+    if not pending:
+        return False
+    if injected is not None:
+        injected.extend(pending)
+    return True
+
+
+def _close_inject_queue(inject_queue: asyncio.Queue[str] | None) -> None:
+    """Stop a bot-owned injection channel from accepting late messages.
+
+    The runtime also accepts ordinary :class:`asyncio.Queue` instances in
+    tests and programmatic callers.  Its private queue subclass exposes an
+    idempotent synchronous ``close`` method; duck-typing keeps that optional
+    lifecycle hook out of the public agent API.
+    """
+    if inject_queue is None:
+        return
+    close = getattr(inject_queue, "close", None)
+    if callable(close):
+        close()
+
+
 def _build_backend_prompt(
     backend, contextual_prompt: str, *, collaborative: bool,
 ) -> str:
@@ -595,6 +631,7 @@ async def _drive_backend(
     on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
     inject_queue: asyncio.Queue[str] | None = None,
     injected: list[str] | None = None,
+    close_inject_on_completion: bool = False,
 ) -> tuple[AgentResult, bool]:
     """Launch *backend*, stream its events, and collect the result.
 
@@ -677,6 +714,15 @@ async def _drive_backend(
     if restarting:
         return result, True
 
+    # ``inject_task`` is cancelled as part of normal teardown.  Do one
+    # last synchronous drain before handing off to another flexible phase
+    # (or finalizing a direct turn), so an accepted message cannot land in
+    # the watcher teardown gap and disappear.
+    if _take_pending_injections(inject_queue, injected):
+        return result, True
+    if close_inject_on_completion:
+        _close_inject_queue(inject_queue)
+
     # Keyed on the *text*, not on the events: a backend that streamed tool
     # calls and then died still owes the caller an answer, and leaving it
     # textless would hand the flexible merge step an empty worker report
@@ -694,6 +740,8 @@ async def _run_with_inject_watch(
     coro: Awaitable[str | None],
     inject_queue: asyncio.Queue[str] | None,
     injected: list[str] | None,
+    *,
+    close_inject_on_completion: bool = False,
 ) -> tuple[str | None, bool]:
     """Run *coro* (an internal-backend call) but abandon it if a message
     arrives on *inject_queue* first.
@@ -735,6 +783,19 @@ async def _run_with_inject_watch(
     # The call finished first; stop watching without consuming a message.
     watch_task.cancel()
     await await_cancelled(watch_task)
+    # A message can arrive after the watcher is cancelled but before this
+    # phase returns to its caller.  Collect it here and restart, instead of
+    # letting an acknowledged /inject fall through a phase boundary.
+    if _take_pending_injections(inject_queue, injected):
+        # Retrieve the completed result so an exception is not left
+        # unobserved; propagate it normally if the call itself failed.
+        call_task.result()
+        return None, True
+    if close_inject_on_completion:
+        # This is the terminal planner/merge phase.  Closing happens before
+        # returning (and therefore before any reply/session I/O awaits), so
+        # late /inject commands are rejected instead of being dropped.
+        _close_inject_queue(inject_queue)
     return call_task.result(), False
 
 
@@ -833,6 +894,12 @@ async def _run_flexible(
     # workers run mid-pipeline, where nobody is reading their questions.
     if plan.question:
         if collaborative:
+            # A question ends the Flexible turn without reaching the merge
+            # phase.  It therefore owns the same terminal injection boundary
+            # as a normal merge result.
+            if _take_pending_injections(inject_queue, injected):
+                return AgentResult(), True
+            _close_inject_queue(inject_queue)
             result = AgentResult()
             append_text_result(result, f"{plan.question}\n\n[[await]]")
             return result, False
@@ -948,6 +1015,7 @@ async def _run_flexible(
         ),
         inject_queue,
         injected,
+        close_inject_on_completion=True,
     )
     if restarting:
         return AgentResult(), True
@@ -1203,10 +1271,13 @@ async def _run_turn(
                     on_event=on_event,
                     inject_queue=inject_queue,
                     injected=injected,
+                    close_inject_on_completion=True,
                 )
         except BackendUnavailable as e:
             result = AgentResult()
             set_error_result(result, str(e))
+            _close_inject_queue(inject_queue)
+            _drain_queue(inject_queue)
             return result
 
         # If we're restarting due to inject, drain pipes and any extra
@@ -1235,7 +1306,12 @@ async def _run_turn(
 
         break  # normal completion
 
-    # Discard any inject messages that arrived after the final answer.
+    # The terminal backend phase normally closes this first.  Keep a
+    # defensive close here for direct callers and queues that exited through
+    # an unusual but non-error path, before session/reply work yields.
+    _close_inject_queue(inject_queue)
+    # Discard any messages from a plain programmatic Queue after the final
+    # answer. Bot-owned queues reject them before this point.
     _drain_queue(inject_queue)
 
     # Log the original prompt (including injected context) to session.

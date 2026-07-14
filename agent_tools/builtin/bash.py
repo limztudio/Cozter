@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import os
-import signal
 import shutil
 from typing import Any, ClassVar
 
 from ..base import AgentTool, coerce_int_arg
+from ...utils import kill_and_wait
 
 # Bash tool default timeout (model can override via the ``timeout``
 # argument up to this hard cap).
@@ -157,17 +157,7 @@ async def _kill_command_tree(proc: asyncio.subprocess.Process) -> None:
     """Terminate the shell and any children it spawned."""
     if proc.returncode is not None:
         return
-    try:
-        if os.name == "nt":
-            proc.kill()
-        else:
-            os.killpg(proc.pid, signal.SIGKILL)
-        await proc.wait()
-    except ProcessLookupError:
-        return
-    except OSError:
-        try:
-            proc.kill()
-            await proc.wait()
-        except OSError:
-            return
+    # Shared cleanup uses a POSIX process group where available and
+    # ``taskkill /T`` on Windows, so a timed-out shell cannot leave build or
+    # test children behind.
+    await kill_and_wait(proc)

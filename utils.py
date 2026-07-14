@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from typing import Any, TypeVar
@@ -97,13 +98,15 @@ def _finalize_background_task(
 
 
 def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
-    """SIGKILL a subprocess - its whole process group if it leads one.
+    """Force-stop a subprocess and, where possible, all of its children.
 
     CLI backends are spawned with ``start_new_session`` so each leads a new
     process group. Killing only the parent PID orphans the grandchildren the
     CLI spawns (builds, test runs, MCP servers via its own bash tool): they
     are reparented to init and keep running - and mutating the workspace -
-    after /stop or an inject-restart. Signalling the group reaps them too.
+    after /stop or an inject-restart. POSIX can signal the new process group;
+    Windows instead uses ``taskkill /T`` to terminate the process tree rooted
+    at the backend process.
 
     Guarded so we never signal our own group (which would kill the bot):
     a process that isn't a group leader (its pgid equals ours) or the
@@ -111,7 +114,28 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
     falls back to a single-target ``proc.kill()``.
     """
     pid = getattr(proc, "pid", None)
-    if os.name != "nt" and isinstance(pid, int) and pid > 0:
+    if os.name == "nt" and isinstance(pid, int) and pid > 0:
+        # ``asyncio`` has no Windows equivalent of POSIX process groups.
+        # ``taskkill /T`` follows the child-process tree, which matters when
+        # a .cmd shim launches Node or an agent invokes a build/test command.
+        # A brief, best-effort synchronous wait makes the caller's subsequent
+        # ``proc.wait()`` safe to treat as complete teardown.  If taskkill is
+        # unavailable or rejects an already-exited PID, retain the existing
+        # single-process kill as a fallback.
+        try:
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if completed.returncode == 0:
+                return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    elif isinstance(pid, int) and pid > 0:
         try:
             pgid = os.getpgid(pid)
             if pgid != os.getpgid(0):

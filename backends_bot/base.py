@@ -135,6 +135,33 @@ Handler = Callable[[BotContext], Awaitable[None]]
 QueueEntry = tuple[str, str, str, bool]
 
 
+class _InjectQueue(asyncio.Queue[str]):
+    """A turn-owned queue that can atomically stop accepting injections.
+
+    ``/inject`` must never acknowledge text after the agent has produced its
+    final answer.  Both ``put_if_active`` and ``close`` are synchronous, so
+    on the event loop there is no await-point between checking the window and
+    enqueueing (or closing) it.
+    """
+
+    def __init__(self, maxsize: int) -> None:
+        super().__init__(maxsize=maxsize)
+        self._accepting = True
+
+    def put_if_active(self, text: str) -> str:
+        """Queue *text* or return ``finished`` / ``full`` without waiting."""
+        if not self._accepting:
+            return "finished"
+        if self.full():
+            return "full"
+        self.put_nowait(text)
+        return "accepted"
+
+    def close(self) -> None:
+        """Prevent any later ``/inject`` from being acknowledged."""
+        self._accepting = False
+
+
 # ---------------------------------------------------------------------------
 # BotPlatform - shared state and command logic.
 # ---------------------------------------------------------------------------
@@ -160,7 +187,7 @@ class BotPlatform(ABC):
         self._running_tasks: dict[str, asyncio.Task] = {}
         self._task_locks: dict[str, asyncio.Lock] = {}
         self._message_queues: dict[str, asyncio.Queue] = {}
-        self._inject_queues: dict[str, asyncio.Queue] = {}
+        self._inject_queues: dict[str, _InjectQueue] = {}
         # Users whose last agent reply ended with [[await]] — their queue
         # drain is paused until the next message from them arrives.
         self._awaiting_answer: set[str] = set()
@@ -1443,10 +1470,13 @@ class BotPlatform(ABC):
         if inject_q is None:
             await ctx.reply_text("No task is running.")
             return
-        if inject_q.full():
+        outcome = inject_q.put_if_active(text)
+        if outcome == "finished":
+            await ctx.reply_text("The task has already finished.")
+            return
+        if outcome == "full":
             await ctx.reply_text("Inject queue full.")
             return
-        await inject_q.put(text)
         await ctx.reply_text("Injected.")
 
     # ----- /reserve (recurring schedule wizard) --------------------------
@@ -2076,9 +2106,7 @@ class BotPlatform(ABC):
             workspace.get_run_config(ws)
         )
 
-        inject_q: asyncio.Queue[str] = asyncio.Queue(
-            maxsize=self.max_queue_size,
-        )
+        inject_q = _InjectQueue(maxsize=self.max_queue_size)
         self._inject_queues[uid] = inject_q
 
         thinking_result = await self._run_status_operation(
@@ -2155,6 +2183,11 @@ class BotPlatform(ABC):
                 session_id=session_id,
             )
         finally:
+            # ``agent.run`` closes the window when its final backend phase
+            # completes.  Keep this idempotent safeguard here for errors or
+            # cancellation before it gets that far, and close before any
+            # status/reply I/O can yield to a late /inject command.
+            inject_q.close()
             if status_edit_task is not None and not status_edit_task.done():
                 status_edit_task.cancel()
             if thinking_handle is not None:

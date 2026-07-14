@@ -114,9 +114,8 @@ async def create_prompt_subprocess(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
-        # New session -> its own process group, so a /stop or inject-restart
-        # can SIGKILL the whole tree (see utils.terminate_process_group) and
-        # not orphan grandchildren the CLI spawns. POSIX only; no-op on Windows.
+        # On POSIX, a new session lets /stop or /inject kill the whole process
+        # group. Windows uses taskkill /T in utils.terminate_process_group.
         start_new_session=os.name != "nt",
     )
     if proc.stdin is None:

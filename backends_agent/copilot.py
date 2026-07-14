@@ -392,10 +392,9 @@ class CopilotBackend(Backend):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=workspace_path,
                 env=env,
-                # Own process group so a /stop or inject-restart kills the
-                # whole tree, not just the copilot parent (see
-                # utils.terminate_process_group). POSIX only; no-op on
-                # Windows.
+                # On POSIX, an own process group lets /stop or /inject kill
+                # the whole tree. Windows uses taskkill /T in
+                # utils.terminate_process_group.
                 start_new_session=os.name != "nt",
             )
         except BaseException:

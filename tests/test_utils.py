@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from Cozter import utils
 
@@ -110,6 +111,60 @@ class ProcessDrainTests(unittest.TestCase):
             )
 
         asyncio.run(run())
+
+
+class ProcessTerminationTests(unittest.TestCase):
+    def test_windows_termination_kills_the_process_tree(self) -> None:
+        proc = mock.MagicMock()
+        proc.pid = 2468
+        completed = mock.Mock(returncode=0)
+
+        with (
+            mock.patch.object(utils.os, "name", "nt"),
+            mock.patch.object(
+                utils.subprocess, "run", return_value=completed,
+            ) as taskkill,
+        ):
+            utils.terminate_process_group(proc)
+
+        taskkill.assert_called_once_with(
+            ["taskkill", "/PID", "2468", "/T", "/F"],
+            stdout=utils.subprocess.DEVNULL,
+            stderr=utils.subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+            creationflags=getattr(utils.subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        proc.kill.assert_not_called()
+
+    def test_windows_tree_kill_failure_falls_back_to_parent_kill(self) -> None:
+        proc = mock.MagicMock()
+        proc.pid = 2468
+
+        with (
+            mock.patch.object(utils.os, "name", "nt"),
+            mock.patch.object(
+                utils.subprocess,
+                "run",
+                return_value=mock.Mock(returncode=1),
+            ),
+        ):
+            utils.terminate_process_group(proc)
+
+        proc.kill.assert_called_once_with()
+
+    def test_non_process_pid_never_calls_windows_taskkill(self) -> None:
+        proc = mock.MagicMock()
+        proc.pid = 0
+
+        with (
+            mock.patch.object(utils.os, "name", "nt"),
+            mock.patch.object(utils.subprocess, "run") as taskkill,
+        ):
+            utils.terminate_process_group(proc)
+
+        taskkill.assert_not_called()
+        proc.kill.assert_called_once_with()
 
 
 class JsonHelperTests(unittest.TestCase):

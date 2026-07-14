@@ -7,6 +7,7 @@ plan parser (a cheap model writes it, so it must be forgiving), the
 per-tier settings, and the routing/merge loop itself.
 """
 
+import asyncio
 import tempfile
 import unittest
 from unittest import mock
@@ -494,6 +495,94 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertIn("429 usage limit reached", result.text)
+
+    async def test_inject_during_planning_restarts_the_whole_turn(self) -> None:
+        """Planner calls are watched just like worker subprocesses are."""
+        planner_started = asyncio.Event()
+
+        async def blocked_planner(*_args, **_kwargs):
+            planner_started.set()
+            await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as ws:
+            workspace.ensure_cozter_dir(ws)
+            inject_q: asyncio.Queue[str] = asyncio.Queue()
+            injected: list[str] = []
+            with mock.patch.object(
+                agent, "run_internal_backend", blocked_planner,
+            ):
+                turn = asyncio.create_task(agent._run_flexible(
+                    "context", "original request", ws,
+                    approval="auto", effort=0, collaborative=False,
+                    summary_backend_name="codex",
+                    summary_model="gpt-5.6-luna", on_event=None,
+                    inject_queue=inject_q, injected=injected,
+                ))
+                await asyncio.wait_for(planner_started.wait(), timeout=1)
+                inject_q.put_nowait("include the new requirement")
+                _, restarting = await asyncio.wait_for(turn, timeout=1)
+
+        self.assertTrue(restarting)
+        self.assertEqual(injected, ["include the new requirement"])
+
+    async def test_inject_during_merging_restarts_the_whole_turn(self) -> None:
+        """An inject must not be stranded while the summary merge runs."""
+        merge_started = asyncio.Event()
+
+        async def planner_then_blocked_merge(
+            _backend, _workspace_path, _prompt, _model, **kwargs,
+        ):
+            if kwargs["label"] == "Flexible planner":
+                return "[PLAN]\n1. [low] inspect the request\n[/PLAN]"
+            merge_started.set()
+            await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as ws:
+            workspace.ensure_cozter_dir(ws)
+            inject_q: asyncio.Queue[str] = asyncio.Queue()
+            injected: list[str] = []
+            with mock.patch.object(
+                agent, "run_internal_backend", planner_then_blocked_merge,
+            ), mock.patch.object(agent, "_drive_backend", self._fake_drive):
+                turn = asyncio.create_task(agent._run_flexible(
+                    "context", "original request", ws,
+                    approval="auto", effort=0, collaborative=False,
+                    summary_backend_name="codex",
+                    summary_model="gpt-5.6-luna", on_event=None,
+                    inject_queue=inject_q, injected=injected,
+                ))
+                await asyncio.wait_for(merge_started.wait(), timeout=1)
+                inject_q.put_nowait("also include the new requirement")
+                _, restarting = await asyncio.wait_for(turn, timeout=1)
+
+        self.assertTrue(restarting)
+        self.assertEqual(injected, ["also include the new requirement"])
+
+    async def test_final_merge_closes_a_bot_inject_window(self) -> None:
+        class ClosingQueue(asyncio.Queue[str]):
+            def __init__(self) -> None:
+                super().__init__()
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as ws:
+            workspace.ensure_cozter_dir(ws)
+            inject_q = ClosingQueue()
+            with mock.patch.object(
+                agent, "run_internal_backend", self._fake_internal,
+            ), mock.patch.object(agent, "_drive_backend", self._fake_drive):
+                _, restarting = await agent._run_flexible(
+                    "context", "user message", ws,
+                    approval="auto", effort=0, collaborative=False,
+                    summary_backend_name="codex",
+                    summary_model="gpt-5.6-luna", on_event=None,
+                    inject_queue=inject_q, injected=[],
+                )
+
+        self.assertFalse(restarting)
+        self.assertTrue(inject_q.closed)
 
 
 if __name__ == "__main__":
