@@ -487,9 +487,9 @@ its own, only the three tiers above.
 
 | Backend | Launch path | Default chat model | Default summary model |
 |---|---|---|---|
-| `codex` | `codex exec --json` | `gpt-5.6-sol` | `gpt-5.6-luna` |
-| `claude_code` | `claude --print --output-format stream-json` | `default` | `haiku` |
-| `copilot` | `copilot --output-format json` | `auto` | `auto` |
+| `codex` | `codex exec --ephemeral --json` | `gpt-5.6-sol` | `gpt-5.6-luna` |
+| `claude_code` | `claude --print --output-format stream-json --verbose` | `default` | `haiku` |
+| `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
 | `llama` | OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-air` |
 
