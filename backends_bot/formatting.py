@@ -58,6 +58,19 @@ def render_fenced_markdown(
     return "\n".join(result)
 
 
+def escape_html_entities(text: str) -> str:
+    """Escape ``&``, ``<``, ``>`` for HTML/mrkdwn-safe output.
+
+    Shared by Telegram (HTML) and Slack (mrkdwn uses the same escapes).
+    Pairs with :func:`strip_html_markup`, which reverses it.
+    """
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 def strip_html_markup(text: str) -> str:
     """Drop simple HTML tags and unescape the entities we emit."""
     plain = re.sub(r"<[^>]+>", "", text)

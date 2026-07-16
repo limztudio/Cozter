@@ -29,7 +29,7 @@ from .base import (
     ensure_upload_dir,
 )
 from .formatting import render_fenced_markdown
-from .formatting import strip_html_markup
+from .formatting import escape_html_entities, strip_html_markup
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +41,9 @@ _TELEGRAM_TEXT_LIMIT = 4096
 # Markdown -> Telegram HTML
 # ---------------------------------------------------------------------------
 
-def _escape_html(text: str) -> str:
-    return (
-        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    )
+# Telegram and Slack share the same HTML-entity escapes; the shared
+# helper lives in formatting.py.
+_escape_html = escape_html_entities
 
 
 def _md_to_html(text: str) -> str:

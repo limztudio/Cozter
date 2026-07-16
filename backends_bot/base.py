@@ -753,18 +753,15 @@ class BotPlatform(ABC):
         await ctx.reply_text("\n".join(lines))
         self._expect_input(ctx.user_id, self._receive_model)
 
-    async def _receive_model(self, ctx: BotContext) -> None:
-        ws = await self._require_ws(ctx)
-        if ws is None:
-            return
-        text = ctx.text.strip()
-        options = await asyncio.to_thread(workspace.get_available_models, ws)
-        model = self._pick_option(text, options)
+    async def _receive_model(
+        self, ctx: BotContext,
+    ) -> None:
+        ws, model = await self._receive_model_choice(
+            ctx,
+            fetch_options=workspace.get_available_models,
+            retry_handler=self._receive_model,
+        )
         if model is None:
-            await ctx.reply_text(
-                f"Unknown model: {text}\nTry again (or /cancel):"
-            )
-            self._expect_input(ctx.user_id, self._receive_model)
             return
         workspace.set_model(ws, model)
         await ctx.reply_text(f"Model set to: {model}")
@@ -790,20 +787,15 @@ class BotPlatform(ABC):
         await ctx.reply_text("\n".join(lines))
         self._expect_input(ctx.user_id, self._receive_summarymodel)
 
-    async def _receive_summarymodel(self, ctx: BotContext) -> None:
-        ws = await self._require_ws(ctx)
-        if ws is None:
-            return
-        text = ctx.text.strip()
-        options = await asyncio.to_thread(
-            workspace.get_available_summary_models, ws,
+    async def _receive_summarymodel(
+        self, ctx: BotContext,
+    ) -> None:
+        ws, model = await self._receive_model_choice(
+            ctx,
+            fetch_options=workspace.get_available_summary_models,
+            retry_handler=self._receive_summarymodel,
         )
-        model = self._pick_option(text, options)
         if model is None:
-            await ctx.reply_text(
-                f"Unknown model: {text}\nTry again (or /cancel):"
-            )
-            self._expect_input(ctx.user_id, self._receive_summarymodel)
             return
         workspace.set_summary_model(ws, model)
         await ctx.reply_text(f"Summary model set to: {model}")
@@ -874,6 +866,34 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, retry_handler)
             return None
         return ws, name
+
+    async def _receive_model_choice(
+        self,
+        ctx: BotContext,
+        *,
+        fetch_options: Callable[[str], list[str]],
+        retry_handler: Callable[[BotContext], Awaitable[None]],
+    ) -> tuple[str, str] | None:
+        """Shared picker-input handler for /model and /summarymodel.
+
+        Resolves the workspace off-thread via *fetch_options*, matches the
+        user's text against the available models, and re-prompts through
+        *retry_handler* on an unknown name. Returns ``(ws, model)`` or
+        ``None`` when the workspace is gone or the input did not match.
+        """
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return None
+        text = ctx.text.strip()
+        options = await asyncio.to_thread(fetch_options, ws)
+        model = self._pick_option(text, options)
+        if model is None:
+            await ctx.reply_text(
+                f"Unknown model: {text}\nTry again (or /cancel):"
+            )
+            self._expect_input(ctx.user_id, retry_handler)
+            return None
+        return ws, model
 
     @staticmethod
     def _option_lines(options: list[str], current: str) -> list[str]:

@@ -243,14 +243,6 @@ class SignalBot(BotPlatform):
         await self._stop_jsonrpc()
         logger.info("Signal bot stopped.")
 
-    async def send_startup_messages(
-        self, version: str, commit_date: str,
-    ) -> None:
-        msg = (
-            f"Cozter started.\nVersion: {version}\nUpdated: {commit_date}"
-        )
-        await self.notify_users(msg)
-
     # ----- JSON-RPC transport --------------------------------------------
 
     async def _start_jsonrpc(self) -> None:

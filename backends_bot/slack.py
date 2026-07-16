@@ -35,7 +35,7 @@ from .base import (
     NO_WORKSPACE_TEXT,
     ensure_upload_dir,
 )
-from .formatting import render_fenced_markdown
+from .formatting import escape_html_entities, render_fenced_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +44,9 @@ logger = logging.getLogger(__name__)
 # Markdown -> Slack mrkdwn
 # ---------------------------------------------------------------------------
 
-def _escape_mrkdwn(text: str) -> str:
-    """Slack mrkdwn uses HTML-style escaping for `<`, `>`, `&`."""
-    return (
-        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    )
+# Slack mrkdwn uses the same HTML-entity escapes as Telegram; the shared
+# helper lives in formatting.py.
+_escape_mrkdwn = escape_html_entities
 
 
 # Private Use Area placeholders that won't collide with user text or
