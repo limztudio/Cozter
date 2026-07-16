@@ -26,6 +26,7 @@ _FALLBACK_MODELS = (
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
+    "gpt-5.3-codex",
     "gpt-5.3-codex-spark",
 )
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
@@ -36,6 +37,7 @@ _FALLBACK_MODEL_EFFORT_LEVELS = {
     "gpt-5.5": _COMMON_EFFORT_LEVELS,
     "gpt-5.4": _COMMON_EFFORT_LEVELS,
     "gpt-5.4-mini": _COMMON_EFFORT_LEVELS,
+    "gpt-5.3-codex": _COMMON_EFFORT_LEVELS,
     "gpt-5.3-codex-spark": _COMMON_EFFORT_LEVELS,
 }
 _MODEL_DISCOVERY_TIMEOUT_SEC = 15
