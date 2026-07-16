@@ -473,6 +473,20 @@ class BotPlatform(ABC):
         return q
 
     @staticmethod
+    def _has_pending_normal_entries(q: asyncio.Queue) -> bool:
+        """True if *q* holds at least one non-ephemeral queued entry.
+
+        ``QueueEntry`` is ``(text, chat_id, entry_id, ephemeral)``.
+        Used by :meth:`_send_result` to avoid arming a ``[[await]]``
+        pause when the user already sent follow-up messages during the
+        turn, which would strand that backlog forever.
+        """
+        for entry in q._queue:  # type: ignore[attr-defined]
+            if isinstance(entry, tuple) and not entry[3]:
+                return True
+        return False
+
+    @staticmethod
     def _pop_next_queue_entry(
         q: asyncio.Queue, *, ephemeral_only: bool = False,
     ) -> QueueEntry | None:
@@ -2309,11 +2323,26 @@ class BotPlatform(ABC):
                 )
 
         if awaiting and uid is not None:
-            self._awaiting_answer.add(uid)
-            logger.info(
-                "User %s awaiting answer; queue paused until next message",
-                uid,
-            )
+            # A [[await]] pause parks *new* messages (the next user
+            # reply is treated as the answer). But messages the user
+            # sent *during* this turn — before the question existed —
+            # are already queued. Stranding them here would leave the
+            # queue unable to pop even after the reply finished, so
+            # only arm the pause when no normal backlog is waiting.
+            q = self._message_queues.get(uid)
+            if q is not None and self._has_pending_normal_entries(q):
+                logger.info(
+                    "User %s reply ended with [[await]] but messages "
+                    "sent earlier are queued; skipping answer pause",
+                    uid,
+                )
+            else:
+                self._awaiting_answer.add(uid)
+                logger.info(
+                    "User %s awaiting answer; queue paused until next "
+                    "message",
+                    uid,
+                )
 
     async def _drain_message_queue(self, uid: str) -> None:
         q = self._message_queues.get(uid)

@@ -10,7 +10,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
-from Cozter import colony, config, schedules, session, workspace
+from Cozter import agent, colony, config, schedules, session, workspace
+from Cozter.backends_agent.base import ChatEvent
 from Cozter.backends_bot.base import BotContext, BotPlatform
 
 
@@ -932,6 +933,136 @@ class QueueStateFallbackTests(unittest.TestCase):
                     workspace.CONFIG_DIR = old_config_dir
 
         asyncio.run(run())
+
+
+class _GatedDrainBot(BotPlatform):
+    """Bot whose _run_turn blocks on a gate, simulating a mid-reply turn.
+
+    When ``await_on_finish`` is set, a finished turn arms the ``[[await]]``
+    pause via the real ``_send_result`` path, exactly as a collaborative
+    reply ending in the marker would.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(["u1"], max_queue_size=5)
+        self.ran: list[str] = []
+        self.gate: asyncio.Event = asyncio.Event()
+        self.await_on_finish: bool = False
+
+    @property
+    def platform_id(self) -> str:
+        return "test:queue"
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def send_text(self, chat_id: str, text: str, *, rich: bool = False):
+        return None
+
+    async def edit_text(self, handle, text: str, *, rich: bool = False) -> None:
+        pass
+
+    async def delete_message(self, handle) -> None:
+        pass
+
+    async def send_file(self, chat_id: str, path: str) -> None:
+        pass
+
+    async def _run_turn(
+        self, uid: str, chat_id: str, text: str,
+        *, session_id: str | None = None,
+    ) -> None:
+        self.ran.append(text)
+        await self.gate.wait()
+        if self.await_on_finish and session_id is None:
+            result = agent.AgentResult()
+            result.events.append(
+                ChatEvent(kind="text", content="Which path?\n\n[[await]]"),
+            )
+            result.text = "Which path?\n\n[[await]]"
+            await self._send_result(
+                chat_id, workspace.get_current(uid, self.platform_id) or "",
+                result, uid=uid,
+            )
+
+
+def _queue_ctx(bot: _GatedDrainBot, text: str) -> BotContext:
+    return BotContext(
+        user_id="u1",
+        chat_id="chat",
+        text=text,
+        command=None,
+        args="",
+        attachment=None,
+        platform=bot,
+    )
+
+
+class MessageDrainedAfterTurnTests(unittest.TestCase):
+    """Regression: a message queued during a turn must pop afterwards.
+
+    Previously a turn that ended in ``[[await]]`` armed the answer pause
+    even when a message was already queued, stranding it forever: the
+    queue would never pop once the agent finished replying.
+    """
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_second_message_drains_after_plain_turn(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                try:
+                    bot = _GatedDrainBot()
+                    t1 = asyncio.create_task(
+                        bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
+                    )
+                    await asyncio.sleep(0)
+                    await asyncio.sleep(0)
+                    # Sent while the agent is mid-reply.
+                    await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
+                    self.assertEqual(bot.ran, ["first"])
+                    bot.gate.set()
+                    await t1
+                    for _ in range(10):
+                        await asyncio.sleep(0)
+                    self.assertEqual(bot.ran, ["first", "second"])
+                finally:
+                    workspace.CONFIG_DIR = old_config_dir
+
+        self._run(run())
+
+    def test_second_message_drains_after_await_turn(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                try:
+                    bot = _GatedDrainBot()
+                    bot.await_on_finish = True
+                    t1 = asyncio.create_task(
+                        bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
+                    )
+                    await asyncio.sleep(0)
+                    await asyncio.sleep(0)
+                    # Sent before the question existed; must not be parked
+                    # behind an answer pause that arms only after the reply.
+                    await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
+                    self.assertEqual(bot.ran, ["first"])
+                    bot.gate.set()
+                    await t1
+                    for _ in range(10):
+                        await asyncio.sleep(0)
+                    self.assertEqual(bot.ran, ["first", "second"])
+                finally:
+                    workspace.CONFIG_DIR = old_config_dir
+
+        self._run(run())
 
 
 if __name__ == "__main__":
