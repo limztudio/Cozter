@@ -656,7 +656,8 @@ ignored for local secrets and runtime queues.
   README under `agent_tools/plugins/`
 - Project metadata, CI, and docs: `requirements.txt`, `py.typed`, `mypy.ini`,
   `.gitlab-ci.yml`, `.github/workflows/ci.yml`, `.config/config.example.json`,
-  `.gitignore`, and this README
+  `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
+  restart path), `.gitignore`, and this README
 - Tests: `tests/conftest.py` plus focused `unittest` modules for
   agent attachments, prompts, and process cleanup; backend event parsing
   and retry behavior; bot commands; import binding; run locks and session
