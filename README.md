@@ -589,7 +589,7 @@ Cozter/
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
 ├── utils.py              shared state, queue, and backend-process helpers
-├── tests/                unittest coverage for commands, state, queues, backends, prompts, tools, and updates
+├── tests/                unittest coverage for commands, state, queues, schedules, compaction, backends, flexible, prompts, tools, attachments, and updates
 ├── .config/config.example.json
 │
 ├── backends_agent/       agent backends (one file per agent)
@@ -658,11 +658,13 @@ ignored for local secrets and runtime queues.
   `.gitlab-ci.yml`, `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests: `tests/conftest.py` plus focused `unittest` modules for
-  agent attachments, prompts, and process cleanup; backend event parsing
-  and retry behavior; bot commands; import binding; run locks and session
-  picking; platform and Signal formatting; runtime diagnostics; state
-  fallbacks; thinking-status display; updater behavior; utilities; and the
+- Tests: `tests/conftest.py` plus focused `unittest` modules covering
+  agent attachments, prompts, process cleanup, and post-turn behavior;
+  backend model defaults, event parsing, and llama retry; bot and Slack
+  commands; compaction; the flexible meta-agent; inject; import binding;
+  run locks and session picking; platform, Slack, and Signal rich-text
+  formatting; runtime diagnostics; state fallbacks; status latency and
+  thinking-status display; updater behavior; utilities; and the
   built-in/plugin tool surface
 
 The normal working checkout may also contain ignored runtime state such as
@@ -806,11 +808,13 @@ thin: each defines `launch()` (build argv, spawn subprocess) and
 Run the current unit tests from the parent directory, or set
 `PYTHONPATH` to the parent when running inside the repository. Discovery
 covers malformed state/config fallbacks, persistent queue restoration,
-schedule parsing, backend model defaults and event parsing,
-subprocess draining and exceptional-path cleanup, prompt construction,
-attachment handling, run-lock cancellation, session picking,
-platform/Slack/Signal rich-text formatting, runtime diagnostics, updater behavior,
-agent-tool helpers, and built-in discovery/edit/patch safety.
+schedule parsing, backend model defaults and event parsing, llama retry
+behavior, the flexible meta-agent's planning/merge, post-turn and inject
+flow, subprocess draining and exceptional-path cleanup, prompt
+construction, attachment handling, run-lock cancellation, session
+picking, compaction, platform/Slack/Signal rich-text formatting,
+status-latency and thinking-status display, runtime diagnostics, updater
+behavior, agent-tool helpers, and built-in discovery/edit/patch safety.
 
 ```bash
 cd ..
