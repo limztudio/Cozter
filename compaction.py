@@ -3,8 +3,8 @@
 Rolls a session's message history into a SCRATCH summary plus a
 LONG-TERM list, replacing the raw messages so the conversation can
 continue without exhausting the context window. Triggered automatically
-when ``len(messages) >= compact_interval`` after a turn, or manually
-via ``/compact now`` (removed in the routing round).
+when ``len(messages) >= compact_interval`` after a turn. The interval is
+set via ``/compact <number>``; there is no one-shot manual compaction.
 
 A successful compaction also bumps the workspace-wide colony counter
 and may fire a colony consolidation pass via ``colony.maybe_trigger``.
