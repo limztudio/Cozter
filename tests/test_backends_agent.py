@@ -55,9 +55,6 @@ class BackendModelTests(unittest.TestCase):
             "gpt-5.6-terra",
             "gpt-5.6-luna",
             "gpt-5.5",
-            "gpt-5.4",
-            "gpt-5.4-mini",
-            "gpt-5.3-codex",
             "gpt-5.3-codex-spark",
         ))
         self.assertIn(CodexBackend.default_model, models)
@@ -85,7 +82,7 @@ class BackendModelTests(unittest.TestCase):
             ("low", "medium", "high", "xhigh", "max"),
         )
         self.assertEqual(
-            backend.effort_levels_for_model("gpt-5.4"),
+            backend.effort_levels_for_model("gpt-5.5"),
             ("low", "medium", "high", "xhigh"),
         )
         self.assertEqual(
