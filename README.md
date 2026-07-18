@@ -101,7 +101,7 @@ starts.
 
 ## Requirements
 
-- Python 3.10+ (the codebase uses modern type syntax)
+- Python 3.11+ (CI targets 3.11 and 3.12; the codebase uses modern type syntax)
 - One agent backend CLI, server, or API key:
   `codex`, `claude`, `copilot`, an OpenAI-compatible HTTP server for the
   `llama` backend, or Z.ai credentials for the `zai` backend
