@@ -146,19 +146,30 @@ def _fetch_origin() -> bool:
     return True
 
 
+def _skip_pull_reason() -> str | None:
+    """Return why an auto-pull should be skipped, or None to proceed.
+
+    Shared by the update-check and the actual pull: a dirty working tree
+    or a branch that is ahead of its upstream means the checkout is being
+    developed on rather than merely deployed, and a fast-forward pull
+    would fight that work.
+    """
+    if _working_tree_dirty():
+        return "working tree has uncommitted changes"
+    if _local_ahead_of_upstream():
+        return (
+            "local branch is ahead of or lacks a tracking upstream "
+            "(development checkout)"
+        )
+    return None
+
+
 def _remote_update_available() -> bool:
     """Return whether the fetched upstream is ahead without pulling it."""
     try:
-        if _working_tree_dirty():
-            logger.debug(
-                "Skipping auto-pull: working tree has uncommitted changes",
-            )
-            return False
-        if _local_ahead_of_upstream():
-            logger.debug(
-                "Skipping auto-pull: local branch is ahead of or lacks a "
-                "tracking upstream (development checkout)",
-            )
+        skip = _skip_pull_reason()
+        if skip:
+            logger.debug("Skipping auto-pull: %s", skip)
             return False
 
         upstream_result = _git(
@@ -213,15 +224,9 @@ def fetch_and_pull() -> bool:
     if not _fetch_origin():
         return _head_changed()
     try:
-        if _working_tree_dirty():
-            logger.debug(
-                "Skipping auto-pull: working tree has uncommitted changes",
-            )
-        elif _local_ahead_of_upstream():
-            logger.debug(
-                "Skipping auto-pull: local branch is ahead of or lacks a "
-                "tracking upstream (development checkout)",
-            )
+        skip = _skip_pull_reason()
+        if skip:
+            logger.debug("Skipping auto-pull: %s", skip)
         else:
             pull = _git("pull", "--ff-only")
             if pull.returncode != 0:

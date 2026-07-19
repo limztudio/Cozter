@@ -154,27 +154,31 @@ def _normalize_session_data(value: object, *, path: str = "") -> dict | None:
     long_term = data.get("long_term", [])
     data["long_term"] = normalize_string_list(long_term, strip=False)
 
-    compacted_count = data.get("compacted_count", 0)
-    if (
-        not isinstance(compacted_count, int)
-        or isinstance(compacted_count, bool)
-        or compacted_count < 0
-    ):
-        compacted_count = 0
-    data["compacted_count"] = compacted_count
+    data["compacted_count"] = _coerce_compacted_count(data)
 
     return data
 
 
+def _coerce_compacted_count(data: dict) -> int:
+    """Return a non-negative ``compacted_count`` from session data.
+
+    Stored counts can be absent or malformed (hand-edited state, a partial
+    write): treat any non-int, bool, or negative value as zero rather than
+    letting a bogus number inflate the displayed message tally.
+    """
+    value = data.get("compacted_count", 0)
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+    ):
+        return 0
+    return value
+
+
 def total_message_count(data: dict) -> int:
     """Total messages in a session (compacted + currently stored)."""
-    compacted_count = data.get("compacted_count", 0)
-    if (
-        not isinstance(compacted_count, int)
-        or isinstance(compacted_count, bool)
-        or compacted_count < 0
-    ):
-        compacted_count = 0
+    compacted_count = _coerce_compacted_count(data)
     messages = data.get("messages", [])
     if not isinstance(messages, list):
         messages = []

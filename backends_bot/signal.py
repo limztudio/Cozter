@@ -123,12 +123,9 @@ class SignalBot(BotPlatform):
             self._remember_outgoing_text(group_id, chunk)
             params: dict[str, Any] = {"groupId": group_id, "message": chunk}
             _add_signal_text_styles(params, styles)
-            result = await self._rpc_request(
-                "send", params,
-            )
+            result = await self._send_rpc_and_remember("send", params)
             timestamp = _extract_timestamp_from_value(result)
             if timestamp:
-                self._remember_own_sent_timestamp(timestamp)
                 last = MessageHandle(
                     chat_id=group_id,
                     message_id=timestamp,
@@ -151,13 +148,7 @@ class SignalBot(BotPlatform):
             "message": message,
         }
         _add_signal_text_styles(params, styles)
-        result = await self._rpc_request(
-            "send",
-            params,
-        )
-        timestamp = _extract_timestamp_from_value(result)
-        if timestamp:
-            self._remember_own_sent_timestamp(timestamp)
+        await self._send_rpc_and_remember("send", params)
 
     async def delete_message(self, handle: MessageHandle) -> None:
         group_id = self._group_id_for_chat(handle.chat_id)
@@ -171,12 +162,9 @@ class SignalBot(BotPlatform):
 
     async def send_file(self, chat_id: str, path: str) -> None:
         group_id = self._group_id_for_chat(chat_id)
-        result = await self._rpc_request(
+        await self._send_rpc_and_remember(
             "send", {"groupId": group_id, "attachment": path},
         )
-        timestamp = _extract_timestamp_from_value(result)
-        if timestamp:
-            self._remember_own_sent_timestamp(timestamp)
 
     async def send_status(self, chat_id: str, text: str) -> None:
         # Signal has no cheap, reliable transient status surface if
@@ -1026,6 +1014,21 @@ class SignalBot(BotPlatform):
         while len(self._own_sent_timestamp_order) > _OUTGOING_ECHO_LIMIT:
             old = self._own_sent_timestamp_order.popleft()
             self._own_sent_timestamps.discard(old)
+
+    async def _send_rpc_and_remember(
+        self, method: str, params: dict[str, Any],
+    ) -> Any:
+        """Run a signal-cli RPC and, if it returned a timestamp, track it.
+
+        Every send/edit/attachment response carries the assigned message
+        timestamp, which later lets Cozter recognise its own echoed
+        messages and avoid processing them again.
+        """
+        result = await self._rpc_request(method, params)
+        timestamp = _extract_timestamp_from_value(result)
+        if timestamp:
+            self._remember_own_sent_timestamp(timestamp)
+        return result
 
     def _is_own_sent_echo(
         self,

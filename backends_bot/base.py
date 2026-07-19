@@ -744,13 +744,10 @@ class BotPlatform(ABC):
             return
         current = workspace.get_model(ws)
         options = await asyncio.to_thread(workspace.get_available_models, ws)
-        lines = [
+        await ctx.reply_text("\n".join([
             f"Current model: {current} (backend: {backend_name})\n",
-            "Available models:",
-            *self._option_lines(options, current),
-            "\nEnter a number or model name (or /cancel):",
-        ]
-        await ctx.reply_text("\n".join(lines))
+            *self._picker_list(options, current, noun="model"),
+        ]))
         self._expect_input(ctx.user_id, self._receive_model)
 
     async def _receive_model(
@@ -777,14 +774,11 @@ class BotPlatform(ABC):
         options = await asyncio.to_thread(
             workspace.get_available_summary_models, ws,
         )
-        lines = [
+        await ctx.reply_text("\n".join([
             f"Current summary model: {current}"
             f" (summary agent: {summary_backend})\n",
-            "Available models:",
-            *self._option_lines(options, current),
-            "\nEnter a number or model name (or /cancel):",
-        ]
-        await ctx.reply_text("\n".join(lines))
+            *self._picker_list(options, current, noun="model"),
+        ]))
         self._expect_input(ctx.user_id, self._receive_summarymodel)
 
     async def _receive_summarymodel(
@@ -808,15 +802,12 @@ class BotPlatform(ABC):
             return
         current = workspace.get_backend_name(ws)
         options = workspace.AVAILABLE_BACKENDS
-        lines = [
+        await ctx.reply_text("\n".join([
             f"Current agent: {current}\n",
-            "Available agents:",
-            *self._option_lines(options, current),
+            *self._picker_list(options, current, noun="agent"),
             f"\n{workspace.FLEXIBLE_BACKEND} splits each request by"
             " difficulty and routes the parts to its low/mid/high agents.",
-            "\nEnter a number or agent name (or /cancel):",
-        ]
-        await ctx.reply_text("\n".join(lines))
+        ]))
         self._expect_input(ctx.user_id, self._receive_agent)
 
     async def _receive_agent(self, ctx: BotContext) -> None:
@@ -904,6 +895,18 @@ class BotPlatform(ABC):
         ]
 
     @staticmethod
+    def _picker_list(
+        options: list[str], current: str, *, noun: str,
+    ) -> list[str]:
+        """The shared body of a model/agent picker: the "Available …" list,
+        the numbered options, and the trailing input prompt."""
+        return [
+            f"Available {noun}s:",
+            *BotPlatform._option_lines(options, current),
+            f"\nEnter a number or {noun} name (or /cancel):",
+        ]
+
+    @staticmethod
     def _flexible_summary(ws: str) -> str:
         """Describe how the flexible agent is currently wired up."""
         lines = [
@@ -941,15 +944,12 @@ class BotPlatform(ABC):
         # Flexible itself is excluded: a tier pointing back at the
         # meta-agent would plan and split forever.
         options = workspace.DIRECT_BACKENDS
-        lines = [
+        await ctx.reply_text("\n".join([
             f"Flexible {tier} tier —"
             f" {workspace.FLEXIBLE_TIER_DESCRIPTIONS[tier]}",
             f"Current agent: {current}\n",
-            "Available agents:",
-            *self._option_lines(options, current),
-            "\nEnter a number or agent name (or /cancel):",
-        ]
-        await ctx.reply_text("\n".join(lines))
+            *self._picker_list(options, current, noun="agent"),
+        ]))
         self._expect_input(
             ctx.user_id,
             functools.partial(self._receive_flexible_agent, tier=tier),
@@ -983,15 +983,12 @@ class BotPlatform(ABC):
         options = await asyncio.to_thread(
             workspace.get_available_flexible_models, ws, tier,
         )
-        lines = [
+        await ctx.reply_text("\n".join([
             f"Flexible {tier} tier —"
             f" {workspace.FLEXIBLE_TIER_DESCRIPTIONS[tier]}",
             f"Current model: {current} (agent: {backend_name})\n",
-            "Available models:",
-            *self._option_lines(options, current),
-            "\nEnter a number or model name (or /cancel):",
-        ]
-        await ctx.reply_text("\n".join(lines))
+            *self._picker_list(options, current, noun="model"),
+        ]))
         self._expect_input(
             ctx.user_id,
             functools.partial(self._receive_flexible_model, tier=tier),
@@ -1030,13 +1027,10 @@ class BotPlatform(ABC):
         # The summary agent runs compaction, titling, and flexible's plan
         # and merge steps — all real turns, which flexible cannot serve.
         options = workspace.DIRECT_BACKENDS
-        lines = [
+        await ctx.reply_text("\n".join([
             f"Current summary agent: {current}\n",
-            "Available agents:",
-            *self._option_lines(options, current),
-            "\nEnter a number or agent name (or /cancel):",
-        ]
-        await ctx.reply_text("\n".join(lines))
+            *self._picker_list(options, current, noun="agent"),
+        ]))
         self._expect_input(ctx.user_id, self._receive_summaryagent)
 
     async def _receive_summaryagent(self, ctx: BotContext) -> None:
