@@ -575,6 +575,7 @@ Cozter/
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
 ├── requirements.txt      Python runtime dependencies installed into .venv
 ├── py.typed              marks the package as typed for downstream checkers
+├── pyproject.toml        pytest config; silences the optional pytest-asyncio deprecation warning
 ├── .config/              runtime config dir; only config.example.json is tracked
 ├── backends_bot/         chat surfaces and shared fenced-Markdown formatting
 ├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
@@ -655,7 +656,9 @@ ignored for local secrets and runtime queues.
   the 16 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
 - Project metadata, CI, and docs: `requirements.txt`, `py.typed`, `mypy.ini`,
-  `.gitlab-ci.yml`, `.github/workflows/ci.yml`, `.config/config.example.json`,
+  `pyproject.toml` (pytest config that silences the optional
+  pytest-asyncio deprecation warning), `.gitlab-ci.yml`,
+  `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
 - Tests: `tests/conftest.py` plus focused `unittest` modules covering
@@ -695,7 +698,7 @@ that owns them:
   `workspace.py`, `session.py`, `schedules.py`, `compaction.py`, and
   `colony.py`
 - CI and local quality gates: `.gitlab-ci.yml`, `.github/workflows/ci.yml`,
-  `mypy.ini`, and `tests/`
+  `mypy.ini`, `pyproject.toml`, and `tests/`
 
 The agent loop in `agent.py:run()` is shared across backends. Each
 `Backend.launch()` spawns the right subprocess or starts an in-process
