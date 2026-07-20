@@ -564,7 +564,6 @@ class BackendModelTests(unittest.TestCase):
             "claude-fable-5",
             "claude-sonnet-5",
             "claude-opus-4-8",
-            "claude-opus-4-8[1m]",
             "claude-opus-4-7",
             "claude-opus-4-6",
             "claude-opus-4-5",
@@ -594,6 +593,7 @@ class BackendModelTests(unittest.TestCase):
             "claude-opus-4-7-fast",
             "claude-opus-4-8-fast",
             # Natively 1M, so these carry no [1m] suffix.
+            "claude-opus-4-8[1m]",
             "claude-sonnet-5[1m]",
             "claude-fable-5[1m]",
         ):

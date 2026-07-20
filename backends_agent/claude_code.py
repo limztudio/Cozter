@@ -51,8 +51,10 @@ class ClaudeCodeBackend(Backend):
     #     Sonnet 4.5, Haiku 4.5). From Opus/Sonnet 4.6 on, the ID is undated
     #     and inventing a date suffix 404s.
     #   - ``[1m]`` is only valid on models whose registry entry sets
-    #     supports_1m_suffix. Sonnet 5, Fable 5, and Mythos 5 are natively 1M,
-    #     so they take no suffix (the CLI strips one if given).
+    #     supports_1m_suffix. Opus 4.8, Sonnet 5, Fable 5, and Mythos 5 are
+    #     natively 1M, so they take no suffix (the CLI strips one if given);
+    #     note Opus 4.6/4.7 are also native-1M but *do* set the flag, so their
+    #     ``[1m]`` variant is real and stays in the picker.
     #   - Fast mode is a session toggle (``/fast``) on Opus 4.8/4.7, not a
     #     model ID. The ``claude-opus-4-*-fast`` strings are retired API IDs:
     #     4.6-fast silently degrades to standard Opus 4.6, and 4.7-fast errors
@@ -81,7 +83,6 @@ class ClaudeCodeBackend(Backend):
         "claude-sonnet-4-5-20250929",
         "claude-haiku-4-5",
         "claude-haiku-4-5-20251001",
-        "claude-opus-4-8[1m]",
         "claude-opus-4-7[1m]",
         "claude-opus-4-6[1m]",
         "claude-sonnet-4-6[1m]",
