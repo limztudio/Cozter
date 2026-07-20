@@ -1,0 +1,12 @@
+# Local tool configuration. This is intentionally minimal: the project's
+# canonical gates (lint/type/test) and their settings live in mypy.ini,
+# .github/workflows/ci.yml, and .gitlab-ci.yml. The pytest section below
+# only silences a noisy deprecation warning emitted by the optional
+# pytest-asyncio plugin (the suite drives async tests via asyncio.run
+# inside unittest, so pytest-asyncio is never actually used).
+
+[tool.pytest.ini_options]
+# pytest-asyncio >= 0.24 warns when this is unset, even though no fixture
+# here relies on it. Pin the current behavior so the warning stops
+# drowning out real test output for local pytest users.
+asyncio_default_fixture_loop_scope = "function"

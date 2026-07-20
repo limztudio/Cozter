@@ -212,8 +212,14 @@ class ClaudeCodeBackend(Backend):
     # -- helpers ----------------------------------------------------------
 
     def _handle_assistant_block(
-        self, block: dict, result: AgentResult,
+        self, block: object, result: AgentResult,
     ) -> None:
+        # Anthropic allows ``content`` to be either a list of typed blocks
+        # or, for plain-text messages, a bare string. Iterating yields
+        # dicts normally, but a non-dict entry must not raise here and
+        # crash the turn.
+        if not isinstance(block, dict):
+            return
         btype = block.get("type")
         if btype == "text":
             text = block.get("text", "")

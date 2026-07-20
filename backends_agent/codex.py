@@ -270,7 +270,13 @@ class CodexBackend(Backend):
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
         etype = event.get("type", "")
-        item = event.get("item", {})
+        # ``or {}`` guards a malformed ``"item": null`` the way the
+        # default alone can't: ``.get("item", {})`` returns {} only when
+        # the key is absent, so a present-but-null value would otherwise
+        # make ``item.get(...)`` raise AttributeError and crash the turn.
+        item = event.get("item") or {}
+        if not isinstance(item, dict):
+            item = {}
         item_type = item.get("type", "")
 
         if etype == "item.completed":
@@ -331,7 +337,7 @@ class CodexBackend(Backend):
     def extract_agent_text(self, event: dict) -> str | None:
         if event.get("type") != "item.completed":
             return None
-        item = event.get("item", {})
-        if item.get("type") != "agent_message":
+        item = event.get("item") or {}
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
             return None
         return item.get("text") or None

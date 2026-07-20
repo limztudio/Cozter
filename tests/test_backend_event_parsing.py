@@ -108,6 +108,23 @@ class CodexParseTests(unittest.TestCase):
         self.assertEqual(r.usage["input_tokens"], 12470)
         self.assertEqual(r.usage["output_tokens"], 28)
 
+    def test_malformed_item_null_does_not_crash(self) -> None:
+        """A present-but-null ``item`` must not raise AttributeError."""
+        r = _run(self.backend, [
+            {"type": "item.completed", "item": None},
+        ])
+        # No text captured, no crash; the malformed line is simply ignored.
+        self.assertEqual(r.text, "")
+        self.assertEqual(r.events, [])
+
+    def test_malformed_item_non_dict_does_not_crash(self) -> None:
+        """A non-object ``item`` must be tolerated, not crash the turn."""
+        r = _run(self.backend, [
+            {"type": "item.completed", "item": "unexpected"},
+        ])
+        self.assertEqual(r.text, "")
+        self.assertEqual(r.events, [])
+
 
 class ClaudeCodeParseTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -120,6 +137,16 @@ class ClaudeCodeParseTests(unittest.TestCase):
             ]}},
         ])
         self.assertEqual(r.text, "hi there")
+
+    def test_assistant_non_dict_block_is_skipped(self) -> None:
+        """A bare-string content entry must not raise during parsing."""
+        r = _run(self.backend, [
+            {"type": "assistant", "message": {"content": [
+                "raw string block",
+                {"type": "text", "text": "ok"},
+            ]}},
+        ])
+        self.assertEqual(r.text, "ok")
 
     def test_assistant_tool_use_bash(self) -> None:
         r = _run(self.backend, [
