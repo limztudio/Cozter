@@ -399,7 +399,9 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
     async def test_reports_are_concatenated_when_the_merge_agent_is_gone(
         self,
     ) -> None:
-        async def missing_merge(backend, ws_path, prompt, model, **kwargs):
+        async def missing_merge(
+            _backend, _ws_path, _prompt, _model, **kwargs,
+        ):
             self.internal.append(kwargs["label"])
             if kwargs["label"] == "Flexible planner":
                 return self.plan_output
@@ -434,16 +436,14 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         stubbed out too: the reply the user is left with has to name the
         tier that went quiet, or there is nothing to act on.
         """
-        async def silent_worker(
-            backend, ws_path, prompt, model, approval, **kwargs,
-        ):
+        async def silent_worker(*_args, **_kwargs):
             result = AgentResult()
             # Tool events but no text - the shape a backend leaves behind
             # when it dies partway through a turn.
             result.events.append(ChatEvent(kind="tool", content="ran a tool"))
             return result, False
 
-        async def silent_merge(backend, ws_path, prompt, model, **kwargs):
+        async def silent_merge(*_args, **kwargs):
             if kwargs["label"] == "Flexible planner":
                 return self.plan_output
             return ""  # the merge model had nothing to add either
@@ -469,14 +469,12 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_failing_worker_reports_why_it_went_quiet(self) -> None:
         """A backend error must reach the user, not just the journal."""
-        async def failing_worker(
-            backend, ws_path, prompt, model, approval, **kwargs,
-        ):
+        async def failing_worker(*_args, **_kwargs):
             result = AgentResult()
             result.error = "429 usage limit reached"
             return result, False
 
-        async def silent_merge(backend, ws_path, prompt, model, **kwargs):
+        async def silent_merge(*_args, **kwargs):
             if kwargs["label"] == "Flexible planner":
                 return self.plan_output
             return ""  # the same broken agent runs the merge
