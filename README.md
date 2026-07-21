@@ -474,7 +474,7 @@ the hard ones:
 /agent_flexible_high    -> claude_code        /model_flexible_high  -> opus
 ```
 
-Defaults put all three tiers on `codex` (`gpt-5.3-codex-spark` / `gpt-5.6-luna` /
+Defaults put all three tiers on `codex` (`gpt-5.4-mini` / `gpt-5.6-luna` /
 `gpt-5.6-sol`); pointing a tier at another agent picks that agent's
 cheap/mid/strong models automatically (its `tier_models` table). `/model`
 and `/doctor` print the current wiring. A tier can only point at a *direct*

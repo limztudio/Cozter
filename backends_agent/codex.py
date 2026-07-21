@@ -24,6 +24,8 @@ _FALLBACK_MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
     "gpt-5.3-codex-spark",
 )
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
@@ -32,6 +34,8 @@ _FALLBACK_MODEL_EFFORT_LEVELS = {
     "gpt-5.6-terra": (*_COMMON_EFFORT_LEVELS, "max", "ultra"),
     "gpt-5.6-luna": (*_COMMON_EFFORT_LEVELS, "max"),
     "gpt-5.5": _COMMON_EFFORT_LEVELS,
+    "gpt-5.4": _COMMON_EFFORT_LEVELS,
+    "gpt-5.4-mini": _COMMON_EFFORT_LEVELS,
     "gpt-5.3-codex-spark": _COMMON_EFFORT_LEVELS,
 }
 _MODEL_DISCOVERY_TIMEOUT_SEC = 15
@@ -107,7 +111,7 @@ class CodexBackend(Backend):
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.6-luna"
     tier_models = {
-        "low": "gpt-5.3-codex-spark",
+        "low": "gpt-5.4-mini",
         "mid": "gpt-5.6-luna",
         "high": "gpt-5.6-sol",
     }
