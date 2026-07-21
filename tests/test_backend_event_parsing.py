@@ -158,6 +158,36 @@ class ClaudeCodeParseTests(unittest.TestCase):
         self.assertIn("tool", _kinds(r))
         self.assertIn("pytest", r.events[0].content)
 
+    def test_paired_background_bash_result_records_task(self) -> None:
+        r = _run(self.backend, [
+            {"type": "assistant", "message": {"content": [{
+                "type": "tool_use", "id": "tool-bg", "name": "Bash",
+                "input": {"command": 'claude --bg "run checks"'},
+            }]}},
+            {"type": "user", "message": {"content": [{
+                "type": "tool_result", "tool_use_id": "tool-bg",
+                "content": "backgrounded · 048e1065\n"
+                "  claude logs 048e1065",
+            }]}},
+        ])
+        self.assertEqual(
+            [(task.backend_name, task.task_id) for task in r.detached_tasks],
+            [("claude_code", "048e1065")],
+        )
+
+    def test_unpaired_background_marker_is_not_trusted(self) -> None:
+        r = _run(self.backend, [
+            {"type": "assistant", "message": {"content": [{
+                "type": "tool_use", "id": "ordinary", "name": "Bash",
+                "input": {"command": "echo backgrounded"},
+            }]}},
+            {"type": "user", "message": {"content": [{
+                "type": "tool_result", "tool_use_id": "ordinary",
+                "content": "backgrounded · 048e1065",
+            }]}},
+        ])
+        self.assertEqual(r.detached_tasks, [])
+
     def test_assistant_tool_use_file(self) -> None:
         r = _run(self.backend, [
             {"type": "assistant", "message": {"content": [

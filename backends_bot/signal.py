@@ -195,6 +195,7 @@ class SignalBot(BotPlatform):
             self._migrate_group_schedules_from_current_workspaces()
             await self._migrate_group_queue_state()
             await self.restore_queues()
+            self.start_detached_task_watcher()
             await self.start_scheduler()
             self._receive_subscription = await self._subscribe_receive()
             self._receive_started = True
@@ -209,6 +210,7 @@ class SignalBot(BotPlatform):
         )
 
     async def stop(self) -> None:
+        await self.stop_detached_task_watcher()
         await self.stop_scheduler()
         self._stop_requested.set()
         subscription = self._receive_subscription

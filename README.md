@@ -270,6 +270,8 @@ The global runtime files are deliberately small JSON documents:
   user and platform
 - `.config/queue_<platform>.json` — persisted pending turns so accepted
   work survives restarts, crashes, and auto-updates
+- `.config/detached_tasks_<platform>.json` — tracked external background
+  tasks and any completion message awaiting delivery
 
 The session router is only used when there is no valid
 `last_session.json` entry, such as a new workspace, a deleted session, or
@@ -305,6 +307,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
 | `/refresh` | Drop the workspace's `.codex/` cache (use after an upgrade) |
 | `/stop` | Cancel the running agent turn and clear queued work |
+| `/bg <task>` | Start a restart-safe detached task with the selected compatible backend |
 | `/inject <text>` | Add context to the running turn (the agent restarts with it) |
 | `/reserve` | Create a recurring scheduled prompt |
 | `/schedules` | List schedules and delete one by number |
@@ -316,6 +319,14 @@ reserved or unavailable; direct Slack mentions work too, for example
 Most picker commands accept either the displayed number or the literal
 name. `/open` also accepts a recent-workspace number directly as
 `/open 2`.
+
+`/bg` currently uses Claude Code, so choose `claude_code` with `/agent`
+first. Cozter persists the external task ID, polls independently, and sends
+a new chat message when the task completes—even across a bot restart.
+`/stop` (or `/cancel` when no picker is active) also stops a tracked detached
+task. If Claude reports that a task is blocked waiting for input, Cozter
+notifies the chat; use `claude agents` and `claude attach` in the workspace
+to continue that interactive session.
 
 Schedules are stored per workspace in `.cozter/schedules.json` and use
 the host's local time. The scheduler checks every 30 seconds and records

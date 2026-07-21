@@ -18,21 +18,76 @@ permissions`` since summarization is a no-tool LLM call.
 """
 
 import asyncio
+import json
 import logging
 import os
+import re
 
 from .base import (
-    AgentResult, Backend, ChatEvent, append_text_result,
-    create_prompt_subprocess, executable_command, set_error_result,
-    truncate_status_text,
+    AgentResult, Backend, ChatEvent, DetachedTaskStatus,
+    append_detached_task, append_text_result, create_prompt_subprocess,
+    executable_command, set_error_result, truncate_status_text,
 )
 
 logger = logging.getLogger(__name__)
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_BACKGROUND_ID_RE = re.compile(
+    r"(?im)^[ \t]*backgrounded[ \t]*(?:·|\*)[ \t]*"
+    r"(?P<id>[A-Za-z0-9][A-Za-z0-9_-]{0,127})[ \t]*$",
+)
+_BACKGROUND_BASH_RE = re.compile(
+    r"(?:^|[\s;&|])claude\b[^\n]*--(?:bg|background)\b",
+    re.IGNORECASE,
+)
+_DETACHED_COMMAND_TIMEOUT_SEC = 30
+
+
+def _decode_cli_output(value: bytes | None) -> str:
+    """Decode one short Claude CLI command stream defensively."""
+    return (value or b"").decode("utf-8", errors="replace").strip()
+
+
+def _background_task_ids(text: str) -> list[str]:
+    """Extract only Claude's dedicated background-launch output lines."""
+    normalized = _ANSI_ESCAPE_RE.sub("", text).replace("\r\n", "\n")
+    ids: list[str] = []
+    for match in _BACKGROUND_ID_RE.finditer(normalized):
+        task_id = match.group("id")
+        if task_id not in ids:
+            ids.append(task_id)
+    return ids
+
+
+async def _run_claude_command(
+    cmd: list[str], *, cwd: str,
+) -> tuple[int, str, str]:
+    """Run a short Claude control command without owning its worker tree."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=_DETACHED_COMMAND_TIMEOUT_SEC,
+        )
+    except TimeoutError as exc:
+        # Do not kill the command's process group here. ``claude --bg``
+        # hands a worker to Claude's supervisor; timing out while the
+        # launcher is slow must not terminate the detached session itself.
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError("Claude Code detached-task command timed out") from exc
+    return proc.returncode or 0, _decode_cli_output(stdout), _decode_cli_output(stderr)
 
 
 class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
+    supports_detached_tasks = True
     # Claude Code has no safe non-interactive catalog command.  In
     # particular, a managed Bedrock/Vertex/Foundry login cannot be enumerated
     # through Anthropic's public API, and probing candidate IDs can make a
@@ -141,6 +196,153 @@ class ClaudeCodeBackend(Backend):
 
         return await create_prompt_subprocess(cmd, prompt, cwd=workspace_path)
 
+    async def launch_detached(
+        self,
+        workspace_path: str,
+        prompt: str,
+        model: str | None,
+        approval: str,
+        *,
+        effort: int = 0,
+    ) -> str:
+        """Start a whole Claude Code session through ``claude --bg``.
+
+        Background sessions are intentionally *not* print/stream-json runs:
+        Claude Code rejects that combination because its supervisor needs a
+        persistent interactive-session transcript to host the detached worker.
+        """
+        cmd: list[str] = [*executable_command(self.executable), "--bg"]
+        self.append_model_effort_args(cmd, model, effort)
+
+        if approval == "full":
+            cmd.append("--dangerously-skip-permissions")
+        elif approval == "deny":
+            cmd += ["--permission-mode", "plan"]
+        else:
+            if approval == "confirm":
+                logger.info(
+                    "Claude Code background sessions cannot surface a "
+                    "chat approval dialog; using bypassPermissions",
+                )
+            cmd += ["--permission-mode", "bypassPermissions"]
+        # ``--bg`` takes a positional prompt, not ``--print``/stdin.
+        cmd.append(prompt)
+
+        returncode, stdout, stderr = await _run_claude_command(
+            cmd, cwd=workspace_path,
+        )
+        combined = "\n".join(part for part in (stdout, stderr) if part)
+        if returncode != 0:
+            raise RuntimeError(
+                "Claude Code could not start a background session"
+                + (f": {combined}" if combined else ""),
+            )
+        task_ids = _background_task_ids(combined)
+        if len(task_ids) != 1:
+            raise RuntimeError(
+                "Claude Code started a background session but did not report "
+                "one unambiguous task id",
+            )
+        return task_ids[0]
+
+    async def get_detached_task_status(
+        self,
+        workspace_path: str,
+        task_id: str,
+    ) -> DetachedTaskStatus | None:
+        """Inspect one Claude supervisor job through its JSON task list."""
+        cmd = [
+            *executable_command(self.executable),
+            "agents", "--json", "--all", "--cwd", workspace_path,
+        ]
+        returncode, stdout, stderr = await _run_claude_command(
+            cmd, cwd=workspace_path,
+        )
+        if returncode != 0:
+            logger.warning(
+                "Claude Code background task listing failed for %s: %s",
+                task_id, stderr or stdout,
+            )
+            # A transient supervisor failure must not be mistaken for a task
+            # disappearing; the durable tracker retries unknown states.
+            return DetachedTaskStatus("unknown")
+        try:
+            sessions = json.loads(stdout)
+        except json.JSONDecodeError:
+            logger.warning(
+                "Claude Code background task listing was not JSON: %s",
+                stdout[:200],
+            )
+            return DetachedTaskStatus("unknown")
+        if not isinstance(sessions, list):
+            return DetachedTaskStatus("unknown")
+        expected_cwd = os.path.realpath(workspace_path)
+        for item in sessions:
+            if (
+                not isinstance(item, dict)
+                or item.get("kind") != "background"
+                or item.get("id") != task_id
+            ):
+                continue
+            item_cwd = item.get("cwd")
+            real_item_cwd = (
+                os.path.realpath(item_cwd)
+                if isinstance(item_cwd, str) else ""
+            )
+            if not (
+                real_item_cwd == expected_cwd
+                or real_item_cwd.startswith(expected_cwd + os.sep)
+            ):
+                logger.warning(
+                    "Claude Code task %s belongs to a different workspace",
+                    task_id,
+                )
+                return None
+            state = item.get("state")
+            if not isinstance(state, str) or not state:
+                state = "unknown"
+            waiting_for = item.get("waitingFor")
+            return DetachedTaskStatus(
+                state=state,
+                waiting_for=waiting_for if isinstance(waiting_for, str) else "",
+            )
+        return None
+
+    async def get_detached_task_output(
+        self,
+        workspace_path: str,
+        task_id: str,
+    ) -> str:
+        """Retrieve Claude Code's recent terminal output for a task."""
+        cmd = [*executable_command(self.executable), "logs", task_id]
+        returncode, stdout, stderr = await _run_claude_command(
+            cmd, cwd=workspace_path,
+        )
+        if returncode != 0:
+            raise RuntimeError(
+                "Claude Code could not read background task output"
+                + (f": {stderr or stdout}" if stderr or stdout else ""),
+            )
+        return stdout
+
+    async def stop_detached_task(
+        self,
+        workspace_path: str,
+        task_id: str,
+    ) -> bool:
+        """Ask Claude's supervisor to stop a detached session."""
+        cmd = [*executable_command(self.executable), "stop", task_id]
+        returncode, stdout, stderr = await _run_claude_command(
+            cmd, cwd=workspace_path,
+        )
+        if returncode != 0:
+            logger.warning(
+                "Claude Code could not stop background task %s: %s",
+                task_id, stderr or stdout,
+            )
+            return False
+        return True
+
     def parse_event(self, event: dict, result: AgentResult) -> None:
         etype = event.get("type", "")
 
@@ -177,9 +379,17 @@ class ClaudeCodeBackend(Backend):
                 append_text_result(result, text)
             return
 
-        # 'user' (tool results) and 'system' (init/meta) events are noisy
-        # for the status display and don't contribute new info; skip.
-        if etype in ("user", "system"):
+        if etype == "user":
+            # Tool results normally stay out of the status display. The one
+            # exception is a paired Bash result from ``claude --bg``: it
+            # contains the short supervisor task id that Cozter can later
+            # validate and monitor after this foreground stream exits.
+            self._handle_user_tool_results(event, result)
+            return
+
+        # System/init events are noisy for the status display and don't
+        # contribute new info; skip.
+        if etype == "system":
             return
 
         if etype == "error":
@@ -229,6 +439,47 @@ class ClaudeCodeBackend(Backend):
         if btype == "tool_use":
             self._emit_tool_event(block, result)
 
+    def _handle_user_tool_results(
+        self, event: dict, result: AgentResult,
+    ) -> None:
+        """Pick up a background-id only from its matching Bash result."""
+        message = event.get("message") or {}
+        if not isinstance(message, dict):
+            return
+        blocks = message.get("content") or []
+        if not isinstance(blocks, list):
+            return
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            tool_use_id = block.get("tool_use_id")
+            if (
+                not isinstance(tool_use_id, str)
+                or tool_use_id not in result.detached_task_tool_use_ids
+            ):
+                continue
+            for task_id in _background_task_ids(
+                self._tool_result_text(block.get("content")),
+            ):
+                append_detached_task(result, self.name, task_id)
+
+    @staticmethod
+    def _tool_result_text(content: object) -> str:
+        """Flatten Anthropic's string/list shaped Bash tool-result content."""
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+
     @staticmethod
     def _emit_tool_event(block: dict, result: AgentResult) -> None:
         tool = block.get("name", "?")
@@ -250,6 +501,13 @@ class ClaudeCodeBackend(Backend):
         # Bash gets the command itself; other tools get just their name.
         if tool == "Bash":
             cmd = inp.get("command") or "?"
+            tool_use_id = block.get("id")
+            if (
+                isinstance(cmd, str)
+                and isinstance(tool_use_id, str)
+                and _BACKGROUND_BASH_RE.search(cmd)
+            ):
+                result.detached_task_tool_use_ids.add(tool_use_id)
             result.events.append(ChatEvent(
                 kind="tool",
                 content=f"$ {truncate_status_text(cmd)}",

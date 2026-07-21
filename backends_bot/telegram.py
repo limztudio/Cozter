@@ -250,11 +250,13 @@ class TelegramBot(BotPlatform):
         # out of order. app.bot.send_message works after initialize(), so
         # drain can still post "Thinking..." during restore.
         await self.restore_queues()
+        self.start_detached_task_watcher()
         await self.start_scheduler()
         await self.app.updater.start_polling(drop_pending_updates=True)
         logger.info("Telegram bot started polling.")
 
     async def stop(self) -> None:
+        await self.stop_detached_task_watcher()
         await self.stop_scheduler()
         if self.app:
             await self.app.updater.stop()

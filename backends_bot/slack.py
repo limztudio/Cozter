@@ -364,6 +364,7 @@ class SlackBot(BotPlatform):
         # is already ready (auth_test succeeded above), so drain can
         # still post messages via chat_postMessage during restore.
         await self.restore_queues()
+        self.start_detached_task_watcher()
         await self.start_scheduler()
         await self._handler.connect_async()
         logger.info(
@@ -372,6 +373,7 @@ class SlackBot(BotPlatform):
         )
 
     async def stop(self) -> None:
+        await self.stop_detached_task_watcher()
         await self.stop_scheduler()
         if self._handler is not None:
             try:

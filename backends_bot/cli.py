@@ -121,10 +121,12 @@ class CliBot(BotPlatform):
         )
         print("Plain text goes to the AI. Ctrl-D or Ctrl-C exits.")
         print()
+        self.start_detached_task_watcher()
         self._input_task = asyncio.create_task(self._input_loop())
 
     async def stop(self) -> None:
         self._stop_requested.set()
+        await self.stop_detached_task_watcher()
         if self._input_task and not self._input_task.done():
             self._input_task.cancel()
             await await_cancelled(self._input_task)

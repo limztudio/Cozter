@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from . import (
     agent_tools, backends_agent, colony, compaction, flexible, router,
@@ -34,6 +35,14 @@ from .utils import (
 from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DetachedTaskLaunch:
+    """A restart-safe provider task started for one Cozter session."""
+    backend_name: str
+    task_id: str
+    session_id: str
 
 # Shared preamble prepended to every backend's prompt. It documents the
 # out-of-band markers Cozter understands and sets the agent's working
@@ -1101,6 +1110,95 @@ async def run(
         )
 
 
+async def launch_detached(
+    prompt: str,
+    workspace_path: str,
+    user_id: int | str,
+    model: str | None = None,
+    summary_model: str | None = None,
+    approval: str = "auto",
+    *,
+    backend_name: str | None = None,
+    summary_backend_name: str | None = None,
+) -> DetachedTaskLaunch:
+    """Start a provider-owned task whose result can arrive after this turn.
+
+    Unlike :func:`run`, this does not keep a foreground CLI process open.
+    The backend must expose a durable task id; the bot persists that id before
+    acknowledging the launch and later polls it through the same adapter.
+    """
+    async with workspace_mod.get_run_lock(workspace_path):
+        backend = backends_agent.get_backend(backend_name)
+        if not getattr(backend, "supports_detached_tasks", False):
+            raise RuntimeError(
+                f"{backend.name} does not support restart-safe detached tasks.",
+            )
+
+        summary_backend = summary_backend_name or backend.name
+        last_sid = session.get_last_session(workspace_path, user_id)
+        last_data = (
+            session.load_session(workspace_path, last_sid)
+            if last_sid else None
+        )
+        if last_data is not None:
+            session_id, session_data = last_sid, last_data
+        else:
+            session_id, session_data = await router.select_or_create_session(
+                prompt, workspace_path, summary_model,
+                backend_name=summary_backend,
+            )
+        assert isinstance(session_id, str) and session_id
+        session.set_last_session(workspace_path, user_id, session_id)
+
+        contextual_prompt = _build_contextual_prompt(
+            prompt,
+            session_data,
+            colony.get_items(workspace_path),
+            budget=workspace_mod.get_history_budget(workspace_path),
+        )
+        task_id = await backend.launch_detached(
+            workspace_path,
+            _build_backend_prompt(
+                backend, contextual_prompt, collaborative=False,
+            ),
+            model,
+            approval,
+            effort=workspace_mod.get_reasoning_effort(workspace_path),
+        )
+
+        started = AgentResult(session_id=session_id)
+        append_text_result(
+            started,
+            f"Started detached {backend.name} task {task_id}. "
+            "Cozter will deliver its completion here.",
+        )
+        async with workspace_mod.get_lock(workspace_path):
+            _log_to_session(workspace_path, session_id, prompt, started)
+        return DetachedTaskLaunch(
+            backend_name=backend.name,
+            task_id=task_id,
+            session_id=session_id,
+        )
+
+
+async def log_detached_task_completion(
+    workspace_path: str,
+    session_id: str | None,
+    text: str,
+) -> None:
+    """Append a detached task's delivered outcome to its original session."""
+    if not session_id:
+        return
+    try:
+        async with workspace_mod.get_lock(workspace_path):
+            session.append_messages(workspace_path, session_id, [{
+                "role": "assistant",
+                "content": text,
+            }])
+    except Exception:
+        logger.error("Failed to log detached task completion", exc_info=True)
+
+
 async def _run_post_turn_maintenance(
     workspace_path: str,
     session_id: str,
@@ -1277,6 +1375,7 @@ async def _run_turn(
         except BackendUnavailable as e:
             result = AgentResult()
             set_error_result(result, str(e))
+            result.session_id = session_id
             _close_inject_queue(inject_queue)
             _drain_queue(inject_queue)
             return result
@@ -1337,6 +1436,7 @@ async def _run_turn(
     ):
         append_text_result(result, result.text or NO_RESPONSE_TEXT)
 
+    result.session_id = session_id
     return result
 
 

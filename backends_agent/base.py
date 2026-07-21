@@ -50,6 +50,20 @@ class ChatEvent:
     content: str
 
 
+@dataclass(frozen=True)
+class DetachedTaskRef:
+    """A provider-owned task that can outlive the foreground turn."""
+    backend_name: str
+    task_id: str
+
+
+@dataclass(frozen=True)
+class DetachedTaskStatus:
+    """Latest state reported by a provider-owned detached task."""
+    state: str
+    waiting_for: str = ""
+
+
 # Shown when a turn ends with nothing to say. It is a *presentation*
 # fallback applied at the point of reply, never a value stored on a
 # result: ``AgentResult.text`` starts empty so "the backend produced no
@@ -76,12 +90,37 @@ class AgentResult:
     # turn.completed, claude_code's result). Backend-shaped dict; None
     # otherwise. See agent.format_usage for the display formatter.
     usage: dict | None = None
+    # Provider jobs discovered during this foreground turn. Their lifecycle
+    # continues after the CLI stream exits, so the bot tracks them through a
+    # separate durable ledger rather than treating them as ChatEvents.
+    detached_tasks: list[DetachedTaskRef] = field(default_factory=list)
+    # Set by agent.run after routing. A later completion can use it to append
+    # output to the conversation that originally started the detached work.
+    session_id: str | None = None
+    # Per-run correlation ids for backend parser use. Keeping these on the
+    # result (rather than a singleton Backend instance) prevents concurrent
+    # turns from cross-wiring a tool result to another user's task launch.
+    detached_task_tool_use_ids: set[str] = field(
+        default_factory=set, repr=False,
+    )
 
 
 def append_text_result(result: AgentResult, text: str) -> None:
     """Record text as the latest agent reply and emit a text event."""
     result.text = text
     result.events.append(ChatEvent(kind="text", content=text))
+
+
+def append_detached_task(
+    result: AgentResult, backend_name: str, task_id: str,
+) -> None:
+    """Record one discovered detached task exactly once on *result*."""
+    task_id = task_id.strip()
+    if not task_id:
+        return
+    ref = DetachedTaskRef(backend_name=backend_name, task_id=task_id)
+    if ref not in result.detached_tasks:
+        result.detached_tasks.append(ref)
 
 
 def set_error_result(
@@ -174,6 +213,13 @@ class Backend(ABC):
     # has no way to actually call.
     supports_plugin_prelude: bool = True
 
+    # A detached task is a provider-owned job that can be queried after the
+    # foreground Cozter subprocess has exited (for example Claude Code's
+    # ``claude --bg`` sessions). Most adapters only support foreground turns;
+    # the default stays false so we never promise restart-safe follow-up work
+    # where a CLI cannot actually provide it.
+    supports_detached_tasks: bool = False
+
     # Behavior -------------------------------------------------------------
 
     def health_check(self) -> tuple[bool, str]:
@@ -225,6 +271,50 @@ class Backend(ABC):
         the normal and internal drain paths call it after reaping the process.
         """
         return None
+
+    async def launch_detached(
+        self,
+        workspace_path: str,
+        prompt: str,
+        model: str | None,
+        approval: str,
+        *,
+        effort: int = 0,
+    ) -> str:
+        """Start a provider-owned detached task and return its identifier."""
+        raise NotImplementedError(
+            f"{self.name or type(self).__name__} does not support detached tasks",
+        )
+
+    async def get_detached_task_status(
+        self,
+        workspace_path: str,
+        task_id: str,
+    ) -> DetachedTaskStatus | None:
+        """Return a task's latest state, or None if it no longer exists."""
+        raise NotImplementedError(
+            f"{self.name or type(self).__name__} does not support detached tasks",
+        )
+
+    async def get_detached_task_output(
+        self,
+        workspace_path: str,
+        task_id: str,
+    ) -> str:
+        """Return a detached task's most recent/final output."""
+        raise NotImplementedError(
+            f"{self.name or type(self).__name__} does not support detached tasks",
+        )
+
+    async def stop_detached_task(
+        self,
+        workspace_path: str,
+        task_id: str,
+    ) -> bool:
+        """Request cancellation; True means the provider accepted it."""
+        raise NotImplementedError(
+            f"{self.name or type(self).__name__} does not support detached tasks",
+        )
 
     def tier_model(self, tier: str) -> str:
         """Default model for one of flexible's difficulty tiers."""

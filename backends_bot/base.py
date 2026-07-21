@@ -56,6 +56,8 @@ UPLOADS_DIR = "uploads"
 # the final answer when a platform API call is slow or a Socket Mode
 # connection is being refreshed.
 _STATUS_OPERATION_TIMEOUT_SEC = 4.0
+_DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
+_DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
 NO_WORKSPACE_TEXT = (
     "No workspace selected (or it was deleted). Use /new or /open."
 )
@@ -202,6 +204,12 @@ class BotPlatform(ABC):
         # Serializes read-modify-write on the persistent-queue file so
         # concurrent enqueue/complete calls don't clobber each other.
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
+        # Detached provider tasks are intentionally separate from the inbound
+        # message queue: queue entries are prompts that _drain_message_queue
+        # reruns through an agent, while these records are already-computed
+        # external results awaiting a later platform delivery.
+        self._detached_task_file_lock: asyncio.Lock = asyncio.Lock()
+        self._detached_task_watcher: asyncio.Task | None = None
         # Users whose running task was already acknowledged by /cancel
         # or /stop, so the cancelled task should not send a second reply.
         self._cancel_acknowledged: set[str] = set()
@@ -620,11 +628,12 @@ class BotPlatform(ABC):
         _drain_queue(self._message_queues.get(uid), collect=drained)
         persisted = await self._clear_persistent_queue(uid)
         cleared = max(len(drained), persisted)
+        detached_cancelled = await self._cancel_detached_tasks(uid)
 
         if task_running:
             await ctx.reply_text("Cancelled.")
             return
-        if was_awaiting or cleared:
+        if was_awaiting or cleared or detached_cancelled:
             await ctx.reply_text("Cancelled.")
             return
         await ctx.reply_text("Nothing to cancel.")
@@ -1460,15 +1469,78 @@ class BotPlatform(ABC):
             # Clear the persistent queue so cancelled work doesn't
             # come back on the next restart.
             await self._clear_persistent_queue(ctx.user_id)
+            # The foreground turn is already cancelled. Keep stopping any
+            # durable tasks best-effort, but do not let their CLI control
+            # calls delay that cancellation request.
+            await self._cancel_detached_tasks(ctx.user_id)
             await ctx.reply_text("Cancelled.")
             return
+        detached_cancelled = await self._cancel_detached_tasks(ctx.user_id)
         if was_awaiting:
             self._start_queue_drain(ctx.user_id)
             await ctx.reply_text(
                 "Cleared pending question; resuming queued work."
             )
             return
+        if detached_cancelled:
+            await ctx.reply_text("Cancelled.")
+            return
         await ctx.reply_text("Nothing is running.")
+
+    # ----- /bg, /background ---------------------------------------------
+
+    async def cmd_background(self, ctx: BotContext) -> None:
+        """Launch a provider-owned detached task and arrange its callback."""
+        task_prompt = ctx.args.strip()
+        if not task_prompt:
+            await ctx.reply_text("Usage: /bg <task>")
+            return
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        backend_name, model, summary_model, permission, summary_backend = (
+            workspace.get_run_config(ws)
+        )
+        try:
+            launch = await agent.launch_detached(
+                task_prompt,
+                ws,
+                ctx.user_id,
+                model=model,
+                summary_model=summary_model,
+                approval=permission,
+                backend_name=backend_name,
+                summary_backend_name=summary_backend,
+            )
+        except Exception as exc:
+            await ctx.reply_text(f"Could not start background task: {exc}")
+            return
+        try:
+            tracked = await self._register_detached_task(
+                uid=ctx.user_id,
+                chat_id=ctx.chat_id,
+                workspace_path=ws,
+                session_id=launch.session_id,
+                backend_name=launch.backend_name,
+                task_id=launch.task_id,
+                validate=True,
+            )
+        except Exception:
+            logger.exception(
+                "Could not persist detached task %s", launch.task_id,
+            )
+            tracked = False
+        if tracked:
+            await ctx.reply_text(
+                f"Started background task {launch.task_id}. "
+                "I’ll post its final result here.",
+            )
+            return
+        await ctx.reply_text(
+            f"Started background task {launch.task_id}, but Cozter could "
+            "not verify it for completion delivery. Check it with "
+            f"`claude agents` or `claude logs {launch.task_id}`.",
+        )
 
     # ----- /inject --------------------------------------------------------
 
@@ -1775,6 +1847,369 @@ class BotPlatform(ABC):
 
         for uid in drained_users:
             self._start_queue_drain(uid)
+
+    # ----- Detached provider tasks --------------------------------------
+
+    def _detached_tasks_file_path(self) -> str:
+        """Return this platform's durable detached-task ledger path."""
+        os.makedirs(workspace.CONFIG_DIR, exist_ok=True)
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', self.platform_id)
+        return os.path.join(
+            workspace.CONFIG_DIR, f"detached_tasks_{safe}.json",
+        )
+
+    def _read_detached_tasks_file(self) -> dict:
+        return load_json_object(
+            self._detached_tasks_file_path(),
+            "detached task ledger",
+            logger,
+        )
+
+    def _write_detached_tasks_file(self, data: dict) -> None:
+        save_json_object(self._detached_tasks_file_path(), data)
+
+    @staticmethod
+    def _detached_task_records(value: object) -> list[dict]:
+        """Normalize durable records, ignoring stale/malformed entries."""
+        if not isinstance(value, list):
+            return []
+        records: list[dict] = []
+        required = (
+            "id", "backend_name", "task_id", "workspace_path",
+            "user_id", "chat_id",
+        )
+        for value_item in value:
+            if not isinstance(value_item, dict):
+                continue
+            if not all(
+                isinstance(value_item.get(key), str) and value_item[key]
+                for key in required
+            ):
+                continue
+            record = dict(value_item)
+            if not isinstance(record.get("session_id"), str):
+                record["session_id"] = None
+            for key in ("delivery_text", "last_reported_state"):
+                if not isinstance(record.get(key), str):
+                    record.pop(key, None)
+            records.append(record)
+        return records
+
+    async def _list_detached_task_records(self) -> list[dict]:
+        async with self._detached_task_file_lock:
+            data = self._read_detached_tasks_file()
+            return self._detached_task_records(data.get("tasks"))
+
+    async def _register_detached_task(
+        self,
+        *,
+        uid: str,
+        chat_id: str,
+        workspace_path: str,
+        session_id: str | None,
+        backend_name: str,
+        task_id: str,
+        validate: bool,
+    ) -> bool:
+        """Persist a task before any completion callback can be sent.
+
+        Parser-discovered task ids are validated against the provider's task
+        list first. That prevents a model/tool transcript from forging a
+        ``backgrounded`` line that attaches Cozter to an unrelated session.
+        """
+        if validate:
+            try:
+                backend = backends_agent.get_backend(backend_name)
+                status = None
+                for delay in (0.0, 0.25, 0.75):
+                    if delay:
+                        await asyncio.sleep(delay)
+                    status = await backend.get_detached_task_status(
+                        workspace_path, task_id,
+                    )
+                    if status is not None and status.state != "unknown":
+                        break
+                if status is None or status.state == "unknown":
+                    logger.warning(
+                        "Ignoring unverified detached task %s from %s",
+                        task_id, backend_name,
+                    )
+                    return False
+            except Exception:
+                logger.warning(
+                    "Could not validate detached task %s from %s",
+                    task_id, backend_name, exc_info=True,
+                )
+                return False
+
+        async with self._detached_task_file_lock:
+            data = self._read_detached_tasks_file()
+            records = self._detached_task_records(data.get("tasks"))
+            if any(
+                item["backend_name"] == backend_name
+                and item["task_id"] == task_id
+                and item["user_id"] == uid
+                and item["chat_id"] == chat_id
+                for item in records
+            ):
+                return True
+            records.append({
+                "id": uuid.uuid4().hex,
+                "backend_name": backend_name,
+                "task_id": task_id,
+                "workspace_path": workspace_path,
+                "user_id": uid,
+                "chat_id": chat_id,
+                "session_id": session_id,
+            })
+            data["tasks"] = records
+            self._write_detached_tasks_file(data)
+        self.start_detached_task_watcher()
+        return True
+
+    async def _update_detached_task_record(
+        self, record_id: str, **changes: object,
+    ) -> None:
+        async with self._detached_task_file_lock:
+            data = self._read_detached_tasks_file()
+            records = self._detached_task_records(data.get("tasks"))
+            changed = False
+            for record in records:
+                if record["id"] != record_id:
+                    continue
+                record.update(changes)
+                changed = True
+                break
+            if changed:
+                data["tasks"] = records
+                self._write_detached_tasks_file(data)
+
+    async def _remove_detached_task_record(self, record_id: str) -> None:
+        async with self._detached_task_file_lock:
+            data = self._read_detached_tasks_file()
+            records = self._detached_task_records(data.get("tasks"))
+            remaining = [record for record in records if record["id"] != record_id]
+            if len(remaining) == len(records):
+                return
+            if remaining:
+                data["tasks"] = remaining
+            else:
+                data.pop("tasks", None)
+            self._write_detached_tasks_file(data)
+
+    def start_detached_task_watcher(self) -> None:
+        """Start the durable detached-task poller once per platform."""
+        if (
+            self._detached_task_watcher is not None
+            and not self._detached_task_watcher.done()
+        ):
+            return
+        self._detached_task_watcher = create_background_task(
+            self._detached_task_loop(),
+            name=f"{self.platform_id}:detached-tasks",
+            log=logger,
+        )
+
+    async def stop_detached_task_watcher(self) -> None:
+        task = self._detached_task_watcher
+        self._detached_task_watcher = None
+        if task is not None and not task.done():
+            task.cancel()
+            await await_cancelled(task)
+
+    async def _detached_task_loop(self) -> None:
+        while True:
+            try:
+                await self._check_detached_tasks()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Detached task poll failed")
+            await asyncio.sleep(_DETACHED_TASK_POLL_INTERVAL_SEC)
+
+    async def _check_detached_tasks(self) -> None:
+        for record in await self._list_detached_task_records():
+            await self._check_detached_task(record)
+
+    async def _check_detached_task(self, record: dict) -> None:
+        """Poll/deliver one record. A final payload is persisted before I/O."""
+        if not self.authorized(record["user_id"], record["chat_id"]):
+            logger.warning(
+                "Discarding detached task for unauthorized user=%s chat=%s",
+                record["user_id"], record["chat_id"],
+            )
+            await self._remove_detached_task_record(record["id"])
+            return
+
+        delivery_text = record.get("delivery_text")
+        if isinstance(delivery_text, str) and delivery_text:
+            await self._deliver_detached_task(record, delivery_text)
+            return
+
+        try:
+            backend = backends_agent.get_backend(record["backend_name"])
+            status = await backend.get_detached_task_status(
+                record["workspace_path"], record["task_id"],
+            )
+        except Exception:
+            logger.warning(
+                "Could not poll detached task %s", record["task_id"],
+                exc_info=True,
+            )
+            return
+
+        if status is None:
+            await self._stage_detached_task_delivery(
+                record,
+                f"Background task {record['task_id']} is no longer available.",
+            )
+            return
+        if status.state == "unknown":
+            return
+        if status.state == "working":
+            if record.get("last_reported_state"):
+                await self._update_detached_task_record(
+                    record["id"], last_reported_state="",
+                )
+            return
+        if status.state == "blocked":
+            if record.get("last_reported_state") == "blocked":
+                return
+            try:
+                output = await backend.get_detached_task_output(
+                    record["workspace_path"], record["task_id"],
+                )
+            except Exception:
+                output = ""
+            reason = f" ({status.waiting_for})" if status.waiting_for else ""
+            message = (
+                f"Background task {record['task_id']} needs input{reason}.\n\n"
+                "Use Claude Code's agent view or `claude attach` to answer it."
+            )
+            if output:
+                message += f"\n\nRecent output:\n{output}"
+            try:
+                await self.send_text(record["chat_id"], message, rich=True)
+            except Exception:
+                logger.warning(
+                    "Failed to report blocked detached task %s",
+                    record["task_id"], exc_info=True,
+                )
+                return
+            await self._update_detached_task_record(
+                record["id"], last_reported_state="blocked",
+            )
+            return
+        if status.state not in _DETACHED_TERMINAL_STATES:
+            logger.warning(
+                "Detached task %s has unrecognized state %r",
+                record["task_id"], status.state,
+            )
+            return
+        try:
+            output = await backend.get_detached_task_output(
+                record["workspace_path"], record["task_id"],
+            )
+        except Exception:
+            logger.warning(
+                "Could not collect completed detached task %s",
+                record["task_id"], exc_info=True,
+            )
+            return
+        label = {
+            "done": "completed",
+            "failed": "failed",
+            "stopped": "stopped",
+        }[status.state]
+        message = f"Background task {record['task_id']} {label}."
+        if output:
+            message += f"\n\n{output}"
+        await self._stage_detached_task_delivery(record, message)
+
+    async def _stage_detached_task_delivery(
+        self, record: dict, message: str,
+    ) -> None:
+        """Durably save a completion payload before platform delivery."""
+        await self._update_detached_task_record(
+            record["id"], delivery_text=message,
+        )
+        staged = dict(record)
+        staged["delivery_text"] = message
+        await self._deliver_detached_task(staged, message)
+
+    async def _deliver_detached_task(self, record: dict, message: str) -> None:
+        """Deliver an already-persisted completion, then remove its ledger row."""
+        if not self.authorized(record["user_id"], record["chat_id"]):
+            await self._remove_detached_task_record(record["id"])
+            return
+        result = agent.AgentResult()
+        agent.append_text_result(result, message)
+        try:
+            # uid=None deliberately avoids turning a provider's textual
+            # ``[[await]]`` marker into a pause in the user's normal queue.
+            await self._send_result(
+                record["chat_id"], record["workspace_path"], result,
+            )
+        except Exception:
+            # Keep the staged payload for at-least-once delivery after a
+            # transient platform outage or a Cozter restart.
+            logger.warning(
+                "Failed to deliver detached task %s",
+                record["task_id"], exc_info=True,
+            )
+            return
+        await agent.log_detached_task_completion(
+            record["workspace_path"], record.get("session_id"), message,
+        )
+        await self._remove_detached_task_record(record["id"])
+
+    async def _register_result_detached_tasks(
+        self,
+        uid: str,
+        chat_id: str,
+        workspace_path: str,
+        result: agent.AgentResult,
+        *,
+        session_id: str | None,
+    ) -> None:
+        for task in result.detached_tasks:
+            await self._register_detached_task(
+                uid=uid,
+                chat_id=chat_id,
+                workspace_path=workspace_path,
+                session_id=session_id,
+                backend_name=task.backend_name,
+                task_id=task.task_id,
+                validate=True,
+            )
+
+    async def _cancel_detached_tasks(self, uid: str) -> int:
+        """Cancel/dismiss every tracked detached task owned by one user."""
+        cancelled = 0
+        for record in await self._list_detached_task_records():
+            if record["user_id"] != uid:
+                continue
+            # A terminal payload is already staged; /cancel means the user
+            # does not want this delayed message any more.
+            if isinstance(record.get("delivery_text"), str):
+                await self._remove_detached_task_record(record["id"])
+                cancelled += 1
+                continue
+            try:
+                backend = backends_agent.get_backend(record["backend_name"])
+                stopped = await backend.stop_detached_task(
+                    record["workspace_path"], record["task_id"],
+                )
+            except Exception:
+                logger.warning(
+                    "Could not cancel detached task %s",
+                    record["task_id"], exc_info=True,
+                )
+                stopped = False
+            if stopped:
+                await self._remove_detached_task_record(record["id"])
+                cancelled += 1
+        return cancelled
 
     # ----- Scheduler loop ------------------------------------------------
 
@@ -2189,6 +2624,26 @@ class BotPlatform(ABC):
                 summary_backend_name=summary_backend,
                 session_id=session_id,
             )
+            # A Claude foreground turn can itself invoke ``claude --bg`` via
+            # Bash. Register any validated task ids before sending the parent
+            # reply, so a fast completion cannot race past Cozter's durable
+            # callback ledger. Ephemeral scheduled sessions are deleted just
+            # after this method returns, so their late output has no session
+            # history target but can still be delivered to the chat.
+            try:
+                await self._register_result_detached_tasks(
+                    uid,
+                    chat_id,
+                    ws,
+                    result,
+                    session_id=(
+                        None if session_id is not None else result.session_id
+                    ),
+                )
+            except Exception:
+                # A filesystem failure in the optional completion ledger must
+                # never hide the foreground answer the user is already owed.
+                logger.exception("Could not register detached task callback")
         finally:
             # ``agent.run`` closes the window when its final backend phase
             # completes.  Keep this idempotent safeguard here for errors or
@@ -2505,6 +2960,8 @@ def _build_command_registry() -> dict[str, Handler]:
         "sessions":     BotPlatform.cmd_sessions,
         "colony":       BotPlatform.cmd_colony,
         "stop":         BotPlatform.cmd_stop,
+        "bg":           BotPlatform.cmd_background,
+        "background":   BotPlatform.cmd_background,
         "inject":       BotPlatform.cmd_inject,
         "reserve":      BotPlatform.cmd_reserve,
         "schedules":    BotPlatform.cmd_schedules,
