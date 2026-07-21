@@ -18,8 +18,8 @@ from . import (
 )
 from . import workspace as workspace_mod
 from .backends_agent.base import (
-    NO_RESPONSE_TEXT, AgentResult, ChatEvent, append_text_result,
-    set_error_result,
+    NO_RESPONSE_TEXT, AgentResult, ChatEvent, append_detached_task_request,
+    append_text_result, set_error_result,
 )
 from .utils import (
     COZTER_DIR,
@@ -86,10 +86,26 @@ _AUTONOMY_POLICY = (
 )
 
 
-def _capability_hint(collaborative: bool) -> str:
+_DETACHED_TASK_POLICY = (
+    "For durable background work, do not start a shell background process "
+    "(`&`, `nohup`, Bash run_in_background, or a nested `claude --bg`) and "
+    "do not promise a later callback yourself. Instead, finish your visible "
+    "reply and place one self-contained task request on its own line as "
+    "`[[background: <task>]]`. Cozter will launch, track, and later post the "
+    "provider task's final result. Use this only when the remaining work can "
+    "continue without user input."
+)
+
+
+def _capability_hint(
+    collaborative: bool, *, allow_detached_requests: bool,
+) -> str:
     """Build the per-turn preamble (collaboration vs autonomy policy)."""
     policy = _COLLABORATION_POLICY if collaborative else _AUTONOMY_POLICY
-    return f"[System: {_ATTACH_HINT}\n\n{policy}]"
+    parts = [_ATTACH_HINT, policy]
+    if allow_detached_requests:
+        parts.append(_DETACHED_TASK_POLICY)
+    return "[System: " + "\n\n".join(parts) + "]"
 
 
 def _is_collaborative_turn(
@@ -109,6 +125,12 @@ _ATTACH_RE = re.compile(
     r"\[\[attach:\s*([^\]\n]+?)\s*\]\]", re.IGNORECASE,
 )
 _AWAIT_RE = re.compile(r"\[\[await\]\]", re.IGNORECASE)
+_DETACHED_TASK_REQUEST_RE = re.compile(
+    r"(?ims)^[ \t]*\[\[background:\s*(?P<prompt>.*?)\s*\]\]"
+    r"[ \t]*(?:\r?\n|$)",
+)
+_MAX_DETACHED_TASK_REQUESTS = 3
+_MAX_DETACHED_TASK_PROMPT_CHARS = 12_000
 
 _IMAGE_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".webp", ".gif",
@@ -190,6 +212,53 @@ def extract_await(text: str) -> tuple[str, bool]:
     cleaned = _AWAIT_RE.sub("", text)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned, True
+
+
+def extract_detached_task_requests(text: str) -> tuple[str, list[str]]:
+    """Strip agent ``[[background: ...]]`` markers and return their prompts.
+
+    The marker is intentionally a final-response protocol rather than a CLI
+    command the foreground agent launches itself. Cozter can therefore
+    persist the provider task id before it acknowledges the request, and can
+    still deliver completion after a restart.
+    """
+    prompts: list[str] = []
+
+    def _take(match: re.Match) -> str:
+        prompt = match.group("prompt").strip()
+        if len(prompt) > _MAX_DETACHED_TASK_PROMPT_CHARS:
+            logger.warning("Ignoring oversized detached task request")
+        elif prompt and prompt not in prompts:
+            if len(prompts) < _MAX_DETACHED_TASK_REQUESTS:
+                prompts.append(prompt)
+            else:
+                logger.warning("Ignoring excess detached task request")
+        return ""
+
+    cleaned = _DETACHED_TASK_REQUEST_RE.sub(_take, text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, prompts
+
+
+def _consume_detached_task_requests(result: AgentResult) -> None:
+    """Move response markers into ``result`` before logging or delivery."""
+    events: list[ChatEvent] = []
+    for ev in result.events:
+        if ev.kind != "text":
+            events.append(ev)
+            continue
+        cleaned, prompts = extract_detached_task_requests(ev.content)
+        for prompt in prompts:
+            append_detached_task_request(result, prompt)
+        if cleaned:
+            ev.content = cleaned
+            events.append(ev)
+    result.events = events
+
+    cleaned_text, prompts = extract_detached_task_requests(result.text)
+    for prompt in prompts:
+        append_detached_task_request(result, prompt)
+    result.text = cleaned_text
 
 
 def _compact_tokens(n: int) -> str:
@@ -609,7 +678,11 @@ def _close_inject_queue(inject_queue: asyncio.Queue[str] | None) -> None:
 
 
 def _build_backend_prompt(
-    backend, contextual_prompt: str, *, collaborative: bool,
+    backend,
+    contextual_prompt: str,
+    *,
+    collaborative: bool,
+    allow_detached_requests: bool = True,
 ) -> str:
     """Wrap a prompt in the preamble and plugin list *backend* needs.
 
@@ -621,7 +694,13 @@ def _build_backend_prompt(
     supports_plugin_prelude=False, since they have no shell to invoke the
     prelude'd commands either.
     """
-    parts = [_capability_hint(collaborative=collaborative)]
+    parts = [_capability_hint(
+        collaborative=collaborative,
+        allow_detached_requests=(
+            allow_detached_requests
+            and bool(getattr(backend, "supports_detached_tasks", False))
+        ),
+    )]
     if not backend.supports_typed_plugins and backend.supports_plugin_prelude:
         prelude = agent_tools.cli_plugin_prelude()
         if prelude:
@@ -944,6 +1023,7 @@ async def _run_flexible(
                     contextual_prompt, plan, i, reports,
                 ),
                 collaborative=False,
+                allow_detached_requests=False,
             ),
             tier_model,
             approval,
@@ -1159,7 +1239,10 @@ async def launch_detached(
         task_id = await backend.launch_detached(
             workspace_path,
             _build_backend_prompt(
-                backend, contextual_prompt, collaborative=False,
+                backend,
+                contextual_prompt,
+                collaborative=False,
+                allow_detached_requests=False,
             ),
             model,
             approval,
@@ -1364,6 +1447,7 @@ async def _run_turn(
                     _build_backend_prompt(
                         backend, contextual_prompt,
                         collaborative=collaborative,
+                        allow_detached_requests=not explicit_session,
                     ),
                     model, approval,
                     effort=effort,
@@ -1414,6 +1498,11 @@ async def _run_turn(
     # answer. Bot-owned queues reject them before this point.
     _drain_queue(inject_queue)
 
+    # A supported foreground agent may request that Cozter own the remaining
+    # work as a durable provider task. Consume the control marker before its
+    # text reaches session history or the chat platform.
+    _consume_detached_task_requests(result)
+
     # Log the original prompt (including injected context) to session.
     async with workspace_mod.get_lock(workspace_path):
         _log_to_session(workspace_path, session_id, effective_prompt, result)
@@ -1433,6 +1522,7 @@ async def _run_turn(
     if (
         not any(e.kind == "text" for e in result.events)
         and not any(e.kind == "attachment" for e in result.events)
+        and not result.detached_task_requests
     ):
         append_text_result(result, result.text or NO_RESPONSE_TEXT)
 

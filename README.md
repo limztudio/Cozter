@@ -322,7 +322,10 @@ name. `/open` also accepts a recent-workspace number directly as
 
 `/bg` currently uses Claude Code, so choose `claude_code` with `/agent`
 first. Cozter persists the external task ID, polls independently, and sends
-a new chat message when the task completes—even across a bot restart.
+a new chat message when the task completes—even across a bot restart. A
+compatible foreground agent can make the same handoff itself with its hidden
+`[[background: ...]]` protocol marker; Cozter launches the durable session
+and posts its completion rather than relying on a shell background process.
 `/stop` (or `/cancel` when no picker is active) also stops a tracked detached
 task. If Claude reports that a task is blocked waiting for input, Cozter
 notifies the chat; use `claude agents` and `claude attach` in the workspace

@@ -7,7 +7,12 @@ import unittest
 from unittest import mock
 
 from Cozter import agent, backends_agent, workspace
-from Cozter.backends_agent.base import AgentResult, DetachedTaskRef, DetachedTaskStatus
+from Cozter.backends_agent.base import (
+    AgentResult,
+    DetachedTaskRef,
+    DetachedTaskRequest,
+    DetachedTaskStatus,
+)
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent import claude_code as claude_code_mod
 from Cozter.backends_bot.base import BotContext, BotPlatform
@@ -144,6 +149,76 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             [],
         )
 
+    async def test_status_falls_back_to_durable_job_state(self) -> None:
+        backend = ClaudeCodeBackend()
+        task_id = "048e1065"
+        with tempfile.TemporaryDirectory() as claude_home:
+            state_path = os.path.join(
+                claude_home, "jobs", task_id, "state.json",
+            )
+            os.makedirs(os.path.dirname(state_path))
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({"cwd": "/work", "state": "done"}, f)
+
+            async def fake_run(_cmd: list[str], *, cwd: str):
+                self.assertEqual(cwd, "/work")
+                return 0, "[]", ""
+
+            with (
+                mock.patch.object(
+                    claude_code_mod, "_claude_home", return_value=claude_home,
+                ),
+                mock.patch.object(
+                    claude_code_mod, "_run_claude_command", fake_run,
+                ),
+            ):
+                status = await backend.get_detached_task_status("/work", task_id)
+
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertEqual(status.state, "done")
+
+    async def test_output_uses_visible_text_from_durable_transcript(self) -> None:
+        backend = ClaudeCodeBackend()
+        task_id = "048e1065"
+        session_id = "048e1065-aaaa-bbbb-cccc-0123456789ab"
+        with tempfile.TemporaryDirectory() as claude_home:
+            state_path = os.path.join(
+                claude_home, "jobs", task_id, "state.json",
+            )
+            transcript_path = os.path.join(
+                claude_home, "projects", "-work", f"{session_id}.jsonl",
+            )
+            os.makedirs(os.path.dirname(state_path))
+            os.makedirs(os.path.dirname(transcript_path))
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "cwd": "/work",
+                    "state": "done",
+                    "sessionId": session_id,
+                    "linkScanPath": transcript_path,
+                    "output": {"result": "short state summary"},
+                }, f)
+            with open(transcript_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "First result."}],
+                }}) + "\n")
+                f.write(json.dumps({"message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "hidden"},
+                        {"type": "text", "text": "Final result."},
+                    ],
+                }}) + "\n")
+
+            with mock.patch.object(
+                claude_code_mod, "_claude_home", return_value=claude_home,
+            ):
+                output = await backend.get_detached_task_output("/work", task_id)
+
+        self.assertEqual(output, "First result.\n\nFinal result.")
+
 
 class DetachedTaskLedgerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -213,6 +288,61 @@ class DetachedTaskLedgerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(len(await self.bot._list_detached_task_records()), 1)
+
+    async def test_agent_request_launches_and_persists_before_acknowledging(self) -> None:
+        result = AgentResult(detached_task_requests=[DetachedTaskRequest(
+            prompt="Run the full test suite and report the result.",
+        )])
+        launch = agent.DetachedTaskLaunch(
+            backend_name="claude_code", task_id="048e1065",
+            session_id="session-1",
+        )
+
+        with mock.patch.object(
+            agent, "launch_detached", new=mock.AsyncMock(return_value=launch),
+        ) as start_task:
+            await self.bot._launch_result_detached_tasks(
+                "u1",
+                "c1",
+                "/work",
+                result,
+                model="sonnet",
+                summary_model="haiku",
+                approval="auto",
+                backend_name="claude_code",
+                summary_backend_name="claude_code",
+            )
+
+        records = await self.bot._list_detached_task_records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["session_id"], "session-1")
+        start_task.assert_awaited_once()
+        self.assertEqual(
+            result.events[-1].content,
+            "Started background task 048e1065. I’ll post its final result here.",
+        )
+
+    async def test_agent_request_does_not_launch_after_foreground_failure(self) -> None:
+        result = AgentResult(
+            error="stream disconnected",
+            detached_task_requests=[DetachedTaskRequest(prompt="Run checks.")],
+        )
+
+        with mock.patch.object(agent, "launch_detached") as start_task:
+            await self.bot._launch_result_detached_tasks(
+                "u1",
+                "c1",
+                "/work",
+                result,
+                model="sonnet",
+                summary_model="haiku",
+                approval="auto",
+                backend_name="claude_code",
+                summary_backend_name="claude_code",
+            )
+
+        start_task.assert_not_called()
+        self.assertIn("foreground agent run failed", result.events[-1].content)
 
     async def test_background_command_registers_before_acknowledging(self) -> None:
         ctx = BotContext(

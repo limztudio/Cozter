@@ -2183,6 +2183,87 @@ class BotPlatform(ABC):
                 validate=True,
             )
 
+    async def _launch_result_detached_tasks(
+        self,
+        uid: str,
+        chat_id: str,
+        workspace_path: str,
+        result: agent.AgentResult,
+        *,
+        model: str | None,
+        summary_model: str | None,
+        approval: str,
+        backend_name: str,
+        summary_backend_name: str,
+    ) -> None:
+        """Start agent-requested durable tasks and queue their callbacks."""
+        requests = result.detached_task_requests
+        if not requests:
+            return
+        if result.error:
+            agent.append_text_result(
+                result,
+                "I did not start the requested background task because the "
+                "foreground agent run failed.",
+            )
+            return
+        backend = backends_agent.get_backend(backend_name)
+        if not getattr(backend, "supports_detached_tasks", False):
+            agent.append_text_result(
+                result,
+                f"{backend.name} does not support restart-safe background "
+                "tasks on this Cozter installation.",
+            )
+            return
+
+        for request in requests:
+            try:
+                launch = await agent.launch_detached(
+                    request.prompt,
+                    workspace_path,
+                    uid,
+                    model=model,
+                    summary_model=summary_model,
+                    approval=approval,
+                    backend_name=backend_name,
+                    summary_backend_name=summary_backend_name,
+                )
+            except Exception as exc:
+                logger.exception("Could not start agent-requested background task")
+                agent.append_text_result(
+                    result, f"Could not start background task: {exc}",
+                )
+                continue
+            try:
+                tracked = await self._register_detached_task(
+                    uid=uid,
+                    chat_id=chat_id,
+                    workspace_path=workspace_path,
+                    session_id=launch.session_id,
+                    backend_name=launch.backend_name,
+                    task_id=launch.task_id,
+                    validate=True,
+                )
+            except Exception:
+                logger.exception(
+                    "Could not persist agent-requested detached task %s",
+                    launch.task_id,
+                )
+                tracked = False
+            if tracked:
+                agent.append_text_result(
+                    result,
+                    f"Started background task {launch.task_id}. "
+                    "I’ll post its final result here.",
+                )
+            else:
+                agent.append_text_result(
+                    result,
+                    f"Started background task {launch.task_id}, but Cozter "
+                    "could not verify it for completion delivery. Check it "
+                    f"with `claude agents` or `claude logs {launch.task_id}`.",
+                )
+
     async def _cancel_detached_tasks(self, uid: str) -> int:
         """Cancel/dismiss every tracked detached task owned by one user."""
         cancelled = 0
@@ -2624,6 +2705,31 @@ class BotPlatform(ABC):
                 summary_backend_name=summary_backend,
                 session_id=session_id,
             )
+            # Agents request durable provider work with a final-response
+            # marker. Start and persist those jobs here, after the foreground
+            # stream has closed but before we acknowledge it to the chat.
+            # Scheduled/ephemeral turns have no durable conversation target,
+            # so only interactive turns may ask for this handoff.
+            if session_id is None:
+                try:
+                    await self._launch_result_detached_tasks(
+                        uid,
+                        chat_id,
+                        ws,
+                        result,
+                        model=model,
+                        summary_model=summary_model,
+                        approval=perm,
+                        backend_name=backend_name,
+                        summary_backend_name=summary_backend,
+                    )
+                except Exception:
+                    # The foreground reply is still owed if an optional
+                    # detached-job handoff itself breaks unexpectedly.
+                    logger.exception("Could not launch detached task request")
+                    agent.append_text_result(
+                        result, "Could not start the requested background task.",
+                    )
             # A Claude foreground turn can itself invoke ``claude --bg`` via
             # Bash. Register any validated task ids before sending the parent
             # reply, so a fast completion cannot race past Cozter's durable

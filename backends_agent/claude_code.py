@@ -18,6 +18,7 @@ permissions`` since summarization is a no-tool LLM call.
 """
 
 import asyncio
+import glob
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ _BACKGROUND_BASH_RE = re.compile(
     r"(?:^|[\s;&|])claude\b[^\n]*--(?:bg|background)\b",
     re.IGNORECASE,
 )
+_SAFE_BACKGROUND_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _DETACHED_COMMAND_TIMEOUT_SEC = 30
 
 
@@ -57,6 +59,125 @@ def _background_task_ids(text: str) -> list[str]:
         if task_id not in ids:
             ids.append(task_id)
     return ids
+
+
+def _claude_home() -> str:
+    """Return Claude Code's user-level persistence root."""
+    return os.path.join(os.path.expanduser("~"), ".claude")
+
+
+def _workspace_contains(workspace_path: str, candidate: object) -> bool:
+    """Return whether a provider-reported directory belongs to this workspace."""
+    if not isinstance(candidate, str):
+        return False
+    expected = os.path.realpath(workspace_path)
+    actual = os.path.realpath(candidate)
+    return actual == expected or actual.startswith(expected + os.sep)
+
+
+def _local_background_state(
+    workspace_path: str, task_id: str,
+) -> dict | None:
+    """Read a Claude background job's durable local state, if it is trusted."""
+    if not _SAFE_BACKGROUND_ID_RE.fullmatch(task_id):
+        return None
+    path = os.path.join(_claude_home(), "jobs", task_id, "state.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(state, dict) or not _workspace_contains(
+        workspace_path, state.get("cwd"),
+    ):
+        return None
+    return state
+
+
+def _local_background_status(
+    workspace_path: str, task_id: str,
+) -> DetachedTaskStatus | None:
+    state = _local_background_state(workspace_path, task_id)
+    if state is None:
+        return None
+    value = state.get("state")
+    if not isinstance(value, str) or not value:
+        return None
+    return DetachedTaskStatus(state=value)
+
+
+def _transcript_text_from_content(content: object) -> str:
+    """Flatten one persisted Claude assistant message's visible text blocks."""
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+    return "\n".join(parts)
+
+
+def _local_background_output(workspace_path: str, task_id: str) -> str:
+    """Read the visible result from Claude's durable background transcript.
+
+    ``claude logs`` renders an interactive terminal transcript on current CLI
+    versions, which is unsuitable for a chat callback. Claude's persisted
+    JSONL transcript is the same durable source the supervisor resumes from
+    and preserves just the assistant's actual response text.
+    """
+    state = _local_background_state(workspace_path, task_id)
+    if state is None:
+        return ""
+    session_id = state.get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        return ""
+    if os.path.basename(session_id) != session_id:
+        return ""
+    project_root = os.path.realpath(os.path.join(_claude_home(), "projects"))
+    paths: list[str] = []
+    linked_path = state.get("linkScanPath")
+    if isinstance(linked_path, str):
+        real_linked_path = os.path.realpath(linked_path)
+        if (
+            real_linked_path.startswith(project_root + os.sep)
+            and os.path.basename(real_linked_path) == f"{session_id}.jsonl"
+        ):
+            paths.append(real_linked_path)
+    pattern = os.path.join(_claude_home(), "projects", "*", f"{session_id}.jsonl")
+    paths.extend(path for path in glob.glob(pattern) if path not in paths)
+    for path in paths:
+        texts: list[str] = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(item, dict):
+                        continue
+                    message = item.get("message")
+                    if not isinstance(message, dict) or message.get("role") != "assistant":
+                        continue
+                    text = _transcript_text_from_content(message.get("content"))
+                    if text:
+                        texts.append(text)
+        except OSError:
+            continue
+        if texts:
+            return "\n\n".join(texts)
+
+    output = state.get("output")
+    if isinstance(output, dict):
+        summary = output.get("result")
+        if isinstance(summary, str):
+            return summary.strip()
+    return ""
 
 
 async def _run_claude_command(
@@ -264,7 +385,11 @@ class ClaudeCodeBackend(Backend):
                 task_id, stderr or stdout,
             )
             # A transient supervisor failure must not be mistaken for a task
-            # disappearing; the durable tracker retries unknown states.
+            # disappearing. A completed task may have already retired from
+            # the daemon, though, so consult its durable local state first.
+            local = _local_background_status(workspace_path, task_id)
+            if local is not None:
+                return local
             return DetachedTaskStatus("unknown")
         try:
             sessions = json.loads(stdout)
@@ -276,7 +401,6 @@ class ClaudeCodeBackend(Backend):
             return DetachedTaskStatus("unknown")
         if not isinstance(sessions, list):
             return DetachedTaskStatus("unknown")
-        expected_cwd = os.path.realpath(workspace_path)
         for item in sessions:
             if (
                 not isinstance(item, dict)
@@ -284,15 +408,7 @@ class ClaudeCodeBackend(Backend):
                 or item.get("id") != task_id
             ):
                 continue
-            item_cwd = item.get("cwd")
-            real_item_cwd = (
-                os.path.realpath(item_cwd)
-                if isinstance(item_cwd, str) else ""
-            )
-            if not (
-                real_item_cwd == expected_cwd
-                or real_item_cwd.startswith(expected_cwd + os.sep)
-            ):
+            if not _workspace_contains(workspace_path, item.get("cwd")):
                 logger.warning(
                     "Claude Code task %s belongs to a different workspace",
                     task_id,
@@ -306,14 +422,23 @@ class ClaudeCodeBackend(Backend):
                 state=state,
                 waiting_for=waiting_for if isinstance(waiting_for, str) else "",
             )
-        return None
+        # Claude's daemon can retire a completed worker before the next poll.
+        # The persisted state keeps the callback restart-safe across that gap.
+        return _local_background_status(workspace_path, task_id)
 
     async def get_detached_task_output(
         self,
         workspace_path: str,
         task_id: str,
     ) -> str:
-        """Retrieve Claude Code's recent terminal output for a task."""
+        """Retrieve a detached task's visible result without terminal ANSI."""
+        local = _local_background_output(workspace_path, task_id)
+        if local:
+            return local
+
+        # Compatibility fallback for older Claude Code versions that do not
+        # persist the current job/transcript layout. Newer versions render a
+        # full terminal screen here, hence the durable transcript above.
         cmd = [*executable_command(self.executable), "logs", task_id]
         returncode, stdout, stderr = await _run_claude_command(
             cmd, cwd=workspace_path,

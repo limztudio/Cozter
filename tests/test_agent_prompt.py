@@ -66,6 +66,58 @@ class PromptPolicyTests(unittest.TestCase):
             )
 
 
+class DetachedTaskRequestTests(unittest.TestCase):
+    def test_marker_is_removed_and_yields_one_task_prompt(self) -> None:
+        cleaned, prompts = agent.extract_detached_task_requests(
+            "I will start the validation now.\n\n"
+            "[[background: Run the full validation suite and report the "
+            "result.]]\n",
+        )
+
+        self.assertEqual(cleaned, "I will start the validation now.")
+        self.assertEqual(
+            prompts, ["Run the full validation suite and report the result."],
+        )
+
+    def test_consuming_marker_keeps_it_out_of_session_and_chat_events(self) -> None:
+        result = agent.AgentResult()
+        result.events.append(agent.ChatEvent(
+            kind="text",
+            content="Starting it.\n[[background: Run checks.]]",
+        ))
+        result.text = "Starting it.\n[[background: Run checks.]]"
+
+        agent._consume_detached_task_requests(result)
+
+        self.assertEqual(result.text, "Starting it.")
+        self.assertEqual(result.events[0].content, "Starting it.")
+        self.assertEqual(
+            [request.prompt for request in result.detached_task_requests],
+            ["Run checks."],
+        )
+
+    def test_only_detached_backends_receive_the_marker_protocol(self) -> None:
+        class _Backend:
+            supports_typed_plugins = True
+            supports_plugin_prelude = False
+            supports_detached_tasks = True
+
+        class _ForegroundOnlyBackend:
+            supports_typed_plugins = True
+            supports_plugin_prelude = False
+            supports_detached_tasks = False
+
+        detached_prompt = agent._build_backend_prompt(
+            _Backend(), "do work", collaborative=True,
+        )
+        foreground_prompt = agent._build_backend_prompt(
+            _ForegroundOnlyBackend(), "do work", collaborative=True,
+        )
+
+        self.assertIn("[[background: <task>]]", detached_prompt)
+        self.assertNotIn("[[background: <task>]]", foreground_prompt)
+
+
 class SessionResponseTests(unittest.TestCase):
     """[[await]] is a control marker the bot consumes, not conversation."""
 

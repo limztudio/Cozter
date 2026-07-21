@@ -58,6 +58,12 @@ class DetachedTaskRef:
 
 
 @dataclass(frozen=True)
+class DetachedTaskRequest:
+    """A durable task an agent asks Cozter to start after replying."""
+    prompt: str
+
+
+@dataclass(frozen=True)
 class DetachedTaskStatus:
     """Latest state reported by a provider-owned detached task."""
     state: str
@@ -94,6 +100,12 @@ class AgentResult:
     # continues after the CLI stream exits, so the bot tracks them through a
     # separate durable ledger rather than treating them as ChatEvents.
     detached_tasks: list[DetachedTaskRef] = field(default_factory=list)
+    # Agent-authored requests for Cozter to start a provider-owned task after
+    # the foreground stream ends. Unlike ``detached_tasks``, these do not
+    # already have a provider task id; the bot launches and persists them.
+    detached_task_requests: list[DetachedTaskRequest] = field(
+        default_factory=list,
+    )
     # Set by agent.run after routing. A later completion can use it to append
     # output to the conversation that originally started the detached work.
     session_id: str | None = None
@@ -121,6 +133,16 @@ def append_detached_task(
     ref = DetachedTaskRef(backend_name=backend_name, task_id=task_id)
     if ref not in result.detached_tasks:
         result.detached_tasks.append(ref)
+
+
+def append_detached_task_request(result: AgentResult, prompt: str) -> None:
+    """Record one agent-requested detached task exactly once on *result*."""
+    prompt = prompt.strip()
+    if not prompt:
+        return
+    request = DetachedTaskRequest(prompt=prompt)
+    if request not in result.detached_task_requests:
+        result.detached_task_requests.append(request)
 
 
 def set_error_result(
