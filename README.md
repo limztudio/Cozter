@@ -58,9 +58,10 @@ cd Cozter
 python __main__.py -cli
 ```
 
-The primary remote is **GitLab** (`git@gitlab.com:mgneh/cozter.git`). GitHub
-(`github.com/limztudio/Cozter`) is kept as a read-only mirror; pull from
-GitLab to stay current.
+GitLab (`git@gitlab.com:mgneh/cozter.git`) is the canonical upstream. GitHub
+(`github.com/limztudio/Cozter`) is a mirror; clone and pull from GitLab to
+stay current. Maintainers who publish to a mirror should check
+`git remote -v` before pushing, since a checkout may use a separate push URL.
 
 That starts the local terminal chat surface without requiring bot tokens.
 From the parent directory you can run the package form instead:
@@ -307,7 +308,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
 | `/refresh` | Drop the workspace's `.codex/` cache (use after an upgrade) |
 | `/stop` | Cancel the running agent turn and clear queued work |
-| `/bg <task>` | Start a restart-safe detached task with the selected compatible backend |
+| `/bg <task>` or `/background <task>` | Start a restart-safe detached task with the selected compatible backend |
 | `/inject <text>` | Add context to the running turn (the agent restarts with it) |
 | `/reserve` | Create a recurring scheduled prompt |
 | `/schedules` | List schedules and delete one by number |
@@ -320,8 +321,8 @@ Most picker commands accept either the displayed number or the literal
 name. `/open` also accepts a recent-workspace number directly as
 `/open 2`.
 
-`/bg` currently uses Claude Code, so choose `claude_code` with `/agent`
-first. Cozter persists the external task ID, polls independently, and sends
+`/bg` (or `/background`) currently uses Claude Code, so choose `claude_code`
+with `/agent` first. Cozter persists the external task ID, polls independently, and sends
 a new chat message when the task completes—even across a bot restart. A
 compatible foreground agent can make the same handoff itself with its hidden
 `[[background: ...]]` protocol marker; Cozter launches the durable session
@@ -648,6 +649,14 @@ content before the file is unlinked. Failed hunks leave the target in place.
 Regression coverage for these paths lives in
 `tests/test_agent_process_cleanup.py`, `tests/test_utils.py`, and
 `tests/test_agent_tools.py`.
+
+Persisted session state is treated as recovery data rather than trusted input:
+malformed last-session pointers, unsafe session IDs, and session files whose
+embedded ID does not match their filename are ignored. A damaged or
+hand-edited state file therefore falls back to normal session selection rather
+than reaching outside `.cozter/sessions/`. Workspace discovery retains normal
+`**` glob behavior while memoizing match states, so an agent-supplied pattern
+with many repeated globstars cannot turn matching into exponential work.
 
 ## Source inventory
 
