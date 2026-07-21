@@ -9,6 +9,7 @@ from unittest import mock
 
 from Cozter import agent_tools
 from Cozter.agent_tools.base import (
+    _path_matches_glob,
     apply_string_replacement,
     coerce_int_arg,
     read_bounded_text,
@@ -104,6 +105,14 @@ class AgentToolHelperTests(unittest.TestCase):
                 )
 
         asyncio.run(run())
+
+    def test_path_glob_handles_many_repeated_globstars(self) -> None:
+        """Repeated ``**`` patterns must not cause exponential matching."""
+        path = "/".join([*(f"part{i}" for i in range(40)), "target.py"])
+        pattern = "/".join([*("**" for _ in range(40)), "target.py"])
+
+        self.assertTrue(_path_matches_glob(path, pattern))
+        self.assertFalse(_path_matches_glob(path, pattern[:-2] + "txt"))
 
 
 class BuiltinEditToolTests(unittest.TestCase):

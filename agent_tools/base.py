@@ -9,6 +9,7 @@ import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import Any, ClassVar
 
 import aiohttp
@@ -365,22 +366,33 @@ def _path_matches_glob(rel_path: str, pattern: str) -> bool:
 
 
 def _match_glob_parts(pattern_parts: list[str], path_parts: list[str]) -> bool:
-    if not pattern_parts:
-        return not path_parts
-    part = pattern_parts[0]
-    if part == "**":
-        return (
-            _match_glob_parts(pattern_parts[1:], path_parts)
-            or (
-                bool(path_parts)
-                and _match_glob_parts(pattern_parts, path_parts[1:])
+    """Match glob path segments without re-exploring ``**`` branches.
+
+    Adjacent (or otherwise repeated) ``**`` segments have many equivalent
+    ways to consume the same path components.  Caching the pair of indexes
+    keeps an agent-supplied pattern such as ``**/**/**/...`` polynomial
+    instead of exponential while preserving the existing matching rules.
+    """
+    @lru_cache(maxsize=None)
+    def matches(pattern_index: int, path_index: int) -> bool:
+        if pattern_index == len(pattern_parts):
+            return path_index == len(path_parts)
+        part = pattern_parts[pattern_index]
+        if part == "**":
+            return (
+                matches(pattern_index + 1, path_index)
+                or (
+                    path_index < len(path_parts)
+                    and matches(pattern_index, path_index + 1)
+                )
             )
+        return (
+            path_index < len(path_parts)
+            and fnmatch.fnmatchcase(path_parts[path_index], part)
+            and matches(pattern_index + 1, path_index + 1)
         )
-    return (
-        bool(path_parts)
-        and fnmatch.fnmatchcase(path_parts[0], part)
-        and _match_glob_parts(pattern_parts[1:], path_parts[1:])
-    )
+
+    return matches(0, 0)
 
 
 def validate_replacement_strings(

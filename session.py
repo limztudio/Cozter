@@ -33,7 +33,26 @@ def _sessions_dir(workspace: str) -> str:
     return os.path.join(workspace, COZTER_DIR, SESSIONS_DIR)
 
 
+def _is_safe_session_id(session_id: object) -> bool:
+    """Return whether *session_id* is safe to use as one file-name part.
+
+    Session IDs normally come from :func:`uuid.uuid4`, but they are also
+    restored from JSON state.  Do not let a corrupt or hand-edited value turn
+    the session file helpers into a path traversal on either POSIX or Windows.
+    """
+    return (
+        isinstance(session_id, str)
+        and bool(session_id)
+        and "\x00" not in session_id
+        and "/" not in session_id
+        and "\\" not in session_id
+        and session_id not in {".", ".."}
+    )
+
+
 def _session_path(workspace: str, session_id: str) -> str:
+    if not _is_safe_session_id(session_id):
+        raise ValueError("unsafe session id")
     return os.path.join(_sessions_dir(workspace), f"{session_id}.json")
 
 
@@ -61,13 +80,16 @@ def _load_last_session_map(workspace: str) -> dict:
 def get_last_session(workspace: str, user_id: int | str) -> str | None:
     """Return the session id this user was last writing into, or None."""
     val = _load_last_session_map(workspace).get(str(user_id))
-    return val if isinstance(val, str) and val else None
+    return val if _is_safe_session_id(val) else None
 
 
 def set_last_session(
     workspace: str, user_id: int | str, session_id: str,
 ) -> None:
     """Record that *user_id* is now working in *session_id*."""
+    if not _is_safe_session_id(session_id):
+        logger.warning("Refusing to persist unsafe session id: %r", session_id)
+        return
     data = _load_last_session_map(workspace)
     data[str(user_id)] = session_id
     save_json_object(_last_session_path(workspace), data)
@@ -89,7 +111,7 @@ def migrate_last_session(
         if source_key == target_key:
             continue
         session_id = data.get(source_key)
-        if not isinstance(session_id, str) or not session_id:
+        if not _is_safe_session_id(session_id):
             continue
         data[target_key] = session_id
         save_json_object(_last_session_path(workspace), data)
@@ -128,9 +150,9 @@ def _normalize_session_data(value: object, *, path: str = "") -> dict | None:
         return None
 
     session_id = value.get("id")
-    if not isinstance(session_id, str) or not session_id:
+    if not isinstance(session_id, str) or not _is_safe_session_id(session_id):
         if path:
-            logger.warning("Ignoring session without valid id: %s", path)
+            logger.warning("Ignoring session without safe id: %s", path)
         return None
 
     data = dict(value)
@@ -242,6 +264,12 @@ def list_sessions_with_data(workspace: str) -> list[dict]:
         data = _normalize_session_data(data, path=fpath)
         if data is None:
             continue
+        expected_id = fname[:-len(".json")]
+        if data["id"] != expected_id:
+            logger.warning(
+                "Ignoring session with mismatched file/id: %s", fpath,
+            )
+            continue
         out.append(data)
     out.sort(key=lambda d: d.get("created", ""), reverse=True)
     return out
@@ -282,6 +310,9 @@ def create_session(workspace: str, name: str | None = None) -> dict:
 
 
 def load_session(workspace: str, session_id: str) -> dict | None:
+    if not _is_safe_session_id(session_id):
+        logger.warning("Ignoring unsafe session id: %r", session_id)
+        return None
     path = _session_path(workspace, session_id)
     if not os.path.exists(path):
         return None
@@ -291,10 +322,17 @@ def load_session(workspace: str, session_id: str) -> dict | None:
     except (json.JSONDecodeError, OSError):
         logger.warning("Corrupt session file, ignoring: %s", path)
         return None
-    return _normalize_session_data(data, path=path)
+    data = _normalize_session_data(data, path=path)
+    if data is not None and data["id"] != session_id:
+        logger.warning("Ignoring session with mismatched file/id: %s", path)
+        return None
+    return data
 
 
 def save_session(workspace: str, session_id: str, data: dict) -> None:
+    if not _is_safe_session_id(session_id):
+        logger.warning("Refusing to save unsafe session id: %r", session_id)
+        return
     save_json_object(_session_path(workspace, session_id), data)
 
 
@@ -304,6 +342,9 @@ def delete_session(workspace: str, session_id: str) -> bool:
     Used by the scheduler to clean up the ephemeral session it spins
     up to run a scheduled command.
     """
+    if not _is_safe_session_id(session_id):
+        logger.warning("Refusing to delete unsafe session id: %r", session_id)
+        return False
     path = _session_path(workspace, session_id)
     try:
         os.remove(path)

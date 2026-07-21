@@ -715,6 +715,30 @@ class SessionStateFallbackTests(unittest.TestCase):
             with self.assertLogs(session.logger, level="WARNING"):
                 self.assertEqual(session.list_sessions(tmp), [])
 
+    def test_session_state_rejects_unsafe_and_mismatched_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions_dir = os.path.join(tmp, ".cozter", "sessions")
+            os.makedirs(sessions_dir)
+            with open(
+                os.path.join(tmp, "outside.json"), "w", encoding="utf-8",
+            ) as f:
+                json.dump({"id": "outside", "messages": []}, f)
+            with open(
+                os.path.join(sessions_dir, "mismatch.json"), "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({"id": "another", "messages": []}, f)
+
+            # A corrupted pointer must not traverse out of sessions/.
+            session.set_last_session(tmp, "user", "safe-id")
+            session.set_last_session(tmp, "user", "../../outside")
+            self.assertEqual(session.get_last_session(tmp, "user"), "safe-id")
+            self.assertIsNone(session.load_session(tmp, "../../outside"))
+
+            # Listing must preserve the file-name/id invariant used by
+            # subsequent load/save operations.
+            self.assertEqual(session.list_sessions(tmp), [])
+
     def test_session_helpers_tolerate_bad_runtime_shapes(self) -> None:
         self.assertEqual(
             session.total_message_count({
