@@ -327,6 +327,10 @@ a new chat message when the task completes—even across a bot restart. A
 compatible foreground agent can make the same handoff itself with its hidden
 `[[background: ...]]` protocol marker; Cozter launches the durable session
 and posts its completion rather than relying on a shell background process.
+For Claude Code foreground and detached sessions, Cozter also installs a
+session-only Bash hook that denies ordinary `&`, `nohup`, `disown`,
+`run_in_background`, and nested `claude --bg` launches, so those jobs cannot
+silently escape the callback ledger.
 `/stop` (or `/cancel` when no picker is active) also stops a tracked detached
 task. If Claude reports that a task is blocked waiting for input, Cozter
 notifies the chat; use `claude agents` and `claude attach` in the workspace

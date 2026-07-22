@@ -89,11 +89,12 @@ _AUTONOMY_POLICY = (
 _DETACHED_TASK_POLICY = (
     "For durable background work, do not start a shell background process "
     "(`&`, `nohup`, Bash run_in_background, or a nested `claude --bg`) and "
-    "do not promise a later callback yourself. Instead, finish your visible "
-    "reply and place one self-contained task request on its own line as "
-    "`[[background: <task>]]`. Cozter will launch, track, and later post the "
-    "provider task's final result. Use this only when the remaining work can "
-    "continue without user input."
+    "do not say that work has started or promise a later callback yourself. "
+    "Instead, finish your visible reply and place one self-contained task "
+    "request on its own line as `[[background: <task>]]`. Cozter will only "
+    "announce the task after it has launched and persisted it, then later "
+    "post the provider task's final result. Use this only when the remaining "
+    "work can continue without user input."
 )
 
 

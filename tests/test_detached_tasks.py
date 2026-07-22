@@ -75,6 +75,33 @@ class _DetachedBot(BotPlatform):
 
 
 class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
+    def _assert_background_guard_settings(self, cmd: list[str]) -> None:
+        self.assertIn("--settings", cmd)
+        settings = json.loads(cmd[cmd.index("--settings") + 1])
+        self.assertFalse(settings["disableAllHooks"])
+        hooks = settings["hooks"]["PreToolUse"]
+        self.assertEqual(hooks[0]["matcher"], "Bash")
+        hook = hooks[0]["hooks"][0]
+        self.assertEqual(hook["type"], "command")
+        self.assertTrue(hook["command"])
+        self.assertTrue(hook["args"][0].endswith("claude_background_guard.py"))
+
+    async def test_foreground_launch_installs_background_guard(self) -> None:
+        backend = ClaudeCodeBackend()
+        proc = mock.Mock()
+        with mock.patch.object(
+            claude_code_mod,
+            "create_prompt_subprocess",
+            new=mock.AsyncMock(return_value=proc),
+        ) as create_process:
+            launched = await backend.launch(
+                "/work", "run checks", "sonnet", "auto",
+            )
+
+        self.assertIs(launched, proc)
+        cmd = create_process.await_args.args[0]
+        self._assert_background_guard_settings(cmd)
+
     async def test_launch_uses_background_mode_not_print_mode(self) -> None:
         backend = ClaudeCodeBackend()
         seen: list[str] = []
@@ -95,6 +122,7 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("--print", seen)
         self.assertNotIn("--output-format", seen)
         self.assertNotIn("--no-session-persistence", seen)
+        self._assert_background_guard_settings(seen)
 
     async def test_status_accepts_only_matching_background_session(self) -> None:
         backend = ClaudeCodeBackend()

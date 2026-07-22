@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import sys
 
 from .base import (
     AgentResult, Backend, ChatEvent, DetachedTaskStatus,
@@ -43,6 +44,34 @@ _BACKGROUND_BASH_RE = re.compile(
 )
 _SAFE_BACKGROUND_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _DETACHED_COMMAND_TIMEOUT_SEC = 30
+_BACKGROUND_GUARD_TIMEOUT_SEC = 5
+
+
+def _background_guard_settings() -> str:
+    """Return the session-only Claude hook that blocks orphaned Bash jobs."""
+    guard_path = os.path.join(
+        os.path.dirname(__file__), "claude_background_guard.py",
+    )
+    return json.dumps({
+        # CLI settings take precedence over workspace/user settings.  A
+        # lower-priority ``disableAllHooks`` must not turn off Cozter's
+        # callback-safety guard for this one session.
+        "disableAllHooks": False,
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{
+                    "type": "command",
+                    # ``args`` selects Claude Code's exec form: both the
+                    # interpreter and path are passed verbatim, including on
+                    # Windows and in workspaces with spaces in their names.
+                    "command": sys.executable,
+                    "args": [guard_path],
+                    "timeout": _BACKGROUND_GUARD_TIMEOUT_SEC,
+                }],
+            }],
+        },
+    }, separators=(",", ":"))
 
 
 def _decode_cli_output(value: bytes | None) -> str:
@@ -292,6 +321,10 @@ class ClaudeCodeBackend(Backend):
             "--output-format", "stream-json",
             "--verbose",  # required by claude when stream-json is set
             "--no-session-persistence",  # we manage sessions ourselves
+            # Claude's Bash tool is outside Cozter's process tree.  Install
+            # a session-scoped PreToolUse hook so it cannot leave an
+            # untracked ordinary background job behind.
+            "--settings", _background_guard_settings(),
         ]
         self.append_model_effort_args(cmd, model, effort)
 
@@ -332,7 +365,11 @@ class ClaudeCodeBackend(Backend):
         Claude Code rejects that combination because its supervisor needs a
         persistent interactive-session transcript to host the detached worker.
         """
-        cmd: list[str] = [*executable_command(self.executable), "--bg"]
+        cmd: list[str] = [
+            *executable_command(self.executable),
+            "--bg",
+            "--settings", _background_guard_settings(),
+        ]
         self.append_model_effort_args(cmd, model, effort)
 
         if approval == "full":
