@@ -21,6 +21,7 @@ from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin.grep import GrepTool
 from Cozter.agent_tools.builtin.multi_edit import MultiEditTool
+from Cozter.agent_tools.builtin.read_file import ReadFileTool
 from Cozter.agent_tools.builtin.tree import TreeTool
 
 
@@ -135,6 +136,54 @@ class BuiltinEditToolTests(unittest.TestCase):
                 self.assertEqual(result, "Replaced 1 occurrence in note.txt")
                 with open(path, encoding="utf-8") as f:
                     self.assertEqual(f.read(), "alpha gamma")
+
+        asyncio.run(run())
+
+
+class ReadFileToolTests(unittest.TestCase):
+    def test_full_read_is_bounded_before_result_truncation(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "large.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("abcdefghijk")
+
+                with mock.patch(
+                    "Cozter.agent_tools.builtin.read_file"
+                    "._READ_FILE_MAX_CHARS",
+                    8,
+                ):
+                    result = await ReadFileTool().run(
+                        tmp, {"path": "large.txt"},
+                    )
+
+                self.assertEqual(
+                    result,
+                    "abcdefgh\n... [truncated at 8 characters; use offset"
+                    " and limit to read another range]",
+                )
+
+        asyncio.run(run())
+
+    def test_line_range_bounds_one_unbroken_line(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "large-line.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("skip\n" + "x" * 20 + "\n")
+
+                with mock.patch(
+                    "Cozter.agent_tools.builtin.read_file"
+                    "._READ_FILE_MAX_CHARS",
+                    8,
+                ):
+                    result = await ReadFileTool().run(
+                        tmp,
+                        {"path": "large-line.txt", "offset": 1, "limit": 1},
+                    )
+
+                self.assertTrue(result.startswith("x" * 8), result)
+                self.assertIn("truncated at 8 characters", result)
 
         asyncio.run(run())
 

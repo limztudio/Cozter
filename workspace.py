@@ -244,11 +244,14 @@ PERMISSION_DESCRIPTIONS = {
     "full": "Full access - bypass all approvals and sandbox",
     "auto": "Run tool calls automatically (sandboxed where supported)",
     "confirm": (
-        "Cautious - chat can't prompt per tool call, so llama exposes"
-        " read-only tools only and CLI backends fall back to auto."
+        "Cautious - HTTP backends expose read-only tools; CLI backends use"
+        " a restricted read-only or plan mode."
         " For ask-before-acting, use /style collaborative"
     ),
-    "deny": "Block all tool calls (text-only responses)",
+    "deny": (
+        "No tools for HTTP/Copilot; Codex/Claude use their strongest"
+        " non-interactive read-only or plan mode"
+    ),
 }
 
 # Interaction style: how collaborative the agent is on interactive chat

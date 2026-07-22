@@ -40,6 +40,14 @@ class CodexParseTests(unittest.TestCase):
         self.assertEqual(r.text, "hello world")
         self.assertIn("text", _kinds(r))
 
+    def test_agent_message_non_string_text_is_skipped(self) -> None:
+        r = _run(self.backend, [{
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": {"bad": "shape"}},
+        }])
+        self.assertEqual(r.text, "")
+        self.assertEqual(r.events, [])
+
     def test_command_execution_becomes_tool(self) -> None:
         r = _run(self.backend, [
             {"type": "item.completed", "item": {
@@ -59,6 +67,28 @@ class CodexParseTests(unittest.TestCase):
             }},
         ])
         self.assertIn("file", _kinds(r))
+        self.assertIn("a.py", r.events[0].content)
+
+    def test_file_change_malformed_changes_are_skipped(self) -> None:
+        """Schema drift in ``changes`` must not abort the whole turn."""
+        for changes in (None, "unexpected", {"path": "a.py"}):
+            with self.subTest(changes=changes):
+                r = _run(self.backend, [{
+                    "type": "item.completed",
+                    "item": {"type": "file_change", "changes": changes},
+                }])
+                self.assertEqual(r.events, [])
+
+        r = _run(self.backend, [{
+            "type": "item.completed",
+            "item": {
+                "type": "file_change",
+                "changes": [None, "unexpected", {
+                    "path": "a.py", "kind": "modified",
+                }],
+            },
+        }])
+        self.assertEqual(len(r.events), 1)
         self.assertIn("a.py", r.events[0].content)
 
     def test_turn_failed_sets_error(self) -> None:
@@ -138,6 +168,14 @@ class ClaudeCodeParseTests(unittest.TestCase):
         ])
         self.assertEqual(r.text, "hi there")
 
+    def test_assistant_text_block_non_string_text_is_skipped(self) -> None:
+        r = _run(self.backend, [{
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": []}]},
+        }])
+        self.assertEqual(r.text, "")
+        self.assertEqual(r.events, [])
+
     def test_assistant_non_dict_block_is_skipped(self) -> None:
         """A bare-string content entry must not raise during parsing."""
         r = _run(self.backend, [
@@ -147,6 +185,31 @@ class ClaudeCodeParseTests(unittest.TestCase):
             ]}},
         ])
         self.assertEqual(r.text, "ok")
+
+    def test_assistant_malformed_message_shapes_are_skipped(self) -> None:
+        """Unexpected assistant envelopes must not abort the stream."""
+        malformed_messages: tuple[object, ...] = (
+            None,
+            "unexpected",
+            [],
+            {"content": None},
+            {"content": {"type": "text"}},
+        )
+        for message in malformed_messages:
+            with self.subTest(message=message):
+                r = _run(self.backend, [{
+                    "type": "assistant", "message": message,
+                }])
+                self.assertEqual(r.events, [])
+                self.assertIsNone(self.backend.extract_agent_text({
+                    "type": "assistant", "message": message,
+                }))
+
+    def test_assistant_bare_string_content_is_text(self) -> None:
+        event = {"type": "assistant", "message": {"content": "hello"}}
+        r = _run(self.backend, [event])
+        self.assertEqual(r.text, "hello")
+        self.assertEqual(self.backend.extract_agent_text(event), "hello")
 
     def test_assistant_tool_use_bash(self) -> None:
         r = _run(self.backend, [

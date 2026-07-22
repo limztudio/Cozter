@@ -24,7 +24,49 @@ class CleanupStubBackend(StubBackend):
         self.cleaned = True
 
 
+class InternalBackendStub:
+    executable = "internal-backend"
+
+    def __init__(self) -> None:
+        self.launch_args: tuple[object, ...] | None = None
+        self.launch_kwargs: dict[str, object] | None = None
+
+    async def launch(self, *args, **kwargs) -> object:
+        self.launch_args = args
+        self.launch_kwargs = kwargs
+        return object()
+
+
 class ProcessDrainTests(unittest.TestCase):
+    def test_iter_json_events_discards_an_oversized_line(self) -> None:
+        async def run() -> None:
+            script = (
+                "import json, sys\n"
+                "sys.stdout.write('x' * 4096 + '\\n')\n"
+                "print(json.dumps({'type': 'done'}))\n"
+            )
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            with (
+                mock.patch.object(utils, "_MAX_STREAM_LINE_BYTES", 1024),
+                self.assertLogs(utils.logger, level="WARNING") as captured,
+            ):
+                events = [
+                    event async for event in utils.iter_json_events(proc.stdout)
+                ]
+            await proc.wait()
+
+            self.assertEqual(events, [{"type": "done"}])
+            self.assertIn("Discarding backend stdout line", captured.output[0])
+
+        asyncio.run(run())
+
     def test_iter_json_events_skips_invalid_lines(self) -> None:
         async def run() -> None:
             script = (
@@ -214,6 +256,60 @@ class BackgroundTaskTests(unittest.TestCase):
             any("Background task test-failure failed" in line for line in output),
         )
         self.assertTrue(any("RuntimeError: boom" in line for line in output))
+
+
+class InternalBackendRunnerTests(unittest.TestCase):
+    def test_internal_backend_uses_deny_instead_of_full(self) -> None:
+        backend = InternalBackendStub()
+
+        async def drain(*_args, **_kwargs) -> str:
+            return "summary"
+
+        with mock.patch.object(utils, "drain_llm_subprocess", new=drain):
+            result = asyncio.run(utils.run_internal_backend(
+                backend,
+                "/work",
+                "summarize this transcript",
+                "model",
+                timeout=1,
+                label="internal test",
+                log=logging.getLogger("Cozter.tests.internal"),
+                missing_executable_message="%s missing",
+            ))
+
+        self.assertEqual(result, "summary")
+        self.assertEqual(
+            backend.launch_args,
+            ("/work", "summarize this transcript", "model"),
+        )
+        self.assertEqual(
+            backend.launch_kwargs,
+            {"approval": "deny", "compaction": True},
+        )
+
+    def test_internal_backend_launch_failure_returns_empty_result(self) -> None:
+        class BrokenBackend:
+            executable = "internal-backend"
+
+            async def launch(self, *args, **kwargs) -> object:
+                del args, kwargs
+                raise RuntimeError("stdin closed")
+
+        log = logging.getLogger("Cozter.tests.internal-failure")
+        with self.assertLogs(log, level="ERROR") as captured:
+            result = asyncio.run(utils.run_internal_backend(
+                BrokenBackend(),
+                "/work",
+                "summarize this transcript",
+                "model",
+                timeout=1,
+                label="internal test",
+                log=log,
+                missing_executable_message="%s missing",
+            ))
+
+        self.assertEqual(result, "")
+        self.assertIn("internal test could not start", captured.output[0])
 
 
 if __name__ == "__main__":

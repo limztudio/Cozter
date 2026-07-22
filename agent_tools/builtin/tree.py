@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from ..base import (
@@ -57,7 +58,9 @@ class TreeTool(AgentTool):
         )
 
         lines: list[str] = []
-        truncated = self._walk(root, 0, depth, "", lines, max_entries)
+        truncated = await asyncio.to_thread(
+            self._walk, root, 0, depth, "", lines, max_entries,
+        )
         if not lines:
             return "(empty)"
         if truncated:

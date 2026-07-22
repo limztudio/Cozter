@@ -738,6 +738,14 @@ async def _drive_backend(
         )
     except FileNotFoundError as e:
         raise BackendUnavailable(backend) from e
+    except (OSError, RuntimeError) as exc:
+        # ``create_prompt_subprocess`` already reaps a child whose stdin
+        # closed during startup. Surface that (and other launch failures) as
+        # a normal chat result instead of letting a backend startup problem
+        # escape the turn runner and strand the user's queued work.
+        result = AgentResult()
+        set_error_result(result, f"{backend.name} could not start: {exc}")
+        return result, False
 
     result = AgentResult()
     restarting = False

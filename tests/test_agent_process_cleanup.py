@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from Cozter import agent, session
+from Cozter.backends_agent import base as backend_base
 from Cozter.backends_agent.base import ChatEvent
 
 
@@ -43,6 +44,56 @@ class _StreamingBackend:
 
 
 class AgentProcessCleanupTests(unittest.TestCase):
+    def test_backend_launch_failure_becomes_a_user_facing_result(self) -> None:
+        class BrokenBackend:
+            name = "broken"
+            executable = "broken-cli"
+
+            async def launch(self, *args, **kwargs):
+                del args, kwargs
+                raise RuntimeError("stdin closed during startup")
+
+        result, restarting = asyncio.run(agent._drive_backend(
+            BrokenBackend(), "/work", "prompt", None, "auto", effort=0,
+        ))
+
+        self.assertFalse(restarting)
+        self.assertIn("broken could not start", result.text)
+        self.assertIn("stdin closed during startup", result.text)
+
+    def test_closed_stdin_prompt_delivery_reaps_process(self) -> None:
+        async def run() -> None:
+            created: list[asyncio.subprocess.Process] = []
+            real_create = asyncio.create_subprocess_exec
+
+            async def capture_process(*args, **kwargs):
+                proc = await real_create(*args, **kwargs)
+                created.append(proc)
+                return proc
+
+            script = "import os, time; os.close(0); time.sleep(60)"
+            with mock.patch.object(
+                backend_base.asyncio,
+                "create_subprocess_exec",
+                side_effect=capture_process,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "closed stdin before Cozter could deliver the prompt",
+                ):
+                    await asyncio.wait_for(
+                        backend_base.create_prompt_subprocess(
+                            [sys.executable, "-c", script],
+                            "x" * (1024 * 1024),
+                        ),
+                        timeout=5,
+                    )
+
+            self.assertEqual(len(created), 1)
+            self.assertIsNotNone(created[0].returncode)
+
+        asyncio.run(run())
+
     def test_event_callback_failure_reaps_backend_process(self) -> None:
         async def run() -> None:
             backend = _StreamingBackend()

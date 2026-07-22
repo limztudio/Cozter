@@ -12,6 +12,7 @@ import asyncio
 import copy
 import json
 import unittest
+from unittest import mock
 
 from Cozter.backends_agent import _openai_agent as oa
 
@@ -72,6 +73,135 @@ class OpenAIRetryLoopTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self._run(once)
         self.assertEqual(calls["n"], 3)  # initial + 2 retries
+
+
+class _SSEContent:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def iter_any(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _SSEResponse:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.status = 200
+        self.headers: dict[str, str] = {}
+        self.content = _SSEContent(chunks)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def text(self) -> str:
+        return ""
+
+
+class _SSESession:
+    def __init__(self, response: _SSEResponse) -> None:
+        self._response = response
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    def post(self, *args, **kwargs) -> _SSEResponse:
+        return self._response
+
+
+class OpenAIStreamShapeTests(unittest.TestCase):
+    def test_sse_line_cap_discards_bad_line_and_keeps_following_event(self) -> None:
+        async def collect() -> list[str]:
+            content = _SSEContent([b"x" * 2048, b"\nvalid\n"])
+            with (
+                mock.patch.object(oa, "_MAX_SSE_LINE_BYTES", 1024),
+                self.assertLogs(oa.logger, level="WARNING") as captured,
+            ):
+                lines = [line async for line in oa._iter_sse_lines(content)]
+            self.assertIn("Discarding SSE line", captured.output[0])
+            return lines
+
+        self.assertEqual(asyncio.run(collect()), ["valid"])
+
+    def _stream(self, events: list[object]) -> tuple[str, list[dict]]:
+        lines = [
+            f"data: {json.dumps(event)}\n".encode()
+            for event in events
+        ]
+        lines.append(b"data: [DONE]\n")
+        response = _SSEResponse([b"".join(lines)])
+        session = _SSESession(response)
+        with mock.patch.object(oa.aiohttp, "ClientSession", return_value=session):
+            return asyncio.run(oa._stream_once(
+                "http://x/chat/completions", {}, {}, 30, "test",
+            ))
+
+    def test_malformed_sse_shapes_are_ignored_without_losing_valid_deltas(
+        self,
+    ) -> None:
+        text, tool_calls = self._stream([
+            [],
+            "not a completion object",
+            {"choices": None},
+            {"choices": {}},
+            {"choices": [None]},
+            {"choices": [{"delta": None}]},
+            {"choices": [{"delta": "not an object"}]},
+            {
+                "choices": [{
+                    "delta": {
+                        "content": "Hello",
+                        "tool_calls": {"not": "a list"},
+                    },
+                }],
+            },
+            {
+                "choices": [{
+                    "delta": {
+                        "content": " world",
+                        "tool_calls": [
+                            None,
+                            "not an object",
+                            {"index": "not an integer"},
+                            {"index": -1},
+                            {"index": 0, "function": "not an object"},
+                            {
+                                "index": 0,
+                                "id": "call-1",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": '{"path":"x.txt"}',
+                                },
+                            },
+                        ],
+                    },
+                }],
+            },
+        ])
+
+        self.assertEqual(text, "Hello world")
+        self.assertEqual(tool_calls, [{
+            "id": "call-1",
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "arguments": '{"path":"x.txt"}',
+            },
+        }])
+
+    def test_malformed_tool_call_delta_is_a_no_op(self) -> None:
+        buffers: dict[int, dict[str, object]] = {}
+        malformed_deltas: tuple[object, ...] = (
+            None, "bad", [], {"index": True}, {"index": "0"},
+        )
+        for delta in malformed_deltas:
+            oa._merge_tool_call(buffers, delta)
+        self.assertEqual(buffers, {})
 
 
 class _ToolLimitBackend(oa.OpenAIChatBackend):

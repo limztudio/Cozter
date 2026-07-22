@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from ..base import (
@@ -52,14 +53,10 @@ class GlobTool(AgentTool):
         )
 
         abs_ws = os.path.realpath(workspace_path)
-        matches: list[str] = []
         try:
-            for _path, rel, _root_rel in iter_workspace_files(
-                abs_ws, abs_ws, pattern,
-            ):
-                matches.append(rel)
-                if len(matches) >= max_results:
-                    break
+            matches = await asyncio.to_thread(
+                self._find_matches, abs_ws, pattern, max_results,
+            )
         except Exception as exc:
             # Filesystem trouble should surface as a clean model-facing error.
             return f"Glob failed: {exc}"
@@ -72,6 +69,20 @@ class GlobTool(AgentTool):
         if len(matches) >= max_results:
             summary += f"\n(stopped at {max_results} matches)"
         return summary
+
+    @staticmethod
+    def _find_matches(
+        workspace_path: str, pattern: str, max_results: int,
+    ) -> list[str]:
+        """Synchronously scan for matches; called in a worker thread."""
+        matches: list[str] = []
+        for _path, rel, _root_rel in iter_workspace_files(
+            workspace_path, workspace_path, pattern,
+        ):
+            matches.append(rel)
+            if len(matches) >= max_results:
+                break
+        return matches
 
     def summarize(self, args: dict) -> str:
         return f"glob: {args.get('pattern', '?')}"

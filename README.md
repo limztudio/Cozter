@@ -201,10 +201,13 @@ manual "continue".
 
 `max_permission` (default `full`) caps the highest `/permission` mode any
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <
-full`. Since `full` bypasses the sandbox (arbitrary code execution) for
-anyone on the `user_ids` allowlist, set this to `auto` to keep every
-workspace sandboxed, or `deny` for a read-only bot. `/permission` rejects
-a higher mode, and an already-stored higher value is clamped down.
+full`. `full` is the only mode that requests each CLI's explicit bypass flag
+(arbitrary code execution) for anyone on the `user_ids` allowlist. Set it to
+`auto` to prevent that bypass; provider-native sandbox and approval behavior
+still differs by CLI. `deny` exposes no tools to the HTTP and Copilot
+backends; Codex and Claude Code use their strongest non-interactive
+read-only/plan modes, which may still inspect the workspace. `/permission`
+rejects a higher mode, and an already-stored higher value is clamped down.
 
 `show_usage` (default `true`) appends a compact per-turn token/cost footer
 (e.g. `📊 12.5k in · 28 out · $0.01`) after each reply, for backends that
@@ -522,18 +525,19 @@ live from their configured HTTP endpoints. `llama` and `zai` share one
 in-process OpenAI-compatible agent loop (`backends_agent/_openai_agent.py`);
 `zai` just adds the Bearer auth header and points at Z.ai's endpoint.
 
-Permission modes are best-effort across third-party CLIs, because a chat
-bot can't surface a per-tool-call approval dialog. `codex` maps all four
-modes to native sandbox/approval flags. `llama` runs the loop in-process,
-so `deny` exposes no tools and `confirm` exposes read-only tools only —
-writes and shell are withheld, and blocked as a backstop in
-`execute_tool`. `claude_code` uses plan mode for `deny` but falls back to
-non-interactive for `confirm`; `copilot` has no usable interactive
-approval flow, so non-`full` modes run with its non-blocking tool flag.
-Stricter intents a backend can't enforce are logged. For ask-before-acting
-behavior on any backend, use `/style collaborative` — it pauses the turn
-(via `[[await]]`) for your reply instead of relying on the CLI's own
-approval flow.
+Permission modes are backend-specific because a chat bot cannot answer a
+per-tool-call approval dialog. `codex` uses bypass only for `full`, its
+sandboxed full-auto mode for `auto`, and a read-only sandbox for `confirm`
+and `deny`. `llama` and `zai` run in-process: `deny` exposes no tools and
+`confirm` exposes only read-only tools, with writes and shell blocked again
+by `execute_tool`. `claude_code` uses bypass only for `full`, `acceptEdits`
+for `auto`, and plan mode for `confirm`/`deny`. `copilot` uses `--yolo` only
+for `full`, `--allow-all-tools` (while retaining path and URL checks) for
+`auto`, and an explicit empty tool list for `confirm`/`deny`. Internal
+router, titling, and compaction calls always use `deny`, so conversation
+content cannot elevate their permissions. For ask-before-acting behavior on
+any backend, use `/style collaborative` — it pauses the turn (via
+`[[await]]`) for your reply instead of relying on a CLI approval flow.
 
 The `llama` model picker queries `llama_server_url/v1/models` and falls
 back to `auto` if the server is down or returns no model IDs. The `zai`

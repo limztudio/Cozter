@@ -122,7 +122,33 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("--print", seen)
         self.assertNotIn("--output-format", seen)
         self.assertNotIn("--no-session-persistence", seen)
+        self.assertIn("--permission-mode", seen)
+        self.assertEqual(
+            seen[seen.index("--permission-mode") + 1], "acceptEdits",
+        )
+        self.assertNotIn("--dangerously-skip-permissions", seen)
+        self.assertNotIn("bypassPermissions", seen)
         self._assert_background_guard_settings(seen)
+
+    async def test_background_deny_uses_plan_without_bypass(self) -> None:
+        backend = ClaudeCodeBackend()
+        seen: list[str] = []
+
+        async def fake_run(cmd: list[str], *, cwd: str):
+            seen.extend(cmd)
+            self.assertEqual(cwd, "/work")
+            return 0, "backgrounded · 048e1065", ""
+
+        with mock.patch.object(claude_code_mod, "_run_claude_command", fake_run):
+            task_id = await backend.launch_detached(
+                "/work", "summarize", "haiku", "deny",
+            )
+
+        self.assertEqual(task_id, "048e1065")
+        self.assertIn("--permission-mode", seen)
+        self.assertEqual(seen[seen.index("--permission-mode") + 1], "plan")
+        self.assertNotIn("--dangerously-skip-permissions", seen)
+        self.assertNotIn("bypassPermissions", seen)
 
     async def test_status_accepts_only_matching_background_session(self) -> None:
         backend = ClaudeCodeBackend()

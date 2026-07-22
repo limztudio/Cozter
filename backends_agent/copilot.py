@@ -7,8 +7,8 @@ streams JSONL events to stdout. Unlike codex, copilot:
     POSIX ARG_MAX, commonly ~2 MB). copilot has no prompt-via-stdin or
     --prompt-file path yet, so argv is the only delivery mechanism.
   - has no `-C <dir>` flag - we use the subprocess `cwd` parameter
-  - has coarser permission semantics: --allow-all-tools, --yolo, or default
-    (which would prompt, unusable in non-interactive mode)
+  - requires an explicit ``--allow-all-tools`` for autonomous headless work;
+    restricted calls use ``--available-tools ""`` to expose no tools at all
 
 The JSONL event schema is not formally documented. ``parse_event`` and
 ``extract_agent_text`` use best-effort key probing (``text``/``content``
@@ -54,6 +54,22 @@ _COPILOT_HOME_FILES = ("config.json", "settings.json")
 # queried. Do not fall back to the generic models from ``copilot help``:
 # those names may be disabled for this account or enterprise.
 _FALLBACK_MODELS = ("auto",)
+
+
+def _permission_args(approval: str) -> list[str]:
+    """Translate Cozter's permission level to Copilot CLI arguments.
+
+    ``--allow-all-tools`` is appropriate only for Cozter's ``auto`` mode: it
+    keeps Copilot's normal path and URL checks, unlike ``--yolo``.  Supplying
+    an explicit empty available-tool list hides every tool from the model, so
+    ``confirm`` and ``deny`` cannot silently inherit a permissive session
+    setting or turn a non-interactive prompt into unrestricted execution.
+    """
+    if approval == "full":
+        return ["--yolo"]
+    if approval == "auto":
+        return ["--allow-all-tools"]
+    return ["--available-tools", ""]
 
 
 def _max_prompt_chars() -> int:
@@ -365,20 +381,9 @@ class CopilotBackend(Backend):
             effort_levels=self.effort_levels_for_model(model),
         )
 
-        if compaction or approval == "full":
-            cmd.append("--yolo")
-        else:
-            # "auto" / "confirm" / "deny" all collapse to --allow-all-tools
-            # here: copilot cannot interactively prompt a Telegram user, so
-            # non-interactive runs must be non-blocking. Log when the user's
-            # intent is stricter than what copilot can enforce.
-            if approval in ("confirm", "deny"):
-                logger.info(
-                    "Copilot backend does not support approval=%s; "
-                    "falling back to --allow-all-tools",
-                    approval,
-                )
-            cmd.append("--allow-all-tools")
+        # ``compaction`` never grants broader access.  Internal calls use
+        # ``deny``, which supplies an explicit empty tool allowlist.
+        cmd += _permission_args(approval)
 
         cmd += ["-p", prompt]
         isolated_home = _create_isolated_copilot_home()

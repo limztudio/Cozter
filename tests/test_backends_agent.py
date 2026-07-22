@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 from Cozter import config
+from Cozter.backends_agent import claude_code as claude_code_mod
 from Cozter.backends_agent import codex as codex_mod
 from Cozter.backends_agent import copilot as copilot_mod
 from Cozter.backends_agent.base import Backend
@@ -34,6 +35,161 @@ class _DummyBackend(Backend):
 
     def extract_agent_text(self, event):
         return None
+
+
+class BackendPermissionCommandTests(unittest.TestCase):
+    def _codex_command(
+        self, approval: str, *, compaction: bool = False,
+    ) -> tuple[str, ...]:
+        async def run() -> tuple[str, ...]:
+            proc = mock.Mock()
+            with (
+                mock.patch.object(
+                    codex_mod, "executable_command", return_value=["codex"],
+                ),
+                mock.patch.object(
+                    codex_mod,
+                    "create_prompt_subprocess",
+                    new=mock.AsyncMock(return_value=proc),
+                ) as create_process,
+            ):
+                await CodexBackend().launch(
+                    "/work", "summarize", None, approval,
+                    compaction=compaction,
+                )
+            return tuple(create_process.await_args.args[0])
+
+        return asyncio.run(run())
+
+    def _claude_command(
+        self, approval: str, *, compaction: bool = False,
+    ) -> tuple[str, ...]:
+        async def run() -> tuple[str, ...]:
+            proc = mock.Mock()
+            with (
+                mock.patch.object(
+                    claude_code_mod,
+                    "executable_command",
+                    return_value=["claude"],
+                ),
+                mock.patch.object(
+                    claude_code_mod,
+                    "create_prompt_subprocess",
+                    new=mock.AsyncMock(return_value=proc),
+                ) as create_process,
+            ):
+                await ClaudeCodeBackend().launch(
+                    "/work", "summarize", None, approval,
+                    compaction=compaction,
+                )
+            return tuple(create_process.await_args.args[0])
+
+        return asyncio.run(run())
+
+    def _copilot_command(
+        self, approval: str, *, compaction: bool = False,
+    ) -> tuple[str, ...]:
+        async def run() -> tuple[str, ...]:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                isolated_home = os.path.join(temp_dir, "copilot-home")
+                os.mkdir(isolated_home)
+                proc = mock.MagicMock()
+                proc.pid = 123
+                backend = CopilotBackend()
+                with (
+                    mock.patch.object(
+                        copilot_mod,
+                        "executable_command",
+                        return_value=["copilot"],
+                    ),
+                    mock.patch.object(
+                        copilot_mod,
+                        "_create_isolated_copilot_home",
+                        return_value=isolated_home,
+                    ),
+                    mock.patch.object(
+                        copilot_mod.asyncio,
+                        "create_subprocess_exec",
+                        new=mock.AsyncMock(return_value=proc),
+                    ) as create_process,
+                ):
+                    await backend.launch(
+                        "/work", "summarize", None, approval,
+                        compaction=compaction,
+                    )
+                command = tuple(create_process.await_args.args)
+                await backend.cleanup_process(proc)
+                return command
+
+        return asyncio.run(run())
+
+    def test_permission_argument_maps_are_explicit_and_fail_restricted(self) -> None:
+        self.assertEqual(
+            codex_mod._permission_args("full"),
+            ["--dangerously-bypass-approvals-and-sandbox"],
+        )
+        self.assertEqual(codex_mod._permission_args("auto"), ["--full-auto"])
+        for approval in ("confirm", "deny", "unknown"):
+            with self.subTest(backend="codex", approval=approval):
+                self.assertEqual(
+                    codex_mod._permission_args(approval),
+                    ["--sandbox", "read-only"],
+                )
+
+        self.assertEqual(
+            claude_code_mod._permission_args("full"),
+            ["--dangerously-skip-permissions"],
+        )
+        self.assertEqual(
+            claude_code_mod._permission_args("auto"),
+            ["--permission-mode", "acceptEdits"],
+        )
+        for approval in ("confirm", "deny", "unknown"):
+            with self.subTest(backend="claude", approval=approval):
+                self.assertEqual(
+                    claude_code_mod._permission_args(approval),
+                    ["--permission-mode", "plan"],
+                )
+
+        self.assertEqual(copilot_mod._permission_args("full"), ["--yolo"])
+        self.assertEqual(
+            copilot_mod._permission_args("auto"), ["--allow-all-tools"],
+        )
+        for approval in ("confirm", "deny", "unknown"):
+            with self.subTest(backend="copilot", approval=approval):
+                self.assertEqual(
+                    copilot_mod._permission_args(approval),
+                    ["--available-tools", ""],
+                )
+
+    def test_internal_compaction_command_never_grants_full_access(self) -> None:
+        codex_command = self._codex_command("deny", compaction=True)
+        self.assertIn("--sandbox", codex_command)
+        self.assertEqual(
+            codex_command[codex_command.index("--sandbox") + 1], "read-only",
+        )
+        self.assertNotIn(
+            "--dangerously-bypass-approvals-and-sandbox", codex_command,
+        )
+        self.assertNotIn("--full-auto", codex_command)
+
+        claude_command = self._claude_command("deny", compaction=True)
+        self.assertIn("--permission-mode", claude_command)
+        self.assertEqual(
+            claude_command[claude_command.index("--permission-mode") + 1],
+            "plan",
+        )
+        self.assertNotIn("--dangerously-skip-permissions", claude_command)
+        self.assertNotIn("bypassPermissions", claude_command)
+
+        copilot_command = self._copilot_command("deny", compaction=True)
+        self.assertIn("--available-tools", copilot_command)
+        self.assertEqual(
+            copilot_command[copilot_command.index("--available-tools") + 1],
+            "",
+        )
+        self.assertNotIn("--allow-all-tools", copilot_command)
+        self.assertNotIn("--yolo", copilot_command)
 
 
 class BackendModelTests(unittest.TestCase):

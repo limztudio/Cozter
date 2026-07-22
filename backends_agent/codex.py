@@ -17,6 +17,21 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
+def _permission_args(approval: str) -> list[str]:
+    """Translate Cozter's permission level to Codex CLI arguments.
+
+    Codex's non-interactive CLI has no separate "no tools" switch.  Its
+    read-only sandbox is therefore the strongest restriction available for
+    ``confirm`` and ``deny``: it prevents writes and keeps the normal
+    sandbox, although the model may still perform read-only inspection.
+    """
+    if approval == "full":
+        return ["--dangerously-bypass-approvals-and-sandbox"]
+    if approval == "auto":
+        return ["--full-auto"]
+    return ["--sandbox", "read-only"]
+
+
 # Safety net for hosts where the CLI is unavailable, unauthenticated, or an
 # older/company-managed build does not support ``codex debug models``.  The
 # live catalog is preferred whenever the installed CLI can provide one.
@@ -277,16 +292,9 @@ class CodexBackend(Backend):
             effort_levels=self.effort_levels_for_model(model),
         )
 
-        if compaction or approval == "full":
-            # Compaction is a trusted internal LLM call with no tool use;
-            # bypass avoids sandbox interference with model API access.
-            cmd.append("--dangerously-bypass-approvals-and-sandbox")
-        elif approval == "deny":
-            cmd += ["--sandbox", "read-only"]
-        elif approval == "confirm":
-            cmd += ["--sandbox", "workspace-write"]
-        else:
-            cmd += ["--full-auto"]
+        # ``compaction`` identifies an internal text task; it must never
+        # widen permissions.  Internal callers pass approval="deny".
+        cmd += _permission_args(approval)
         cmd.append("-")  # read prompt from stdin
 
         return await create_prompt_subprocess(cmd, prompt)
@@ -305,7 +313,7 @@ class CodexBackend(Backend):
         if etype == "item.completed":
             if item_type == "agent_message":
                 text = item.get("text", "")
-                if text:
+                if isinstance(text, str) and text:
                     append_text_result(result, text)
 
             elif item_type == "command_execution":
@@ -318,7 +326,12 @@ class CodexBackend(Backend):
                 result.events.append(ChatEvent(kind="tool", content=summary))
 
             elif item_type == "file_change":
-                for ch in item.get("changes", []):
+                changes = item.get("changes")
+                if not isinstance(changes, list):
+                    return
+                for ch in changes:
+                    if not isinstance(ch, dict):
+                        continue
                     path = ch.get("path", "?")
                     kind = ch.get("kind", "?")
                     result.events.append(ChatEvent(

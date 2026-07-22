@@ -33,6 +33,11 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+# A single SSE event can legitimately exceed aiohttp's readline threshold
+# when a provider emits a complete tool argument in one delta. Keep generous
+# compatibility headroom without retaining an unbounded no-newline stream.
+_MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
+
 
 def extract_model_ids(payload: object) -> tuple[str, ...]:
     """Extract unique, non-empty IDs from an OpenAI-style ``/models`` payload.
@@ -522,15 +527,28 @@ async def _stream_once(
                 except json.JSONDecodeError:
                     logger.debug("Non-JSON SSE line: %r", data)
                     continue
-                choices = obj.get("choices") or []
-                if not choices:
+                # Providers occasionally send non-completion events on the
+                # same SSE stream (or a proxy can emit a JSON error shape).
+                # Treat anything outside the chat-completions delta shape as
+                # ignorable rather than letting an AttributeError end a turn.
+                if not isinstance(obj, dict):
                     continue
-                delta = choices[0].get("delta") or {}
+                choices = obj.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta")
+                if not isinstance(delta, dict):
+                    continue
                 content = delta.get("content")
                 if isinstance(content, str) and content:
                     text_parts.append(content)
-                for tc in delta.get("tool_calls") or []:
-                    _merge_tool_call(tool_buffers, tc)
+                tool_call_deltas = delta.get("tool_calls")
+                if isinstance(tool_call_deltas, list):
+                    for tc in tool_call_deltas:
+                        _merge_tool_call(tool_buffers, tc)
     except (
         aiohttp.ClientConnectorError,
         aiohttp.ServerDisconnectedError,
@@ -550,37 +568,73 @@ async def _stream_once(
 async def _iter_sse_lines(
     content: aiohttp.StreamReader,
 ) -> AsyncIterator[str]:
-    """Yield decoded lines from an SSE body without any line-length limit.
+    """Yield decoded SSE lines while bounding each retained line.
 
-    aiohttp's built-in line iteration (``async for line in resp.content``)
-    uses ``readline()``, which raises ``LineTooLong`` once a single line
-    exceeds its internal high-water mark (~512 KiB). A model that emits a
-    large tool-argument object or content block as one SSE ``data:`` line
-    (GLM/Z.ai and some local runtimes send whole objects per delta) trips
-    that; ``LineTooLong`` is not a ``ClientError``, so it escapes the retry
-    handler and surfaces as a bare "loop crashed", discarding text already
-    streamed this turn. Reading raw chunks and splitting on ``\\n`` ourselves
-    has no length cap. Splitting on the ``\\n`` byte never splits a multi-byte
-    UTF-8 sequence, so decoding each complete line is safe.
+    Raw chunk reads avoid aiohttp's comparatively small ``readline()`` cap,
+    which some providers exceed with one complete tool-call argument. A
+    malformed stream that never sends a newline is discarded after a generous
+    hard limit, then normal processing resumes at its next complete line.
     """
     buffer = bytearray()
+    discarding_long_line = False
     async for chunk in content.iter_any():
-        buffer.extend(chunk)
-        start = 0
-        while True:
-            nl = buffer.find(b"\n", start)
-            if nl < 0:
+        cursor = 0
+        while cursor < len(chunk):
+            if discarding_long_line:
+                newline = chunk.find(b"\n", cursor)
+                if newline == -1:
+                    break
+                discarding_long_line = False
+                cursor = newline + 1
+                continue
+
+            newline = chunk.find(b"\n", cursor)
+            end = newline if newline != -1 else len(chunk)
+            segment = chunk[cursor:end]
+            remaining = _MAX_SSE_LINE_BYTES - len(buffer)
+            if len(segment) > remaining:
+                logger.warning(
+                    "Discarding SSE line larger than %d bytes",
+                    _MAX_SSE_LINE_BYTES,
+                )
+                buffer.clear()
+                if newline == -1:
+                    discarding_long_line = True
+                    break
+                cursor = newline + 1
+                continue
+
+            buffer.extend(segment)
+            if newline == -1:
                 break
-            yield bytes(buffer[start:nl]).decode("utf-8", errors="replace")
-            start = nl + 1
-        del buffer[:start]
-    if buffer:
+            yield bytes(buffer).decode("utf-8", errors="replace")
+            buffer.clear()
+            cursor = newline + 1
+    if buffer and not discarding_long_line:
         yield bytes(buffer).decode("utf-8", errors="replace")
 
 
-def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
+def _merge_tool_call(
+    buffers: dict[int, dict[str, Any]], delta: object,
+) -> None:
     """Fold a single streaming tool_call delta into the index'd buffer."""
+    if not isinstance(delta, dict):
+        return
+
     idx = delta.get("index", 0)
+    # Indices are used as dictionary keys and sorted at the end of the
+    # stream. Reject booleans, strings, and negative values so malformed
+    # events cannot create incomparable keys or otherwise disrupt a turn.
+    if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
+        return
+
+    fn = delta.get("function")
+    # A function-less chunk can legitimately carry the id before later
+    # chunks supply the function name/arguments. A non-object ``function``
+    # field, on the other hand, is not a valid tool-call delta.
+    if fn is not None and not isinstance(fn, dict):
+        return
+
     # Pre-seed with a synthetic id so we always have something to put in the
     # tool-result message's tool_call_id field; some servers reject empty
     # tool_call_ids. The server-provided id below overrides this if present.
@@ -589,11 +643,15 @@ def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
         "type": "function",
         "function": {"name": "", "arguments": ""},
     })
-    if delta.get("id"):
-        buf["id"] = delta["id"]
-    fn = delta.get("function") or {}
-    if fn.get("name"):
-        buf["function"]["name"] = fn["name"]
+    call_id = delta.get("id")
+    if isinstance(call_id, str) and call_id:
+        buf["id"] = call_id
+    if fn is None:
+        return
+
+    name = fn.get("name")
+    if isinstance(name, str) and name:
+        buf["function"]["name"] = name
     args_frag = fn.get("arguments")
     if isinstance(args_frag, str):
         # Arguments stream in as JSON-string fragments; concatenate.
@@ -601,7 +659,12 @@ def _merge_tool_call(buffers: dict[int, dict], delta: dict) -> None:
     elif isinstance(args_frag, dict):
         # Some servers (GLM / Z.ai, some local runtimes) send the whole
         # arguments object in one delta instead of string fragments.
-        buf["function"]["arguments"] = json.dumps(args_frag)
+        try:
+            buf["function"]["arguments"] = json.dumps(args_frag)
+        except (TypeError, ValueError):
+            # This cannot arise from decoded JSON, but keeps this boundary
+            # safe for custom providers that call it directly.
+            logger.debug("Ignoring non-serializable tool-call arguments")
 
 
 # ---------------------------------------------------------------------------

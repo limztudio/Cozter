@@ -12,9 +12,8 @@ JSONL event sequence:
     - terminal event carrying the final aggregated assistant text
 
 Workspace access uses the subprocess ``cwd`` (Claude Code has no -C flag).
-Permission modes map to claude's ``--permission-mode`` choices, with the
-trusted ``compaction=True`` path collapsing to ``--dangerously-skip-
-permissions`` since summarization is a no-tool LLM call.
+Permission modes map to Claude's ``--permission-mode`` choices. Internal
+text-only calls use ``deny``; ``compaction=True`` never broadens approval.
 """
 
 import asyncio
@@ -45,6 +44,21 @@ _BACKGROUND_BASH_RE = re.compile(
 _SAFE_BACKGROUND_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _DETACHED_COMMAND_TIMEOUT_SEC = 30
 _BACKGROUND_GUARD_TIMEOUT_SEC = 5
+
+
+def _permission_args(approval: str) -> list[str]:
+    """Translate Cozter's permission level to Claude Code CLI arguments.
+
+    ``acceptEdits`` keeps regular permission checks for commands outside the
+    working-directory edit flow.  ``plan`` allows inspection but blocks edits,
+    which is the safest non-interactive fallback for both ``confirm`` and
+    ``deny`` without pretending a chat surface can answer native prompts.
+    """
+    if approval == "full":
+        return ["--dangerously-skip-permissions"]
+    if approval == "auto":
+        return ["--permission-mode", "acceptEdits"]
+    return ["--permission-mode", "plan"]
 
 
 def _background_guard_settings() -> str:
@@ -328,25 +342,9 @@ class ClaudeCodeBackend(Backend):
         ]
         self.append_model_effort_args(cmd, model, effort)
 
-        if compaction or approval == "full":
-            # Compaction is a trusted internal call; same for the user's
-            # full-access mode.
-            cmd.append("--dangerously-skip-permissions")
-        elif approval == "deny":
-            # Plan mode produces a response without performing edits or
-            # shell commands - closest analogue to "no tools".
-            cmd += ["--permission-mode", "plan"]
-        else:
-            # Telegram/Slack flows can't surface interactive permission
-            # prompts; bypass so the run doesn't block. Log when the
-            # user's intent was stricter than what we can enforce.
-            if approval == "confirm":
-                logger.info(
-                    "Claude Code can't prompt for confirmation in"
-                    " non-interactive mode; falling back to"
-                    " bypassPermissions",
-                )
-            cmd += ["--permission-mode", "bypassPermissions"]
+        # ``compaction`` must not override the requested approval. Internal
+        # callers use ``deny`` so transcript content cannot gain privileges.
+        cmd += _permission_args(approval)
 
         return await create_prompt_subprocess(cmd, prompt, cwd=workspace_path)
 
@@ -372,17 +370,7 @@ class ClaudeCodeBackend(Backend):
         ]
         self.append_model_effort_args(cmd, model, effort)
 
-        if approval == "full":
-            cmd.append("--dangerously-skip-permissions")
-        elif approval == "deny":
-            cmd += ["--permission-mode", "plan"]
-        else:
-            if approval == "confirm":
-                logger.info(
-                    "Claude Code background sessions cannot surface a "
-                    "chat approval dialog; using bypassPermissions",
-                )
-            cmd += ["--permission-mode", "bypassPermissions"]
+        cmd += _permission_args(approval)
         # ``--bg`` takes a positional prompt, not ``--print``/stdin.
         cmd.append(prompt)
 
@@ -510,7 +498,16 @@ class ClaudeCodeBackend(Backend):
 
         if etype == "assistant":
             msg = event.get("message", {}) or {}
-            for block in msg.get("content") or []:
+            if not isinstance(msg, dict):
+                return
+            content = msg.get("content")
+            if isinstance(content, str):
+                if content:
+                    append_text_result(result, content)
+                return
+            if not isinstance(content, list):
+                return
+            for block in content:
                 self._handle_assistant_block(block, result)
             return
 
@@ -574,10 +571,19 @@ class ClaudeCodeBackend(Backend):
             return text if isinstance(text, str) and text else None
         if etype == "assistant":
             msg = event.get("message", {}) or {}
-            for block in msg.get("content") or []:
+            if not isinstance(msg, dict):
+                return None
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content or None
+            if not isinstance(content, list):
+                return None
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
                 if block.get("type") == "text":
                     text = block.get("text", "")
-                    if text:
+                    if isinstance(text, str) and text:
                         return text
         return None
 
@@ -595,7 +601,7 @@ class ClaudeCodeBackend(Backend):
         btype = block.get("type")
         if btype == "text":
             text = block.get("text", "")
-            if text:
+            if isinstance(text, str) and text:
                 append_text_result(result, text)
             return
         if btype == "tool_use":

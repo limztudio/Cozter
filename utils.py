@@ -19,6 +19,10 @@ CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.
     os.path.dirname(os.path.abspath(__file__)), ".config",
 )
 _STDERR_CAPTURE_BYTES = 64 * 1024
+# A malformed CLI can emit an unbroken stdout line forever. JSONL normally
+# has short event lines, so keep a generous cap while preventing the decoder
+# buffer from growing until it exhausts the bot process.
+_MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024
 _BackgroundResult = TypeVar("_BackgroundResult")
 _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 
@@ -226,22 +230,54 @@ def load_json_object(
 async def iter_stream_lines(
     stream: asyncio.StreamReader, chunk_size: int = 64 * 1024,
 ) -> AsyncIterator[str]:
-    """Yield decoded stdout lines without StreamReader.readline() limits."""
+    """Yield decoded stdout lines without ``readline()`` limits.
+
+    Individual JSONL lines are bounded so a broken child that omits a newline
+    cannot make the in-memory decoder buffer grow without limit. An oversized
+    line is discarded and the next complete line is still processed.
+    """
     buffer = bytearray()
+    discarding_long_line = False
 
     while True:
         chunk = await stream.read(chunk_size)
         if not chunk:
-            if buffer:
+            if buffer and not discarding_long_line:
                 yield buffer.decode("utf-8", errors="replace")
             return
 
-        buffer.extend(chunk)
-        parts = buffer.split(b"\n")
-        buffer = bytearray(parts.pop())
+        cursor = 0
+        while cursor < len(chunk):
+            if discarding_long_line:
+                newline = chunk.find(b"\n", cursor)
+                if newline == -1:
+                    break
+                discarding_long_line = False
+                cursor = newline + 1
+                continue
 
-        for part in parts:
-            yield part.decode("utf-8", errors="replace")
+            newline = chunk.find(b"\n", cursor)
+            end = newline if newline != -1 else len(chunk)
+            segment = chunk[cursor:end]
+            remaining = _MAX_STREAM_LINE_BYTES - len(buffer)
+            if len(segment) > remaining:
+                logger.warning(
+                    "Discarding backend stdout line larger than %d bytes",
+                    _MAX_STREAM_LINE_BYTES,
+                )
+                buffer.clear()
+                if newline == -1:
+                    discarding_long_line = True
+                    break
+                cursor = newline + 1
+                continue
+
+            buffer.extend(segment)
+            if newline == -1:
+                break
+            yield buffer.decode("utf-8", errors="replace")
+            buffer.clear()
+            cursor = newline + 1
 
 
 async def iter_json_events(
@@ -452,16 +488,23 @@ async def run_internal_backend(
 ) -> str | None:
     """Launch and drain an internal no-tools backend call.
 
+    Internal prompts include user-controlled conversation content.  Keep them
+    at the least-privileged ``deny`` level instead of treating summarization,
+    titling, and routing as a reason to bypass backend safety controls.
+
     Return ``None`` when the backend executable is missing and an empty
     string when it runs without producing an agent response.
     """
     try:
         proc = await backend.launch(
-            workspace_path, prompt, model, approval="full", compaction=True,
+            workspace_path, prompt, model, approval="deny", compaction=True,
         )
     except FileNotFoundError:
         log.log(missing_level, missing_executable_message, backend.executable)
         return None
+    except (OSError, RuntimeError) as exc:
+        log.error("%s could not start: %s", label, exc)
+        return ""
     return await drain_llm_subprocess(
         proc,
         backend,

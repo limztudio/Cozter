@@ -7,6 +7,8 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from ..utils import kill_and_wait
+
 
 def resolve_executable_prefix(name: str) -> list[str] | None:
     """Resolve *name* to a launchable subprocess argv prefix.
@@ -168,7 +170,13 @@ async def create_prompt_subprocess(
     *,
     cwd: str | None = None,
 ) -> asyncio.subprocess.Process:
-    """Spawn a JSONL CLI backend and write the prompt to stdin."""
+    """Spawn a JSONL CLI backend and write the prompt to stdin.
+
+    A CLI can reject its startup arguments or fail authentication before it
+    ever reads stdin.  In that case ``drain()``/``wait_closed()`` raises a
+    broken-pipe error; reap the child here, where it is still in scope, so a
+    failed prompt delivery cannot leak a subprocess.
+    """
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
@@ -180,12 +188,39 @@ async def create_prompt_subprocess(
         start_new_session=os.name != "nt",
     )
     if proc.stdin is None:
-        raise RuntimeError("subprocess stdin pipe was not created")
-    proc.stdin.write(prompt.encode("utf-8"))
-    await proc.stdin.drain()
-    proc.stdin.close()
-    await proc.stdin.wait_closed()
+        await _reap_failed_prompt_subprocess(proc)
+        raise RuntimeError("backend subprocess did not provide a stdin pipe")
+    try:
+        proc.stdin.write(prompt.encode("utf-8"))
+        await proc.stdin.drain()
+        proc.stdin.close()
+        await proc.stdin.wait_closed()
+    except asyncio.CancelledError:
+        await _reap_failed_prompt_subprocess(proc)
+        raise
+    except OSError as exc:
+        await _reap_failed_prompt_subprocess(proc)
+        raise RuntimeError(
+            "backend process closed stdin before Cozter could deliver the "
+            "prompt; check its startup error and configuration"
+        ) from exc
+    except Exception as exc:
+        await _reap_failed_prompt_subprocess(proc)
+        raise RuntimeError(
+            "could not deliver the prompt to the backend process; check its "
+            "startup error and configuration"
+        ) from exc
     return proc
+
+
+async def _reap_failed_prompt_subprocess(
+    proc: asyncio.subprocess.Process,
+) -> None:
+    """Kill/reap a subprocess whose prompt could not be delivered."""
+    if proc.returncode is None:
+        await kill_and_wait(proc)
+    else:
+        await proc.wait()
 
 
 class Backend(ABC):
@@ -273,9 +308,9 @@ class Backend(ABC):
         Returns the running subprocess with stdout/stderr piped. The caller
         reads stdout lines and feeds them through ``parse_event``.
 
-        compaction=True indicates this is an internal summarization call
-        (no user-facing tool use). Backends typically translate this to
-        a broader approval scope since compaction is trusted.
+        compaction=True indicates this is an internal text-only call with no
+        user-facing tool use. It must not broaden ``approval``; internal
+        callers use the least-privileged ``deny`` level.
 
         effort is a 0-100 percentage of "how hard the model should
         think". 0 means "do not send a reasoning-effort signal at all"
