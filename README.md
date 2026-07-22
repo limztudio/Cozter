@@ -622,10 +622,14 @@ Cozter/
 │   ├── base.py             abstract Backend; convert_effort, supports_typed_plugins
 │   ├── codex.py            wraps `codex exec`
 │   ├── claude_code.py      wraps `claude --print`
+│   ├── claude_background_guard.py
+│   │                       session-only Claude Bash hook that blocks
+│   │                       untracked background launches
 │   ├── copilot.py          wraps `copilot`
 │   ├── flexible.py         flexible meta-agent backend (no CLI of its own)
 │   ├── _http_proc.py       process-like adapter and error handling for HTTP backends
 │   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop
+│   │                       and cached live-model discovery
 │   ├── llama.py            local /v1/chat/completions backend hooks
 │   └── zai.py              Z.ai /api/paas/v4/chat/completions backend hooks
 │
@@ -660,6 +664,12 @@ Regression coverage for these paths lives in
 `tests/test_agent_process_cleanup.py`, `tests/test_utils.py`, and
 `tests/test_agent_tools.py`.
 
+CLI JSONL and OpenAI-compatible HTTP SSE use the same bounded line reader in
+`utils.iter_bounded_lines()`. Each transport retains at most 4 MiB for one
+physical line; if a malformed peer never terminates a line, Cozter discards
+that line and resumes at the next newline rather than allowing the bot's
+memory use to grow without bound. A later valid event can still be processed.
+
 Persisted session state is treated as recovery data rather than trusted input:
 malformed last-session pointers, unsafe session IDs, and session files whose
 embedded ID does not match their filename are ignored. A damaged or
@@ -683,8 +693,9 @@ ignored for local secrets and runtime queues.
 - Chat-platform adapters: `backends_bot/base.py`, `formatting.py`,
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/base.py`, `_http_proc.py`,
-  `_openai_agent.py`, `codex.py`, `claude_code.py`, `copilot.py`,
-  `flexible.py`, `llama.py`, and `zai.py`
+  `_openai_agent.py`, `codex.py`, `claude_code.py`,
+  `claude_background_guard.py`, `copilot.py`, `flexible.py`, `llama.py`,
+  and `zai.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
   the 16 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
