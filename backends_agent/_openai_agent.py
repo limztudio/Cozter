@@ -19,6 +19,8 @@ import asyncio
 import json
 import logging
 import random
+import threading
+import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -26,6 +28,7 @@ from typing import Any
 import aiohttp
 
 from .. import agent_tools as tools
+from ..utils import iter_bounded_lines
 from ._http_proc import HttpAgentProcess, http_error_translator
 from .base import (
     AgentResult, Backend, ChatEvent, append_text_result, set_error_result,
@@ -387,6 +390,47 @@ class OpenAIChatBackend(Backend):
         return None
 
 
+class CachedOpenAIChatBackend(OpenAIChatBackend):
+    """OpenAI-compatible backend with a short-lived, thread-safe model cache.
+
+    Providers can implement :meth:`_fetch_models` to obtain their live model
+    catalog. The common cache avoids a network request each time users open a
+    model picker while retaining the existing one-minute refresh cadence.
+    """
+
+    _model_catalog_ttl_sec = 60.0
+
+    def __init__(self) -> None:
+        self._cached_models: tuple[str, ...] | None = None
+        self._catalog_expires_at = 0.0
+        self._models_lock = threading.Lock()
+
+    @property
+    def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
+        now = time.monotonic()
+        if (
+            self._cached_models is not None
+            and now < self._catalog_expires_at
+        ):
+            return self._cached_models
+
+        with self._models_lock:
+            now = time.monotonic()
+            if (
+                self._cached_models is None
+                or now >= self._catalog_expires_at
+            ):
+                self._cached_models = self._fetch_models()
+                self._catalog_expires_at = (
+                    time.monotonic() + self._model_catalog_ttl_sec
+                )
+        return self._cached_models
+
+    def _fetch_models(self) -> tuple[str, ...]:
+        """Return this provider's current model catalog."""
+        raise NotImplementedError
+
+
 # ---------------------------------------------------------------------------
 # Streaming chat-completions client
 # ---------------------------------------------------------------------------
@@ -575,43 +619,13 @@ async def _iter_sse_lines(
     malformed stream that never sends a newline is discarded after a generous
     hard limit, then normal processing resumes at its next complete line.
     """
-    buffer = bytearray()
-    discarding_long_line = False
-    async for chunk in content.iter_any():
-        cursor = 0
-        while cursor < len(chunk):
-            if discarding_long_line:
-                newline = chunk.find(b"\n", cursor)
-                if newline == -1:
-                    break
-                discarding_long_line = False
-                cursor = newline + 1
-                continue
-
-            newline = chunk.find(b"\n", cursor)
-            end = newline if newline != -1 else len(chunk)
-            segment = chunk[cursor:end]
-            remaining = _MAX_SSE_LINE_BYTES - len(buffer)
-            if len(segment) > remaining:
-                logger.warning(
-                    "Discarding SSE line larger than %d bytes",
-                    _MAX_SSE_LINE_BYTES,
-                )
-                buffer.clear()
-                if newline == -1:
-                    discarding_long_line = True
-                    break
-                cursor = newline + 1
-                continue
-
-            buffer.extend(segment)
-            if newline == -1:
-                break
-            yield bytes(buffer).decode("utf-8", errors="replace")
-            buffer.clear()
-            cursor = newline + 1
-    if buffer and not discarding_long_line:
-        yield bytes(buffer).decode("utf-8", errors="replace")
+    async for line in iter_bounded_lines(
+        content.iter_any(),
+        max_line_bytes=_MAX_SSE_LINE_BYTES,
+        source="SSE",
+        log=logger,
+    ):
+        yield line
 
 
 def _merge_tool_call(

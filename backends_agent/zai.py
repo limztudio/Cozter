@@ -18,12 +18,10 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
-import time
 import urllib.request
 
 from .. import config as cfg
-from ._openai_agent import OpenAIChatBackend, extract_model_ids
+from ._openai_agent import CachedOpenAIChatBackend, extract_model_ids
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +45,9 @@ _FALLBACK_MODELS = (
     "glm-4-32b-0414-128k",
 )
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
-# The account's model catalog can change after a plan or entitlement update.
-# Refresh it occasionally while keeping picker opens inexpensive.
-_MODEL_CATALOG_TTL_SEC = 60
 
 
-class ZaiBackend(OpenAIChatBackend):
+class ZaiBackend(CachedOpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
@@ -65,43 +60,7 @@ class ZaiBackend(OpenAIChatBackend):
         "none", "minimal", "low", "medium", "high", "xhigh", "max",
     )
 
-    def __init__(self) -> None:
-        # The backend is process-wide, so a short-lived cache avoids an HTTP
-        # round trip for every picker open while still seeing account changes.
-        self._cached_models: tuple[str, ...] | None = None
-        self._catalog_expires_at = 0.0
-        self._models_lock = threading.Lock()
-
     # ---- model discovery -----------------------------------------------
-
-    @property
-    def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
-        """Models exposed by the configured Z.ai account.
-
-        Z.ai's OpenAI-compatible ``/models`` endpoint can include private or
-        plan-specific IDs that a public static list cannot know. The live
-        result is refreshed periodically; any missing key, endpoint failure,
-        malformed response, or empty catalog falls back to the curated list
-        above.
-        """
-        now = time.monotonic()
-        if (
-            self._cached_models is not None
-            and now < self._catalog_expires_at
-        ):
-            return self._cached_models
-
-        with self._models_lock:
-            now = time.monotonic()
-            if (
-                self._cached_models is None
-                or now >= self._catalog_expires_at
-            ):
-                self._cached_models = self._fetch_models()
-                self._catalog_expires_at = (
-                    time.monotonic() + _MODEL_CATALOG_TTL_SEC
-                )
-        return self._cached_models
 
     def _models_endpoint(self) -> str:
         return cfg.get_zai_base_url().rstrip("/") + "/models"

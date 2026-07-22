@@ -236,16 +236,36 @@ async def iter_stream_lines(
     cannot make the in-memory decoder buffer grow without limit. An oversized
     line is discarded and the next complete line is still processed.
     """
+    async def chunks() -> AsyncIterator[bytes]:
+        while chunk := await stream.read(chunk_size):
+            yield chunk
+
+    async for line in iter_bounded_lines(
+        chunks(),
+        max_line_bytes=_MAX_STREAM_LINE_BYTES,
+        source="backend stdout",
+    ):
+        yield line
+
+
+async def iter_bounded_lines(
+    chunks: AsyncIterator[bytes],
+    *,
+    max_line_bytes: int,
+    source: str,
+    log: logging.Logger | None = None,
+) -> AsyncIterator[str]:
+    """Decode newline-delimited *chunks* while bounding each retained line.
+
+    Both subprocess JSONL and HTTP SSE transports can receive arbitrarily
+    chunked data. Keeping the framing logic here makes their memory cap and
+    recovery behavior identical: discard an oversized line, then resume at
+    the next newline instead of retaining an unbounded malformed stream.
+    """
     buffer = bytearray()
     discarding_long_line = False
 
-    while True:
-        chunk = await stream.read(chunk_size)
-        if not chunk:
-            if buffer and not discarding_long_line:
-                yield buffer.decode("utf-8", errors="replace")
-            return
-
+    async for chunk in chunks:
         cursor = 0
         while cursor < len(chunk):
             if discarding_long_line:
@@ -259,11 +279,11 @@ async def iter_stream_lines(
             newline = chunk.find(b"\n", cursor)
             end = newline if newline != -1 else len(chunk)
             segment = chunk[cursor:end]
-            remaining = _MAX_STREAM_LINE_BYTES - len(buffer)
+            remaining = max_line_bytes - len(buffer)
             if len(segment) > remaining:
-                logger.warning(
-                    "Discarding backend stdout line larger than %d bytes",
-                    _MAX_STREAM_LINE_BYTES,
+                (log or logger).warning(
+                    "Discarding %s line larger than %d bytes",
+                    source, max_line_bytes,
                 )
                 buffer.clear()
                 if newline == -1:
@@ -278,6 +298,9 @@ async def iter_stream_lines(
             yield buffer.decode("utf-8", errors="replace")
             buffer.clear()
             cursor = newline + 1
+
+    if buffer and not discarding_long_line:
+        yield buffer.decode("utf-8", errors="replace")
 
 
 async def iter_json_events(
