@@ -157,12 +157,15 @@ class BackendModelTests(unittest.TestCase):
             backend = CodexBackend()
             self.assertEqual(backend.available_models, ("company-model",))
             self.assertEqual(backend.available_models, ("company-model",))
+            backend._catalog_expires_at = 0
+            self.assertEqual(backend.available_models, ("company-model",))
             self.assertEqual(
                 backend.model_effort_levels,
                 {"company-model": ("medium",)},
             )
 
-        run_mock.assert_called_once_with(
+        self.assertEqual(run_mock.call_count, 2)
+        run_mock.assert_called_with(
             ["codex", "debug", "models"],
             capture_output=True,
             timeout=codex_mod._MODEL_DISCOVERY_TIMEOUT_SEC,
@@ -684,6 +687,20 @@ class BackendHealthCheckTests(unittest.TestCase):
             {"reasoning_effort": "high"},
         )
 
+    def test_llama_model_catalog_refreshes_after_expiry(self) -> None:
+        backend = LlamaBackend()
+        with mock.patch.object(
+            backend,
+            "_fetch_models",
+            side_effect=[("local-a",), ("local-b",)],
+        ) as fetch:
+            self.assertEqual(backend.available_models, ("local-a",))
+            self.assertEqual(backend.available_models, ("local-a",))
+            backend._catalog_expires_at = 0
+            self.assertEqual(backend.available_models, ("local-b",))
+
+        self.assertEqual(fetch.call_count, 2)
+
     def test_llama_model_ids_tolerate_malformed_payloads(self) -> None:
         for payload in (None, [], {}, {"data": None}, {"data": {}}):
             with self.subTest(payload=payload):
@@ -775,8 +792,13 @@ class ZaiBackendTests(unittest.TestCase):
                 backend.available_models,
                 ("glm-company", "glm-private"),
             )
+            backend._catalog_expires_at = 0
+            self.assertEqual(
+                backend.available_models,
+                ("glm-company", "glm-private"),
+            )
 
-        urlopen_mock.assert_called_once()
+        self.assertEqual(urlopen_mock.call_count, 2)
         request = urlopen_mock.call_args.args[0]
         self.assertEqual(request.full_url, "https://models.example.test/v4/models")
         self.assertEqual(request.get_header("Authorization"), "Bearer key")

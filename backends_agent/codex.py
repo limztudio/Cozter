@@ -6,6 +6,7 @@ import logging
 import shutil
 import subprocess
 import threading
+import time
 
 from .base import (
     AgentResult, Backend, ChatEvent, append_text_result,
@@ -39,6 +40,10 @@ _FALLBACK_MODEL_EFFORT_LEVELS = {
     "gpt-5.3-codex-spark": _COMMON_EFFORT_LEVELS,
 }
 _MODEL_DISCOVERY_TIMEOUT_SEC = 15
+# Model catalogs can change when the locally installed CLI or its account
+# policy changes. Keep picker results fresh without re-running the probe for
+# every /model request in a long-lived bot process.
+_MODEL_CATALOG_TTL_SEC = 60
 
 
 def _parse_debug_models_catalog(
@@ -119,12 +124,13 @@ class CodexBackend(Backend):
     effort_levels = (*common_effort_levels, "max", "ultra")
 
     def __init__(self) -> None:
-        # Backends are process-wide singletons.  Probe at most once: model
-        # selection is a user-facing operation, and repeatedly launching the
-        # CLI would make each picker unnecessarily slow.
+        # Backends are process-wide singletons. Refresh the catalog on a
+        # short interval: model selection is user-facing, so probing every
+        # picker would be unnecessarily slow.
         self._cached_model_catalog: (
             tuple[tuple[str, ...], dict[str, tuple[str, ...]]] | None
         ) = None
+        self._catalog_expires_at = 0.0
         self._model_catalog_lock = threading.Lock()
 
     # ---- model discovery -----------------------------------------------
@@ -155,10 +161,23 @@ class CodexBackend(Backend):
     def _model_catalog(self) -> tuple[
         tuple[str, ...], dict[str, tuple[str, ...]],
     ]:
-        if self._cached_model_catalog is None:
-            with self._model_catalog_lock:
-                if self._cached_model_catalog is None:
-                    self._cached_model_catalog = self._discover_models()
+        now = time.monotonic()
+        if (
+            self._cached_model_catalog is not None
+            and now < self._catalog_expires_at
+        ):
+            return self._cached_model_catalog
+
+        with self._model_catalog_lock:
+            now = time.monotonic()
+            if (
+                self._cached_model_catalog is None
+                or now >= self._catalog_expires_at
+            ):
+                self._cached_model_catalog = self._discover_models()
+                self._catalog_expires_at = (
+                    time.monotonic() + _MODEL_CATALOG_TTL_SEC
+                )
         return self._cached_model_catalog
 
     def _discover_models(self) -> tuple[

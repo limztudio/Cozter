@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 import urllib.request
 
 from .. import config as cfg
@@ -23,24 +25,46 @@ from ._openai_agent import OpenAIChatBackend, extract_model_ids
 logger = logging.getLogger(__name__)
 
 
+# Refresh live endpoints periodically so a long-running bot picks up a model
+# swap or a server that became available after its first /model request.
+_MODEL_CATALOG_TTL_SEC = 60
+
+
 class LlamaBackend(OpenAIChatBackend):
     name = "llama"
     executable = "llama-server"  # only used in "not found" error text
 
-    # The model list is populated dynamically from /v1/models on first
-    # access. Stored as a tuple per the Backend contract.
+    # The model list is populated dynamically from /v1/models and cached
+    # briefly. Stored as a tuple per the Backend contract.
     default_model = "auto"
     default_summary_model = "auto"
 
     def __init__(self) -> None:
         self._cached_models: tuple[str, ...] | None = None
+        self._catalog_expires_at = 0.0
+        self._models_lock = threading.Lock()
 
     # ---- model discovery ------------------------------------------------
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
-        if self._cached_models is None:
-            self._cached_models = self._fetch_models()
+        now = time.monotonic()
+        if (
+            self._cached_models is not None
+            and now < self._catalog_expires_at
+        ):
+            return self._cached_models
+
+        with self._models_lock:
+            now = time.monotonic()
+            if (
+                self._cached_models is None
+                or now >= self._catalog_expires_at
+            ):
+                self._cached_models = self._fetch_models()
+                self._catalog_expires_at = (
+                    time.monotonic() + _MODEL_CATALOG_TTL_SEC
+                )
         return self._cached_models
 
     def _fetch_models(self) -> tuple[str, ...]:

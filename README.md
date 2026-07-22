@@ -538,9 +538,11 @@ approval flow.
 The `llama` model picker queries `llama_server_url/v1/models` and falls
 back to `auto` if the server is down or returns no model IDs. The `zai`
 picker queries the configured Z.ai `/models` endpoint and retains its curated
-fallback if the account cannot be queried. Copilot uses a short ACP handshake
-without sending a prompt, and refreshes a successful account catalog
-periodically. The `copilot` backend keeps prompts under the Windows
+fallback if the account cannot be queried. Codex, llama, and Z.ai refresh
+their live catalogs periodically, so long-running services see CLI, server,
+and account model changes. Copilot uses a short ACP handshake without sending
+a prompt, and refreshes a successful account catalog periodically. The
+`copilot` backend keeps prompts under the Windows
 command-line limit by dropping the oldest composed context when a prompt
 exceeds its cap; the current user message is kept at the tail. Each Copilot
 run also uses a short-lived private CLI home, so its planner, worker, and
