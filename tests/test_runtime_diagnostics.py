@@ -267,6 +267,87 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
 
 
 class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_update_restart_waits_for_active_reply_delivery(self):
+        """An update may be detected mid-reply, but never cuts it short."""
+        main = _load_main_module()
+        reply_delivered = asyncio.Event()
+        restart_started = asyncio.Event()
+        events: list[str] = []
+
+        class _Bot:
+            platform_id = "test:active-reply"
+
+            async def begin_update_restart(self):
+                events.append("pause")
+                restart_started.set()
+
+            def has_active_turns(self):
+                # ``BotPlatform`` keeps this true until its final reply I/O
+                # returns and its turn cleanup runs.
+                return not reply_delivered.is_set()
+
+            def stuck_turn_diagnostics(self):
+                return "final reply is still being delivered"
+
+            async def cancel_update_restart(self):
+                events.append("resume")
+
+            async def notify_users(self, _message):
+                events.append("notify")
+
+            async def stop(self):
+                events.append("stop")
+
+        bot = _Bot()
+
+        def fetch_and_pull() -> bool:
+            self.assertTrue(
+                reply_delivered.is_set(),
+                "the checkout must not change before the reply is delivered",
+            )
+            events.append("pull")
+            return True
+
+        old_poll = main._UPDATE_IDLE_POLL_SEC
+        main._UPDATE_IDLE_POLL_SEC = 0.001
+        try:
+            with (
+                mock.patch.object(
+                    main.updater, "fetch_and_pull", side_effect=fetch_and_pull,
+                ) as pull,
+                mock.patch.object(
+                    main.updater, "install_requirements",
+                    side_effect=lambda: events.append("install"),
+                ) as install,
+                mock.patch.object(
+                    main.updater, "restart_script",
+                    side_effect=lambda _code: events.append("restart"),
+                ) as restart,
+            ):
+                update = asyncio.create_task(
+                    main._restart_after_update([bot], restart_code=0),
+                )
+                await asyncio.wait_for(restart_started.wait(), timeout=1)
+                await asyncio.sleep(0)
+
+                self.assertEqual(events, ["pause"])
+                pull.assert_not_called()
+                install.assert_not_called()
+                restart.assert_not_called()
+
+                reply_delivered.set()
+                await asyncio.wait_for(update, timeout=1)
+
+                pull.assert_called_once_with()
+                install.assert_called_once_with()
+                restart.assert_called_once_with(0)
+                self.assertEqual(
+                    events,
+                    ["pause", "pull", "install", "notify", "stop", "restart"],
+                )
+        finally:
+            main._UPDATE_IDLE_POLL_SEC = old_poll
+
     async def test_no_update_does_not_pause_message_intake(self):
         main = _load_main_module()
 
