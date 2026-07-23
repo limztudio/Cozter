@@ -731,7 +731,9 @@ class BackendModelTests(unittest.TestCase):
             "claude-opus-4-5-20251101",
             "claude-sonnet-4-6",
             "claude-sonnet-4-5",
+            "claude-sonnet-4-5-20250929",
             "claude-haiku-4-5",
+            "claude-haiku-4-5-20251001",
             "claude-sonnet-4-5-20250929[1m]",
         ):
             with self.subTest(model=model):
