@@ -233,13 +233,24 @@ def parse_time(text: object) -> str | None:
 
 
 def parse_iso(value: object) -> datetime | None:
-    """Parse an ISO timestamp; return None for missing or malformed input."""
+    """Parse an ISO timestamp in the scheduler's local naive time basis.
+
+    Cozter persists schedule timestamps with :meth:`datetime.isoformat` on
+    naive local datetimes.  Hand-edited or migrated state can contain an
+    offset-aware ISO timestamp, though.  Normalize that form to local naive
+    time before the scheduler compares it with ``datetime.now()``; mixing the
+    two directly raises ``TypeError`` and would abort the whole scheduler
+    tick.
+    """
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+        return parsed.astimezone().replace(tzinfo=None)
+    return parsed
 
 
 def most_recent_slot(sched: dict, now: datetime) -> datetime | None:

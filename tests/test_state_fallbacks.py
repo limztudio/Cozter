@@ -573,6 +573,13 @@ class ScheduleParserTests(unittest.TestCase):
         self.assertIsNone(schedules.parse_time(930))
         self.assertIsNone(schedules.parse_iso(930))
 
+    def test_parse_iso_normalizes_offset_timestamps_for_scheduler(self) -> None:
+        parsed = schedules.parse_iso("2026-01-05T10:00:00+00:00")
+
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertIsNone(parsed.tzinfo)
+
     def test_most_recent_slot_ignores_malformed_schedule_fields(self) -> None:
         now = datetime(2026, 1, 5, 10, 0)  # Monday
 
@@ -808,6 +815,35 @@ class QueueStateFallbackTests(unittest.TestCase):
                         ("second", "chat", "second-id", True),
                     )
                     self.assertEqual(bot.drained_users, ["u1"])
+                finally:
+                    workspace.CONFIG_DIR = old_config_dir
+
+        asyncio.run(run())
+
+    def test_restore_queues_requires_boolean_ephemeral_flag(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                try:
+                    bot = QueueRestoreBot(["u1"])
+                    with open(bot._queue_file_path(), "w", encoding="utf-8") as f:
+                        json.dump({
+                            "u1": [{
+                                "id": "entry-id",
+                                "text": "ordinary message",
+                                "chat_id": "chat",
+                                "ephemeral": "false",
+                            }],
+                        }, f)
+
+                    await bot.restore_queues()
+                    await asyncio.sleep(0)
+
+                    self.assertEqual(
+                        bot._message_queues["u1"].get_nowait(),
+                        ("ordinary message", "chat", "entry-id", False),
+                    )
                 finally:
                     workspace.CONFIG_DIR = old_config_dir
 

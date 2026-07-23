@@ -51,7 +51,10 @@ class EditFileTool(AgentTool):
         old, new = replacement
         if not os.path.isfile(target):
             return f"File not found: {args.get('path')}"
-        replace_all = bool(args.get("replace_all", False))
+        # Tool arguments come from external model output.  Do not let a
+        # truthy non-boolean such as the string "false" widen this from a
+        # unique replacement into a whole-file replacement.
+        replace_all = args.get("replace_all") is True
         loaded = read_text_for_edit(target)
         if isinstance(loaded, str):
             return f"Error: {loaded}"

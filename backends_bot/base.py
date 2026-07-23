@@ -1850,7 +1850,11 @@ class BotPlatform(ABC):
                     entry.get("text", ""),
                     entry.get("chat_id", ""),
                     entry.get("id", ""),
-                    bool(entry.get("ephemeral", False)),
+                    # Queue files are durable user-editable state.  A
+                    # truthy malformed value such as "false" must not turn
+                    # an ordinary chat message into an ephemeral scheduled
+                    # turn that bypasses the normal answer pause.
+                    entry.get("ephemeral") is True,
                 ))
             drained_users.append(uid)
 

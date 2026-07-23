@@ -86,7 +86,9 @@ class MultiEditTool(AgentTool):
         for i, edit in enumerate(edits):
             old = edit["old_string"]
             new = edit["new_string"]
-            replace_all = bool(edit.get("replace_all", False))
+            # Match EditFileTool's fail-safe handling of malformed tool
+            # arguments: only a JSON boolean true permits broad replacement.
+            replace_all = edit.get("replace_all") is True
             content, count, replacements = apply_string_replacement(
                 content, old, new, replace_all=replace_all,
             )

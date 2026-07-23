@@ -139,6 +139,45 @@ class BuiltinEditToolTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_edit_tools_require_boolean_true_for_replace_all(self) -> None:
+        """A malformed string must not turn a unique edit into a broad one."""
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                edit_path = os.path.join(tmp, "edit.txt")
+                multi_path = os.path.join(tmp, "multi.txt")
+                for path in (edit_path, multi_path):
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write("alpha alpha")
+
+                edit_result = await EditFileTool().run(
+                    tmp,
+                    {
+                        "path": "edit.txt",
+                        "old_string": "alpha",
+                        "new_string": "beta",
+                        "replace_all": "false",
+                    },
+                )
+                multi_result = await MultiEditTool().run(
+                    tmp,
+                    {
+                        "path": "multi.txt",
+                        "edits": [{
+                            "old_string": "alpha",
+                            "new_string": "beta",
+                            "replace_all": "false",
+                        }],
+                    },
+                )
+
+                self.assertIn("appears 2 times", edit_result)
+                self.assertIn("appears 2 times", multi_result)
+                for path in (edit_path, multi_path):
+                    with open(path, encoding="utf-8") as f:
+                        self.assertEqual(f.read(), "alpha alpha")
+
+        asyncio.run(run())
+
 
 class ReadFileToolTests(unittest.TestCase):
     def test_full_read_is_bounded_before_result_truncation(self) -> None:
