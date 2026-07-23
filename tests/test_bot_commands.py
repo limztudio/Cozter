@@ -139,6 +139,17 @@ class BotCommandTests(unittest.TestCase):
         for name in ("codex", "claude_code", "copilot", "llama"):
             self.assertIn(name, out)
 
+    # -- /agent ------------------------------------------------------------
+    def test_agent_picker_reserves_zero_for_flexible(self) -> None:
+        self._run(self.bot.cmd_agent(self._ctx()))
+
+        out = self._last()
+        self.assertIn("  0. flexible", out)
+        self.assertIn("  1. codex", out)
+
+        self._run(self.bot._receive_agent(self._ctx(text="0")))
+        self.assertEqual(workspace.get_backend_name(self.ws), "flexible")
+
     # -- /sessions ---------------------------------------------------------
     def test_sessions_list_and_switch(self) -> None:
         first = session.create_session(self.ws, name="First")

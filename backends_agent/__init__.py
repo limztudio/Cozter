@@ -43,8 +43,9 @@ _BACKENDS: dict[str, Backend] = {
 # itself would recurse.
 DIRECT_BACKENDS = list(_DIRECT.keys())
 
-# Everything a user can select as their chat agent.
-AVAILABLE_BACKENDS = list(_BACKENDS.keys())
+# Everything a user can select as their chat agent.  Keep the meta-agent
+# first: the interactive /agent picker assigns it the dedicated ``0`` slot.
+AVAILABLE_BACKENDS = [FLEXIBLE_BACKEND, *_DIRECT]
 
 DEFAULT_BACKEND = FLEXIBLE_BACKEND
 # Fallback for every role flexible cannot fill: summary agent, and the

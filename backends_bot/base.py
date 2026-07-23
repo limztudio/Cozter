@@ -813,7 +813,9 @@ class BotPlatform(ABC):
         options = workspace.AVAILABLE_BACKENDS
         await ctx.reply_text("\n".join([
             f"Current agent: {current}\n",
-            *self._picker_list(options, current, noun="agent"),
+            *self._picker_list(
+                options, current, noun="agent", first_number=0,
+            ),
             f"\n{workspace.FLEXIBLE_BACKEND} splits each request by"
             " difficulty and routes the parts to its low/mid/high agents.",
         ]))
@@ -824,6 +826,7 @@ class BotPlatform(ABC):
             ctx,
             options=workspace.AVAILABLE_BACKENDS,
             retry_handler=self._receive_agent,
+            first_number=0,
         )
         if selected is None:
             return
@@ -853,12 +856,13 @@ class BotPlatform(ABC):
         *,
         options: list[str],
         retry_handler: Callable[[BotContext], Awaitable[None]],
+        first_number: int = 1,
     ) -> tuple[str, str] | None:
         ws = await self._require_ws(ctx)
         if ws is None:
             return None
         text = ctx.text.strip()
-        name = self._pick_option(text, options)
+        name = self._pick_option(text, options, first_number=first_number)
         if name is None:
             await ctx.reply_text(
                 f"Unknown agent: {text}\nTry again (or /cancel):"
@@ -896,22 +900,27 @@ class BotPlatform(ABC):
         return ws, model
 
     @staticmethod
-    def _option_lines(options: list[str], current: str) -> list[str]:
+    def _option_lines(
+        options: list[str], current: str, *, first_number: int = 1,
+    ) -> list[str]:
         """Number a picker's options and mark the active one."""
         return [
             f"  {i}. {name}{' <-' if name == current else ''}"
-            for i, name in enumerate(options, 1)
+            for i, name in enumerate(options, first_number)
         ]
 
     @staticmethod
     def _picker_list(
         options: list[str], current: str, *, noun: str,
+        first_number: int = 1,
     ) -> list[str]:
         """The shared body of a model/agent picker: the "Available …" list,
         the numbered options, and the trailing input prompt."""
         return [
             f"Available {noun}s:",
-            *BotPlatform._option_lines(options, current),
+            *BotPlatform._option_lines(
+                options, current, first_number=first_number,
+            ),
             f"\nEnter a number or {noun} name (or /cancel):",
         ]
 
@@ -3004,10 +3013,12 @@ class BotPlatform(ABC):
     # ----- helpers --------------------------------------------------------
 
     @staticmethod
-    def _pick_option(text: str, options: list[str]) -> str | None:
+    def _pick_option(
+        text: str, options: list[str], *, first_number: int = 1,
+    ) -> str | None:
         text = text.strip()
         if text.isdecimal():
-            idx = int(text) - 1
+            idx = int(text) - first_number
             if 0 <= idx < len(options):
                 return options[idx]
             return None
