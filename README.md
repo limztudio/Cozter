@@ -37,15 +37,15 @@ drop-in plugin system that works across every backend.
 - **Durable sessions with two-layer memory**: each conversation
   auto-compacts every N turns into a scratch summary plus a persistent
   long-term-memory list, both injected into every subsequent turn
-- **Persistent turn queues**: if a user sends more work while an agent
-  turn is running, or while an update restart is pending, the messages
-  are queued on disk and restored after restart
+- **Persistent turn queues on Telegram, Slack, and Signal**: if a user sends
+  more work while an agent turn is running, or while an update restart is
+  pending, the messages are queued on disk and restored after restart
 - **File flow in both directions**: chat uploads are saved into the
   workspace and text-like files are inlined into the next prompt; agent
   replies can upload workspace files or generated images back to chat
-- **Recurring scheduled prompts**: `/reserve` queues prompts on selected
-  weekdays and runs them in throwaway sessions so routine jobs do not
-  pollute the user's active conversation
+- **Recurring scheduled prompts on Telegram, Slack, and Signal**: `/reserve`
+  queues prompts on selected weekdays and runs them in throwaway sessions so
+  routine jobs do not pollute the user's active conversation
 - **Auto-update**: the bot polls origin, fast-forward-pulls only when the
   checkout is clean and not locally ahead, then exits for the supervisor
   (`systemd` or its equivalent) to restart it
@@ -53,7 +53,7 @@ drop-in plugin system that works across every backend.
 ## Quick start
 
 ```bash
-git clone https://gitlab.com/mgneh/cozter.git
+git clone https://gitlab.com/mgneh/cozter.git Cozter
 cd Cozter
 python __main__.py -cli
 ```
@@ -78,8 +78,9 @@ python -m Cozter
 # fill in tokens and run again
 ```
 
-On startup, Cozter re-execs through a project-local `.venv` when needed
-and installs `requirements.txt` before importing the bot runtime.
+On startup, Cozter creates or re-execs through a project-local `.venv` when
+needed. It installs `requirements.txt` only when required runtime modules are
+missing; an update that changes the requirements installs them before restart.
 
 ### Windows Task Scheduler
 
@@ -91,14 +92,17 @@ action rather than a global Python executable. For a checkout at
 - **Arguments:** `-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "D:\Cozter\run_cozter.ps1"`
 - **Start in:** `D:\`
 
-The script runs the project venv directly and restarts Cozter after updates
-or failures, so Task Scheduler keeps a single supervised service process.
+Start Cozter normally once before registering the task so the project
+`.venv` exists; the script expects `.venv\Scripts\python.exe` to be present.
+It runs that venv directly and restarts Cozter after every exit, including
+updates and failures, so Task Scheduler keeps a single supervised process.
 
-CLI mode intentionally skips daemon configuration: it does not read or
-create `.config/config.json`, and it uses the stable local platform key
-`cli:local` for workspace/session state. Daemon mode (`python -m Cozter`
-without `-cli`) validates `.config/config.json` before any platform
-starts.
+CLI mode intentionally skips daemon configuration at startup: it neither
+requires nor creates `.config/config.json`, and it uses the stable local
+platform key `cli:local` for workspace/session state. If that file already
+exists, an agent turn can still read shared backend, tool, and permission
+limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
+`.config/config.json` before any platform starts.
 
 ## Requirements
 
@@ -108,8 +112,8 @@ starts.
   `llama` backend, or Z.ai credentials for the `zai` backend
 - Python package dependencies from `requirements.txt`:
   `python-telegram-bot`, `httpx`, `slack-bolt`, and `aiohttp`. The
-  launcher installs them into the project-local `.venv` before importing
-  the runtime.
+  launcher bootstraps them into the project-local `.venv` when required
+  runtime modules are missing; normal starts do not invoke pip.
 - Optional external services:
   Telegram and Slack need their platform tokens; Signal also requires a
   separately installed and running `signal-cli` JSON-RPC daemon.
@@ -214,12 +218,12 @@ rejects a higher mode, and an already-stored higher value is clamped down.
 report usage — `codex` (`turn.completed`) and `claude_code` (`result`).
 Other backends stay silent. Set it to `false` to suppress the footer.
 
-Pending chat turns are persisted in
+Pending chat turns on daemon platforms are persisted in
 `Cozter/.config/queue_<platform>.json`, so clean restarts, auto-updates,
 and crash recovery do not drop already accepted messages. Platform IDs
 are sanitized for those filenames; for example the CLI's stable platform
-key `cli:local` is stored as `queue_cli_local.json`. CLI mode does not
-read or create daemon config.
+key `cli:local` maps to `queue_cli_local.json`. CLI mode does not restore
+saved queue entries after a restart.
 
 For Signal, `signal-cli` must already be installed, registered, and
 running as a JSON-RPC daemon. Each invite URL in `signal_group_urls` is
@@ -264,7 +268,7 @@ runs commands in it, and stores per-workspace state under
   workspace before upload back to chat
 
 Workspaces are recorded globally in `Cozter/.config/workspaces.json`
-(per-user current pick + the recent-workspaces list). Platform turn
+(per-user current pick + the recent-workspaces list). Daemon-platform turn
 queues live beside it as `queue_<platform>.json`.
 
 The global runtime files are deliberately small JSON documents:
@@ -272,8 +276,8 @@ The global runtime files are deliberately small JSON documents:
 - `.config/config.json` — daemon chat-surface and backend settings
 - `.config/workspaces.json` — current/recent workspace selections per
   user and platform
-- `.config/queue_<platform>.json` — persisted pending turns so accepted
-  work survives restarts, crashes, and auto-updates
+- `.config/queue_<platform>.json` — persisted pending daemon-platform turns
+  so accepted work survives restarts, crashes, and auto-updates
 - `.config/detached_tasks_<platform>.json` — tracked external background
   tasks and any completion message awaiting delivery
 
@@ -320,9 +324,10 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/cancel` | Cancel a picker/wizard, pending answer, running turn, or queued work |
 | `/start` | Confirm the bot is running |
 
-Most picker commands accept either the displayed number or the literal
-name. `/open` also accepts a recent-workspace number directly as
-`/open 2`.
+Most picker commands start at 1 and accept either the displayed number or
+the literal name. The `/agent` picker deliberately reserves option `0` for
+the default `flexible` meta-agent; its direct backends start at 1. `/open`
+also accepts a recent-workspace number directly as `/open 2`.
 
 `/bg` (or `/background`) currently uses Claude Code, so choose `claude_code`
 with `/agent` first. Cozter persists the external task ID, polls independently, and sends
@@ -340,13 +345,16 @@ notifies the chat; use `claude agents` and `claude attach` in the workspace
 to continue that interactive session.
 
 Schedules are stored per workspace in `.cozter/schedules.json` and use
-the host's local time. The scheduler checks every 30 seconds and records
-`last_fired`, so a missed slot fires once after restart instead of being
-lost. Scheduled prompts run through the same persistent queue as user
-messages, but use a fresh ephemeral session that is deleted after the
-turn; they do not append to the user's current conversation. They run
-autonomously and can continue even while normal chat work is paused
-waiting for a collaborative `[[await]]` answer.
+the host's local time. On Telegram, Slack, and Signal, the scheduler checks
+every 30 seconds and records `last_fired`, so a missed slot fires once after
+restart instead of being lost. Offset-bearing persisted timestamps are
+normalized to that local basis, and malformed schedule fields are ignored.
+Scheduled prompts run through the same persistent queue as user messages,
+but use a fresh ephemeral session that is deleted after the turn; they do
+not append to the user's current conversation. They run autonomously and can
+continue even while normal chat work is paused waiting for a collaborative
+`[[await]]` answer. CLI mode accepts `/reserve` but does not currently run a
+scheduler or restore queued turns after a restart.
 
 ## Files and attachments
 
@@ -436,12 +444,13 @@ Cozter/.venv/bin/python -m Cozter.agent_tools.plugins.current_time '{"timezone":
 HTTP-backend tool results are capped before they are fed back into the
 model, keeping accidental huge outputs from consuming the whole context.
 The `web_search` and `web_fetch` tools also cap downloaded response bodies
-at 5 MiB. Both tools use the shared `open_http_response()` request setup and
-`read_bounded_text()` reader in `agent_tools/base.py`, so their user agent,
-timeouts, redirect policy, decoding, and response ceiling stay consistent.
-The reader consumes chunked or slow responses until EOF or that ceiling
-instead of treating a short network read as the complete body; `web_fetch`
-then applies its separate `max_chars` output limit.
+at 5 MiB and share the bounded `read_bounded_text()` reader in
+`agent_tools/base.py`. `web_search` uses the common request setup;
+`web_fetch` instead uses a public-network-only client with redirect targets
+validated individually, preventing redirects into private addresses. The
+reader consumes chunked or slow responses until EOF or that ceiling instead
+of treating a short network read as the complete body; `web_fetch` then
+applies its separate `max_chars` output limit.
 CLI backends rely on their own bundled shell tool for plugin execution, so
 the plugin prelude only exposes how to call the extra tools; it does not
 change the CLI's native tool sandbox.
@@ -660,6 +669,9 @@ The built-in file tools also fail closed at workspace boundaries. In
 particular, `apply_patch` will not use a create patch to overwrite an existing
 file, and a delete patch must match the current file and remove all of its
 content before the file is unlinked. Failed hunks leave the target in place.
+The string-edit tools honor a broad `replace_all` operation only when its
+tool argument is the literal JSON boolean `true`; malformed truthy values
+retain the safer unique-match behavior.
 Regression coverage for these paths lives in
 `tests/test_agent_process_cleanup.py`, `tests/test_utils.py`, and
 `tests/test_agent_tools.py`.
@@ -802,12 +814,14 @@ git status --short
 
 ## Auto-update
 
-`updater.check_for_update()` runs every `update_check_interval` seconds
-(five minutes by default). It fetches `origin` without blocking message
-intake, then checks whether the clean local branch is behind its upstream.
-Dirty checkouts and branches with local commits are treated as development
-state and are left alone, so an auto-update pass does not fight an
-in-progress edit or an unpushed commit.
+In daemon mode, `updater.check_for_update()` runs every
+`update_check_interval` seconds (five minutes by default). CLI mode uses the
+same five-minute interval but does not load daemon configuration at startup.
+The updater fetches `origin` without blocking message intake, then checks
+whether the clean local branch is behind its upstream. Dirty checkouts and
+branches with local commits are treated as development state and are left
+alone, so an auto-update pass does not fight an in-progress edit or an
+unpushed commit.
 
 Only when an update is available does Cozter pause new AI turns, wait for
 active turns to finish, fast-forward-pull, install any changed
@@ -815,8 +829,8 @@ active turns to finish, fast-forward-pull, install any changed
 pulls and local commits while the bot is running also trigger this safe
 restart path. The init system, such as `systemd` with `Restart=always`,
 brings daemon mode back. CLI mode uses an outer respawner process and
-relaunches itself in the same terminal. Persisted queues resume after
-either path starts again.
+relaunches itself in the same terminal. Daemon platforms restore persisted
+queues after either path starts again; CLI mode currently does not.
 
 ## Runtime diagnostics
 
@@ -874,10 +888,10 @@ From inside `Cozter/`:
 PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
 ```
 
-CI runs on Python 3.11 and 3.12 and runs `ruff check` and `mypy` on every
-push and merge request / PR. The canonical pipeline is `.gitlab-ci.yml`
-(GitLab CI, the primary remote); `.github/workflows/ci.yml` mirrors it on
-GitHub. mypy is adopted
+CI runs on Python 3.11 and 3.12 and runs `ruff check` and `mypy` on pushes
+to `main` and on merge requests / PRs. The canonical pipeline is
+`.gitlab-ci.yml` (GitLab CI, the primary remote); `.github/workflows/ci.yml`
+mirrors it on GitHub. mypy is adopted
 gradually — enforced on clean modules, with pre-existing type debt
 grandfathered per-module in `mypy.ini` (burn the list down over time).
 `requirements.txt` contains runtime dependencies only, so install the CI
