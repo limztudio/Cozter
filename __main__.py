@@ -40,7 +40,6 @@ _WINDOWS_CHILD_RESTART_DELAY_SEC = 1
 _DEPENDENCY_INSTALL_TIMEOUT_SEC = 180
 _REQUIRED_RUNTIME_MODULES = (
     "aiohttp",
-    "httpx",
     "slack_bolt",
     "telegram",
 )

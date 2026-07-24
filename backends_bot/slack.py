@@ -363,9 +363,7 @@ class SlackBot(BotPlatform):
         # user events can't race past the restored backlog. app.client
         # is already ready (auth_test succeeded above), so drain can
         # still post messages via chat_postMessage during restore.
-        await self.restore_queues()
-        self.start_detached_task_watcher()
-        await self.start_scheduler()
+        await self._start_daemon_services()
         await self._handler.connect_async()
         logger.info(
             "Slack bot started in Socket Mode (bot_user=%s).",
@@ -373,8 +371,7 @@ class SlackBot(BotPlatform):
         )
 
     async def stop(self) -> None:
-        await self.stop_detached_task_watcher()
-        await self.stop_scheduler()
+        await self._stop_daemon_services()
         if self._handler is not None:
             try:
                 await self._handler.close_async()
@@ -401,9 +398,13 @@ class SlackBot(BotPlatform):
         args: str = "",
         attachment: AttachmentInfo | None = None,
     ) -> BotContext:
-        return BotContext(
-            user_id=uid, chat_id=channel, text=text,
-            command=command, args=args, attachment=attachment, platform=self,
+        return self.make_context(
+            uid,
+            channel,
+            text=text,
+            command=command,
+            args=args,
+            attachment=attachment,
         )
 
     def _make_command_handler(self, name: str):

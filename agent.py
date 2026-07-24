@@ -121,8 +121,6 @@ def _is_collaborative_turn(
     )
 
 
-MAX_HISTORY_CHARS = 50_000
-
 _ATTACH_RE = re.compile(
     r"\[\[attach:\s*([^\]\n]+?)\s*\]\]", re.IGNORECASE,
 )
@@ -519,7 +517,7 @@ def _build_contextual_prompt(
     prompt: str,
     session_data: dict | None,
     colony_items: list[str] | None = None,
-    budget: int = MAX_HISTORY_CHARS,
+    budget: int = workspace_mod.DEFAULT_HISTORY_BUDGET,
 ) -> str:
     """Prepend colony + session history to the prompt for full context.
 

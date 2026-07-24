@@ -131,6 +131,9 @@ class ZaiBackend(CachedOpenAIChatBackend):
     def _socket_timeout(self) -> int:
         return cfg.get_zai_socket_timeout()
 
+    def _socket_timeout_setting(self) -> str:
+        return "zai_socket_timeout"
+
     def _max_retries(self) -> int:
         return cfg.get_zai_max_retries()
 

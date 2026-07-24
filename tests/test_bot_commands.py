@@ -65,9 +65,11 @@ class BotCommandTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _ctx(self, text: str = "", args: str = "") -> BotContext:
-        return BotContext(
-            user_id=self.uid, chat_id="c1", text=text,
-            command=None, args=args, attachment=None, platform=self.bot,
+        return self.bot.make_context(
+            self.uid,
+            "c1",
+            text=text,
+            args=args,
         )
 
     def _last(self) -> str:
@@ -150,6 +152,18 @@ class BotCommandTests(unittest.TestCase):
         self._run(self.bot._receive_agent(self._ctx(text="0")))
         self.assertEqual(workspace.get_backend_name(self.ws), "flexible")
 
+    def test_flexible_model_picker_uses_selected_tier_backend(self) -> None:
+        workspace.set_flexible_backend_name(self.ws, "high", "claude_code")
+
+        self._run(self.bot._receive_flexible_model(
+            self._ctx(text="opus"), tier="high",
+        ))
+
+        self.assertEqual(
+            workspace.get_flexible_model(self.ws, "high"), "opus",
+        )
+        self.assertIn("Flexible high model set to: opus", self._last())
+
     # -- /sessions ---------------------------------------------------------
     def test_sessions_list_and_switch(self) -> None:
         first = session.create_session(self.ws, name="First")
@@ -169,10 +183,7 @@ class BotCommandTests(unittest.TestCase):
     def test_no_workspace_replies_gracefully(self) -> None:
         # A user with no selected workspace gets the no-workspace message,
         # not a crash.
-        ctx = BotContext(
-            user_id="nobody", chat_id="c1", text="", command=None,
-            args="", attachment=None, platform=self.bot,
-        )
+        ctx = self.bot.make_context("nobody", "c1")
         self._run(self.bot.cmd_permission(ctx))
         self.assertTrue(self.bot.replies)  # replied rather than raised
 

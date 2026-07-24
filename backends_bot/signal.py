@@ -194,9 +194,7 @@ class SignalBot(BotPlatform):
                 )
             self._migrate_group_schedules_from_current_workspaces()
             await self._migrate_group_queue_state()
-            await self.restore_queues()
-            self.start_detached_task_watcher()
-            await self.start_scheduler()
+            await self._start_daemon_services()
             self._receive_subscription = await self._subscribe_receive()
             self._receive_started = True
             self._receive_subscribed = True
@@ -210,8 +208,7 @@ class SignalBot(BotPlatform):
         )
 
     async def stop(self) -> None:
-        await self.stop_detached_task_watcher()
-        await self.stop_scheduler()
+        await self._stop_daemon_services()
         self._stop_requested.set()
         subscription = self._receive_subscription
         self._receive_subscription = None
@@ -672,14 +669,13 @@ class SignalBot(BotPlatform):
             command = parts[0].split("@", 1)[0] if parts else ""
             args = parts[1] if len(parts) > 1 else ""
             text = ""
-        return BotContext(
-            user_id=self._state_user_id(group_id),
-            chat_id=group_id,
+        return self.make_context(
+            self._state_user_id(group_id),
+            group_id,
             text=text,
             command=command,
             args=args,
             attachment=attachment,
-            platform=self,
         )
 
     # ----- signal-cli helpers --------------------------------------------

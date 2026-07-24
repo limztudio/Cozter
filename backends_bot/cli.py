@@ -241,14 +241,13 @@ class CliBot(BotPlatform):
         args: str = "",
         attachment: AttachmentInfo | None = None,
     ) -> BotContext:
-        return BotContext(
-            user_id=_LOCAL_ID,
-            chat_id=_LOCAL_ID,
+        return self.make_context(
+            _LOCAL_ID,
+            _LOCAL_ID,
             text=text,
             command=command,
             args=args,
             attachment=attachment,
-            platform=self,
         )
 
 

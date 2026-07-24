@@ -143,7 +143,7 @@ async def maybe_compact(
         # this, not the grown on-disk length, or those newer messages are lost.
         snapshot_count = len(msgs)
         interval = workspace_mod.get_compact_interval(workspace_path)
-        if interval <= 0 or len(msgs) < interval:
+        if len(msgs) < interval:
             return
 
         logger.info(

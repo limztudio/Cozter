@@ -99,6 +99,7 @@ class HttpAgentProcess:
 async def http_error_translator(
     label: str,
     sock_read_timeout: int,
+    timeout_setting: str = "the configured socket timeout",
 ) -> AsyncIterator[None]:
     """Map aiohttp client errors to user-facing ``RuntimeError`` messages.
 
@@ -111,8 +112,8 @@ async def http_error_translator(
 
     *label* names the service in each error message. *sock_read_timeout*
     is the configured timeout value (printed in the timeout error so the
-    user knows what to raise). All HTTP backends currently share the
-    ``llama_socket_timeout`` config knob, so the message references it.
+    user knows what to raise), and *timeout_setting* names that backend's
+    configuration key.
     """
     try:
         yield
@@ -131,7 +132,7 @@ async def http_error_translator(
     except TimeoutError as exc:
         raise RuntimeError(
             f"{label} did not respond within {sock_read_timeout}s"
-            " (raise llama_socket_timeout in config.json if your"
+            f" (raise {timeout_setting} in config.json if your"
             " server is slow, not stuck)"
         ) from exc
     except aiohttp.ClientError as exc:

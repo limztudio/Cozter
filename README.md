@@ -111,7 +111,7 @@ limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
   `codex`, `claude`, `copilot`, an OpenAI-compatible HTTP server for the
   `llama` backend, or Z.ai credentials for the `zai` backend
 - Python package dependencies from `requirements.txt`:
-  `python-telegram-bot`, `httpx`, `slack-bolt`, and `aiohttp`. The
+  `python-telegram-bot`, `slack-bolt`, and `aiohttp`. The
   launcher bootstraps them into the project-local `.venv` when required
   runtime modules are missing; normal starts do not invoke pip.
 - Optional external services:

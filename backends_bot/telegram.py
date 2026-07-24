@@ -249,15 +249,12 @@ class TelegramBot(BotPlatform):
         # new user message can't race past the restored backlog and run
         # out of order. app.bot.send_message works after initialize(), so
         # drain can still post "Thinking..." during restore.
-        await self.restore_queues()
-        self.start_detached_task_watcher()
-        await self.start_scheduler()
+        await self._start_daemon_services()
         await self.app.updater.start_polling(drop_pending_updates=True)
         logger.info("Telegram bot started polling.")
 
     async def stop(self) -> None:
-        await self.stop_detached_task_watcher()
-        await self.stop_scheduler()
+        await self._stop_daemon_services()
         if self.app:
             await self.app.updater.stop()
             await self.app.stop()
@@ -424,12 +421,11 @@ class TelegramBot(BotPlatform):
     ) -> BotContext | None:
         if not update.effective_user:
             return None
-        return BotContext(
-            user_id=str(update.effective_user.id),
-            chat_id=str(update.effective_chat.id),
+        return self.make_context(
+            update.effective_user.id,
+            update.effective_chat.id,
             text=text,
             command=command,
             args=args,
             attachment=attachment,
-            platform=self,
         )

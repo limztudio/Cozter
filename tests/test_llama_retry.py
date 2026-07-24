@@ -14,6 +14,7 @@ import json
 import unittest
 from unittest import mock
 
+from Cozter.backends_agent._http_proc import http_error_translator
 from Cozter.backends_agent import _openai_agent as oa
 
 
@@ -28,6 +29,20 @@ class OpenAIBackoffTests(unittest.TestCase):
         self.assertEqual(oa._backoff_delay(9, 100.0), 10.0)  # capped
         self.assertGreaterEqual(oa._backoff_delay(3), oa._backoff_delay(1))
         self.assertLessEqual(oa._backoff_delay(20), 10.0 * 1.25)
+
+
+class HttpErrorTranslatorTests(unittest.TestCase):
+    def test_timeout_names_the_active_backend_setting(self) -> None:
+        async def fail() -> None:
+            async with http_error_translator(
+                "Z.ai", 30, "zai_socket_timeout",
+            ):
+                raise TimeoutError
+
+        with self.assertRaisesRegex(
+            RuntimeError, r"raise zai_socket_timeout in config\.json",
+        ):
+            asyncio.run(fail())
 
 
 class OpenAIRetryLoopTests(unittest.TestCase):

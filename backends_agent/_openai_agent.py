@@ -139,6 +139,10 @@ class OpenAIChatBackend(Backend):
     def _socket_timeout(self) -> int:
         return 300
 
+    def _socket_timeout_setting(self) -> str:
+        """Config setting to mention in a request-timeout error."""
+        return "the configured socket timeout"
+
     def _max_retries(self) -> int:
         return 2
 
@@ -173,6 +177,7 @@ class OpenAIChatBackend(Backend):
         endpoint = self._chat_endpoint()
         headers = self._auth_headers()
         sock_read = self._socket_timeout()
+        timeout_setting = self._socket_timeout_setting()
         max_retries = self._max_retries()
         # Per-AI-turn safety caps. Read fresh each turn so a config edit
         # takes effect on the next message without a restart.
@@ -218,7 +223,7 @@ class OpenAIChatBackend(Backend):
 
                 assistant_text, tool_calls = await _stream_completion(
                     endpoint, payload, headers, sock_read, max_retries,
-                    self.name,
+                    self.name, timeout_setting,
                 )
 
                 # OpenAI spec: when ``tool_calls`` is present, ``content``
@@ -330,6 +335,7 @@ class OpenAIChatBackend(Backend):
         payload = _completion_payload(messages, request_model, effort_fields)
         assistant_text, _ = await _stream_completion(
             endpoint, payload, headers, sock_read, max_retries, self.name,
+            timeout_setting,
         )
 
         if assistant_text:
@@ -492,6 +498,7 @@ async def _stream_completion(
     sock_read: int,
     max_retries: int,
     label: str,
+    timeout_setting: str = "the configured socket timeout",
 ) -> tuple[str, list[dict]]:
     """POST the chat/completions endpoint (streaming); retry transient fails.
 
@@ -501,7 +508,7 @@ async def _stream_completion(
     run *after* this returns. A bad status or malformed response is not
     retried.
     """
-    async with http_error_translator(label, sock_read):
+    async with http_error_translator(label, sock_read, timeout_setting):
         attempt = 0
         while True:
             try:

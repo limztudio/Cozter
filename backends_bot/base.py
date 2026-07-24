@@ -214,6 +214,27 @@ class BotPlatform(ABC):
         # or /stop, so the cancelled task should not send a second reply.
         self._cancel_acknowledged: set[str] = set()
 
+    def make_context(
+        self,
+        user_id: str | int,
+        chat_id: str | int,
+        *,
+        text: str = "",
+        command: str | None = None,
+        args: str = "",
+        attachment: AttachmentInfo | None = None,
+    ) -> BotContext:
+        """Build the common command context used by platform adapters."""
+        return BotContext(
+            user_id=str(user_id),
+            chat_id=str(chat_id),
+            text=text,
+            command=command,
+            args=args,
+            attachment=attachment,
+            platform=self,
+        )
+
     # ----- platform identity + I/O primitives (abstract) ------------------
 
     @property
@@ -265,6 +286,22 @@ class BotPlatform(ABC):
         with ANSI dim grey) should override.
         """
         await self.send_text(chat_id, text)
+
+    async def _start_daemon_services(self) -> None:
+        """Restore durable state and start services used by daemon bots.
+
+        Telegram, Slack, and Signal all persist queues, schedule recurring
+        prompts, and poll detached provider tasks. CLI mode deliberately
+        skips the first two, so its lifecycle remains separate.
+        """
+        await self.restore_queues()
+        self.start_detached_task_watcher()
+        await self.start_scheduler()
+
+    async def _stop_daemon_services(self) -> None:
+        """Stop the background services started by _start_daemon_services."""
+        await self.stop_detached_task_watcher()
+        await self.stop_scheduler()
 
     async def _send_text_best_effort(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -1015,22 +1052,16 @@ class BotPlatform(ABC):
     async def _receive_flexible_model(
         self, ctx: BotContext, *, tier: str,
     ) -> None:
-        ws = await self._require_ws(ctx)
-        if ws is None:
-            return
-        text = ctx.text.strip()
-        options = await asyncio.to_thread(
-            workspace.get_available_flexible_models, ws, tier,
+        ws, model = await self._receive_model_choice(
+            ctx,
+            fetch_options=functools.partial(
+                workspace.get_available_flexible_models, tier=tier,
+            ),
+            retry_handler=functools.partial(
+                self._receive_flexible_model, tier=tier,
+            ),
         )
-        model = self._pick_option(text, options)
         if model is None:
-            await ctx.reply_text(
-                f"Unknown model: {text}\nTry again (or /cancel):"
-            )
-            self._expect_input(
-                ctx.user_id,
-                functools.partial(self._receive_flexible_model, tier=tier),
-            )
             return
         workspace.set_flexible_model(ws, tier, model)
         await ctx.reply_text(f"Flexible {tier} model set to: {model}")

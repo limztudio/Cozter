@@ -34,13 +34,18 @@ class LlamaBackend(CachedOpenAIChatBackend):
 
     # ---- model discovery ------------------------------------------------
 
+    def _models_url(self) -> str:
+        return cfg.get_llama_server_url().rstrip("/") + "/v1/models"
+
+    def _fetch_model_ids(self, url: str) -> tuple[str, ...]:
+        with urllib.request.urlopen(url, timeout=2.0) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return extract_model_ids(payload)
+
     def _fetch_models(self) -> tuple[str, ...]:
-        url = cfg.get_llama_server_url().rstrip("/") + "/v1/models"
+        url = self._models_url()
         try:
-            with urllib.request.urlopen(url, timeout=2.0) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-            ids = extract_model_ids(payload)
-            return ids or ("auto",)
+            return self._fetch_model_ids(url) or ("auto",)
         except Exception as exc:
             logger.debug(
                 "Could not query %s for models (%s); using 'auto'",
@@ -51,13 +56,11 @@ class LlamaBackend(CachedOpenAIChatBackend):
     def health_check(self) -> tuple[bool, str]:
         # llama is an HTTP endpoint, not a CLI: probe /v1/models instead of
         # looking for a binary on PATH.
-        url = cfg.get_llama_server_url().rstrip("/") + "/v1/models"
+        url = self._models_url()
         try:
-            with urllib.request.urlopen(url, timeout=2.0) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
+            ids = self._fetch_model_ids(url)
         except Exception as exc:
             return False, f"server unreachable at {url}: {exc}"
-        ids = extract_model_ids(payload)
         if ids:
             return True, f"server up at {url} ({len(ids)} model(s))"
         return True, f"server up at {url} (no models listed)"
@@ -80,6 +83,9 @@ class LlamaBackend(CachedOpenAIChatBackend):
 
     def _socket_timeout(self) -> int:
         return cfg.get_llama_socket_timeout()
+
+    def _socket_timeout_setting(self) -> str:
+        return "llama_socket_timeout"
 
     def _max_retries(self) -> int:
         return cfg.get_llama_max_retries()

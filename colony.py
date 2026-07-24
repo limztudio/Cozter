@@ -201,7 +201,7 @@ def maybe_trigger(
     just leaves the colony unchanged for the next interval hit.
     """
     interval = workspace_mod.get_colony_interval(workspace_path)
-    if interval <= 0 or compact_count % interval != 0:
+    if compact_count % interval != 0:
         return
     logger.info(
         "Colony pass triggered (count=%d, interval=%d)",
