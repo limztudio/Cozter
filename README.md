@@ -18,8 +18,8 @@ drop-in plugin system that works across every backend.
   - `codex` — OpenAI's CLI (`codex exec`)
   - `claude_code` — Anthropic's CLI (`claude --print`)
   - `copilot` — GitHub's CLI
-  - `llama` — any OpenAI-compatible HTTP server (llama-server, LM Studio,
-    Mistral API, etc.); the agent loop runs in-process and uses the
+  - `llama` — an unauthenticated OpenAI-compatible HTTP server (such as
+    llama-server or LM Studio); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
   - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.2`, `glm-5.1`, …);
     OpenAI-compatible, so it shares the in-process loop — set `zai_api_key`
@@ -108,8 +108,8 @@ limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
 
 - Python 3.11+ (CI targets 3.11 and 3.12; the codebase uses modern type syntax)
 - One agent backend CLI, server, or API key:
-  `codex`, `claude`, `copilot`, an OpenAI-compatible HTTP server for the
-  `llama` backend, or Z.ai credentials for the `zai` backend
+  `codex`, `claude`, `copilot`, an unauthenticated OpenAI-compatible HTTP
+  server for the `llama` backend, or Z.ai credentials for the `zai` backend
 - Python package dependencies from `requirements.txt`:
   `python-telegram-bot`, `slack-bolt`, and `aiohttp`. The
   launcher bootstraps them into the project-local `.venv` when required
@@ -521,7 +521,7 @@ its own, only the three tiers above.
 | `codex` | `codex exec --ephemeral --json` | `gpt-5.6-sol` | `gpt-5.6-luna` |
 | `claude_code` | `claude --print --output-format stream-json --verbose` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
-| `llama` | OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
+| `llama` | Unauthenticated OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-air` |
 
 Codex discovers its visible local CLI catalog, while Copilot queries its
