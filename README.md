@@ -573,8 +573,8 @@ maps the percentage to its own vocabulary and request shape:
 | `codex` | Model-aware: 4–6 levels | `ultra` (Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
 | `zai` | GLM-5.2: 7 levels; older GLM: thinking toggle | `payload["reasoning_effort"] = "max"` |
-| `claude_code` | 5 levels @ 20% each | `--effort max` |
-| `copilot` | 5 levels @ 20% each for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
+| `claude_code` | Model-aware: current Fable / Sonnet 5 / Opus 4.7+ use 5 levels; 4.6 uses 4; Haiku and legacy pins use their defaults | `--effort max` for supported current models |
+| `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
 
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort

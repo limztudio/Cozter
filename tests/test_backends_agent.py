@@ -62,7 +62,12 @@ class BackendPermissionCommandTests(unittest.TestCase):
         return asyncio.run(run())
 
     def _claude_command(
-        self, approval: str, *, compaction: bool = False,
+        self,
+        approval: str,
+        *,
+        compaction: bool = False,
+        model: str | None = None,
+        effort: int = 0,
     ) -> tuple[str, ...]:
         async def run() -> tuple[str, ...]:
             proc = mock.Mock()
@@ -79,8 +84,8 @@ class BackendPermissionCommandTests(unittest.TestCase):
                 ) as create_process,
             ):
                 await ClaudeCodeBackend().launch(
-                    "/work", "summarize", None, approval,
-                    compaction=compaction,
+                    "/work", "summarize", model, approval,
+                    compaction=compaction, effort=effort,
                 )
             return tuple(create_process.await_args.args[0])
 
@@ -190,6 +195,26 @@ class BackendPermissionCommandTests(unittest.TestCase):
         )
         self.assertNotIn("--allow-all-tools", copilot_command)
         self.assertNotIn("--yolo", copilot_command)
+
+    def test_claude_effort_matches_selected_model_capabilities(self) -> None:
+        current_command = self._claude_command(
+            "auto", model="claude-opus-4-8", effort=100,
+        )
+        self.assertEqual(
+            current_command[current_command.index("--effort") + 1], "max",
+        )
+
+        limited_command = self._claude_command(
+            "auto", model="claude-opus-4-6[1m]", effort=75,
+        )
+        self.assertEqual(
+            limited_command[limited_command.index("--effort") + 1], "max",
+        )
+
+        haiku_command = self._claude_command(
+            "auto", model="haiku", effort=100,
+        )
+        self.assertNotIn("--effort", haiku_command)
 
 
 class BackendModelTests(unittest.TestCase):
@@ -648,10 +673,10 @@ class BackendModelTests(unittest.TestCase):
         backend = CopilotBackend()
         self.assertEqual(
             backend.effort_levels,
-            ("low", "medium", "high", "xhigh", "max"),
+            ("minimal", "low", "medium", "high", "xhigh", "max"),
         )
         self.assertIsNone(backend.convert_effort(0))
-        self.assertEqual(backend.convert_effort(1), "low")
+        self.assertEqual(backend.convert_effort(1), "minimal")
         self.assertEqual(backend.convert_effort(100), "max")
         self.assertEqual(backend.effort_levels_for_model("auto"), ())
         self.assertEqual(backend.effort_levels_for_model(None), ())

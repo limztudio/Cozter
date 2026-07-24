@@ -140,7 +140,10 @@ class CopilotBackend(Backend):
     # not inject arbitrary, unverified names back into a picker.
     allow_unverified_extra_models = False
     # No override is represented by Cozter's effort=0 (omit the flag).
-    effort_levels = ("low", "medium", "high", "xhigh", "max")
+    # Current Copilot CLI builds accept ``minimal`` for named models; do not
+    # include ``none`` because a nonzero Cozter percentage should never turn
+    # reasoning off.
+    effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
 
     def __init__(self) -> None:
         # The backend is a process-wide singleton. Cache only an ACP result,

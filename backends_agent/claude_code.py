@@ -32,6 +32,24 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+# Claude Code's effort support is model-specific.  Keep these pinned-model
+# exceptions separate from the aliases below: aliases intentionally follow
+# whichever current model the installed Claude Code resolves for the account.
+_FOUR_LEVEL_EFFORT_MODELS = frozenset({
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+})
+_NO_EFFORT_MODELS = frozenset({
+    "haiku",
+    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
+    "claude-opus-4-5",
+    "claude-opus-4-5-20251101",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-5-20250929",
+})
+_FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
+
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BACKGROUND_ID_RE = re.compile(
     r"(?im)^[ \t]*backgrounded[ \t]*(?:·|\*)[ \t]*"
@@ -312,6 +330,24 @@ class ClaudeCodeBackend(Backend):
     tier_models = {"low": "haiku", "mid": "sonnet", "high": "opus"}
     effort_levels = ("low", "medium", "high", "xhigh", "max")
 
+    def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
+        """Return only the effort values accepted by a selected Claude model.
+
+        Claude Code clamps unsupported values, but omitting the flag for
+        models without adaptive reasoning avoids presenting a misleading
+        workspace setting.  ``[1m]`` only changes context length, not effort
+        support, so normalize it before looking up a pinned model.
+        """
+        selected = (model or self.default_model).strip().casefold()
+        selected = selected.removesuffix("[1m]")
+        if selected in _NO_EFFORT_MODELS:
+            return ()
+        if selected in _FOUR_LEVEL_EFFORT_MODELS:
+            return _FOUR_LEVEL_EFFORTS
+        # Keep existing gateway/private model behavior: unknown IDs receive
+        # the current full scale rather than being silently downgraded.
+        return self.effort_levels
+
     # File-editing tools whose tool_use blocks we surface as kind="file"
     # ChatEvents (the rest of the tool name is kept as the action label).
     _FILE_TOOLS = frozenset({
@@ -340,7 +376,12 @@ class ClaudeCodeBackend(Backend):
             # untracked ordinary background job behind.
             "--settings", _background_guard_settings(),
         ]
-        self.append_model_effort_args(cmd, model, effort)
+        self.append_model_effort_args(
+            cmd,
+            model,
+            effort,
+            effort_levels=self.effort_levels_for_model(model),
+        )
 
         # ``compaction`` must not override the requested approval. Internal
         # callers use ``deny`` so transcript content cannot gain privileges.
@@ -368,7 +409,12 @@ class ClaudeCodeBackend(Backend):
             "--bg",
             "--settings", _background_guard_settings(),
         ]
-        self.append_model_effort_args(cmd, model, effort)
+        self.append_model_effort_args(
+            cmd,
+            model,
+            effort,
+            effort_levels=self.effort_levels_for_model(model),
+        )
 
         cmd += _permission_args(approval)
         # ``--bg`` takes a positional prompt, not ``--print``/stdin.
