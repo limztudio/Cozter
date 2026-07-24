@@ -29,6 +29,7 @@ from .base import (
     append_detached_task, append_text_result, create_prompt_subprocess,
     executable_command, set_error_result, truncate_status_text,
 )
+from ..utils import is_path_within
 
 logger = logging.getLogger(__name__)
 
@@ -129,11 +130,7 @@ def _claude_home() -> str:
 
 def _workspace_contains(workspace_path: str, candidate: object) -> bool:
     """Return whether a provider-reported directory belongs to this workspace."""
-    if not isinstance(candidate, str):
-        return False
-    expected = os.path.realpath(workspace_path)
-    actual = os.path.realpath(candidate)
-    return actual == expected or actual.startswith(expected + os.sep)
+    return is_path_within(candidate, workspace_path)
 
 
 def _local_background_state(
@@ -200,17 +197,25 @@ def _local_background_output(workspace_path: str, task_id: str) -> str:
     if os.path.basename(session_id) != session_id:
         return ""
     project_root = os.path.realpath(os.path.join(_claude_home(), "projects"))
-    paths: list[str] = []
+    candidates: list[str] = []
     linked_path = state.get("linkScanPath")
     if isinstance(linked_path, str):
-        real_linked_path = os.path.realpath(linked_path)
-        if (
-            real_linked_path.startswith(project_root + os.sep)
-            and os.path.basename(real_linked_path) == f"{session_id}.jsonl"
-        ):
-            paths.append(real_linked_path)
+        candidates.append(linked_path)
     pattern = os.path.join(_claude_home(), "projects", "*", f"{session_id}.jsonl")
-    paths.extend(path for path in glob.glob(pattern) if path not in paths)
+    candidates.extend(glob.glob(pattern))
+
+    # ``glob`` does not resolve intermediate symlinks.  A project entry may
+    # therefore look like a child of ``projects`` while resolving elsewhere;
+    # normalize every candidate before opening it, just like linkScanPath.
+    paths: list[str] = []
+    for candidate in candidates:
+        real_path = os.path.realpath(candidate)
+        if (
+            is_path_within(real_path, project_root)
+            and os.path.basename(real_path) == f"{session_id}.jsonl"
+            and real_path not in paths
+        ):
+            paths.append(real_path)
     for path in paths:
         texts: list[str] = []
         try:

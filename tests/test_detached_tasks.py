@@ -273,6 +273,53 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(output, "First result.\n\nFinal result.")
 
+    async def test_output_ignores_symlinked_transcript_outside_projects(
+        self,
+    ) -> None:
+        """The fallback glob must not follow a project-directory symlink."""
+        backend = ClaudeCodeBackend()
+        task_id = "048e1065"
+        session_id = "048e1065-aaaa-bbbb-cccc-0123456789ab"
+        with (
+            tempfile.TemporaryDirectory() as claude_home,
+            tempfile.TemporaryDirectory() as outside,
+        ):
+            state_path = os.path.join(
+                claude_home, "jobs", task_id, "state.json",
+            )
+            projects_dir = os.path.join(claude_home, "projects")
+            outside_transcript = os.path.join(
+                outside, f"{session_id}.jsonl",
+            )
+            os.makedirs(os.path.dirname(state_path))
+            os.makedirs(projects_dir)
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "cwd": "/work",
+                    "state": "done",
+                    "sessionId": session_id,
+                    "output": {"result": "safe state summary"},
+                }, f)
+            with open(outside_transcript, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "secret"}],
+                }}) + "\n")
+            try:
+                os.symlink(
+                    outside, os.path.join(projects_dir, "linked"),
+                    target_is_directory=True,
+                )
+            except (AttributeError, OSError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with mock.patch.object(
+                claude_code_mod, "_claude_home", return_value=claude_home,
+            ):
+                output = await backend.get_detached_task_output("/work", task_id)
+
+        self.assertEqual(output, "safe state summary")
+
 
 class DetachedTaskLedgerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:

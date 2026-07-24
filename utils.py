@@ -27,6 +27,27 @@ _BackgroundResult = TypeVar("_BackgroundResult")
 _BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 
 
+def is_path_within(path: object, root: object) -> bool:
+    """Return whether *path* resolves inside *root*, including *root*.
+
+    This is the common filesystem-boundary check for workspace and provider
+    state paths. Resolving both values rejects ``..`` traversal and symlink
+    escapes; ``commonpath`` avoids sibling-prefix false positives such as
+    treating ``/work2`` as part of ``/work``. Invalid values and paths on
+    different drives are safely treated as outside.
+    """
+    if not isinstance(path, str) or not isinstance(root, str):
+        return False
+    if not path or not root or "\x00" in path or "\x00" in root:
+        return False
+    try:
+        resolved_path = os.path.realpath(path)
+        resolved_root = os.path.realpath(root)
+        return os.path.commonpath((resolved_path, resolved_root)) == resolved_root
+    except (OSError, ValueError):
+        return False
+
+
 def drain_queue(
     q: asyncio.Queue | None, collect: list | None = None,
 ) -> None:

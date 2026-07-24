@@ -234,6 +234,32 @@ class JsonHelperTests(unittest.TestCase):
         )
 
 
+class PathBoundaryTests(unittest.TestCase):
+    def test_is_path_within_rejects_sibling_and_symlink_escapes(self) -> None:
+        with tempfile.TemporaryDirectory() as root_parent, \
+                tempfile.TemporaryDirectory() as outside:
+            root = os.path.join(root_parent, "work")
+            sibling = os.path.join(root_parent, "work-other")
+            os.makedirs(root)
+            os.makedirs(sibling)
+            inside = os.path.join(root, "file.txt")
+            with open(inside, "w", encoding="utf-8") as f:
+                f.write("inside")
+
+            self.assertTrue(utils.is_path_within(inside, root))
+            self.assertFalse(utils.is_path_within(sibling, root))
+            self.assertFalse(utils.is_path_within(f"{root}{os.sep}\x00", root))
+
+            link = os.path.join(root, "escape")
+            try:
+                os.symlink(outside, link, target_is_directory=True)
+            except (AttributeError, OSError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+            self.assertFalse(
+                utils.is_path_within(os.path.join(link, "secret.txt"), root),
+            )
+
+
 class BackgroundTaskTests(unittest.TestCase):
     def test_create_background_task_logs_unhandled_exception(self) -> None:
         async def run() -> list[str]:

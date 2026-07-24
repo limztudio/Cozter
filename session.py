@@ -241,6 +241,30 @@ def take_recent_messages(
     )
 
 
+def _load_session_path(
+    path: str,
+    expected_id: str,
+    *,
+    log_corrupt: bool,
+) -> dict | None:
+    """Read, normalize, and identity-check one durable session file."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        if log_corrupt:
+            logger.warning("Corrupt session file, ignoring: %s", path)
+        return None
+
+    data = _normalize_session_data(data, path=path)
+    if data is None:
+        return None
+    if data["id"] != expected_id:
+        logger.warning("Ignoring session with mismatched file/id: %s", path)
+        return None
+    return data
+
+
 def list_sessions_with_data(workspace: str) -> list[dict]:
     """Return every session's full data dict, sorted by created desc.
 
@@ -256,21 +280,12 @@ def list_sessions_with_data(workspace: str) -> list[dict]:
         if not fname.endswith(".json"):
             continue
         fpath = os.path.join(sdir, fname)
-        try:
-            with open(fpath, encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            continue
-        data = _normalize_session_data(data, path=fpath)
-        if data is None:
-            continue
         expected_id = fname[:-len(".json")]
-        if data["id"] != expected_id:
-            logger.warning(
-                "Ignoring session with mismatched file/id: %s", fpath,
-            )
-            continue
-        out.append(data)
+        data = _load_session_path(
+            fpath, expected_id, log_corrupt=False,
+        )
+        if data is not None:
+            out.append(data)
     out.sort(key=lambda d: d.get("created", ""), reverse=True)
     return out
 
@@ -316,17 +331,7 @@ def load_session(workspace: str, session_id: str) -> dict | None:
     path = _session_path(workspace, session_id)
     if not os.path.exists(path):
         return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        logger.warning("Corrupt session file, ignoring: %s", path)
-        return None
-    data = _normalize_session_data(data, path=path)
-    if data is not None and data["id"] != session_id:
-        logger.warning("Ignoring session with mismatched file/id: %s", path)
-        return None
-    return data
+    return _load_session_path(path, session_id, log_corrupt=True)
 
 
 def save_session(workspace: str, session_id: str, data: dict) -> None:

@@ -14,6 +14,8 @@ from typing import Any, ClassVar
 
 import aiohttp
 
+from ..utils import is_path_within
+
 
 # Hard cap on raw HTTP body bytes per web tool call so a pathological
 # URL can't OOM the bot.
@@ -184,7 +186,7 @@ def resolve_inside_workspace(workspace: str, path: str) -> str:
         path if os.path.isabs(path) else os.path.join(workspace, path)
     )
     abs_path = os.path.realpath(candidate)
-    if not (abs_path == abs_ws or abs_path.startswith(abs_ws + os.sep)):
+    if not is_path_within(abs_path, abs_ws):
         raise ValueError(f"path escapes workspace: {path}")
     return abs_path
 
@@ -334,7 +336,7 @@ def iter_workspace_files(
         for filename in filenames:
             fpath = os.path.join(dirpath, filename)
             real = os.path.realpath(fpath)
-            if not (real == abs_ws or real.startswith(abs_ws + os.sep)):
+            if not is_path_within(real, abs_ws):
                 continue
             root_rel = os.path.relpath(fpath, abs_root).replace(os.sep, "/")
             if not _path_matches_glob(root_rel, pattern):

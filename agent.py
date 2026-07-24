@@ -27,6 +27,7 @@ from .utils import (
     cleanup_backend_process,
     create_background_task,
     drain_text_stream,
+    is_path_within,
     iter_json_events,
     kill_and_wait,
     run_internal_backend,
@@ -148,10 +149,6 @@ _ATTACHMENT_SCAN_SKIP_DIRS = {
     "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
 }
 _EXTERNAL_ATTACHMENT_ROOTS_ENV = "COZTER_ATTACHMENT_ROOTS"
-
-
-def _path_inside(path: str, root: str) -> bool:
-    return path == root or path.startswith(root + os.sep)
 
 
 def _workspace_candidate_path(path: str, workspace_path: str) -> str:
@@ -366,7 +363,7 @@ def _copy_generated_image_into_workspace(
     except OSError:
         return None
 
-    if src_real == ws_real or src_real.startswith(ws_real + os.sep):
+    if is_path_within(src_real, ws_real):
         return src_real
 
     dest_dir = os.path.join(workspace_path, COZTER_DIR, "generated_images")
@@ -397,12 +394,12 @@ def _resolve_attachment_source(
         return None
     if not os.path.isfile(real):
         return None
-    if _path_inside(real, ws_real):
+    if is_path_within(real, ws_real):
         return real, False
     if _image_extension(real) is None:
         return None
     for root in _external_attachment_roots():
-        if _path_inside(real, root):
+        if is_path_within(real, root):
             return real, True
     return None
 
@@ -1590,7 +1587,7 @@ def _format_session_response(
             path = os.path.realpath(
                 _workspace_candidate_path(ev.content, workspace_path),
             )
-            if path == ws_real or path.startswith(ws_real + os.sep):
+            if is_path_within(path, ws_real):
                 path = os.path.relpath(path, workspace_path)
         except OSError:
             path = ev.content
