@@ -761,6 +761,23 @@ class SessionStateFallbackTests(unittest.TestCase):
 
 
 class QueueStateFallbackTests(unittest.TestCase):
+    def test_platform_state_paths_share_safe_platform_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_config_dir = workspace.CONFIG_DIR
+            workspace.CONFIG_DIR = tmp
+            try:
+                bot = QueueRestoreBot(["u1"])
+                self.assertEqual(
+                    os.path.basename(bot._queue_file_path()),
+                    "queue_test_queue.json",
+                )
+                self.assertEqual(
+                    os.path.basename(bot._detached_tasks_file_path()),
+                    "detached_tasks_test_queue.json",
+                )
+            finally:
+                workspace.CONFIG_DIR = old_config_dir
+
     def test_queue_entries_filters_malformed_values(self) -> None:
         self.assertEqual(BotPlatform._queue_entries("not-list"), [])
         self.assertEqual(

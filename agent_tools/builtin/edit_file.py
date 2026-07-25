@@ -9,6 +9,7 @@ from ..base import (
     AgentTool,
     apply_string_replacement,
     read_text_for_edit,
+    replacement_properties,
     resolve_inside_workspace,
     summarize_path,
     validate_replacement_strings,
@@ -28,15 +29,7 @@ class EditFileTool(AgentTool):
         "type": "object",
         "properties": {
             "path": {"type": "string"},
-            "old_string": {"type": "string"},
-            "new_string": {"type": "string"},
-            "replace_all": {
-                "type": "boolean",
-                "description": (
-                    "When true, replace every occurrence. When false"
-                    " (default), require a unique match."
-                ),
-            },
+            **replacement_properties(),
         },
         "required": ["path", "old_string", "new_string"],
     }

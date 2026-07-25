@@ -19,6 +19,7 @@ from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
 from Cozter.backends_agent.llama import LlamaBackend
+from Cozter.backends_agent import _openai_agent as openai_agent_mod
 from Cozter.backends_agent._openai_agent import extract_model_ids
 from Cozter.backends_agent import zai as zai_mod
 from Cozter.backends_agent.zai import ZaiBackend
@@ -658,16 +659,12 @@ class BackendModelTests(unittest.TestCase):
         proc.stderr = None
         proc.poll.return_value = 0
 
-        with mock.patch.object(copilot_mod.subprocess, "run") as taskkill:
+        with mock.patch.object(
+            copilot_mod, "terminate_windows_process_tree", return_value=True,
+        ) as taskkill:
             copilot_mod._stop_acp_process(proc, kill_tree=True)
 
-        taskkill.assert_called_once_with(
-            ["taskkill", "/PID", "12345", "/T", "/F"],
-            stdout=copilot_mod.subprocess.DEVNULL,
-            stderr=copilot_mod.subprocess.DEVNULL,
-            timeout=2,
-            check=False,
-        )
+        taskkill.assert_called_once_with(12345)
 
     def test_copilot_effort_matches_current_cli_choices(self) -> None:
         backend = CopilotBackend()
@@ -964,7 +961,7 @@ class ZaiBackendTests(unittest.TestCase):
                 return_value="https://models.example.test/v4/",
             ),
             mock.patch.object(
-                zai_mod.urllib.request,
+                openai_agent_mod.urllib.request,
                 "urlopen",
                 return_value=response,
             ) as urlopen_mock,
@@ -996,7 +993,9 @@ class ZaiBackendTests(unittest.TestCase):
     def test_available_models_falls_back_without_key(self) -> None:
         with (
             mock.patch.object(zai_mod.cfg, "get_zai_api_key", return_value=""),
-            mock.patch.object(zai_mod.urllib.request, "urlopen") as urlopen_mock,
+            mock.patch.object(
+                openai_agent_mod.urllib.request, "urlopen",
+            ) as urlopen_mock,
         ):
             self.assertEqual(ZaiBackend().available_models, zai_mod._FALLBACK_MODELS)
 

@@ -37,6 +37,7 @@ from .base import (
     AgentResult, Backend, ChatEvent, append_text_result, executable_command,
     set_error_result, truncate_status_text,
 )
+from ..utils import terminate_windows_process_tree
 
 logger = logging.getLogger(__name__)
 
@@ -784,16 +785,7 @@ def _stop_acp_process(
         # A .cmd shim runs beneath cmd.exe. Terminating only that parent can
         # leave its Copilot/Node child alive on Windows, so tear down the
         # process tree rooted at the PID we created above.
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        terminate_windows_process_tree(proc.pid)
     try:
         if proc.poll() is None:
             proc.terminate()

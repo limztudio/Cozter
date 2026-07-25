@@ -1778,7 +1778,8 @@ class BotPlatform(ABC):
     #      shutdown the entry must survive restart; on /stop, cmd_stop
     #      clears the file explicitly.
 
-    def _queue_file_path(self) -> str:
+    def _platform_state_file_path(self, stem: str) -> str:
+        """Return a durable per-platform state path with a safe file name."""
         os.makedirs(workspace.CONFIG_DIR, exist_ok=True)
         # Sanitize platform_id for the filesystem: ``cli:local`` and
         # ``slack:U123ABC`` would otherwise produce filenames with a
@@ -1787,9 +1788,10 @@ class BotPlatform(ABC):
         safe = re.sub(
             r'[<>:"/\\|?*\x00-\x1f]', '_', self.platform_id,
         )
-        return os.path.join(
-            workspace.CONFIG_DIR, f"queue_{safe}.json",
-        )
+        return os.path.join(workspace.CONFIG_DIR, f"{stem}_{safe}.json")
+
+    def _queue_file_path(self) -> str:
+        return self._platform_state_file_path("queue")
 
     def _read_queue_file(self) -> dict:
         return load_json_object(
@@ -1896,11 +1898,7 @@ class BotPlatform(ABC):
 
     def _detached_tasks_file_path(self) -> str:
         """Return this platform's durable detached-task ledger path."""
-        os.makedirs(workspace.CONFIG_DIR, exist_ok=True)
-        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', self.platform_id)
-        return os.path.join(
-            workspace.CONFIG_DIR, f"detached_tasks_{safe}.json",
-        )
+        return self._platform_state_file_path("detached_tasks")
 
     def _read_detached_tasks_file(self) -> dict:
         return load_json_object(

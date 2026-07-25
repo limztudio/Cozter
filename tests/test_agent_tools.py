@@ -13,6 +13,7 @@ from Cozter.agent_tools.base import (
     apply_string_replacement,
     coerce_int_arg,
     read_bounded_text,
+    replacement_properties,
     validate_replacement_strings,
 )
 from Cozter.agent_tools.builtin.apply_patch import ApplyPatchTool
@@ -60,6 +61,17 @@ class AgentToolHelperTests(unittest.TestCase):
                 "a b a", "a", "x", replace_all=True,
             ),
             ("x b x", 2, 2),
+        )
+
+    def test_replacement_schema_properties_are_independent(self) -> None:
+        first = replacement_properties()
+        second = replacement_properties()
+
+        self.assertEqual(first, second)
+        first["replace_all"]["description"] = "changed"
+        self.assertNotEqual(
+            first["replace_all"]["description"],
+            second["replace_all"]["description"],
         )
 
     def test_read_bounded_text_accumulates_partial_reads(self) -> None:

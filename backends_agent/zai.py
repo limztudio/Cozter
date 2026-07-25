@@ -16,12 +16,10 @@ includes the version so only ``/chat/completions`` is appended),
 
 from __future__ import annotations
 
-import json
 import logging
-import urllib.request
 
 from .. import config as cfg
-from ._openai_agent import CachedOpenAIChatBackend, extract_model_ids
+from ._openai_agent import CachedOpenAIChatBackend, fetch_model_ids
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +70,12 @@ class ZaiBackend(CachedOpenAIChatBackend):
             return _FALLBACK_MODELS
 
         url = self._models_endpoint()
-        request = urllib.request.Request(
-            url, headers={"Authorization": f"Bearer {key}"}, method="GET",
-        )
         try:
-            with urllib.request.urlopen(
-                request, timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
-            ) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            model_ids = fetch_model_ids(
+                url,
+                timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
+                headers={"Authorization": f"Bearer {key}"},
+            )
         except Exception as exc:
             logger.debug(
                 "Could not query Z.ai models at %s (%s); using fallback",
@@ -87,7 +83,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
             )
             return _FALLBACK_MODELS
 
-        return extract_model_ids(payload) or _FALLBACK_MODELS
+        return model_ids or _FALLBACK_MODELS
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 

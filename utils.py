@@ -122,6 +122,30 @@ def _finalize_background_task(
         log.exception("Background task %s failed", name)
 
 
+def terminate_windows_process_tree(pid: object) -> bool:
+    """Best-effort terminate the Windows process tree rooted at *pid*.
+
+    ``asyncio`` has no Windows equivalent of POSIX process groups.  Calling
+    ``taskkill /T`` is therefore the common teardown primitive for both
+    long-lived backend processes and short-lived CLI probes.  The boolean
+    result lets callers choose their appropriate single-process fallback.
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        completed = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
 def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
     """Force-stop a subprocess and, where possible, all of its children.
 
@@ -139,7 +163,7 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
     falls back to a single-target ``proc.kill()``.
     """
     pid = getattr(proc, "pid", None)
-    if os.name == "nt" and isinstance(pid, int) and pid > 0:
+    if os.name == "nt":
         # ``asyncio`` has no Windows equivalent of POSIX process groups.
         # ``taskkill /T`` follows the child-process tree, which matters when
         # a .cmd shim launches Node or an agent invokes a build/test command.
@@ -147,19 +171,8 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
         # ``proc.wait()`` safe to treat as complete teardown.  If taskkill is
         # unavailable or rejects an already-exited PID, retain the existing
         # single-process kill as a fallback.
-        try:
-            completed = subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2,
-                check=False,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            if completed.returncode == 0:
-                return
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        if terminate_windows_process_tree(pid):
+            return
     elif isinstance(pid, int) and pid > 0:
         try:
             pgid = os.getpgid(pid)

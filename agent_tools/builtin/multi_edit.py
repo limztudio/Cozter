@@ -8,7 +8,9 @@ from typing import Any, ClassVar
 from ..base import (
     AgentTool,
     apply_string_replacement,
+    object_parameters,
     read_text_for_edit,
+    replacement_properties,
     resolve_inside_workspace,
     summarize_path,
     validate_replacement_strings,
@@ -36,22 +38,9 @@ class MultiEditTool(AgentTool):
                     "Ordered list of edits. Each edit is applied to the"
                     " result of the previous one."
                 ),
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "old_string": {"type": "string"},
-                        "new_string": {"type": "string"},
-                        "replace_all": {
-                            "type": "boolean",
-                            "description": (
-                                "When true, replace every occurrence."
-                                " When false (default), require a"
-                                " unique match for this edit."
-                            ),
-                        },
-                    },
-                    "required": ["old_string", "new_string"],
-                },
+                "items": object_parameters(
+                    replacement_properties(), ["old_string", "new_string"],
+                ),
             },
         },
         "required": ["path", "edits"],

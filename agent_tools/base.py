@@ -261,6 +261,26 @@ def path_parameters() -> dict[str, Any]:
     )
 
 
+def replacement_properties() -> dict[str, Any]:
+    """Return the common replacement fields for the edit tools.
+
+    A fresh mapping on every call keeps each tool's JSON schema independent:
+    tool loaders or plugin code can safely inspect or augment one without
+    altering another.
+    """
+    return {
+        "old_string": {"type": "string"},
+        "new_string": {"type": "string"},
+        "replace_all": {
+            "type": "boolean",
+            "description": (
+                "When true, replace every occurrence. When false"
+                " (default), require a unique match."
+            ),
+        },
+    }
+
+
 def resolve_source_destination(
     workspace: str, args: dict,
 ) -> tuple[str, str, str, str]:

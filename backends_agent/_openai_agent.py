@@ -21,6 +21,7 @@ import logging
 import random
 import threading
 import time
+import urllib.request
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -69,6 +70,27 @@ def extract_model_ids(payload: object) -> tuple[str, ...]:
             seen.add(model_id)
             ids.append(model_id)
     return tuple(ids)
+
+
+def fetch_model_ids(
+    url: str,
+    *,
+    timeout: float,
+    headers: dict[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Fetch and parse an OpenAI-style ``/models`` catalog.
+
+    Both supported HTTP backends use the same small, synchronous discovery
+    request. Keeping it here avoids providers drifting in response decoding
+    or model-ID normalization while still letting each backend choose its URL,
+    timeout, authentication headers, and fallback behavior.
+    """
+    request: str | urllib.request.Request = url
+    if headers:
+        request = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return extract_model_ids(payload)
 
 
 class OpenAIChatBackend(Backend):
