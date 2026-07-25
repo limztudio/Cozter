@@ -443,6 +443,9 @@ Cozter/.venv/bin/python -m Cozter.agent_tools.plugins.current_time '{"timezone":
 
 HTTP-backend tool results are capped before they are fed back into the
 model, keeping accidental huge outputs from consuming the whole context.
+`read_file` reads at most 128 KiB per call; its line-offset scan is also
+bounded at 16 MiB so a pathological offset cannot leave a worker thread
+walking an enormous file.
 The `web_search` and `web_fetch` tools also cap downloaded response bodies
 at 5 MiB and share the bounded `read_bounded_text()` reader in
 `agent_tools/base.py`. `web_search` uses the common request setup;
@@ -529,10 +532,13 @@ authenticated ACP model selector and fails closed to `auto` if that catalog
 cannot be read. This keeps enterprise-disabled Copilot models out of the
 picker; a stored Copilot choice also uses `auto` until it appears in a fresh
 catalog. Claude Code has no safe non-interactive account catalog, so it keeps
-a curated list that `extra_models` can extend. Llama and Z.ai discover models
-live from their configured HTTP endpoints. `llama` and `zai` share one
-in-process OpenAI-compatible agent loop (`backends_agent/_openai_agent.py`);
-`zai` just adds the Bearer auth header and points at Z.ai's endpoint.
+a curated list that `extra_models` can extend. Its picker includes the current
+Opus 5 pin and only the pinned `[1m]` variants the CLI supports; Claude's
+`/fast` is a session toggle rather than a selectable `*-fast` model ID. Llama
+and Z.ai discover models live from their configured HTTP endpoints. `llama`
+and `zai` share one in-process OpenAI-compatible agent loop
+(`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
+and points at Z.ai's endpoint.
 
 Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its
