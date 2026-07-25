@@ -16,6 +16,17 @@ from ..base import AgentTool, resolve_inside_workspace, summarize_path
 # memory and synchronous disk work.
 _READ_FILE_MAX_CHARS = 128 * 1024
 _READ_FILE_SKIP_CHUNK_CHARS = 64 * 1024
+# An offset is expressed in lines, so reaching it can require scanning a
+# great deal of data (especially in generated files with very long lines).
+# ``asyncio.to_thread`` keeps that scan off the event loop, but cancelling a
+# timed-out await does not stop the underlying worker thread. Bound the skip
+# itself so an untrusted tool argument cannot leave a thread reading a huge
+# file long after the tool call has returned.
+_READ_FILE_MAX_SKIP_CHARS = 16 * 1024 * 1024
+
+
+class _OffsetScanLimitExceeded(Exception):
+    """The requested line offset needs an excessive sequential scan."""
 
 
 class ReadFileTool(AgentTool):
@@ -72,6 +83,12 @@ class ReadFileTool(AgentTool):
             text, truncated = await asyncio.to_thread(
                 _read_text_range, target, start, count,
             )
+        except _OffsetScanLimitExceeded:
+            return (
+                "Error: offset requires scanning more than "
+                f"{_READ_FILE_MAX_SKIP_CHARS:,} characters; use a smaller "
+                "offset"
+            )
         except OSError as exc:
             return f"Read failed: {exc}"
 
@@ -126,12 +143,23 @@ def _read_text_range(
 
 
 def _skip_lines(file, count: int) -> bool:
-    """Discard *count* lines without materializing an oversized line."""
+    """Discard *count* lines without materializing or scanning too much.
+
+    Returns False at EOF before the requested offset. Raises
+    :class:`_OffsetScanLimitExceeded` when reaching the offset would require
+    reading more than the bounded skip budget.
+    """
+    remaining = _READ_FILE_MAX_SKIP_CHARS
     for _ in range(count):
         while True:
-            chunk = file.readline(_READ_FILE_SKIP_CHUNK_CHARS)
+            if remaining <= 0:
+                raise _OffsetScanLimitExceeded
+            chunk = file.readline(
+                min(_READ_FILE_SKIP_CHUNK_CHARS, remaining),
+            )
             if not chunk:
                 return False
+            remaining -= len(chunk)
             if chunk.endswith("\n"):
                 break
     return True

@@ -226,6 +226,32 @@ class ReadFileToolTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_offset_scan_is_bounded_before_worker_thread_can_run_away(
+        self,
+    ) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "many-lines.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("one\ntwo\nthree\n")
+
+                with mock.patch(
+                    "Cozter.agent_tools.builtin.read_file"
+                    "._READ_FILE_MAX_SKIP_CHARS",
+                    5,
+                ):
+                    result = await ReadFileTool().run(
+                        tmp, {"path": "many-lines.txt", "offset": 2},
+                    )
+
+                self.assertEqual(
+                    result,
+                    "Error: offset requires scanning more than 5 characters;"
+                    " use a smaller offset",
+                )
+
+        asyncio.run(run())
+
 
 class BashToolTests(unittest.TestCase):
     @staticmethod
