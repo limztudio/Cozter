@@ -1,11 +1,18 @@
 import unittest
 
+from Cozter.backends_bot.base import attachment_kind_from_mime
 from Cozter.backends_bot.formatting import strip_html_markup
 from Cozter.backends_bot.slack import _md_to_mrkdwn
 from Cozter.backends_bot.telegram import _md_to_html
 
 
 class PlatformFormattingTests(unittest.TestCase):
+    def test_attachment_kind_from_mime_handles_all_transports(self) -> None:
+        self.assertEqual(attachment_kind_from_mime("IMAGE/jpeg"), "photo")
+        self.assertEqual(attachment_kind_from_mime("audio/ogg"), "audio")
+        self.assertEqual(attachment_kind_from_mime("video/mp4"), "video")
+        self.assertEqual(attachment_kind_from_mime(None), "document")
+
     def test_telegram_markdown_to_html_handles_inline_and_code_blocks(
         self,
     ) -> None:

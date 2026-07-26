@@ -385,30 +385,36 @@ async def drain_text_stream(
     return text
 
 
-def extract_marker_block(text: str, tag: str) -> str | None:
-    """Return the body of ``[TAG]...[/TAG]`` (stripped), or None if absent."""
+def _marker_block_slices(text: str, tag: str) -> tuple[slice, slice] | None:
+    """Return whole-block and body slices for the first ``[TAG]`` block."""
     open_tag = f"[{tag}]"
     close_tag = f"[/{tag}]"
     i = text.find(open_tag)
     if i == -1:
         return None
-    j = text.find(close_tag, i + len(open_tag))
+    body_start = i + len(open_tag)
+    j = text.find(close_tag, body_start)
     if j == -1:
         return None
-    return text[i + len(open_tag):j].strip()
+    return slice(i, j + len(close_tag)), slice(body_start, j)
+
+
+def extract_marker_block(text: str, tag: str) -> str | None:
+    """Return the body of ``[TAG]...[/TAG]`` (stripped), or None if absent."""
+    slices = _marker_block_slices(text, tag)
+    if slices is None:
+        return None
+    _, body = slices
+    return text[body].strip()
 
 
 def strip_marker_block(text: str, tag: str) -> str:
     """Return *text* with the first ``[TAG]...[/TAG]`` block removed."""
-    open_tag = f"[{tag}]"
-    close_tag = f"[/{tag}]"
-    i = text.find(open_tag)
-    if i == -1:
+    slices = _marker_block_slices(text, tag)
+    if slices is None:
         return text
-    j = text.find(close_tag, i + len(open_tag))
-    if j == -1:
-        return text
-    return text[:i] + text[j + len(close_tag):]
+    block, _ = slices
+    return text[:block.start] + text[block.stop:]
 
 
 def take_recent_lines(

@@ -26,6 +26,7 @@ from .base import (
     BotPlatform,
     MessageHandle,
     NO_WORKSPACE_TEXT,
+    attachment_kind_from_mime,
     ensure_upload_dir,
 )
 from .formatting import iter_fenced_markdown
@@ -650,7 +651,7 @@ class SignalBot(BotPlatform):
         return AttachmentInfo(
             local_path=local_path,
             filename=filename,
-            kind=_attachment_kind(att),
+            kind=attachment_kind_from_mime(att.get("contentType")),
             caption=caption,
         )
 
@@ -1629,17 +1630,6 @@ def _signal_cli_attachment_dirs() -> list[str]:
         os.path.join(data_dir, "attachments")
         for data_dir in dict.fromkeys(data_dirs)
     ]
-
-
-def _attachment_kind(att: dict[str, Any]) -> str:
-    content_type = str(att.get("contentType") or "").lower()
-    if content_type.startswith("image/"):
-        return "photo"
-    if content_type.startswith("audio/"):
-        return "audio"
-    if content_type.startswith("video/"):
-        return "video"
-    return "document"
 
 
 def _extension_for_content_type(value: Any) -> str:

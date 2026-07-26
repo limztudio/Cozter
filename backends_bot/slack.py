@@ -33,6 +33,7 @@ from .base import (
     COMMAND_NAMES,
     MessageHandle,
     NO_WORKSPACE_TEXT,
+    attachment_kind_from_mime,
     ensure_upload_dir,
 )
 from .formatting import escape_html_entities, render_fenced_markdown
@@ -509,7 +510,7 @@ class SlackBot(BotPlatform):
             filename = os.path.basename(f.get("name") or "")
             if not filename:
                 filename = f.get("id") or "file"
-            kind = _slack_file_kind(f)
+            kind = attachment_kind_from_mime(f.get("mimetype"))
             local_path = os.path.join(upload_dir, filename)
             try:
                 await _download_private(url, self.bot_token, local_path)
@@ -528,18 +529,6 @@ class SlackBot(BotPlatform):
                     caption=caption,
                 ),
             ))
-
-
-def _slack_file_kind(f: dict) -> str:
-    """Map a Slack file payload to one of our coarse kind labels."""
-    mime = (f.get("mimetype") or "").lower()
-    if mime.startswith("image/"):
-        return "photo"
-    if mime.startswith("audio/"):
-        return "audio"
-    if mime.startswith("video/"):
-        return "video"
-    return "document"
 
 
 async def _download_private(

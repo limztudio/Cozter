@@ -69,6 +69,18 @@ def ensure_upload_dir(workspace_path: str) -> str:
     os.makedirs(upload_dir, exist_ok=True)
     return upload_dir
 
+
+def attachment_kind_from_mime(value: object) -> str:
+    """Map a transport MIME value to Cozter's coarse attachment labels."""
+    mime = str(value or "").lower()
+    if mime.startswith("image/"):
+        return "photo"
+    if mime.startswith("audio/"):
+        return "audio"
+    if mime.startswith("video/"):
+        return "video"
+    return "document"
+
 # ---------------------------------------------------------------------------
 # Message handle + attachment info
 # ---------------------------------------------------------------------------

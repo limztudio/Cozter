@@ -82,22 +82,14 @@ def _get_nonempty_string(key: str) -> str:
     return cast(str, _DEFAULT_CONFIG[key])
 
 
-def _get_positive_int(key: str) -> int:
-    """Return ``cfg[key]`` if it's an ``int > 0``, else the default."""
+def _get_int_at_least(key: str, minimum: int) -> int:
+    """Return ``cfg[key]`` if it is an int at least *minimum*, else default."""
     val = _read_config_value(key)
-    if isinstance(val, int) and not isinstance(val, bool) and val > 0:
-        return val
-    return cast(int, _DEFAULT_CONFIG[key])
-
-
-def _get_non_negative_int(key: str) -> int:
-    """Return ``cfg[key]`` if it's an ``int >= 0``, else the default.
-
-    Like :func:`_get_positive_int` but permits 0 (used as an "off" flag
-    for optional periodic features such as the traceback dump).
-    """
-    val = _read_config_value(key)
-    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
+    if (
+        isinstance(val, int)
+        and not isinstance(val, bool)
+        and val >= minimum
+    ):
         return val
     return cast(int, _DEFAULT_CONFIG[key])
 
@@ -108,12 +100,12 @@ def get_llama_server_url() -> str:
 
 def get_llama_max_agent_turns() -> int:
     """Return the per-turn cap on llama agent-loop iterations."""
-    return _get_positive_int("llama_max_agent_turns")
+    return _get_int_at_least("llama_max_agent_turns", 1)
 
 
 def get_llama_tool_repeat_limit() -> int:
     """Return the cap on identical repeated tool calls within a turn."""
-    return _get_positive_int("llama_tool_repeat_limit")
+    return _get_int_at_least("llama_tool_repeat_limit", 1)
 
 
 def get_llama_socket_timeout() -> int:
@@ -125,16 +117,16 @@ def get_llama_socket_timeout() -> int:
     The default is intentionally generous; lower it only if you have a
     fast server and want failures to surface quickly.
     """
-    return _get_positive_int("llama_socket_timeout")
+    return _get_int_at_least("llama_socket_timeout", 1)
 
 
 def get_llama_max_retries() -> int:
     """Retry attempts for transient llama HTTP failures (>= 0; 0 disables).
 
     Zero is meaningful here ("do not retry"), so this uses the shared
-    non-negative integer reader rather than :func:`_get_positive_int`.
+    shared integer reader with a zero minimum.
     """
-    return _get_non_negative_int("llama_max_retries")
+    return _get_int_at_least("llama_max_retries", 0)
 
 
 def get_show_usage() -> bool:
@@ -177,12 +169,12 @@ def get_zai_base_url() -> str:
 
 def get_zai_socket_timeout() -> int:
     """Per-socket-read timeout (seconds) for zai HTTP calls."""
-    return _get_positive_int("zai_socket_timeout")
+    return _get_int_at_least("zai_socket_timeout", 1)
 
 
 def get_zai_max_retries() -> int:
     """Retry attempts for transient zai HTTP failures (>= 0; 0 disables)."""
-    return _get_non_negative_int("zai_max_retries")
+    return _get_int_at_least("zai_max_retries", 0)
 
 
 def get_tool_timeout() -> int:
@@ -193,7 +185,7 @@ def get_tool_timeout() -> int:
     block the whole turn. This wraps every ``execute_tool`` call as a
     safety net. Defaults to 120s, matching bash's hard cap.
     """
-    return _get_positive_int("tool_timeout")
+    return _get_int_at_least("tool_timeout", 1)
 
 
 def get_update_idle_timeout() -> int:
@@ -203,7 +195,7 @@ def get_update_idle_timeout() -> int:
     interval, the loop dumps diagnostics and continues waiting instead of
     restarting through active work. Defaults to 1200s.
     """
-    return _get_positive_int("update_idle_timeout")
+    return _get_int_at_least("update_idle_timeout", 1)
 
 
 def get_dump_traceback_interval() -> int:
@@ -214,7 +206,7 @@ def get_dump_traceback_interval() -> int:
     log even though no Python exception is raised. 0 disables the
     periodic dump; the on-demand ``SIGUSR1`` dump always works.
     """
-    return _get_non_negative_int("dump_traceback_interval")
+    return _get_int_at_least("dump_traceback_interval", 0)
 
 
 def get_extra_models(backend_name: str) -> list[str]:

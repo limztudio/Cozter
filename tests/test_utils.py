@@ -210,6 +210,17 @@ class ProcessTerminationTests(unittest.TestCase):
 
 
 class JsonHelperTests(unittest.TestCase):
+    def test_marker_helpers_share_first_complete_block(self) -> None:
+        text = "before [TAG]  body  [/TAG] after [TAG]later[/TAG]"
+
+        self.assertEqual(utils.extract_marker_block(text, "TAG"), "body")
+        self.assertEqual(
+            utils.strip_marker_block(text, "TAG"),
+            "before  after [TAG]later[/TAG]",
+        )
+        self.assertIsNone(utils.extract_marker_block("[TAG]open", "TAG"))
+        self.assertEqual(utils.strip_marker_block("[TAG]open", "TAG"), "[TAG]open")
+
     def test_save_json_object_creates_parent_and_writes_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "nested", "state.json")
