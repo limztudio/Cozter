@@ -135,10 +135,10 @@ class BotCommandTests(unittest.TestCase):
         self.assertEqual(workspace.get_history_budget(self.ws), 8000)
 
     # -- /doctor -----------------------------------------------------------
-    def test_doctor_lists_every_backend(self) -> None:
+    def test_doctor_lists_every_direct_backend(self) -> None:
         self._run(self.bot.cmd_doctor(self._ctx()))
         out = self._last()
-        for name in ("codex", "claude_code", "copilot", "llama"):
+        for name in ("codex", "claude_code", "copilot", "llama", "zai"):
             self.assertIn(name, out)
 
     # -- /agent ------------------------------------------------------------
