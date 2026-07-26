@@ -1,9 +1,10 @@
 # Local tool configuration. This is intentionally minimal: the project's
-# canonical gates (lint/type/test) and their settings live in mypy.ini,
-# .github/workflows/ci.yml, and .gitlab-ci.yml. The pytest section below
-# only silences a noisy deprecation warning emitted by the optional
-# pytest-asyncio plugin (the suite drives async tests via asyncio.run
-# inside unittest, so pytest-asyncio is never actually used).
+# canonical gates (lint/type/test) live in .github/workflows/ci.yml and
+# .gitlab-ci.yml. Mypy is configured in mypy.ini; Ruff's explicit rule set
+# below preserves the original E4/E7/E9/F lint contract as Ruff evolves.
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 # pytest-asyncio >= 0.24 warns when this is unset, even though no fixture
