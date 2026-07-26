@@ -3,7 +3,7 @@
 Drop a `.py` file here to add a new tool to every agent. One file
 serves both modes:
 
-- **HTTP backends** (`llama`, future Mistral/Gemini/etc.) see plugins
+- **HTTP backends** (`llama`, `zai`, future Mistral/Gemini/etc.) see plugins
   as typed tools — same schema as the built-in toolkit in `../builtin/`.
 - **CLI backends** (`codex`, `claude_code`, `copilot`) can't have
   external tools injected, so the bot tells the model about each

@@ -167,6 +167,12 @@ The CLI surface needs neither.
 `recent_workspace_limit` controls how many paths `/open` shows.
 `message_queue_size` caps each user's pending chat turns.
 
+The llama safety settings are read at the start of every llama turn:
+`llama_max_agent_turns` (default 60) limits tool-call turns before Cozter
+forces a final answer, `llama_tool_repeat_limit` (default 3) skips an
+identical call after that many executions, and `llama_socket_timeout`
+(default 1800 seconds) is the per-read timeout for a slow local server.
+
 Agent turns do not have a wall-clock timeout; long-running work is
 allowed to finish. `tool_timeout` (default 120s) still caps each
 individual tool call for HTTP backends, so one wedged plugin call cannot
@@ -328,6 +334,8 @@ Most picker commands start at 1 and accept either the displayed number or
 the literal name. The `/agent` picker deliberately reserves option `0` for
 the default `flexible` meta-agent; its direct backends start at 1. `/open`
 also accepts a recent-workspace number directly as `/open 2`.
+If a picker entry is not recognized, Cozter keeps the picker open and asks
+again; use `/cancel` to leave it.
 
 `/bg` (or `/background`) currently uses Claude Code, so choose `claude_code`
 with `/agent` first. Cozter persists the external task ID, polls independently, and sends
@@ -615,7 +623,7 @@ Cozter/
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
 ├── requirements.txt      Python runtime dependencies installed into .venv
 ├── py.typed              marks the package as typed for downstream checkers
-├── pyproject.toml        pytest config; silences the optional pytest-asyncio deprecation warning
+├── pyproject.toml        Ruff E4/E7/E9/F lint contract plus pytest async-fixture configuration
 ├── .config/              runtime config dir; only config.example.json is tracked
 ├── backends_bot/         chat surfaces and shared fenced-Markdown formatting
 ├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
@@ -718,8 +726,8 @@ ignored for local secrets and runtime queues.
   the 16 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
 - Project metadata, CI, and docs: `requirements.txt`, `py.typed`, `mypy.ini`,
-  `pyproject.toml` (pytest config that silences the optional
-  pytest-asyncio deprecation warning), `.gitlab-ci.yml`,
+  `pyproject.toml` (the Ruff E4/E7/E9/F lint contract plus pytest's
+  async-fixture configuration), `.gitlab-ci.yml`,
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
@@ -777,18 +785,18 @@ backend that sub-task's tier points at.
 
 ## Repository state
 
-Tracked source is intentionally small: the top-level runtime modules,
-`backends_bot/`, `backends_agent/`, `agent_tools/`, `tests/`,
-`requirements.txt`, this README, and `.config/config.example.json`.
+Tracked project files are intentionally small: the top-level runtime modules
+and metadata, `backends_bot/`, `backends_agent/`, `agent_tools/`, `tests/`,
+the CI definitions, this README, and `.config/config.example.json`.
 Everything else created by a running bot is local state.
 
 Do not commit these runtime artifacts:
 
-- `.config/config.json`, `.config/workspaces.json`, and
-  `.config/queue_<platform>.json` - local tokens, workspace selections,
-  and persisted pending messages. Platform IDs are sanitized for queue
-  filenames, so a runtime key like `cli:local` becomes a filesystem-safe
-  `queue_cli_local.json`.
+- `.config/config.json`, `.config/workspaces.json`,
+  `.config/queue_<platform>.json`, and `.config/detached_tasks_<platform>.json`
+  - local tokens, workspace selections, persisted pending messages, and
+  detached-task state. Platform IDs are sanitized for queue filenames, so a
+  runtime key like `cli:local` becomes a filesystem-safe `queue_cli_local.json`.
 - `.cozter/` — sessions, workspace settings, colony memory, schedules,
   uploads, and generated images; this directory can appear at the repo
   root when Cozter is used on its own checkout
