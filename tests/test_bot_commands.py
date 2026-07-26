@@ -10,6 +10,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from Cozter import session, workspace
 from Cozter.backends_bot.base import BotContext, BotPlatform
@@ -163,6 +164,32 @@ class BotCommandTests(unittest.TestCase):
             workspace.get_flexible_model(self.ws, "high"), "opus",
         )
         self.assertIn("Flexible high model set to: opus", self._last())
+
+    def test_invalid_model_choices_reprompt_without_crashing(self) -> None:
+        cases = (
+            (
+                self.bot._receive_model(self._ctx(text="missing")),
+                "get_available_models",
+            ),
+            (
+                self.bot._receive_summarymodel(self._ctx(text="missing")),
+                "get_available_summary_models",
+            ),
+            (
+                self.bot._receive_flexible_model(
+                    self._ctx(text="missing"), tier="high",
+                ),
+                "get_available_flexible_models",
+            ),
+        )
+
+        for handler, fetcher in cases:
+            with self.subTest(fetcher=fetcher), mock.patch.object(
+                workspace, fetcher, return_value=["known-model"],
+            ):
+                self._run(handler)
+                self.assertIn("Unknown model: missing", self._last())
+                self.assertIn(self.uid, self.bot._pending_input)
 
     # -- /sessions ---------------------------------------------------------
     def test_sessions_list_and_switch(self) -> None:

@@ -799,13 +799,14 @@ class BotPlatform(ABC):
     async def _receive_model(
         self, ctx: BotContext,
     ) -> None:
-        ws, model = await self._receive_model_choice(
+        selected = await self._receive_model_choice(
             ctx,
             fetch_options=workspace.get_available_models,
             retry_handler=self._receive_model,
         )
-        if model is None:
+        if selected is None:
             return
+        ws, model = selected
         workspace.set_model(ws, model)
         await ctx.reply_text(f"Model set to: {model}")
 
@@ -830,13 +831,14 @@ class BotPlatform(ABC):
     async def _receive_summarymodel(
         self, ctx: BotContext,
     ) -> None:
-        ws, model = await self._receive_model_choice(
+        selected = await self._receive_model_choice(
             ctx,
             fetch_options=workspace.get_available_summary_models,
             retry_handler=self._receive_summarymodel,
         )
-        if model is None:
+        if selected is None:
             return
+        ws, model = selected
         workspace.set_summary_model(ws, model)
         await ctx.reply_text(f"Summary model set to: {model}")
 
@@ -1052,7 +1054,7 @@ class BotPlatform(ABC):
     async def _receive_flexible_model(
         self, ctx: BotContext, *, tier: str,
     ) -> None:
-        ws, model = await self._receive_model_choice(
+        selected = await self._receive_model_choice(
             ctx,
             fetch_options=functools.partial(
                 workspace.get_available_flexible_models, tier=tier,
@@ -1061,8 +1063,9 @@ class BotPlatform(ABC):
                 self._receive_flexible_model, tier=tier,
             ),
         )
-        if model is None:
+        if selected is None:
             return
+        ws, model = selected
         workspace.set_flexible_model(ws, tier, model)
         await ctx.reply_text(f"Flexible {tier} model set to: {model}")
 
