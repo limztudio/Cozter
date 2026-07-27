@@ -507,6 +507,44 @@ class ExecuteToolTimeoutTests(unittest.TestCase):
         self.assertEqual(events[-1]["output"], result)
 
 
+class ExecuteToolResultTests(unittest.TestCase):
+    def test_execute_tool_handles_non_text_result(self) -> None:
+        class NonTextTool:
+            file_action = None
+
+            async def run(self, workspace_path: str, args: dict) -> object:
+                del workspace_path, args
+                return None
+
+        async def run() -> tuple[str, list[dict]]:
+            events: list[dict] = []
+            return (
+                await agent_tools.execute_tool(
+                    "non_text_test", {}, "/tmp", "auto", events.append,
+                ),
+                events,
+            )
+
+        original_tools = agent_tools._BY_NAME
+        agent_tools._BY_NAME = {
+            **original_tools,
+            "non_text_test": NonTextTool(),
+        }
+        try:
+            result, events = asyncio.run(run())
+        finally:
+            agent_tools._BY_NAME = original_tools
+
+        self.assertEqual(
+            result,
+            "Tool non_text_test returned an invalid non-text result "
+            "(NoneType).",
+        )
+        self.assertEqual(events[0]["type"], "tool_use")
+        self.assertEqual(events[-1]["type"], "tool_result")
+        self.assertEqual(events[-1]["output"], result)
+
+
 class ParseOpenAICallTests(unittest.TestCase):
     def test_string_arguments(self) -> None:
         name, args = agent_tools.parse_openai_call(

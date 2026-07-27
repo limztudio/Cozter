@@ -222,10 +222,23 @@ async def execute_tool(
     else:
         timeout = tool_timeout()
         try:
-            result = await asyncio.wait_for(
+            raw_result: object = await asyncio.wait_for(
                 tool.run(workspace_path, args),
                 timeout=timeout,
             )
+            if isinstance(raw_result, str):
+                result = raw_result
+            else:
+                result_type = type(raw_result).__name__
+                logger.warning(
+                    "Tool %s returned %s instead of text",
+                    name,
+                    result_type,
+                )
+                result = (
+                    f"Tool {name} returned an invalid non-text result "
+                    f"({result_type})."
+                )
         except asyncio.TimeoutError:
             logger.error("Tool %s exceeded tool_timeout=%ss", name, timeout)
             result = (
