@@ -6,9 +6,12 @@ streams JSONL events to stdout. Unlike codex, copilot:
     the platform's exec limit (Windows' ~32K CreateProcess command line;
     POSIX ARG_MAX, commonly ~2 MB). copilot has no prompt-via-stdin or
     --prompt-file path yet, so argv is the only delivery mechanism.
-  - has no `-C <dir>` flag - we use the subprocess `cwd` parameter
+  - supports `-C <dir>`, but Cozter uses the subprocess `cwd` parameter so
+    the launch path stays compatible with older CLI versions
   - requires an explicit ``--allow-all-tools`` for autonomous headless work;
     restricted calls use ``--available-tools ""`` to expose no tools at all
+  - can export a session to GitHub web and mobile; Cozter explicitly disables
+    that for its private, workspace-owned runs
 
 The JSONL event schema is not formally documented. ``parse_event`` and
 ``extract_agent_text`` use best-effort key probing (``text``/``content``
@@ -264,6 +267,7 @@ class CopilotBackend(Backend):
                     "--disable-builtin-mcps",
                     "--no-auto-update",
                     "--no-custom-instructions",
+                    "--no-remote-export",
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -376,7 +380,13 @@ class CopilotBackend(Backend):
 
         prefix = executable_command(self.executable)
         cmd: list[str] = [
-            *prefix, "--output-format", "json", "--no-color",
+            *prefix,
+            "--output-format",
+            "json",
+            "--no-color",
+            # Cozter stores the durable chat locally. Do not let a user-level
+            # Copilot setting export this private subprocess session remotely.
+            "--no-remote-export",
         ]
         self.append_model_effort_args(
             cmd,

@@ -197,6 +197,13 @@ class BackendPermissionCommandTests(unittest.TestCase):
         self.assertNotIn("--allow-all-tools", copilot_command)
         self.assertNotIn("--yolo", copilot_command)
 
+    def test_copilot_runs_disable_remote_session_export(self) -> None:
+        for approval in ("full", "auto", "confirm", "deny"):
+            with self.subTest(approval=approval):
+                self.assertIn(
+                    "--no-remote-export", self._copilot_command(approval),
+                )
+
     def test_claude_effort_matches_selected_model_capabilities(self) -> None:
         current_command = self._claude_command(
             "auto", model="claude-opus-4-8", effort=100,
@@ -601,6 +608,7 @@ class BackendModelTests(unittest.TestCase):
         command = popen.call_args.args[0]
         self.assertIn("--acp", command)
         self.assertIn("--stdio", command)
+        self.assertIn("--no-remote-export", command)
         self.assertNotIn("help", command)
         sent = [
             json.loads(call.args[0])

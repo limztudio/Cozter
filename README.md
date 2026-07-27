@@ -573,8 +573,9 @@ a prompt, and refreshes a successful account catalog periodically. The
 command-line limit by dropping the oldest composed context when a prompt
 exceeds its cap; the current user message is kept at the tail. Each Copilot
 run also uses a short-lived private CLI home, so its planner, worker, and
-merge calls do not appear in Copilot's session history; Cozter's workspace
-session remains the durable conversation record.
+merge calls do not appear in Copilot's session history or get exported to
+GitHub web and mobile; Cozter's workspace session remains the durable
+conversation record.
 
 ## Reasoning effort
 
