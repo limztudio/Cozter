@@ -902,12 +902,14 @@ From inside `Cozter/`:
 PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
 ```
 
-CI runs on Python 3.11 and 3.12 and runs `ruff check` and `mypy` on pushes
-to `main` and on merge requests / PRs. The canonical pipeline is
+CI runs the same three gates — `ruff check`, `mypy`, and the `unittest`
+suite — on Python 3.11 and 3.12 for pushes to `main` and merge requests /
+PRs. The canonical pipeline is
 `.gitlab-ci.yml` (GitLab CI, the primary remote); `.github/workflows/ci.yml`
-mirrors it on GitHub. mypy is adopted
-gradually — enforced on clean modules, with pre-existing type debt
-grandfathered per-module in `mypy.ini` (burn the list down over time).
+mirrors it on GitHub. mypy is enforced on the core runtime, agent backends,
+and tool surface; `tests/` are excluded and the chat-platform adapters are
+temporarily error-suppressed for their untyped SDK interactions, as defined
+in `mypy.ini`.
 `requirements.txt` contains runtime dependencies only, so install the CI
 tooling explicitly before running the lint and type gates locally:
 
@@ -918,6 +920,7 @@ Cozter/.venv/bin/ruff check Cozter
 Cozter/.venv/bin/mypy --config-file Cozter/mypy.ini -p Cozter
 ```
 
-Before committing, run the tests and check `git status --short` for only
-intentional source or documentation edits. Runtime JSON, logs, sessions,
-virtualenv files, and caches should stay local.
+Before committing, run the three gates above, `git diff --check`, and
+`git status --short` to ensure only intentional source or documentation
+edits are staged. Runtime JSON, logs, sessions, virtualenv files, and
+caches should stay local.
