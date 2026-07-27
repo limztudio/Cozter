@@ -24,7 +24,6 @@ to the prompt so the model knows to invoke plugins through its own
 Backends consume:
 
   - :data:`TOOL_SCHEMA` - OpenAI-shape ``tools`` list (builtin + plugins).
-  - :data:`TOOL_NAMES` - ordered tuple of tool names.
   - :func:`execute_tool` - run a tool by ``name`` + parsed ``args``.
   - :func:`tool_signature` - stable JSON fingerprint for repeat detection.
   - :func:`summarize_tool_use` - one-line status-display formatter.
@@ -120,8 +119,6 @@ _BY_NAME: dict[str, AgentTool] = {t.name: t for t in _TOOLS}
 TOOL_SCHEMA: list[dict[str, Any]] = [
     {"type": "function", "function": t.schema} for t in _TOOLS
 ]
-
-TOOL_NAMES: tuple[str, ...] = tuple(t.name for t in _TOOLS)
 
 # Tools that only read state - no file writes, no shell, no side effects.
 # These realize the "confirm" permission as a look-but-don't-touch surface
@@ -316,7 +313,6 @@ def cli_plugin_prelude() -> str:
 __all__ = [
     "READ_ONLY_TOOL_NAMES",
     "READ_ONLY_TOOL_SCHEMA",
-    "TOOL_NAMES",
     "TOOL_SCHEMA",
     "AgentTool",
     "cli_plugin_prelude",

@@ -811,16 +811,13 @@ class BotPlatform(ABC):
     async def _receive_model(
         self, ctx: BotContext,
     ) -> None:
-        selected = await self._receive_model_choice(
+        await self._apply_model_choice(
             ctx,
             fetch_options=workspace.get_available_models,
             retry_handler=self._receive_model,
+            set_model=workspace.set_model,
+            success_text="Model set to: {model}",
         )
-        if selected is None:
-            return
-        ws, model = selected
-        workspace.set_model(ws, model)
-        await ctx.reply_text(f"Model set to: {model}")
 
     # ----- /summarymodel --------------------------------------------------
 
@@ -843,16 +840,13 @@ class BotPlatform(ABC):
     async def _receive_summarymodel(
         self, ctx: BotContext,
     ) -> None:
-        selected = await self._receive_model_choice(
+        await self._apply_model_choice(
             ctx,
             fetch_options=workspace.get_available_summary_models,
             retry_handler=self._receive_summarymodel,
+            set_model=workspace.set_summary_model,
+            success_text="Summary model set to: {model}",
         )
-        if selected is None:
-            return
-        ws, model = selected
-        workspace.set_summary_model(ws, model)
-        await ctx.reply_text(f"Summary model set to: {model}")
 
     # ----- /agent ---------------------------------------------------------
 
@@ -949,6 +943,27 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, retry_handler)
             return None
         return ws, model
+
+    async def _apply_model_choice(
+        self,
+        ctx: BotContext,
+        *,
+        fetch_options: Callable[[str], list[str]],
+        retry_handler: Callable[[BotContext], Awaitable[None]],
+        set_model: Callable[[str, str], None],
+        success_text: str,
+    ) -> None:
+        """Resolve a model-picker input, save it, and confirm the choice."""
+        selected = await self._receive_model_choice(
+            ctx,
+            fetch_options=fetch_options,
+            retry_handler=retry_handler,
+        )
+        if selected is None:
+            return
+        workspace_path, model = selected
+        set_model(workspace_path, model)
+        await ctx.reply_text(success_text.format(model=model))
 
     @staticmethod
     def _option_lines(
@@ -1066,7 +1081,10 @@ class BotPlatform(ABC):
     async def _receive_flexible_model(
         self, ctx: BotContext, *, tier: str,
     ) -> None:
-        selected = await self._receive_model_choice(
+        def set_flexible_model(workspace_path: str, model: str) -> None:
+            workspace.set_flexible_model(workspace_path, tier, model)
+
+        await self._apply_model_choice(
             ctx,
             fetch_options=functools.partial(
                 workspace.get_available_flexible_models, tier=tier,
@@ -1074,12 +1092,9 @@ class BotPlatform(ABC):
             retry_handler=functools.partial(
                 self._receive_flexible_model, tier=tier,
             ),
+            set_model=set_flexible_model,
+            success_text=f"Flexible {tier} model set to: {{model}}",
         )
-        if selected is None:
-            return
-        ws, model = selected
-        workspace.set_flexible_model(ws, tier, model)
-        await ctx.reply_text(f"Flexible {tier} model set to: {model}")
 
     # ----- /summaryagent --------------------------------------------------
 

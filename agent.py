@@ -1194,6 +1194,39 @@ async def run(
         )
 
 
+async def _resolve_or_create_user_session(
+    prompt: str,
+    workspace_path: str,
+    user_id: int | str,
+    summary_model: str | None,
+    summary_backend: str,
+) -> tuple[str, dict]:
+    """Resume a user's active session or route a new turn, then persist it.
+
+    Foreground and detached turns must attach to the same conversation when
+    they are started by the same user. Keeping the fallback-to-router policy
+    in one place prevents either path from drifting when session persistence
+    changes.
+    """
+    last_session_id = session.get_last_session(workspace_path, user_id)
+    last_data = (
+        session.load_session(workspace_path, last_session_id)
+        if last_session_id else None
+    )
+    if last_data is not None:
+        session_id, session_data = last_session_id, last_data
+    else:
+        session_id, session_data = await router.select_or_create_session(
+            prompt,
+            workspace_path,
+            summary_model,
+            backend_name=summary_backend,
+        )
+    assert isinstance(session_id, str) and session_id
+    session.set_last_session(workspace_path, user_id, session_id)
+    return session_id, session_data
+
+
 async def launch_detached(
     prompt: str,
     workspace_path: str,
@@ -1219,20 +1252,13 @@ async def launch_detached(
             )
 
         summary_backend = summary_backend_name or backend.name
-        last_sid = session.get_last_session(workspace_path, user_id)
-        last_data = (
-            session.load_session(workspace_path, last_sid)
-            if last_sid else None
+        session_id, session_data = await _resolve_or_create_user_session(
+            prompt,
+            workspace_path,
+            user_id,
+            summary_model,
+            summary_backend,
         )
-        if last_data is not None:
-            session_id, session_data = last_sid, last_data
-        else:
-            session_id, session_data = await router.select_or_create_session(
-                prompt, workspace_path, summary_model,
-                backend_name=summary_backend,
-            )
-        assert isinstance(session_id, str) and session_id
-        session.set_last_session(workspace_path, user_id, session_id)
 
         contextual_prompt = _build_contextual_prompt(
             prompt,
@@ -1371,29 +1397,16 @@ async def _run_turn(
             )
             return result
     else:
-        # Resume whatever session the user was last writing into.
-        # Falls back to the router only when there's no last_session
-        # pointer (first turn in this workspace, or /newsession reset
-        # it) or the pointed-to session has been deleted.
-        last_sid = session.get_last_session(workspace_path, user_id)
-        last_data = (
-            session.load_session(workspace_path, last_sid)
-            if last_sid else None
+        session_id, session_data = await _resolve_or_create_user_session(
+            prompt,
+            workspace_path,
+            user_id,
+            summary_model,
+            summary_backend,
         )
-        if last_data is not None:
-            session_id, session_data = last_sid, last_data
-        else:
-            session_id, session_data = await router.select_or_create_session(
-                prompt, workspace_path, summary_model,
-                backend_name=summary_backend,
-            )
 
     # session_id is set by both resolution branches by this point.
     assert session_id is not None
-    if not explicit_session:
-        # Persist for the next turn - including the next bot restart.
-        session.set_last_session(workspace_path, user_id, session_id)
-
     # Workspace-shared memory is loaded once and reused on every inject
     # restart, just like session_data.
     colony_items = colony.get_items(workspace_path)

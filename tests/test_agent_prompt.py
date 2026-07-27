@@ -7,8 +7,9 @@ budget must keep more history; the user's new message is always present.
 
 import tempfile
 import unittest
+from unittest import mock
 
-from Cozter import agent, workspace
+from Cozter import agent, session, workspace
 
 
 def _messages(n: int) -> list[dict]:
@@ -64,6 +65,42 @@ class PromptPolicyTests(unittest.TestCase):
                     tmp, explicit_session=True,
                 ),
             )
+
+
+class SessionResolutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_last_session_is_reused_without_routing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            existing = session.create_session(tmp, name="Existing")
+            session.set_last_session(tmp, "user", existing["id"])
+            with mock.patch.object(agent.router, "select_or_create_session") as route:
+                session_id, data = await agent._resolve_or_create_user_session(
+                    "continue work", tmp, "user", "summary-model", "codex",
+                )
+
+        self.assertEqual(session_id, existing["id"])
+        self.assertEqual(data["id"], existing["id"])
+        route.assert_not_called()
+
+    async def test_missing_session_routes_and_persists_the_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            routed = session.create_session(tmp, name="Routed")
+            session.set_last_session(tmp, "user", "missing-session")
+            with mock.patch.object(
+                agent.router,
+                "select_or_create_session",
+                new=mock.AsyncMock(return_value=(routed["id"], routed)),
+            ) as route:
+                session_id, data = await agent._resolve_or_create_user_session(
+                    "new work", tmp, "user", "summary-model", "claude_code",
+                )
+
+            self.assertEqual(session.get_last_session(tmp, "user"), routed["id"])
+
+        self.assertEqual(session_id, routed["id"])
+        self.assertEqual(data, routed)
+        route.assert_awaited_once_with(
+            "new work", tmp, "summary-model", backend_name="claude_code",
+        )
 
 
 class DetachedTaskRequestTests(unittest.TestCase):

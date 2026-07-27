@@ -620,11 +620,11 @@ ordinary queued chat still waits for the user's answer.
 
 ```
 Cozter/
-├── __init__.py           package marker and version
+├── __init__.py           package marker
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
 ├── requirements.txt      Python runtime dependencies installed into .venv
 ├── py.typed              marks the package as typed for downstream checkers
-├── pyproject.toml        Ruff E4/E7/E9/F lint contract plus pytest async-fixture configuration
+├── pyproject.toml        Ruff E4/E7/E9/F lint contract
 ├── .config/              runtime config dir; only config.example.json is tracked
 ├── backends_bot/         chat surfaces and shared fenced-Markdown formatting
 ├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
@@ -727,8 +727,7 @@ ignored for local secrets and runtime queues.
   the 16 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
 - Project metadata, CI, and docs: `requirements.txt`, `py.typed`, `mypy.ini`,
-  `pyproject.toml` (the Ruff E4/E7/E9/F lint contract plus pytest's
-  async-fixture configuration), `.gitlab-ci.yml`,
+  `pyproject.toml` (the Ruff E4/E7/E9/F lint contract), `.gitlab-ci.yml`,
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
