@@ -15,6 +15,21 @@ WORKSPACE_STATE_PATH = os.path.join(CONFIG_DIR, "workspaces.json")
 MAX_RECENT = 50  # cap on stored recent-workspaces list
 
 
+def canonicalize_workspace_path(path: str) -> str:
+    """Return a stable local identity for a workspace path.
+
+    A workspace can be opened through ``.``, ``..``, a trailing slash, or a
+    symlink.  State and lock registries must treat those spellings as one
+    workspace; otherwise separate agent turns can mutate the same files at
+    once.  Preserve an unresolvable path so malformed persisted state still
+    follows the existing validation/error path instead of crashing a read.
+    """
+    try:
+        return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    except (OSError, ValueError):
+        return path
+
+
 def _load_all() -> dict:
     """Load workspace state.
 
@@ -44,14 +59,27 @@ def get_current(
     if not isinstance(current, dict):
         return None
     path = current.get(str(bot_id))
-    return path if isinstance(path, str) and path else None
+    return (
+        canonicalize_workspace_path(path)
+        if isinstance(path, str) and path else None
+    )
 
 
 def get_recent(user_id: int | str, limit: int = 10) -> list[str]:
     recent = _get_user(user_id).get("recent", [])
     if not isinstance(recent, list):
         return []
-    return [p for p in recent if isinstance(p, str) and p][:limit]
+    paths: list[str] = []
+    seen: set[str] = set()
+    for path in recent:
+        if not isinstance(path, str) or not path:
+            continue
+        canonical = canonicalize_workspace_path(path)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        paths.append(canonical)
+    return paths[:limit]
 
 
 def iter_current_workspaces(
@@ -72,7 +100,7 @@ def iter_current_workspaces(
             continue
         path = current.get(str(bot_id))
         if isinstance(path, str) and path:
-            pairs.append((uid, path))
+            pairs.append((uid, canonicalize_workspace_path(path)))
     return pairs
 
 
@@ -80,6 +108,7 @@ def select_workspace(
     user_id: int | str, path: str, bot_id: int | str = "_default",
 ) -> None:
     """Set path as current workspace for a bot and push it to recent."""
+    path = canonicalize_workspace_path(path)
     all_state = _load_all()
     uid = str(user_id)
     user_state = all_state.get(uid, {"current": {}, "recent": []})
@@ -92,10 +121,9 @@ def select_workspace(
     recent = user_state.get("recent", [])
     if not isinstance(recent, list):
         recent = []
-    if path in recent:
-        recent.remove(path)
-    recent.insert(0, path)
-    user_state["recent"] = recent[:MAX_RECENT]
+    # Rebuild instead of merely removing an exact string so legacy aliases
+    # (for example ``/work/.``) are normalized and deduplicated too.
+    user_state["recent"] = _merge_recent(path, recent)
 
     all_state[uid] = user_state
     _save_all(all_state)
@@ -144,6 +172,7 @@ def migrate_current_workspace(
                 break
     if not isinstance(path, str) or not path:
         return False
+    path = canonicalize_workspace_path(path)
 
     target_current[target_bot] = path
     target_state["recent"] = _merge_recent(
@@ -177,6 +206,7 @@ def migrate_current_workspace_platform_keys(
                 break
         if not isinstance(path, str) or not path:
             continue
+        path = canonicalize_workspace_path(path)
         current[target_bot] = path
         state["recent"] = _merge_recent(path, state.get("recent", []))
         all_state[uid] = state
@@ -190,6 +220,7 @@ def _merge_recent(primary: str, *recent_lists: object) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
     for value in (primary,):
+        value = canonicalize_workspace_path(value)
         if value and value not in seen:
             merged.append(value)
             seen.add(value)
@@ -198,6 +229,9 @@ def _merge_recent(primary: str, *recent_lists: object) -> list[str]:
             continue
         for value in recent:
             if not isinstance(value, str) or not value or value in seen:
+                continue
+            value = canonicalize_workspace_path(value)
+            if value in seen:
                 continue
             merged.append(value)
             seen.add(value)
@@ -730,10 +764,11 @@ _locks: dict[str, asyncio.Lock] = {}
 def _lock_for(
     registry: dict[str, asyncio.Lock], workspace_path: str,
 ) -> asyncio.Lock:
-    lock = registry.get(workspace_path)
+    canonical_path = canonicalize_workspace_path(workspace_path)
+    lock = registry.get(canonical_path)
     if lock is None:
         lock = asyncio.Lock()
-        registry[workspace_path] = lock
+        registry[canonical_path] = lock
     return lock
 
 
@@ -756,3 +791,18 @@ def get_run_lock(workspace_path: str) -> asyncio.Lock:
     edits - without deadlocking on the non-reentrant file lock.
     """
     return _lock_for(_run_locks, workspace_path)
+
+
+_memory_maintenance_locks: dict[str, asyncio.Lock] = {}
+
+
+def get_memory_maintenance_lock(workspace_path: str) -> asyncio.Lock:
+    """Serialize long-term-memory rewrites for one workspace.
+
+    Compaction and colony consolidation both snapshot long-term memory, make
+    a potentially slow backend call, then replace that memory.  Their normal
+    file lock deliberately covers only the short read/write critical sections,
+    so this separate lock spans the full maintenance transaction without
+    blocking foreground turns from appending ordinary session messages.
+    """
+    return _lock_for(_memory_maintenance_locks, workspace_path)

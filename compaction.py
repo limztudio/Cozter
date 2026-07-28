@@ -126,74 +126,90 @@ async def maybe_compact(
     Compaction runs outside the workspace lock so other requests
     aren't stalled.
     """
-    key = (workspace_path, session_id)
+    key = (
+        workspace_mod.canonicalize_workspace_path(workspace_path), session_id,
+    )
     if key in _in_flight:
         logger.debug("Compaction already in progress for session %s", session_id)
         return
 
     _in_flight.add(key)
     try:
-        data = session.load_session(workspace_path, session_id)
-        if data is None:
-            return
-        msgs = data.get("messages", [])
-        # Snapshot count: how many messages this compaction will summarize.
-        # A concurrent turn can append more while the summary runs (compaction
-        # is deliberately outside the lock), so set_summary must trim against
-        # this, not the grown on-disk length, or those newer messages are lost.
-        snapshot_count = len(msgs)
-        interval = workspace_mod.get_compact_interval(workspace_path)
-        if len(msgs) < interval:
-            return
-
-        logger.info(
-            "Auto-compact triggered (msgs=%d, interval=%d)",
-            len(msgs), interval,
-        )
-        existing_summary = data.get("summary") or ""
-        new_summary, new_long_term, new_title = await compact_session(
-            workspace_path, session_id, summary_model,
-            backend_name=backend_name,
-            _preloaded_data=data,
-        )
-        if not new_summary:
-            logger.error(
-                "Compaction produced empty summary for session %s",
-                session_id,
+        async with workspace_mod.get_memory_maintenance_lock(workspace_path):
+            await _maybe_compact_under_maintenance_lock(
+                workspace_path, session_id, summary_model,
+                backend_name=backend_name,
             )
-            return
-        # Reject summaries that are suspiciously short compared to the
-        # existing one - a sign of a truncated or failed backend response.
-        min_len = max(100, len(existing_summary) // 2)
-        if len(new_summary) < min_len:
-            logger.error(
-                "Compaction summary too short (%d chars, min %d) "
-                "for session %s - keeping existing",
-                len(new_summary), min_len, session_id,
-            )
-            return
-        async with workspace_mod.get_lock(workspace_path):
-            session.set_summary(
-                workspace_path, session_id, new_summary,
-                keep_recent=KEEP_RECENT_AFTER_COMPACT,
-                long_term_rewrite=new_long_term,
-                title=new_title,
-                summarized_count=snapshot_count,
-            )
-            colony_count = colony.bump_compact_count(workspace_path)
-        lt_count = len(new_long_term) if new_long_term is not None else "?"
-        logger.info(
-            "Session %s compacted, summary %d chars, long_term %s items",
-            session_id, len(new_summary), lt_count,
-        )
-        colony.maybe_trigger(
-            workspace_path, colony_count, summary_model,
-            backend_name=backend_name,
-        )
     except Exception:
         logger.error("Compaction check failed", exc_info=True)
     finally:
         _in_flight.discard(key)
+
+
+async def _maybe_compact_under_maintenance_lock(
+    workspace_path: str,
+    session_id: str,
+    summary_model: str | None,
+    *,
+    backend_name: str | None,
+) -> None:
+    """Run one compaction while no colony rewrite can race its snapshot."""
+    data = session.load_session(workspace_path, session_id)
+    if data is None:
+        return
+    msgs = data.get("messages", [])
+    # Snapshot count: how many messages this compaction will summarize. A
+    # foreground turn can append more while the summary runs, so set_summary
+    # trims against this count rather than the grown on-disk message list.
+    snapshot_count = len(msgs)
+    interval = workspace_mod.get_compact_interval(workspace_path)
+    if len(msgs) < interval:
+        return
+
+    logger.info(
+        "Auto-compact triggered (msgs=%d, interval=%d)",
+        len(msgs), interval,
+    )
+    existing_summary = data.get("summary") or ""
+    new_summary, new_long_term, new_title = await compact_session(
+        workspace_path, session_id, summary_model,
+        backend_name=backend_name,
+        _preloaded_data=data,
+    )
+    if not new_summary:
+        logger.error(
+            "Compaction produced empty summary for session %s",
+            session_id,
+        )
+        return
+    # Reject summaries that are suspiciously short compared to the existing
+    # one - a sign of a truncated or failed backend response.
+    min_len = max(100, len(existing_summary) // 2)
+    if len(new_summary) < min_len:
+        logger.error(
+            "Compaction summary too short (%d chars, min %d) "
+            "for session %s - keeping existing",
+            len(new_summary), min_len, session_id,
+        )
+        return
+    async with workspace_mod.get_lock(workspace_path):
+        session.set_summary(
+            workspace_path, session_id, new_summary,
+            keep_recent=KEEP_RECENT_AFTER_COMPACT,
+            long_term_rewrite=new_long_term,
+            title=new_title,
+            summarized_count=snapshot_count,
+        )
+        colony_count = colony.bump_compact_count(workspace_path)
+    lt_count = len(new_long_term) if new_long_term is not None else "?"
+    logger.info(
+        "Session %s compacted, summary %d chars, long_term %s items",
+        session_id, len(new_summary), lt_count,
+    )
+    colony.maybe_trigger(
+        workspace_path, colony_count, summary_model,
+        backend_name=backend_name,
+    )
 
 
 async def compact_session(

@@ -44,7 +44,9 @@ _DEFAULT_CONFIG = {
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
     "extra_models": {},
-    "max_permission": "full",
+    # Do not grant remote chat users the CLI sandbox/approval bypass unless
+    # an operator explicitly opts in via config.json.
+    "max_permission": "auto",
     "show_usage": True,
 }
 
@@ -56,6 +58,48 @@ def _load_config_object() -> dict:
     if not isinstance(cfg, dict):
         raise ValueError("config.json must contain a JSON object")
     return cfg
+
+
+def _config_dir() -> str:
+    """Return the actual parent of the configurable config path."""
+    return os.path.dirname(os.path.abspath(CONFIG_PATH)) or "."
+
+
+def _restrict_config_permissions(path: str, mode: int) -> None:
+    """Enforce owner-only POSIX permissions for token-bearing config state.
+
+    POSIX's normal umask commonly makes new files world-readable.  Config
+    holds bot and API tokens, so restrict both the directory and file on
+    creation and tighten pre-existing installations on their next startup.
+    Windows ACLs are not expressible through :func:`os.chmod`, so Windows
+    deployments retain their configured directory ACLs instead.
+    """
+    if os.name == "nt":
+        return
+    try:
+        os.chmod(path, mode)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not restrict token config permissions for {path}: {exc}",
+        ) from exc
+
+
+def _create_default_config() -> None:
+    """Create the initial config with owner-only file and directory modes."""
+    config_dir = _config_dir()
+    os.makedirs(config_dir, mode=0o700, exist_ok=True)
+    _restrict_config_permissions(config_dir, 0o700)
+
+    # ``open(..., "w")`` honors the process umask and usually creates 0644.
+    # os.open's explicit mode guarantees no group/other read bits on POSIX.
+    fd = os.open(
+        CONFIG_PATH,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(_DEFAULT_CONFIG, f, indent=2)
+    _restrict_config_permissions(CONFIG_PATH, 0o600)
 
 
 def _read_config_value(key: str):
@@ -234,17 +278,31 @@ def get_extra_models(backend_name: str) -> list[str]:
 
 def load_config() -> dict:
     if not os.path.exists(CONFIG_PATH):
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(_DEFAULT_CONFIG, f, indent=2)
-        print(f"Config file created at: {CONFIG_PATH}")
-        print(
-            "Fill in either 'telegram_bot_tokens' + 'user_ids'"
-            " or 'slack_bot_token' + 'slack_app_token' +"
-            " 'slack_channel_ids', or 'signal_group_urls' +"
-            " 'signal_jsonrpc_socket', then restart."
-        )
-        sys.exit(0)
+        try:
+            _create_default_config()
+        except FileExistsError:
+            # Another startup created it between the existence check and
+            # exclusive open; continue through normal validation below.
+            pass
+        except (OSError, RuntimeError) as exc:
+            print(f"ERROR: could not create a private config file: {exc}")
+            sys.exit(1)
+        else:
+            print(f"Config file created at: {CONFIG_PATH}")
+            print(
+                "Fill in either 'telegram_bot_tokens' + 'user_ids'"
+                " or 'slack_bot_token' + 'slack_app_token' +"
+                " 'slack_channel_ids', or 'signal_group_urls' +"
+                " 'signal_jsonrpc_socket', then restart."
+            )
+            sys.exit(0)
+
+    try:
+        _restrict_config_permissions(_config_dir(), 0o700)
+        _restrict_config_permissions(CONFIG_PATH, 0o600)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
 
     try:
         cfg = _load_config_object()

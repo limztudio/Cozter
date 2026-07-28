@@ -229,19 +229,21 @@ async def consolidate(
     list, and rewrites each session's ``long_term`` with the promoted
     items removed. Returns True on a successful apply.
     """
-    if workspace_path in _consolidate_in_flight:
+    workspace_key = workspace_mod.canonicalize_workspace_path(workspace_path)
+    if workspace_key in _consolidate_in_flight:
         logger.info(
             "Colony pass already in flight for %s, skipping",
             workspace_path,
         )
         return False
-    _consolidate_in_flight.add(workspace_path)
+    _consolidate_in_flight.add(workspace_key)
     try:
-        return await _consolidate_inner(
-            workspace_path, summary_model, backend_name=backend_name,
-        )
+        async with workspace_mod.get_memory_maintenance_lock(workspace_path):
+            return await _consolidate_inner(
+                workspace_path, summary_model, backend_name=backend_name,
+            )
     finally:
-        _consolidate_in_flight.discard(workspace_path)
+        _consolidate_in_flight.discard(workspace_key)
 
 
 async def _consolidate_inner(

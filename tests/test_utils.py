@@ -245,6 +245,29 @@ class JsonHelperTests(unittest.TestCase):
         )
 
 
+class TextChunkTests(unittest.TestCase):
+    def test_split_text_chunks_preserves_newlines_and_blank_lines(self) -> None:
+        text = "one\n\ntwo\nthree"
+
+        chunks = utils.split_text_chunks(text, 5)
+
+        self.assertEqual(chunks, ["one\n\n", "two\n", "three"])
+        self.assertEqual("".join(chunks), text)
+        self.assertTrue(all(len(chunk) <= 5 for chunk in chunks))
+
+    def test_split_text_chunks_hard_splits_without_newlines(self) -> None:
+        text = "abcdef"
+
+        chunks = utils.split_text_chunks(text, 2)
+
+        self.assertEqual(chunks, ["ab", "cd", "ef"])
+        self.assertEqual("".join(chunks), text)
+
+    def test_split_text_chunks_rejects_non_positive_limit(self) -> None:
+        with self.assertRaises(ValueError):
+            utils.split_text_chunks("text", 0)
+
+
 class PathBoundaryTests(unittest.TestCase):
     def test_is_path_within_rejects_sibling_and_symlink_escapes(self) -> None:
         with tempfile.TemporaryDirectory() as root_parent, \

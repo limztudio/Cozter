@@ -154,7 +154,7 @@ lives in `.config/config.example.json`):
   "message_queue_size": 50,
 
   "extra_models": {},
-  "max_permission": "full",
+  "max_permission": "auto",
   "show_usage": true
 }
 ```
@@ -209,12 +209,13 @@ automatically continue into another tool-enabled segment when Cozter's
 internal tool-call segment limit is reached, instead of stopping for a
 manual "continue".
 
-`max_permission` (default `full`) caps the highest `/permission` mode any
+`max_permission` (default `auto`) caps the highest `/permission` mode any
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <
 full`. `full` is the only mode that requests each CLI's explicit bypass flag
-(arbitrary code execution) for anyone on the `user_ids` allowlist. Set it to
-`auto` to prevent that bypass; provider-native sandbox and approval behavior
-still differs by CLI. `deny` exposes no tools to the HTTP and Copilot
+(arbitrary code execution) for anyone on the `user_ids` allowlist. Keep the
+default `auto` to prevent that bypass, or set it to `full` only when an
+operator explicitly accepts that risk; provider-native sandbox and approval
+behavior still differs by CLI. `deny` exposes no tools to the HTTP and Copilot
 backends; Codex and Claude Code use their strongest non-interactive
 read-only/plan modes, which may still inspect the workspace. `/permission`
 rejects a higher mode, and an already-stored higher value is clamped down.

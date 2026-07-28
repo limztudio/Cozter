@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import stat
 import tempfile
 import unittest
 import shutil
@@ -154,6 +155,25 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             finally:
                 workspace.WORKSPACE_STATE_PATH = old_path
 
+    def test_workspace_selection_canonicalizes_path_and_recents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "workspaces.json")
+            workspace_dir = os.path.join(tmp, "workspace")
+            os.mkdir(workspace_dir)
+            old_path = workspace.WORKSPACE_STATE_PATH
+            old_cwd = os.getcwd()
+            workspace.WORKSPACE_STATE_PATH = path
+            try:
+                os.chdir(tmp)
+                workspace.select_workspace("u1", "workspace", "bot")
+                workspace.select_workspace("u1", "workspace/.", "bot")
+                canonical = workspace.canonicalize_workspace_path(workspace_dir)
+                self.assertEqual(workspace.get_current("u1", "bot"), canonical)
+                self.assertEqual(workspace.get_recent("u1"), [canonical])
+            finally:
+                os.chdir(old_cwd)
+                workspace.WORKSPACE_STATE_PATH = old_path
+
     def test_iter_current_workspaces_ignores_malformed_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "workspaces.json")
@@ -216,9 +236,54 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 self.assertEqual(config.get_max_permission(), "auto")
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump({"max_permission": "nonsense"}, f)
-                self.assertEqual(config.get_max_permission(), "full")
+                self.assertEqual(config.get_max_permission(), "auto")
             finally:
                 config.CONFIG_PATH = old
+
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits are not Windows ACLs")
+    def test_new_config_is_created_owner_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = os.path.join(tmp, "config")
+            path = os.path.join(config_dir, "config.json")
+            old_path = config.CONFIG_PATH
+            config.CONFIG_PATH = path
+            try:
+                with (
+                    contextlib.redirect_stdout(io.StringIO()),
+                    self.assertRaises(SystemExit) as exited,
+                ):
+                    config.load_config()
+                self.assertEqual(exited.exception.code, 0)
+                self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+                self.assertEqual(
+                    stat.S_IMODE(os.stat(config_dir).st_mode), 0o700,
+                )
+            finally:
+                config.CONFIG_PATH = old_path
+
+    @unittest.skipIf(os.name == "nt", "POSIX mode bits are not Windows ACLs")
+    def test_existing_config_permissions_are_tightened(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = os.path.join(tmp, "config")
+            path = os.path.join(config_dir, "config.json")
+            os.makedirs(config_dir, mode=0o755)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "telegram_bot_tokens": ["token"],
+                    "user_ids": [1],
+                }, f)
+            os.chmod(config_dir, 0o755)
+            os.chmod(path, 0o644)
+            old_path = config.CONFIG_PATH
+            config.CONFIG_PATH = path
+            try:
+                config.load_config()
+                self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+                self.assertEqual(
+                    stat.S_IMODE(os.stat(config_dir).st_mode), 0o700,
+                )
+            finally:
+                config.CONFIG_PATH = old_path
 
     def test_permission_ceiling_clamps_and_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

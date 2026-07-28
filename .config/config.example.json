@@ -28,6 +28,6 @@
   "message_queue_size": 50,
 
   "extra_models": {},
-  "max_permission": "full",
+  "max_permission": "auto",
   "show_usage": true
 }

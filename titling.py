@@ -59,7 +59,9 @@ async def maybe_auto_title(
     overwrite a meaningful title with a freshly-generated one. The
     compaction path refreshes the title separately.
     """
-    key = (workspace_path, session_id)
+    key = (
+        workspace_mod.canonicalize_workspace_path(workspace_path), session_id,
+    )
     if key in _in_flight:
         return
     try:

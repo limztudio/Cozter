@@ -460,21 +460,31 @@ def parse_bullets(block: str | None) -> list[str]:
 
 
 def split_text_chunks(text: str, limit: int) -> list[str]:
-    """Split text into <=limit chunks, preferring newline boundaries."""
+    """Split text into <=limit chunks, preferring newline boundaries.
+
+    Concatenating the returned chunks always reconstructs *text* exactly.
+    When a newline is used as a boundary it stays at the end of the prior
+    chunk, rather than being silently discarded with any adjacent blank
+    lines.
+    """
     if limit < 1:
         raise ValueError("limit must be >= 1")
     if len(text) <= limit:
         return [text]
     chunks: list[str] = []
-    while text:
-        if len(text) <= limit:
-            chunks.append(text)
-            break
-        split_at = text.rfind("\n", 0, limit)
-        if split_at <= 0:
-            split_at = limit
-        chunks.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
+    start = 0
+    text_len = len(text)
+    while text_len - start > limit:
+        split_at = text.rfind("\n", start, start + limit)
+        if split_at >= 0:
+            # Keep the separator in the preceding chunk. This both preserves
+            # the original text and makes a leading newline a valid boundary.
+            end = split_at + 1
+        else:
+            end = start + limit
+        chunks.append(text[start:end])
+        start = end
+    chunks.append(text[start:])
     return chunks
 
 
