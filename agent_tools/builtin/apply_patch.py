@@ -18,6 +18,7 @@ from ..base import (
     ensure_parent_dir,
     object_parameters,
     resolve_inside_workspace,
+    write_text_after_edit,
 )
 
 
@@ -258,10 +259,7 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     out = "\n".join(applied)
     if had_nl:
         out += "\n"
-    if uses_crlf:
-        out = out.replace("\n", "\r\n")
-    with open(target, "w", encoding="utf-8", newline="") as f:
-        f.write(out)
+    write_text_after_edit(target, out, uses_crlf=uses_crlf)
     return f"{fp.new_path}: applied {len(fp.hunks)} hunk(s)"
 
 

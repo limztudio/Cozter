@@ -695,6 +695,15 @@ def _positive_int_setting(
     return val
 
 
+def _set_minimum_int_setting(
+    workspace_path: str, key: str, value: int, minimum: int = 1,
+) -> None:
+    """Persist *value* after enforcing a public setting's lower bound."""
+    if value < minimum:
+        raise ValueError(f"{key} must be >= {minimum}")
+    _set_setting(workspace_path, key, value)
+
+
 # Defaults for the two per-workspace turn-counter knobs. Owned here
 # because :mod:`colony` and :mod:`compaction` need workspace settings
 # at module import time; defining them up there too creates a cycle
@@ -712,9 +721,7 @@ def get_colony_interval(workspace_path: str) -> int:
 
 
 def set_colony_interval(workspace_path: str, interval: int) -> None:
-    if interval < 1:
-        raise ValueError("colony_interval must be >= 1")
-    _set_setting(workspace_path, "colony_interval", interval)
+    _set_minimum_int_setting(workspace_path, "colony_interval", interval)
 
 
 def get_compact_interval(workspace_path: str) -> int:
@@ -725,9 +732,7 @@ def get_compact_interval(workspace_path: str) -> int:
 
 
 def set_compact_interval(workspace_path: str, interval: int) -> None:
-    if interval < 1:
-        raise ValueError("compact_interval must be >= 1")
-    _set_setting(workspace_path, "compact_interval", interval)
+    _set_minimum_int_setting(workspace_path, "compact_interval", interval)
 
 
 # Character budget for the context block (colony + long-term memory +
@@ -748,9 +753,9 @@ def get_history_budget(workspace_path: str) -> int:
 
 
 def set_history_budget(workspace_path: str, budget: int) -> None:
-    if budget < MIN_HISTORY_BUDGET:
-        raise ValueError(f"history_budget must be >= {MIN_HISTORY_BUDGET}")
-    _set_setting(workspace_path, "history_budget", budget)
+    _set_minimum_int_setting(
+        workspace_path, "history_budget", budget, MIN_HISTORY_BUDGET,
+    )
 
 
 # ---------------------------------------------------------------------------

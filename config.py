@@ -188,11 +188,12 @@ def get_show_usage() -> bool:
 def get_max_permission() -> str:
     """Highest permission any workspace may use - an operator-wide cap.
 
-    Defaults to ``"full"`` (no cap). Set it to e.g. ``"auto"`` to forbid
-    the sandbox-bypassing ``full`` mode across every workspace, or
-    ``"deny"`` for a read-only bot. Invalid values fall back to the
-    default. Enforced in :mod:`workspace` (clamps the effective permission
-    and rejects setting a higher one via ``/permission``).
+    Defaults to ``"auto"``, which forbids the sandbox-bypassing ``"full"``
+    mode across every workspace. An operator must explicitly set ``"full"``
+    to allow that bypass, or can use ``"deny"`` for a read-only bot. Invalid
+    values fall back to the default. Enforced in :mod:`workspace` (clamps the
+    effective permission and rejects setting a higher one via
+    ``/permission``).
     """
     val = _read_config_value("max_permission")
     if isinstance(val, str) and val in ("full", "auto", "confirm", "deny"):

@@ -34,6 +34,14 @@ class _MarkdownRejectingClient(_Client):
             )
         return await super().chat_postMessage(**kwargs)
 
+    async def chat_update(self, **kwargs):
+        if "blocks" in kwargs:
+            raise SlackApiError(
+                "Markdown blocks are unavailable",
+                {"ok": False, "error": "invalid_blocks"},
+            )
+        await super().chat_update(**kwargs)
+
 
 class SlackFormattingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
@@ -88,6 +96,18 @@ class SlackFormattingTests(unittest.IsolatedAsyncioTestCase):
             "ts": "10.0",
             "text": markdown,
             "blocks": [{"type": "markdown", "text": markdown}],
+        }])
+
+    async def test_rich_edit_falls_back_when_markdown_blocks_are_rejected(self):
+        self.client = _MarkdownRejectingClient()
+        self.bot.app = SimpleNamespace(client=self.client)
+
+        await self.bot.edit_text(
+            MessageHandle("C1", "10.0"), "# Working", rich=True,
+        )
+
+        self.assertEqual(self.client.updates, [{
+            "channel": "C1", "ts": "10.0", "text": "*Working*",
         }])
 
     def test_long_markdown_is_split_with_fences_balanced(self) -> None:

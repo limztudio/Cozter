@@ -387,10 +387,14 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 workspace.get_history_budget(tmp),
                 workspace.DEFAULT_HISTORY_BUDGET,
             )
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError) as raised:
                 workspace.set_history_budget(
                     tmp, workspace.MIN_HISTORY_BUDGET - 1,
                 )
+            self.assertEqual(
+                str(raised.exception),
+                f"history_budget must be >= {workspace.MIN_HISTORY_BUDGET}",
+            )
             workspace.set_history_budget(tmp, 8_000)
             self.assertEqual(workspace.get_history_budget(tmp), 8_000)
             # A malformed stored value falls back to the default.
@@ -404,6 +408,33 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 workspace.get_history_budget(tmp),
                 workspace.DEFAULT_HISTORY_BUDGET,
             )
+
+    def test_interval_setters_enforce_positive_floors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cases = [
+                (
+                    workspace.set_colony_interval,
+                    workspace.get_colony_interval,
+                    workspace.DEFAULT_COLONY_INTERVAL,
+                    "colony_interval",
+                ),
+                (
+                    workspace.set_compact_interval,
+                    workspace.get_compact_interval,
+                    workspace.DEFAULT_COMPACT_INTERVAL,
+                    "compact_interval",
+                ),
+            ]
+            for setter, getter, default, key in cases:
+                with self.subTest(key=key):
+                    self.assertEqual(getter(tmp), default)
+                    with self.assertRaises(ValueError) as raised:
+                        setter(tmp, 0)
+                    self.assertEqual(
+                        str(raised.exception), f"{key} must be >= 1",
+                    )
+                    setter(tmp, 7)
+                    self.assertEqual(getter(tmp), 7)
 
     def test_available_models_appends_extras_without_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -625,6 +625,21 @@ class ApplyPatchToolTests(unittest.TestCase):
             with open(p, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "line1\nline2-changed\nline3\n")
 
+    def test_modify_preserves_crlf_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "windows.txt")
+            with open(p, "wb") as f:
+                f.write(b"line1\r\nline2\r\n")
+
+            out = self._run(tmp, (
+                "--- a/windows.txt\n+++ b/windows.txt\n"
+                "@@ -1,2 +1,2 @@\n line1\n-line2\n+changed\n"
+            ))
+
+            self.assertIn("applied", out)
+            with open(p, "rb") as f:
+                self.assertEqual(f.read(), b"line1\r\nchanged\r\n")
+
     def test_create(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = self._run(tmp, (

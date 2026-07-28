@@ -192,13 +192,13 @@ def _markdown_block_rejected(error: SlackApiError) -> bool:
     return code in {"invalid_arguments", "invalid_blocks"}
 
 
-async def _post_rich_markdown(client, chat_id: str, markdown: str) -> dict:
-    """Post one native-Markdown payload, falling back to legacy mrkdwn."""
+async def _call_rich_markdown(method, markdown: str, **kwargs):
+    """Call a Slack message method with native Markdown and mrkdwn fallback."""
     try:
-        return await client.chat_postMessage(
-            channel=chat_id,
+        return await method(
             text=markdown,
             blocks=[{"type": "markdown", "text": markdown}],
+            **kwargs,
         )
     except SlackApiError as error:
         if not _markdown_block_rejected(error):
@@ -207,34 +207,29 @@ async def _post_rich_markdown(client, chat_id: str, markdown: str) -> dict:
             "Slack Markdown blocks unavailable; falling back to mrkdwn: %s",
             error,
         )
-        return await client.chat_postMessage(
-            channel=chat_id, text=_md_to_mrkdwn(markdown),
+        return await method(
+            text=_md_to_mrkdwn(markdown),
+            **kwargs,
         )
+
+
+async def _post_rich_markdown(client, chat_id: str, markdown: str) -> dict:
+    """Post one native-Markdown payload, falling back to legacy mrkdwn."""
+    return await _call_rich_markdown(
+        client.chat_postMessage, markdown, channel=chat_id,
+    )
 
 
 async def _update_rich_markdown(
     client, handle: MessageHandle, markdown: str,
 ) -> None:
     """Update a short rich message, with legacy mrkdwn fallback."""
-    try:
-        await client.chat_update(
-            channel=handle.chat_id,
-            ts=handle.message_id,
-            text=markdown,
-            blocks=[{"type": "markdown", "text": markdown}],
-        )
-    except SlackApiError as error:
-        if not _markdown_block_rejected(error):
-            raise
-        logger.warning(
-            "Slack Markdown blocks unavailable; falling back to mrkdwn: %s",
-            error,
-        )
-        await client.chat_update(
-            channel=handle.chat_id,
-            ts=handle.message_id,
-            text=_md_to_mrkdwn(markdown),
-        )
+    await _call_rich_markdown(
+        client.chat_update,
+        markdown,
+        channel=handle.chat_id,
+        ts=handle.message_id,
+    )
 
 
 # ---------------------------------------------------------------------------
