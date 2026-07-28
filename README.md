@@ -164,6 +164,12 @@ Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
 `slack_channel_ids`, or `signal_group_urls` + `signal_jsonrpc_socket`.
 The CLI surface needs neither.
 
+On POSIX hosts, daemon startup tightens the token-bearing `.config/`
+directory to owner-only access (`0700`) and `config.json` to `0600`. If that
+cannot be done, Cozter stops instead of leaving credentials exposed. Windows
+keeps the existing directory ACLs because those permissions are not managed by
+`chmod`.
+
 `recent_workspace_limit` controls how many paths `/open` shows.
 `message_queue_size` caps each user's pending chat turns.
 
@@ -277,6 +283,11 @@ runs commands in it, and stores per-workspace state under
 Workspaces are recorded globally in `Cozter/.config/workspaces.json`
 (per-user current pick + the recent-workspaces list). Daemon-platform turn
 queues live beside it as `queue_<platform>.json`.
+
+When a workspace is selected, Cozter canonicalizes its path. Opening the
+same directory through `.`, `..`, a trailing slash, or a symlink therefore
+uses the same sessions, settings, recent-workspace entry, and per-workspace
+turn locks rather than creating parallel state for path aliases.
 
 The global runtime files are deliberately small JSON documents:
 
@@ -541,11 +552,13 @@ authenticated ACP model selector and fails closed to `auto` if that catalog
 cannot be read. This keeps enterprise-disabled Copilot models out of the
 picker; a stored Copilot choice also uses `auto` until it appears in a fresh
 catalog. Claude Code has no safe non-interactive account catalog, so it keeps
-a curated list that `extra_models` can extend. Its picker includes the current
-Opus 5 pin and only the pinned `[1m]` variants the CLI supports; Claude's
-`/fast` is a session toggle rather than a selectable `*-fast` model ID. Llama
-and Z.ai discover models live from their configured HTTP endpoints. `llama`
-and `zai` share one in-process OpenAI-compatible agent loop
+a curated list that `extra_models` can extend. Its picker offers standard
+aliases, the supported `sonnet[1m]`, `opus[1m]`, and `opusplan[1m]` aliases,
+and verified version pins (including Opus 5). `fable[1m]` and Fable 5/Sonnet
+5 `[1m]` pins are deliberately absent because the CLI does not accept them;
+Claude's `/fast` is a session toggle rather than a selectable `*-fast` model
+ID. Llama and Z.ai discover models live from their configured HTTP endpoints.
+`llama` and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
 and points at Z.ai's endpoint.
 
