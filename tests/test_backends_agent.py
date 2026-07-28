@@ -751,7 +751,6 @@ class BackendModelTests(unittest.TestCase):
         for model in (
             "sonnet",
             "opusplan[1m]",
-            "fable[1m]",
             "claude-fable-5",
             "claude-sonnet-5",
             "claude-opus-5",
@@ -789,7 +788,9 @@ class BackendModelTests(unittest.TestCase):
             "claude-opus-4-6-fast",
             "claude-opus-4-7-fast",
             "claude-opus-4-8-fast",
-            # Their pinned model entries do not support a [1m] suffix.
+            # These aliases or pinned model entries do not support a [1m]
+            # suffix.
+            "fable[1m]",
             "claude-sonnet-5[1m]",
             "claude-fable-5[1m]",
         ):

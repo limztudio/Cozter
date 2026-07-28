@@ -310,7 +310,6 @@ class ClaudeCodeBackend(Backend):
         "opusplan",
         "sonnet[1m]",
         "opus[1m]",
-        "fable[1m]",
         "opusplan[1m]",
         "claude-fable-5",
         "claude-sonnet-5",
