@@ -26,8 +26,9 @@ import sys
 
 from .base import (
     AgentResult, Backend, ChatEvent, DetachedTaskStatus,
-    append_detached_task, append_text_result, create_prompt_subprocess,
-    executable_command, set_error_result, truncate_status_text,
+    append_detached_task, append_text_result, create_captured_subprocess,
+    create_prompt_subprocess, executable_command, record_error_event,
+    set_error_result, truncate_status_text,
 )
 from ..utils import is_path_within
 
@@ -250,13 +251,7 @@ async def _run_claude_command(
     cmd: list[str], *, cwd: str,
 ) -> tuple[int, str, str]:
     """Run a short Claude control command without owning its worker tree."""
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=cwd,
-    )
+    proc = await create_captured_subprocess(cmd, cwd=cwd)
     try:
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(), timeout=_DETACHED_COMMAND_TIMEOUT_SEC,
@@ -274,6 +269,7 @@ async def _run_claude_command(
 class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
+    permission_args = staticmethod(_permission_args)
     supports_detached_tasks = True
     # Claude Code has no safe non-interactive catalog command.  In
     # particular, a managed Bedrock/Vertex/Foundry login cannot be enumerated
@@ -385,16 +381,7 @@ class ClaudeCodeBackend(Backend):
             # untracked ordinary background job behind.
             "--settings", _background_guard_settings(),
         ]
-        self.append_model_effort_args(
-            cmd,
-            model,
-            effort,
-            effort_levels=self.effort_levels_for_model(model),
-        )
-
-        # ``compaction`` must not override the requested approval. Internal
-        # callers use ``deny`` so transcript content cannot gain privileges.
-        cmd += _permission_args(approval)
+        self.append_launch_options(cmd, model, effort, approval)
 
         return await create_prompt_subprocess(cmd, prompt, cwd=workspace_path)
 
@@ -418,14 +405,7 @@ class ClaudeCodeBackend(Backend):
             "--bg",
             "--settings", _background_guard_settings(),
         ]
-        self.append_model_effort_args(
-            cmd,
-            model,
-            effort,
-            effort_levels=self.effort_levels_for_model(model),
-        )
-
-        cmd += _permission_args(approval)
+        self.append_launch_options(cmd, model, effort, approval)
         # ``--bg`` takes a positional prompt, not ``--print``/stdin.
         cmd.append(prompt)
 
@@ -606,9 +586,7 @@ class ClaudeCodeBackend(Backend):
         if etype == "system":
             return
 
-        if etype == "error":
-            msg = event.get("message") or "Unknown error"
-            set_error_result(result, msg)
+        if record_error_event(event, result):
             return
 
         logger.debug(

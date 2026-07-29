@@ -44,6 +44,22 @@ class _StreamingBackend:
 
 
 class AgentProcessCleanupTests(unittest.TestCase):
+    def test_captured_subprocess_closes_stdin_and_captures_output(self) -> None:
+        async def run() -> None:
+            script = (
+                "import sys\n"
+                "print('stdin-closed=' + str(sys.stdin.read() == ''))\n"
+                "print('stderr-output', file=sys.stderr)\n"
+            )
+            proc = await backend_base.create_captured_subprocess(
+                [sys.executable, "-c", script],
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+            self.assertEqual(stdout.decode(), "stdin-closed=True\n")
+            self.assertEqual(stderr.decode(), "stderr-output\n")
+
+        asyncio.run(run())
+
     def test_backend_launch_failure_becomes_a_user_facing_result(self) -> None:
         class BrokenBackend:
             name = "broken"

@@ -128,6 +128,7 @@ def _stderr_preview(value: str | bytes | None) -> str:
 class CodexBackend(Backend):
     name = "codex"
     executable = "codex"
+    permission_args = staticmethod(_permission_args)
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.6-luna"
     tier_models = {
@@ -280,21 +281,17 @@ class CodexBackend(Backend):
     ) -> asyncio.subprocess.Process:
         prefix = executable_command(self.executable)
         cmd = [*prefix, "exec", "--ephemeral", "--json", "-C", workspace_path]
-        self.append_model_effort_args(
+        self.append_launch_options(
             cmd,
             model,
             effort,
+            approval,
             model_flag="-m",
             effort_flag="-c",
             # Codex CLI exposes reasoning effort via the generic config
             # override flag. Unknown levels are rejected by the CLI.
             effort_template="model_reasoning_effort={effort}",
-            effort_levels=self.effort_levels_for_model(model),
         )
-
-        # ``compaction`` identifies an internal text task; it must never
-        # widen permissions.  Internal callers pass approval="deny".
-        cmd += _permission_args(approval)
         cmd.append("-")  # read prompt from stdin
 
         return await create_prompt_subprocess(cmd, prompt)

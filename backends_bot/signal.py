@@ -649,10 +649,10 @@ class SignalBot(BotPlatform):
                 f.write(base64.b64decode(payload))
 
         return AttachmentInfo(
-            local_path=local_path,
-            filename=filename,
-            kind=attachment_kind_from_mime(att.get("contentType")),
-            caption=caption,
+            local_path,
+            filename,
+            attachment_kind_from_mime(att.get("contentType")),
+            caption,
         )
 
     def _ctx(

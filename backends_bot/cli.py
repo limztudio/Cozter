@@ -61,7 +61,7 @@ class CliBot(BotPlatform):
         # sessions. Prefixed to keep it disjoint from Slack/Telegram ids.
         return f"cli:{_LOCAL_ID}"
 
-    def authorized(self, user_id: str, chat_id: str) -> bool:
+    def authorized(self, user_id: str, _chat_id: str) -> bool:
         # Anyone running this binary already has shell access; authorize
         # the lone local user unconditionally.
         return True

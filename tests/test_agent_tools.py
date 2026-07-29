@@ -12,6 +12,7 @@ from Cozter.agent_tools.base import (
     _path_matches_glob,
     apply_string_replacement,
     coerce_int_arg,
+    path_property,
     read_bounded_text,
     replacement_properties,
     validate_replacement_strings,
@@ -73,6 +74,14 @@ class AgentToolHelperTests(unittest.TestCase):
             first["replace_all"]["description"],
             second["replace_all"]["description"],
         )
+
+    def test_path_schema_properties_are_fresh_and_described(self) -> None:
+        first = path_property("A workspace path.")
+        second = path_property("A workspace path.")
+
+        self.assertEqual(first, {"type": "string", "description": "A workspace path."})
+        first["description"] = "changed"
+        self.assertEqual(second["description"], "A workspace path.")
 
     def test_read_bounded_text_accumulates_partial_reads(self) -> None:
         class ChunkedContent:

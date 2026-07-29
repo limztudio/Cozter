@@ -32,7 +32,8 @@ from .. import agent_tools as tools
 from ..utils import iter_bounded_lines
 from ._http_proc import HttpAgentProcess, http_error_translator
 from .base import (
-    AgentResult, Backend, ChatEvent, append_text_result, set_error_result,
+    AgentResult, Backend, ChatEvent, append_text_result, fresh_model_catalog,
+    record_error_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ class OpenAIChatBackend(Backend):
     def _effort_fields(
         self,
         percent: int,
-        model: str | None = None,
+        _model: str | None = None,
     ) -> dict[str, Any]:
         """Provider-specific request fields for a reasoning-effort override.
 
@@ -402,9 +403,7 @@ class OpenAIChatBackend(Backend):
             # duplicate noise.
             return
 
-        if etype == "error":
-            msg = event.get("message") or "Unknown error"
-            set_error_result(result, msg)
+        if record_error_event(event, result):
             return
 
         logger.debug("%s: unhandled event %r", self.name, event)
@@ -434,24 +433,24 @@ class CachedOpenAIChatBackend(OpenAIChatBackend):
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
-        now = time.monotonic()
-        if (
-            self._cached_models is not None
-            and now < self._catalog_expires_at
-        ):
-            return self._cached_models
+        cached = fresh_model_catalog(
+            self._cached_models, self._catalog_expires_at,
+        )
+        if cached is not None:
+            return cached
 
         with self._models_lock:
-            now = time.monotonic()
-            if (
-                self._cached_models is None
-                or now >= self._catalog_expires_at
-            ):
-                self._cached_models = self._fetch_models()
-                self._catalog_expires_at = (
-                    time.monotonic() + self._model_catalog_ttl_sec
-                )
-        return self._cached_models
+            cached = fresh_model_catalog(
+                self._cached_models, self._catalog_expires_at,
+            )
+            if cached is not None:
+                return cached
+            models = self._fetch_models()
+            self._cached_models = models
+            self._catalog_expires_at = (
+                time.monotonic() + self._model_catalog_ttl_sec
+            )
+            return models
 
     def _fetch_models(self) -> tuple[str, ...]:
         """Return this provider's current model catalog."""

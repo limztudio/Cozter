@@ -14,7 +14,12 @@ from Cozter import config
 from Cozter.backends_agent import claude_code as claude_code_mod
 from Cozter.backends_agent import codex as codex_mod
 from Cozter.backends_agent import copilot as copilot_mod
-from Cozter.backends_agent.base import Backend
+from Cozter.backends_agent.base import (
+    AgentResult,
+    Backend,
+    fresh_model_catalog,
+    record_error_event,
+)
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
@@ -36,6 +41,21 @@ class _DummyBackend(Backend):
 
     def extract_agent_text(self, event):
         return None
+
+
+class BackendSharedHelperTests(unittest.TestCase):
+    def test_fresh_model_catalog_honors_expiry(self) -> None:
+        models = ("model-a",)
+        self.assertEqual(fresh_model_catalog(models, 20.0, now=19.9), models)
+        self.assertIsNone(fresh_model_catalog(models, 20.0, now=20.0))
+        self.assertIsNone(fresh_model_catalog(None, 100.0, now=0.0))
+
+    def test_record_error_event_normalizes_bad_messages(self) -> None:
+        result = AgentResult()
+        self.assertFalse(record_error_event({"type": "assistant_text"}, result))
+        self.assertTrue(record_error_event({"type": "error", "message": 7}, result))
+        self.assertEqual(result.error, "Unknown error")
+        self.assertEqual(result.text, "Error: Unknown error")
 
 
 class BackendPermissionCommandTests(unittest.TestCase):
@@ -114,8 +134,8 @@ class BackendPermissionCommandTests(unittest.TestCase):
                         return_value=isolated_home,
                     ),
                     mock.patch.object(
-                        copilot_mod.asyncio,
-                        "create_subprocess_exec",
+                        copilot_mod,
+                        "create_captured_subprocess",
                         new=mock.AsyncMock(return_value=proc),
                     ) as create_process,
                 ):
@@ -123,7 +143,7 @@ class BackendPermissionCommandTests(unittest.TestCase):
                         "/work", "summarize", None, approval,
                         compaction=compaction,
                     )
-                command = tuple(create_process.await_args.args)
+                command = tuple(create_process.await_args.args[0])
                 await backend.cleanup_process(proc)
                 return command
 
@@ -710,8 +730,8 @@ class BackendModelTests(unittest.TestCase):
                         return_value=isolated_home,
                     ),
                     mock.patch.object(
-                        copilot_mod.asyncio,
-                        "create_subprocess_exec",
+                        copilot_mod,
+                        "create_captured_subprocess",
                         new_callable=mock.AsyncMock,
                         return_value=proc,
                     ) as create_process,
@@ -729,7 +749,7 @@ class BackendModelTests(unittest.TestCase):
                 )
                 await backend.cleanup_process(proc)
                 self.assertFalse(os.path.exists(isolated_home))
-                return create_process.await_args.args
+                return tuple(create_process.await_args.args[0])
 
         auto_command = asyncio.run(launch("auto"))
         self.assertIn("--model", auto_command)

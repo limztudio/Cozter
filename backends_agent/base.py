@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import sys
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
@@ -43,6 +44,25 @@ def effort_band(percent: int, levels: tuple[str, ...]) -> str | None:
         return None
     idx = min(percent * len(levels) // 100, len(levels) - 1)
     return levels[idx]
+
+
+def fresh_model_catalog(
+    models: tuple[str, ...] | None,
+    expires_at: float,
+    *,
+    now: float | None = None,
+) -> tuple[str, ...] | None:
+    """Return a live model catalog, or ``None`` after its TTL expires.
+
+    Backend adapters keep their own refresh and fallback policies, but both
+    HTTP and CLI catalog probes need the same fail-closed fast-path: an
+    expired catalog must not be treated as current just because it still
+    happens to be held in memory.
+    """
+    current = time.monotonic() if now is None else now
+    if models is not None and current < expires_at:
+        return models
+    return None
 
 
 @dataclass
@@ -158,6 +178,24 @@ def set_error_result(
     append_text_result(result, display_text or f"Error: {message}")
 
 
+def record_error_event(event: dict, result: AgentResult) -> bool:
+    """Record a simple ``{\"type\": \"error\"}`` event if present.
+
+    Several streaming adapters emit this common event shape. Keeping its
+    normalization here ensures a malformed or blank message still produces a
+    useful user-facing failure instead of leaking a non-string value into the
+    result state. Returns whether *event* was handled.
+    """
+    if event.get("type") != "error":
+        return False
+    message = event.get("message")
+    set_error_result(
+        result,
+        message if isinstance(message, str) and message else "Unknown error",
+    )
+    return True
+
+
 def truncate_status_text(text: object, *, limit: int = 200) -> str:
     """Return a clipped preview for status events."""
     value = text if isinstance(text, str) else str(text)
@@ -177,11 +215,9 @@ async def create_prompt_subprocess(
     broken-pipe error; reap the child here, where it is still in scope, so a
     failed prompt delivery cannot leak a subprocess.
     """
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
+    proc = await _create_piped_subprocess(
+        cmd,
         stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
         # On POSIX, a new session lets /stop or /inject kill the whole process
         # group. Windows uses taskkill /T in utils.terminate_process_group.
@@ -211,6 +247,48 @@ async def create_prompt_subprocess(
             "startup error and configuration"
         ) from exc
     return proc
+
+
+async def create_captured_subprocess(
+    cmd: list[str],
+    *,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    start_new_session: bool = False,
+) -> asyncio.subprocess.Process:
+    """Spawn a short control command with closed stdin and captured output.
+
+    Claude detached-task controls and Copilot prompt runs both need this
+    process shape. The caller remains responsible for communication,
+    timeouts, and cleanup appropriate to its backend.
+    """
+    return await _create_piped_subprocess(
+        cmd,
+        stdin=asyncio.subprocess.DEVNULL,
+        cwd=cwd,
+        env=env,
+        start_new_session=start_new_session,
+    )
+
+
+async def _create_piped_subprocess(
+    cmd: list[str],
+    *,
+    stdin: int,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    start_new_session: bool = False,
+) -> asyncio.subprocess.Process:
+    """Spawn a process whose stdout and stderr are always captured."""
+    return await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=stdin,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=cwd,
+        env=env,
+        start_new_session=start_new_session,
+    )
 
 
 async def _reap_failed_prompt_subprocess(
@@ -319,7 +397,7 @@ class Backend(ABC):
         """
 
     async def cleanup_process(
-        self, proc: asyncio.subprocess.Process,
+        self, _proc: asyncio.subprocess.Process,
     ) -> None:
         """Release backend-specific resources after *proc* has stopped.
 
@@ -398,6 +476,19 @@ class Backend(ABC):
         """
         return effort_band(percent, self.effort_levels)
 
+    def effort_levels_for_model(
+        self, _model: str | None,
+    ) -> tuple[str, ...]:
+        """Return the reasoning-effort vocabulary for a selected model."""
+        return self.effort_levels
+
+    @staticmethod
+    def permission_args(approval: str) -> list[str]:
+        """Return backend-specific CLI flags for a permission mode."""
+        raise NotImplementedError(
+            "this backend does not launch a permission-aware CLI",
+        )
+
     def append_model_effort_args(
         self,
         cmd: list[str],
@@ -422,6 +513,34 @@ class Backend(ABC):
                 effort_flag,
                 effort_template.format(effort=native_effort),
             ]
+
+    def append_launch_options(
+        self,
+        cmd: list[str],
+        model: str | None,
+        effort: int,
+        approval: str,
+        *,
+        model_flag: str = "--model",
+        effort_flag: str = "--effort",
+        effort_template: str = "{effort}",
+    ) -> None:
+        """Append model, reasoning, and backend permission CLI options.
+
+        Every CLI backend must put these options before its prompt argument;
+        keeping that shared ordering in one place avoids provider adapters
+        drifting on the security-sensitive permission flag.
+        """
+        self.append_model_effort_args(
+            cmd,
+            model,
+            effort,
+            model_flag=model_flag,
+            effort_flag=effort_flag,
+            effort_template=effort_template,
+            effort_levels=self.effort_levels_for_model(model),
+        )
+        cmd.extend(self.permission_args(approval))
 
     @abstractmethod
     def parse_event(self, event: dict, result: AgentResult) -> None:

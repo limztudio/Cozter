@@ -6,7 +6,13 @@ import asyncio
 import os
 from typing import Any, ClassVar
 
-from ..base import AgentTool, resolve_inside_workspace, summarize_path
+from ..base import (
+    AgentTool,
+    object_parameters,
+    path_property,
+    resolve_inside_workspace,
+    summarize_path,
+)
 
 
 # ``execute_tool`` limits the result sent back to the model, but applying
@@ -36,16 +42,12 @@ class ReadFileTool(AgentTool):
         " call). Pass *offset* and *limit* to read only a line range,"
         " which is useful for large files."
     )
-    parameters: ClassVar[dict[str, Any]] = {
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": (
-                    "Path relative to the workspace root, or an absolute"
-                    " path inside the workspace."
-                ),
-            },
+    parameters: ClassVar[dict[str, Any]] = object_parameters(
+        {
+            "path": path_property(
+                "Path relative to the workspace root, or an absolute path"
+                " inside the workspace.",
+            ),
             "offset": {
                 "type": "integer",
                 "description": "0-based line index to start at. Default 0.",
@@ -58,8 +60,8 @@ class ReadFileTool(AgentTool):
                 ),
             },
         },
-        "required": ["path"],
-    }
+        ["path"],
+    )
 
     async def run(self, workspace_path: str, args: dict) -> str:
         target = resolve_inside_workspace(workspace_path, args.get("path", ""))

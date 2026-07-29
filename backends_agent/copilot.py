@@ -37,7 +37,8 @@ import threading
 import time
 
 from .base import (
-    AgentResult, Backend, ChatEvent, append_text_result, executable_command,
+    AgentResult, Backend, ChatEvent, append_text_result,
+    create_captured_subprocess, executable_command, fresh_model_catalog,
     set_error_result, truncate_status_text,
 )
 from ..utils import terminate_windows_process_tree
@@ -131,6 +132,7 @@ def _remove_isolated_copilot_home(home: str) -> None:
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
+    permission_args = staticmethod(_permission_args)
     # ``auto`` is policy-aware: Copilot chooses from models allowed for the
     # signed-in account. It is also the only safe default before ACP has
     # returned an account-specific catalog.
@@ -184,23 +186,21 @@ class CopilotBackend(Backend):
         because it can advertise models this account cannot select. If ACP
         cannot produce a structured selector, return only ``auto``.
         """
-        now = time.monotonic()
-        if (
-            self._cached_models is not None
-            and now < self._catalog_expires_at
-        ):
-            return self._cached_models
-        if now < self._fallback_expires_at:
+        cached = fresh_model_catalog(
+            self._cached_models, self._catalog_expires_at,
+        )
+        if cached is not None:
+            return cached
+        if time.monotonic() < self._fallback_expires_at:
             return _FALLBACK_MODELS
 
         with self._models_lock:
-            now = time.monotonic()
-            if (
-                self._cached_models is not None
-                and now < self._catalog_expires_at
-            ):
-                return self._cached_models
-            if now < self._fallback_expires_at:
+            cached = fresh_model_catalog(
+                self._cached_models, self._catalog_expires_at,
+            )
+            if cached is not None:
+                return cached
+            if time.monotonic() < self._fallback_expires_at:
                 return _FALLBACK_MODELS
 
             # An expired catalog must not keep displaying names that a newly
@@ -388,27 +388,15 @@ class CopilotBackend(Backend):
             # Copilot setting export this private subprocess session remotely.
             "--no-remote-export",
         ]
-        self.append_model_effort_args(
-            cmd,
-            model,
-            effort,
-            effort_levels=self.effort_levels_for_model(model),
-        )
-
-        # ``compaction`` never grants broader access.  Internal calls use
-        # ``deny``, which supplies an explicit empty tool allowlist.
-        cmd += _permission_args(approval)
+        self.append_launch_options(cmd, model, effort, approval)
 
         cmd += ["-p", prompt]
         isolated_home = _create_isolated_copilot_home()
         env = os.environ.copy()
         env["COPILOT_HOME"] = isolated_home
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            proc = await create_captured_subprocess(
+                cmd,
                 cwd=workspace_path,
                 env=env,
                 # On POSIX, an own process group lets /stop or /inject kill

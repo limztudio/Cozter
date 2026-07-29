@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 from ..base import (
     AgentTool,
     coerce_int_arg,
+    path_property,
     resolve_inside_workspace,
     summarize_path,
 )
@@ -22,13 +23,9 @@ class ListDirTool(AgentTool):
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
-            "path": {
-                "type": "string",
-                "description": (
-                    "Directory path. Defaults to the workspace root if"
-                    " omitted."
-                ),
-            },
+            "path": path_property(
+                "Directory path. Defaults to the workspace root if omitted.",
+            ),
             "max_results": {
                 "type": "integer",
                 "description": (

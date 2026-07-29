@@ -424,7 +424,7 @@ class BotPlatform(ABC):
 
     # ----- event dispatch hooks (called by platform adapters) -------------
 
-    def authorized(self, user_id: str, chat_id: str) -> bool:
+    def authorized(self, user_id: str, _chat_id: str) -> bool:
         """Return True if an event from *(user_id, chat_id)* is allowed.
 
         Default scopes by user_id (Telegram semantics). Platforms that

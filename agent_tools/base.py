@@ -255,10 +255,18 @@ def path_parameters() -> dict[str, Any]:
     """Return the common schema for tools that operate on one path."""
     return object_parameters(
         {
-            "path": {"type": "string"},
+            "path": path_property(),
         },
         ["path"],
     )
+
+
+def path_property(description: str | None = None) -> dict[str, Any]:
+    """Return a fresh JSON-Schema property for one workspace path."""
+    schema: dict[str, Any] = {"type": "string"}
+    if description:
+        schema["description"] = description
+    return schema
 
 
 def replacement_properties() -> dict[str, Any]:

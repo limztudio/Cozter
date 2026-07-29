@@ -360,12 +360,7 @@ class TelegramBot(BotPlatform):
 
         ctx = self._build_context(
             update, text="",
-            attachment=AttachmentInfo(
-                local_path=local_path,
-                filename=filename,
-                kind=kind,
-                caption=caption,
-            ),
+            attachment=AttachmentInfo(local_path, filename, kind, caption),
         )
         if ctx is None:
             return

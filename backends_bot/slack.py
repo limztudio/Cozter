@@ -517,12 +517,7 @@ class SlackBot(BotPlatform):
 
             await self.dispatch_file(self._ctx(
                 uid, channel,
-                attachment=AttachmentInfo(
-                    local_path=local_path,
-                    filename=filename,
-                    kind=kind,
-                    caption=caption,
-                ),
+                attachment=AttachmentInfo(local_path, filename, kind, caption),
             ))
 
 
