@@ -292,10 +292,12 @@ class ClaudeCodeBackend(Backend):
     #   - A dated snapshot exists only where the API publishes one (Opus 4.5,
     #     Sonnet 4.5, Haiku 4.5). From Opus/Sonnet 4.6 on, the ID is undated
     #     and inventing a date suffix 404s.
-    #   - ``[1m]`` is only valid on models whose registry entry sets
-    #     supports_1m_suffix. Fable 5, Sonnet 5, and Mythos 5 take no pinned
-    #     suffix; Opus 4.6 through Opus 5 set the flag, so their explicit
-    #     ``[1m]`` variants are real and stay in the picker.
+    #   - ``[1m]`` is only valid on aliases/models whose registry exposes a
+    #     long-context variant. The current picker exposes Fable 5 and Sonnet
+    #     5 through the ``fable[1m]`` and ``sonnet[1m]`` aliases; explicit
+    #     Opus 4.6 through Opus 5 pins also support the suffix. Keep full
+    #     Fable/Sonnet suffixes out of this curated picker unless the CLI
+    #     exposes them as picker entries.
     #   - Fast mode is a session toggle (``/fast``) on Opus 5/4.8/4.7, not a
     #     model ID. The ``claude-opus-4-*-fast`` strings are retired API IDs:
     #     4.6-fast silently degrades to standard Opus 4.6, and 4.7-fast errors
@@ -308,6 +310,7 @@ class ClaudeCodeBackend(Backend):
         "haiku",
         "best",
         "opusplan",
+        "fable[1m]",
         "sonnet[1m]",
         "opus[1m]",
         "opusplan[1m]",

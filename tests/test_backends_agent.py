@@ -750,6 +750,7 @@ class BackendModelTests(unittest.TestCase):
         models = ClaudeCodeBackend.available_models
         for model in (
             "sonnet",
+            "fable[1m]",
             "opusplan[1m]",
             "claude-fable-5",
             "claude-sonnet-5",
@@ -771,8 +772,8 @@ class BackendModelTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertIn(model, models)
 
-    def test_claude_code_picker_excludes_ids_the_cli_rejects(self) -> None:
-        """Guard the three ID shapes Claude Code's model registry refuses.
+    def test_claude_code_picker_excludes_unverified_ids(self) -> None:
+        """Guard model forms not exposed by Claude Code's current picker.
 
         Every one of these shipped in the picker at some point. The rules
         they violate are spelled out on ClaudeCodeBackend.available_models.
@@ -788,9 +789,8 @@ class BackendModelTests(unittest.TestCase):
             "claude-opus-4-6-fast",
             "claude-opus-4-7-fast",
             "claude-opus-4-8-fast",
-            # These aliases or pinned model entries do not support a [1m]
-            # suffix.
-            "fable[1m]",
+            # The current CLI picker exposes Fable/Sonnet 5's 1M variants via
+            # aliases. Keep full suffixed IDs out until they become entries.
             "claude-sonnet-5[1m]",
             "claude-fable-5[1m]",
         ):

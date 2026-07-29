@@ -553,9 +553,10 @@ cannot be read. This keeps enterprise-disabled Copilot models out of the
 picker; a stored Copilot choice also uses `auto` until it appears in a fresh
 catalog. Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
-aliases, the supported `sonnet[1m]`, `opus[1m]`, and `opusplan[1m]` aliases,
-and verified version pins (including Opus 5). `fable[1m]` and Fable 5/Sonnet
-5 `[1m]` pins are deliberately absent because the CLI does not accept them;
+aliases, the supported `fable[1m]`, `sonnet[1m]`, `opus[1m]`, and
+`opusplan[1m]` long-context aliases, and verified version pins (including
+Opus 5). Fable 5/Sonnet 5 1M variants are exposed by the CLI through their
+aliases; full provider-specific pins can be supplied through `extra_models`.
 Claude's `/fast` is a session toggle rather than a selectable `*-fast` model
 ID. Llama and Z.ai discover models live from their configured HTTP endpoints.
 `llama` and `zai` share one in-process OpenAI-compatible agent loop
