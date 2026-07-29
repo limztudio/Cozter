@@ -47,8 +47,8 @@ drop-in plugin system that works across every backend.
   queues prompts on selected weekdays and runs them in throwaway sessions so
   routine jobs do not pollute the user's active conversation
 - **Auto-update**: the bot polls origin, fast-forward-pulls only when the
-  checkout is clean and not locally ahead, then exits for the supervisor
-  (`systemd` or its equivalent) to restart it
+  checkout is clean and not locally ahead, then restarts safely: it re-execs
+  in place on POSIX and hands off to the Windows supervisor on Windows
 
 ## Quick start
 
@@ -62,6 +62,9 @@ GitLab (`git@gitlab.com:mgneh/cozter.git`) is the canonical upstream. GitHub
 (`github.com/limztudio/Cozter`) is a mirror; clone and pull from GitLab to
 stay current. Maintainers who publish to a mirror should check
 `git remote -v` before pushing, since a checkout may use a separate push URL.
+Keep the checkout directory named `Cozter` (with a capital `C`): the launcher,
+updater, and CI import the source tree as that package rather than as an
+installed distribution.
 
 That starts the local terminal chat surface without requiring bot tokens.
 From the parent directory you can run the package form instead:
@@ -97,6 +100,42 @@ Start Cozter normally once before registering the task so the project
 It runs that venv directly and restarts Cozter after every exit, including
 updates and failures, so Task Scheduler keeps a single supervised process.
 
+### POSIX systemd
+
+No POSIX service unit is shipped. For a checkout at `/srv/Cozter` owned by a
+dedicated non-privileged `cozter` user, first create the venv and config
+template, then fill in `.config/config.json`:
+
+```bash
+sudo -u cozter -H sh -c 'cd /srv/Cozter && python __main__.py'
+```
+
+Create `/etc/systemd/system/cozter.service` with the checkout's *parent* as
+the working directory, because the source tree is imported as `Cozter`:
+
+```ini
+[Unit]
+Description=Cozter chat-agent service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=cozter
+Group=cozter
+WorkingDirectory=/srv
+ExecStart=/srv/Cozter/.venv/bin/python -m Cozter
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable it with `sudo systemctl daemon-reload` followed by
+`sudo systemctl enable --now cozter`. Give the `cozter` account access only
+to the workspace directories it is intended to manage.
+
 CLI mode intentionally skips daemon configuration at startup: it neither
 requires nor creates `.config/config.json`, and it uses the stable local
 platform key `cli:local` for workspace/session state. If that file already
@@ -117,6 +156,20 @@ limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
 - Optional external services:
   Telegram and Slack need their platform tokens; Signal also requires a
   separately installed and running `signal-cli` JSON-RPC daemon.
+
+## Deployment boundary
+
+Cozter is intended for a trusted individual or small trusted group. An
+authorized chat participant can select an existing workspace with `/open` or
+request a new one with `/new` wherever the service account's filesystem
+permissions allow. In write-capable modes, an agent can also run commands in
+that selected workspace. Run Cozter as a dedicated, non-privileged OS user and
+authorize only people, channels, and groups you trust.
+
+Telegram authorizes the configured user IDs; Slack and Signal authorize the
+configured channels or groups, so anyone able to send a message in an allowed
+Slack channel or Signal group can use the bot. `/permission confirm` and
+`deny` reduce tool access, but they do not replace OS-level isolation.
 
 ## Configuration
 
@@ -397,6 +450,8 @@ Generated images under `$CODEX_HOME/generated_images` (or
 directories listed in `COZTER_ATTACHMENT_ROOTS` are also accepted. Cozter
 copies explicitly referenced external images into `.cozter/generated_images/`
 before upload so chat platforms never receive arbitrary external paths.
+`COZTER_ATTACHMENT_ROOTS` is an OS-path-separator-delimited list (`:` on
+POSIX, `;` on Windows); blank entries are ignored and `~` is expanded.
 At the end of a run, Cozter also snapshots newly created or modified image
 files in the workspace and attaches them unless the agent already referenced
 them explicitly; shared external output directories always require an
@@ -591,7 +646,9 @@ exceeds its cap; the current user message is kept at the tail. Each Copilot
 run also uses a short-lived private CLI home, so its planner, worker, and
 merge calls do not appear in Copilot's session history or get exported to
 GitHub web and mobile; Cozter's workspace session remains the durable
-conversation record.
+conversation record. The private home copies `config.json` and `settings.json`
+from `$COPILOT_HOME` when it is set, otherwise from `~/.copilot`; set
+`COPILOT_HOME` before launch when the source profile lives elsewhere.
 
 ## Reasoning effort
 
@@ -851,14 +908,17 @@ The updater fetches `origin` without blocking message intake, then checks
 whether the clean local branch is behind its upstream. Dirty checkouts and
 branches with local commits are treated as development state and are left
 alone, so an auto-update pass does not fight an in-progress edit or an
-unpushed commit.
+unpushed commit. It requires `git`, an `origin` remote, and a tracking
+upstream; if any of those are unavailable, it safely skips the auto-pull.
 
 Only when an update is available does Cozter pause new AI turns, wait for
 active turns to finish, fast-forward-pull, install any changed
-`requirements.txt`, broadcast a "restarting" message, and exit. Manual
-pulls and local commits while the bot is running also trigger this safe
-restart path. The init system, such as `systemd` with `Restart=always`,
-brings daemon mode back. CLI mode uses an outer respawner process and
+`requirements.txt`, and broadcast a "restarting" message. On POSIX, the
+daemon then re-execs itself in place. On Windows, it exits for the bootstrap
+or `run_cozter.ps1` supervisor to relaunch it. Manual pulls and local commits
+while the bot is running also trigger this safe restart path. A service
+manager such as `systemd` with `Restart=always` remains useful for boot-time
+startup and unexpected exits. CLI mode uses an outer respawner process and
 relaunches itself in the same terminal. Daemon platforms restore persisted
 queues after either path starts again; CLI mode currently does not.
 
@@ -906,6 +966,15 @@ construction, attachment handling, run-lock cancellation, session
 picking, compaction, platform/Slack/Signal rich-text formatting,
 status-latency and thinking-status display, runtime diagnostics, updater
 behavior, agent-tool helpers, and built-in discovery/edit/patch safety.
+
+For a CI-equivalent local environment, create the project venv with Python
+3.11 or 3.12 and install the runtime dependencies plus the two CI tools:
+
+```bash
+cd ..
+python3.12 -m venv Cozter/.venv  # or python3.11
+Cozter/.venv/bin/python -m pip install -r Cozter/requirements.txt ruff mypy
+```
 
 ```bash
 cd ..
