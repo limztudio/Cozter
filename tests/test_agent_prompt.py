@@ -49,6 +49,26 @@ class ContextBudgetTests(unittest.TestCase):
         out = agent._build_contextual_prompt("hi", None)
         self.assertEqual(out, "hi")
 
+    def test_durable_memory_cannot_exceed_history_budget(self) -> None:
+        """Large persisted blocks are clipped instead of crowding out the cap."""
+        data = {
+            "summary": "summary-marker " + ("s" * 6_000),
+            "long_term": ["long-term-marker " + ("l" * 3_000)],
+            "messages": _messages(10),
+        }
+        colony = ["colony-marker " + ("c" * 3_000)]
+
+        out = agent._build_contextual_prompt(
+            "NEW MESSAGE", data, colony, budget=3_000,
+        )
+
+        self.assertLessEqual(len(out), 3_000)
+        self.assertIn("NEW MESSAGE", out)
+        self.assertIn("[Colony]", out)
+        self.assertIn("[Long-term Memory]", out)
+        self.assertIn("[Session Summary]", out)
+        self.assertIn("… [truncated]", out)
+
 
 class PromptPolicyTests(unittest.TestCase):
     def test_explicit_session_turn_is_autonomous(self) -> None:

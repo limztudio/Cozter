@@ -395,11 +395,12 @@ The path may be relative to the workspace or an absolute path inside it.
 Generated images under `$CODEX_HOME/generated_images` (or
 `~/.codex/generated_images` when `CODEX_HOME` is unset) and any
 directories listed in `COZTER_ATTACHMENT_ROOTS` are also accepted. Cozter
-copies those images into `.cozter/generated_images/` before upload so
-chat platforms never receive arbitrary external paths. At the end of a
-run, Cozter also snapshots newly created or modified image files in the
-workspace and trusted generated-image roots and attaches them unless the
-agent already referenced them explicitly. Replies can end with
+copies explicitly referenced external images into `.cozter/generated_images/`
+before upload so chat platforms never receive arbitrary external paths.
+At the end of a run, Cozter also snapshots newly created or modified image
+files in the workspace and attaches them unless the agent already referenced
+them explicitly; shared external output directories always require an
+explicit `[[attach: ...]]` marker. Replies can end with
 `[[await]]` when the agent needs a user decision; the marker is stripped
 and that user's queued work pauses until the next message arrives.
 

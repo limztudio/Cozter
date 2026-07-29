@@ -8,6 +8,7 @@ cover the [[await]] and [[attach:]] markers the orchestrator relies on.
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from Cozter import agent
 
@@ -26,6 +27,11 @@ class AwaitMarkerTests(unittest.TestCase):
 
 
 class AttachmentGuardTests(unittest.TestCase):
+    @staticmethod
+    def _write_png(path: str) -> None:
+        with open(path, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\nplaceholder")
+
     def test_workspace_file_is_attachable(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             path = os.path.join(ws, "foo.txt")
@@ -68,6 +74,28 @@ class AttachmentGuardTests(unittest.TestCase):
             self.assertIn(os.path.realpath(good), paths)
             self.assertNotIn(os.path.realpath(evil), paths)
             self.assertNotIn("[[attach:", cleaned)
+
+    def test_auto_detection_never_scans_shared_external_roots(self) -> None:
+        """External images require an explicit marker to avoid cross-chat leaks."""
+        with tempfile.TemporaryDirectory() as ws, \
+                tempfile.TemporaryDirectory() as external:
+            before = agent._snapshot_attachment_images(ws)
+            external_image = os.path.join(external, "other-turn.png")
+            self._write_png(external_image)
+            workspace_image = os.path.join(ws, "this-turn.png")
+            self._write_png(workspace_image)
+
+            with mock.patch.dict(
+                os.environ, {"COZTER_ATTACHMENT_ROOTS": external}, clear=False,
+            ):
+                detected = agent._collect_new_attachment_images(before, ws)
+                explicit = agent.prepare_attachment_path(external_image, ws)
+
+            self.assertEqual(detected, [os.path.realpath(workspace_image)])
+            self.assertIsNotNone(explicit)
+            assert explicit is not None
+            self.assertTrue(explicit.startswith(os.path.realpath(ws) + os.sep))
+            self.assertNotEqual(explicit, os.path.realpath(external_image))
 
 
 if __name__ == "__main__":

@@ -428,7 +428,7 @@ class DiscoveryToolTests(unittest.TestCase):
 
 
 class ConfirmPermissionGateTests(unittest.TestCase):
-    """confirm exposes read-only tools only; execute_tool is the backstop."""
+    """Permission gates expose only the intended tool surface."""
 
     def _execute(
         self, name: str, args: dict, approval: str, ws: str,
@@ -460,6 +460,25 @@ class ConfirmPermissionGateTests(unittest.TestCase):
             )
             self.assertFalse(result.startswith("Blocked"), result)
             self.assertTrue(os.path.exists(os.path.join(tmp, "x.txt")))
+
+    def test_deny_blocks_a_stray_tool_call(self) -> None:
+        """The execution boundary remains safe if a backend emits a tool anyway."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._execute(
+                "write_file", {"path": "x.txt", "content": "hi"},
+                "deny", tmp,
+            )
+            self.assertTrue(result.startswith("Blocked"), result)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "x.txt")))
+
+    def test_unknown_permission_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._execute(
+                "write_file", {"path": "x.txt", "content": "hi"},
+                "unexpected", tmp,
+            )
+            self.assertTrue(result.startswith("Blocked"), result)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "x.txt")))
 
     def test_read_only_schema_excludes_mutating_tools(self) -> None:
         names = {

@@ -20,7 +20,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             calls += 1
             started.set()
             await release.wait()
-            return ("x" * 100, [], None)
+            return ("x" * 100, [], None, 6)
 
         with tempfile.TemporaryDirectory() as workspace_path:
             data = session.create_session(workspace_path, name="Manual")
@@ -66,7 +66,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         async def slow_compact(*_args, **_kwargs):
             compaction_started.set()
             await release_compaction.wait()
-            return ("x" * 100, [], None)
+            return ("x" * 100, [], None, 6)
 
         async def fake_consolidate(*_args, **_kwargs) -> bool:
             colony_started.set()
@@ -121,7 +121,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         async def slow_compact(*_args, **_kwargs):
             compaction_started.set()
             await release_compaction.wait()
-            return ("x" * 100, [], None)
+            return ("x" * 100, [], None, 6)
 
         with tempfile.TemporaryDirectory() as workspace_path:
             data = session.create_session(workspace_path, name="Manual")
@@ -158,6 +158,65 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(compaction_started.wait(), timeout=1)
                 release_compaction.set()
                 await compact_task
+
+    async def test_oversized_history_keeps_messages_not_sent_to_summary(self) -> None:
+        """A budgeted compaction may trim only the prefix it actually saw."""
+        async def fake_summary(*_args, **_kwargs) -> str:
+            return "[SUMMARY]\n" + ("s" * 100) + "\n[/SUMMARY]"
+
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            messages = [
+                {
+                    "role": "user",
+                    "content": f"message-{i}:" + ("x" * 2_000),
+                }
+                for i in range(10)
+            ]
+            session.append_messages(workspace_path, data["id"], messages)
+            with (
+                mock.patch.object(
+                    compaction.workspace_mod, "get_compact_interval", return_value=1,
+                ),
+                mock.patch.object(compaction, "MAX_SUMMARY_CHARS", 17_000),
+                mock.patch.object(
+                    compaction, "run_internal_backend", side_effect=fake_summary,
+                ) as run_summary,
+                mock.patch.object(
+                    compaction.colony, "bump_compact_count", return_value=1,
+                ),
+                mock.patch.object(compaction.colony, "maybe_trigger"),
+            ):
+                await compaction.maybe_compact(
+                    workspace_path, data["id"], "model", backend_name="codex",
+                )
+
+            prompt = run_summary.await_args.args[2]
+            expected_lines = compaction._take_oldest_message_lines(
+                messages,
+                17_000 - len(compaction.SUMMARY_PROMPT) - 200
+                - len("Conversation to summarize:"),
+            )
+            covered_count = len(expected_lines)
+            self.assertGreater(covered_count, compaction.KEEP_RECENT_AFTER_COMPACT)
+            self.assertLess(covered_count, len(messages))
+            self.assertIn("message-0:", prompt)
+            self.assertIn(f"message-{covered_count - 1}:", prompt)
+            self.assertNotIn(f"message-{covered_count}:", prompt)
+
+            saved = session.load_session(workspace_path, data["id"])
+            assert saved is not None
+            retained = saved["messages"]
+            self.assertEqual(
+                [entry["content"] for entry in retained],
+                [entry["content"] for entry in messages[
+                    covered_count - compaction.KEEP_RECENT_AFTER_COMPACT:
+                ]],
+            )
+            self.assertEqual(
+                saved["compacted_count"],
+                covered_count - compaction.KEEP_RECENT_AFTER_COMPACT,
+            )
 
 
 if __name__ == "__main__":

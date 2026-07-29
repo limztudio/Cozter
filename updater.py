@@ -14,10 +14,10 @@ _STARTUP_COMMIT: str | None = None
 
 
 _GIT_TIMEOUT = 30  # seconds — prevents hung network calls from blocking forever
-# Dependency installation only runs after an update (or while repairing a
-# missing fresh-venv dependency), but it must still be bounded: intake is
-# paused during an update restart and an unbounded pip process would queue
-# chat messages indefinitely.
+# Dependency installation only runs when an update changed requirements (or
+# while repairing a missing fresh-venv dependency), but it must still be
+# bounded: intake is paused during an update restart and an unbounded pip
+# process would queue chat messages indefinitely.
 _PIP_INSTALL_TIMEOUT = 180
 
 # A Windows supervisor (such as run_cozter.ps1) treats this as a normal
@@ -238,27 +238,58 @@ def fetch_and_pull() -> bool:
     return _head_changed()
 
 
+def requirements_changed_since_startup() -> bool:
+    """Return whether requirements changed between process start and HEAD.
+
+    A code-only update still needs a restart, but resolving unchanged loose
+    dependencies on every update adds startup delay and can upgrade unrelated
+    packages. If Git cannot establish the comparison, return True so the
+    updater remains conservative and repairs dependencies before restart.
+    """
+    if not _STARTUP_COMMIT:
+        return True
+    try:
+        result = _git(
+            "diff", "--quiet", _STARTUP_COMMIT, "HEAD", "--", "requirements.txt",
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return True
+    if result.returncode == 0:
+        return False
+    if result.returncode == 1:
+        return True
+    logger.warning(
+        "Could not compare requirements against startup commit: %s",
+        result.stderr.strip(),
+    )
+    return True
+
+
 def install_requirements() -> None:
-    """Install updated requirements if the file exists."""
-    if os.path.exists(REQUIREMENTS_PATH):
-        logger.info("Installing updated requirements...")
-        try:
-            pip = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_PATH],
-                cwd=MODULE_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=_PIP_INSTALL_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired as exc:
-            logger.error(
-                "pip install timed out after %ds", _PIP_INSTALL_TIMEOUT,
-            )
-            raise RuntimeError("pip install timed out") from exc
-        if pip.returncode != 0:
-            logger.error("pip install failed: %s", pip.stderr.strip())
-            raise RuntimeError("pip install failed")
-        logger.info("Requirements installed.")
+    """Install requirements only when the just-pulled update changed them."""
+    if not os.path.exists(REQUIREMENTS_PATH):
+        return
+    if not requirements_changed_since_startup():
+        logger.info("Requirements unchanged since startup; skipping pip install.")
+        return
+    logger.info("Installing updated requirements...")
+    try:
+        pip = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_PATH],
+            cwd=MODULE_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=_PIP_INSTALL_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        logger.error(
+            "pip install timed out after %ds", _PIP_INSTALL_TIMEOUT,
+        )
+        raise RuntimeError("pip install timed out") from exc
+    if pip.returncode != 0:
+        logger.error("pip install failed: %s", pip.stderr.strip())
+        raise RuntimeError("pip install failed")
+    logger.info("Requirements installed.")
 
 
 def restart_script(exit_code: int = 0) -> None:

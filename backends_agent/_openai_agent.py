@@ -274,9 +274,8 @@ class OpenAIChatBackend(Backend):
 
                 # Execute each requested tool and append the result.
                 # ``approval`` is passed through to execute_tool, which
-                # enforces the confirm-mode read-only gate as a backstop
-                # even if the model asks for a state-changing tool it
-                # wasn't offered.
+                # re-enforces the permission gate as a backstop even if
+                # the model asks for a tool it was not offered.
                 for call in tool_calls:
                     name, args = tools.parse_openai_call(call)
                     sig = tools.tool_signature(name, args)
@@ -727,7 +726,10 @@ def _tools_for_approval(
       collaborative for ask-before-acting on state changes.
     - auto / full: the full tool set.
     """
-    if compaction or approval == "deny":
+    # A malformed approval value must never widen the tool surface. Only the
+    # two explicit write-capable modes get the full schema; deny, compaction,
+    # and unknown values stay chat-only.
+    if compaction or approval not in {"auto", "full", "confirm"}:
         return None
     if approval == "confirm":
         return tools.READ_ONLY_TOOL_SCHEMA or None

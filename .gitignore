@@ -201,6 +201,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Claude Code machine-local settings can contain personal paths and overrides.
+.claude/settings.local.json
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

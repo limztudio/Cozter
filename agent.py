@@ -31,6 +31,7 @@ from .utils import (
     iter_json_events,
     kill_and_wait,
     run_internal_backend,
+    take_recent_lines,
     terminate_process_group,
 )
 from .utils import drain_queue as _drain_queue
@@ -458,24 +459,24 @@ def _iter_image_files(root: str, *, skip_dirs: bool) -> list[str]:
 def _snapshot_attachment_images(
     workspace_path: str,
 ) -> dict[str, tuple[int, int]]:
-    """Return image artifact state for workspace and trusted external roots."""
+    """Return image artifact state for the current workspace only.
+
+    Trusted external roots remain available through explicit ``[[attach:]]``
+    markers, but must not be auto-scanned: their common default is a global
+    Codex output directory shared by concurrent workspaces and sessions.
+    Automatically attaching every changed image there can leak one turn's
+    artifact into another chat.
+    """
     snapshot: dict[str, tuple[int, int]] = {}
     ws_real = os.path.realpath(workspace_path)
-    roots = [ws_real]
-    roots.extend(_external_attachment_roots())
-
-    seen_roots: set[str] = set()
-    for root in roots:
-        if root in seen_roots or not os.path.isdir(root):
+    if not os.path.isdir(ws_real):
+        return snapshot
+    for path in _iter_image_files(ws_real, skip_dirs=True):
+        try:
+            st = os.stat(path)
+        except OSError:
             continue
-        seen_roots.add(root)
-        skip_dirs = root == ws_real
-        for path in _iter_image_files(root, skip_dirs=skip_dirs):
-            try:
-                st = os.stat(path)
-            except OSError:
-                continue
-            snapshot[path] = (st.st_mtime_ns, st.st_size)
+        snapshot[path] = (st.st_mtime_ns, st.st_size)
     return snapshot
 
 
@@ -485,7 +486,7 @@ def _collect_new_attachment_images(
     *,
     exclude_sources: set[str] | None = None,
 ) -> list[str]:
-    """Return images created or modified during this run as attachments."""
+    """Return workspace images created or modified during this run."""
     after = _snapshot_attachment_images(workspace_path)
     changed = [
         path for path, stamp in after.items()
@@ -512,6 +513,91 @@ def _collect_new_attachment_images(
 # ------------------------------------------------------------------
 # Contextual prompt building
 # ------------------------------------------------------------------
+
+_CONTEXT_TRUNCATION_MARKER = "\n… [truncated]"
+
+
+def _truncate_context_text(text: str, limit: int) -> str:
+    """Return *text* clipped to *limit* characters with a clear marker."""
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= len(_CONTEXT_TRUNCATION_MARKER):
+        return text[:limit]
+    return text[:limit - len(_CONTEXT_TRUNCATION_MARKER)] + (
+        _CONTEXT_TRUNCATION_MARKER
+    )
+
+
+def _bounded_context_block(
+    label: str,
+    body: str,
+    limit: int | None = None,
+) -> str:
+    """Format one labeled memory block, clipping its body when requested."""
+    if not body:
+        return ""
+    header = f"[{label}]\n"
+    footer = f"\n[End of {label}]\n"
+    if limit is None:
+        return header + body + footer
+    body_limit = limit - len(header) - len(footer)
+    if body_limit <= 0:
+        return ""
+    clipped = _truncate_context_text(body, body_limit)
+    return header + clipped + footer if clipped else ""
+
+
+def _bounded_context_list_block(
+    label: str,
+    items: list,
+    formatter,
+    limit: int | None = None,
+) -> str:
+    """Format a labeled list block, retaining newest entries under a cap."""
+    if not items:
+        return ""
+    header = f"[{label}]\n"
+    footer = f"\n[End of {label}]\n"
+    if limit is None:
+        return header + "\n".join(formatter(item) for item in items) + footer
+    body_limit = limit - len(header) - len(footer)
+    if body_limit <= 0:
+        return ""
+    lines = take_recent_lines(items, body_limit, formatter)
+    if lines:
+        body = "\n".join(lines)
+    else:
+        # A single persisted item may be larger than the whole history
+        # budget. Preserve a bounded tail item rather than dropping every
+        # hint that the block exists.
+        body = _truncate_context_text(formatter(items[-1]), body_limit)
+    return header + body + footer if body else ""
+
+
+def _context_quotas(lengths: list[int], budget: int) -> list[int]:
+    """Distribute a context budget fairly without wasting unused capacity."""
+    quotas = [0] * len(lengths)
+    remaining = max(0, budget)
+    active = {i for i, length in enumerate(lengths) if length > 0}
+    while remaining and active:
+        share = max(1, remaining // len(active))
+        progressed = False
+        for index in tuple(active):
+            grant = min(share, lengths[index] - quotas[index], remaining)
+            if grant:
+                quotas[index] += grant
+                remaining -= grant
+                progressed = True
+            if quotas[index] >= lengths[index]:
+                active.discard(index)
+            if not remaining:
+                break
+        if not progressed:
+            break
+    return quotas
+
 
 def _build_contextual_prompt(
     prompt: str,
@@ -564,63 +650,67 @@ def _build_contextual_prompt(
 
     full = "\n".join(parts)
 
-    # Truncate if too long - drop oldest messages; colony, long-term and
-    # summary are durable so they're preserved at the expense of recent msgs.
+    # Truncate if too long. Durable blocks remain higher-value context than
+    # raw messages, but each is bounded too: a malformed or unusually large
+    # persisted memory item must not turn the configured history budget into
+    # an unbounded prompt.
     if len(full) > budget:
-        colony_block = ""
-        if colony_list:
-            colony_block = (
-                "[Colony]\n"
-                + "\n".join(f"- {item}" for item in colony_list)
-                + "\n[End of Colony]\n"
-            )
-        lt_block = ""
-        if long_term:
-            lt_block = (
-                "[Long-term Memory]\n"
-                + "\n".join(f"- {item}" for item in long_term)
-                + "\n[End of Long-term Memory]\n"
-            )
-        summary_block = (
-            f"[Session Summary]\n{summary}\n[End of Session Summary]\n"
-            if summary else ""
-        )
-        overhead = (
-            len(prompt) + len(colony_block) + len(lt_block)
-            + len(summary_block) + 500
-        )
-        msg_budget = max(0, budget - overhead)
-        if msg_budget == 0 and messages:
-            logger.warning(
-                "History truncation: colony/long-term/summary fill budget; "
-                "dropping all %d recent messages", len(messages),
-            )
-
-        history_parts: list[str] = []
-        if colony_block:
-            history_parts.append(colony_block)
-        if lt_block:
-            history_parts.append(lt_block)
-        if summary_block:
-            history_parts.append(summary_block)
-
-        # Add messages newest-to-oldest until the budget is exhausted.
-        # Content is already capped at session.MSG_CONTENT_MAX so budget arithmetic
-        # is predictable.
-        msg_lines = (
-            session.take_recent_messages(messages, msg_budget)
-            if msg_budget > 0 else []
-        )
-
-        if msg_lines:
-            history_parts.append("[Recent Messages]")
-            history_parts.extend(msg_lines)
-            history_parts.append("[End of Recent Messages]\n")
-
-        history_parts.append(
+        descriptors = [
+            (
+                lambda limit: _bounded_context_list_block(
+                    "Colony", colony_list, lambda item: f"- {item}", limit,
+                ),
+                _bounded_context_list_block(
+                    "Colony", colony_list, lambda item: f"- {item}",
+                ),
+            ),
+            (
+                lambda limit: _bounded_context_list_block(
+                    "Long-term Memory", long_term, lambda item: f"- {item}",
+                    limit,
+                ),
+                _bounded_context_list_block(
+                    "Long-term Memory", long_term, lambda item: f"- {item}",
+                ),
+            ),
+            (
+                lambda limit: _bounded_context_block(
+                    "Session Summary", summary or "", limit,
+                ),
+                _bounded_context_block("Session Summary", summary or ""),
+            ),
+            (
+                lambda limit: _bounded_context_list_block(
+                    "Recent Messages", messages, session.format_msg_line, limit,
+                ),
+                _bounded_context_list_block(
+                    "Recent Messages", messages, session.format_msg_line,
+                ),
+            ),
+        ]
+        descriptors = [
+            (render, natural) for render, natural in descriptors if natural
+        ]
+        continuation = (
             "Continue the conversation. The user's new message follows.\n"
         )
-        history_parts.append(prompt)
+        # Include join separators in the fixed cost. If the user's new
+        # message alone exceeds the setting, it remains intact and all saved
+        # context is dropped rather than cutting off the request itself.
+        context_budget = max(
+            0,
+            budget - len(prompt) - len(continuation) - len(descriptors) - 1,
+        )
+        quotas = _context_quotas(
+            [len(natural) for _render, natural in descriptors], context_budget,
+        )
+        history_parts = [
+            render(quota)
+            for (render, _natural), quota in zip(descriptors, quotas)
+            if quota
+        ]
+        history_parts = [part for part in history_parts if part]
+        history_parts.extend((continuation, prompt))
         full = "\n".join(history_parts)
 
     return full

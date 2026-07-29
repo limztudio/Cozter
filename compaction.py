@@ -158,10 +158,6 @@ async def _maybe_compact_under_maintenance_lock(
     if data is None:
         return
     msgs = data.get("messages", [])
-    # Snapshot count: how many messages this compaction will summarize. A
-    # foreground turn can append more while the summary runs, so set_summary
-    # trims against this count rather than the grown on-disk message list.
-    snapshot_count = len(msgs)
     interval = workspace_mod.get_compact_interval(workspace_path)
     if len(msgs) < interval:
         return
@@ -171,15 +167,16 @@ async def _maybe_compact_under_maintenance_lock(
         len(msgs), interval,
     )
     existing_summary = data.get("summary") or ""
-    new_summary, new_long_term, new_title = await compact_session(
+    new_summary, new_long_term, new_title, covered_count = await compact_session(
         workspace_path, session_id, summary_model,
         backend_name=backend_name,
         _preloaded_data=data,
     )
-    if not new_summary:
+    if not new_summary or covered_count <= KEEP_RECENT_AFTER_COMPACT:
         logger.error(
-            "Compaction produced empty summary for session %s",
-            session_id,
+            "Compaction did not cover enough messages for session %s "
+            "(covered=%d, keep_recent=%d)",
+            session_id, covered_count, KEEP_RECENT_AFTER_COMPACT,
         )
         return
     # Reject summaries that are suspiciously short compared to the existing
@@ -198,7 +195,11 @@ async def _maybe_compact_under_maintenance_lock(
             keep_recent=KEEP_RECENT_AFTER_COMPACT,
             long_term_rewrite=new_long_term,
             title=new_title,
-            summarized_count=snapshot_count,
+            # Only trim the contiguous prefix actually sent to the summary
+            # backend. A foreground turn can append more while the summary
+            # runs, and oversized histories intentionally leave their later
+            # messages raw for the next pass.
+            summarized_count=covered_count,
         )
         colony_count = colony.bump_compact_count(workspace_path)
     lt_count = len(new_long_term) if new_long_term is not None else "?"
@@ -212,6 +213,28 @@ async def _maybe_compact_under_maintenance_lock(
     )
 
 
+def _take_oldest_message_lines(messages: list[dict], budget: int) -> list[str]:
+    """Return the largest budget-fitting contiguous prefix of *messages*.
+
+    ``session.set_summary`` can only safely discard a prefix of the raw
+    history. Selecting a newest suffix made it possible to mark older,
+    omitted messages as summarized and then delete them. Keep the prefix
+    contiguous and let a later pass compact the remaining suffix once the
+    raw overlap has advanced.
+    """
+    lines: list[str] = []
+    used = 0
+    for message in messages:
+        line = session.format_msg_line(message, cap=None)
+        if used + len(line) > budget:
+            break
+        lines.append(line)
+        # Match utils.take_recent_lines' conservative accounting for the
+        # newline that joins adjacent lines.
+        used += len(line) + 1
+    return lines
+
+
 async def compact_session(
     workspace_path: str,
     session_id: str,
@@ -219,14 +242,16 @@ async def compact_session(
     *,
     backend_name: str | None = None,
     _preloaded_data: dict | None = None,
-) -> tuple[str, list[str] | None, str | None]:
+) -> tuple[str, list[str] | None, str | None, int]:
     """Run the selected backend to compact a session.
 
-    Returns (summary, long_term, title). long_term is the new complete
-    list, or None if the model did not emit a [LONG_TERM] block
-    (existing list kept). title is None if the model did not emit a
-    [TITLE] block. On failure returns ("", None, None). Does NOT write
-    to disk - caller takes the workspace lock and calls set_summary.
+    Returns ``(summary, long_term, title, covered_count)``. ``covered_count``
+    is the number of consecutive oldest raw messages included in the prompt;
+    callers must only trim against that count. ``long_term`` is the new
+    complete list, or None if the model did not emit a [LONG_TERM] block
+    (existing list kept). ``title`` is None if the model did not emit a
+    [TITLE] block. On failure returns ``("", None, None, 0)``. Does NOT write
+    to disk - caller takes the workspace lock and calls ``set_summary``.
 
     _preloaded_data: pass already-loaded session dict to skip a disk read
     (used by maybe_compact which loads the data to check the interval).
@@ -234,13 +259,13 @@ async def compact_session(
     backend = backends_agent.get_backend(backend_name)
     data = _preloaded_data or session.load_session(workspace_path, session_id)
     if data is None:
-        return ("", None, None)
+        return ("", None, None, 0)
     messages = data.get("messages", [])
     existing_summary = data.get("summary")
     existing_long_term: list[str] = data.get("long_term") or []
 
     if not messages:
-        return ("", None, None)
+        return ("", None, None, 0)
 
     # Build the content to summarize, staying within a token budget.
     # Large prompts cause the summary model to return truncated/empty output.
@@ -263,12 +288,13 @@ async def compact_session(
         parts.append(f"Previous summary:\n{existing_summary}\n")
     parts.append("Conversation to summarize:")
 
-    # Add messages newest-first until we hit the budget. cap=None so
-    # the model sees full message content (compaction's budget is
-    # generous enough to afford it).
+    # Add a contiguous oldest prefix until we hit the budget. cap=None so
+    # the model sees full message content (compaction's budget is generous
+    # enough to afford it). The caller only removes this exact prefix, which
+    # prevents unsent messages from being mistaken for summarized history.
     overhead = len(SUMMARY_PROMPT) + sum(len(p) for p in parts) + 200
     budget = max(0, MAX_SUMMARY_CHARS - overhead)
-    msg_lines = session.take_recent_messages(messages, budget, cap=None)
+    msg_lines = _take_oldest_message_lines(messages, budget)
     parts.extend(msg_lines)
 
     if not msg_lines:
@@ -276,7 +302,7 @@ async def compact_session(
             "Session %s messages too large even for a single entry",
             session_id,
         )
-        return ("", None, None)
+        return ("", None, None, 0)
 
     full_prompt = f"{SUMMARY_PROMPT}\n\n" + "\n".join(parts)
 
@@ -297,7 +323,7 @@ async def compact_session(
         ),
     )
     if not new_summary:
-        return ("", None, None)
+        return ("", None, None, 0)
 
     summary, long_term, title = _parse_output(new_summary)
-    return (summary, long_term, title)
+    return (summary, long_term, title, len(msg_lines))

@@ -333,5 +333,14 @@ class OpenAIToolLimitTests(unittest.TestCase):
         ))
 
 
+class OpenAIToolPermissionTests(unittest.TestCase):
+    def test_tool_schema_fails_closed_for_unknown_permission(self) -> None:
+        self.assertIsNone(oa._tools_for_approval("unexpected", False))
+
+    def test_confirm_exposes_only_read_only_tools(self) -> None:
+        schema = oa._tools_for_approval("confirm", False)
+        self.assertEqual(schema, oa.tools.READ_ONLY_TOOL_SCHEMA)
+
+
 if __name__ == "__main__":
     unittest.main()

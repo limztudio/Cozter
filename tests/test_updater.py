@@ -176,6 +176,33 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
 
 
 class UpdaterRequirementsTests(unittest.TestCase):
+    def test_unchanged_requirements_skip_install(self) -> None:
+        unchanged = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with (
+            mock.patch.object(updater.os.path, "exists", return_value=True),
+            mock.patch.object(updater, "_STARTUP_COMMIT", "old"),
+            mock.patch.object(updater, "_git", return_value=unchanged),
+            mock.patch.object(updater.subprocess, "run") as run,
+        ):
+            updater.install_requirements()
+
+        run.assert_not_called()
+
+    def test_changed_requirements_install(self) -> None:
+        changed = subprocess.CompletedProcess([], 1, stdout="", stderr="")
+        installed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with (
+            mock.patch.object(updater.os.path, "exists", return_value=True),
+            mock.patch.object(updater, "_STARTUP_COMMIT", "old"),
+            mock.patch.object(updater, "_git", return_value=changed),
+            mock.patch.object(
+                updater.subprocess, "run", return_value=installed,
+            ) as run,
+        ):
+            updater.install_requirements()
+
+        self.assertEqual(run.call_args.kwargs["timeout"], updater._PIP_INSTALL_TIMEOUT)
+
     def test_updated_requirements_install_has_a_timeout(self) -> None:
         completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         with (

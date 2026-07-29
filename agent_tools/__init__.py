@@ -199,6 +199,20 @@ async def execute_tool(
         "file_action": tool.file_action if tool else None,
     })
 
+    if approval not in {"auto", "full", "confirm"}:
+        # Tool schemas are normally omitted for deny/unknown permission
+        # values, but an OpenAI-compatible server can still return a stray
+        # tool call. Keep this execution boundary fail-closed so malformed
+        # provider output or a bad caller can never turn a no-tools turn into
+        # a workspace mutation.
+        logger.info("%s mode blocked tool: %s", approval, name)
+        result = (
+            f"Blocked: '{name}' cannot run because permission mode "
+            f"'{approval}' permits no tools."
+        )
+        emit({"type": "tool_result", "name": name, "output": result})
+        return result
+
     if approval == "confirm" and name not in READ_ONLY_TOOL_NAMES:
         # A chat surface can't prompt per tool call, so "confirm" is a
         # read-only gate: state-changing tools are withheld rather than run
