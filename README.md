@@ -357,6 +357,12 @@ The session router is only used when there is no valid
 after `/newsession`. Otherwise each user continues the same session across
 bot restarts and platform reconnects.
 
+New sessions begin with a timestamp-based placeholder name. After their first
+assistant reply, Cozter asks the selected summary backend for a short topical
+title for the session picker. The result is written only while that placeholder
+is still current, so a newer compaction title or custom persisted name is not
+overwritten by a late background title request.
+
 ## Commands
 
 All chat surfaces speak the same command set:
@@ -387,7 +393,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/refresh` | Drop the workspace's `.codex/` cache (use after an upgrade) |
 | `/stop` | Cancel the running agent turn and clear queued work |
 | `/bg <task>` or `/background <task>` | Start a restart-safe detached task with the selected compatible backend |
-| `/inject <text>` | Add context to the running turn (the agent restarts with it) |
+| `/inject <text>` | Add context to the running turn; Cozter abandons its active phase and restarts with it |
 | `/reserve` | Create a recurring scheduled prompt |
 | `/schedules` | List schedules and delete one by number |
 | `/version` | Show the current git version and last commit date |
@@ -401,6 +407,12 @@ the default `flexible` meta-agent; its direct backends start at 1. `/open`
 also accepts a recent-workspace number directly as `/open 2`.
 If a picker entry is not recognized, Cozter keeps the picker open and asks
 again; use `/cancel` to leave it.
+
+An accepted `/inject` is either folded into a restarted turn or rejected once
+the final reply has closed its injection window. This applies to every
+`flexible` phase—including planning and merge calls as well as workers—so
+context sent while the meta-agent is working cannot be silently lost between
+phases.
 
 `/bg` (or `/background`) currently uses Claude Code, so choose `claude_code`
 with `/agent` first. Cozter persists the external task ID, polls independently, and sends
@@ -759,6 +771,9 @@ The built-in file tools also fail closed at workspace boundaries. In
 particular, `apply_patch` will not use a create patch to overwrite an existing
 file, and a delete patch must match the current file and remove all of its
 content before the file is unlinked. Failed hunks leave the target in place.
+Normal unified-diff hunks must also match the line counts declared in their
+headers before any target is written, so a malformed or truncated patch is
+rejected instead of being treated as a smaller valid edit.
 The string-edit tools honor a broad `replace_all` operation only when its
 tool argument is the literal JSON boolean `true`; malformed truthy values
 retain the safer unique-match behavior.
@@ -810,7 +825,7 @@ ignored for local secrets and runtime queues.
   agent attachments, prompts, process cleanup, and post-turn behavior;
   backend model defaults, event parsing, and llama retry; bot and Slack
   commands; compaction; the flexible meta-agent; inject; import binding;
-  run locks and session picking; platform, Slack, and Signal rich-text
+  run locks, session picking, and auto-titling; platform, Slack, and Signal rich-text
   formatting; runtime diagnostics; state fallbacks; status latency and
   thinking-status display; updater behavior; utilities; and the
   built-in/plugin tool surface
@@ -965,7 +980,7 @@ schedule parsing, backend model defaults and event parsing, llama retry
 behavior, the flexible meta-agent's planning/merge, post-turn and inject
 flow, subprocess draining and exceptional-path cleanup, prompt
 construction, attachment handling, run-lock cancellation, session
-picking, compaction, platform/Slack/Signal rich-text formatting,
+picking, auto-titling, compaction, platform/Slack/Signal rich-text formatting,
 status-latency and thinking-status display, runtime diagnostics, updater
 behavior, agent-tool helpers, and built-in discovery/edit/patch safety.
 
