@@ -48,6 +48,27 @@ def is_path_within(path: object, root: object) -> bool:
         return False
 
 
+def try_parse_int(value: str) -> int | None:
+    """Return *value* as an integer, or ``None`` when it is invalid.
+
+    Python limits conversion of exceptionally long decimal strings to avoid
+    denial-of-service inputs.  User-facing parsers should turn that
+    ``ValueError`` into an ordinary invalid value rather than let it escape a
+    command or scheduler loop.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def parse_decimal_int(value: object) -> int | None:
+    """Return a decimal text input as an integer, or ``None`` if invalid."""
+    if not isinstance(value, str) or not value.isdecimal():
+        return None
+    return try_parse_int(value)
+
+
 def drain_queue(
     q: asyncio.Queue | None, collect: list | None = None,
 ) -> None:

@@ -245,6 +245,17 @@ class JsonHelperTests(unittest.TestCase):
         )
 
 
+class IntegerParsingTests(unittest.TestCase):
+    def test_integer_parsers_reject_invalid_and_oversized_input(self) -> None:
+        oversized = "9" * 5_000
+
+        self.assertEqual(utils.try_parse_int(" +42 "), 42)
+        self.assertIsNone(utils.try_parse_int(oversized))
+        self.assertEqual(utils.parse_decimal_int("42"), 42)
+        self.assertIsNone(utils.parse_decimal_int("+42"))
+        self.assertIsNone(utils.parse_decimal_int(oversized))
+
+
 class TextChunkTests(unittest.TestCase):
     def test_split_text_chunks_preserves_newlines_and_blank_lines(self) -> None:
         text = "one\n\ntwo\nthree"

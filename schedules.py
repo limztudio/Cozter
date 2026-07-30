@@ -17,7 +17,9 @@ from datetime import datetime, time as dt_time, timedelta
 
 from .utils import COZTER_DIR
 from .utils import load_json_object
+from .utils import parse_decimal_int
 from .utils import save_json_object
+from .utils import try_parse_int
 
 logger = logging.getLogger(__name__)
 
@@ -202,12 +204,8 @@ def parse_days(text: object) -> list[str]:
     days: list[str] = []
     for p in parts:
         if p.isdecimal():
-            try:
-                n = int(p)
-            except ValueError:
-                # Python limits conversion of extremely long decimal strings.
-                # User input should be treated as an invalid day selector, not
-                # allowed to abort the schedule-creation flow.
+            n = parse_decimal_int(p)
+            if n is None:
                 return []
             if not (1 <= n <= 7):
                 return []
@@ -228,10 +226,9 @@ def parse_time(text: object) -> str | None:
     parts = text.split(":")
     if len(parts) != 2:
         return None
-    try:
-        h = int(parts[0])
-        m = int(parts[1])
-    except ValueError:
+    h = try_parse_int(parts[0])
+    m = try_parse_int(parts[1])
+    if h is None or m is None:
         return None
     if not (0 <= h <= 23 and 0 <= m <= 59):
         return None

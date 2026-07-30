@@ -35,7 +35,9 @@ from ..utils import await_cancelled
 from ..utils import create_background_task
 from ..utils import drain_queue as _drain_queue
 from ..utils import load_json_object
+from ..utils import parse_decimal_int
 from ..utils import save_json_object
+from ..utils import try_parse_int
 
 logger = logging.getLogger(__name__)
 
@@ -61,23 +63,6 @@ _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
 NO_WORKSPACE_TEXT = (
     "No workspace selected (or it was deleted). Use /new or /open."
 )
-
-
-def _decimal_int(value: str) -> int | None:
-    """Return a decimal input as an int without leaking parser limits.
-
-    ``str.isdecimal()`` accepts arbitrarily long user input, while recent
-    Python versions reject conversion of decimal strings above a configurable
-    digit limit.  Interactive selections should treat those inputs as invalid
-    rather than letting the exception escape a bot handler.
-    """
-    if not value.isdecimal():
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
-
 
 def ensure_upload_dir(workspace_path: str) -> str:
     """Return the workspace upload directory, creating it if needed."""
@@ -770,7 +755,7 @@ class BotPlatform(ABC):
     ) -> None:
         recent = workspace.get_recent(ctx.user_id, self.recent_limit)
         if text.isdecimal():
-            number = _decimal_int(text)
+            number = parse_decimal_int(text)
             if number is None:
                 idx = -1
             else:
@@ -1272,9 +1257,8 @@ class BotPlatform(ABC):
         if ws is None:
             return
         text = ctx.text.strip().rstrip("%").strip()
-        try:
-            value = int(text)
-        except ValueError:
+        value = try_parse_int(text)
+        if value is None:
             await ctx.reply_text(
                 f"Not a number: {ctx.text!r}\nEnter 0-100 (or /cancel):"
             )
@@ -1328,7 +1312,7 @@ class BotPlatform(ABC):
         first = arg[0] if arg else ""
 
         if first.isdecimal():
-            interval = _decimal_int(first)
+            interval = parse_decimal_int(first)
             if interval is None:
                 await ctx.reply_text("Error: number is too large.")
                 return
@@ -1367,7 +1351,7 @@ class BotPlatform(ABC):
         first = arg[0] if arg else ""
 
         if first.isdecimal():
-            budget = _decimal_int(first)
+            budget = parse_decimal_int(first)
             if budget is None:
                 await ctx.reply_text("Error: number is too large.")
                 return
@@ -1426,7 +1410,7 @@ class BotPlatform(ABC):
         """Resolve a /sessions selection: 1-based number, exact, or substring."""
         choice = choice.strip()
         if choice.isdecimal():
-            number = _decimal_int(choice)
+            number = parse_decimal_int(choice)
             if number is None:
                 return None
             idx = number - 1
@@ -1518,7 +1502,7 @@ class BotPlatform(ABC):
             return
 
         if first.isdecimal():
-            n = _decimal_int(first)
+            n = parse_decimal_int(first)
             if n is None:
                 await ctx.reply_text("Error: number is too large.")
                 return
@@ -1802,7 +1786,7 @@ class BotPlatform(ABC):
             )
             self._expect_input(ctx.user_id, self._receive_schedules)
             return
-        number = _decimal_int(text)
+        number = parse_decimal_int(text)
         if number is None:
             await ctx.reply_text(
                 "Invalid number. Try again (or /cancel):"
@@ -3120,7 +3104,7 @@ class BotPlatform(ABC):
     ) -> str | None:
         text = text.strip()
         if text.isdecimal():
-            number = _decimal_int(text)
+            number = parse_decimal_int(text)
             if number is None:
                 return None
             idx = number - first_number
