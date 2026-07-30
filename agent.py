@@ -961,7 +961,19 @@ async def _run_with_inject_watch(
         if injected is not None:
             injected.append(msg)
         call_task.cancel()
-        await await_cancelled(call_task)
+        try:
+            await call_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # Both tasks can complete on the same event-loop tick. The
+            # injected message intentionally wins that race, so a completed
+            # planner/merge failure belongs to the abandoned attempt rather
+            # than escaping and preventing the restart.
+            logger.debug(
+                "Discarding internal backend failure after an inject",
+                exc_info=True,
+            )
         return None, True
     # The call finished first; stop watching without consuming a message.
     watch_task.cancel()

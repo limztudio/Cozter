@@ -135,6 +135,18 @@ class BotCommandTests(unittest.TestCase):
         self._run(self.bot.cmd_context(self._ctx(args="8000")))
         self.assertEqual(workspace.get_history_budget(self.ws), 8000)
 
+    def test_numeric_commands_reject_overlong_decimal_input(self) -> None:
+        too_long = "9" * 5_000
+
+        for handler in (
+            self.bot.cmd_compact,
+            self.bot.cmd_context,
+            self.bot.cmd_colony,
+        ):
+            with self.subTest(handler=handler.__name__):
+                self._run(handler(self._ctx(args=too_long)))
+                self.assertEqual(self._last(), "Error: number is too large.")
+
     # -- /doctor -----------------------------------------------------------
     def test_doctor_lists_every_direct_backend(self) -> None:
         self._run(self.bot.cmd_doctor(self._ctx()))

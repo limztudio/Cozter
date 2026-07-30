@@ -666,6 +666,7 @@ class ScheduleParserTests(unittest.TestCase):
 
     def test_schedule_parsers_ignore_malformed_values(self) -> None:
         self.assertEqual(schedules.parse_days(["mon"]), [])
+        self.assertEqual(schedules.parse_days("9" * 5_000), [])
         self.assertIsNone(schedules.parse_time(930))
         self.assertIsNone(schedules.parse_iso(930))
 

@@ -202,7 +202,13 @@ def parse_days(text: object) -> list[str]:
     days: list[str] = []
     for p in parts:
         if p.isdecimal():
-            n = int(p)
+            try:
+                n = int(p)
+            except ValueError:
+                # Python limits conversion of extremely long decimal strings.
+                # User input should be treated as an invalid day selector, not
+                # allowed to abort the schedule-creation flow.
+                return []
             if not (1 <= n <= 7):
                 return []
             days.append(DAY_ABBREV[n - 1])

@@ -82,6 +82,17 @@ async def maybe_auto_title(
         if not title:
             return
         async with workspace_mod.get_lock(workspace_path):
+            # A compaction (or a manual rename) can finish while this title
+            # request is in flight. Re-check under the same lock used by the
+            # writer so this stale fallback never overwrites the newer name.
+            latest = session.load_session(workspace_path, session_id)
+            if latest is None or not session.is_default_name(
+                latest.get("name"),
+            ):
+                logger.debug(
+                    "Skipping stale auto-title for session %s", session_id,
+                )
+                return
             session.set_session_name(workspace_path, session_id, title)
         logger.info("Session %s auto-titled: %s", session_id, title)
     except Exception:

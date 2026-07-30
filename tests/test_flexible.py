@@ -556,6 +556,23 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(restarting)
         self.assertEqual(injected, ["also include the new requirement"])
 
+    async def test_inject_wins_over_a_simultaneous_internal_failure(self) -> None:
+        """A failed abandoned planner/merge must not suppress an inject."""
+        inject_q: asyncio.Queue[str] = asyncio.Queue()
+        inject_q.put_nowait("include the new requirement")
+        injected: list[str] = []
+
+        async def failing_call() -> str:
+            raise RuntimeError("planner connection dropped")
+
+        text, restarting = await agent._run_with_inject_watch(
+            failing_call(), inject_q, injected,
+        )
+
+        self.assertIsNone(text)
+        self.assertTrue(restarting)
+        self.assertEqual(injected, ["include the new requirement"])
+
     async def test_final_merge_closes_a_bot_inject_window(self) -> None:
         class ClosingQueue(asyncio.Queue[str]):
             def __init__(self) -> None:

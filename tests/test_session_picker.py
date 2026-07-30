@@ -24,6 +24,7 @@ class SessionPickerTests(unittest.TestCase):
     def test_number_out_of_range(self) -> None:
         self.assertIsNone(self._pick("9"))
         self.assertIsNone(self._pick("0"))
+        self.assertIsNone(self._pick("9" * 5_000))
 
     def test_pick_by_exact_name_case_insensitive(self) -> None:
         picked = self._pick("beta notes")
@@ -38,6 +39,11 @@ class SessionPickerTests(unittest.TestCase):
     def test_no_match_or_empty(self) -> None:
         self.assertIsNone(self._pick("zzz"))
         self.assertIsNone(self._pick(""))
+
+    def test_option_picker_rejects_overlong_decimal_input(self) -> None:
+        self.assertIsNone(BotPlatform._pick_option(
+            "9" * 5_000, ["first", "second"],
+        ))
 
 
 if __name__ == "__main__":

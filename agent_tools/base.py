@@ -202,7 +202,7 @@ def coerce_int_arg(
     try:
         # value is an arbitrary tool arg; the except handles non-numerics.
         number = int(value)  # type: ignore[arg-type, call-overload]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         number = default
     number = max(minimum, number)
     if maximum is not None:

@@ -41,6 +41,25 @@ class AgentToolHelperTests(unittest.TestCase):
             coerce_int_arg("99", default=10, minimum=1, maximum=20),
             20,
         )
+        self.assertEqual(
+            coerce_int_arg(float("inf"), default=10, minimum=1, maximum=20),
+            10,
+        )
+
+    def test_read_file_rejects_non_finite_range_values(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "note.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("hello\n")
+
+                result = await ReadFileTool().run(
+                    tmp, {"path": "note.txt", "offset": float("inf")},
+                )
+
+                self.assertEqual(result, "Error: 'offset' must be an integer")
+
+        asyncio.run(run())
 
     def test_replacement_helpers_validate_and_apply(self) -> None:
         self.assertEqual(
@@ -741,6 +760,32 @@ class ApplyPatchToolTests(unittest.TestCase):
             self.assertIn("did not apply", out)
             with open(p, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "alpha\nbeta\n")
+
+    def test_incomplete_hunk_is_rejected_without_partial_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "partial.txt")
+            self._write(p, "old\nsecond\n")
+
+            out = self._run(tmp, (
+                "--- a/partial.txt\n+++ b/partial.txt\n"
+                "@@ -1,2 +1,2 @@\n-old\n+new\n"
+            ))
+
+            self.assertIn("could not parse patch", out)
+            self.assertIn("line counts", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "old\nsecond\n")
+
+    def test_overlong_hunk_number_is_reported_as_invalid_patch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self._run(tmp, (
+                "--- /dev/null\n+++ b/new.txt\n"
+                f"@@ -0,0 +1,{('9' * 5_000)} @@\n+new\n"
+            ))
+
+            self.assertIn("could not parse patch", out)
+            self.assertIn("invalid line count", out)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "new.txt")))
 
     def test_fuzzy_trailing_whitespace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

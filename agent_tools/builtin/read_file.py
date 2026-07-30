@@ -72,11 +72,11 @@ class ReadFileTool(AgentTool):
         limit = args.get("limit")
         try:
             start = max(0, int(offset)) if offset is not None else 0
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return "Error: 'offset' must be an integer"
         try:
             count = int(limit) if limit is not None else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return "Error: 'limit' must be an integer"
         if count is not None and count < 0:
             return "Error: 'limit' must be >= 0"

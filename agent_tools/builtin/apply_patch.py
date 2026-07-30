@@ -45,9 +45,27 @@ class _Hunk:
         return (
             self.old_count is not None
             and self.new_count is not None
-            and len(self.old) >= self.old_count
-            and len(self.new) >= self.new_count
+            and len(self.old) == self.old_count
+            and len(self.new) == self.new_count
         )
+
+    def validate(self) -> None:
+        """Reject a hunk whose body does not match its declared line counts.
+
+        A truncated diff must never be treated as a smaller valid edit: doing
+        so can silently apply only the first part of a requested change.  Keep
+        count-less fallback headers permissive for backwards compatibility,
+        but validate every normal unified-diff hunk before it can reach the
+        file writer.
+        """
+        if self.old_count is None or self.new_count is None:
+            return
+        if len(self.old) != self.old_count or len(self.new) != self.new_count:
+            raise _PatchError(
+                "hunk line counts do not match its header "
+                f"(expected -{self.old_count}/+{self.new_count}, got "
+                f"-{len(self.old)}/+{len(self.new)})"
+            )
 
 
 class _FilePatch:
@@ -127,9 +145,12 @@ def _parse_hunk_header(
     )
     if match is None:
         return 1, None, None
-    start = int(match.group(1))
-    old_count = int(match.group(2) or "1")
-    new_count = int(match.group(3) or "1")
+    try:
+        start = int(match.group(1))
+        old_count = int(match.group(2) or "1")
+        new_count = int(match.group(3) or "1")
+    except ValueError as exc:
+        raise _PatchError("hunk header contains an invalid line count") from exc
     return start, old_count, new_count
 
 
@@ -165,6 +186,8 @@ def _parse_patch(text: str) -> list[_FilePatch]:
         if line.startswith("@@"):
             if current is None:
                 raise _PatchError("hunk (@@) before any file header")
+            if hunk is not None:
+                hunk.validate()
             start, old_count, new_count = _parse_hunk_header(line)
             hunk = _Hunk(start, old_count, new_count)
             current.hunks.append(hunk)
@@ -188,7 +211,11 @@ def _parse_patch(text: str) -> list[_FilePatch]:
         elif marker == "+":
             hunk.new.append(content)
         else:
+            hunk.validate()
             hunk = None  # a non-body line ends this hunk
+
+    if hunk is not None:
+        hunk.validate()
 
     return [p for p in patches if p.hunks]
 
