@@ -639,8 +639,10 @@ picker queries the configured Z.ai `/models` endpoint and retains its curated
 fallback if the account cannot be queried. Codex, llama, and Z.ai refresh
 their live catalogs periodically, so long-running services see CLI, server,
 and account model changes. Copilot uses a short ACP handshake without sending
-a prompt, and refreshes a successful account catalog periodically. The
-`copilot` backend keeps prompts under the Windows
+a prompt, and refreshes a successful account catalog periodically. Its picker
+also accepts ACP's provider-grouped model selectors, so account-approved
+models stay visible without a hard-coded catalog. The `copilot` backend keeps
+prompts under the Windows
 command-line limit by dropping the oldest composed context when a prompt
 exceeds its cap; the current user message is kept at the tail. Each Copilot
 run also uses a short-lived private CLI home, so its planner, worker, and

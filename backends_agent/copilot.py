@@ -569,6 +569,8 @@ def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
     Copilot's session metadata has an ``availableModels`` list with exact
     model IDs. ACP's standard ``configOptions`` model selector is retained
     as a compatibility fallback for builds that do not expose that metadata.
+    The ACP category is optional, so recognize the protocol's usual
+    ``model``/``models`` selector IDs and labels as well.
     """
     if not isinstance(payload, dict):
         return ()
@@ -590,10 +592,15 @@ def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
             continue
         category = option.get("category")
         option_id = option.get("id")
+        option_name = option.get("name")
         is_model_selector = (
             isinstance(category, str) and category.casefold() == "model"
         ) or (
-            isinstance(option_id, str) and option_id.casefold() == "model"
+            isinstance(option_id, str)
+            and option_id.casefold() in {"model", "models"}
+        ) or (
+            isinstance(option_name, str)
+            and option_name.casefold() in {"model", "models"}
         )
         if not is_model_selector or option.get("type") != "select":
             continue
@@ -605,23 +612,36 @@ def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
 
 
 def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
-    """Normalize a structured ACP model list and always lead with auto."""
+    """Normalize a structured ACP model list and always lead with auto.
+
+    ACP permits select options to be grouped (for example, by provider). A
+    grouped catalog is still account-authoritative, so preserve its declared
+    order while flattening its nested ``options`` lists.
+    """
     if not isinstance(values, list):
         return ()
 
     models: list[str] = []
     seen: set[str] = set()
-    for value in values:
-        if not isinstance(value, dict):
-            continue
-        model = value.get(key)
-        if not isinstance(model, str):
-            continue
-        model = model.strip()
-        if model and model not in seen:
-            seen.add(model)
-            if model != "auto":
-                models.append(model)
+
+    def collect(options: object) -> None:
+        if not isinstance(options, list):
+            return
+        for value in options:
+            if not isinstance(value, dict):
+                continue
+            model = value.get(key)
+            if isinstance(model, str):
+                model = model.strip()
+                if model and model not in seen:
+                    seen.add(model)
+                    if model != "auto":
+                        models.append(model)
+            # ACP's grouped-select form nests another list under ``options``.
+            # An ordinary option has no such list, so this is a no-op there.
+            collect(value.get("options"))
+
+    collect(values)
     # Auto is an official Copilot model-selection sentinel. It remains
     # available even when an ACP catalog lists concrete models only.
     return ("auto", *models) if models or "auto" in seen else ()

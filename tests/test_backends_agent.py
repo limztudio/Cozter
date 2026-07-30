@@ -568,6 +568,54 @@ class BackendModelTests(unittest.TestCase):
             ("auto", "company-allowed"),
         )
 
+    def test_copilot_acp_parser_flattens_grouped_model_selector(self) -> None:
+        """Current ACP permits provider-grouped options without a category."""
+        self.assertEqual(
+            copilot_mod._parse_acp_model_options({
+                "configOptions": [{
+                    "id": "models",
+                    "name": "Models",
+                    "type": "select",
+                    "options": [
+                        {
+                            "group": "OpenAI",
+                            "options": [
+                                {"value": "gpt-5.6-sol"},
+                                {"value": "gpt-5.6-terra"},
+                            ],
+                        },
+                        {"value": "auto"},
+                        {
+                            "group": "Anthropic",
+                            "options": [
+                                {"value": "claude-sonnet-5"},
+                                {"value": "gpt-5.6-sol"},
+                            ],
+                        },
+                    ],
+                }],
+            }),
+            (
+                "auto",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "claude-sonnet-5",
+            ),
+        )
+
+    def test_copilot_acp_parser_uses_model_label_without_category(self) -> None:
+        self.assertEqual(
+            copilot_mod._parse_acp_model_options({
+                "configOptions": [{
+                    "id": "account-catalog",
+                    "name": "Model",
+                    "type": "select",
+                    "options": [{"value": "company-allowed"}],
+                }],
+            }),
+            ("auto", "company-allowed"),
+        )
+
     def test_copilot_acp_parser_rejects_missing_or_malformed_selector(self) -> None:
         for payload in (
             None,
