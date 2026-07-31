@@ -34,9 +34,12 @@ drop-in plugin system that works across every backend.
   sessions, last-session pointers, compaction history, agent choice,
   model, permission level, reasoning effort, summary backend, colony
   (long-term memory), uploads, generated image attachments, and schedules
-- **Durable sessions with two-layer memory**: each conversation
-  auto-compacts every N turns into a scratch summary plus a persistent
-  long-term-memory list, both injected into every subsequent turn
+- **Durable sessions with layered memory**: once a session reaches its
+  configured stored-message threshold, Cozter compacts older history into a
+  scratch summary and rewrites its long-term-memory list while retaining the
+  latest five raw messages. Colony, long-term memory, summaries, and recent
+  messages are prepended subject to the configured character budget; the new
+  user message stays intact
 - **Persistent turn queues on Telegram, Slack, and Signal**: if a user sends
   more work while an agent turn is running, or while an update restart is
   pending, the messages are queued on disk and restored after restart
@@ -72,6 +75,11 @@ From the parent directory you can run the package form instead:
 ```bash
 python -m Cozter -cli
 ```
+
+`-cli` and `--cli` are equivalent. Use `-h` or `--help` to print the
+launcher usage without creating configuration or bootstrapping the virtual
+environment; unrecognized options exit with an error rather than starting a
+daemon.
 
 For Telegram, Slack, or Signal daemon mode, run without `-cli`:
 
@@ -271,7 +279,7 @@ manual "continue".
 `max_permission` (default `auto`) caps the highest `/permission` mode any
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <
 full`. `full` is the only mode that requests each CLI's explicit bypass flag
-(arbitrary code execution) for anyone on the `user_ids` allowlist. Keep the
+(arbitrary code execution) for any authorized chat participant. Keep the
 default `auto` to prevent that bypass, or set it to `full` only when an
 operator explicitly accepts that risk; provider-native sandbox and approval
 behavior still differs by CLI. `deny` exposes no tools to the HTTP and Copilot
@@ -357,6 +365,11 @@ The session router is only used when there is no valid
 after `/newsession`. Otherwise each user continues the same session across
 bot restarts and platform reconnects.
 
+Colony consolidation includes sessions whose long-term list is empty, so their
+names still help it retire stale workspace memory. If a workspace has no
+sessions left, a colony pass clears its shared memory rather than carrying
+deleted-session facts into later conversations.
+
 New sessions begin with a timestamp-based placeholder name. After their first
 assistant reply, Cozter asks the selected summary backend for a short topical
 title for the session picker. The result is written only while that placeholder
@@ -407,6 +420,10 @@ the default `flexible` meta-agent; its direct backends start at 1. `/open`
 also accepts a recent-workspace number directly as `/open 2`.
 If a picker entry is not recognized, Cozter keeps the picker open and asks
 again; use `/cancel` to leave it.
+
+`/context` applies a character budget to each composed turn. Cozter never
+truncates the current user message: it trims saved context first and, if
+needed, omits the continuation cue and sends the message alone.
 
 An accepted `/inject` is either folded into a restarted turn or rejected once
 the final reply has closed its injection window. This applies to every
@@ -478,10 +495,10 @@ tools: `bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`,
 `apply_patch`, `delete_file`, `copy_file`, `move_file`, `make_dir`,
 `list_dir`, `tree`, `glob`, `grep`, `web_search`, and `web_fetch`.
 
-Drop a `.py` file into `agent_tools/plugins/` and every agent picks it up
-on next restart. Files whose names start with `_` are skipped, which is
-useful for disabled examples or local scratch tools. One file, two
-invocation paths:
+Drop a `.py` file into `agent_tools/plugins/` and every agent discovers it
+on next restart. Whether a backend can invoke it still follows its selected
+permission mode. Files whose names start with `_` are skipped, which is useful
+for disabled examples or local scratch tools. One file, two invocation paths:
 
 - **HTTP backends** (`llama`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
@@ -491,6 +508,11 @@ invocation paths:
   instead lists each plugin in their prompt and tells the model to
   invoke it through the backend's own `bash` / `shell` tool as
   `python -m Cozter.agent_tools.plugins.<filename> '<JSON args>'`.
+
+For HTTP backends, `deny` exposes no tools. Under `/permission confirm`,
+plugins are never exposed or executed—even if a plugin reuses a built-in
+read-only tool's name. That mode uses only Cozter's fixed read-only built-ins;
+select `auto` or `full` when an HTTP plugin needs to run.
 
 Plugin template:
 
