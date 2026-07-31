@@ -209,6 +209,16 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             },
         }])
 
+    def test_sse_error_envelope_is_surfaced(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "quota exhausted"):
+            self._stream([{"error": {"message": "quota exhausted"}}])
+
+    def test_sse_error_message_is_bounded(self) -> None:
+        with self.assertRaises(RuntimeError) as raised:
+            self._stream([{"error": "x" * 2_000}])
+
+        self.assertLessEqual(len(str(raised.exception)), 520)
+
     def test_malformed_tool_call_delta_is_a_no_op(self) -> None:
         buffers: dict[int, dict[str, object]] = {}
         malformed_deltas: tuple[object, ...] = (

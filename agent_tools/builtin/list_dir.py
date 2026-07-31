@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any, ClassVar
 
@@ -51,22 +52,31 @@ class ListDirTool(AgentTool):
         )
 
         try:
-            entries = sorted(os.listdir(target))
+            lines, entry_count = await asyncio.to_thread(
+                self._list_entries, target, max_results,
+            )
         except OSError as exc:
             return f"List failed: {exc}"
 
-        if not entries:
+        if not lines:
             return f"Directory is empty: {raw_path}"
 
-        lines: list[str] = []
-        for entry in entries[:max_results]:
-            full = os.path.join(target, entry)
-            lines.append(f"{entry}/" if os.path.isdir(full) else entry)
-
-        if len(entries) > max_results:
-            lines.append(f"... ({len(entries) - max_results} more entries)")
+        if entry_count > max_results:
+            lines.append(f"... ({entry_count - max_results} more entries)")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _list_entries(
+        target: str, max_results: int,
+    ) -> tuple[list[str], int]:
+        """Enumerate, sort, and classify entries off the event loop."""
+        entries = sorted(os.listdir(target))
+        lines = [
+            f"{entry}/" if os.path.isdir(os.path.join(target, entry)) else entry
+            for entry in entries[:max_results]
+        ]
+        return lines, len(entries)
 
     def summarize(self, args: dict) -> str:
         return summarize_path("list_dir", args, ".")

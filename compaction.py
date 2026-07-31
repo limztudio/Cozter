@@ -30,6 +30,14 @@ KEEP_RECENT_AFTER_COMPACT = 5
 MAX_SUMMARY_CHARS = 80_000  # ~20K tokens - safe for most models
 COMPACT_TIMEOUT = 240  # seconds; large sessions with rich long-term lists need headroom
 
+# A previously persisted summary is model output, so it is not guaranteed to
+# respect the requested 80-200 word target.  Reserve most of the compaction
+# prompt for the raw messages that actually need compacting; otherwise one
+# oversized old summary can leave no room for even a single message and block
+# every later compaction attempt.
+_PREVIOUS_SUMMARY_FRACTION = 4
+_PREVIOUS_SUMMARY_TRUNCATION_MARKER = "\n… [previous summary truncated]\n"
+
 SUMMARY_PROMPT = (
     "You are compacting a conversation into two memory layers: a SCRATCH "
     "summary (rewritten each compaction) and LONG-TERM memory (persistent "
@@ -116,6 +124,27 @@ def _parse_output(
     return summary, long_term, title
 
 
+def _previous_summary_budget() -> int:
+    """Return the portion of the compaction input reserved for old summary."""
+    return max(1, MAX_SUMMARY_CHARS // _PREVIOUS_SUMMARY_FRACTION)
+
+
+def _bounded_previous_summary(summary: str) -> str:
+    """Clip pathological stored summaries while preserving both ends.
+
+    Keeping the beginning retains the original task framing; keeping the end
+    retains the most recently recorded state and open work.
+    """
+    budget = _previous_summary_budget()
+    if len(summary) <= budget:
+        return summary
+    marker = _PREVIOUS_SUMMARY_TRUNCATION_MARKER
+    if budget <= len(marker):
+        return summary[:budget]
+    keep = (budget - len(marker)) // 2
+    return summary[:keep] + marker + summary[-(budget - len(marker) - keep):]
+
+
 async def maybe_compact(
     workspace_path: str, session_id: str, summary_model: str | None = None,
     *, backend_name: str | None = None,
@@ -181,7 +210,15 @@ async def _maybe_compact_under_maintenance_lock(
         return
     # Reject summaries that are suspiciously short compared to the existing
     # one - a sign of a truncated or failed backend response.
-    min_len = max(100, len(existing_summary) // 2)
+    # An oversized stored summary is explicitly truncated before the next
+    # model call. It may therefore be replaced by a normally sized summary;
+    # comparing the result with the pathological original would reject every
+    # recovery attempt even after the prompt itself has room again.
+    min_len = (
+        100
+        if len(existing_summary) > _previous_summary_budget()
+        else max(100, len(existing_summary) // 2)
+    )
     if len(new_summary) < min_len:
         logger.error(
             "Compaction summary too short (%d chars, min %d) "
@@ -285,7 +322,10 @@ async def compact_session(
             parts.extend(lt_lines)
             parts.append("")
     if existing_summary:
-        parts.append(f"Previous summary:\n{existing_summary}\n")
+        parts.append(
+            "Previous summary:\n"
+            f"{_bounded_previous_summary(existing_summary)}\n"
+        )
     parts.append("Conversation to summarize:")
 
     # Add a contiguous oldest prefix until we hit the budget. cap=None so

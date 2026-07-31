@@ -694,12 +694,20 @@ def _build_contextual_prompt(
         continuation = (
             "Continue the conversation. The user's new message follows.\n"
         )
+        # Preserve the user's request intact even under a tight history
+        # setting. If the required continuation wrapper itself would push an
+        # otherwise fitting request over budget, omit both it and all saved
+        # context rather than quietly exceeding the configured cap.
+        fixed_length = len(continuation) + 1 + len(prompt)
+        if fixed_length > budget:
+            return prompt
         # Include join separators in the fixed cost. If the user's new
-        # message alone exceeds the setting, it remains intact and all saved
-        # context is dropped rather than cutting off the request itself.
+        # message (plus its required continuation wrapper) exceeds the
+        # setting, it remains intact and all saved context is dropped rather
+        # than cutting off the request itself.
         context_budget = max(
             0,
-            budget - len(prompt) - len(continuation) - len(descriptors) - 1,
+            budget - fixed_length - len(descriptors),
         )
         quotas = _context_quotas(
             [len(natural) for _render, natural in descriptors], context_budget,

@@ -1,12 +1,14 @@
 """Ensure filesystem discovery scans do not block the asyncio event loop."""
 
 import asyncio
+import os
 import tempfile
 import threading
 import unittest
 from unittest import mock
 
 from Cozter.agent_tools.builtin.glob import GlobTool
+from Cozter.agent_tools.builtin.list_dir import ListDirTool
 from Cozter.agent_tools.builtin.tree import TreeTool
 
 
@@ -19,6 +21,41 @@ async def _wait_for_start(start: threading.Event) -> None:
 
 
 class DiscoveryToolAsyncTests(unittest.TestCase):
+    def test_list_dir_scan_runs_off_the_event_loop(self) -> None:
+        async def run() -> None:
+            started = threading.Event()
+            release = threading.Event()
+            real_listdir = os.listdir
+
+            def slow_listdir(path: str) -> list[str]:
+                started.set()
+                release.wait(timeout=1)
+                return real_listdir(path)
+
+            with tempfile.TemporaryDirectory() as workspace:
+                os.mkdir(os.path.join(workspace, "directory"))
+                with open(
+                    os.path.join(workspace, "file.txt"), "w",
+                    encoding="utf-8",
+                ):
+                    pass
+                with mock.patch(
+                    "Cozter.agent_tools.builtin.list_dir.os.listdir",
+                    side_effect=slow_listdir,
+                ):
+                    task = asyncio.create_task(ListDirTool().run(workspace, {}))
+                    try:
+                        await _wait_for_start(started)
+                        self.assertFalse(task.done())
+                    finally:
+                        release.set()
+                    self.assertEqual(
+                        await task,
+                        "directory/\nfile.txt",
+                    )
+
+        asyncio.run(run())
+
     def test_glob_scan_runs_off_the_event_loop(self) -> None:
         async def run() -> None:
             started = threading.Event()

@@ -253,27 +253,34 @@ async def _consolidate_inner(
     backend_name: str | None,
 ) -> bool:
     backend = backends_agent.get_backend(backend_name)
+    existing_colony = get_items(workspace_path)
 
-    # Collect non-empty long_term lists from every session in the workspace.
-    # The session name accompanies each list so the model can judge whether
-    # a colony item's topic is still represented in the workspace.
+    # Collect every session in the workspace, including ones whose long-term
+    # list is empty. The session name accompanies each list so the model can
+    # judge whether a colony item's topic is still represented in the
+    # workspace. Omitting empty lists made a stale colony impossible to retire
+    # once compaction had cleared every session-local item.
     inputs: list[tuple[str, str, list[str]]] = []
     for data in session.list_sessions_with_data(workspace_path):
         lt = data.get("long_term") or []
-        if not lt:
-            continue
         sid = data["id"]
         name = data.get("name") or sid[:8]
         inputs.append((sid, name, lt))
 
     if not inputs:
+        if not existing_colony:
+            logger.info("Colony pass: no sessions in %s", workspace_path)
+            return False
+        # With no sessions left, no current topic can justify retaining a
+        # workspace-wide memory item. Clear deterministically rather than
+        # leaving stale facts injected into every future session forever.
+        async with workspace_mod.get_lock(workspace_path):
+            set_items(workspace_path, [])
         logger.info(
-            "Colony pass: no sessions with long-term items in %s",
-            workspace_path,
+            "Colony pass: cleared %d stale item(s); no sessions remain in %s",
+            len(existing_colony), workspace_path,
         )
-        return False
-
-    existing_colony = get_items(workspace_path)
+        return True
 
     parts: list[str] = ["Current colony list:"]
     if existing_colony:

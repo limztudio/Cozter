@@ -116,10 +116,6 @@ _TOOLS: tuple[AgentTool, ...] = tuple(
 )
 _BY_NAME: dict[str, AgentTool] = {t.name: t for t in _TOOLS}
 
-TOOL_SCHEMA: list[dict[str, Any]] = [
-    {"type": "function", "function": t.schema} for t in _TOOLS
-]
-
 # Tools that only read state - no file writes, no shell, no side effects.
 # These realize the "confirm" permission as a look-but-don't-touch surface
 # for the llama backend: a chat bot can't prompt per tool call, so confirm
@@ -138,10 +134,38 @@ READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
     "web_fetch",
 })
 
-READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = [
-    entry for entry in TOOL_SCHEMA
-    if entry["function"]["name"] in READ_ONLY_TOOL_NAMES
+
+def _is_confirm_read_only(tool: AgentTool | None) -> bool:
+    """Return whether *tool* may be exposed and run in confirm mode.
+
+    A plugin can use the same name as a builtin because registrations are
+    keyed by name.  Names alone therefore are not a permission boundary: a
+    colliding plugin must remain withheld even if it replaces a read-only
+    builtin in the registry.
+    """
+    return (
+        tool is not None
+        and not tool.is_plugin
+        and tool.name in READ_ONLY_TOOL_NAMES
+    )
+
+
+def _read_only_tool_schema(
+    registered_tools: tuple[AgentTool, ...],
+) -> list[dict[str, Any]]:
+    """Build the confirm-mode schema from builtin read-only tools only."""
+    return [
+        {"type": "function", "function": tool.schema}
+        for tool in registered_tools
+        if _is_confirm_read_only(tool)
+    ]
+
+
+TOOL_SCHEMA: list[dict[str, Any]] = [
+    {"type": "function", "function": t.schema} for t in _TOOLS
 ]
+
+READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = _read_only_tool_schema(_TOOLS)
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +237,7 @@ async def execute_tool(
         emit({"type": "tool_result", "name": name, "output": result})
         return result
 
-    if approval == "confirm" and name not in READ_ONLY_TOOL_NAMES:
+    if approval == "confirm" and not _is_confirm_read_only(tool):
         # A chat surface can't prompt per tool call, so "confirm" is a
         # read-only gate: state-changing tools are withheld rather than run
         # unconfirmed. (Ask-before-acting on writes is /style

@@ -218,6 +218,86 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 covered_count - compaction.KEEP_RECENT_AFTER_COMPACT,
             )
 
+    async def test_oversized_previous_summary_can_be_replaced(self) -> None:
+        """A bad historical summary must not block every future compaction."""
+        async def fake_summary(*_args, **_kwargs) -> str:
+            return "[SUMMARY]\n" + ("s" * 100) + "\n[/SUMMARY]"
+
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            session.append_messages(workspace_path, data["id"], [
+                {"role": "user", "content": f"message-{i}"}
+                for i in range(6)
+            ])
+            saved = session.load_session(workspace_path, data["id"])
+            assert saved is not None
+            saved["summary"] = "old-summary " + (
+                "x" * compaction.MAX_SUMMARY_CHARS
+            )
+            session.save_session(workspace_path, data["id"], saved)
+
+            with (
+                mock.patch.object(
+                    compaction.workspace_mod, "get_compact_interval", return_value=1,
+                ),
+                mock.patch.object(
+                    compaction, "run_internal_backend", side_effect=fake_summary,
+                ) as run_summary,
+                mock.patch.object(
+                    compaction.colony, "bump_compact_count", return_value=1,
+                ),
+                mock.patch.object(compaction.colony, "maybe_trigger"),
+            ):
+                await compaction.maybe_compact(
+                    workspace_path, data["id"], "model", backend_name="codex",
+                )
+
+            prompt = run_summary.await_args.args[2]
+            self.assertIn("[previous summary truncated]", prompt)
+            self.assertLess(len(prompt), compaction.MAX_SUMMARY_CHARS)
+            compacted = session.load_session(workspace_path, data["id"])
+            assert compacted is not None
+            self.assertEqual(compacted["summary"], "s" * 100)
+            self.assertEqual(len(compacted["messages"]), 5)
+
+    async def test_colony_can_retire_items_when_sessions_are_empty(self) -> None:
+        """Empty session memory is still evidence for a colony reconciliation."""
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Retired Topic")
+            colony.set_items(workspace_path, ["A stale shared fact."])
+            output = (
+                "[COLONY]\n[/COLONY]\n\n"
+                f"[SESSION:{data['id']}]\n[/SESSION]"
+            )
+            with mock.patch.object(
+                colony, "run_internal_backend", new=mock.AsyncMock(
+                    return_value=output,
+                ),
+            ) as run_consolidate:
+                applied = await colony.consolidate(
+                    workspace_path, "model", backend_name="codex",
+                )
+
+            self.assertTrue(applied)
+            prompt = run_consolidate.await_args.args[2]
+            self.assertIn(f"[SESSION:{data['id']}]", prompt)
+            self.assertEqual(colony.get_items(workspace_path), [])
+
+    async def test_colony_is_cleared_when_no_sessions_remain(self) -> None:
+        """Deleted sessions must not leave stale workspace memory behind."""
+        with tempfile.TemporaryDirectory() as workspace_path:
+            colony.set_items(workspace_path, ["A stale shared fact."])
+            with mock.patch.object(
+                colony, "run_internal_backend", new=mock.AsyncMock(),
+            ) as run_consolidate:
+                applied = await colony.consolidate(
+                    workspace_path, "model", backend_name="codex",
+                )
+
+            self.assertTrue(applied)
+            run_consolidate.assert_not_awaited()
+            self.assertEqual(colony.get_items(workspace_path), [])
+
 
 if __name__ == "__main__":
     unittest.main()

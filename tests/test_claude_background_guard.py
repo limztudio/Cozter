@@ -38,6 +38,7 @@ class BackgroundLaunchMechanismTests(unittest.TestCase):
     def test_does_not_confuse_normal_shell_syntax_with_backgrounding(self) -> None:
         safe_commands = [
             "pytest && ruff check .",
+            "pytest |& tee test.log",
             "pytest &> test.log",
             "printf '%s' '&'",
             "echo hi # `nohup` and & in a comment",

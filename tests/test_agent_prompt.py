@@ -69,6 +69,18 @@ class ContextBudgetTests(unittest.TestCase):
         self.assertIn("[Session Summary]", out)
         self.assertIn("… [truncated]", out)
 
+    def test_continuation_overhead_does_not_exceed_history_budget(self) -> None:
+        """Drop saved context when its wrapper would overflow a fitting prompt."""
+        prompt = "p" * 1_993
+
+        out = agent._build_contextual_prompt(
+            prompt, {"summary": "existing", "long_term": [], "messages": []},
+            budget=2_000,
+        )
+
+        self.assertEqual(out, prompt)
+        self.assertLessEqual(len(out), 2_000)
+
 
 class PromptPolicyTests(unittest.TestCase):
     def test_explicit_session_turn_is_autonomous(self) -> None:

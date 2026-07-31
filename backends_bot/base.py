@@ -2456,7 +2456,7 @@ class BotPlatform(ABC):
                     continue
                 to_fire.append((uid, ws, sched, slot))
 
-        to_fire.sort(key=lambda item: item[2].get("created", ""))
+        to_fire.sort(key=lambda item: str(item[2].get("created") or ""))
 
         for uid, ws, sched, slot in to_fire:
             schedule_id = sched.get("id")

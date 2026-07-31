@@ -763,6 +763,51 @@ class ScheduleParserTests(unittest.TestCase):
             finally:
                 workspace.WORKSPACE_STATE_PATH = old_path
 
+    def test_scheduler_sorts_malformed_created_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = os.path.join(tmp, "ws")
+            os.makedirs(os.path.join(ws, ".cozter"))
+            with open(
+                os.path.join(ws, ".cozter", "schedules.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({
+                    "u1": [
+                        {
+                            "id": "numeric-created",
+                            "days": list(schedules.DAY_ABBREV),
+                            "time": "00:00",
+                            "created": 0,
+                            "chat_id": "u1",
+                            "user_id": "u1",
+                        },
+                        {
+                            "id": "string-created",
+                            "days": list(schedules.DAY_ABBREV),
+                            "time": "00:00",
+                            "created": "2000-01-01T00:00:00",
+                            "chat_id": "u1",
+                            "user_id": "u1",
+                        },
+                    ],
+                }, f)
+
+            old_path = workspace.WORKSPACE_STATE_PATH
+            workspace.WORKSPACE_STATE_PATH = os.path.join(
+                tmp, "workspaces.json",
+            )
+            try:
+                workspace.select_workspace("u1", ws, "test:queue")
+                bot = QueueRestoreBot(["u1"])
+                with mock.patch.object(
+                    bot, "_fire_schedule", new=mock.AsyncMock(),
+                ) as fire:
+                    asyncio.run(bot._scheduler_tick())
+                self.assertEqual(fire.await_count, 2)
+            finally:
+                workspace.WORKSPACE_STATE_PATH = old_path
+
 
 class SessionStateFallbackTests(unittest.TestCase):
     def test_session_loader_normalizes_malformed_fields(self) -> None:

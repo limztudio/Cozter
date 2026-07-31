@@ -10,6 +10,7 @@ code paths.
 import asyncio
 import contextlib
 import faulthandler
+import io
 import os
 import shutil
 import subprocess
@@ -147,6 +148,35 @@ class VenvBootstrapTests(unittest.TestCase):
         )
         exit_mock.assert_called_once_with(23)
         execve_mock.assert_not_called()
+
+
+class LaunchArgumentTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._main = _load_main_module()
+
+    def test_help_exits_without_starting_the_runtime(self) -> None:
+        stdout = io.StringIO()
+        with mock.patch.object(self._main.sys, "stdout", stdout):
+            with self.assertRaises(SystemExit) as exited:
+                self._main._validate_launch_args(["--help"])
+
+        self.assertEqual(exited.exception.code, 0)
+        self.assertIn("Usage: python -m Cozter", stdout.getvalue())
+        self.assertIn("--cli", stdout.getvalue())
+
+    def test_unknown_launch_argument_fails_instead_of_starting_daemon(self) -> None:
+        stderr = io.StringIO()
+        with mock.patch.object(self._main.sys, "stderr", stderr):
+            with self.assertRaises(SystemExit) as exited:
+                self._main._validate_launch_args(["--typo"])
+
+        self.assertEqual(exited.exception.code, 2)
+        self.assertIn("--typo", stderr.getvalue())
+        self.assertIn("--help", stderr.getvalue())
+
+    def test_cli_flags_are_accepted(self) -> None:
+        self._main._validate_launch_args(["-cli"])
+        self._main._validate_launch_args(["--cli"])
 
 
 class DumpRuntimeDiagnosticsTests(unittest.TestCase):

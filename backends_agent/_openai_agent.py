@@ -598,12 +598,22 @@ async def _stream_once(
                 except json.JSONDecodeError:
                     logger.debug("Non-JSON SSE line: %r", data)
                     continue
-                # Providers occasionally send non-completion events on the
-                # same SSE stream (or a proxy can emit a JSON error shape).
-                # Treat anything outside the chat-completions delta shape as
-                # ignorable rather than letting an AttributeError end a turn.
+                # Providers occasionally send malformed non-completion events
+                # on the same SSE stream. Ignore those rather than letting an
+                # AttributeError end a turn, but surface explicit errors.
                 if not isinstance(obj, dict):
                     continue
+                if "error" in obj:
+                    error = obj["error"]
+                    message = (
+                        error.get("message")
+                        if isinstance(error, dict) else error
+                    )
+                    if not isinstance(message, str) or not message.strip():
+                        message = str(error)
+                    raise RuntimeError(
+                        f"{label} stream error: {message.strip()[:500]}"
+                    )
                 choices = obj.get("choices")
                 if not isinstance(choices, list) or not choices:
                     continue

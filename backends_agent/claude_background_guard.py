@@ -185,6 +185,7 @@ def _has_background_operator(command: str) -> bool:
         following = command[index + 1] if index + 1 < len(command) else ""
         if (
             previous == "&"
+            or previous == "|"
             or following == "&"
             or previous == ">"
             or following == ">"

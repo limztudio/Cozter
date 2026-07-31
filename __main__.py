@@ -4,6 +4,42 @@ import sys
 import time
 from importlib.util import find_spec
 
+
+_CLI_MODE_FLAGS = frozenset({"-cli", "--cli"})
+_HELP_FLAGS = frozenset({"-h", "--help"})
+_USAGE = """Usage: python -m Cozter [OPTION]
+
+Start Cozter's daemon chat surface by default.
+
+Options:
+  -cli, --cli  run the local terminal chat surface
+  -h, --help   show this help and exit
+"""
+
+
+def _validate_launch_args(args: list[str]) -> None:
+    """Print help or reject unsupported launcher arguments before startup.
+
+    This runs only for an actual module/script launch, never on a normal
+    import. In particular, help and typoed flags must not create config state,
+    bootstrap a virtual environment, or accidentally start a daemon.
+    """
+    if any(arg in _HELP_FLAGS for arg in args):
+        print(_USAGE, end="")
+        raise SystemExit(0)
+    unknown = [arg for arg in args if arg not in _CLI_MODE_FLAGS]
+    if unknown:
+        print(
+            "error: unrecognized argument(s): " + " ".join(unknown),
+            file=sys.stderr,
+        )
+        print("Run `python -m Cozter --help` for usage.", file=sys.stderr)
+        raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    _validate_launch_args(sys.argv[1:])
+
 # Re-launch as module if run as `python Cozter` (no package context).
 # Forward any CLI args (e.g. -cli) so flags survive the re-exec.
 if __name__ == "__main__" and not __package__:
@@ -436,8 +472,7 @@ async def update_loop(
 
 def _cli_mode_requested() -> bool:
     """Return True if the user passed -cli / --cli on the command line."""
-    flags = {"-cli", "--cli"}
-    return any(arg in flags for arg in sys.argv[1:])
+    return any(arg in _CLI_MODE_FLAGS for arg in sys.argv[1:])
 
 
 # Two-phase CLI lifecycle, signalled via one env var:
