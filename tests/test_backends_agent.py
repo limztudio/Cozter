@@ -987,9 +987,10 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
 
-    def test_fallback_picker_includes_current_text_models(self) -> None:
+    def test_fallback_picker_includes_current_agent_models(self) -> None:
         self.assertEqual(zai_mod._FALLBACK_MODELS, (
             "glm-5.2",
+            "glm-5v-turbo",
             "glm-5.1",
             "glm-5-turbo",
             "glm-5",
@@ -1161,6 +1162,17 @@ class ZaiBackendTests(unittest.TestCase):
         )
         self.assertEqual(
             backend._effort_fields(50, "glm-5.1"),
+            {"thinking": {"type": "enabled"}},
+        )
+
+    def test_glm_5v_turbo_effort_uses_thinking_switch(self) -> None:
+        backend = ZaiBackend()
+        self.assertEqual(
+            backend._effort_fields(49, "glm-5v-turbo"),
+            {"thinking": {"type": "disabled"}},
+        )
+        self.assertEqual(
+            backend._effort_fields(50, "glm-5v-turbo"),
             {"thinking": {"type": "enabled"}},
         )
 

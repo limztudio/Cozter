@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 # account's ``/models`` catalog is preferred whenever it can be queried.
 _FALLBACK_MODELS = (
     "glm-5.2",
+    # Current multimodal coding model. It accepts text-only agent turns and
+    # function calls, so it stays usable even though Cozter does not yet send
+    # image inputs through this backend.
+    "glm-5v-turbo",
     "glm-5.1",
     "glm-5-turbo",
     "glm-5",

@@ -21,9 +21,9 @@ drop-in plugin system that works across every backend.
   - `llama` — an unauthenticated OpenAI-compatible HTTP server (such as
     llama-server or LM Studio); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
-  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.2`, `glm-5.1`, …);
-    OpenAI-compatible, so it shares the in-process loop — set `zai_api_key`
-    in config
+  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.2`,
+    `glm-5v-turbo`, `glm-5.1`, …); OpenAI-compatible, so it shares the
+    in-process loop — set `zai_api_key` in config
 - **Four chat surfaces**, selected at launch:
   - Telegram (`python -m Cozter`)
   - Slack (Socket Mode; native Markdown rendering for AI replies; same
@@ -648,9 +648,10 @@ any backend, use `/style collaborative` — it pauses the turn (via
 The `llama` model picker queries `llama_server_url/v1/models` and falls
 back to `auto` if the server is down or returns no model IDs. The `zai`
 picker queries the configured Z.ai `/models` endpoint and retains its curated
-fallback if the account cannot be queried. Codex, llama, and Z.ai refresh
-their live catalogs periodically, so long-running services see CLI, server,
-and account model changes. Copilot uses a short ACP handshake without sending
+agent-capable fallback, including `glm-5v-turbo`, if the account cannot be
+queried. Codex, llama, and Z.ai refresh their live catalogs periodically, so
+long-running services see CLI, server, and account model changes. Copilot
+uses a short ACP handshake without sending
 a prompt, and refreshes a successful account catalog periodically. Its picker
 also accepts ACP's provider-grouped model selectors, so account-approved
 models stay visible without a hard-coded catalog. The `copilot` backend keeps
