@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 from ..base import (
     AgentTool,
     apply_string_replacement,
+    path_property,
     read_text_for_edit,
     replacement_properties,
     resolve_inside_workspace,
@@ -28,7 +29,7 @@ class EditFileTool(AgentTool):
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
+            "path": path_property(),
             **replacement_properties(),
         },
         "required": ["path", "old_string", "new_string"],

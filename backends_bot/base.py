@@ -132,17 +132,6 @@ class BotContext:
             self.chat_id, text, rich=rich,
         )
 
-    async def edit_text(
-        self, handle: MessageHandle, text: str, *, rich: bool = False,
-    ) -> None:
-        await self.platform.edit_text(handle, text, rich=rich)
-
-    async def delete_message(self, handle: MessageHandle) -> None:
-        await self.platform.delete_message(handle)
-
-    async def send_file(self, path: str) -> None:
-        await self.platform.send_file(self.chat_id, path)
-
 
 # Handler signature: callback taking a BotContext.
 Handler = Callable[[BotContext], Awaitable[None]]
@@ -545,6 +534,34 @@ class BotPlatform(ABC):
         return False
 
     @staticmethod
+    def _select_queue_entry(
+        q: asyncio.Queue,
+        predicate: Callable[[QueueEntry], bool],
+        *,
+        requeue_selected: bool = False,
+    ) -> QueueEntry | None:
+        """Select the first matching entry while preserving FIFO order.
+
+        When *requeue_selected* is true, restore the match ahead of every
+        remaining entry. This makes the same stable queue partition usable
+        for both selecting a runnable entry and promoting a user's answer.
+        """
+        selected: QueueEntry | None = None
+        buffered: list[QueueEntry] = []
+        while not q.empty():
+            entry = q.get_nowait()
+            if selected is None and predicate(entry):
+                selected = entry
+            else:
+                buffered.append(entry)
+
+        if selected is not None and requeue_selected:
+            q.put_nowait(selected)
+        for entry in buffered:
+            q.put_nowait(entry)
+        return selected
+
+    @staticmethod
     def _pop_next_queue_entry(
         q: asyncio.Queue, *, ephemeral_only: bool = False,
     ) -> QueueEntry | None:
@@ -556,38 +573,18 @@ class BotPlatform(ABC):
         """
         if not ephemeral_only:
             return q.get_nowait()
-
-        selected: QueueEntry | None = None
-        buffered: list[QueueEntry] = []
-        while not q.empty():
-            entry = q.get_nowait()
-            if selected is None and entry[3]:
-                selected = entry
-            else:
-                buffered.append(entry)
-
-        for entry in buffered:
-            q.put_nowait(entry)
-        return selected
+        return BotPlatform._select_queue_entry(q, lambda entry: entry[3])
 
     @staticmethod
     def _promote_queue_entry(
         q: asyncio.Queue, entry_id: str,
     ) -> None:
         """Move a queued entry to the front, preserving all others."""
-        selected: QueueEntry | None = None
-        buffered: list[QueueEntry] = []
-        while not q.empty():
-            entry = q.get_nowait()
-            if selected is None and entry[2] == entry_id:
-                selected = entry
-            else:
-                buffered.append(entry)
-
-        if selected is not None:
-            q.put_nowait(selected)
-        for entry in buffered:
-            q.put_nowait(entry)
+        BotPlatform._select_queue_entry(
+            q,
+            lambda entry: entry[2] == entry_id,
+            requeue_selected=True,
+        )
 
     async def _persist_promote(
         self, uid: str, entry_id: str,

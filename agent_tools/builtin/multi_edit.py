@@ -9,6 +9,7 @@ from ..base import (
     AgentTool,
     apply_string_replacement,
     object_parameters,
+    path_property,
     read_text_for_edit,
     replacement_properties,
     resolve_inside_workspace,
@@ -31,7 +32,7 @@ class MultiEditTool(AgentTool):
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
+            "path": path_property(),
             "edits": {
                 "type": "array",
                 "description": (

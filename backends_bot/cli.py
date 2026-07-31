@@ -24,7 +24,6 @@ import threading
 
 from ..utils import await_cancelled, create_background_task
 from .base import (
-    AttachmentInfo,
     BotContext,
     BotPlatform,
     MessageHandle,
@@ -239,7 +238,6 @@ class CliBot(BotPlatform):
         text: str = "",
         command: str | None = None,
         args: str = "",
-        attachment: AttachmentInfo | None = None,
     ) -> BotContext:
         return self.make_context(
             _LOCAL_ID,
@@ -247,7 +245,6 @@ class CliBot(BotPlatform):
             text=text,
             command=command,
             args=args,
-            attachment=attachment,
         )
 
 

@@ -904,6 +904,22 @@ class SessionStateFallbackTests(unittest.TestCase):
 
 
 class QueueStateFallbackTests(unittest.TestCase):
+    def test_queue_entry_selection_and_promotion_preserve_order(self) -> None:
+        q: asyncio.Queue = asyncio.Queue()
+        first = ("first", "chat", "first-id", False)
+        scheduled = ("scheduled", "chat", "scheduled-id", True)
+        last = ("last", "chat", "last-id", False)
+        for entry in (first, scheduled, last):
+            q.put_nowait(entry)
+
+        self.assertEqual(
+            BotPlatform._pop_next_queue_entry(q, ephemeral_only=True),
+            scheduled,
+        )
+        BotPlatform._promote_queue_entry(q, "last-id")
+        self.assertEqual(q.get_nowait(), last)
+        self.assertEqual(q.get_nowait(), first)
+
     def test_platform_state_paths_share_safe_platform_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             old_config_dir = workspace.CONFIG_DIR
