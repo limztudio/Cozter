@@ -1020,8 +1020,19 @@ class ZaiBackendTests(unittest.TestCase):
     def test_context_windows_cover_only_published_curated_ids(self) -> None:
         backend = ZaiBackend()
         self.assertEqual(backend.context_window_tokens("glm-5.2"), 1_000_000)
+        self.assertEqual(
+            backend.context_window_tokens("glm-5v-turbo"), 200_000,
+        )
+        for model in (
+            "glm-4.6v",
+            "glm-4.6v-flashx",
+            "glm-4.6v-flash",
+        ):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    backend.context_window_tokens(model), 128_000,
+                )
         self.assertEqual(backend.context_window_tokens("glm-4.5-air"), 128_000)
-        self.assertIsNone(backend.context_window_tokens("glm-5v-turbo"))
         self.assertIsNone(backend.context_window_tokens("private-glm"))
 
     def test_fallback_picker_includes_current_agent_models(self) -> None:
@@ -1035,6 +1046,9 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-4.7-flash",
             "glm-4.7-flashx",
             "glm-4.6",
+            "glm-4.6v",
+            "glm-4.6v-flashx",
+            "glm-4.6v-flash",
             "glm-4.5",
             "glm-4.5-air",
             "glm-4.5-x",
@@ -1202,16 +1216,23 @@ class ZaiBackendTests(unittest.TestCase):
             {"thinking": {"type": "enabled"}},
         )
 
-    def test_glm_5v_turbo_effort_uses_thinking_switch(self) -> None:
+    def test_multimodal_models_use_thinking_switch(self) -> None:
         backend = ZaiBackend()
-        self.assertEqual(
-            backend._effort_fields(49, "glm-5v-turbo"),
-            {"thinking": {"type": "disabled"}},
-        )
-        self.assertEqual(
-            backend._effort_fields(50, "glm-5v-turbo"),
-            {"thinking": {"type": "enabled"}},
-        )
+        for model in (
+            "glm-5v-turbo",
+            "glm-4.6v",
+            "glm-4.6v-flashx",
+            "glm-4.6v-flash",
+        ):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    backend._effort_fields(49, model),
+                    {"thinking": {"type": "disabled"}},
+                )
+                self.assertEqual(
+                    backend._effort_fields(50, model),
+                    {"thinking": {"type": "enabled"}},
+                )
 
 
 if __name__ == "__main__":

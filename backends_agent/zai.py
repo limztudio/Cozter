@@ -39,6 +39,12 @@ _FALLBACK_MODELS = (
     "glm-4.7-flash",
     "glm-4.7-flashx",
     "glm-4.6",
+    # These vision-capable variants also accept text-only turns and native
+    # function calls, so they can run Cozter's in-process agent loop even
+    # before the frontend grows image-attachment support for this backend.
+    "glm-4.6v",
+    "glm-4.6v-flashx",
+    "glm-4.6v-flash",
     "glm-4.5",
     "glm-4.5-air",
     "glm-4.5-x",
@@ -52,6 +58,7 @@ _FALLBACK_MODELS = (
 # model_context_windows to config.json.
 _MODEL_CONTEXT_WINDOWS = {
     "glm-5.2": 1_000_000,
+    "glm-5v-turbo": 200_000,
     "glm-5.1": 200_000,
     "glm-5-turbo": 200_000,
     "glm-5": 200_000,
@@ -59,6 +66,9 @@ _MODEL_CONTEXT_WINDOWS = {
     "glm-4.7-flash": 200_000,
     "glm-4.7-flashx": 200_000,
     "glm-4.6": 200_000,
+    "glm-4.6v": 128_000,
+    "glm-4.6v-flashx": 128_000,
+    "glm-4.6v-flash": 128_000,
     "glm-4.5": 128_000,
     "glm-4.5-air": 128_000,
     "glm-4.5-x": 128_000,
