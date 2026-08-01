@@ -383,6 +383,13 @@ The global runtime files are deliberately small JSON documents:
 - `.config/detached_tasks_<platform>.json` — tracked external background
   tasks and any completion message awaiting delivery
 
+Later updates to workspace selections and settings, sessions, colony memory,
+schedules, queues, and detached-task records are written through a temporary
+file and atomically replaced. The new file is synced before replacement; on
+POSIX, Cozter also syncs the parent directory so a completed rename is durable
+across a power loss. An interrupted write can leave a harmless temporary file,
+but it cannot publish a half-written JSON state document.
+
 The session router is only used when there is no valid
 `last_session.json` entry, such as a new workspace, a deleted session, or
 after `/newsession`. Otherwise each user continues the same session across
