@@ -37,7 +37,7 @@ import threading
 import time
 
 from .base import (
-    AgentResult, Backend, ChatEvent, append_text_result,
+    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
     create_captured_subprocess, executable_command, fresh_model_catalog,
     set_error_result, truncate_status_text,
 )
@@ -50,7 +50,6 @@ logger = logging.getLogger(__name__)
 _WINDOWS_PROMPT_CHARS = 28_000
 _ACP_PROTOCOL_VERSION = 1
 _MODEL_DISCOVERY_TIMEOUT_SEC = 12
-_MODEL_CATALOG_TTL_SEC = 60
 _MODEL_FAILURE_RETRY_SEC = 15
 _MAX_ACP_MESSAGES_PER_REQUEST = 100
 _COPILOT_HOME_FILES = ("config.json", "settings.json")
@@ -212,7 +211,7 @@ class CopilotBackend(Backend):
             if models is not None:
                 self._cached_models = models
                 self._catalog_expires_at = (
-                    time.monotonic() + _MODEL_CATALOG_TTL_SEC
+                    time.monotonic() + MODEL_CATALOG_TTL_SEC
                 )
                 self._fallback_expires_at = 0.0
                 return models

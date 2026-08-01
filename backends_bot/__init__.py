@@ -7,6 +7,7 @@ session state isn't fragmented across platforms.
 """
 
 from .base import BotPlatform
+from ..config import DEFAULT_MESSAGE_QUEUE_SIZE, DEFAULT_RECENT_WORKSPACE_LIMIT
 
 
 def create_platforms(config: dict) -> list[BotPlatform]:
@@ -21,8 +22,10 @@ def create_platforms(config: dict) -> list[BotPlatform]:
     slack_bot = config.get("slack_bot_token") or ""
     signal_groups = config.get("signal_group_urls") or []
     signal_socket = config.get("signal_jsonrpc_socket") or ""
-    recent_limit = config.get("recent_workspace_limit", 10)
-    queue_size = config.get("message_queue_size", 50)
+    recent_limit = config.get(
+        "recent_workspace_limit", DEFAULT_RECENT_WORKSPACE_LIMIT,
+    )
+    queue_size = config.get("message_queue_size", DEFAULT_MESSAGE_QUEUE_SIZE)
 
     if tg_tokens:
         # Deferred import to avoid requiring slack_bolt at telegram-only

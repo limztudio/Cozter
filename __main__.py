@@ -514,9 +514,8 @@ async def main_cli() -> None:
 
     # CLI mode has no config to read - reading one would create a
     # spurious config.json with daemon-only fields on first run and
-    # print misleading "fill in your tokens" messages. Match the
-    # daemon's default interval directly.
-    cli_interval = 300
+    # print misleading "fill in your tokens" messages.
+    cli_interval = cfg.DEFAULT_UPDATE_CHECK_INTERVAL
 
     updater.init_startup_commit()
     logger.info(

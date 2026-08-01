@@ -32,7 +32,8 @@ from .. import agent_tools as tools
 from ..utils import iter_bounded_lines
 from ._http_proc import HttpAgentProcess, http_error_translator
 from .base import (
-    AgentResult, Backend, ChatEvent, append_text_result, fresh_model_catalog,
+    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
+    fresh_model_catalog,
     record_error_event,
 )
 
@@ -424,7 +425,7 @@ class CachedOpenAIChatBackend(OpenAIChatBackend):
     model picker while retaining the existing one-minute refresh cadence.
     """
 
-    _model_catalog_ttl_sec = 60.0
+    _model_catalog_ttl_sec = MODEL_CATALOG_TTL_SEC
 
     def __init__(self) -> None:
         self._cached_models: tuple[str, ...] | None = None

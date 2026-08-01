@@ -158,37 +158,10 @@ def _bounded_previous_summary(summary: str) -> str:
 def _session_context_text(data: dict, colony_items: list[str]) -> str:
     """Render the persisted context blocks that precede a normal turn.
 
-    This intentionally mirrors the stored-history portion of
-    :func:`agent._build_contextual_prompt` without importing ``agent`` (which
-    imports this module). The current user message and backend preamble are
-    not included; the model-window trigger reserves substantial headroom for
-    both.
+    The current user message and backend preamble are not included; the
+    model-window trigger reserves substantial headroom for both.
     """
-    parts: list[str] = []
-    if colony_items:
-        parts.append("[Colony]")
-        parts.extend(f"- {item}" for item in colony_items)
-        parts.append("[End of Colony]\n")
-
-    long_term = data.get("long_term") or []
-    if long_term:
-        parts.append("[Long-term Memory]")
-        parts.extend(f"- {item}" for item in long_term)
-        parts.append("[End of Long-term Memory]\n")
-
-    summary = data.get("summary")
-    if isinstance(summary, str) and summary:
-        parts.append("[Session Summary]")
-        parts.append(summary)
-        parts.append("[End of Session Summary]\n")
-
-    messages = data.get("messages") or []
-    if messages:
-        parts.append("[Recent Messages]")
-        parts.extend(session.format_msg_line(message) for message in messages)
-        parts.append("[End of Recent Messages]\n")
-
-    return "\n".join(parts)
+    return "\n".join(session.format_context_blocks(data, colony_items))
 
 
 def _estimate_context_tokens(text: str) -> int:

@@ -24,6 +24,7 @@ from slack_bolt.adapter.socket_mode.async_handler import (
 )
 from slack_sdk.errors import SlackApiError
 
+from ..config import DEFAULT_MESSAGE_QUEUE_SIZE, DEFAULT_RECENT_WORKSPACE_LIMIT
 from .. import workspace
 from ..utils import split_text_chunks
 from .base import (
@@ -245,8 +246,8 @@ class SlackBot(BotPlatform):
         app_token: str,
         channel_ids: list[str],
         *,
-        recent_limit: int = 10,
-        max_queue_size: int = 50,
+        recent_limit: int = DEFAULT_RECENT_WORKSPACE_LIMIT,
+        max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
     ):
         # channel_ids IS the authorization set for Slack: the bot listens
         # only in these channels (public C..., private G..., DMs D..., or

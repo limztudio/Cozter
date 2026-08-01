@@ -65,7 +65,10 @@ def get_current(
     )
 
 
-def get_recent(user_id: int | str, limit: int = 10) -> list[str]:
+def get_recent(
+    user_id: int | str,
+    limit: int = config.DEFAULT_RECENT_WORKSPACE_LIMIT,
+) -> list[str]:
     recent = _get_user(user_id).get("recent", [])
     if not isinstance(recent, list):
         return []

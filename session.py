@@ -225,6 +225,43 @@ def format_msg_line(msg: dict, cap: int | None = MSG_CONTENT_MAX) -> str:
     return f"{role}: {content}"
 
 
+def format_context_blocks(
+    data: dict, colony_items: list[str] | None = None,
+) -> list[str]:
+    """Render persisted conversation context in normal prompt order.
+
+    Ordinary agent turns and compaction both use the same durable context:
+    workspace-wide colony notes followed by session-scoped memory, summary,
+    and recent messages. Keeping the formatting here prevents their prompt
+    formats from drifting apart.
+    """
+    parts: list[str] = []
+    if colony_items:
+        parts.append("[Colony]")
+        parts.extend(f"- {item}" for item in colony_items)
+        parts.append("[End of Colony]\n")
+
+    long_term = data.get("long_term") or []
+    if long_term:
+        parts.append("[Long-term Memory]")
+        parts.extend(f"- {item}" for item in long_term)
+        parts.append("[End of Long-term Memory]\n")
+
+    summary = data.get("summary")
+    if isinstance(summary, str) and summary:
+        parts.append("[Session Summary]")
+        parts.append(summary)
+        parts.append("[End of Session Summary]\n")
+
+    messages = data.get("messages") or []
+    if messages:
+        parts.append("[Recent Messages]")
+        parts.extend(format_msg_line(message) for message in messages)
+        parts.append("[End of Recent Messages]\n")
+
+    return parts
+
+
 def take_recent_messages(
     messages: list[dict],
     budget: int,

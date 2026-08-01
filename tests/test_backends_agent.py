@@ -343,17 +343,11 @@ class BackendModelTests(unittest.TestCase):
             "company-fixed": (),
         })
         self.assertEqual(windows, {"company-fast": 272_000})
-        self.assertEqual(
-            codex_mod._parse_debug_models_catalog(
-                json.dumps(payload).encode("utf-8"),
-            ),
-            (models, efforts),
-        )
 
     def test_codex_catalog_parser_rejects_invalid_output(self) -> None:
         self.assertEqual(
-            codex_mod._parse_debug_models_catalog(b"\xff\xfe\x00"),
-            ((), {}),
+            codex_mod._parse_debug_models_metadata(b"\xff\xfe\x00"),
+            ((), {}, {}),
         )
 
     def test_codex_discovery_caches_company_catalog(self) -> None:
@@ -479,8 +473,8 @@ class BackendModelTests(unittest.TestCase):
                 f"{codex_mod._stderr_preview(proc.stderr)}",
             )
 
-        visible_models, catalog_efforts = (
-            codex_mod._parse_debug_models_catalog(proc.stdout)
+        visible_models, catalog_efforts, _catalog_windows = (
+            codex_mod._parse_debug_models_metadata(proc.stdout)
         )
         if not visible_models:
             self.skipTest("codex debug models returned no visible models")

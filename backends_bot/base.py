@@ -176,8 +176,8 @@ class BotPlatform(ABC):
         self,
         notify_targets: list[str],
         *,
-        recent_limit: int = 10,
-        max_queue_size: int = 50,
+        recent_limit: int = config.DEFAULT_RECENT_WORKSPACE_LIMIT,
+        max_queue_size: int = config.DEFAULT_MESSAGE_QUEUE_SIZE,
     ):
         # notify_targets are the chat IDs the bot greets on startup and uses
         # as its authorization set by default. For Telegram these are user

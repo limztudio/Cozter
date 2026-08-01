@@ -621,27 +621,7 @@ def _build_contextual_prompt(
     if not summary and not messages and not long_term and not colony_list:
         return prompt
 
-    parts: list[str] = []
-
-    if colony_list:
-        parts.append("[Colony]")
-        parts.extend(f"- {item}" for item in colony_list)
-        parts.append("[End of Colony]\n")
-
-    if long_term:
-        parts.append("[Long-term Memory]")
-        parts.extend(f"- {item}" for item in long_term)
-        parts.append("[End of Long-term Memory]\n")
-
-    if summary:
-        parts.append("[Session Summary]")
-        parts.append(summary)
-        parts.append("[End of Session Summary]\n")
-
-    if messages:
-        parts.append("[Recent Messages]")
-        parts.extend(session.format_msg_line(msg) for msg in messages)
-        parts.append("[End of Recent Messages]\n")
+    parts = session.format_context_blocks(data, colony_list)
 
     parts.append(
         "Continue the conversation. The user's new message follows.\n"

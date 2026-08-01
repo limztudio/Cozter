@@ -9,7 +9,7 @@ import threading
 import time
 
 from .base import (
-    AgentResult, Backend, ChatEvent, append_text_result,
+    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
     create_prompt_subprocess, executable_command, set_error_result,
     truncate_status_text,
 )
@@ -68,25 +68,6 @@ _FALLBACK_MODEL_CONTEXT_WINDOWS = {
     "gpt-5.3-codex-spark": 128_000,
 }
 _MODEL_DISCOVERY_TIMEOUT_SEC = 15
-# Model catalogs can change when the locally installed CLI or its account
-# policy changes. Keep picker results fresh without re-running the probe for
-# every /model request in a long-lived bot process.
-_MODEL_CATALOG_TTL_SEC = 60
-
-
-def _parse_debug_models_catalog(
-    output: str | bytes,
-) -> tuple[tuple[str, ...], dict[str, tuple[str, ...]]]:
-    """Extract picker-visible models and effort levels from Codex JSON.
-
-    ``codex debug models`` is deliberately queried from the locally installed
-    CLI: companies can expose a different, policy-controlled catalog than the
-    public/default Codex picker.  Only ``visibility == 'list'`` entries are
-    suitable for Cozter's model picker; hidden/internal entries should not be
-    offered to users.
-    """
-    models, efforts, _context_windows = _parse_debug_models_metadata(output)
-    return models, efforts
 
 
 def _parse_debug_models_metadata(
@@ -244,7 +225,7 @@ class CodexBackend(Backend):
                     **context_windows,
                 }
                 self._catalog_expires_at = (
-                    time.monotonic() + _MODEL_CATALOG_TTL_SEC
+                    time.monotonic() + MODEL_CATALOG_TTL_SEC
                 )
         return self._cached_model_catalog
 

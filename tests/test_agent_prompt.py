@@ -10,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from Cozter import agent, session, workspace
+from Cozter import agent, compaction, session, workspace
 
 
 def _messages(n: int) -> list[dict]:
@@ -24,6 +24,24 @@ def _messages(n: int) -> list[dict]:
 
 
 class ContextBudgetTests(unittest.TestCase):
+    def test_compaction_and_agent_share_context_block_rendering(self) -> None:
+        data = {
+            "summary": "A concise summary",
+            "long_term": ["Remember this"],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+        colony = ["Shared note"]
+
+        expected = "\n".join(session.format_context_blocks(data, colony))
+        prompt = agent._build_contextual_prompt(
+            "NEW MESSAGE", data, colony, budget=100_000,
+        )
+
+        self.assertEqual(
+            compaction._session_context_text(data, colony), expected,
+        )
+        self.assertTrue(prompt.startswith(expected + "\n"))
+
     def test_larger_budget_keeps_more_history(self) -> None:
         data = {"summary": "", "long_term": [], "messages": _messages(50)}
 

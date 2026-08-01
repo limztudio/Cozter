@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 
 from ..utils import kill_and_wait
 
+# Keep model pickers responsive to local CLI/account-policy changes without
+# probing on every request. All backend catalogs use the same refresh cadence.
+MODEL_CATALOG_TTL_SEC = 60.0
+
 
 def resolve_executable_prefix(name: str) -> list[str] | None:
     """Resolve *name* to a launchable subprocess argv prefix.

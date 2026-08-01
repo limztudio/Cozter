@@ -17,6 +17,7 @@ from telegram.ext import (
     filters,
 )
 
+from ..config import DEFAULT_MESSAGE_QUEUE_SIZE, DEFAULT_RECENT_WORKSPACE_LIMIT
 from .. import workspace
 from ..utils import split_text_chunks
 from .base import (
@@ -83,8 +84,8 @@ class TelegramBot(BotPlatform):
         token: str,
         user_ids: list[int | str],
         *,
-        recent_limit: int = 10,
-        max_queue_size: int = 50,
+        recent_limit: int = DEFAULT_RECENT_WORKSPACE_LIMIT,
+        max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
     ):
         super().__init__(
             user_ids,

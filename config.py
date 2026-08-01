@@ -8,6 +8,10 @@ from .utils import normalize_string_list
 
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
+DEFAULT_UPDATE_CHECK_INTERVAL = 300
+DEFAULT_RECENT_WORKSPACE_LIMIT = 10
+DEFAULT_MESSAGE_QUEUE_SIZE = 50
+
 _DEFAULT_CONFIG = {
     "telegram_bot_tokens": [],
     "user_ids": [],
@@ -40,9 +44,9 @@ _DEFAULT_CONFIG = {
     "dump_traceback_interval": 0,
     # Fetches are cheap and non-blocking, but five minutes avoids needless
     # network churn for a long-running service.
-    "update_check_interval": 300,
-    "recent_workspace_limit": 10,
-    "message_queue_size": 50,
+    "update_check_interval": DEFAULT_UPDATE_CHECK_INTERVAL,
+    "recent_workspace_limit": DEFAULT_RECENT_WORKSPACE_LIMIT,
+    "message_queue_size": DEFAULT_MESSAGE_QUEUE_SIZE,
     "extra_models": {},
     # Explicit capacities for private/self-hosted models whose backend cannot
     # discover a context window.  Shape: {backend: {model_or_*: tokens}}.

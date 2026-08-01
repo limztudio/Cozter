@@ -615,9 +615,18 @@ class ConfigFallbackTests(unittest.TestCase):
             finally:
                 config.CONFIG_PATH = old_path
 
-            self.assertEqual(loaded["update_check_interval"], 300)
-            self.assertEqual(loaded["recent_workspace_limit"], 10)
-            self.assertEqual(loaded["message_queue_size"], 50)
+            self.assertEqual(
+                loaded["update_check_interval"],
+                config.DEFAULT_UPDATE_CHECK_INTERVAL,
+            )
+            self.assertEqual(
+                loaded["recent_workspace_limit"],
+                config.DEFAULT_RECENT_WORKSPACE_LIMIT,
+            )
+            self.assertEqual(
+                loaded["message_queue_size"],
+                config.DEFAULT_MESSAGE_QUEUE_SIZE,
+            )
 
 
 class RuntimeHardeningConfigTests(unittest.TestCase):

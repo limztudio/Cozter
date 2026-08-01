@@ -18,6 +18,7 @@ import time
 from collections import deque
 from typing import Any
 
+from ..config import DEFAULT_MESSAGE_QUEUE_SIZE, DEFAULT_RECENT_WORKSPACE_LIMIT
 from .. import schedules, session, workspace
 from ..utils import split_text_chunks
 from .base import (
@@ -65,8 +66,8 @@ class SignalBot(BotPlatform):
         self,
         group_urls: list[str],
         *,
-        recent_limit: int = 10,
-        max_queue_size: int = 50,
+        recent_limit: int = DEFAULT_RECENT_WORKSPACE_LIMIT,
+        max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
         jsonrpc_socket: str = "",
     ):
         super().__init__(

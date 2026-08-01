@@ -22,6 +22,7 @@ import signal
 import sys
 import threading
 
+from ..config import DEFAULT_MESSAGE_QUEUE_SIZE, DEFAULT_RECENT_WORKSPACE_LIMIT
 from ..utils import await_cancelled, create_background_task
 from .base import (
     BotContext,
@@ -43,8 +44,8 @@ class CliBot(BotPlatform):
     def __init__(
         self,
         *,
-        recent_limit: int = 10,
-        max_queue_size: int = 50,
+        recent_limit: int = DEFAULT_RECENT_WORKSPACE_LIMIT,
+        max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
     ):
         super().__init__(
             [_LOCAL_ID],
