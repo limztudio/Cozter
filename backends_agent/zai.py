@@ -46,6 +46,26 @@ _FALLBACK_MODELS = (
     "glm-4.5-flash",
     "glm-4-32b-0414-128k",
 )
+# Provider-published capacities for the curated, public IDs above. The live
+# OpenAI-compatible /models response only standardizes IDs, so private or
+# newly discovered models intentionally remain unknown until an operator adds
+# model_context_windows to config.json.
+_MODEL_CONTEXT_WINDOWS = {
+    "glm-5.2": 1_000_000,
+    "glm-5.1": 200_000,
+    "glm-5-turbo": 200_000,
+    "glm-5": 200_000,
+    "glm-4.7": 200_000,
+    "glm-4.7-flash": 200_000,
+    "glm-4.7-flashx": 200_000,
+    "glm-4.6": 200_000,
+    "glm-4.5": 128_000,
+    "glm-4.5-air": 128_000,
+    "glm-4.5-x": 128_000,
+    "glm-4.5-airx": 128_000,
+    "glm-4.5-flash": 128_000,
+    "glm-4-32b-0414-128k": 128_000,
+}
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
 
@@ -61,6 +81,11 @@ class ZaiBackend(CachedOpenAIChatBackend):
     effort_levels = (
         "none", "minimal", "low", "medium", "high", "xhigh", "max",
     )
+
+    def context_window_tokens(self, model: str | None) -> int | None:
+        """Return a published capacity for a curated Z.ai model ID."""
+        selected = model or self.default_model
+        return _MODEL_CONTEXT_WINDOWS.get(selected)
 
     # ---- model discovery -----------------------------------------------
 

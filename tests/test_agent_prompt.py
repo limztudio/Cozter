@@ -7,6 +7,7 @@ budget must keep more history; the user's new message is always present.
 
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from Cozter import agent, session, workspace
@@ -97,6 +98,35 @@ class PromptPolicyTests(unittest.TestCase):
                     tmp, explicit_session=True,
                 ),
             )
+
+
+class CompactionTargetTests(unittest.TestCase):
+    def test_flexible_targets_include_summary_and_every_tier(self) -> None:
+        backend = SimpleNamespace(name=agent.flexible.BACKEND_NAME)
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                agent.workspace_mod,
+                "get_flexible_run_config",
+                return_value={
+                    "low": ("llama", "small"),
+                    "mid": ("codex", "medium"),
+                    "high": ("zai", "large"),
+                },
+            ):
+                targets = agent._compaction_context_targets(
+                    tmp,
+                    backend,
+                    None,
+                    "claude_code",
+                    "summary-model",
+                )
+
+        self.assertEqual(targets, (
+            ("claude_code", "summary-model"),
+            ("llama", "small"),
+            ("codex", "medium"),
+            ("zai", "large"),
+        ))
 
 
 class SessionResolutionTests(unittest.IsolatedAsyncioTestCase):

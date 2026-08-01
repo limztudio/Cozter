@@ -1319,7 +1319,7 @@ class BotPlatform(ABC):
                 await ctx.reply_text(f"Error: {e}")
                 return
             await ctx.reply_text(
-                f"Compact interval set to {interval} messages."
+                f"Fallback compact interval set to {interval} messages."
             )
             return
 
@@ -1327,14 +1327,16 @@ class BotPlatform(ABC):
         sessions = session.list_sessions(ws)
         total_msgs = sum(s.get("message_count", 0) for s in sessions)
         lines = [
-            f"Compact interval: {current} messages",
+            f"Fallback compact interval: {current} messages",
             f"Sessions: {len(sessions)} ({total_msgs} total messages)",
             "",
-            "Compaction is automatic — each session compacts itself "
-            f"every {current} messages.",
+            "Compaction is automatic. When every selected recipient model "
+            "has a known context window, Cozter compacts from its estimated "
+            "token use (while respecting /context). Otherwise it falls back "
+            f"to every {current} stored messages.",
             "",
             "Usage:",
-            "  /compact <number> - set interval",
+            "  /compact <number> - set fallback interval",
         ]
         await ctx.reply_text("\n".join(lines))
 

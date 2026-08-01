@@ -44,6 +44,9 @@ _DEFAULT_CONFIG = {
     "recent_workspace_limit": 10,
     "message_queue_size": 50,
     "extra_models": {},
+    # Explicit capacities for private/self-hosted models whose backend cannot
+    # discover a context window.  Shape: {backend: {model_or_*: tokens}}.
+    "model_context_windows": {},
     # Do not grant remote chat users the CLI sandbox/approval bypass unless
     # an operator explicitly opts in via config.json.
     "max_permission": "auto",
@@ -275,6 +278,42 @@ def get_extra_models(backend_name: str) -> list[str]:
     if not isinstance(val, dict):
         return []
     return normalize_string_list(val.get(backend_name))
+
+
+def get_model_context_window(
+    backend_name: str, model: str | None,
+) -> int | None:
+    """Return an operator-configured context window for one backend/model.
+
+    Compaction checks this operator override before adapter metadata, so it
+    can also correct a provider-specific deployment. It covers private,
+    auto-routed, and self-hosted models whose providers do not expose a
+    numeric context capacity. Exact model IDs win over a backend-local
+    ``"*"`` default::
+
+        {
+            "model_context_windows": {
+                "llama": {"qwen3-coder": 32768, "auto": 32768},
+                "zai": {"private-glm": 128000}
+            }
+        }
+
+    Invalid values are ignored so malformed configuration falls back to the
+    model adapter (and ultimately the message-interval safeguard).
+    """
+    windows = _read_config_value("model_context_windows")
+    if not isinstance(windows, dict):
+        return None
+    per_backend = windows.get(backend_name)
+    if not isinstance(per_backend, dict):
+        return None
+    keys = [model] if isinstance(model, str) and model else []
+    keys.append("*")
+    for key in keys:
+        value = per_backend.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
 
 
 def load_config() -> dict:

@@ -467,6 +467,23 @@ class Backend(ABC):
         """
         return model
 
+    def context_window_tokens(self, _model: str | None) -> int | None:
+        """Return the active context-window capacity for *model*, if known.
+
+        This is deliberately metadata only: it must never launch a blocking
+        catalog probe on a foreground turn.  A backend with a live catalog
+        may consult values already cached by its picker; otherwise it should
+        return a conservative built-in value for a specifically known model,
+        or ``None``.  Callers use ``None`` to retain their safe fallback
+        policy rather than guessing a capacity for private or auto-routed
+        models.
+
+        The returned value is the whole active context window, not an output
+        allowance.  Compaction reserves its own headroom for system prompts,
+        tools, the next user request, and the model's response.
+        """
+        return None
+
     def convert_effort(self, percent: int) -> str | None:
         """Translate a 0-100 percentage to the backend's native effort form.
 

@@ -725,7 +725,7 @@ def set_colony_interval(workspace_path: str, interval: int) -> None:
 
 
 def get_compact_interval(workspace_path: str) -> int:
-    """Messages between auto-compactions for sessions in this workspace."""
+    """Fallback message threshold when a context capacity is unknown."""
     return _positive_int_setting(
         workspace_path, "compact_interval", DEFAULT_COMPACT_INTERVAL,
     )

@@ -1422,11 +1422,34 @@ async def log_detached_task_completion(
         logger.error("Failed to log detached task completion", exc_info=True)
 
 
+def _compaction_context_targets(
+    workspace_path: str,
+    backend,
+    model: str | None,
+    summary_backend: str,
+    summary_model: str | None,
+) -> tuple[tuple[str, str | None], ...]:
+    """Return every model that can receive this turn's saved context.
+
+    A direct turn has one recipient. Flexible feeds the same contextual
+    prompt to its planner/merger and may route any subtask to any configured
+    tier, so the compaction threshold must respect the smallest known window
+    across all of them.
+    """
+    if backend.name != flexible.BACKEND_NAME:
+        return ((backend.name, model),)
+    tier_targets = tuple(workspace_mod.get_flexible_run_config(
+        workspace_path,
+    ).values())
+    return ((summary_backend, summary_model), *tier_targets)
+
+
 async def _run_post_turn_maintenance(
     workspace_path: str,
     session_id: str,
     summary_model: str | None,
     summary_backend: str,
+    context_targets: tuple[tuple[str, str | None], ...],
 ) -> None:
     """Run non-critical session maintenance after the user reply is ready.
 
@@ -1438,6 +1461,7 @@ async def _run_post_turn_maintenance(
     await compaction.maybe_compact(
         workspace_path, session_id, summary_model,
         backend_name=summary_backend,
+        context_targets=context_targets,
     )
     await titling.maybe_auto_title(
         workspace_path, session_id, summary_model,
@@ -1484,6 +1508,13 @@ async def _run_turn(
     # fall back to a real backend rather than recursing into itself.
     summary_backend = summary_backend_name or (
         backends_agent.DEFAULT_DIRECT_BACKEND if is_flexible else backend.name
+    )
+    compaction_context_targets = _compaction_context_targets(
+        workspace_path,
+        backend,
+        model,
+        summary_backend,
+        summary_model,
     )
 
     # Track whether the caller pinned a specific session: when True
@@ -1640,7 +1671,11 @@ async def _run_turn(
     # compaction-before-title ordering.
     create_background_task(
         _run_post_turn_maintenance(
-            workspace_path, session_id, summary_model, summary_backend,
+            workspace_path,
+            session_id,
+            summary_model,
+            summary_backend,
+            compaction_context_targets,
         ),
         name=f"post-turn-maintenance:{session_id}",
         log=logger,

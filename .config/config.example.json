@@ -28,6 +28,7 @@
   "message_queue_size": 50,
 
   "extra_models": {},
+  "model_context_windows": {},
   "max_permission": "auto",
   "show_usage": true
 }

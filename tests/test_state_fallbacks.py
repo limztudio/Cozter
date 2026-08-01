@@ -381,6 +381,45 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             finally:
                 config.CONFIG_PATH = old
 
+    def test_model_context_windows_validate_and_prefer_exact_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "model_context_windows": {
+                        "llama": {
+                            "qwen3-coder": 32_768,
+                            "*": 16_384,
+                            "invalid-bool": True,
+                            "invalid-zero": 0,
+                        },
+                    },
+                }, f)
+            old = config.CONFIG_PATH
+            config.CONFIG_PATH = path
+            try:
+                self.assertEqual(
+                    config.get_model_context_window("llama", "qwen3-coder"),
+                    32_768,
+                )
+                self.assertEqual(
+                    config.get_model_context_window("llama", "other-model"),
+                    16_384,
+                )
+                self.assertEqual(
+                    config.get_model_context_window("llama", "invalid-bool"),
+                    16_384,
+                )
+                self.assertEqual(
+                    config.get_model_context_window("llama", "invalid-zero"),
+                    16_384,
+                )
+                self.assertIsNone(
+                    config.get_model_context_window("unknown", "model"),
+                )
+            finally:
+                config.CONFIG_PATH = old
+
     def test_history_budget_falls_back_and_enforces_floor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(

@@ -57,6 +57,9 @@ class BackendSharedHelperTests(unittest.TestCase):
         self.assertEqual(result.error, "Unknown error")
         self.assertEqual(result.text, "Error: Unknown error")
 
+    def test_context_window_hook_defaults_to_unknown(self) -> None:
+        self.assertIsNone(_DummyBackend().context_window_tokens("any-model"))
+
 
 class BackendPermissionCommandTests(unittest.TestCase):
     def _codex_command(
@@ -307,6 +310,7 @@ class BackendModelTests(unittest.TestCase):
                 {
                     "slug": "company-fast",
                     "visibility": "list",
+                    "context_window": 272_000,
                     "supported_reasoning_levels": [
                         {"effort": "low"},
                         {"effort": "high"},
@@ -321,13 +325,15 @@ class BackendModelTests(unittest.TestCase):
                 {
                     "slug": "company-fixed",
                     "visibility": "list",
+                    # Booleans are ints in Python, but never valid capacities.
+                    "context_window": True,
                     "supported_reasoning_levels": [],
                 },
                 {"slug": "", "visibility": "list"},
             ],
         }
 
-        models, efforts = codex_mod._parse_debug_models_catalog(
+        models, efforts, windows = codex_mod._parse_debug_models_metadata(
             json.dumps(payload).encode("utf-8"),
         )
 
@@ -336,6 +342,13 @@ class BackendModelTests(unittest.TestCase):
             "company-fast": ("low", "high"),
             "company-fixed": (),
         })
+        self.assertEqual(windows, {"company-fast": 272_000})
+        self.assertEqual(
+            codex_mod._parse_debug_models_catalog(
+                json.dumps(payload).encode("utf-8"),
+            ),
+            (models, efforts),
+        )
 
     def test_codex_catalog_parser_rejects_invalid_output(self) -> None:
         self.assertEqual(
@@ -348,6 +361,7 @@ class BackendModelTests(unittest.TestCase):
             "models": [{
                 "slug": "company-model",
                 "visibility": "list",
+                "context_window": 123_456,
                 "supported_reasoning_levels": [{"effort": "medium"}],
             }],
         }).encode("utf-8")
@@ -371,6 +385,9 @@ class BackendModelTests(unittest.TestCase):
             self.assertEqual(
                 backend.model_effort_levels,
                 {"company-model": ("medium",)},
+            )
+            self.assertEqual(
+                backend.context_window_tokens("company-model"), 123_456,
             )
 
         self.assertEqual(run_mock.call_count, 2)
@@ -840,6 +857,19 @@ class BackendModelTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertIn(model, models)
 
+    def test_claude_context_windows_are_known_only_for_explicit_1m_models(
+        self,
+    ) -> None:
+        backend = ClaudeCodeBackend()
+        for model in claude_code_mod._ONE_MILLION_CONTEXT_MODELS:
+            with self.subTest(model=model):
+                self.assertEqual(
+                    backend.context_window_tokens(model), 1_000_000,
+                )
+        for model in ("default", "sonnet", "claude-opus-4-8", "private"):
+            with self.subTest(model=model):
+                self.assertIsNone(backend.context_window_tokens(model))
+
     def test_claude_code_picker_excludes_unverified_ids(self) -> None:
         """Guard model forms not exposed by Claude Code's current picker.
 
@@ -986,6 +1016,13 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertEqual(len(models), len(set(models)))
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
+
+    def test_context_windows_cover_only_published_curated_ids(self) -> None:
+        backend = ZaiBackend()
+        self.assertEqual(backend.context_window_tokens("glm-5.2"), 1_000_000)
+        self.assertEqual(backend.context_window_tokens("glm-4.5-air"), 128_000)
+        self.assertIsNone(backend.context_window_tokens("glm-5v-turbo"))
+        self.assertIsNone(backend.context_window_tokens("private-glm"))
 
     def test_fallback_picker_includes_current_agent_models(self) -> None:
         self.assertEqual(zai_mod._FALLBACK_MODELS, (

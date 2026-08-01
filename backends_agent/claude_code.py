@@ -52,6 +52,25 @@ _NO_EFFORT_MODELS = frozenset({
 })
 _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 
+# Claude Code does not expose a safe, non-interactive account model catalog
+# with numeric capacities. Keep only its explicitly selectable 1M variants;
+# aliases, default selection, and arbitrary/private IDs stay unknown so
+# compaction keeps the message-interval safeguard. An operator can configure
+# a private deployment through model_context_windows in Cozter's config.json.
+_LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
+_ONE_MILLION_CONTEXT_MODELS = frozenset({
+    "fable[1m]",
+    "sonnet[1m]",
+    "opus[1m]",
+    "opusplan[1m]",
+    "claude-opus-4-7[1m]",
+    "claude-opus-5[1m]",
+    "claude-opus-4-8[1m]",
+    "claude-opus-4-6[1m]",
+    "claude-sonnet-4-6[1m]",
+    "claude-sonnet-4-5-20250929[1m]",
+})
+
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BACKGROUND_ID_RE = re.compile(
     r"(?im)^[ \t]*backgrounded[ \t]*(?:·|\*)[ \t]*"
@@ -352,6 +371,13 @@ class ClaudeCodeBackend(Backend):
         # Keep existing gateway/private model behavior: unknown IDs receive
         # the current full scale rather than being silently downgraded.
         return self.effort_levels
+
+    def context_window_tokens(self, model: str | None) -> int | None:
+        """Return a verified capacity for one explicit Claude variant."""
+        selected = (model or self.default_model).strip().casefold()
+        if selected in _ONE_MILLION_CONTEXT_MODELS:
+            return _LONG_CONTEXT_WINDOW_TOKENS
+        return None
 
     # File-editing tools whose tool_use blocks we surface as kind="file"
     # ChatEvents (the rest of the tool name is kept as the action label).

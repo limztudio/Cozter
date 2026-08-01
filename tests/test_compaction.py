@@ -4,6 +4,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from Cozter import colony, compaction, session
@@ -158,6 +159,152 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(compaction_started.wait(), timeout=1)
                 release_compaction.set()
                 await compact_task
+
+    async def test_known_context_window_compacts_before_message_interval(
+        self,
+    ) -> None:
+        """A known capacity drives compaction even below /compact's fallback."""
+        async def fake_compact(*_args, **_kwargs):
+            return ("s" * 100, [], None, 6)
+
+        backend = SimpleNamespace(
+            context_window_tokens=lambda _model: 500,
+        )
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            session.append_messages(workspace_path, data["id"], [
+                {"role": "user", "content": "x" * 120}
+                for _ in range(6)
+            ])
+            with (
+                mock.patch.object(
+                    compaction.config,
+                    "get_model_context_window",
+                    return_value=None,
+                ),
+                mock.patch.object(
+                    compaction.backends_agent, "get_backend", return_value=backend,
+                ),
+                mock.patch.object(
+                    compaction.workspace_mod,
+                    "get_compact_interval",
+                    return_value=99,
+                ),
+                mock.patch.object(
+                    compaction, "compact_session", side_effect=fake_compact,
+                ) as compact,
+                mock.patch.object(
+                    compaction.colony, "bump_compact_count", return_value=1,
+                ),
+                mock.patch.object(compaction.colony, "maybe_trigger"),
+            ):
+                await compaction.maybe_compact(
+                    workspace_path,
+                    data["id"],
+                    "summary-model",
+                    backend_name="summary",
+                    context_targets=(("known", "model"),),
+                )
+
+            compact.assert_awaited_once()
+            saved = session.load_session(workspace_path, data["id"])
+            assert saved is not None
+            self.assertEqual(len(saved["messages"]), 5)
+
+    async def test_unknown_context_window_keeps_message_interval_fallback(
+        self,
+    ) -> None:
+        backend = SimpleNamespace(context_window_tokens=lambda _model: None)
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            session.append_messages(workspace_path, data["id"], [
+                {"role": "user", "content": "x" * 120}
+                for _ in range(6)
+            ])
+            with (
+                mock.patch.object(
+                    compaction.config,
+                    "get_model_context_window",
+                    return_value=None,
+                ),
+                mock.patch.object(
+                    compaction.backends_agent, "get_backend", return_value=backend,
+                ),
+                mock.patch.object(
+                    compaction.workspace_mod,
+                    "get_compact_interval",
+                    return_value=7,
+                ),
+                mock.patch.object(compaction, "compact_session") as compact,
+            ):
+                await compaction.maybe_compact(
+                    workspace_path,
+                    data["id"],
+                    "summary-model",
+                    backend_name="summary",
+                    context_targets=(("unknown", "model"),),
+                )
+
+            compact.assert_not_awaited()
+
+    async def test_context_window_uses_backend_default_for_implicit_model(
+        self,
+    ) -> None:
+        backend = SimpleNamespace(
+            default_model="default-model",
+            context_window_tokens=lambda _model: None,
+        )
+        with (
+            mock.patch.object(
+                compaction.backends_agent, "get_backend", return_value=backend,
+            ),
+            mock.patch.object(
+                compaction.config,
+                "get_model_context_window",
+                return_value=12_345,
+            ) as configured,
+        ):
+            window = compaction._context_window_tokens((("known", None),))
+
+        self.assertEqual(window, 12_345)
+        configured.assert_called_once_with("known", "default-model")
+
+    async def test_known_context_window_also_respects_history_budget(self) -> None:
+        """/context remains a guard before raw history would be truncated."""
+        backend = SimpleNamespace(
+            context_window_tokens=lambda _model: 1_000_000,
+        )
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            session.append_messages(workspace_path, data["id"], [
+                {"role": "user", "content": "x" * 600},
+                {"role": "assistant", "content": "y" * 600},
+            ])
+            loaded = session.load_session(workspace_path, data["id"])
+            assert loaded is not None
+            with (
+                mock.patch.object(
+                    compaction.config,
+                    "get_model_context_window",
+                    return_value=None,
+                ),
+                mock.patch.object(
+                    compaction.backends_agent, "get_backend", return_value=backend,
+                ),
+                mock.patch.object(
+                    compaction.workspace_mod,
+                    "get_history_budget",
+                    return_value=1_000,
+                ),
+            ):
+                trigger = compaction._token_trigger(
+                    loaded,
+                    workspace_path,
+                    (("known", "model"),),
+                )
+
+        assert trigger is not None
+        self.assertEqual(trigger[0], "history_chars")
 
     async def test_oversized_history_keeps_messages_not_sent_to_summary(self) -> None:
         """A budgeted compaction may trim only the prefix it actually saw."""

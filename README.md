@@ -34,12 +34,13 @@ drop-in plugin system that works across every backend.
   sessions, last-session pointers, compaction history, agent choice,
   model, permission level, reasoning effort, summary backend, colony
   (long-term memory), uploads, generated image attachments, and schedules
-- **Durable sessions with layered memory**: once a session reaches its
-  configured stored-message threshold, Cozter compacts older history into a
-  scratch summary and rewrites its long-term-memory list while retaining the
-  latest five raw messages. Colony, long-term memory, summaries, and recent
-  messages are prepended subject to the configured character budget; the new
-  user message stays intact
+- **Durable sessions with layered memory**: Cozter compacts older history
+  from a conservative estimate of the active model's context capacity when
+  that capacity is known, otherwise from the configured stored-message
+  fallback. It writes a scratch summary and rewrites its long-term-memory
+  list while retaining the latest five raw messages. Colony, long-term
+  memory, summaries, and recent messages are prepended subject to the
+  configured character budget; the new user message stays intact
 - **Persistent turn queues on Telegram, Slack, and Signal**: if a user sends
   more work while an agent turn is running, or while an update restart is
   pending, the messages are queued on disk and restored after restart
@@ -215,6 +216,7 @@ lives in `.config/config.example.json`):
   "message_queue_size": 50,
 
   "extra_models": {},
+  "model_context_windows": {},
   "max_permission": "auto",
   "show_usage": true
 }
@@ -257,6 +259,27 @@ self-hosted catalogs. Copilot deliberately ignores unverified extras: its
 picker uses the authenticated account's policy-controlled catalog, so an
 arbitrary configured ID cannot be shown if the account cannot use it.
 Malformed entries are ignored.
+
+`model_context_windows` supplies an explicit input capacity, in tokens, for
+private, self-hosted, auto-routed, or otherwise unreported models. It is an
+operator override keyed first by backend and then by model ID; an optional
+`"*"` supplies a backend-wide default:
+
+```json
+{
+  "model_context_windows": {
+    "llama": {"qwen3-coder": 32768, "*": 16384},
+    "zai": {"private-glm": 128000}
+  }
+}
+```
+
+Only positive integers are accepted. This setting affects automatic
+compaction, not the provider request itself. Cozter uses built-in/live model
+metadata for known public models; use this override when a private model's
+capacity is known. If any model that can receive the saved conversation has
+no capacity, Cozter safely uses the workspace's `/compact` message interval
+instead.
 
 `llama_max_retries` (default 2) is how many times a transient llama HTTP
 failure — a dropped connection, a read timeout, or an HTTP 429/5xx — is
@@ -331,7 +354,7 @@ runs commands in it, and stores per-workspace state under
   last writing into; consulted on every turn (and across bot restarts)
   so conversations resume in place instead of being re-routed
 - `settings.json` — chosen agent, model, permission, interaction style,
-  reasoning effort, summary backend, summary model, compact interval,
+  reasoning effort, summary backend, summary model, fallback compact interval,
   colony interval, and context budget
 - `colony.json` — workspace-wide long-term memory consolidated across
   sessions
@@ -370,6 +393,15 @@ names still help it retire stale workspace memory. If a workspace has no
 sessions left, a colony pass clears its shared memory rather than carrying
 deleted-session facts into later conversations.
 
+For a direct agent turn, automatic compaction follows that selected model's
+known input window. For a flexible turn, it follows the smallest known window
+among the summary model and all three tier models. The stored context is
+estimated conservatively and compacted at 60% of that window, leaving room for
+system instructions, tools, the next request, and the reply. `/context` stays
+a separate character cap; Cozter also compacts at 75% of that budget so it
+summarizes raw history before the prompt builder needs to trim it. A model
+with an unknown capacity falls back to `/compact`'s stored-message interval.
+
 New sessions begin with a timestamp-based placeholder name. After their first
 assistant reply, Cozter asks the selected summary backend for a short topical
 title for the session picker. The result is written only while that placeholder
@@ -398,7 +430,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/permission` | full / auto / confirm / deny — how the agent treats tool calls |
 | `/style` | collaborative / autonomous — whether the agent asks before big/ambiguous actions or runs full-auto |
 | `/effort` | 0–100 reasoning effort; each backend maps to its native scale |
-| `/compact [number]` | Show compaction state, or set messages between compactions |
+| `/compact [number]` | Show compaction state, or set the fallback message interval for unknown-capacity models |
 | `/context [number]` | Show or set the per-turn context budget (characters of prepended history) |
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
 | `/sessions [number\|name]` | List this workspace's sessions, or switch to one |

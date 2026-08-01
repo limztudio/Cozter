@@ -2,9 +2,11 @@
 
 Rolls a session's message history into a SCRATCH summary plus a
 LONG-TERM list, replacing the raw messages so the conversation can
-continue without exhausting the context window. Triggered automatically
-when ``len(messages) >= compact_interval`` after a turn. The interval is
-set via ``/compact <number>``; there is no one-shot manual compaction.
+continue without exhausting the context window. When every model that will
+receive a conversation has a known input capacity, compaction is triggered
+from a conservative estimate of the stored context; otherwise it falls back
+to ``len(messages) >= compact_interval`` after a turn. The interval is set
+via ``/compact <number>``; there is no one-shot manual compaction.
 
 A successful compaction also bumps the workspace-wide colony counter
 and may fire a colony consolidation pass via ``colony.maybe_trigger``.
@@ -12,7 +14,7 @@ and may fire a colony consolidation pass via ``colony.maybe_trigger``.
 
 import logging
 
-from . import backends_agent, colony, session, titling
+from . import backends_agent, colony, config, session, titling
 from . import workspace as workspace_mod
 from .utils import (
     extract_marker_block, parse_bullets, run_internal_backend,
@@ -29,6 +31,14 @@ _in_flight: set[tuple[str, str]] = set()
 KEEP_RECENT_AFTER_COMPACT = 5
 MAX_SUMMARY_CHARS = 80_000  # ~20K tokens - safe for most models
 COMPACT_TIMEOUT = 240  # seconds; large sessions with rich long-term lists need headroom
+
+# Model windows include fixed system instructions, tools, a future user
+# message, and the model's reply. Trigger before stored conversation material
+# consumes more than this portion so the estimate does not crowd those out.
+_MODEL_CONTEXT_COMPACT_FRACTION = 0.60
+# ``/context`` remains a per-workspace character ceiling for saved context.
+# Summarize before its truncation logic has to discard much raw history.
+_HISTORY_BUDGET_COMPACT_FRACTION = 0.75
 
 # A previously persisted summary is model output, so it is not guaranteed to
 # respect the requested 80-200 word target.  Reserve most of the compaction
@@ -145,15 +155,138 @@ def _bounded_previous_summary(summary: str) -> str:
     return summary[:keep] + marker + summary[-(budget - len(marker) - keep):]
 
 
+def _session_context_text(data: dict, colony_items: list[str]) -> str:
+    """Render the persisted context blocks that precede a normal turn.
+
+    This intentionally mirrors the stored-history portion of
+    :func:`agent._build_contextual_prompt` without importing ``agent`` (which
+    imports this module). The current user message and backend preamble are
+    not included; the model-window trigger reserves substantial headroom for
+    both.
+    """
+    parts: list[str] = []
+    if colony_items:
+        parts.append("[Colony]")
+        parts.extend(f"- {item}" for item in colony_items)
+        parts.append("[End of Colony]\n")
+
+    long_term = data.get("long_term") or []
+    if long_term:
+        parts.append("[Long-term Memory]")
+        parts.extend(f"- {item}" for item in long_term)
+        parts.append("[End of Long-term Memory]\n")
+
+    summary = data.get("summary")
+    if isinstance(summary, str) and summary:
+        parts.append("[Session Summary]")
+        parts.append(summary)
+        parts.append("[End of Session Summary]\n")
+
+    messages = data.get("messages") or []
+    if messages:
+        parts.append("[Recent Messages]")
+        parts.extend(session.format_msg_line(message) for message in messages)
+        parts.append("[End of Recent Messages]\n")
+
+    return "\n".join(parts)
+
+
+def _estimate_context_tokens(text: str) -> int:
+    """Return a provider-neutral upper-bound estimate for arbitrary text.
+
+    Cozter supports several unrelated tokenizers. Every tokenizer ultimately
+    consumes UTF-8 bytes, so counting bytes is deliberately conservative: a
+    byte cannot span more than one token, while ordinary text usually packs
+    several bytes per token. This biases compaction early rather than risking
+    an input-window overflow for non-ASCII text, code, or unknown models.
+    """
+    return len(text.encode("utf-8"))
+
+
+def _context_window_tokens(
+    context_targets: tuple[tuple[str, str | None], ...] | None,
+) -> int | None:
+    """Return the smallest known capacity among conversation recipients.
+
+    Flexible turns can send the same saved context to its planner, merger,
+    and any tier worker. One unknown recipient means there is no safe numeric
+    threshold, so the caller must keep using the configured message interval.
+    """
+    if not context_targets:
+        return None
+    limits: list[int] = []
+    for backend_name, model in context_targets:
+        try:
+            backend = backends_agent.get_backend(backend_name)
+        except ValueError:
+            return None
+        selected_model = model
+        if selected_model is None:
+            default_model = getattr(backend, "default_model", None)
+            if isinstance(default_model, str) and default_model:
+                selected_model = default_model
+        configured = config.get_model_context_window(backend_name, selected_model)
+        if configured is not None:
+            limits.append(configured)
+            continue
+        getter = getattr(backend, "context_window_tokens", None)
+        window = getter(selected_model) if callable(getter) else None
+        if (
+            not isinstance(window, int)
+            or isinstance(window, bool)
+            or window < 1
+        ):
+            return None
+        limits.append(window)
+    return min(limits) if limits else None
+
+
+def _token_trigger(
+    data: dict,
+    workspace_path: str,
+    context_targets: tuple[tuple[str, str | None], ...] | None,
+) -> tuple[str, int, int, int] | None:
+    """Return token/character trigger details, or ``None`` if not ready.
+
+    The result is ``(reason, measured, threshold, model_window)``. A known
+    model window produces a token trigger; the workspace's explicit history
+    cap remains a second guard against silently dropping raw messages before
+    they have been summarized.
+    """
+    model_window = _context_window_tokens(context_targets)
+    if model_window is None:
+        return None
+
+    context_text = _session_context_text(data, colony.get_items(workspace_path))
+    estimated_tokens = _estimate_context_tokens(context_text)
+    token_threshold = max(
+        1, int(model_window * _MODEL_CONTEXT_COMPACT_FRACTION),
+    )
+    if estimated_tokens >= token_threshold:
+        return "tokens", estimated_tokens, token_threshold, model_window
+
+    history_budget = workspace_mod.get_history_budget(workspace_path)
+    history_threshold = max(
+        1, int(history_budget * _HISTORY_BUDGET_COMPACT_FRACTION),
+    )
+    if len(context_text) >= history_threshold:
+        return "history_chars", len(context_text), history_threshold, model_window
+    return None
+
+
 async def maybe_compact(
     workspace_path: str, session_id: str, summary_model: str | None = None,
-    *, backend_name: str | None = None,
+    *,
+    backend_name: str | None = None,
+    context_targets: tuple[tuple[str, str | None], ...] | None = None,
 ) -> None:
-    """Compact session if uncompacted messages reach the compact interval.
+    """Compact a session when its token or fallback trigger is reached.
 
-    The trigger is len(messages) >= interval, checked with a single load.
-    Compaction runs outside the workspace lock so other requests
-    aren't stalled.
+    ``context_targets`` identifies every backend/model that can receive the
+    conversation. When their capacities are all known, token use drives the
+    trigger; an unknown target retains the configured message interval.
+    Compaction runs outside the workspace lock so other requests aren't
+    stalled.
     """
     key = (
         workspace_mod.canonicalize_workspace_path(workspace_path), session_id,
@@ -168,6 +301,7 @@ async def maybe_compact(
             await _maybe_compact_under_maintenance_lock(
                 workspace_path, session_id, summary_model,
                 backend_name=backend_name,
+                context_targets=context_targets,
             )
     except Exception:
         logger.error("Compaction check failed", exc_info=True)
@@ -181,20 +315,37 @@ async def _maybe_compact_under_maintenance_lock(
     summary_model: str | None,
     *,
     backend_name: str | None,
+    context_targets: tuple[tuple[str, str | None], ...] | None,
 ) -> None:
     """Run one compaction while no colony rewrite can race its snapshot."""
     data = session.load_session(workspace_path, session_id)
     if data is None:
         return
     msgs = data.get("messages", [])
-    interval = workspace_mod.get_compact_interval(workspace_path)
-    if len(msgs) < interval:
-        return
-
-    logger.info(
-        "Auto-compact triggered (msgs=%d, interval=%d)",
-        len(msgs), interval,
-    )
+    trigger = _token_trigger(data, workspace_path, context_targets)
+    if trigger is not None:
+        reason, measured, threshold, model_window = trigger
+        if reason == "tokens":
+            logger.info(
+                "Auto-compact triggered (context≈%d tokens, threshold=%d, "
+                "model_window=%d)",
+                measured, threshold, model_window,
+            )
+        else:
+            logger.info(
+                "Auto-compact triggered (context=%d chars, history "
+                "threshold=%d, model_window=%d)",
+                measured, threshold, model_window,
+            )
+    else:
+        interval = workspace_mod.get_compact_interval(workspace_path)
+        if len(msgs) < interval:
+            return
+        logger.info(
+            "Auto-compact triggered (msgs=%d, interval=%d; no known "
+            "context window)",
+            len(msgs), interval,
+        )
     existing_summary = data.get("summary") or ""
     new_summary, new_long_term, new_title, covered_count = await compact_session(
         workspace_path, session_id, summary_model,

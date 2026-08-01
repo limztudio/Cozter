@@ -54,6 +54,19 @@ _FALLBACK_MODEL_EFFORT_LEVELS = {
     "gpt-5.4-mini": _COMMON_EFFORT_LEVELS,
     "gpt-5.3-codex-spark": _COMMON_EFFORT_LEVELS,
 }
+# ``codex debug models`` is authoritative when its short-lived cache is warm.
+# These values preserve useful token-aware compaction before a user opens the
+# picker or on hosts where the catalog probe is unavailable.  They are active
+# CLI windows, not the larger maximum capability a model may advertise.
+_FALLBACK_MODEL_CONTEXT_WINDOWS = {
+    "gpt-5.6-sol": 272_000,
+    "gpt-5.6-terra": 272_000,
+    "gpt-5.6-luna": 272_000,
+    "gpt-5.5": 272_000,
+    "gpt-5.4": 272_000,
+    "gpt-5.4-mini": 272_000,
+    "gpt-5.3-codex-spark": 128_000,
+}
 _MODEL_DISCOVERY_TIMEOUT_SEC = 15
 # Model catalogs can change when the locally installed CLI or its account
 # policy changes. Keep picker results fresh without re-running the probe for
@@ -72,18 +85,35 @@ def _parse_debug_models_catalog(
     suitable for Cozter's model picker; hidden/internal entries should not be
     offered to users.
     """
+    models, efforts, _context_windows = _parse_debug_models_metadata(output)
+    return models, efforts
+
+
+def _parse_debug_models_metadata(
+    output: str | bytes,
+) -> tuple[
+    tuple[str, ...], dict[str, tuple[str, ...]], dict[str, int],
+]:
+    """Extract visible models, effort levels, and active context windows.
+
+    ``max_context_window`` can be higher than what the CLI enables for the
+    current account or service tier.  Compaction must follow the live
+    ``context_window`` value instead, so a model with an optional 1M mode
+    does not delay its safety trigger while operating in a 272K session.
+    """
     try:
         payload = json.loads(output)
     except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
-        return (), {}
+        return (), {}, {}
     if not isinstance(payload, dict):
-        return (), {}
+        return (), {}, {}
     catalog = payload.get("models")
     if not isinstance(catalog, list):
-        return (), {}
+        return (), {}, {}
 
     models: list[str] = []
     efforts_by_model: dict[str, tuple[str, ...]] = {}
+    context_windows: dict[str, int] = {}
     seen_models: set[str] = set()
     for entry in catalog:
         if not isinstance(entry, dict) or entry.get("visibility") != "list":
@@ -115,7 +145,18 @@ def _parse_debug_models_catalog(
         # be passed for this discovered model.
         efforts_by_model[slug] = tuple(efforts)
 
-    return tuple(models), efforts_by_model
+        # The catalog also reports ``max_context_window`` and an effective
+        # percent.  Neither is the active input limit for this CLI session;
+        # use only the positive, explicit ``context_window`` value.
+        context_window = entry.get("context_window")
+        if (
+            isinstance(context_window, int)
+            and not isinstance(context_window, bool)
+            and context_window > 0
+        ):
+            context_windows[slug] = context_window
+
+    return tuple(models), efforts_by_model, context_windows
 
 
 def _stderr_preview(value: str | bytes | None) -> str:
@@ -146,6 +187,7 @@ class CodexBackend(Backend):
         self._cached_model_catalog: (
             tuple[tuple[str, ...], dict[str, tuple[str, ...]]] | None
         ) = None
+        self._model_context_windows = dict(_FALLBACK_MODEL_CONTEXT_WINDOWS)
         self._catalog_expires_at = 0.0
         self._model_catalog_lock = threading.Lock()
 
@@ -174,6 +216,11 @@ class CodexBackend(Backend):
             return _FALLBACK_MODEL_EFFORT_LEVELS
         return self._cached_model_catalog[1]
 
+    def context_window_tokens(self, model: str | None) -> int | None:
+        """Return cached active context capacity without probing the CLI."""
+        selected_model = model or self.default_model
+        return self._model_context_windows.get(selected_model)
+
     def _model_catalog(self) -> tuple[
         tuple[str, ...], dict[str, tuple[str, ...]],
     ]:
@@ -190,19 +237,28 @@ class CodexBackend(Backend):
                 self._cached_model_catalog is None
                 or now >= self._catalog_expires_at
             ):
-                self._cached_model_catalog = self._discover_models()
+                models, efforts, context_windows = self._discover_models()
+                self._cached_model_catalog = models, efforts
+                self._model_context_windows = {
+                    **_FALLBACK_MODEL_CONTEXT_WINDOWS,
+                    **context_windows,
+                }
                 self._catalog_expires_at = (
                     time.monotonic() + _MODEL_CATALOG_TTL_SEC
                 )
         return self._cached_model_catalog
 
     def _discover_models(self) -> tuple[
-        tuple[str, ...], dict[str, tuple[str, ...]],
+        tuple[str, ...], dict[str, tuple[str, ...]], dict[str, int],
     ]:
         binary = shutil.which(self.executable)
         if binary is None:
             logger.debug("codex not on PATH; using fallback model list")
-            return _FALLBACK_MODELS, _FALLBACK_MODEL_EFFORT_LEVELS
+            return (
+                _FALLBACK_MODELS,
+                _FALLBACK_MODEL_EFFORT_LEVELS,
+                _FALLBACK_MODEL_CONTEXT_WINDOWS,
+            )
 
         prefix = executable_command(self.executable)
         try:
@@ -215,7 +271,11 @@ class CodexBackend(Backend):
             logger.debug(
                 "codex debug models probe failed (%s); using fallback", exc,
             )
-            return _FALLBACK_MODELS, _FALLBACK_MODEL_EFFORT_LEVELS
+            return (
+                _FALLBACK_MODELS,
+                _FALLBACK_MODEL_EFFORT_LEVELS,
+                _FALLBACK_MODEL_CONTEXT_WINDOWS,
+            )
         if proc.returncode != 0:
             # A stale local reasoning setting can prevent even the
             # read-only catalog command from starting.  Retry with a valid,
@@ -238,7 +298,11 @@ class CodexBackend(Backend):
                     "using fallback",
                     exc,
                 )
-                return _FALLBACK_MODELS, _FALLBACK_MODEL_EFFORT_LEVELS
+                return (
+                    _FALLBACK_MODELS,
+                    _FALLBACK_MODEL_EFFORT_LEVELS,
+                    _FALLBACK_MODEL_CONTEXT_WINDOWS,
+                )
             if recovered.returncode == 0:
                 logger.debug(
                     "codex debug models recovered with a temporary "
@@ -250,16 +314,26 @@ class CodexBackend(Backend):
                     "codex debug models exited %d (%s); using fallback",
                     recovered.returncode, _stderr_preview(recovered.stderr),
                 )
-                return _FALLBACK_MODELS, _FALLBACK_MODEL_EFFORT_LEVELS
+                return (
+                    _FALLBACK_MODELS,
+                    _FALLBACK_MODEL_EFFORT_LEVELS,
+                    _FALLBACK_MODEL_CONTEXT_WINDOWS,
+                )
 
-        models, efforts = _parse_debug_models_catalog(proc.stdout)
+        models, efforts, context_windows = _parse_debug_models_metadata(
+            proc.stdout,
+        )
         if not models:
             logger.debug(
                 "codex debug models yielded no visible model catalog; "
                 "using fallback",
             )
-            return _FALLBACK_MODELS, _FALLBACK_MODEL_EFFORT_LEVELS
-        return models, efforts
+            return (
+                _FALLBACK_MODELS,
+                _FALLBACK_MODEL_EFFORT_LEVELS,
+                _FALLBACK_MODEL_CONTEXT_WINDOWS,
+            )
+        return models, efforts, context_windows
 
     def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
         """Return the effort vocabulary accepted by the selected model."""
