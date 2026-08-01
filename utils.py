@@ -89,6 +89,8 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
 
     A crash during the write leaves the temp file orphaned but the target
     untouched, so the file is never left in a half-written corrupt state.
+    Both the new file and its containing directory are synced on POSIX: the
+    directory sync makes the rename itself durable across a power loss.
     """
     fd, tmp_path = tempfile.mkstemp(dir=tmp_dir, suffix=".tmp")
     try:
@@ -102,10 +104,30 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, target)  # atomic on same filesystem
+        _fsync_directory(os.path.dirname(os.path.abspath(target)) or ".")
     except Exception:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
+
+
+def _fsync_directory(path: str) -> None:
+    """Sync a POSIX directory so a preceding rename survives a crash.
+
+    ``os.replace`` makes a new file visible atomically, but its directory
+    entry can still be lost after a sudden power failure unless the parent
+    directory is synced too. Windows does not expose a portable directory
+    file descriptor through :func:`os.open`, so its existing replace behavior
+    is retained there.
+    """
+    if os.name == "nt":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(path, flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 async def await_cancelled(task: Awaitable[object]) -> None:

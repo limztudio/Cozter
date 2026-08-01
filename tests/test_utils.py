@@ -230,6 +230,40 @@ class JsonHelperTests(unittest.TestCase):
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(json.load(f), {"ok": True})
 
+    def test_atomic_write_syncs_target_directory_after_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "state.json")
+
+            with mock.patch.object(utils, "_fsync_directory") as sync_dir:
+                utils.atomic_write(path, {"ok": True}, tmp)
+
+            sync_dir.assert_called_once_with(os.path.abspath(tmp))
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f), {"ok": True})
+
+    def test_fsync_directory_closes_its_descriptor(self) -> None:
+        with (
+            mock.patch.object(utils.os, "open", return_value=123) as open_dir,
+            mock.patch.object(utils.os, "fsync") as fsync,
+            mock.patch.object(utils.os, "close") as close,
+        ):
+            utils._fsync_directory("/state")
+
+        open_dir.assert_called_once_with(
+            "/state", utils.os.O_RDONLY | getattr(utils.os, "O_DIRECTORY", 0),
+        )
+        fsync.assert_called_once_with(123)
+        close.assert_called_once_with(123)
+
+    def test_fsync_directory_is_a_noop_on_windows(self) -> None:
+        with (
+            mock.patch.object(utils.os, "name", "nt"),
+            mock.patch.object(utils.os, "open") as open_dir,
+        ):
+            utils._fsync_directory("C:/state")
+
+        open_dir.assert_not_called()
+
     def test_normalize_string_list_preserves_requested_semantics(self) -> None:
         self.assertEqual(
             utils.normalize_string_list([" a ", "", 3, "b"]),
