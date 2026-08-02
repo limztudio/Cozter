@@ -71,6 +71,20 @@ updater, and CI import the source tree as that package rather than as an
 installed distribution.
 
 That starts the local terminal chat surface without requiring bot tokens.
+Before sending work, create or select a workspace:
+
+```text
+/new
+/absolute/path/to/new-workspace
+# or: /open /absolute/path/to/existing-workspace
+```
+
+Then use `/doctor` to check backend readiness. A fresh workspace selects the
+`flexible` meta-agent, whose summary agent and three tiers default to Codex.
+If Codex is unavailable, select a configured direct backend with `/agent` and
+`/summaryagent`, or rebind flexible's summary agent and tiers before sending a
+task.
+
 From the parent directory you can run the package form instead:
 
 ```bash
@@ -228,6 +242,11 @@ Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
 `slack_channel_ids`, or `signal_group_urls` + `signal_jsonrpc_socket`.
 The CLI surface needs neither.
 
+The shipped `config.example.json` has a non-empty placeholder Telegram token.
+When copying it, replace that value with a real token or change
+`telegram_bot_tokens` to `[]`; otherwise the shape is valid and startup will
+attempt to connect with the placeholder.
+
 On POSIX hosts, daemon startup tightens the token-bearing `.config/`
 directory to owner-only access (`0700`) and `config.json` to `0600`. If that
 cannot be done, Cozter stops instead of leaving credentials exposed. Windows
@@ -371,6 +390,11 @@ Workspaces are recorded globally in `Cozter/.config/workspaces.json`
 (per-user current pick + the recent-workspaces list). Daemon-platform turn
 queues live beside it as `queue_<platform>.json`.
 
+Signal intentionally scopes runtime state to the configured group rather than
+the individual sender. Everyone in the same Signal group therefore shares its
+selected workspace, active session pointer, and pending-turn queue; use a
+separate configured group when that shared context is not appropriate.
+
 When a workspace is selected, Cozter canonicalizes its path. Opening the
 same directory through `.`, `..`, a trailing slash, or a symlink therefore
 uses the same sessions, settings, recent-workspace entry, and per-workspace
@@ -394,9 +418,9 @@ across a power loss. An interrupted write can leave a harmless temporary file,
 but it cannot publish a half-written JSON state document.
 
 The session router is only used when there is no valid
-`last_session.json` entry, such as a new workspace, a deleted session, or
-after `/newsession`. Otherwise each user continues the same session across
-bot restarts and platform reconnects.
+`last_session.json` entry, such as a new workspace or a deleted session.
+`/newsession` explicitly creates and pins a fresh session; otherwise each user
+continues the same session across bot restarts and platform reconnects.
 
 Colony consolidation includes sessions whose long-term list is empty, so their
 names still help it retire stale workspace memory. If a workspace has no
@@ -508,6 +532,11 @@ prompt includes the saved relative path, and text-like files up to
 50,000 characters are inlined directly into the prompt. Larger text files
 and binary files are referenced by path so the selected backend can inspect
 them with its normal tools.
+
+`max_upload_bytes` is enforced before an outbound transfer and throughout an
+inbound copy or download. Incoming files are staged beside their final path
+and atomically renamed only after a complete, in-limit transfer succeeds, so
+failed or oversized uploads do not leave a partial file for an agent to use.
 
 Agents can attach files back to chat by emitting a line like:
 
