@@ -157,6 +157,16 @@ class ZaiBackend(CachedOpenAIChatBackend):
             },
         }
 
+    def _tool_request_fields(self, model: str | None) -> dict:
+        """Enable Z.ai's incremental tool-call deltas for GLM-5.2 only.
+
+        ``tool_stream`` is an opt-in GLM-5.2 request field. The shared SSE
+        parser already joins incremental OpenAI-style tool-call arguments;
+        restricting the field to this documented model keeps older and
+        account-specific model IDs compatible.
+        """
+        return {"tool_stream": True} if model == "glm-5.2" else {}
+
     def _auto_continue_after_tool_limit(self) -> bool:
         # Long z.ai coding runs can legitimately need more tool turns than
         # Cozter's per-segment guard. Keep going in a fresh segment instead

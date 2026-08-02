@@ -1199,6 +1199,16 @@ class ZaiBackendTests(unittest.TestCase):
             },
         )
 
+    def test_glm_5_2_streams_tool_call_arguments(self) -> None:
+        backend = ZaiBackend()
+        self.assertEqual(
+            backend._tool_request_fields("glm-5.2"),
+            {"tool_stream": True},
+        )
+        for model in (None, "glm-5.1", "private-glm"):
+            with self.subTest(model=model):
+                self.assertEqual(backend._tool_request_fields(model), {})
+
     def test_older_glm_effort_uses_thinking_switch(self) -> None:
         backend = ZaiBackend()
         self.assertEqual(

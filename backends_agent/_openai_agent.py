@@ -138,6 +138,16 @@ class OpenAIChatBackend(Backend):
         native_effort = self.convert_effort(percent)
         return {"reasoning_effort": native_effort} if native_effort else {}
 
+    def _tool_request_fields(self, _model: str | None) -> dict[str, Any]:
+        """Return provider fields for a streaming completion with tools.
+
+        Most OpenAI-compatible servers need no extra fields. Providers that
+        expose opt-in streaming for incremental tool-call arguments can
+        override this hook without sending an unsupported field on ordinary
+        chat or the final no-tools completion.
+        """
+        return {}
+
     def _max_agent_turns(self) -> int:
         return 40
 
@@ -244,6 +254,7 @@ class OpenAIChatBackend(Backend):
                 )
                 if tools_schema is not None:
                     payload["tool_choice"] = "auto"
+                    payload.update(self._tool_request_fields(request_model))
 
                 assistant_text, tool_calls = await _stream_completion(
                     endpoint, payload, headers, sock_read, max_retries,

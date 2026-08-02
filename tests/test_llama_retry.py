@@ -251,6 +251,11 @@ class _ToolLimitBackend(oa.OpenAIChatBackend):
         return self.auto_continue
 
 
+class _ToolStreamingBackend(_ToolLimitBackend):
+    def _tool_request_fields(self, _model: str | None) -> dict[str, object]:
+        return {"tool_stream": True}
+
+
 class _CaptureProc:
     def __init__(self) -> None:
         self.events: list[dict] = []
@@ -341,6 +346,30 @@ class OpenAIToolLimitTests(unittest.TestCase):
             and "exceeded 1 tool-call turns" in e.get("message", "")
             for e in proc.events
         ))
+
+    def test_tool_request_fields_apply_only_to_tool_turns(self) -> None:
+        calls: list[dict] = []
+
+        async def stream(*args, **kwargs):
+            payload = args[1]
+            calls.append(copy.deepcopy(payload))
+            if len(calls) == 1:
+                return "", [_tool_call("call-1", "x.txt")]
+            return "done", []
+
+        async def execute_tool(name, args, workspace_path, approval, emit):
+            return f"{name} ok"
+
+        oa._stream_completion = stream
+        oa.tools.execute_tool = execute_tool
+
+        proc = _CaptureProc()
+        asyncio.run(_ToolStreamingBackend(auto_continue=False)._run_agent(
+            proc, "/tmp", "work", None, "auto", False, 0,
+        ))
+
+        self.assertEqual(calls[0]["tool_stream"], True)
+        self.assertNotIn("tool_stream", calls[1])
 
 
 class OpenAIToolPermissionTests(unittest.TestCase):
