@@ -19,12 +19,14 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import ClassVar
+from typing import BinaryIO, ClassVar
 
 from .. import (
     agent, backends_agent, colony, config, schedules, session, updater,
@@ -111,6 +113,79 @@ def upload_limit_message(max_upload_bytes: int) -> str:
         "File is too large "
         f"(maximum upload size: {max_upload_bytes:,} bytes)."
     )
+
+
+@contextmanager
+def atomic_output_file(local_path: str) -> Iterator[BinaryIO]:
+    """Yield a temporary binary output file, then atomically replace *local_path*.
+
+    Attachment adapters all need the same guarantee: a failed download or
+    copy must leave neither a partial destination nor a temporary file
+    behind.  Keeping that lifecycle here prevents the platform-specific
+    transports from drifting apart.
+    """
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb",
+            dir=os.path.dirname(os.path.abspath(local_path)),
+            prefix=f".{os.path.basename(local_path)}.",
+            delete=False,
+        ) as output:
+            temp_path = output.name
+            yield output
+        os.replace(temp_path, local_path)
+        temp_path = ""
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+
+
+async def write_limited_async_stream(
+    chunks: AsyncIterator[bytes],
+    local_path: str,
+    max_upload_bytes: int,
+) -> None:
+    """Atomically write an async byte stream without exceeding a byte cap."""
+    written = 0
+    with atomic_output_file(local_path) as output:
+        async for chunk in chunks:
+            written += len(chunk)
+            if upload_size_exceeds_limit(written, max_upload_bytes):
+                raise UploadTooLargeError(max_upload_bytes)
+            output.write(chunk)
+
+
+def copy_file_with_limit(
+    source_path: str,
+    local_path: str,
+    max_upload_bytes: int,
+) -> None:
+    """Atomically copy a local file without exceeding a byte cap."""
+    if upload_size_exceeds_limit(
+        os.path.getsize(source_path), max_upload_bytes,
+    ):
+        raise UploadTooLargeError(max_upload_bytes)
+
+    with (
+        open(source_path, "rb") as source,
+        atomic_output_file(local_path) as output,
+    ):
+        copied = 0
+        while chunk := source.read(64 * 1024):
+            copied += len(chunk)
+            if upload_size_exceeds_limit(copied, max_upload_bytes):
+                raise UploadTooLargeError(max_upload_bytes)
+            output.write(chunk)
+
+
+def write_bytes_atomically(local_path: str, data: bytes) -> None:
+    """Atomically write already-bounded binary attachment data."""
+    with atomic_output_file(local_path) as output:
+        output.write(data)
 
 
 # ---------------------------------------------------------------------------

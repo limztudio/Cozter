@@ -6,8 +6,6 @@ import asyncio
 import logging
 import os
 import re
-import tempfile
-from collections.abc import AsyncIterator
 from urllib.parse import urlparse
 
 import aiohttp
@@ -36,8 +34,11 @@ from .base import (
     MessageHandle,
     NO_WORKSPACE_TEXT,
     UploadTooLargeError,
+    copy_file_with_limit,
     ensure_upload_dir,
     upload_limit_message,
+    upload_size_exceeds_limit,
+    write_limited_async_stream,
 )
 from .formatting import render_fenced_markdown
 from .formatting import escape_html_entities, strip_html_markup
@@ -493,7 +494,7 @@ async def _download_telegram_file(
         return
 
     await asyncio.to_thread(
-        _copy_telegram_local_file, file_path, local_path, max_upload_bytes,
+        copy_file_with_limit, file_path, local_path, max_upload_bytes,
     )
 
 
@@ -508,80 +509,12 @@ async def _download_telegram_url(
         session.get(url) as response,
     ):
         response.raise_for_status()
-        if response.content_length is not None and (
-            response.content_length > max_upload_bytes
+        if upload_size_exceeds_limit(
+            response.content_length, max_upload_bytes,
         ):
             raise UploadTooLargeError(max_upload_bytes)
-        await _write_limited_async_stream(
+        await write_limited_async_stream(
             response.content.iter_chunked(64 * 1024),
             local_path,
             max_upload_bytes,
         )
-
-
-async def _write_limited_async_stream(
-    chunks: AsyncIterator[bytes],
-    local_path: str,
-    max_upload_bytes: int,
-) -> None:
-    """Write an async byte stream atomically while enforcing a byte cap."""
-    temp_path = ""
-    try:
-        with tempfile.NamedTemporaryFile(
-            "wb",
-            dir=os.path.dirname(os.path.abspath(local_path)),
-            prefix=f".{os.path.basename(local_path)}.",
-            delete=False,
-        ) as f:
-            temp_path = f.name
-            downloaded = 0
-            async for chunk in chunks:
-                downloaded += len(chunk)
-                if downloaded > max_upload_bytes:
-                    raise UploadTooLargeError(max_upload_bytes)
-                f.write(chunk)
-        os.replace(temp_path, local_path)
-        temp_path = ""
-    finally:
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except FileNotFoundError:
-                pass
-
-
-def _copy_telegram_local_file(
-    source_path: str,
-    local_path: str,
-    max_upload_bytes: int,
-) -> None:
-    """Copy a local Bot API file atomically while enforcing a byte cap."""
-    if os.path.getsize(source_path) > max_upload_bytes:
-        raise UploadTooLargeError(max_upload_bytes)
-
-    temp_path = ""
-    try:
-        with (
-            open(source_path, "rb") as source,
-            tempfile.NamedTemporaryFile(
-                "wb",
-                dir=os.path.dirname(os.path.abspath(local_path)),
-                prefix=f".{os.path.basename(local_path)}.",
-                delete=False,
-            ) as dest,
-        ):
-            temp_path = dest.name
-            copied = 0
-            while chunk := source.read(64 * 1024):
-                copied += len(chunk)
-                if copied > max_upload_bytes:
-                    raise UploadTooLargeError(max_upload_bytes)
-                dest.write(chunk)
-        os.replace(temp_path, local_path)
-        temp_path = ""
-    finally:
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except FileNotFoundError:
-                pass

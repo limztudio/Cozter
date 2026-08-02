@@ -13,7 +13,6 @@ import json
 import logging
 import os
 import re
-import tempfile
 import time
 from collections import deque
 from typing import Any
@@ -33,9 +32,11 @@ from .base import (
     NO_WORKSPACE_TEXT,
     UploadTooLargeError,
     attachment_kind_from_mime,
+    copy_file_with_limit,
     ensure_upload_dir,
     upload_limit_message,
     upload_size_exceeds_limit,
+    write_bytes_atomically,
 )
 from .formatting import iter_fenced_markdown
 
@@ -659,7 +660,7 @@ class SignalBot(BotPlatform):
         source_path = _resolve_attachment_local_path(att)
 
         if source_path:
-            _copy_file_with_limit(
+            copy_file_with_limit(
                 source_path, local_path, self.max_upload_bytes,
             )
         else:
@@ -671,7 +672,7 @@ class SignalBot(BotPlatform):
             )
             payload = re.sub(r"\s+", "", _attachment_payload(result))
             data = _decode_attachment_payload(payload, self.max_upload_bytes)
-            _write_attachment_bytes(local_path, data)
+            write_bytes_atomically(local_path, data)
 
         return AttachmentInfo(
             local_path,
@@ -1580,45 +1581,6 @@ def _attachment_declared_size(att: dict[str, Any]) -> int | None:
     return None
 
 
-def _copy_file_with_limit(
-    source_path: str,
-    local_path: str,
-    max_upload_bytes: int,
-) -> None:
-    """Atomically copy a local signal-cli attachment without exceeding a cap."""
-    if upload_size_exceeds_limit(
-        os.path.getsize(source_path), max_upload_bytes,
-    ):
-        raise UploadTooLargeError(max_upload_bytes)
-
-    temp_path = ""
-    try:
-        with (
-            open(source_path, "rb") as source,
-            tempfile.NamedTemporaryFile(
-                "wb",
-                dir=os.path.dirname(os.path.abspath(local_path)),
-                prefix=f".{os.path.basename(local_path)}.",
-                delete=False,
-            ) as dest,
-        ):
-            temp_path = dest.name
-            copied = 0
-            while chunk := source.read(64 * 1024):
-                copied += len(chunk)
-                if upload_size_exceeds_limit(copied, max_upload_bytes):
-                    raise UploadTooLargeError(max_upload_bytes)
-                dest.write(chunk)
-        os.replace(temp_path, local_path)
-        temp_path = ""
-    finally:
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except FileNotFoundError:
-                pass
-
-
 def _decode_attachment_payload(payload: str, max_upload_bytes: int) -> bytes:
     """Decode a bounded base64 Signal attachment payload."""
     max_encoded_bytes = ((max_upload_bytes + 2) // 3) * 4
@@ -1628,28 +1590,6 @@ def _decode_attachment_payload(payload: str, max_upload_bytes: int) -> bytes:
     if upload_size_exceeds_limit(len(data), max_upload_bytes):
         raise UploadTooLargeError(max_upload_bytes)
     return data
-
-
-def _write_attachment_bytes(local_path: str, data: bytes) -> None:
-    """Atomically write already-bounded attachment data to the workspace."""
-    temp_path = ""
-    try:
-        with tempfile.NamedTemporaryFile(
-            "wb",
-            dir=os.path.dirname(os.path.abspath(local_path)),
-            prefix=f".{os.path.basename(local_path)}.",
-            delete=False,
-        ) as f:
-            temp_path = f.name
-            f.write(data)
-        os.replace(temp_path, local_path)
-        temp_path = ""
-    finally:
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except FileNotFoundError:
-                pass
 
 
 def _find_key(value: Any, key: str) -> Any:

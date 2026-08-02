@@ -322,6 +322,43 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertFalse(os.path.exists(os.path.join(upload_dir, "remote.bin")))
 
+    async def test_signal_attachment_storage_writes_complete_files(self) -> None:
+        """Both shared atomic writers preserve valid Signal attachments."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "signal-source.bin")
+            upload_dir = os.path.join(tmp, "uploads")
+            os.mkdir(upload_dir)
+            with open(source, "wb") as f:
+                f.write(b"abc")
+
+            bot = SignalBot(
+                ["https://signal.group/#test"],
+                jsonrpc_socket="/tmp/signal.sock",
+                max_upload_bytes=3,
+            )
+            local = await bot._materialize_attachment(
+                {"path": source, "filename": "local.bin"},
+                "group",
+                upload_dir,
+                "",
+            )
+            assert local is not None
+            with open(local.local_path, "rb") as f:
+                self.assertEqual(f.read(), b"abc")
+
+            bot._rpc_request = mock.AsyncMock(
+                return_value=base64.b64encode(b"xyz").decode(),
+            )
+            remote = await bot._materialize_attachment(
+                {"id": "remote", "filename": "remote.bin"},
+                "group",
+                upload_dir,
+                "",
+            )
+            assert remote is not None
+            with open(remote.local_path, "rb") as f:
+                self.assertEqual(f.read(), b"xyz")
+
 
 if __name__ == "__main__":
     unittest.main()

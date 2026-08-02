@@ -14,7 +14,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import tempfile
 from urllib.parse import urlparse
 
 import aiohttp
@@ -44,6 +43,7 @@ from .base import (
     ensure_upload_dir,
     upload_limit_message,
     upload_size_exceeds_limit,
+    write_limited_async_stream,
 )
 from .formatting import escape_html_entities, render_fenced_markdown
 
@@ -572,28 +572,8 @@ async def _download_private(
         if upload_size_exceeds_limit(resp.content_length, max_upload_bytes):
             raise UploadTooLargeError(max_upload_bytes)
 
-        temp_path = ""
-        try:
-            with tempfile.NamedTemporaryFile(
-                "wb",
-                dir=os.path.dirname(os.path.abspath(local_path)),
-                prefix=f".{os.path.basename(local_path)}.",
-                delete=False,
-            ) as fp:
-                temp_path = fp.name
-                downloaded = 0
-                async for chunk in resp.content.iter_chunked(64 * 1024):
-                    downloaded += len(chunk)
-                    if upload_size_exceeds_limit(
-                        downloaded, max_upload_bytes,
-                    ):
-                        raise UploadTooLargeError(max_upload_bytes)
-                    fp.write(chunk)
-            os.replace(temp_path, local_path)
-            temp_path = ""
-        finally:
-            if temp_path:
-                try:
-                    os.unlink(temp_path)
-                except FileNotFoundError:
-                    pass
+        await write_limited_async_stream(
+            resp.content.iter_chunked(64 * 1024),
+            local_path,
+            max_upload_bytes,
+        )
