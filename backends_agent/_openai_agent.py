@@ -43,6 +43,13 @@ logger = logging.getLogger(__name__)
 # when a provider emits a complete tool argument in one delta. Keep generous
 # compatibility headroom without retaining an unbounded no-newline stream.
 _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
+# Standard SSE permits an event to contain many individual ``data:`` lines.
+# Bound their aggregate too; otherwise a peer can bypass the line cap by never
+# emitting the blank event delimiter.
+_MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
+_EOF_SUCCESS_FINISH_REASONS = frozenset({
+    "stop", "length", "tool_calls", "function_call", "content_filter",
+})
 
 
 def extract_model_ids(payload: object) -> tuple[str, ...]:
@@ -502,6 +509,10 @@ class _RetryableError(RuntimeError):
         self.retry_after = retry_after
 
 
+class _SSEEventTooLargeError(RuntimeError):
+    """A framed SSE event exceeded the aggregate memory limit."""
+
+
 def _backoff_delay(
     attempt: int, retry_after: float | None = None,
     *, base: float = 0.5, cap: float = 10.0,
@@ -576,6 +587,11 @@ async def _stream_once(
     # Tool calls arrive in pieces: we accumulate by index because the
     # OpenAI streaming protocol fragments name/arguments across deltas.
     tool_buffers: dict[int, dict[str, Any]] = {}
+    # A transport EOF alone is not a valid completion: a dropped connection
+    # can leave partial text or tool-call arguments in the buffers.  [DONE]
+    # is the usual marker, while a handful of OpenAI-compatible servers end
+    # cleanly after a standard finish_reason instead.
+    saw_terminal_marker = False
 
     try:
         async with (
@@ -598,12 +614,10 @@ async def _stream_once(
                 raise RuntimeError(
                     f"{label} returned HTTP {resp.status}: {body[:500]}"
                 )
-            async for line in _iter_sse_lines(resp.content):
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:"):].strip()
+            async for data in _iter_sse_events(resp.content):
+                data = data.strip()
                 if data == "[DONE]":
+                    saw_terminal_marker = True
                     break
                 try:
                     obj = json.loads(data)
@@ -632,6 +646,23 @@ async def _stream_once(
                 choice = choices[0]
                 if not isinstance(choice, dict):
                     continue
+                finish_reason = choice.get("finish_reason")
+                if finish_reason == "network_error":
+                    raise _RetryableError(
+                        f"{label} stream ended with network_error",
+                    )
+                if isinstance(finish_reason, str) and finish_reason:
+                    if finish_reason in _EOF_SUCCESS_FINISH_REASONS:
+                        saw_terminal_marker = True
+                    else:
+                        # A terminal provider error can arrive alongside a
+                        # [DONE] sentinel and partially accumulated tool
+                        # arguments. Do not hand that partial call to the
+                        # tool executor just because the transport closed.
+                        raise RuntimeError(
+                            f"{label} stream ended with {finish_reason}; "
+                            "response was incomplete",
+                        )
                 delta = choice.get("delta")
                 if not isinstance(delta, dict):
                     continue
@@ -649,6 +680,16 @@ async def _stream_once(
         TimeoutError,
     ) as exc:
         raise _RetryableError(f"{label}: {exc}") from exc
+    except _SSEEventTooLargeError as exc:
+        # Do not continue a completion after dropping one of its deltas: it
+        # could have contained text or a fragment of a tool call. Retrying is
+        # safe because no buffered calls run until this function succeeds.
+        raise _RetryableError(f"{label}: {exc}") from exc
+
+    if not saw_terminal_marker:
+        raise _RetryableError(
+            f"{label} stream ended before a completion marker",
+        )
 
     # Normalize tool_buffers into the OpenAI tool_calls list shape.
     tool_calls = [
@@ -675,6 +716,48 @@ async def _iter_sse_lines(
         log=logger,
     ):
         yield line
+
+
+async def _iter_sse_events(
+    content: aiohttp.StreamReader,
+) -> AsyncIterator[str]:
+    """Yield complete SSE ``data`` events, including multiline payloads.
+
+    Server-Sent Events join multiple ``data:`` fields in one blank-line
+    delimited event with newline characters.  Parsing each physical line
+    separately loses valid pretty-printed JSON, so frame events here before
+    the completion parser decodes them.
+    """
+    data_lines: list[str] = []
+    event_bytes = 0
+    async for line in _iter_sse_lines(content):
+        if not line.strip():
+            if data_lines:
+                yield "\n".join(data_lines)
+                data_lines.clear()
+                event_bytes = 0
+            continue
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:"):]
+        # SSE permits one optional space after the colon; preserve all other
+        # whitespace because it may be part of a multiline JSON string.
+        if data.startswith(" "):
+            data = data[1:]
+        # Count the inserted newline too. ``line`` was decoded with
+        # replacement characters, whose UTF-8 form is at least as large as
+        # malformed source bytes, so this remains a conservative bound.
+        event_bytes += len(data.encode("utf-8")) + (1 if data_lines else 0)
+        if event_bytes > _MAX_SSE_EVENT_BYTES:
+            raise _SSEEventTooLargeError(
+                "SSE event exceeded "
+                f"{_MAX_SSE_EVENT_BYTES} byte limit",
+            )
+        data_lines.append(data)
+    if data_lines:
+        # Tolerate a server that closes immediately after a complete event.
+        # _stream_once still rejects it unless it carried a terminal marker.
+        yield "\n".join(data_lines)
 
 
 def _merge_tool_call(

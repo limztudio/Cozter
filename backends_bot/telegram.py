@@ -6,7 +6,11 @@ import asyncio
 import logging
 import os
 import re
+import tempfile
+from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
+import aiohttp
 from telegram import Update
 from telegram.error import NetworkError
 from telegram.ext import (
@@ -17,7 +21,11 @@ from telegram.ext import (
     filters,
 )
 
-from ..config import DEFAULT_MESSAGE_QUEUE_SIZE, DEFAULT_RECENT_WORKSPACE_LIMIT
+from ..config import (
+    DEFAULT_MAX_UPLOAD_BYTES,
+    DEFAULT_MESSAGE_QUEUE_SIZE,
+    DEFAULT_RECENT_WORKSPACE_LIMIT,
+)
 from .. import workspace
 from ..utils import split_text_chunks
 from .base import (
@@ -27,7 +35,9 @@ from .base import (
     COMMAND_NAMES,
     MessageHandle,
     NO_WORKSPACE_TEXT,
+    UploadTooLargeError,
     ensure_upload_dir,
+    upload_limit_message,
 )
 from .formatting import render_fenced_markdown
 from .formatting import escape_html_entities, strip_html_markup
@@ -86,11 +96,13 @@ class TelegramBot(BotPlatform):
         *,
         recent_limit: int = DEFAULT_RECENT_WORKSPACE_LIMIT,
         max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
+        max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
     ):
         super().__init__(
             user_ids,
             recent_limit=recent_limit,
             max_queue_size=max_queue_size,
+            max_upload_bytes=max_upload_bytes,
         )
         self.token = token
         self.app: Application | None = None
@@ -172,6 +184,7 @@ class TelegramBot(BotPlatform):
         )
 
     async def send_file(self, chat_id: str, path: str) -> None:
+        self._check_upload_path(path)
         name = os.path.basename(path)
         ext = os.path.splitext(name)[1].lower()
         if ext in _TELEGRAM_PHOTO_EXTENSIONS:
@@ -302,40 +315,59 @@ class TelegramBot(BotPlatform):
         message = update.message
 
         if message.document:
-            tg_file = await message.document.get_file()
+            media = message.document
             filename = (
                 message.document.file_name
                 or f"file_{message.document.file_id}"
             )
             kind = "document"
         elif message.photo:
-            photo = message.photo[-1]
-            tg_file = await photo.get_file()
-            filename = f"photo_{photo.file_id}.jpg"
+            media = message.photo[-1]
+            filename = f"photo_{media.file_id}.jpg"
             kind = "photo"
         elif message.audio:
-            tg_file = await message.audio.get_file()
+            media = message.audio
             filename = (
                 message.audio.file_name
                 or f"audio_{message.audio.file_id}.ogg"
             )
             kind = "audio"
         elif message.video:
-            tg_file = await message.video.get_file()
+            media = message.video
             filename = (
                 message.video.file_name
                 or f"video_{message.video.file_id}.mp4"
             )
             kind = "video"
         elif message.voice:
-            tg_file = await message.voice.get_file()
+            media = message.voice
             filename = f"voice_{message.voice.file_id}.ogg"
             kind = "voice"
         elif message.video_note:
-            tg_file = await message.video_note.get_file()
+            media = message.video_note
             filename = f"videonote_{message.video_note.file_id}.mp4"
             kind = "video note"
         else:
+            return
+
+        try:
+            self._check_upload_size(getattr(media, "file_size", None))
+        except UploadTooLargeError:
+            ctx = self._build_context(update, text="")
+            if ctx:
+                await ctx.reply_text(upload_limit_message(self.max_upload_bytes))
+            return
+
+        tg_file = await media.get_file()
+        try:
+            # Some update objects omit a size but the subsequent getFile
+            # response includes it. Reject before opening the download in
+            # that case too.
+            self._check_upload_size(getattr(tg_file, "file_size", None))
+        except UploadTooLargeError:
+            ctx = self._build_context(update, text="")
+            if ctx:
+                await ctx.reply_text(upload_limit_message(self.max_upload_bytes))
             return
 
         caption = (message.caption or "").strip()
@@ -352,7 +384,14 @@ class TelegramBot(BotPlatform):
         upload_dir = ensure_upload_dir(ws)
         local_path = os.path.join(upload_dir, filename)
         try:
-            await tg_file.download_to_drive(local_path)
+            await _download_telegram_file(
+                tg_file, local_path, self.max_upload_bytes,
+            )
+        except UploadTooLargeError:
+            ctx = self._build_context(update, text="")
+            if ctx:
+                await ctx.reply_text(upload_limit_message(self.max_upload_bytes))
+            return
         except Exception as e:
             ctx = self._build_context(update, text="")
             if ctx:
@@ -425,3 +464,124 @@ class TelegramBot(BotPlatform):
             args=args,
             attachment=attachment,
         )
+
+
+async def _download_telegram_file(
+    tg_file: object,
+    local_path: str,
+    max_upload_bytes: int,
+) -> None:
+    """Stream a Telegram file into an atomically-created bounded upload.
+
+    ``python-telegram-bot``'s convenient ``download_to_drive`` first
+    materializes the complete response in memory, then writes it to disk.
+    That is unsafe when an update lacks a trustworthy ``file_size``. Files
+    returned by ``get_file`` carry either a signed HTTP(S) URL or a local Bot
+    API path, both of which can be copied while enforcing our own byte cap.
+    """
+    file_path = getattr(tg_file, "file_path", None)
+    if not isinstance(file_path, str) or not file_path:
+        raise RuntimeError("Telegram did not supply an attachment download path")
+
+    get_encoded_url = getattr(tg_file, "_get_encoded_url", None)
+    url = get_encoded_url() if callable(get_encoded_url) else file_path
+    if not isinstance(url, str):
+        raise RuntimeError("Telegram supplied an invalid attachment download URL")
+
+    if urlparse(url).scheme in ("http", "https"):
+        await _download_telegram_url(url, local_path, max_upload_bytes)
+        return
+
+    await asyncio.to_thread(
+        _copy_telegram_local_file, file_path, local_path, max_upload_bytes,
+    )
+
+
+async def _download_telegram_url(
+    url: str,
+    local_path: str,
+    max_upload_bytes: int,
+) -> None:
+    """Stream an HTTP(S) Telegram file without writing beyond the cap."""
+    async with (
+        aiohttp.ClientSession() as session,
+        session.get(url) as response,
+    ):
+        response.raise_for_status()
+        if response.content_length is not None and (
+            response.content_length > max_upload_bytes
+        ):
+            raise UploadTooLargeError(max_upload_bytes)
+        await _write_limited_async_stream(
+            response.content.iter_chunked(64 * 1024),
+            local_path,
+            max_upload_bytes,
+        )
+
+
+async def _write_limited_async_stream(
+    chunks: AsyncIterator[bytes],
+    local_path: str,
+    max_upload_bytes: int,
+) -> None:
+    """Write an async byte stream atomically while enforcing a byte cap."""
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb",
+            dir=os.path.dirname(os.path.abspath(local_path)),
+            prefix=f".{os.path.basename(local_path)}.",
+            delete=False,
+        ) as f:
+            temp_path = f.name
+            downloaded = 0
+            async for chunk in chunks:
+                downloaded += len(chunk)
+                if downloaded > max_upload_bytes:
+                    raise UploadTooLargeError(max_upload_bytes)
+                f.write(chunk)
+        os.replace(temp_path, local_path)
+        temp_path = ""
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+
+
+def _copy_telegram_local_file(
+    source_path: str,
+    local_path: str,
+    max_upload_bytes: int,
+) -> None:
+    """Copy a local Bot API file atomically while enforcing a byte cap."""
+    if os.path.getsize(source_path) > max_upload_bytes:
+        raise UploadTooLargeError(max_upload_bytes)
+
+    temp_path = ""
+    try:
+        with (
+            open(source_path, "rb") as source,
+            tempfile.NamedTemporaryFile(
+                "wb",
+                dir=os.path.dirname(os.path.abspath(local_path)),
+                prefix=f".{os.path.basename(local_path)}.",
+                delete=False,
+            ) as dest,
+        ):
+            temp_path = dest.name
+            copied = 0
+            while chunk := source.read(64 * 1024):
+                copied += len(chunk)
+                if copied > max_upload_bytes:
+                    raise UploadTooLargeError(max_upload_bytes)
+                dest.write(chunk)
+        os.replace(temp_path, local_path)
+        temp_path = ""
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import stat
 
 from ..base import (
     AgentTool,
@@ -123,7 +124,15 @@ class GrepTool(AgentTool):
             workspace_path, search_root, file_glob,
         ):
             try:
-                if os.path.getsize(fpath) > _GREP_MAX_FILE_BYTES:
+                metadata = os.stat(fpath)
+                # os.walk also yields FIFOs, sockets, and device files. A
+                # blocking open of one of those can strand this worker thread
+                # long after the tool coroutine times out, so grep only reads
+                # regular files.
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_size > _GREP_MAX_FILE_BYTES
+                ):
                     continue
                 with open(fpath, "rb") as f:
                     raw = f.read()

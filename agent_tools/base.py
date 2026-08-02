@@ -6,9 +6,11 @@ import html
 import fnmatch
 import os
 import re
+import stat
+import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
 from typing import Any, ClassVar
 
@@ -487,16 +489,31 @@ def read_text_for_edit(path: str) -> tuple[str, bool] | str:
 
 
 def write_text_after_edit(path: str, text: str, *, uses_crlf: bool) -> None:
-    """Write edited *text* back, restoring CRLF endings and never translating.
+    """Atomically replace edited *text*, restoring its newline convention.
 
     ``newline=""`` disables the platform newline translation open() would
     otherwise apply on write (which turns every ``\\n`` into ``\\r\\n`` on
     Windows), so only the bytes the edit actually changed differ on disk.
+    Write into the target's directory and replace only after the full file is
+    flushed: a write failure can then leave the old source intact instead of
+    truncating it midway through an edit or patch application.
     """
     if uses_crlf:
         text = text.replace("\n", "\r\n")
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
+    parent = os.path.dirname(path) or "."
+    original_mode = stat.S_IMODE(os.stat(path).st_mode)
+    fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, original_mode)
+        os.replace(tmp_path, path)
+    except Exception:
+        with suppress(OSError):
+            os.unlink(tmp_path)
+        raise
 
 
 async def read_bounded_text(resp: aiohttp.ClientResponse) -> str:

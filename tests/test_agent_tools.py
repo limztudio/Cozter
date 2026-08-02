@@ -1,5 +1,7 @@
 import asyncio
 import os
+import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -16,6 +18,7 @@ from Cozter.agent_tools.base import (
     read_bounded_text,
     replacement_properties,
     validate_replacement_strings,
+    write_text_after_edit,
 )
 from Cozter.agent_tools.builtin.apply_patch import ApplyPatchTool
 from Cozter.agent_tools.builtin.bash import BashTool
@@ -23,8 +26,10 @@ from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin.grep import GrepTool
 from Cozter.agent_tools.builtin.multi_edit import MultiEditTool
+from Cozter.agent_tools.builtin.move_file import MoveFileTool
 from Cozter.agent_tools.builtin.read_file import ReadFileTool
 from Cozter.agent_tools.builtin.tree import TreeTool
+from Cozter.agent_tools.builtin.write_file import WriteFileTool
 
 
 class AgentToolHelperTests(unittest.TestCase):
@@ -215,6 +220,63 @@ class BuiltinEditToolTests(unittest.TestCase):
                 for path in (edit_path, multi_path):
                     with open(path, encoding="utf-8") as f:
                         self.assertEqual(f.read(), "alpha alpha")
+
+        asyncio.run(run())
+
+    def test_edit_write_keeps_original_when_atomic_replace_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "note.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("original")
+
+            with mock.patch(
+                "Cozter.agent_tools.base.os.replace",
+                side_effect=OSError("simulated replace failure"),
+            ):
+                with self.assertRaisesRegex(OSError, "simulated"):
+                    write_text_after_edit(path, "replacement", uses_crlf=False)
+
+            with open(path, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "original")
+
+
+class MoveFileToolTests(unittest.TestCase):
+    def test_directory_cannot_move_into_its_own_child(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                source = os.path.join(tmp, "src")
+                os.makedirs(source)
+
+                result = await MoveFileTool().run(tmp, {
+                    "source": "src",
+                    "destination": "src/child/destination",
+                })
+
+                self.assertIn("cannot be inside", result)
+                self.assertFalse(os.path.exists(os.path.join(source, "child")))
+
+        asyncio.run(run())
+
+
+class WriteFileToolTests(unittest.TestCase):
+    def test_write_file_rejects_existing_special_path(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "special")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("unchanged")
+
+                with mock.patch(
+                    "Cozter.agent_tools.builtin.write_file.os.path.isfile",
+                    return_value=False,
+                ):
+                    result = await WriteFileTool().run(tmp, {
+                        "path": "special", "content": "new",
+                    })
+
+                self.assertIn("not a regular file", result)
+                with open(path, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "unchanged")
 
         asyncio.run(run())
 
@@ -417,6 +479,29 @@ class DiscoveryToolTests(unittest.TestCase):
                 )
 
         asyncio.run(run())
+
+    def test_grep_skips_non_regular_files_before_opening_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "special")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("needle\n")
+
+            class FifoStat:
+                st_mode = stat.S_IFIFO
+                st_size = 0
+
+            with (
+                mock.patch(
+                    "Cozter.agent_tools.builtin.grep.os.stat",
+                    return_value=FifoStat(),
+                ),
+                mock.patch("builtins.open", side_effect=AssertionError),
+            ):
+                result = GrepTool._scan(
+                    tmp, tmp, "**/*", re.compile("needle"), 10,
+                )
+
+            self.assertEqual(result, [])
 
     def test_multi_edit_rejects_ambiguous_edit_without_partial_write(
         self,
@@ -827,6 +912,21 @@ class ApplyPatchToolTests(unittest.TestCase):
             self.assertIn("line counts", out)
             with open(p, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "old\nsecond\n")
+
+    def test_overlong_hunk_is_rejected_without_dropping_body_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "overlong.txt")
+            self._write(p, "old\n")
+
+            out = self._run(tmp, (
+                "--- a/overlong.txt\n+++ b/overlong.txt\n"
+                "@@ -1 +1 @@\n-old\n+new\n+silently-dropped-before\n"
+            ))
+
+            self.assertIn("could not parse patch", out)
+            self.assertIn("more body lines", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "old\n")
 
     def test_overlong_hunk_number_is_reported_as_invalid_patch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

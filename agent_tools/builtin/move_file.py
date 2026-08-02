@@ -12,6 +12,7 @@ from ..base import (
     summarize_path_pair,
     validate_source_destination,
 )
+from ...utils import is_path_within
 
 
 class MoveFileTool(AgentTool):
@@ -29,6 +30,11 @@ class MoveFileTool(AgentTool):
         )
         if error := validate_source_destination(raw_src, raw_dst, src, dst):
             return error
+        if os.path.isdir(src) and is_path_within(dst, src):
+            return (
+                "Error: destination cannot be inside the source directory: "
+                f"{raw_dst}"
+            )
         try:
             ensure_parent_dir(dst)
             os.rename(src, dst)

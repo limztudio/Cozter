@@ -7,7 +7,11 @@ session state isn't fragmented across platforms.
 """
 
 from .base import BotPlatform
-from ..config import DEFAULT_MESSAGE_QUEUE_SIZE, DEFAULT_RECENT_WORKSPACE_LIMIT
+from ..config import (
+    DEFAULT_MAX_UPLOAD_BYTES,
+    DEFAULT_MESSAGE_QUEUE_SIZE,
+    DEFAULT_RECENT_WORKSPACE_LIMIT,
+)
 
 
 def create_platforms(config: dict) -> list[BotPlatform]:
@@ -26,6 +30,9 @@ def create_platforms(config: dict) -> list[BotPlatform]:
         "recent_workspace_limit", DEFAULT_RECENT_WORKSPACE_LIMIT,
     )
     queue_size = config.get("message_queue_size", DEFAULT_MESSAGE_QUEUE_SIZE)
+    max_upload_bytes = config.get(
+        "max_upload_bytes", DEFAULT_MAX_UPLOAD_BYTES,
+    )
 
     if tg_tokens:
         # Deferred import to avoid requiring slack_bolt at telegram-only
@@ -34,7 +41,9 @@ def create_platforms(config: dict) -> list[BotPlatform]:
         return [
             TelegramBot(
                 token, config.get("user_ids") or [],
-                recent_limit=recent_limit, max_queue_size=queue_size,
+                recent_limit=recent_limit,
+                max_queue_size=queue_size,
+                max_upload_bytes=max_upload_bytes,
             )
             for token in tg_tokens
         ]
@@ -46,7 +55,9 @@ def create_platforms(config: dict) -> list[BotPlatform]:
                 slack_bot,
                 config.get("slack_app_token") or "",
                 config.get("slack_channel_ids") or [],
-                recent_limit=recent_limit, max_queue_size=queue_size,
+                recent_limit=recent_limit,
+                max_queue_size=queue_size,
+                max_upload_bytes=max_upload_bytes,
             ),
         ]
 
@@ -55,7 +66,9 @@ def create_platforms(config: dict) -> list[BotPlatform]:
         return [
             SignalBot(
                 signal_groups,
-                recent_limit=recent_limit, max_queue_size=queue_size,
+                recent_limit=recent_limit,
+                max_queue_size=queue_size,
+                max_upload_bytes=max_upload_bytes,
                 jsonrpc_socket=signal_socket,
             ),
         ]

@@ -97,6 +97,33 @@ class AttachmentGuardTests(unittest.TestCase):
             self.assertTrue(explicit.startswith(os.path.realpath(ws) + os.sep))
             self.assertNotEqual(explicit, os.path.realpath(external_image))
 
+    def test_external_image_copy_rejects_symlinked_destination(self) -> None:
+        """A workspace state symlink must not redirect an image copy outside."""
+        with tempfile.TemporaryDirectory() as ws, \
+                tempfile.TemporaryDirectory() as external, \
+                tempfile.TemporaryDirectory() as outside:
+            source = os.path.join(external, "artifact.png")
+            self._write_png(source)
+            state_dir = os.path.join(ws, ".cozter")
+            os.makedirs(state_dir)
+            try:
+                os.symlink(
+                    outside,
+                    os.path.join(state_dir, "generated_images"),
+                    target_is_directory=True,
+                )
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with mock.patch.dict(
+                os.environ, {"COZTER_ATTACHMENT_ROOTS": external}, clear=False,
+            ):
+                with self.assertLogs(agent.logger, level="WARNING"):
+                    copied = agent.prepare_attachment_path(source, ws)
+
+            self.assertIsNone(copied)
+            self.assertEqual(os.listdir(outside), [])
+
 
 if __name__ == "__main__":
     unittest.main()

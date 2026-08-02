@@ -13,12 +13,16 @@ import json
 import logging
 import os
 import re
-import shutil
+import tempfile
 import time
 from collections import deque
 from typing import Any
 
-from ..config import DEFAULT_MESSAGE_QUEUE_SIZE, DEFAULT_RECENT_WORKSPACE_LIMIT
+from ..config import (
+    DEFAULT_MAX_UPLOAD_BYTES,
+    DEFAULT_MESSAGE_QUEUE_SIZE,
+    DEFAULT_RECENT_WORKSPACE_LIMIT,
+)
 from .. import schedules, session, workspace
 from ..utils import split_text_chunks
 from .base import (
@@ -27,8 +31,11 @@ from .base import (
     BotPlatform,
     MessageHandle,
     NO_WORKSPACE_TEXT,
+    UploadTooLargeError,
     attachment_kind_from_mime,
     ensure_upload_dir,
+    upload_limit_message,
+    upload_size_exceeds_limit,
 )
 from .formatting import iter_fenced_markdown
 
@@ -68,12 +75,14 @@ class SignalBot(BotPlatform):
         *,
         recent_limit: int = DEFAULT_RECENT_WORKSPACE_LIMIT,
         max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
+        max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
         jsonrpc_socket: str = "",
     ):
         super().__init__(
             group_urls,
             recent_limit=recent_limit,
             max_queue_size=max_queue_size,
+            max_upload_bytes=max_upload_bytes,
         )
         self.group_urls = _dedupe_group_urls(group_urls)
         self.jsonrpc_socket = jsonrpc_socket.strip() if jsonrpc_socket else ""
@@ -163,6 +172,7 @@ class SignalBot(BotPlatform):
         )
 
     async def send_file(self, chat_id: str, path: str) -> None:
+        self._check_upload_path(path)
         group_id = self._group_id_for_chat(chat_id)
         await self._send_rpc_and_remember(
             "send", {"groupId": group_id, "attachment": path},
@@ -607,6 +617,17 @@ class SignalBot(BotPlatform):
                 info = await self._materialize_attachment(
                     att, group_id, upload_dir, caption,
                 )
+            except UploadTooLargeError:
+                try:
+                    await ctx_for_reply.reply_text(
+                        upload_limit_message(self.max_upload_bytes),
+                    )
+                except Exception as reply_error:
+                    logger.warning(
+                        "Failed to report Signal attachment error: %s",
+                        reply_error,
+                    )
+                continue
             except Exception as e:
                 logger.warning("Failed to import Signal attachment: %s", e)
                 try:
@@ -634,10 +655,13 @@ class SignalBot(BotPlatform):
     ) -> AttachmentInfo | None:
         filename = _attachment_filename(att)
         local_path = os.path.join(upload_dir, filename)
+        self._check_upload_size(_attachment_declared_size(att))
         source_path = _resolve_attachment_local_path(att)
 
         if source_path:
-            shutil.copyfile(source_path, local_path)
+            _copy_file_with_limit(
+                source_path, local_path, self.max_upload_bytes,
+            )
         else:
             attachment_id = _attachment_id(att)
             if not attachment_id:
@@ -646,8 +670,8 @@ class SignalBot(BotPlatform):
                 "getAttachment", {"id": attachment_id, "groupId": group_id},
             )
             payload = re.sub(r"\s+", "", _attachment_payload(result))
-            with open(local_path, "wb") as f:
-                f.write(base64.b64decode(payload))
+            data = _decode_attachment_payload(payload, self.max_upload_bytes)
+            _write_attachment_bytes(local_path, data)
 
         return AttachmentInfo(
             local_path,
@@ -1541,6 +1565,91 @@ def _attachment_payload(value: Any) -> str:
     if isinstance(payload, str):
         return payload
     raise SignalCliError("signal-cli getAttachment returned no payload")
+
+
+def _attachment_declared_size(att: dict[str, Any]) -> int | None:
+    """Return a usable signal-cli attachment byte count, when provided."""
+    for key in ("size", "fileSize", "length"):
+        value = att.get(key)
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+        ):
+            return value
+    return None
+
+
+def _copy_file_with_limit(
+    source_path: str,
+    local_path: str,
+    max_upload_bytes: int,
+) -> None:
+    """Atomically copy a local signal-cli attachment without exceeding a cap."""
+    if upload_size_exceeds_limit(
+        os.path.getsize(source_path), max_upload_bytes,
+    ):
+        raise UploadTooLargeError(max_upload_bytes)
+
+    temp_path = ""
+    try:
+        with (
+            open(source_path, "rb") as source,
+            tempfile.NamedTemporaryFile(
+                "wb",
+                dir=os.path.dirname(os.path.abspath(local_path)),
+                prefix=f".{os.path.basename(local_path)}.",
+                delete=False,
+            ) as dest,
+        ):
+            temp_path = dest.name
+            copied = 0
+            while chunk := source.read(64 * 1024):
+                copied += len(chunk)
+                if upload_size_exceeds_limit(copied, max_upload_bytes):
+                    raise UploadTooLargeError(max_upload_bytes)
+                dest.write(chunk)
+        os.replace(temp_path, local_path)
+        temp_path = ""
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
+
+
+def _decode_attachment_payload(payload: str, max_upload_bytes: int) -> bytes:
+    """Decode a bounded base64 Signal attachment payload."""
+    max_encoded_bytes = ((max_upload_bytes + 2) // 3) * 4
+    if len(payload) > max_encoded_bytes:
+        raise UploadTooLargeError(max_upload_bytes)
+    data = base64.b64decode(payload, validate=True)
+    if upload_size_exceeds_limit(len(data), max_upload_bytes):
+        raise UploadTooLargeError(max_upload_bytes)
+    return data
+
+
+def _write_attachment_bytes(local_path: str, data: bytes) -> None:
+    """Atomically write already-bounded attachment data to the workspace."""
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb",
+            dir=os.path.dirname(os.path.abspath(local_path)),
+            prefix=f".{os.path.basename(local_path)}.",
+            delete=False,
+        ) as f:
+            temp_path = f.name
+            f.write(data)
+        os.replace(temp_path, local_path)
+        temp_path = ""
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
 
 
 def _find_key(value: Any, key: str) -> Any:

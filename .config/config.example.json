@@ -26,6 +26,7 @@
   "update_check_interval": 300,
   "recent_workspace_limit": 10,
   "message_queue_size": 50,
+  "max_upload_bytes": 52428800,
 
   "extra_models": {},
   "model_context_windows": {},

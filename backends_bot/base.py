@@ -82,6 +82,37 @@ def attachment_kind_from_mime(value: object) -> str:
         return "video"
     return "document"
 
+
+class UploadTooLargeError(ValueError):
+    """Raised before an attachment can exceed the configured size cap."""
+
+    def __init__(self, max_upload_bytes: int):
+        self.max_upload_bytes = max_upload_bytes
+        super().__init__(upload_limit_message(max_upload_bytes))
+
+
+def upload_size_exceeds_limit(size: object, max_upload_bytes: int) -> bool:
+    """Whether a trustworthy byte count is above the configured cap.
+
+    Transport metadata is optional, so an unknown or malformed value cannot
+    be rejected here. Download/copy code still measures streamed data where
+    a transport does not provide a usable size upfront.
+    """
+    return (
+        isinstance(size, int)
+        and not isinstance(size, bool)
+        and size > max_upload_bytes
+    )
+
+
+def upload_limit_message(max_upload_bytes: int) -> str:
+    """Short user-facing explanation for a rejected attachment."""
+    return (
+        "File is too large "
+        f"(maximum upload size: {max_upload_bytes:,} bytes)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Message handle + attachment info
 # ---------------------------------------------------------------------------
@@ -178,6 +209,7 @@ class BotPlatform(ABC):
         *,
         recent_limit: int = config.DEFAULT_RECENT_WORKSPACE_LIMIT,
         max_queue_size: int = config.DEFAULT_MESSAGE_QUEUE_SIZE,
+        max_upload_bytes: int = config.DEFAULT_MAX_UPLOAD_BYTES,
     ):
         # notify_targets are the chat IDs the bot greets on startup and uses
         # as its authorization set by default. For Telegram these are user
@@ -185,6 +217,13 @@ class BotPlatform(ABC):
         self.notify_targets: list[str] = [str(t) for t in notify_targets]
         self.recent_limit = recent_limit
         self.max_queue_size = max_queue_size
+        self.max_upload_bytes = (
+            max_upload_bytes
+            if isinstance(max_upload_bytes, int)
+            and not isinstance(max_upload_bytes, bool)
+            and max_upload_bytes > 0
+            else config.DEFAULT_MAX_UPLOAD_BYTES
+        )
 
         # Per-user runtime state (all keyed by str user_id).
         self._running_tasks: dict[str, asyncio.Task] = {}
@@ -215,6 +254,15 @@ class BotPlatform(ABC):
         # Users whose running task was already acknowledged by /cancel
         # or /stop, so the cancelled task should not send a second reply.
         self._cancel_acknowledged: set[str] = set()
+
+    def _check_upload_size(self, size: object) -> None:
+        """Raise before accepting or sending a known-oversized file."""
+        if upload_size_exceeds_limit(size, self.max_upload_bytes):
+            raise UploadTooLargeError(self.max_upload_bytes)
+
+    def _check_upload_path(self, path: str) -> None:
+        """Raise before an outbound adapter hands a large file to its API."""
+        self._check_upload_size(os.path.getsize(path))
 
     def make_context(
         self,
@@ -2465,10 +2513,15 @@ class BotPlatform(ABC):
             # crash between marking and queueing at worst drops the
             # fire rather than firing it twice.
             async with workspace.get_lock(ws):
-                schedules.update_schedule_fired(
+                claimed_schedule = schedules.update_schedule_fired(
                     ws, uid, schedule_id, slot.isoformat(),
                 )
-            await self._fire_schedule(uid, sched)
+            # The schedule may have been cancelled after the initial due
+            # snapshot.  Fire only after claiming a still-present record
+            # under the workspace lock, and use that current record rather
+            # than stale command/chat metadata from the snapshot.
+            if claimed_schedule is not None:
+                await self._fire_schedule(uid, claimed_schedule)
 
     async def _fire_schedule(self, uid: str, sched: dict) -> None:
         """Push a scheduled command onto the user's message queue.

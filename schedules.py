@@ -166,20 +166,26 @@ def update_schedule_fired(
     user_id: str | int,
     schedule_id: str,
     fired_at: str,
-) -> None:
+) -> dict | None:
+    """Persist a schedule's fired slot and return its current record.
+
+    The scheduler snapshots due entries before it acquires the workspace
+    lock.  A schedule can be removed in that gap, so a missing record is an
+    unsuccessful claim rather than an unconditional fire of stale data.
+    Returning a copy of the record we actually updated also makes callers
+    queue the current command/chat metadata instead of their old snapshot.
+    """
     data = _load_all(workspace)
     key = str(user_id)
     schedules = _schedule_list(data, key)
-    changed = False
     for s in schedules:
         if not isinstance(s, dict):
             continue
         if s.get("id") == schedule_id:
             s["last_fired"] = fired_at
-            changed = True
-            break
-    if changed:
-        _save_all(workspace, data)
+            _save_all(workspace, data)
+            return dict(s)
+    return None
 
 
 # ---------------------------------------------------------------------------

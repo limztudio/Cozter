@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from ..base import (
     AgentTool,
     ensure_parent_dir,
@@ -31,6 +33,12 @@ class WriteFileTool(AgentTool):
         content = args.get("content")
         if not isinstance(content, str):
             return "Error: 'content' must be a string"
+        # Opening a FIFO or device for writing can block the bot's event loop
+        # indefinitely. This tool is intentionally for ordinary workspace
+        # files, so refuse existing special paths rather than treating them
+        # as a writable text file.
+        if os.path.exists(target) and not os.path.isfile(target):
+            return f"Error: not a regular file: {args.get('path')}"
         ensure_parent_dir(target)
         with open(target, "w", encoding="utf-8") as f:
             f.write(content)

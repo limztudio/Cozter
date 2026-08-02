@@ -166,6 +166,13 @@ def _parse_patch(text: str) -> list[_FilePatch]:
         # one that starts with ``++`` produces ``+++ ...``. Only recognize the
         # next file header once the current hunk's declared counts are full.
         if hunk is not None and hunk.complete:
+            if (
+                line.startswith((" ", "+", "-"))
+                and not line.startswith(("--- ", "+++ "))
+            ):
+                raise _PatchError(
+                    "hunk contains more body lines than its header declares",
+                )
             hunk = None
         if line.startswith("--- "):
             if hunk is not None:

@@ -214,6 +214,7 @@ lives in `.config/config.example.json`):
   "update_check_interval": 300,
   "recent_workspace_limit": 10,
   "message_queue_size": 50,
+  "max_upload_bytes": 52428800,
 
   "extra_models": {},
   "model_context_windows": {},
@@ -235,6 +236,8 @@ keeps the existing directory ACLs because those permissions are not managed by
 
 `recent_workspace_limit` controls how many paths `/open` shows.
 `message_queue_size` caps each user's pending chat turns.
+`max_upload_bytes` (default 52,428,800 / 50 MiB) caps each attachment
+accepted from or sent to Telegram, Slack, and Signal.
 
 The llama safety settings are read at the start of every llama turn:
 `llama_max_agent_turns` (default 60) limits tool-call turns before Cozter

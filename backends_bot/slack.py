@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import tempfile
 from urllib.parse import urlparse
 
 import aiohttp
@@ -24,7 +25,11 @@ from slack_bolt.adapter.socket_mode.async_handler import (
 )
 from slack_sdk.errors import SlackApiError
 
-from ..config import DEFAULT_MESSAGE_QUEUE_SIZE, DEFAULT_RECENT_WORKSPACE_LIMIT
+from ..config import (
+    DEFAULT_MAX_UPLOAD_BYTES,
+    DEFAULT_MESSAGE_QUEUE_SIZE,
+    DEFAULT_RECENT_WORKSPACE_LIMIT,
+)
 from .. import workspace
 from ..utils import split_text_chunks
 from .base import (
@@ -34,8 +39,11 @@ from .base import (
     COMMAND_NAMES,
     MessageHandle,
     NO_WORKSPACE_TEXT,
+    UploadTooLargeError,
     attachment_kind_from_mime,
     ensure_upload_dir,
+    upload_limit_message,
+    upload_size_exceeds_limit,
 )
 from .formatting import escape_html_entities, render_fenced_markdown
 
@@ -248,6 +256,7 @@ class SlackBot(BotPlatform):
         *,
         recent_limit: int = DEFAULT_RECENT_WORKSPACE_LIMIT,
         max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
+        max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
     ):
         # channel_ids IS the authorization set for Slack: the bot listens
         # only in these channels (public C..., private G..., DMs D..., or
@@ -256,6 +265,7 @@ class SlackBot(BotPlatform):
             channel_ids,
             recent_limit=recent_limit,
             max_queue_size=max_queue_size,
+            max_upload_bytes=max_upload_bytes,
         )
         self.bot_token = bot_token
         self.app_token = app_token
@@ -335,6 +345,7 @@ class SlackBot(BotPlatform):
         )
 
     async def send_file(self, chat_id: str, path: str) -> None:
+        self._check_upload_path(path)
         assert self.app is not None
         name = os.path.basename(path)
         await self.app.client.files_upload_v2(
@@ -497,19 +508,38 @@ class SlackBot(BotPlatform):
         upload_dir = ensure_upload_dir(ws)
 
         for f in files:
-            url = f.get("url_private_download") or f.get("url_private")
-            if not url:
-                continue
             # Use the user-supplied name if meaningful; otherwise fall back
             # to the Slack file id. basename() guards against path chars
             # that would otherwise escape upload_dir.
             filename = os.path.basename(f.get("name") or "")
             if not filename:
                 filename = f.get("id") or "file"
+            if upload_size_exceeds_limit(
+                f.get("size"), self.max_upload_bytes,
+            ):
+                await ctx_for_reply.reply_text(
+                    f"Not downloading {filename}: "
+                    f"{upload_limit_message(self.max_upload_bytes)}",
+                )
+                continue
+            url = f.get("url_private_download") or f.get("url_private")
+            if not url:
+                continue
             kind = attachment_kind_from_mime(f.get("mimetype"))
             local_path = os.path.join(upload_dir, filename)
             try:
-                await _download_private(url, self.bot_token, local_path)
+                await _download_private(
+                    url,
+                    self.bot_token,
+                    local_path,
+                    max_upload_bytes=self.max_upload_bytes,
+                )
+            except UploadTooLargeError:
+                await ctx_for_reply.reply_text(
+                    f"Not downloading {filename}: "
+                    f"{upload_limit_message(self.max_upload_bytes)}",
+                )
+                continue
             except Exception as e:
                 await ctx_for_reply.reply_text(
                     f"Failed to download {filename}: {e}"
@@ -523,9 +553,13 @@ class SlackBot(BotPlatform):
 
 
 async def _download_private(
-    url: str, bot_token: str, local_path: str,
+    url: str,
+    bot_token: str,
+    local_path: str,
+    *,
+    max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
 ) -> None:
-    """Download a `url_private` file using the bot token."""
+    """Download a bounded ``url_private`` file using the bot token."""
     # Slack private URLs require Authorization: Bearer <bot-token>.
     if urlparse(url).scheme not in ("http", "https"):
         raise ValueError(f"Refusing to fetch non-http url: {url!r}")
@@ -535,6 +569,31 @@ async def _download_private(
         s.get(url, headers=headers) as resp,
     ):
         resp.raise_for_status()
-        with open(local_path, "wb") as fp:
-            async for chunk in resp.content.iter_chunked(64 * 1024):
-                fp.write(chunk)
+        if upload_size_exceeds_limit(resp.content_length, max_upload_bytes):
+            raise UploadTooLargeError(max_upload_bytes)
+
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                "wb",
+                dir=os.path.dirname(os.path.abspath(local_path)),
+                prefix=f".{os.path.basename(local_path)}.",
+                delete=False,
+            ) as fp:
+                temp_path = fp.name
+                downloaded = 0
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    downloaded += len(chunk)
+                    if upload_size_exceeds_limit(
+                        downloaded, max_upload_bytes,
+                    ):
+                        raise UploadTooLargeError(max_upload_bytes)
+                    fp.write(chunk)
+            os.replace(temp_path, local_path)
+            temp_path = ""
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass

@@ -143,12 +143,15 @@ class OpenAIStreamShapeTests(unittest.TestCase):
 
         self.assertEqual(asyncio.run(collect()), ["valid"])
 
-    def _stream(self, events: list[object]) -> tuple[str, list[dict]]:
+    def _stream(
+        self, events: list[object], *, include_done: bool = True,
+    ) -> tuple[str, list[dict]]:
         lines = [
-            f"data: {json.dumps(event)}\n".encode()
+            f"data: {json.dumps(event)}\n\n".encode()
             for event in events
         ]
-        lines.append(b"data: [DONE]\n")
+        if include_done:
+            lines.append(b"data: [DONE]\n\n")
         response = _SSEResponse([b"".join(lines)])
         session = _SSESession(response)
         with mock.patch.object(oa.aiohttp, "ClientSession", return_value=session):
@@ -218,6 +221,95 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             self._stream([{"error": "x" * 2_000}])
 
         self.assertLessEqual(len(str(raised.exception)), 520)
+
+    def test_eof_without_completion_marker_is_retryable(self) -> None:
+        with self.assertRaisesRegex(
+            oa._RetryableError, "before a completion marker",
+        ):
+            self._stream([
+                {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call-1",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": '{"path":"x.txt"',
+                                },
+                            }],
+                        },
+                    }],
+                },
+            ], include_done=False)
+
+    def test_standard_finish_reason_allows_eof_without_done(self) -> None:
+        text, tool_calls = self._stream([
+            {
+                "choices": [{
+                    "delta": {"content": "complete"},
+                    "finish_reason": "stop",
+                }],
+            },
+        ], include_done=False)
+
+        self.assertEqual(text, "complete")
+        self.assertEqual(tool_calls, [])
+
+    def test_error_finish_reason_never_returns_partial_tool_call(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "response was incomplete"):
+            self._stream([
+                {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call-1",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": '{"path":"x.txt"',
+                                },
+                            }],
+                        },
+                        "finish_reason": "model_context_window_exceeded",
+                    }],
+                },
+            ])
+
+    def test_multiline_sse_data_event_is_decoded_once(self) -> None:
+        async def stream() -> tuple[str, list[dict]]:
+            content = _SSEContent([
+                b'data: {"choices":\n'
+                b'data: [{"delta":{"content":"hello"}}]}\n\n'
+                b'data: [DONE]\n\n',
+            ])
+            response = _SSEResponse([])
+            response.content = content
+            session = _SSESession(response)
+            with mock.patch.object(
+                oa.aiohttp, "ClientSession", return_value=session,
+            ):
+                return await oa._stream_once(
+                    "http://x/chat/completions", {}, {}, 30, "test",
+                )
+
+        text, tool_calls = asyncio.run(stream())
+        self.assertEqual(text, "hello")
+        self.assertEqual(tool_calls, [])
+
+    def test_multiline_sse_event_has_an_aggregate_size_cap(self) -> None:
+        async def collect() -> None:
+            content = _SSEContent([
+                b"data: abc\n"
+                b"data: def\n\n",
+            ])
+            with mock.patch.object(oa, "_MAX_SSE_EVENT_BYTES", 5):
+                with self.assertRaisesRegex(
+                    oa._SSEEventTooLargeError, "event exceeded",
+                ):
+                    _ = [event async for event in oa._iter_sse_events(content)]
+
+        asyncio.run(collect())
 
     def test_malformed_tool_call_delta_is_a_no_op(self) -> None:
         buffers: dict[int, dict[str, object]] = {}

@@ -559,6 +559,24 @@ class ConfigFallbackTests(unittest.TestCase):
             finally:
                 config.CONFIG_PATH = old_path
 
+    def test_zai_base_url_requires_https(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "zai_base_url": "http://insecure.example/api/paas/v4",
+                }, f)
+
+            old_path = config.CONFIG_PATH
+            config.CONFIG_PATH = path
+            try:
+                self.assertEqual(
+                    config.get_zai_base_url(),
+                    "https://api.z.ai/api/paas/v4",
+                )
+            finally:
+                config.CONFIG_PATH = old_path
+
     def test_non_object_config_exits_with_clear_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "config.json")
@@ -771,7 +789,15 @@ class ScheduleParserTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({"u1": ["not-object", {"id": "a"}]}, f)
 
-            schedules.update_schedule_fired(tmp, "u1", "a", "2026-01-01T00:00:00")
+            claimed = schedules.update_schedule_fired(
+                tmp, "u1", "a", "2026-01-01T00:00:00",
+            )
+            self.assertEqual(claimed, {
+                "id": "a", "last_fired": "2026-01-01T00:00:00",
+            })
+            self.assertIsNone(schedules.update_schedule_fired(
+                tmp, "u1", "missing", "2026-01-01T00:00:00",
+            ))
             self.assertEqual(
                 schedules.list_schedules(tmp, "u1"),
                 [{"id": "a", "last_fired": "2026-01-01T00:00:00"}],
@@ -853,6 +879,49 @@ class ScheduleParserTests(unittest.TestCase):
                 ) as fire:
                     asyncio.run(bot._scheduler_tick())
                 self.assertEqual(fire.await_count, 2)
+            finally:
+                workspace.WORKSPACE_STATE_PATH = old_path
+
+    def test_scheduler_skips_schedule_cancelled_after_snapshot(self) -> None:
+        """A stale due snapshot must not run a schedule that no longer exists."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = os.path.join(tmp, "ws")
+            os.makedirs(os.path.join(ws, ".cozter"))
+            schedule = {
+                "id": "cancelled",
+                "days": list(schedules.DAY_ABBREV),
+                "time": "00:00",
+                "command": "must-not-run",
+                "created": "2000-01-01T00:00:00",
+                "chat_id": "u1",
+                "user_id": "u1",
+            }
+            schedules.add_schedule(ws, "u1", schedule)
+
+            old_path = workspace.WORKSPACE_STATE_PATH
+            workspace.WORKSPACE_STATE_PATH = os.path.join(
+                tmp, "workspaces.json",
+            )
+            try:
+                workspace.select_workspace("u1", ws, "test:queue")
+                bot = QueueRestoreBot(["u1"])
+                original_claim = schedules.update_schedule_fired
+
+                def cancel_before_claim(*args, **kwargs):
+                    schedules.remove_schedule(ws, "u1", "cancelled")
+                    return original_claim(*args, **kwargs)
+
+                with (
+                    mock.patch.object(
+                        schedules, "update_schedule_fired",
+                        side_effect=cancel_before_claim,
+                    ),
+                    mock.patch.object(
+                        bot, "_fire_schedule", new=mock.AsyncMock(),
+                    ) as fire,
+                ):
+                    asyncio.run(bot._scheduler_tick())
+                fire.assert_not_awaited()
             finally:
                 workspace.WORKSPACE_STATE_PATH = old_path
 

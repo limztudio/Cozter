@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from typing import cast
+from urllib.parse import urlsplit
 
 from .utils import CONFIG_DIR
 from .utils import normalize_string_list
@@ -11,6 +12,9 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 DEFAULT_UPDATE_CHECK_INTERVAL = 300
 DEFAULT_RECENT_WORKSPACE_LIMIT = 10
 DEFAULT_MESSAGE_QUEUE_SIZE = 50
+# Bound a single attachment well below the JSON-RPC stream backstop and
+# common chat-platform quotas. Operators with a justified need can raise it.
+DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 _DEFAULT_CONFIG = {
     "telegram_bot_tokens": [],
@@ -47,6 +51,7 @@ _DEFAULT_CONFIG = {
     "update_check_interval": DEFAULT_UPDATE_CHECK_INTERVAL,
     "recent_workspace_limit": DEFAULT_RECENT_WORKSPACE_LIMIT,
     "message_queue_size": DEFAULT_MESSAGE_QUEUE_SIZE,
+    "max_upload_bytes": DEFAULT_MAX_UPLOAD_BYTES,
     "extra_models": {},
     # Explicit capacities for private/self-hosted models whose backend cannot
     # discover a context window.  Shape: {backend: {model_or_*: tokens}}.
@@ -133,6 +138,24 @@ def _get_nonempty_string(key: str) -> str:
     return cast(str, _DEFAULT_CONFIG[key])
 
 
+def _get_https_url(key: str) -> str:
+    """Return a configured HTTPS URL, falling back safely when malformed.
+
+    Some endpoints are called with a bearer token.  Treating an accidental
+    ``http://`` override as valid would transmit that secret in clear text,
+    so those getters use this narrower form instead of the generic non-empty
+    string reader.
+    """
+    value = _get_nonempty_string(key)
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return cast(str, _DEFAULT_CONFIG[key])
+    if parsed.scheme.lower() == "https" and parsed.hostname:
+        return value
+    return cast(str, _DEFAULT_CONFIG[key])
+
+
 def _get_int_at_least(key: str, minimum: int) -> int:
     """Return ``cfg[key]`` if it is an int at least *minimum*, else default."""
     val = _read_config_value(key)
@@ -215,8 +238,8 @@ def get_zai_api_key() -> str:
 
 
 def get_zai_base_url() -> str:
-    """Base URL for Z.ai's OpenAI-compatible endpoint (includes the version)."""
-    return _get_nonempty_string("zai_base_url")
+    """HTTPS base URL for Z.ai's OpenAI-compatible bearer-token endpoint."""
+    return _get_https_url("zai_base_url")
 
 
 def get_zai_socket_timeout() -> int:
@@ -238,6 +261,15 @@ def get_tool_timeout() -> int:
     safety net. Defaults to 120s, matching bash's hard cap.
     """
     return _get_int_at_least("tool_timeout", 1)
+
+
+def get_max_upload_bytes() -> int:
+    """Maximum size in bytes for a single chat attachment.
+
+    This applies to files accepted from chat platforms and files sent back to
+    them. Invalid or non-positive values fall back to the 50 MiB default.
+    """
+    return _get_int_at_least("max_upload_bytes", 1)
 
 
 def get_update_idle_timeout() -> int:
@@ -369,6 +401,7 @@ def load_config() -> dict:
         "update_check_interval",
         "recent_workspace_limit",
         "message_queue_size",
+        "max_upload_bytes",
     ):
         value = cfg.get(key)
         if (

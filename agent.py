@@ -368,6 +368,18 @@ def _copy_generated_image_into_workspace(
     dest_dir = os.path.join(workspace_path, COZTER_DIR, "generated_images")
     try:
         os.makedirs(dest_dir, exist_ok=True)
+        # ``.cozter`` is workspace state, but a writable workspace can still
+        # contain a symlink at this path.  Resolve after creating the
+        # directory and reject an escape *before* copying: otherwise an
+        # explicitly allowed external image could be written through that
+        # symlink somewhere outside the workspace.
+        dest_dir = os.path.realpath(dest_dir)
+        if not is_path_within(dest_dir, ws_real):
+            logger.warning(
+                "Refusing generated-image destination outside workspace: %s",
+                dest_dir,
+            )
+            return None
         dest = _unique_path(dest_dir, _safe_generated_image_name(src_real, ext))
         shutil.copy2(src_real, dest)
         return os.path.realpath(dest)
@@ -1560,7 +1572,12 @@ async def _run_turn(
             budget=history_budget,
         )
 
-        attachment_images_before = _snapshot_attachment_images(workspace_path)
+        # Walking a workspace can be expensive (large repositories often
+        # contain generated screenshots), so keep the filesystem scan off the
+        # shared bot event loop.
+        attachment_images_before = await asyncio.to_thread(
+            _snapshot_attachment_images, workspace_path,
+        )
 
         try:
             if is_flexible:
@@ -1620,10 +1637,13 @@ async def _run_turn(
         explicit_attachment_sources = _explicit_attachment_sources(
             result.events, workspace_path,
         )
-        for path in _collect_new_attachment_images(
-            attachment_images_before, workspace_path,
+        new_attachment_paths = await asyncio.to_thread(
+            _collect_new_attachment_images,
+            attachment_images_before,
+            workspace_path,
             exclude_sources=explicit_attachment_sources,
-        ):
+        )
+        for path in new_attachment_paths:
             result.events.append(ChatEvent(kind="attachment", content=path))
 
         break  # normal completion
