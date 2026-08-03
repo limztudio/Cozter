@@ -17,26 +17,6 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-
-def _permission_args(approval: str) -> list[str]:
-    """Translate Cozter's permission level to Codex CLI arguments.
-
-    Codex's non-interactive CLI has no separate "no tools" switch.  Its
-    read-only sandbox is therefore the strongest restriction available for
-    ``confirm`` and ``deny``: it prevents writes and keeps the normal
-    sandbox, although the model may still perform read-only inspection.
-    """
-    if approval == "full":
-        return ["--dangerously-bypass-approvals-and-sandbox"]
-    if approval == "auto":
-        # Codex 0.146 retains ``--full-auto`` only as a deprecated
-        # compatibility flag. The explicit writable sandbox keeps normal
-        # sandboxing while allowing agent edits in the workspace, which is
-        # the behavior Cozter's ``auto`` mode needs.
-        return ["--sandbox", "workspace-write"]
-    return ["--sandbox", "read-only"]
-
-
 # Safety net for hosts where the CLI is unavailable, unauthenticated, or an
 # older/company-managed build does not support ``codex debug models``.  The
 # live catalog is preferred whenever the installed CLI can provide one.
@@ -155,7 +135,14 @@ def _stderr_preview(value: str | bytes | None) -> str:
 class CodexBackend(Backend):
     name = "codex"
     executable = "codex"
-    permission_args = staticmethod(_permission_args)
+    # Codex has no non-interactive "no tools" mode. Read-only sandboxing is
+    # therefore the strongest restriction for confirm and deny. ``--full-auto``
+    # remains deprecated; auto explicitly uses the writable normal sandbox.
+    permission_arg_sets = {
+        "full": ("--dangerously-bypass-approvals-and-sandbox",),
+        "auto": ("--sandbox", "workspace-write"),
+        "restricted": ("--sandbox", "read-only"),
+    }
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.6-luna"
     tier_models = {

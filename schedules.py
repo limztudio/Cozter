@@ -38,10 +38,6 @@ def _load_all(workspace: str) -> dict:
     return load_json_object(_path(workspace), "schedules file", logger)
 
 
-def _save_all(workspace: str, data: dict) -> None:
-    save_json_object(_path(workspace), data)
-
-
 def _schedule_list(data: dict, user_id: str | int) -> list:
     schedules = data.get(str(user_id), [])
     return schedules if isinstance(schedules, list) else []
@@ -55,7 +51,7 @@ def add_schedule(
     schedules = _schedule_list(data, key)
     schedules.append(schedule)
     data[key] = schedules
-    _save_all(workspace, data)
+    save_json_object(_path(workspace), data)
 
 
 def remove_schedule(
@@ -74,7 +70,7 @@ def remove_schedule(
         data[key] = kept
     else:
         data.pop(key, None)
-    _save_all(workspace, data)
+    save_json_object(_path(workspace), data)
     return True
 
 
@@ -157,7 +153,7 @@ def migrate_schedules(
     if changed:
         if target:
             data[target_key] = target
-        _save_all(workspace, data)
+        save_json_object(_path(workspace), data)
     return moved
 
 
@@ -183,7 +179,7 @@ def update_schedule_fired(
             continue
         if s.get("id") == schedule_id:
             s["last_fired"] = fired_at
-            _save_all(workspace, data)
+            save_json_object(_path(workspace), data)
             return dict(s)
     return None
 

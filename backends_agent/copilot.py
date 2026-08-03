@@ -59,23 +59,6 @@ _COPILOT_HOME_FILES = ("config.json", "settings.json")
 # those names may be disabled for this account or enterprise.
 _FALLBACK_MODELS = ("auto",)
 
-
-def _permission_args(approval: str) -> list[str]:
-    """Translate Cozter's permission level to Copilot CLI arguments.
-
-    ``--allow-all-tools`` is appropriate only for Cozter's ``auto`` mode: it
-    keeps Copilot's normal path and URL checks, unlike ``--yolo``.  Supplying
-    an explicit empty available-tool list hides every tool from the model, so
-    ``confirm`` and ``deny`` cannot silently inherit a permissive session
-    setting or turn a non-interactive prompt into unrestricted execution.
-    """
-    if approval == "full":
-        return ["--yolo"]
-    if approval == "auto":
-        return ["--allow-all-tools"]
-    return ["--available-tools", ""]
-
-
 def _max_prompt_chars() -> int:
     """Largest prompt (chars) we can safely pass to copilot via ``-p``.
 
@@ -131,7 +114,13 @@ def _remove_isolated_copilot_home(home: str) -> None:
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
-    permission_args = staticmethod(_permission_args)
+    # Auto retains Copilot's normal path/URL checks; restricted modes expose
+    # no tools, so they cannot inherit a permissive session setting.
+    permission_arg_sets = {
+        "full": ("--yolo",),
+        "auto": ("--allow-all-tools",),
+        "restricted": ("--available-tools", ""),
+    }
     # ``auto`` is policy-aware: Copilot chooses from models allowed for the
     # signed-in account. It is also the only safe default before ACP has
     # returned an account-specific catalog.

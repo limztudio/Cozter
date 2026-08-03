@@ -369,6 +369,12 @@ class Backend(ABC):
     # where a CLI cannot actually provide it.
     supports_detached_tasks: bool = False
 
+    # CLI backends declare their permission flags rather than each
+    # reimplementing the same full/auto/restricted selection. HTTP backends
+    # leave this as ``None`` because they do not build a permission-aware
+    # subprocess command line.
+    permission_arg_sets: dict[str, tuple[str, ...]] | None = None
+
     # Behavior -------------------------------------------------------------
 
     def health_check(self) -> tuple[bool, str]:
@@ -513,12 +519,15 @@ class Backend(ABC):
         """Return the reasoning-effort vocabulary for a selected model."""
         return self.effort_levels
 
-    @staticmethod
-    def permission_args(approval: str) -> list[str]:
+    @classmethod
+    def permission_args(cls, approval: str) -> list[str]:
         """Return backend-specific CLI flags for a permission mode."""
-        raise NotImplementedError(
-            "this backend does not launch a permission-aware CLI",
-        )
+        arg_sets = cls.permission_arg_sets
+        if arg_sets is None:
+            raise NotImplementedError(
+                "this backend does not launch a permission-aware CLI",
+            )
+        return list(arg_sets.get(approval, arg_sets["restricted"]))
 
     def append_model_effort_args(
         self,

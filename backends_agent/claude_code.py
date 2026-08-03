@@ -84,22 +84,6 @@ _SAFE_BACKGROUND_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _DETACHED_COMMAND_TIMEOUT_SEC = 30
 _BACKGROUND_GUARD_TIMEOUT_SEC = 5
 
-
-def _permission_args(approval: str) -> list[str]:
-    """Translate Cozter's permission level to Claude Code CLI arguments.
-
-    ``acceptEdits`` keeps regular permission checks for commands outside the
-    working-directory edit flow.  ``plan`` allows inspection but blocks edits,
-    which is the safest non-interactive fallback for both ``confirm`` and
-    ``deny`` without pretending a chat surface can answer native prompts.
-    """
-    if approval == "full":
-        return ["--dangerously-skip-permissions"]
-    if approval == "auto":
-        return ["--permission-mode", "acceptEdits"]
-    return ["--permission-mode", "plan"]
-
-
 def _background_guard_settings() -> str:
     """Return the session-only Claude hook that blocks orphaned Bash jobs."""
     guard_path = os.path.join(
@@ -288,7 +272,14 @@ async def _run_claude_command(
 class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
-    permission_args = staticmethod(_permission_args)
+    # ``acceptEdits`` preserves normal checks outside workspace edits; plan
+    # permits inspection while blocking edits, the safest non-interactive
+    # fallback for confirm and deny.
+    permission_arg_sets = {
+        "full": ("--dangerously-skip-permissions",),
+        "auto": ("--permission-mode", "acceptEdits"),
+        "restricted": ("--permission-mode", "plan"),
+    }
     supports_detached_tasks = True
     # Claude Code has no safe non-interactive catalog command.  In
     # particular, a managed Bedrock/Vertex/Foundry login cannot be enumerated

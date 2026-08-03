@@ -153,46 +153,39 @@ class BackendPermissionCommandTests(unittest.TestCase):
         return asyncio.run(run())
 
     def test_permission_argument_maps_are_explicit_and_fail_restricted(self) -> None:
-        self.assertEqual(
-            codex_mod._permission_args("full"),
-            ["--dangerously-bypass-approvals-and-sandbox"],
+        mappings = (
+            (
+                "codex",
+                codex_mod.CodexBackend(),
+                ["--dangerously-bypass-approvals-and-sandbox"],
+                ["--sandbox", "workspace-write"],
+                ["--sandbox", "read-only"],
+            ),
+            (
+                "claude",
+                claude_code_mod.ClaudeCodeBackend(),
+                ["--dangerously-skip-permissions"],
+                ["--permission-mode", "acceptEdits"],
+                ["--permission-mode", "plan"],
+            ),
+            (
+                "copilot",
+                copilot_mod.CopilotBackend(),
+                ["--yolo"],
+                ["--allow-all-tools"],
+                ["--available-tools", ""],
+            ),
         )
-        self.assertEqual(
-            codex_mod._permission_args("auto"),
-            ["--sandbox", "workspace-write"],
-        )
-        for approval in ("confirm", "deny", "unknown"):
-            with self.subTest(backend="codex", approval=approval):
-                self.assertEqual(
-                    codex_mod._permission_args(approval),
-                    ["--sandbox", "read-only"],
-                )
-
-        self.assertEqual(
-            claude_code_mod._permission_args("full"),
-            ["--dangerously-skip-permissions"],
-        )
-        self.assertEqual(
-            claude_code_mod._permission_args("auto"),
-            ["--permission-mode", "acceptEdits"],
-        )
-        for approval in ("confirm", "deny", "unknown"):
-            with self.subTest(backend="claude", approval=approval):
-                self.assertEqual(
-                    claude_code_mod._permission_args(approval),
-                    ["--permission-mode", "plan"],
-                )
-
-        self.assertEqual(copilot_mod._permission_args("full"), ["--yolo"])
-        self.assertEqual(
-            copilot_mod._permission_args("auto"), ["--allow-all-tools"],
-        )
-        for approval in ("confirm", "deny", "unknown"):
-            with self.subTest(backend="copilot", approval=approval):
-                self.assertEqual(
-                    copilot_mod._permission_args(approval),
-                    ["--available-tools", ""],
-                )
+        for name, backend, full, auto, restricted in mappings:
+            with self.subTest(backend=name, approval="full"):
+                self.assertEqual(backend.permission_args("full"), full)
+            with self.subTest(backend=name, approval="auto"):
+                self.assertEqual(backend.permission_args("auto"), auto)
+            for approval in ("confirm", "deny", "unknown"):
+                with self.subTest(backend=name, approval=approval):
+                    self.assertEqual(
+                        backend.permission_args(approval), restricted,
+                    )
 
     def test_internal_compaction_command_never_grants_full_access(self) -> None:
         codex_command = self._codex_command("deny", compaction=True)

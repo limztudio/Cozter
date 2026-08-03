@@ -263,15 +263,6 @@ def get_tool_timeout() -> int:
     return _get_int_at_least("tool_timeout", 1)
 
 
-def get_max_upload_bytes() -> int:
-    """Maximum size in bytes for a single chat attachment.
-
-    This applies to files accepted from chat platforms and files sent back to
-    them. Invalid or non-positive values fall back to the 50 MiB default.
-    """
-    return _get_int_at_least("max_upload_bytes", 1)
-
-
 def get_update_idle_timeout() -> int:
     """Diagnostic interval while the update loop waits for active turns.
 

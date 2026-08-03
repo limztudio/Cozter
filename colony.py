@@ -61,10 +61,6 @@ def _load(workspace: str) -> dict:
     return data
 
 
-def _save(workspace: str, data: dict) -> None:
-    save_json_object(_path(workspace), data)
-
-
 def get_items(workspace: str) -> list[str]:
     return list(_load(workspace)["items"])
 
@@ -80,7 +76,7 @@ def set_items(workspace: str, items: list[str]) -> None:
         )
         cleaned = cleaned[-COLONY_CAP:]
     data["items"] = cleaned
-    _save(workspace, data)
+    save_json_object(_path(workspace), data)
 
 
 def get_compact_count(workspace: str) -> int:
@@ -98,7 +94,7 @@ def bump_compact_count(workspace: str) -> int:
     if not isinstance(compact_count, int) or isinstance(compact_count, bool):
         compact_count = 0
     data["compact_count"] = compact_count + 1
-    _save(workspace, data)
+    save_json_object(_path(workspace), data)
     return data["compact_count"]
 
 

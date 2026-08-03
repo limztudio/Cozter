@@ -19,29 +19,6 @@ from Cozter.backends_bot.telegram import (
 
 
 class UploadLimitConfigTests(unittest.TestCase):
-    def test_getter_uses_override_and_rejects_invalid_values(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            old_path = config.CONFIG_PATH
-            config.CONFIG_PATH = path
-            try:
-                self.assertEqual(
-                    config.get_max_upload_bytes(),
-                    config.DEFAULT_MAX_UPLOAD_BYTES,
-                )
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump({"max_upload_bytes": 123}, f)
-                self.assertEqual(config.get_max_upload_bytes(), 123)
-
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump({"max_upload_bytes": True}, f)
-                self.assertEqual(
-                    config.get_max_upload_bytes(),
-                    config.DEFAULT_MAX_UPLOAD_BYTES,
-                )
-            finally:
-                config.CONFIG_PATH = old_path
-
     def test_loader_normalizes_an_invalid_platform_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "config.json")

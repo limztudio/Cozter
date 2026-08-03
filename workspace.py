@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 
 from . import backends_agent
 from . import config
@@ -338,6 +339,24 @@ def _set_setting(workspace_path: str, key: str, value: object) -> None:
     _save_settings(workspace_path, settings)
 
 
+def _validate_choice(value: str, options: list[str], label: str) -> None:
+    """Raise a consistent error when a persisted setting is not selectable."""
+    if value not in options:
+        raise ValueError(f"Unknown {label}: {value}. Available: {options}")
+
+
+def _set_choice_setting(
+    workspace_path: str,
+    key: str,
+    value: str,
+    options: list[str],
+    label: str,
+) -> None:
+    """Validate and persist one setting chosen from a fixed option list."""
+    _validate_choice(value, options, label)
+    _set_setting(workspace_path, key, value)
+
+
 def _coerce_backend_name(
     name: object,
     default: str = DEFAULT_BACKEND,
@@ -387,11 +406,9 @@ def get_backend_name(workspace_path: str) -> str:
 
 
 def set_backend_name(workspace_path: str, name: str) -> None:
-    if name not in AVAILABLE_BACKENDS:
-        raise ValueError(
-            f"Unknown backend: {name}. Available: {AVAILABLE_BACKENDS}"
-        )
-    _set_setting(workspace_path, "backend", name)
+    _set_choice_setting(
+        workspace_path, "backend", name, AVAILABLE_BACKENDS, "backend",
+    )
 
 
 def get_summary_backend_name(workspace_path: str) -> str:
@@ -407,11 +424,13 @@ def get_summary_backend_name(workspace_path: str) -> str:
 
 
 def set_summary_backend_name(workspace_path: str, name: str) -> None:
-    if name not in DIRECT_BACKENDS:
-        raise ValueError(
-            f"Unknown summary backend: {name}. Available: {DIRECT_BACKENDS}"
-        )
-    _set_setting(workspace_path, "summary_backend", name)
+    _set_choice_setting(
+        workspace_path,
+        "summary_backend",
+        name,
+        DIRECT_BACKENDS,
+        "summary backend",
+    )
 
 
 def _with_extra_models(
@@ -450,16 +469,25 @@ def _available_models_for_backend(backend_name: str) -> list[str]:
     )
 
 
+def _available_models_for_selected_backend(
+    workspace_path: str,
+    backend_name_getter: Callable[[str], str],
+) -> list[str]:
+    return _available_models_for_backend(backend_name_getter(workspace_path))
+
+
 def get_available_models(workspace_path: str) -> list[str]:
     """List models for the workspace's currently selected backend."""
-    backend_name = get_backend_name(workspace_path)
-    return _available_models_for_backend(backend_name)
+    return _available_models_for_selected_backend(
+        workspace_path, get_backend_name,
+    )
 
 
 def get_available_summary_models(workspace_path: str) -> list[str]:
     """List models for the workspace's summary backend (may differ from chat)."""
-    backend_name = get_summary_backend_name(workspace_path)
-    return _available_models_for_backend(backend_name)
+    return _available_models_for_selected_backend(
+        workspace_path, get_summary_backend_name,
+    )
 
 
 # A model is stored per (backend, role) so each agent keeps its own model
@@ -585,11 +613,13 @@ def set_flexible_backend_name(
     workspace_path: str, tier: str, name: str,
 ) -> None:
     _validate_tier(tier)
-    if name not in DIRECT_BACKENDS:
-        raise ValueError(
-            f"Unknown agent: {name}. Available: {DIRECT_BACKENDS}"
-        )
-    _set_setting(workspace_path, _flexible_backend_key(tier), name)
+    _set_choice_setting(
+        workspace_path,
+        _flexible_backend_key(tier),
+        name,
+        DIRECT_BACKENDS,
+        "agent",
+    )
 
 
 def get_flexible_model(workspace_path: str, tier: str) -> str:
@@ -638,11 +668,7 @@ def get_permission(workspace_path: str) -> str:
 
 
 def set_permission(workspace_path: str, permission: str) -> None:
-    if permission not in AVAILABLE_PERMISSIONS:
-        raise ValueError(
-            f"Unknown permission: {permission}. "
-            f"Available: {AVAILABLE_PERMISSIONS}"
-        )
+    _validate_choice(permission, AVAILABLE_PERMISSIONS, "permission")
     ceiling = permission_ceiling()
     if _PERMISSION_RANK[permission] > _PERMISSION_RANK[ceiling]:
         raise ValueError(
@@ -665,12 +691,9 @@ def get_interaction_style(workspace_path: str) -> str:
 
 
 def set_interaction_style(workspace_path: str, style: str) -> None:
-    if style not in AVAILABLE_STYLES:
-        raise ValueError(
-            f"Unknown interaction style: {style}. "
-            f"Available: {AVAILABLE_STYLES}"
-        )
-    _set_setting(workspace_path, "style", style)
+    _set_choice_setting(
+        workspace_path, "style", style, AVAILABLE_STYLES, "interaction style",
+    )
 
 
 def get_reasoning_effort(workspace_path: str) -> int:
