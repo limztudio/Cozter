@@ -10,7 +10,8 @@ import time
 
 from .base import (
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
-    create_prompt_subprocess, executable_command, set_error_result,
+    create_prompt_subprocess, executable_command, normalize_error_message,
+    set_error_result,
     truncate_status_text,
 )
 
@@ -422,7 +423,7 @@ class CodexBackend(Backend):
             if result.text:
                 # The model already answered. Keep the error, but never let
                 # a late one overwrite the reply the user is owed.
-                result.error = msg
+                result.error = normalize_error_message(msg)
             else:
                 set_error_result(result, msg)
 

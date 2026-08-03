@@ -10,7 +10,7 @@ test instead.
 
 import unittest
 
-from Cozter.backends_agent.base import AgentResult
+from Cozter.backends_agent.base import AgentResult, set_error_result
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
@@ -26,6 +26,16 @@ def _run(backend, events: list[dict]) -> AgentResult:
 
 def _kinds(result: AgentResult) -> list[str]:
     return [e.kind for e in result.events]
+
+
+class ErrorResultTests(unittest.TestCase):
+    def test_non_text_or_blank_error_is_normalized(self) -> None:
+        for message in (None, "", "   ", ["bad"], {"message": "bad"}):
+            with self.subTest(message=message):
+                result = AgentResult()
+                set_error_result(result, message)
+                self.assertEqual(result.error, "Unknown error")
+                self.assertEqual(result.text, "Error: Unknown error")
 
 
 class CodexParseTests(unittest.TestCase):
@@ -126,6 +136,15 @@ class CodexParseTests(unittest.TestCase):
         ])
         self.assertEqual(r.text, "hello world")
         self.assertEqual(r.error, "disconnected while closing")
+
+    def test_late_malformed_stream_error_is_normalized(self) -> None:
+        r = _run(self.backend, [
+            {"type": "item.completed",
+             "item": {"type": "agent_message", "text": "hello world"}},
+            {"type": "error", "message": {"detail": "disconnected"}},
+        ])
+        self.assertEqual(r.text, "hello world")
+        self.assertEqual(r.error, "Unknown error")
 
     def test_turn_completed_captures_usage(self) -> None:
         r = _run(self.backend, [
@@ -273,6 +292,13 @@ class ClaudeCodeParseTests(unittest.TestCase):
         ])
         self.assertEqual(r.error, "nope")
 
+    def test_result_error_with_non_text_message_is_normalized(self) -> None:
+        r = _run(self.backend, [{
+            "type": "result", "is_error": True,
+            "error": {"detail": "nope"},
+        }])
+        self.assertEqual(r.error, "Unknown error")
+
     def test_result_captures_usage_and_cost(self) -> None:
         r = _run(self.backend, [
             {"type": "result", "subtype": "success", "result": "done",
@@ -335,6 +361,12 @@ class CopilotParseTests(unittest.TestCase):
             {"type": "error", "message": "bad"},
         ])
         self.assertEqual(r.error, "bad")
+
+    def test_error_with_non_text_message_is_normalized(self) -> None:
+        r = _run(self.backend, [
+            {"type": "error", "message": ["bad"]},
+        ])
+        self.assertEqual(r.error, "Unknown error")
 
 
 class LlamaParseTests(unittest.TestCase):

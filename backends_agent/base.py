@@ -171,15 +171,29 @@ def append_detached_task_request(result: AgentResult, prompt: str) -> None:
         result.detached_task_requests.append(request)
 
 
+def normalize_error_message(message: object) -> str:
+    """Return a non-blank error message safe to store on ``AgentResult``.
+
+    JSONL backends consume provider-controlled payloads, whose ``message``
+    fields are not guaranteed to remain strings.  Keeping this conversion in
+    one place preserves the ``AgentResult.error`` contract even when a
+    provider changes an error envelope.
+    """
+    if isinstance(message, str) and message.strip():
+        return message
+    return "Unknown error"
+
+
 def set_error_result(
     result: AgentResult,
-    message: str,
+    message: object,
     *,
     display_text: str | None = None,
 ) -> None:
-    """Record an error and emit its user-facing text event."""
-    result.error = message
-    append_text_result(result, display_text or f"Error: {message}")
+    """Record a normalized error and emit its user-facing text event."""
+    error_message = normalize_error_message(message)
+    result.error = error_message
+    append_text_result(result, display_text or f"Error: {error_message}")
 
 
 def record_error_event(event: dict, result: AgentResult) -> bool:
@@ -192,11 +206,7 @@ def record_error_event(event: dict, result: AgentResult) -> bool:
     """
     if event.get("type") != "error":
         return False
-    message = event.get("message")
-    set_error_result(
-        result,
-        message if isinstance(message, str) and message else "Unknown error",
-    )
+    set_error_result(result, event.get("message"))
     return True
 
 
