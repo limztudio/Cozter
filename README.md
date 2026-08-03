@@ -761,6 +761,13 @@ conversation record. The private home copies `config.json` and `settings.json`
 from `$COPILOT_HOME` when it is set, otherwise from `~/.copilot`; set
 `COPILOT_HOME` before launch when the source profile lives elsewhere.
 
+Provider event envelopes are treated as untrusted input. A missing, blank, or
+non-text backend error message is normalized to `Unknown error` before it is
+stored or shown, rather than exposing a provider object or breaking the turn
+parser. If Codex has
+already streamed an assistant reply, a late stream error is retained on the
+turn without replacing that reply.
+
 ## Reasoning effort
 
 `/effort` accepts `0`–`100` and is stored per workspace. `0` means "no
