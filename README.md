@@ -728,7 +728,7 @@ before executing the requested tool.
 
 Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its
-sandboxed full-auto mode for `auto`, and a read-only sandbox for `confirm`
+workspace-write sandbox for `auto`, and a read-only sandbox for `confirm`
 and `deny`. `llama` and `zai` run in-process: `deny` exposes no tools and
 `confirm` exposes only read-only tools, with writes and shell blocked again
 by `execute_tool`. `claude_code` uses bypass only for `full`, `acceptEdits`

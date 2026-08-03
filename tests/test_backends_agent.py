@@ -157,7 +157,10 @@ class BackendPermissionCommandTests(unittest.TestCase):
             codex_mod._permission_args("full"),
             ["--dangerously-bypass-approvals-and-sandbox"],
         )
-        self.assertEqual(codex_mod._permission_args("auto"), ["--full-auto"])
+        self.assertEqual(
+            codex_mod._permission_args("auto"),
+            ["--sandbox", "workspace-write"],
+        )
         for approval in ("confirm", "deny", "unknown"):
             with self.subTest(backend="codex", approval=approval):
                 self.assertEqual(
@@ -220,6 +223,17 @@ class BackendPermissionCommandTests(unittest.TestCase):
         self.assertNotIn("--allow-all-tools", copilot_command)
         self.assertNotIn("--yolo", copilot_command)
 
+    def test_codex_auto_launch_uses_the_workspace_write_sandbox(self) -> None:
+        command = self._codex_command("auto")
+        self.assertIn("--sandbox", command)
+        self.assertEqual(
+            command[command.index("--sandbox") + 1], "workspace-write",
+        )
+        self.assertNotIn("--full-auto", command)
+        self.assertNotIn(
+            "--dangerously-bypass-approvals-and-sandbox", command,
+        )
+
     def test_copilot_runs_disable_remote_session_export(self) -> None:
         for approval in ("full", "auto", "confirm", "deny"):
             with self.subTest(approval=approval):
@@ -275,6 +289,16 @@ class BackendModelTests(unittest.TestCase):
         self.assertIn(CodexBackend.default_summary_model, models)
         for model in CodexBackend.tier_models.values():
             self.assertIn(model, models)
+
+    def test_codex_fallback_metadata_covers_every_model(self) -> None:
+        self.assertEqual(
+            set(codex_mod._FALLBACK_MODELS),
+            set(codex_mod._FALLBACK_MODEL_EFFORT_LEVELS),
+        )
+        self.assertEqual(
+            set(codex_mod._FALLBACK_MODELS),
+            set(codex_mod._FALLBACK_MODEL_CONTEXT_WINDOWS),
+        )
 
     def test_codex_effort_uses_levels_supported_by_selected_picker_model(
         self,
@@ -1010,6 +1034,12 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertEqual(len(models), len(set(models)))
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
+
+    def test_fallback_context_windows_cover_every_model(self) -> None:
+        self.assertEqual(
+            set(zai_mod._FALLBACK_MODELS),
+            set(zai_mod._MODEL_CONTEXT_WINDOWS),
+        )
 
     def test_context_windows_cover_only_published_curated_ids(self) -> None:
         backend = ZaiBackend()
