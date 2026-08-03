@@ -76,6 +76,19 @@ _MODEL_CONTEXT_WINDOWS = {
     "glm-4.5-flash": 128_000,
     "glm-4-32b-0414-128k": 128_000,
 }
+# Z.ai documents ``tool_stream`` for its GLM-4.6-and-newer text families.
+# Keep vision-capable and account-private IDs out until their respective API
+# references explicitly advertise the request field.
+_TOOL_STREAM_MODELS = frozenset({
+    "glm-5.2",
+    "glm-5.1",
+    "glm-5-turbo",
+    "glm-5",
+    "glm-4.7",
+    "glm-4.7-flash",
+    "glm-4.7-flashx",
+    "glm-4.6",
+})
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
 
@@ -158,14 +171,16 @@ class ZaiBackend(CachedOpenAIChatBackend):
         }
 
     def _tool_request_fields(self, model: str | None) -> dict:
-        """Enable Z.ai's incremental tool-call deltas for GLM-5.2 only.
+        """Enable incremental tool-call deltas on documented text models.
 
-        ``tool_stream`` is an opt-in GLM-5.2 request field. The shared SSE
-        parser already joins incremental OpenAI-style tool-call arguments;
-        restricting the field to this documented model keeps older and
-        account-specific model IDs compatible.
+        ``tool_stream`` is supported by Z.ai's GLM-4.6-and-newer text model
+        families. The shared SSE parser already joins incremental
+        OpenAI-style tool-call arguments. Vision-capable and unrecognized
+        account-specific IDs intentionally omit the optional field until
+        provider documentation confirms their compatibility.
         """
-        return {"tool_stream": True} if model == "glm-5.2" else {}
+        selected = model or self.default_model
+        return {"tool_stream": True} if selected in _TOOL_STREAM_MODELS else {}
 
     def _auto_continue_after_tool_limit(self) -> bool:
         # Long z.ai coding runs can legitimately need more tool turns than

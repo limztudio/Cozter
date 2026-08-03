@@ -722,9 +722,9 @@ Claude's `/fast` is a session toggle rather than a selectable `*-fast` model
 ID. Llama and Z.ai discover models live from their configured HTTP endpoints.
 `llama` and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
-and points at Z.ai's endpoint. GLM-5.2 tool turns also opt into Z.ai's
-incremental tool-call argument stream, which the shared SSE parser merges
-before executing the requested tool.
+and points at Z.ai's endpoint. GLM-4.6-and-newer text-model tool turns opt
+into Z.ai's incremental tool-call argument stream, which the shared SSE
+parser merges before executing the requested tool.
 
 Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its

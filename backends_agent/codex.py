@@ -28,9 +28,10 @@ def _permission_args(approval: str) -> list[str]:
     if approval == "full":
         return ["--dangerously-bypass-approvals-and-sandbox"]
     if approval == "auto":
-        # Codex 0.146 removed ``--full-auto``. The explicit writable sandbox
-        # retains normal sandboxing while allowing agent edits in the
-        # workspace, which is the behavior Cozter's ``auto`` mode needs.
+        # Codex 0.146 retains ``--full-auto`` only as a deprecated
+        # compatibility flag. The explicit writable sandbox keeps normal
+        # sandboxing while allowing agent edits in the workspace, which is
+        # the behavior Cozter's ``auto`` mode needs.
         return ["--sandbox", "workspace-write"]
     return ["--sandbox", "read-only"]
 

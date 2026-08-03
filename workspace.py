@@ -306,12 +306,12 @@ STYLE_DESCRIPTIONS = {
     "autonomous": "Decide and proceed without asking (full-auto)",
 }
 
-# Reasoning effort: a single 0-100 percentage. Each agent backend maps
-# the percentage to its own native scale (codex has 5 levels including
-# "xhigh", llama has 4, and claude_code has 5. Copilot has 5 for named
-# models; its policy-aware ``auto`` selector delegates effort to the CLI.
-# This sidesteps the per-backend vocabulary problem - the user picks one
-# number and every backend reacts in its own way.
+# Reasoning effort: a single 0-100 percentage. Each agent backend maps the
+# percentage to its own native scale. The available levels are model-aware for
+# Codex, while other backends expose between four and seven levels or a native
+# thinking switch; Copilot's policy-aware ``auto`` selector delegates effort
+# to the CLI. This sidesteps the per-backend vocabulary problem - the user
+# picks one number and every backend reacts in its own way.
 #
 # 0 is the "off" value: no effort signal is sent and each backend's
 # server-side default is used. 1-100 are explicit overrides.
