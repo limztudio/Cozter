@@ -47,6 +47,10 @@ _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
 # Bound their aggregate too; otherwise a peer can bypass the line cap by never
 # emitting the blank event delimiter.
 _MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
+# Error responses never reach the model in full (their messages are trimmed
+# below), so do not let a misconfigured or hostile endpoint make the bot
+# buffer an arbitrarily large HTML/JSON error document first.
+_MAX_HTTP_ERROR_BODY_BYTES = 8 * 1024
 _EOF_SUCCESS_FINISH_REASONS = frozenset({
     "stop", "length", "tool_calls", "function_call", "content_filter",
 })
@@ -602,7 +606,7 @@ async def _stream_once(
             ) as resp,
         ):
             if resp.status == 429 or resp.status >= 500:
-                body = await resp.text()
+                body = await _read_error_body(resp)
                 raise _RetryableError(
                     f"{label} returned HTTP {resp.status}: {body[:200]}",
                     retry_after=_parse_retry_after(
@@ -610,7 +614,7 @@ async def _stream_once(
                     ),
                 )
             if resp.status != 200:
-                body = await resp.text()
+                body = await _read_error_body(resp)
                 raise RuntimeError(
                     f"{label} returned HTTP {resp.status}: {body[:500]}"
                 )
@@ -697,6 +701,23 @@ async def _stream_once(
         if tool_buffers[idx].get("function", {}).get("name")
     ]
     return "".join(text_parts), tool_calls
+
+
+async def _read_error_body(resp: aiohttp.ClientResponse) -> str:
+    """Read a bounded, best-effort error-body preview from *resp*.
+
+    The user-facing error format only includes at most 500 characters, but
+    ``ClientResponse.text()`` first reads the entire payload.  A reverse
+    proxy can attach an unexpectedly large diagnostic page to a 4xx/5xx
+    response, so cap the raw read before decoding it.  A malformed declared
+    charset should not hide the useful HTTP status either.
+    """
+    body = await resp.content.read(_MAX_HTTP_ERROR_BODY_BYTES)
+    encoding = getattr(resp, "charset", None) or "utf-8"
+    try:
+        return body.decode(encoding, errors="replace")
+    except (LookupError, TypeError):
+        return body.decode("utf-8", errors="replace")
 
 
 async def _iter_sse_lines(

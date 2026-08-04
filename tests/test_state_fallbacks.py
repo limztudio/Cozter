@@ -81,11 +81,13 @@ class QueueDrainBot(BotPlatform):
     async def _run_turn(
         self, uid: str, chat_id: str, text: str,
         *, session_id: str | None = None,
+        queue_entry_id: str | None = None,
     ) -> None:
         self.ran.append(("chat", text))
 
     async def _run_ephemeral_turn(
         self, uid: str, chat_id: str, text: str,
+        *, queue_entry_id: str | None = None,
     ) -> None:
         self.ran.append(("scheduled", text))
 
@@ -1287,6 +1289,37 @@ class QueueStateFallbackTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_stop_clears_paused_queue_without_running_turn(self) -> None:
+        async def run(pause: str) -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                try:
+                    bot = QueueDrainBot()
+                    q = bot._ensure_message_queue("u1")
+                    entry_id = await bot._persist_enqueue(
+                        "u1", "queued work", "chat",
+                    )
+                    q.put_nowait(("queued work", "chat", entry_id, False))
+                    if pause == "await":
+                        bot._awaiting_answer.add("u1")
+                    else:
+                        bot._update_restart_pending = True
+
+                    await bot.cmd_stop(bot.make_context("u1", "chat"))
+
+                    self.assertNotIn("u1", bot._awaiting_answer)
+                    self.assertTrue(q.empty())
+                    self.assertNotIn("u1", bot._read_queue_file())
+                    await asyncio.sleep(0)
+                    self.assertEqual(bot.ran, [])
+                finally:
+                    workspace.CONFIG_DIR = old_config_dir
+
+        for pause in ("await", "update restart"):
+            with self.subTest(pause=pause):
+                asyncio.run(run(pause))
+
 
 class _GatedDrainBot(BotPlatform):
     """Bot whose _run_turn blocks on a gate, simulating a mid-reply turn.
@@ -1327,6 +1360,7 @@ class _GatedDrainBot(BotPlatform):
     async def _run_turn(
         self, uid: str, chat_id: str, text: str,
         *, session_id: str | None = None,
+        queue_entry_id: str | None = None,
     ) -> None:
         self.ran.append(text)
         await self.gate.wait()

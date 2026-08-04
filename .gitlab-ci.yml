@@ -41,8 +41,10 @@ test:
     - ln -s "$CI_PROJECT_DIR" "$COZTER_LINK_DIR/Cozter"
     - export PYTHONPATH="$COZTER_LINK_DIR"
     - python -m pip install --upgrade pip
-    - pip install -r requirements.txt ruff mypy
+    - python -m pip install -r requirements.txt ruff mypy
   script:
     - ruff check .
-    - mypy --config-file mypy.ini -p Cozter
+    # Override mypy.ini's local lowest-supported-version default so each
+    # matrix job actually type-checks its advertised Python target.
+    - mypy --config-file mypy.ini --python-version "$PYTHON_VERSION" -p Cozter
     - python -m unittest discover -s tests

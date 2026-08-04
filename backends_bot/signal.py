@@ -34,6 +34,7 @@ from .base import (
     attachment_kind_from_mime,
     copy_file_with_limit,
     ensure_upload_dir,
+    reserve_upload_path,
     upload_limit_message,
     upload_size_exceeds_limit,
     write_bytes_atomically,
@@ -655,24 +656,24 @@ class SignalBot(BotPlatform):
         caption: str,
     ) -> AttachmentInfo | None:
         filename = _attachment_filename(att)
-        local_path = os.path.join(upload_dir, filename)
         self._check_upload_size(_attachment_declared_size(att))
         source_path = _resolve_attachment_local_path(att)
+        attachment_id = "" if source_path else _attachment_id(att)
+        if not source_path and not attachment_id:
+            return None
 
-        if source_path:
-            copy_file_with_limit(
-                source_path, local_path, self.max_upload_bytes,
-            )
-        else:
-            attachment_id = _attachment_id(att)
-            if not attachment_id:
-                return None
-            result = await self._rpc_request(
-                "getAttachment", {"id": attachment_id, "groupId": group_id},
-            )
-            payload = re.sub(r"\s+", "", _attachment_payload(result))
-            data = _decode_attachment_payload(payload, self.max_upload_bytes)
-            write_bytes_atomically(local_path, data)
+        with reserve_upload_path(upload_dir, filename) as local_path:
+            if source_path:
+                copy_file_with_limit(
+                    source_path, local_path, self.max_upload_bytes,
+                )
+            else:
+                result = await self._rpc_request(
+                    "getAttachment", {"id": attachment_id, "groupId": group_id},
+                )
+                payload = re.sub(r"\s+", "", _attachment_payload(result))
+                data = _decode_attachment_payload(payload, self.max_upload_bytes)
+                write_bytes_atomically(local_path, data)
 
         return AttachmentInfo(
             local_path,

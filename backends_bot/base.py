@@ -73,6 +73,46 @@ def ensure_upload_dir(workspace_path: str) -> str:
     return upload_dir
 
 
+@contextmanager
+def reserve_upload_path(upload_dir: str, filename: str) -> Iterator[str]:
+    """Reserve a collision-free upload path until its transfer completes.
+
+    The placeholder is created exclusively so concurrent inbound transfers
+    cannot pick the same destination.  A successful atomic writer replaces
+    it; a failed transfer removes it along with its temporary output.
+    """
+    safe_name = os.path.basename(filename) or "file"
+    stem, suffix = os.path.splitext(safe_name)
+    index = 1
+
+    while True:
+        candidate = (
+            safe_name if index == 1 else f"{stem} ({index}){suffix}"
+        )
+        local_path = os.path.join(upload_dir, candidate)
+        try:
+            descriptor = os.open(
+                local_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600,
+            )
+        except FileExistsError:
+            index += 1
+            continue
+        else:
+            os.close(descriptor)
+            break
+
+    completed = False
+    try:
+        yield local_path
+        completed = True
+    finally:
+        if not completed:
+            try:
+                os.unlink(local_path)
+            except FileNotFoundError:
+                pass
+
+
 def attachment_kind_from_mime(value: object) -> str:
     """Map a transport MIME value to Cozter's coarse attachment labels."""
     mime = str(value or "").lower()
@@ -320,6 +360,15 @@ class BotPlatform(ABC):
         # Serializes read-modify-write on the persistent-queue file so
         # concurrent enqueue/complete calls don't clobber each other.
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
+        # A completed turn's final text is staged here before outbound I/O.
+        # Keeping it separate from the inbound prompt queue lets a later
+        # delivery retry resend the answer without rerunning the agent.
+        self._reply_delivery_file_lock: asyncio.Lock = asyncio.Lock()
+        # Serializes one user's delivery attempts with /cancel and /stop.
+        # A separate lock per user avoids allowing one temporarily unavailable
+        # chat platform to hold up delivery or cancellation for everyone.
+        self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
+        self._pending_reply_delivery_users: set[str] = set()
         # Detached provider tasks are intentionally separate from the inbound
         # message queue: queue entries are prompts that _drain_message_queue
         # reruns through an agent, while these records are already-computed
@@ -797,7 +846,8 @@ class BotPlatform(ABC):
         drained: list = []
         _drain_queue(self._message_queues.get(uid), collect=drained)
         persisted = await self._clear_persistent_queue(uid)
-        cleared = max(len(drained), persisted)
+        delayed_replies = await self._clear_reply_deliveries(uid)
+        cleared = max(len(drained), persisted, delayed_replies)
         detached_cancelled = await self._cancel_detached_tasks(uid)
 
         if task_running:
@@ -1664,33 +1714,31 @@ class BotPlatform(ABC):
     # ----- /stop ----------------------------------------------------------
 
     async def cmd_stop(self, ctx: BotContext) -> None:
-        # /stop unconditionally clears the await flag — the user is
-        # giving up on the pending question, so the queue should be
-        # free to drain (or stay drained, since /stop also empties it).
-        was_awaiting = ctx.user_id in self._awaiting_answer
-        self._awaiting_answer.discard(ctx.user_id)
-        task = self._running_tasks.get(ctx.user_id)
-        if task and not task.done():
-            self._cancel_acknowledged.add(ctx.user_id)
+        # /stop abandons a pending question and every queued prompt,
+        # including queues that are paused without a foreground turn.
+        uid = ctx.user_id
+        was_awaiting = uid in self._awaiting_answer
+        self._awaiting_answer.discard(uid)
+
+        task = self._running_tasks.get(uid)
+        task_running = task is not None and not task.done()
+        if task_running:
+            self._cancel_acknowledged.add(uid)
             task.cancel()
-            _drain_queue(self._message_queues.get(ctx.user_id))
-            # Clear the persistent queue so cancelled work doesn't
-            # come back on the next restart.
-            await self._clear_persistent_queue(ctx.user_id)
-            # The foreground turn is already cancelled. Keep stopping any
-            # durable tasks best-effort, but do not let their CLI control
-            # calls delay that cancellation request.
-            await self._cancel_detached_tasks(ctx.user_id)
+
+        drained: list = []
+        _drain_queue(self._message_queues.get(uid), collect=drained)
+        # Clear the persistent queue so stopped work doesn't come back on
+        # the next restart, even when the queue is only paused in memory.
+        persisted = await self._clear_persistent_queue(uid)
+        delayed_replies = await self._clear_reply_deliveries(uid)
+        cleared = max(len(drained), persisted, delayed_replies)
+        detached_cancelled = await self._cancel_detached_tasks(uid)
+
+        if task_running:
             await ctx.reply_text("Cancelled.")
             return
-        detached_cancelled = await self._cancel_detached_tasks(ctx.user_id)
-        if was_awaiting:
-            self._start_queue_drain(ctx.user_id)
-            await ctx.reply_text(
-                "Cleared pending question; resuming queued work."
-            )
-            return
-        if detached_cancelled:
+        if was_awaiting or cleared or detached_cancelled:
             await ctx.reply_text("Cancelled.")
             return
         await ctx.reply_text("Nothing is running.")
@@ -2036,6 +2084,11 @@ class BotPlatform(ABC):
         persisted entries, refill the in-memory queue and spawn a drain
         task so the oldest entry runs first.
         """
+        # If a process crashed after staging a completed reply but before it
+        # removed the original prompt, keep that prompt parked until the
+        # delivery record has consumed it. Otherwise restore could rerun the
+        # agent and repeat its side effects.
+        await self.restore_reply_deliveries()
         async with self._queue_file_lock:
             data = self._read_queue_file()
         if not data:
@@ -2068,6 +2121,291 @@ class BotPlatform(ABC):
 
         for uid in drained_users:
             self._start_queue_drain(uid)
+
+    # ----- Durable final-reply delivery ---------------------------------
+
+    def _reply_deliveries_file_path(self) -> str:
+        """Return the per-platform ledger for completed text replies."""
+        return self._platform_state_file_path("reply_deliveries")
+
+    def _read_reply_deliveries_file(self) -> dict:
+        return load_json_object(
+            self._reply_deliveries_file_path(), "reply delivery ledger", logger,
+        )
+
+    def _write_reply_deliveries_file(self, data: dict) -> None:
+        save_json_object(self._reply_deliveries_file_path(), data)
+
+    @staticmethod
+    def _reply_delivery_records(value: object) -> list[dict]:
+        """Normalize staged text payloads from durable user-editable state."""
+        if not isinstance(value, list):
+            return []
+        records: list[dict] = []
+        required = ("id", "user_id", "chat_id")
+        for value_item in value:
+            if not isinstance(value_item, dict):
+                continue
+            if not all(
+                isinstance(value_item.get(key), str) and value_item[key]
+                for key in required
+            ):
+                continue
+            messages = value_item.get("messages")
+            if not isinstance(messages, list) or not all(
+                isinstance(message, str) for message in messages
+            ):
+                continue
+            records.append({
+                "id": value_item["id"],
+                "user_id": value_item["user_id"],
+                "chat_id": value_item["chat_id"],
+                "messages": list(messages),
+                "awaiting": value_item.get("awaiting") is True,
+            })
+        return records
+
+    async def _list_reply_delivery_records(self) -> list[dict]:
+        async with self._reply_delivery_file_lock:
+            data = self._read_reply_deliveries_file()
+            return self._reply_delivery_records(data.get("deliveries"))
+
+    def _reply_delivery_lock(self, uid: str) -> asyncio.Lock:
+        """Return the per-user lock for delivery/cancellation ordering."""
+        lock = self._reply_delivery_locks.get(uid)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._reply_delivery_locks[uid] = lock
+        return lock
+
+    async def _get_reply_delivery_record(
+        self, record_id: str,
+    ) -> dict | None:
+        """Load the live delivery record, if it has not been cancelled."""
+        async with self._reply_delivery_file_lock:
+            data = self._read_reply_deliveries_file()
+            return next(
+                (
+                    record
+                    for record in self._reply_delivery_records(
+                        data.get("deliveries"),
+                    )
+                    if record["id"] == record_id
+                ),
+                None,
+            )
+
+    async def restore_reply_deliveries(self) -> None:
+        """Block later prompts until any prior completed reply is delivered."""
+        records = await self._list_reply_delivery_records()
+        users = {record["user_id"] for record in records}
+        self._pending_reply_delivery_users.intersection_update(users)
+        self._pending_reply_delivery_users.update(users)
+
+    def _reply_delivery_payload(
+        self, ws: str, result: agent.AgentResult,
+    ) -> tuple[list[str], bool]:
+        """Extract the retry-safe text part of an agent result.
+
+        Attachments deliberately remain on the normal best-effort path. A
+        platform upload has no stable idempotency key, so retrying it after a
+        lost acknowledgement could duplicate the file. Text has the same
+        unavoidable at-least-once delivery boundary, but retaining it avoids
+        rerunning the completed agent and its tools.
+        """
+        messages: list[str] = []
+        awaiting = False
+        for event in result.events:
+            if event.kind != "text":
+                continue
+            text, _ = agent.extract_attachment_sources(event.content, ws)
+            text, event_awaiting = agent.extract_await(text)
+            awaiting = awaiting or event_awaiting
+            if text:
+                messages.append(text)
+        if result.usage and config.get_show_usage():
+            footer = agent.format_usage(result.usage)
+            if footer:
+                messages.append(footer)
+        return messages, awaiting
+
+    async def _stage_reply_delivery(
+        self,
+        uid: str,
+        entry_id: str,
+        chat_id: str,
+        ws: str,
+        result: agent.AgentResult,
+        *,
+        allow_await: bool,
+    ) -> dict:
+        """Persist a final text reply before any non-idempotent send."""
+        messages, awaiting = self._reply_delivery_payload(ws, result)
+        awaiting = awaiting and allow_await
+        async with self._reply_delivery_file_lock:
+            data = self._read_reply_deliveries_file()
+            records = self._reply_delivery_records(data.get("deliveries"))
+            for record in records:
+                if record["id"] == entry_id:
+                    return record
+            record = {
+                "id": entry_id,
+                "user_id": uid,
+                "chat_id": chat_id,
+                "messages": messages,
+                "awaiting": awaiting,
+            }
+            records.append(record)
+            data["deliveries"] = records
+            self._write_reply_deliveries_file(data)
+        self._pending_reply_delivery_users.add(uid)
+        # Daemon bots already have this watcher. Starting is idempotent and
+        # also covers a reply that fails shortly after platform startup.
+        self.start_detached_task_watcher()
+        return record
+
+    async def _complete_reply_input(self, record: dict) -> bool:
+        """Consume a staged reply's original prompt without running it.
+
+        The two ledgers are separate files, so a crash can leave both an
+        inbound prompt and its completed reply on disk. Complete the prompt
+        before delivery, and remove a restored in-memory copy too, so the
+        reply ledger remains the sole recovery source.
+        """
+        try:
+            await self._persist_complete(record["user_id"], record["id"])
+        except Exception:
+            logger.warning(
+                "Could not complete input for staged reply %s",
+                record["id"], exc_info=True,
+            )
+            return False
+        q = self._message_queues.get(record["user_id"])
+        if q is not None:
+            self._select_queue_entry(
+                q, lambda entry: entry[2] == record["id"],
+            )
+        return True
+
+    async def _remove_reply_delivery_record(self, record_id: str) -> None:
+        cleared_user: str | None = None
+        async with self._reply_delivery_file_lock:
+            data = self._read_reply_deliveries_file()
+            records = self._reply_delivery_records(data.get("deliveries"))
+            removed = next(
+                (record for record in records if record["id"] == record_id),
+                None,
+            )
+            if removed is None:
+                return
+            remaining = [record for record in records if record["id"] != record_id]
+            if remaining:
+                data["deliveries"] = remaining
+            else:
+                data.pop("deliveries", None)
+            self._write_reply_deliveries_file(data)
+            uid = removed["user_id"]
+            if not any(record["user_id"] == uid for record in remaining):
+                cleared_user = uid
+        if cleared_user is not None:
+            self._pending_reply_delivery_users.discard(cleared_user)
+
+    async def _clear_reply_deliveries(self, uid: str) -> int:
+        """Discard delayed replies the user explicitly cancelled.
+
+        A delivery which was already accepted by the platform cannot be
+        recalled, but this lock guarantees a reply which has not begun its
+        outbound send cannot race past this explicit cancellation.
+        """
+        async with self._reply_delivery_lock(uid):
+            async with self._reply_delivery_file_lock:
+                data = self._read_reply_deliveries_file()
+                records = self._reply_delivery_records(data.get("deliveries"))
+                remaining = [
+                    record for record in records if record["user_id"] != uid
+                ]
+                removed = len(records) - len(remaining)
+                if removed:
+                    if remaining:
+                        data["deliveries"] = remaining
+                    else:
+                        data.pop("deliveries", None)
+                    self._write_reply_deliveries_file(data)
+        self._pending_reply_delivery_users.discard(uid)
+        return removed
+
+    async def _deliver_staged_reply(
+        self, record: dict, *, ws: str | None = None,
+        result: agent.AgentResult | None = None,
+        awaiting_uid: str | None = None,
+    ) -> bool:
+        """Deliver a staged reply once, retaining it after a send failure.
+
+        The foreground path supplies ``result`` so attachments retain their
+        existing best-effort behavior. Restart retries send only the already
+        staged text payload and never invoke an agent again.
+        """
+        record_id = record["id"]
+        uid = record["user_id"]
+        # _check_reply_deliveries() works from a snapshot. Re-read the record
+        # while holding the same per-user lock as /cancel and /stop so a stale
+        # snapshot cannot send a reply which the user just discarded.
+        async with self._reply_delivery_lock(uid):
+            record = await self._get_reply_delivery_record(record_id)
+            if record is None:
+                return False
+            if not self.authorized(record["user_id"], record["chat_id"]):
+                logger.warning(
+                    "Discarding undeliverable reply for unauthorized "
+                    "user=%s chat=%s",
+                    record["user_id"], record["chat_id"],
+                )
+                if not await self._complete_reply_input(record):
+                    return False
+                await self._remove_reply_delivery_record(record_id)
+                return True
+
+            try:
+                if not await self._complete_reply_input(record):
+                    return False
+                if result is not None:
+                    assert ws is not None
+                    await self._send_result(
+                        record["chat_id"], ws, result, uid=awaiting_uid,
+                    )
+                else:
+                    for text in record["messages"]:
+                        await self.send_text(
+                            record["chat_id"], text, rich=True,
+                        )
+                    if record["awaiting"]:
+                        self._arm_awaiting_answer(record["user_id"])
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "Failed to deliver completed reply %s; retaining it for "
+                    "retry", record_id, exc_info=True,
+                )
+                return False
+
+            try:
+                await self._remove_reply_delivery_record(record_id)
+            except Exception:
+                # The chat may already have accepted the reply. Keep the
+                # ledger for at-least-once recovery rather than rerunning the
+                # agent.
+                logger.warning(
+                    "Delivered completed reply %s but could not clear its "
+                    "ledger", record_id, exc_info=True,
+                )
+                return False
+        self._start_queue_drain(uid)
+        return True
+
+    async def _check_reply_deliveries(self) -> None:
+        for record in await self._list_reply_delivery_records():
+            await self._deliver_staged_reply(record)
 
     # ----- Detached provider tasks --------------------------------------
 
@@ -2215,7 +2553,7 @@ class BotPlatform(ABC):
             self._write_detached_tasks_file(data)
 
     def start_detached_task_watcher(self) -> None:
-        """Start the durable detached-task poller once per platform."""
+        """Start the durable completion watcher once per platform."""
         if (
             self._detached_task_watcher is not None
             and not self._detached_task_watcher.done()
@@ -2237,11 +2575,12 @@ class BotPlatform(ABC):
     async def _detached_task_loop(self) -> None:
         while True:
             try:
+                await self._check_reply_deliveries()
                 await self._check_detached_tasks()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("Detached task poll failed")
+                logger.exception("Durable completion poll failed")
             await asyncio.sleep(_DETACHED_TASK_POLL_INTERVAL_SEC)
 
     async def _check_detached_tasks(self) -> None:
@@ -2737,7 +3076,7 @@ class BotPlatform(ABC):
 
         lock = self._ensure_task_lock(uid)
 
-        if lock.locked():
+        if lock.locked() or uid in self._pending_reply_delivery_users:
             q = self._ensure_message_queue(uid)
             if q.full():
                 await ctx.reply_text("Queue full. Wait or /stop first.")
@@ -2780,7 +3119,9 @@ class BotPlatform(ABC):
         # API calls (send "Thinking..." etc.) before it fully starts.
         self._running_tasks[uid] = asyncio.current_task()
         try:
-            await self._run_turn(uid, chat_id, text)
+            await self._run_turn(
+                uid, chat_id, text, queue_entry_id=entry_id,
+            )
         except asyncio.CancelledError:
             # /stop path already cleared the persistent queue.
             # Shutdown path deliberately leaves the entry so restart
@@ -2831,6 +3172,7 @@ class BotPlatform(ABC):
     async def _run_turn(
         self, uid: str, chat_id: str, text: str,
         *, session_id: str | None = None,
+        queue_entry_id: str | None = None,
     ) -> None:
         """Send a "Thinking..." status, run the agent, then post the reply.
 
@@ -2996,13 +3338,31 @@ class BotPlatform(ABC):
         # Only opt into the [[await]] pause for interactive turns —
         # ephemeral schedule turns (session_id is set) get their session
         # deleted right after, so there's nothing to resume into.
-        await self._send_result(
-            chat_id, ws, result,
-            uid=uid if session_id is None else None,
+        if queue_entry_id is None:
+            await self._send_result(
+                chat_id, ws, result,
+                uid=uid if session_id is None else None,
+            )
+            return
+
+        # Once an agent turn has finished, preserve its textual reply before
+        # asking the platform to accept it. A failed send then leaves a
+        # deliverable record rather than an inbound prompt that would rerun
+        # the agent (and potentially its tools) after a restart.
+        record = await self._stage_reply_delivery(
+            uid, queue_entry_id, chat_id, ws, result,
+            allow_await=session_id is None,
+        )
+        await self._deliver_staged_reply(
+            record,
+            ws=ws,
+            result=result,
+            awaiting_uid=uid if session_id is None else None,
         )
 
     async def _run_ephemeral_turn(
         self, uid: str, chat_id: str, text: str,
+        *, queue_entry_id: str | None = None,
     ) -> None:
         """Run a scheduled command in a fresh, throwaway session.
 
@@ -3024,7 +3384,10 @@ class BotPlatform(ABC):
         sess_data = session.create_session(ws, name=f"⏰ {label}")
         sid = sess_data["id"]
         try:
-            await self._run_turn(uid, chat_id, text, session_id=sid)
+            await self._run_turn(
+                uid, chat_id, text, session_id=sid,
+                queue_entry_id=queue_entry_id,
+            )
         finally:
             # Always tear down the throwaway session — including on
             # /stop (CancelledError propagates after this finally) and
@@ -3120,36 +3483,42 @@ class BotPlatform(ABC):
                 )
 
         if awaiting and uid is not None:
-            # A [[await]] pause parks *new* messages (the next user
-            # reply is treated as the answer). But messages the user
-            # sent *during* this turn — before the question existed —
-            # are already queued. Stranding them here would leave the
-            # queue unable to pop even after the reply finished, so
-            # only arm the pause when no normal backlog is waiting.
-            q = self._message_queues.get(uid)
-            if q is not None and self._has_pending_normal_entries(q):
-                logger.info(
-                    "User %s reply ended with [[await]] but messages "
-                    "sent earlier are queued; skipping answer pause",
-                    uid,
-                )
-            else:
-                self._awaiting_answer.add(uid)
-                logger.info(
-                    "User %s awaiting answer; queue paused until next "
-                    "message",
-                    uid,
-                )
+            self._arm_awaiting_answer(uid)
+
+    def _arm_awaiting_answer(self, uid: str) -> None:
+        """Honor a delivered ``[[await]]`` reply without stranding backlog."""
+        # A [[await]] pause parks *new* messages (the next user reply is
+        # treated as the answer). But messages sent during this turn are
+        # already queued, before the question existed, and must still drain.
+        q = self._message_queues.get(uid)
+        if q is not None and self._has_pending_normal_entries(q):
+            logger.info(
+                "User %s reply ended with [[await]] but messages sent "
+                "earlier are queued; skipping answer pause",
+                uid,
+            )
+            return
+        self._awaiting_answer.add(uid)
+        logger.info(
+            "User %s awaiting answer; queue paused until next message", uid,
+        )
 
     async def _drain_message_queue(self, uid: str) -> None:
         q = self._message_queues.get(uid)
         if not q:
+            return
+        # Preserve conversational order: a completed answer that the
+        # platform has not accepted yet must be retried before another user
+        # prompt can start a new agent turn.
+        if uid in self._pending_reply_delivery_users:
             return
         # Defensive: if a queue exists, a lock must too. Create on demand
         # so a missing lock doesn't crash the drain task.
         lock = self._ensure_task_lock(uid)
 
         while not q.empty():
+            if uid in self._pending_reply_delivery_users:
+                break
             if self._update_restart_pending:
                 break
             if lock.locked():
@@ -3200,9 +3569,13 @@ class BotPlatform(ABC):
             self._running_tasks[uid] = asyncio.current_task()
             try:
                 if ephemeral:
-                    await self._run_ephemeral_turn(uid, msg_chat_id, text)
+                    await self._run_ephemeral_turn(
+                        uid, msg_chat_id, text, queue_entry_id=entry_id,
+                    )
                 else:
-                    await self._run_turn(uid, msg_chat_id, text)
+                    await self._run_turn(
+                        uid, msg_chat_id, text, queue_entry_id=entry_id,
+                    )
             except asyncio.CancelledError:
                 # Leave the entry on disk so restart resumes it
                 # (or, if /stop caused the cancel, cmd_stop already

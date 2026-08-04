@@ -99,6 +99,25 @@ class _SSEContent:
             yield chunk
 
 
+class _ReadableContent(_SSEContent):
+    """Minimal response body stub that records bounded read requests."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        super().__init__(chunks)
+        self.read_sizes: list[int] = []
+
+    async def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        if not self._chunks:
+            return b""
+        chunk = self._chunks[0]
+        if size < 0 or len(chunk) <= size:
+            self._chunks.pop(0)
+            return chunk
+        self._chunks[0] = chunk[size:]
+        return chunk[:size]
+
+
 class _SSEResponse:
     def __init__(self, chunks: list[bytes]) -> None:
         self.status = 200
@@ -221,6 +240,31 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             self._stream([{"error": "x" * 2_000}])
 
         self.assertLessEqual(len(str(raised.exception)), 520)
+
+    def test_http_error_body_read_is_bounded(self) -> None:
+        async def stream() -> None:
+            content = _ReadableContent([
+                b"x" * (oa._MAX_HTTP_ERROR_BODY_BYTES * 2),
+            ])
+            response = _SSEResponse([])
+            response.status = 400
+            response.content = content
+            session = _SSESession(response)
+            with mock.patch.object(
+                oa.aiohttp, "ClientSession", return_value=session,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "HTTP 400"):
+                    await oa._stream_once(
+                        "http://x/chat/completions", {}, {}, 30, "test",
+                    )
+            self.assertEqual(
+                content.read_sizes, [oa._MAX_HTTP_ERROR_BODY_BYTES],
+            )
+            self.assertEqual(
+                len(content._chunks[0]), oa._MAX_HTTP_ERROR_BODY_BYTES,
+            )
+
+        asyncio.run(stream())
 
     def test_eof_without_completion_marker_is_retryable(self) -> None:
         with self.assertRaisesRegex(

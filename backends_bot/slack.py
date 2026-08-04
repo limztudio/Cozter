@@ -41,6 +41,7 @@ from .base import (
     UploadTooLargeError,
     attachment_kind_from_mime,
     ensure_upload_dir,
+    reserve_upload_path,
     upload_limit_message,
     upload_size_exceeds_limit,
     write_limited_async_stream,
@@ -526,14 +527,14 @@ class SlackBot(BotPlatform):
             if not url:
                 continue
             kind = attachment_kind_from_mime(f.get("mimetype"))
-            local_path = os.path.join(upload_dir, filename)
             try:
-                await _download_private(
-                    url,
-                    self.bot_token,
-                    local_path,
-                    max_upload_bytes=self.max_upload_bytes,
-                )
+                with reserve_upload_path(upload_dir, filename) as local_path:
+                    await _download_private(
+                        url,
+                        self.bot_token,
+                        local_path,
+                        max_upload_bytes=self.max_upload_bytes,
+                    )
             except UploadTooLargeError:
                 await ctx_for_reply.reply_text(
                     f"Not downloading {filename}: "

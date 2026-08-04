@@ -9,7 +9,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 from Cozter import config
-from Cozter.backends_bot.base import UploadTooLargeError, upload_limit_message
+from Cozter.backends_bot.base import (
+    UploadTooLargeError,
+    reserve_upload_path,
+    upload_limit_message,
+    write_bytes_atomically,
+)
 from Cozter.backends_bot.signal import SignalBot
 from Cozter.backends_bot.slack import SlackBot, _download_private
 from Cozter.backends_bot.telegram import (
@@ -335,6 +340,176 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             assert remote is not None
             with open(remote.local_path, "rb") as f:
                 self.assertEqual(f.read(), b"xyz")
+
+    async def test_upload_path_reservation_keeps_same_names_distinct(self) -> None:
+        with tempfile.TemporaryDirectory() as upload_dir:
+            with reserve_upload_path(upload_dir, "report.txt") as first:
+                with reserve_upload_path(upload_dir, "report.txt") as second:
+                    write_bytes_atomically(first, b"first")
+                    write_bytes_atomically(second, b"second")
+
+            self.assertEqual(os.path.basename(first), "report.txt")
+            self.assertEqual(os.path.basename(second), "report (2).txt")
+            with open(first, "rb") as f:
+                self.assertEqual(f.read(), b"first")
+            with open(second, "rb") as f:
+                self.assertEqual(f.read(), b"second")
+
+    async def test_upload_path_reservation_is_removed_after_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as upload_dir:
+            with self.assertRaisesRegex(RuntimeError, "download failed"):
+                with reserve_upload_path(upload_dir, "report.txt"):
+                    raise RuntimeError("download failed")
+
+            self.assertEqual(os.listdir(upload_dir), [])
+
+    async def test_slack_same_name_attachments_keep_original_names(self) -> None:
+        bot = SlackBot("bot-token", "app-token", ["C1"])
+        bot._bot_user_id = "B1"
+        attachments = []
+
+        async def fake_download(
+            url: str,
+            _token: str,
+            local_path: str,
+            *,
+            max_upload_bytes: int,
+        ) -> None:
+            self.assertGreater(max_upload_bytes, 0)
+            write_bytes_atomically(local_path, url.encode())
+
+        bot.dispatch_file = mock.AsyncMock(
+            side_effect=lambda ctx: attachments.append(ctx.attachment),
+        )
+        files = [
+            {
+                "id": "F1",
+                "name": "report.txt",
+                "url_private_download": "https://files.example/first",
+            },
+            {
+                "id": "F2",
+                "name": "report.txt",
+                "url_private_download": "https://files.example/second",
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as ws, mock.patch(
+            "Cozter.backends_bot.slack.workspace.get_current",
+            return_value=ws,
+        ), mock.patch(
+            "Cozter.backends_bot.slack._download_private",
+            side_effect=fake_download,
+        ):
+            await bot._handle_files(
+                {"user": "U1", "channel": "C1"}, files, "",
+            )
+            with open(attachments[0].local_path, "rb") as f:
+                self.assertEqual(f.read(), b"https://files.example/first")
+            with open(attachments[1].local_path, "rb") as f:
+                self.assertEqual(f.read(), b"https://files.example/second")
+
+        self.assertEqual([att.filename for att in attachments], [
+            "report.txt", "report.txt",
+        ])
+        self.assertNotEqual(
+            attachments[0].local_path, attachments[1].local_path,
+        )
+
+    async def test_telegram_same_name_attachments_keep_original_names(
+        self,
+    ) -> None:
+        bot = TelegramBot("token", ["1"])
+        bot.app = SimpleNamespace(bot=SimpleNamespace(id=99))
+        attachments = []
+
+        def update_for(file_id: str):
+            media = SimpleNamespace(
+                file_name="report.txt",
+                file_id=file_id,
+                file_size=3,
+                get_file=mock.AsyncMock(
+                    return_value=SimpleNamespace(file_id=file_id),
+                ),
+            )
+            return SimpleNamespace(
+                effective_user=SimpleNamespace(id=1, full_name="Test User"),
+                effective_chat=SimpleNamespace(id=10),
+                message=SimpleNamespace(
+                    document=media,
+                    photo=None,
+                    audio=None,
+                    video=None,
+                    voice=None,
+                    video_note=None,
+                    caption="",
+                ),
+            )
+
+        async def fake_download(
+            tg_file: object, local_path: str, _max_upload_bytes: int,
+        ) -> None:
+            write_bytes_atomically(
+                local_path, str(getattr(tg_file, "file_id")).encode(),
+            )
+
+        bot.dispatch_file = mock.AsyncMock(
+            side_effect=lambda ctx: attachments.append(ctx.attachment),
+        )
+        with tempfile.TemporaryDirectory() as ws, mock.patch(
+            "Cozter.backends_bot.telegram.workspace.get_current",
+            return_value=ws,
+        ), mock.patch(
+            "Cozter.backends_bot.telegram._download_telegram_file",
+            side_effect=fake_download,
+        ):
+            await bot._on_file(update_for("first"), None)
+            await bot._on_file(update_for("second"), None)
+            with open(attachments[0].local_path, "rb") as f:
+                self.assertEqual(f.read(), b"first")
+            with open(attachments[1].local_path, "rb") as f:
+                self.assertEqual(f.read(), b"second")
+
+        self.assertEqual([att.filename for att in attachments], [
+            "report.txt", "report.txt",
+        ])
+        self.assertNotEqual(
+            attachments[0].local_path, attachments[1].local_path,
+        )
+
+    async def test_signal_same_name_attachments_keep_original_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_one = os.path.join(tmp, "source-one.txt")
+            source_two = os.path.join(tmp, "source-two.txt")
+            upload_dir = os.path.join(tmp, "uploads")
+            os.mkdir(upload_dir)
+            with open(source_one, "wb") as f:
+                f.write(b"first")
+            with open(source_two, "wb") as f:
+                f.write(b"second")
+
+            bot = SignalBot(
+                ["https://signal.group/#test"],
+                jsonrpc_socket="/tmp/signal.sock",
+            )
+            first = await bot._materialize_attachment(
+                {"path": source_one, "filename": "report.txt"},
+                "group", upload_dir, "",
+            )
+            second = await bot._materialize_attachment(
+                {"path": source_two, "filename": "report.txt"},
+                "group", upload_dir, "",
+            )
+
+            assert first is not None
+            assert second is not None
+            self.assertEqual(first.filename, "report.txt")
+            self.assertEqual(second.filename, "report.txt")
+            self.assertNotEqual(first.local_path, second.local_path)
+            with open(first.local_path, "rb") as f:
+                self.assertEqual(f.read(), b"first")
+            with open(second.local_path, "rb") as f:
+                self.assertEqual(f.read(), b"second")
 
 
 if __name__ == "__main__":

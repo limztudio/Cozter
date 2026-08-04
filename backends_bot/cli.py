@@ -121,6 +121,11 @@ class CliBot(BotPlatform):
         )
         print("Plain text goes to the AI. Ctrl-D or Ctrl-C exits.")
         print()
+        # A prior terminal run may have completed an agent turn just as
+        # stdout failed or the process was interrupted. Load its staged
+        # reply before accepting fresh prompts so the watcher can preserve
+        # conversational order while it retries delivery.
+        await self.restore_reply_deliveries()
         self.start_detached_task_watcher()
         self._input_task = asyncio.create_task(self._input_loop())
 

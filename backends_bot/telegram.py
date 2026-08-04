@@ -36,6 +36,7 @@ from .base import (
     UploadTooLargeError,
     copy_file_with_limit,
     ensure_upload_dir,
+    reserve_upload_path,
     upload_limit_message,
     upload_size_exceeds_limit,
     write_limited_async_stream,
@@ -383,11 +384,11 @@ class TelegramBot(BotPlatform):
             return
 
         upload_dir = ensure_upload_dir(ws)
-        local_path = os.path.join(upload_dir, filename)
         try:
-            await _download_telegram_file(
-                tg_file, local_path, self.max_upload_bytes,
-            )
+            with reserve_upload_path(upload_dir, filename) as local_path:
+                await _download_telegram_file(
+                    tg_file, local_path, self.max_upload_bytes,
+                )
         except UploadTooLargeError:
             ctx = self._build_context(update, text="")
             if ctx:
