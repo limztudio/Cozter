@@ -2,12 +2,12 @@ import asyncio
 import json
 import logging
 import os
-import sys
 import tempfile
 import unittest
 from unittest import mock
 
 from Cozter import utils
+from Cozter.tests.helpers import create_python_script_process
 
 
 class StubBackend:
@@ -45,13 +45,7 @@ class ProcessDrainTests(unittest.TestCase):
                 "sys.stdout.write('x' * 4096 + '\\n')\n"
                 "print(json.dumps({'type': 'done'}))\n"
             )
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-c",
-                script,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            proc = await create_python_script_process(script)
 
             with (
                 mock.patch.object(utils, "_MAX_STREAM_LINE_BYTES", 1024),
@@ -76,13 +70,7 @@ class ProcessDrainTests(unittest.TestCase):
                 "print(json.dumps(['not', 'object']))\n"
                 "print(json.dumps({'type': 'done'}))\n"
             )
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-c",
-                script,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            proc = await create_python_script_process(script)
 
             invalid: list[str] = []
             events = [
@@ -107,13 +95,7 @@ class ProcessDrainTests(unittest.TestCase):
                 "sys.stderr.flush()\n"
                 "print(json.dumps({'type': 'message', 'text': 'done'}))\n"
             )
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-c",
-                script,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            proc = await create_python_script_process(script)
 
             backend = CleanupStubBackend()
             text = await utils.drain_llm_subprocess(proc, backend, 5, "test")
@@ -126,12 +108,8 @@ class ProcessDrainTests(unittest.TestCase):
 
     def test_drain_llm_subprocess_reports_stderr_when_output_is_empty(self) -> None:
         async def run() -> None:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-c",
+            proc = await create_python_script_process(
                 "import sys; print('backend diagnostic', file=sys.stderr)",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
             )
             log = logging.getLogger("Cozter.tests.empty_llm_output")
 

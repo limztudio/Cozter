@@ -14,9 +14,10 @@ from unittest import mock
 from Cozter import agent, colony, config, schedules, session, workspace
 from Cozter.backends_agent.base import ChatEvent
 from Cozter.backends_bot.base import BotContext, BotPlatform
+from Cozter.tests.helpers import TestBot, temporary_config
 
 
-class QueueRestoreBot(BotPlatform):
+class QueueRestoreBot(TestBot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.drained_users: list[str] = []
@@ -25,31 +26,11 @@ class QueueRestoreBot(BotPlatform):
     def platform_id(self) -> str:
         return "test:queue"
 
-    async def start(self) -> None:
-        pass
-
-    async def stop(self) -> None:
-        pass
-
-    async def send_text(self, chat_id: str, text: str, *, rich: bool = False):
-        return None
-
-    async def edit_text(
-        self, handle, text: str, *, rich: bool = False,
-    ) -> None:
-        pass
-
-    async def delete_message(self, handle) -> None:
-        pass
-
-    async def send_file(self, chat_id: str, path: str) -> None:
-        pass
-
     async def _drain_message_queue(self, uid: str) -> None:
         self.drained_users.append(uid)
 
 
-class QueueDrainBot(BotPlatform):
+class QueueDrainBot(TestBot):
     def __init__(self) -> None:
         super().__init__(["u1"], max_queue_size=5)
         self.ran: list[tuple[str, str]] = []
@@ -57,26 +38,6 @@ class QueueDrainBot(BotPlatform):
     @property
     def platform_id(self) -> str:
         return "test:queue"
-
-    async def start(self) -> None:
-        pass
-
-    async def stop(self) -> None:
-        pass
-
-    async def send_text(self, chat_id: str, text: str, *, rich: bool = False):
-        return None
-
-    async def edit_text(
-        self, handle, text: str, *, rich: bool = False,
-    ) -> None:
-        pass
-
-    async def delete_message(self, handle) -> None:
-        pass
-
-    async def send_file(self, chat_id: str, path: str) -> None:
-        pass
 
     async def _run_turn(
         self, uid: str, chat_id: str, text: str,
@@ -228,19 +189,11 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 workspace.set_permission(tmp, "maybe")
 
     def test_max_permission_parsing(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            old = config.CONFIG_PATH
+        with temporary_config({"max_permission": "auto"}) as path:
+            self.assertEqual(config.get_max_permission(), "auto")
             with open(path, "w", encoding="utf-8") as f:
-                json.dump({"max_permission": "auto"}, f)
-            config.CONFIG_PATH = path
-            try:
-                self.assertEqual(config.get_max_permission(), "auto")
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump({"max_permission": "nonsense"}, f)
-                self.assertEqual(config.get_max_permission(), "auto")
-            finally:
-                config.CONFIG_PATH = old
+                json.dump({"max_permission": "nonsense"}, f)
+            self.assertEqual(config.get_max_permission(), "auto")
 
     @unittest.skipIf(os.name == "nt", "POSIX mode bits are not Windows ACLs")
     def test_new_config_is_created_owner_only(self) -> None:
@@ -342,27 +295,19 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 workspace.set_interaction_style(tmp, "verbose")
 
     def test_extra_models_parsing_tolerates_malformed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "extra_models": {
-                        # non-string entries are dropped.
-                        "codex": ["private-codex-model", "", 123],
-                        "copilot": "not-a-list",         # wrong type -> []
-                    },
-                }, f)
-            old = config.CONFIG_PATH
-            config.CONFIG_PATH = path
-            try:
-                self.assertEqual(
-                    config.get_extra_models("codex"),
-                    ["private-codex-model"],
-                )
-                self.assertEqual(config.get_extra_models("copilot"), [])
-                self.assertEqual(config.get_extra_models("missing"), [])
-            finally:
-                config.CONFIG_PATH = old
+        with temporary_config({
+            "extra_models": {
+                # non-string entries are dropped.
+                "codex": ["private-codex-model", "", 123],
+                "copilot": "not-a-list",         # wrong type -> []
+            },
+        }):
+            self.assertEqual(
+                config.get_extra_models("codex"),
+                ["private-codex-model"],
+            )
+            self.assertEqual(config.get_extra_models("copilot"), [])
+            self.assertEqual(config.get_extra_models("missing"), [])
 
     def test_extra_models_missing_or_non_object_returns_empty(self) -> None:
         # No config file (CLI mode) -> [].
@@ -373,54 +318,39 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
         finally:
             config.CONFIG_PATH = old
         # extra_models present but not an object -> [].
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"extra_models": ["oops"]}, f)
-            config.CONFIG_PATH = path
-            try:
-                self.assertEqual(config.get_extra_models("codex"), [])
-            finally:
-                config.CONFIG_PATH = old
+        with temporary_config({"extra_models": ["oops"]}):
+            self.assertEqual(config.get_extra_models("codex"), [])
 
     def test_model_context_windows_validate_and_prefer_exact_model(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "model_context_windows": {
-                        "llama": {
-                            "qwen3-coder": 32_768,
-                            "*": 16_384,
-                            "invalid-bool": True,
-                            "invalid-zero": 0,
-                        },
-                    },
-                }, f)
-            old = config.CONFIG_PATH
-            config.CONFIG_PATH = path
-            try:
-                self.assertEqual(
-                    config.get_model_context_window("llama", "qwen3-coder"),
-                    32_768,
-                )
-                self.assertEqual(
-                    config.get_model_context_window("llama", "other-model"),
-                    16_384,
-                )
-                self.assertEqual(
-                    config.get_model_context_window("llama", "invalid-bool"),
-                    16_384,
-                )
-                self.assertEqual(
-                    config.get_model_context_window("llama", "invalid-zero"),
-                    16_384,
-                )
-                self.assertIsNone(
-                    config.get_model_context_window("unknown", "model"),
-                )
-            finally:
-                config.CONFIG_PATH = old
+        with temporary_config({
+            "model_context_windows": {
+                "llama": {
+                    "qwen3-coder": 32_768,
+                    "*": 16_384,
+                    "invalid-bool": True,
+                    "invalid-zero": 0,
+                },
+            },
+        }):
+            self.assertEqual(
+                config.get_model_context_window("llama", "qwen3-coder"),
+                32_768,
+            )
+            self.assertEqual(
+                config.get_model_context_window("llama", "other-model"),
+                16_384,
+            )
+            self.assertEqual(
+                config.get_model_context_window("llama", "invalid-bool"),
+                16_384,
+            )
+            self.assertEqual(
+                config.get_model_context_window("llama", "invalid-zero"),
+                16_384,
+            )
+            self.assertIsNone(
+                config.get_model_context_window("unknown", "model"),
+            )
 
     def test_history_budget_falls_back_and_enforces_floor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -549,104 +479,59 @@ class ColonyStateFallbackTests(unittest.TestCase):
 
 class ConfigFallbackTests(unittest.TestCase):
     def test_boolean_config_values_do_not_count_as_positive_ints(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"llama_max_agent_turns": True}, f)
-
-            old_path = config.CONFIG_PATH
-            config.CONFIG_PATH = path
-            try:
-                self.assertEqual(config.get_llama_max_agent_turns(), 60)
-            finally:
-                config.CONFIG_PATH = old_path
+        with temporary_config({"llama_max_agent_turns": True}):
+            self.assertEqual(config.get_llama_max_agent_turns(), 60)
 
     def test_zai_base_url_requires_https(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "zai_base_url": "http://insecure.example/api/paas/v4",
-                }, f)
-
-            old_path = config.CONFIG_PATH
-            config.CONFIG_PATH = path
-            try:
-                self.assertEqual(
-                    config.get_zai_base_url(),
-                    "https://api.z.ai/api/paas/v4",
-                )
-            finally:
-                config.CONFIG_PATH = old_path
+        with temporary_config({
+            "zai_base_url": "http://insecure.example/api/paas/v4",
+        }):
+            self.assertEqual(
+                config.get_zai_base_url(),
+                "https://api.z.ai/api/paas/v4",
+            )
 
     def test_non_object_config_exits_with_clear_error(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump([], f)
+        with temporary_config([]):
+            out = io.StringIO()
+            with (
+                self.assertRaises(SystemExit) as raised,
+                contextlib.redirect_stdout(out),
+            ):
+                config.load_config()
 
-            old_path = config.CONFIG_PATH
-            config.CONFIG_PATH = path
-            try:
-                out = io.StringIO()
-                with (
-                    self.assertRaises(SystemExit) as raised,
-                    contextlib.redirect_stdout(out),
-                ):
-                    config.load_config()
-
-                self.assertEqual(raised.exception.code, 1)
-                self.assertIn("must contain a JSON object", out.getvalue())
-            finally:
-                config.CONFIG_PATH = old_path
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("must contain a JSON object", out.getvalue())
 
     def test_runtime_getters_reject_non_object_config(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump([], f)
-
-            old_path = config.CONFIG_PATH
-            config.CONFIG_PATH = path
-            try:
-                with self.assertRaisesRegex(ValueError, "JSON object"):
-                    config.get_llama_max_agent_turns()
-            finally:
-                config.CONFIG_PATH = old_path
+        with temporary_config([]):
+            with self.assertRaisesRegex(ValueError, "JSON object"):
+                config.get_llama_max_agent_turns()
 
     def test_load_config_normalizes_directly_consumed_positive_ints(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "telegram_bot_tokens": ["token"],
-                    "user_ids": [123],
-                    "update_check_interval": "fast",
-                    "recent_workspace_limit": True,
-                    "message_queue_size": 0,
-                }, f)
+        with temporary_config({
+            "telegram_bot_tokens": ["token"],
+            "user_ids": [123],
+            "update_check_interval": "fast",
+            "recent_workspace_limit": True,
+            "message_queue_size": 0,
+        }):
+            loaded = config.load_config()
 
-            old_path = config.CONFIG_PATH
-            config.CONFIG_PATH = path
-            try:
-                loaded = config.load_config()
-            finally:
-                config.CONFIG_PATH = old_path
-
-            self.assertEqual(
-                loaded["update_check_interval"],
-                config.DEFAULT_UPDATE_CHECK_INTERVAL,
-            )
-            self.assertEqual(
-                loaded["recent_workspace_limit"],
-                config.DEFAULT_RECENT_WORKSPACE_LIMIT,
-            )
-            self.assertEqual(
-                loaded["message_queue_size"],
-                config.DEFAULT_MESSAGE_QUEUE_SIZE,
-            )
+        self.assertEqual(
+            loaded["update_check_interval"],
+            config.DEFAULT_UPDATE_CHECK_INTERVAL,
+        )
+        self.assertEqual(
+            loaded["recent_workspace_limit"],
+            config.DEFAULT_RECENT_WORKSPACE_LIMIT,
+        )
+        self.assertEqual(
+            loaded["message_queue_size"],
+            config.DEFAULT_MESSAGE_QUEUE_SIZE,
+        )
 
 
 class RuntimeHardeningConfigTests(unittest.TestCase):
@@ -1321,7 +1206,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 asyncio.run(run(pause))
 
 
-class _GatedDrainBot(BotPlatform):
+class _GatedDrainBot(TestBot):
     """Bot whose _run_turn blocks on a gate, simulating a mid-reply turn.
 
     When ``await_on_finish`` is set, a finished turn arms the ``[[await]]``
@@ -1338,24 +1223,6 @@ class _GatedDrainBot(BotPlatform):
     @property
     def platform_id(self) -> str:
         return "test:queue"
-
-    async def start(self) -> None:
-        pass
-
-    async def stop(self) -> None:
-        pass
-
-    async def send_text(self, chat_id: str, text: str, *, rich: bool = False):
-        return None
-
-    async def edit_text(self, handle, text: str, *, rich: bool = False) -> None:
-        pass
-
-    async def delete_message(self, handle) -> None:
-        pass
-
-    async def send_file(self, chat_id: str, path: str) -> None:
-        pass
 
     async def _run_turn(
         self, uid: str, chat_id: str, text: str,

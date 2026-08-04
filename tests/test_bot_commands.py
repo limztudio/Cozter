@@ -13,10 +13,11 @@ import unittest
 from unittest import mock
 
 from Cozter import session, workspace
-from Cozter.backends_bot.base import BotContext, BotPlatform
+from Cozter.backends_bot.base import BotContext
+from Cozter.tests.helpers import TestBot
 
 
-class _CmdBot(BotPlatform):
+class _CmdBot(TestBot):
     def __init__(self) -> None:
         super().__init__(["u1"])
         self.replies: list[str] = []
@@ -26,26 +27,9 @@ class _CmdBot(BotPlatform):
     def platform_id(self) -> str:
         return "test:cmd"
 
-    async def start(self) -> None:
-        pass
-
-    async def stop(self) -> None:
-        pass
-
     async def send_text(self, chat_id: str, text: str, *, rich: bool = False):
         self.replies.append(text)
         return None
-
-    async def edit_text(
-        self, handle, text: str, *, rich: bool = False,
-    ) -> None:
-        pass
-
-    async def delete_message(self, handle) -> None:
-        pass
-
-    async def send_file(self, chat_id: str, path: str) -> None:
-        pass
 
     async def _ai_chat(self, ctx: BotContext) -> None:
         self.ai_texts.append(ctx.text)

@@ -7,10 +7,11 @@ from unittest import mock
 
 from Cozter import agent, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
-from Cozter.backends_bot.base import BotContext, BotPlatform
+from Cozter.backends_bot.base import BotContext
+from Cozter.tests.helpers import TestBot
 
 
-class _InjectRaceBot(BotPlatform):
+class _InjectRaceBot(TestBot):
     """A bot whose final reply remains in flight for the race window."""
 
     def __init__(self, workspace_path: str) -> None:
@@ -24,12 +25,6 @@ class _InjectRaceBot(BotPlatform):
     def platform_id(self) -> str:
         return "test:inject"
 
-    async def start(self) -> None:
-        pass
-
-    async def stop(self) -> None:
-        pass
-
     async def send_text(
         self, _chat_id: str, text: str, *, rich: bool = False,
     ) -> None:
@@ -37,17 +32,6 @@ class _InjectRaceBot(BotPlatform):
         if text == "final reply":
             self.final_reply_started.set()
             await self.release_final_reply.wait()
-
-    async def edit_text(
-        self, _handle, _text: str, *, rich: bool = False,
-    ) -> None:
-        pass
-
-    async def delete_message(self, _handle) -> None:
-        pass
-
-    async def send_file(self, _chat_id: str, _path: str) -> None:
-        pass
 
     async def _current_workspace_for_turn(
         self, _uid: str, _chat_id: str,

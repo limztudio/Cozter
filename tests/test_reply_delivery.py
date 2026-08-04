@@ -7,10 +7,11 @@ from unittest import mock
 
 from Cozter import agent, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
-from Cozter.backends_bot.base import BotContext, BotPlatform
+from Cozter.backends_bot.base import BotContext
+from Cozter.tests.helpers import TestBot
 
 
-class _ReplyDeliveryBot(BotPlatform):
+class _ReplyDeliveryBot(TestBot):
     def __init__(self, workspace_path: str, *, fail_final: bool) -> None:
         super().__init__(["u1"])
         self.workspace_path = workspace_path
@@ -20,12 +21,6 @@ class _ReplyDeliveryBot(BotPlatform):
     @property
     def platform_id(self) -> str:
         return "test:reply-delivery"
-
-    async def start(self) -> None:
-        pass
-
-    async def stop(self) -> None:
-        pass
 
     def start_detached_task_watcher(self) -> None:
         # This test drives retry passes explicitly.
@@ -38,15 +33,6 @@ class _ReplyDeliveryBot(BotPlatform):
             raise OSError("platform unavailable")
         self.sent.append(text)
         return None
-
-    async def edit_text(self, _handle, _text: str, *, rich: bool = False) -> None:
-        pass
-
-    async def delete_message(self, _handle) -> None:
-        pass
-
-    async def send_file(self, _chat_id: str, _path: str) -> None:
-        pass
 
     async def _current_workspace_for_turn(
         self, _uid: str, _chat_id: str,

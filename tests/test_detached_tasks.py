@@ -15,7 +15,8 @@ from Cozter.backends_agent.base import (
 )
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent import claude_code as claude_code_mod
-from Cozter.backends_bot.base import BotContext, BotPlatform
+from Cozter.backends_bot.base import BotContext
+from Cozter.tests.helpers import TestBot
 
 
 class _DetachedBackend:
@@ -38,7 +39,7 @@ class _DetachedBackend:
         return True
 
 
-class _DetachedBot(BotPlatform):
+class _DetachedBot(TestBot):
     def __init__(self) -> None:
         super().__init__(["u1"])
         self.sent: list[str] = []
@@ -47,12 +48,6 @@ class _DetachedBot(BotPlatform):
     @property
     def platform_id(self) -> str:
         return "test:detached"
-
-    async def start(self) -> None:
-        pass
-
-    async def stop(self) -> None:
-        pass
 
     def start_detached_task_watcher(self) -> None:
         # Unit tests drive each polling pass explicitly.
@@ -63,16 +58,6 @@ class _DetachedBot(BotPlatform):
             raise RuntimeError("platform unavailable")
         self.sent.append(text)
         return None
-
-    async def edit_text(self, _handle, _text: str, *, rich: bool = False):
-        pass
-
-    async def delete_message(self, _handle) -> None:
-        pass
-
-    async def send_file(self, _chat_id: str, _path: str) -> None:
-        pass
-
 
 class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
     def _assert_background_guard_settings(self, cmd: list[str]) -> None:

@@ -1,7 +1,6 @@
 """Regression coverage for bounded chat-platform attachments."""
 
 import base64
-import json
 import os
 import tempfile
 import unittest
@@ -21,29 +20,21 @@ from Cozter.backends_bot.telegram import (
     TelegramBot,
     _download_telegram_file,
 )
+from Cozter.tests.helpers import temporary_config
 
 
 class UploadLimitConfigTests(unittest.TestCase):
     def test_loader_normalizes_an_invalid_platform_limit(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "telegram_bot_tokens": ["token"],
-                    "user_ids": [123],
-                    "max_upload_bytes": 0,
-                }, f)
+        with temporary_config({
+            "telegram_bot_tokens": ["token"],
+            "user_ids": [123],
+            "max_upload_bytes": 0,
+        }):
+            loaded = config.load_config()
 
-            old_path = config.CONFIG_PATH
-            config.CONFIG_PATH = path
-            try:
-                loaded = config.load_config()
-            finally:
-                config.CONFIG_PATH = old_path
-
-            self.assertEqual(
-                loaded["max_upload_bytes"], config.DEFAULT_MAX_UPLOAD_BYTES,
-            )
+        self.assertEqual(
+            loaded["max_upload_bytes"], config.DEFAULT_MAX_UPLOAD_BYTES,
+        )
 
 
 class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):

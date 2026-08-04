@@ -9,6 +9,7 @@ from unittest import mock
 from Cozter import agent, session
 from Cozter.backends_agent import base as backend_base
 from Cozter.backends_agent.base import ChatEvent
+from Cozter.tests.helpers import create_python_script_process
 
 
 class _StreamingBackend:
@@ -26,13 +27,7 @@ class _StreamingBackend:
             "print(json.dumps({'type': 'message'}), flush=True)\n"
             "time.sleep(60)\n"
         )
-        self.proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-c",
-            script,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        self.proc = await create_python_script_process(script)
         return self.proc
 
     async def cleanup_process(self, _proc: asyncio.subprocess.Process) -> None:

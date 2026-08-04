@@ -11,10 +11,11 @@ from unittest import mock
 
 from Cozter import agent, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
-from Cozter.backends_bot.base import BotPlatform, MessageHandle
+from Cozter.backends_bot.base import MessageHandle
+from Cozter.tests.helpers import TestBot
 
 
-class _StatusBot(BotPlatform):
+class _StatusBot(TestBot):
     def __init__(self, workspace_path: str) -> None:
         super().__init__([])
         self.workspace_path = workspace_path
@@ -27,12 +28,6 @@ class _StatusBot(BotPlatform):
     @property
     def platform_id(self) -> str:
         return "test:status"
-
-    async def start(self) -> None:
-        pass
-
-    async def stop(self) -> None:
-        pass
 
     async def send_text(
         self, _chat_id: str, text: str, *, rich: bool = False,
@@ -51,9 +46,6 @@ class _StatusBot(BotPlatform):
     async def delete_message(self, _handle: MessageHandle) -> None:
         self.delete_started.set()
         await self.delete_release.wait()
-
-    async def send_file(self, _chat_id: str, _path: str) -> None:
-        pass
 
     async def _current_workspace_for_turn(
         self, _uid: str, _chat_id: str,
