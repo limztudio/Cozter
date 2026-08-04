@@ -73,7 +73,7 @@ _MODEL_CONTEXT_WINDOWS = {
     "glm-4.5-air": 128_000,
     "glm-4.5-x": 128_000,
     "glm-4.5-airx": 128_000,
-    "glm-4.5-flash": 128_000,
+    "glm-4.5-flash": 200_000,
     "glm-4-32b-0414-128k": 128_000,
 }
 # Z.ai documents ``tool_stream`` for its GLM-4.6-and-newer text families.

@@ -1050,6 +1050,9 @@ class ZaiBackendTests(unittest.TestCase):
                     backend.context_window_tokens(model), 128_000,
                 )
         self.assertEqual(backend.context_window_tokens("glm-4.5-air"), 128_000)
+        self.assertEqual(
+            backend.context_window_tokens("glm-4.5-flash"), 200_000,
+        )
         self.assertIsNone(backend.context_window_tokens("private-glm"))
 
     def test_fallback_picker_includes_current_agent_models(self) -> None:
