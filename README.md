@@ -44,6 +44,11 @@ drop-in plugin system that works across every backend.
 - **Persistent turn queues on Telegram, Slack, and Signal**: if a user sends
   more work while an agent turn is running, or while an update restart is
   pending, the messages are queued on disk and restored after restart
+- **Durable final-text delivery**: before a queued agent reply is sent,
+  Cozter stages its text (and any usage footer) in a separate delivery
+  ledger. A failed chat send or restart retries that finished text before
+  later work, rather than rerunning agent tools; attachment uploads remain
+  best-effort so a retry cannot duplicate a file
 - **File flow in both directions**: chat uploads are saved into the
   workspace and text-like files are inlined into the next prompt; agent
   replies can upload workspace files or generated images back to chat
@@ -56,10 +61,13 @@ drop-in plugin system that works across every backend.
 
 ## Quick start
 
+Run Cozter directly from its source checkout; it does not ship an installable
+package or console script. Run the following from the checkout's parent
+directory:
+
 ```bash
 git clone https://gitlab.com/mgneh/cozter.git Cozter
-cd Cozter
-python __main__.py -cli
+python -m Cozter --cli
 ```
 
 GitLab (`git@gitlab.com:mgneh/cozter.git`) is the canonical upstream. GitHub
@@ -85,10 +93,11 @@ If Codex is unavailable, select a configured direct backend with `/agent` and
 `/summaryagent`, or rebind flexible's summary agent and tiers before sending a
 task.
 
-From the parent directory you can run the package form instead:
+If you are already inside `Cozter/`, this compatibility launcher re-execs
+through the same package entry point:
 
 ```bash
-python -m Cozter -cli
+python __main__.py --cli
 ```
 
 `-cli` and `--cli` are equivalent. Use `-h` or `--help` to print the
@@ -342,7 +351,17 @@ Pending chat turns on daemon platforms are persisted in
 and crash recovery do not drop already accepted messages. Platform IDs
 are sanitized for those filenames; for example the CLI's stable platform
 key `cli:local` maps to `queue_cli_local.json`. CLI mode does not restore
-saved queue entries after a restart.
+saved prompt-queue entries after a restart.
+
+Before Cozter sends a completed queued reply, it writes the reply text and
+any usage footer to `Cozter/.config/reply_deliveries_<platform>.json`. If the
+outbound send fails or a restart interrupts delivery, it retries that staged
+text before it starts another prompt for the same user, so it does not rerun
+the completed agent turn and its tools. Delivery is intentionally
+at-least-once: if a platform accepts text but Cozter cannot record that fact,
+the text can be delivered again after recovery. Attachments stay on the
+normal best-effort path because chat-file uploads do not have a safe
+idempotency key. CLI mode likewise restores staged final text after restart.
 
 For Signal, `signal-cli` must already be installed, registered, and
 running as a JSON-RPC daemon. Each invite URL in `signal_group_urls` is
@@ -407,15 +426,18 @@ The global runtime files are deliberately small JSON documents:
   user and platform
 - `.config/queue_<platform>.json` — persisted pending daemon-platform turns
   so accepted work survives restarts, crashes, and auto-updates
+- `.config/reply_deliveries_<platform>.json` — staged final text replies
+  awaiting delivery, so a send failure does not repeat completed agent work
 - `.config/detached_tasks_<platform>.json` — tracked external background
   tasks and any completion message awaiting delivery
 
 Later updates to workspace selections and settings, sessions, colony memory,
-schedules, queues, and detached-task records are written through a temporary
-file and atomically replaced. The new file is synced before replacement; on
-POSIX, Cozter also syncs the parent directory so a completed rename is durable
-across a power loss. An interrupted write can leave a harmless temporary file,
-but it cannot publish a half-written JSON state document.
+schedules, queues, reply-delivery records, and detached-task records are
+written through a temporary file and atomically replaced. The new file is
+synced before replacement; on POSIX, Cozter also syncs the parent directory
+so a completed rename is durable across a power loss. An interrupted write can
+leave a harmless temporary file, but it cannot publish a half-written JSON
+state document.
 
 The session router is only used when there is no valid
 `last_session.json` entry, such as a new workspace or a deleted session.
@@ -537,6 +559,9 @@ them with its normal tools.
 inbound copy or download. Incoming files are staged beside their final path
 and atomically renamed only after a complete, in-limit transfer succeeds, so
 failed or oversized uploads do not leave a partial file for an agent to use.
+Concurrent uploads reserve distinct destination names (for example,
+`report (2).pdf`) before downloading, so matching filenames cannot overwrite
+one another.
 
 Agents can attach files back to chat by emitting a line like:
 
@@ -930,8 +955,8 @@ ignored for local secrets and runtime queues.
   backend model defaults, event parsing, and llama retry; bot and Slack
   commands; compaction; the flexible meta-agent; inject; import binding;
   run locks, session picking, and auto-titling; platform, Slack, and Signal rich-text
-  formatting; runtime diagnostics; state fallbacks; status latency and
-  thinking-status display; updater behavior; utilities; and the
+  formatting; durable reply delivery; runtime diagnostics; state fallbacks;
+  status latency and thinking-status display; updater behavior; utilities; and the
   built-in/plugin tool surface
 
 The normal working checkout may also contain ignored runtime state such as
@@ -987,10 +1012,12 @@ Everything else created by a running bot is local state.
 Do not commit these runtime artifacts:
 
 - `.config/config.json`, `.config/workspaces.json`,
-  `.config/queue_<platform>.json`, and `.config/detached_tasks_<platform>.json`
-  - local tokens, workspace selections, persisted pending messages, and
-  detached-task state. Platform IDs are sanitized for queue filenames, so a
-  runtime key like `cli:local` becomes a filesystem-safe `queue_cli_local.json`.
+  `.config/queue_<platform>.json`, `.config/reply_deliveries_<platform>.json`,
+  and `.config/detached_tasks_<platform>.json`
+  - local tokens, workspace selections, persisted pending messages, staged
+  replies, and detached-task state. Platform IDs are sanitized for queue
+  filenames, so a runtime key like `cli:local` becomes a filesystem-safe
+  `queue_cli_local.json`.
 - `.cozter/` — sessions, workspace settings, colony memory, schedules,
   uploads, and generated images; this directory can appear at the repo
   root when Cozter is used on its own checkout
@@ -1009,16 +1036,19 @@ them before staging. If you add a new user-facing plugin, place it under
 start with `_` are ignored by the plugin loader but are not ignored by
 git.
 
-Useful audit commands before documentation or release commits:
+Useful read-only audit commands before documentation or release commits:
 
 ```bash
-git pull --ff-only
 git status -sb
 git ls-files
 find . -maxdepth 2 -type d -not -path './.git*' -print | sort
 PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
 git status --short
 ```
+
+To synchronize first, run `git pull --ff-only` separately from a clean
+worktree; it can fast-forward the checkout and is therefore not an audit-only
+operation.
 
 ## Auto-update
 
@@ -1123,10 +1153,13 @@ tooling explicitly before running the lint and type gates locally:
 cd ..
 Cozter/.venv/bin/python -m pip install -r Cozter/requirements.txt ruff mypy
 Cozter/.venv/bin/ruff check Cozter
-Cozter/.venv/bin/mypy --config-file Cozter/mypy.ini -p Cozter
+Cozter/.venv/bin/mypy --config-file Cozter/mypy.ini --python-version 3.11 -p Cozter
+Cozter/.venv/bin/mypy --config-file Cozter/mypy.ini --python-version 3.12 -p Cozter
+Cozter/.venv/bin/python -m unittest discover -s Cozter/tests
+git -C Cozter diff --check
 ```
 
-Before committing, run the three gates above, `git diff --check`, and
-`git status --short` to ensure only intentional source or documentation
-edits are staged. Runtime JSON, logs, sessions, virtualenv files, and
-caches should stay local.
+The two `mypy` invocations mirror CI's Python 3.11 and 3.12 target matrix.
+Before committing, check `git status --short` as well, to ensure only
+intentional source or documentation edits are staged. Runtime JSON, logs,
+sessions, virtualenv files, and caches should stay local.
