@@ -62,7 +62,8 @@ drop-in plugin system that works across every backend.
 ## Quick start
 
 Run Cozter directly from its source checkout; it does not ship an installable
-package or console script. Run the following from the checkout's parent
+package, console script, or build artifact. Deploy the checkout itself rather
+than running `pip install .`. Run the following from the checkout's parent
 directory:
 
 ```bash
@@ -136,7 +137,7 @@ updates and failures, so Task Scheduler keeps a single supervised process.
 
 No POSIX service unit is shipped. For a checkout at `/srv/Cozter` owned by a
 dedicated non-privileged `cozter` user, first create the venv and config
-template, then fill in `.config/config.json`:
+file with an initial daemon-mode launch, then fill in `.config/config.json`:
 
 ```bash
 sudo -u cozter -H sh -c 'cd /srv/Cozter && python __main__.py'
@@ -205,8 +206,8 @@ Slack channel or Signal group can use the bot. `/permission confirm` and
 
 ## Configuration
 
-`Cozter/.config/config.json` (created on first run; the example layout
-lives in `.config/config.example.json`):
+`Cozter/.config/config.json` (created on the first daemon-mode run; the
+example layout lives in `.config/config.example.json`):
 
 ```json
 {
@@ -283,12 +284,12 @@ work. `dump_traceback_interval` (default 0) enables optional periodic
 thread dumps when set above zero; on-demand `SIGUSR1` diagnostics remain
 available either way.
 
-`extra_models` adds model IDs to a backend's `/model` and `/summarymodel`
-pickers on top of its built-in list, keyed by backend name — for example
-`{"codex": ["my-private-codex-model"]}`. It is useful for static or
-self-hosted catalogs. Copilot deliberately ignores unverified extras: its
-picker uses the authenticated account's policy-controlled catalog, so an
-arbitrary configured ID cannot be shown if the account cannot use it.
+`extra_models` adds model IDs to a backend's `/model`, `/summarymodel`, and
+flexible-tier model pickers on top of its built-in list, keyed by backend name
+— for example `{"codex": ["my-private-codex-model"]}`. It is useful for
+static or self-hosted catalogs. Copilot deliberately ignores unverified
+extras: its picker uses the authenticated account's policy-controlled catalog,
+so an arbitrary configured ID cannot be shown if the account cannot use it.
 Malformed entries are ignored.
 
 `model_context_windows` supplies an explicit input capacity, in tokens, for
@@ -313,22 +314,26 @@ no capacity, Cozter safely uses the workspace's `/compact` message interval
 instead.
 
 `llama_max_retries` (default 2) is how many times a transient llama HTTP
-failure — a dropped connection, a read timeout, or an HTTP 429/5xx — is
-retried with exponential backoff before the turn fails. Set it to `0` to
-disable retries. Only the `llama` backend uses it; the CLI backends have
-their own process-level behavior.
+failure — a dropped connection, a read timeout, an HTTP 429/5xx, or a streamed
+completion that exceeds Cozter's retained-state limits — is retried with
+exponential backoff before the turn fails. A capped completion is discarded
+before any of its buffered tool calls execute. Set it to `0` to disable
+retries. Only the `llama` backend uses it; the CLI backends have their own
+process-level behavior.
 
 `zai_api_key` enables the `zai` backend (Z.ai / Zhipu GLM) — get one from
 your Z.ai account and paste it here. `zai_base_url` defaults to
 `https://api.z.ai/api/paas/v4` (already includes the version, so only
-`/chat/completions` is appended); override it for a regional endpoint.
+`/chat/completions` is appended); override it for a regional endpoint with a
+valid HTTPS URL. A blank, malformed, or non-HTTPS override falls back to the
+default so the API key is never sent over cleartext HTTP.
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
-mirror the llama knobs for the cloud call. Select `zai` with `/agent`, pick
-a model with `/model` (default `glm-5.2`), and add private or regional GLM
-ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai coding turns
-automatically continue into another tool-enabled segment when Cozter's
-internal tool-call segment limit is reached, instead of stopping for a
-manual "continue".
+mirror the llama knobs and retry behavior for the cloud call. Select `zai`
+with `/agent`, pick a model with `/model` (default `glm-5.2`), and add private
+or regional GLM ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai
+coding turns automatically continue into another tool-enabled segment when
+Cozter's internal tool-call segment limit is reached, instead of stopping for
+a manual "continue".
 
 `max_permission` (default `auto`) caps the highest `/permission` mode any
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <
@@ -786,6 +791,13 @@ conversation record. The private home copies `config.json` and `settings.json`
 from `$COPILOT_HOME` when it is set, otherwise from `~/.copilot`; set
 `COPILOT_HOME` before launch when the source profile lives elsewhere.
 
+Codex uses discovered effort and context-window metadata only while its
+60-second catalog cache is fresh. Until `/model` refreshes an expired cache,
+known public models use Cozter's built-in metadata and a previously discovered
+private model has no inferred context window, so the `/compact` message-
+interval safeguard applies. An explicit `model_context_windows` entry remains
+authoritative.
+
 Provider event envelopes are treated as untrusted input. A missing, blank, or
 non-text backend error message is normalized to `Unknown error` before it is
 stored or shown, rather than exposing a provider object or breaking the turn
@@ -903,6 +915,10 @@ content before the file is unlinked. Failed hunks leave the target in place.
 Normal unified-diff hunks must also match the line counts declared in their
 headers before any target is written, so a malformed or truncated patch is
 rejected instead of being treated as a smaller valid edit.
+`copy_file` only copies files, while `move_file` can move a file or directory
+but refuses to move a directory into its own subtree. Both operations refuse
+to replace an existing destination and create a missing destination parent
+directory only after their source and destination checks pass.
 The string-edit tools honor a broad `replace_all` operation only when its
 tool argument is the literal JSON boolean `true`; malformed truthy values
 retain the safer unique-match behavior.
@@ -915,6 +931,14 @@ CLI JSONL and OpenAI-compatible HTTP SSE use the same bounded line reader in
 physical line; if a malformed peer never terminates a line, Cozter discards
 that line and resumes at the next newline rather than allowing the bot's
 memory use to grow without bound. A later valid event can still be processed.
+
+OpenAI-compatible backends also bound the retained state for one streamed
+completion: 4 MiB of assistant text, 4 MiB of arguments for any one tool
+call, 8 MiB across retained text and tool arguments, and 128 tool calls. A
+limit breach is handled as a retryable completion failure before any buffered
+tool call executes. Tool-argument fragments are joined only after a
+completion finishes, which avoids repeated copying as a long streamed
+argument arrives.
 
 Persisted session state is treated as recovery data rather than trusted input:
 malformed last-session pointers, unsafe session IDs, and session files whose
@@ -1118,8 +1142,9 @@ picking, auto-titling, compaction, platform/Slack/Signal rich-text formatting,
 status-latency and thinking-status display, runtime diagnostics, updater
 behavior, agent-tool helpers, and built-in discovery/edit/patch safety.
 
-For a CI-equivalent local environment, create the project venv with Python
-3.11 or 3.12 and install the runtime dependencies plus the two CI tools:
+For a local developer check with a CI-supported Python version, create the
+project venv with Python 3.11 or 3.12 and install the runtime dependencies
+plus the two CI tools:
 
 ```bash
 cd ..
@@ -1159,7 +1184,9 @@ Cozter/.venv/bin/python -m unittest discover -s Cozter/tests
 git -C Cozter diff --check
 ```
 
-The two `mypy` invocations mirror CI's Python 3.11 and 3.12 target matrix.
-Before committing, check `git status --short` as well, to ensure only
-intentional source or documentation edits are staged. Runtime JSON, logs,
-sessions, virtualenv files, and caches should stay local.
+The two `mypy` invocations mirror CI's Python 3.11 and 3.12 target matrix. To
+exercise the full CI matrix locally, run the `unittest` command from separate
+3.11 and 3.12 virtual environments as well. Before committing, check `git
+status --short` as well, to ensure only intentional source or documentation
+edits are staged. Runtime JSON, logs, sessions, virtualenv files, and caches
+should stay local.
