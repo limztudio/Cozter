@@ -183,15 +183,30 @@ class CodexBackend(Backend):
 
         Do not start a blocking discovery just to launch a turn.  The picker
         normally warms this cache; until then, use the conservative fallback
-        vocabulary for compatibility with existing direct model settings.
+        vocabulary for compatibility with existing direct model settings. An
+        expired catalog is likewise not safe to use: the next picker refresh
+        may reflect a changed account policy or CLI model set.
         """
-        if self._cached_model_catalog is None:
+        if (
+            self._cached_model_catalog is None
+            or time.monotonic() >= self._catalog_expires_at
+        ):
             return _FALLBACK_MODEL_EFFORT_LEVELS
         return self._cached_model_catalog[1]
 
     def context_window_tokens(self, model: str | None) -> int | None:
-        """Return cached active context capacity without probing the CLI."""
+        """Return fresh cached capacity without probing the CLI.
+
+        Keep the conservative fallback after a live catalog expires. This
+        prevents a removed private model from delaying compaction until the
+        next model picker has had a chance to refresh the catalog.
+        """
         selected_model = model or self.default_model
+        if (
+            self._cached_model_catalog is None
+            or time.monotonic() >= self._catalog_expires_at
+        ):
+            return _FALLBACK_MODEL_CONTEXT_WINDOWS.get(selected_model)
         return self._model_context_windows.get(selected_model)
 
     def _model_catalog(self) -> tuple[

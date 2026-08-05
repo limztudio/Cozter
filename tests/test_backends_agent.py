@@ -254,6 +254,11 @@ class BackendPermissionCommandTests(unittest.TestCase):
         )
         self.assertNotIn("--effort", haiku_command)
 
+        opus_41_command = self._claude_command(
+            "auto", model="claude-opus-4-1", effort=100,
+        )
+        self.assertNotIn("--effort", opus_41_command)
+
 
 class BackendModelTests(unittest.TestCase):
     def test_backend_catalogs_are_nonempty_and_deduped(self) -> None:
@@ -320,6 +325,39 @@ class BackendModelTests(unittest.TestCase):
             backend.effort_levels_for_model("custom-model"),
             ("low", "medium", "high", "xhigh"),
         )
+
+    def test_codex_expired_catalog_metadata_reverts_to_fallback(self) -> None:
+        backend = CodexBackend()
+        backend._cached_model_catalog = (
+            ("company-private",),
+            {"company-private": ("ultra",)},
+        )
+        backend._model_context_windows = {
+            **codex_mod._FALLBACK_MODEL_CONTEXT_WINDOWS,
+            "company-private": 1_000_000,
+        }
+        backend._catalog_expires_at = time.monotonic() + 60
+
+        with mock.patch.object(backend, "_discover_models") as discover:
+            self.assertEqual(
+                backend.model_effort_levels,
+                {"company-private": ("ultra",)},
+            )
+            self.assertEqual(
+                backend.context_window_tokens("company-private"), 1_000_000,
+            )
+
+            backend._catalog_expires_at = 0
+            self.assertEqual(
+                backend.model_effort_levels,
+                codex_mod._FALLBACK_MODEL_EFFORT_LEVELS,
+            )
+            self.assertIsNone(backend.context_window_tokens("company-private"))
+            self.assertEqual(
+                backend.context_window_tokens("gpt-5.6-sol"), 272_000,
+            )
+
+        discover.assert_not_called()
 
     def test_codex_catalog_parser_uses_only_visible_models(self) -> None:
         payload = {
@@ -856,6 +894,7 @@ class BackendModelTests(unittest.TestCase):
             "claude-opus-4-6",
             "claude-opus-4-5",
             "claude-opus-4-5-20251101",
+            "claude-opus-4-1",
             "claude-sonnet-4-6",
             "claude-sonnet-4-5",
             "claude-sonnet-4-5-20250929",
