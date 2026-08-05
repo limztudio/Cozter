@@ -830,6 +830,16 @@ async def _drive_backend(
         # escape the turn runner and strand the user's queued work.
         result = AgentResult()
         set_error_result(result, f"{backend.name} could not start: {exc}")
+        # ``backend.launch()`` can yield before it fails, leaving an accepted
+        # /inject in the queue even though no watcher was started yet. Carry
+        # it into the normal restart path rather than replying with a launch
+        # error and silently discarding the user's added context. With no
+        # pending inject, this is a terminal direct-backend phase, so close
+        # the bot-owned queue before later post-turn awaits begin.
+        if _take_pending_injections(inject_queue, injected):
+            return result, True
+        if close_inject_on_completion:
+            _close_inject_queue(inject_queue)
         return result, False
 
     result = AgentResult()

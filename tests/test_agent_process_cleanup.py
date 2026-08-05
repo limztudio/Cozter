@@ -9,6 +9,7 @@ from unittest import mock
 from Cozter import agent, session
 from Cozter.backends_agent import base as backend_base
 from Cozter.backends_agent.base import ChatEvent
+from Cozter.backends_bot.base import _InjectQueue
 from Cozter.tests.helpers import create_python_script_process
 
 
@@ -71,6 +72,64 @@ class AgentProcessCleanupTests(unittest.TestCase):
         self.assertFalse(restarting)
         self.assertIn("broken could not start", result.text)
         self.assertIn("stdin closed during startup", result.text)
+
+    def test_launch_failure_honors_pending_and_terminal_injects(self) -> None:
+        class BrokenBackend:
+            name = "broken"
+            executable = "broken-cli"
+
+            async def launch(self, *args, **kwargs):
+                del args, kwargs
+                raise RuntimeError("stdin closed during startup")
+
+        class DelayedBrokenBackend(BrokenBackend):
+            def __init__(self) -> None:
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def launch(self, *args, **kwargs):
+                del args, kwargs
+                self.started.set()
+                await self.release.wait()
+                raise RuntimeError("stdin closed during startup")
+
+        async def run() -> None:
+            pending_queue = _InjectQueue(maxsize=2)
+            pending_backend = DelayedBrokenBackend()
+            injected: list[str] = []
+            drive = asyncio.create_task(agent._drive_backend(
+                pending_backend, "/work", "prompt", None, "auto", effort=0,
+                inject_queue=pending_queue,
+                injected=injected,
+                close_inject_on_completion=True,
+            ))
+            await asyncio.wait_for(pending_backend.started.wait(), timeout=1)
+            self.assertEqual(
+                pending_queue.put_if_active("also check the tests"),
+                "accepted",
+            )
+            pending_backend.release.set()
+            _result, restarting = await asyncio.wait_for(drive, timeout=1)
+
+            self.assertTrue(restarting)
+            self.assertEqual(injected, ["also check the tests"])
+            # A restart owns the same queue, so another inject remains valid.
+            self.assertEqual(pending_queue.put_if_active("one more"), "accepted")
+
+            terminal_queue = _InjectQueue(maxsize=1)
+            _result, restarting = await agent._drive_backend(
+                BrokenBackend(), "/work", "prompt", None, "auto", effort=0,
+                inject_queue=terminal_queue,
+                injected=[],
+                close_inject_on_completion=True,
+            )
+
+            self.assertFalse(restarting)
+            self.assertEqual(
+                terminal_queue.put_if_active("too late"), "finished",
+            )
+
+        asyncio.run(run())
 
     def test_closed_stdin_prompt_delivery_reaps_process(self) -> None:
         async def run() -> None:

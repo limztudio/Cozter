@@ -47,6 +47,18 @@ _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
 # Bound their aggregate too; otherwise a peer can bypass the line cap by never
 # emitting the blank event delimiter.
 _MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
+# A stream can contain arbitrarily many individually valid events. Keep the
+# retained completion state bounded too: otherwise a provider that dribbles
+# tiny text/tool fragments can bypass the per-event limit and grow this
+# process without bound. Tool arguments get their own cap because one call
+# should never monopolize the whole completion buffer.
+_MAX_COMPLETION_TEXT_BYTES = 4 * 1024 * 1024
+_MAX_TOOL_ARGUMENT_BYTES = 4 * 1024 * 1024
+_MAX_COMPLETION_BUFFER_BYTES = 8 * 1024 * 1024
+# Models normally issue only a small batch of calls before receiving their
+# results. This also bounds the bookkeeping for malformed streams that keep
+# inventing new tool-call indexes without sending argument text.
+_MAX_TOOL_CALLS_PER_COMPLETION = 128
 # Error responses never reach the model in full (their messages are trimmed
 # below), so do not let a misconfigured or hostile endpoint make the bot
 # buffer an arbitrarily large HTML/JSON error document first.
@@ -517,6 +529,10 @@ class _SSEEventTooLargeError(RuntimeError):
     """A framed SSE event exceeded the aggregate memory limit."""
 
 
+class _CompletionTooLargeError(RuntimeError):
+    """A completion exceeded its retained text, tool, or call-count limit."""
+
+
 def _backoff_delay(
     attempt: int, retry_after: float | None = None,
     *, base: float = 0.5, cap: float = 10.0,
@@ -588,6 +604,8 @@ async def _stream_once(
     ``data: [DONE]`` terminates the stream.
     """
     text_parts: list[str] = []
+    text_bytes = 0
+    tool_argument_bytes = 0
     # Tool calls arrive in pieces: we accumulate by index because the
     # OpenAI streaming protocol fragments name/arguments across deltas.
     tool_buffers: dict[int, dict[str, Any]] = {}
@@ -672,11 +690,35 @@ async def _stream_once(
                     continue
                 content = delta.get("content")
                 if isinstance(content, str) and content:
+                    text_bytes += len(content.encode("utf-8", errors="replace"))
+                    if text_bytes > _MAX_COMPLETION_TEXT_BYTES:
+                        raise _CompletionTooLargeError(
+                            "completion text exceeded "
+                            f"{_MAX_COMPLETION_TEXT_BYTES} byte limit",
+                        )
+                    if (
+                        text_bytes + tool_argument_bytes
+                        > _MAX_COMPLETION_BUFFER_BYTES
+                    ):
+                        raise _CompletionTooLargeError(
+                            "completion buffers exceeded "
+                            f"{_MAX_COMPLETION_BUFFER_BYTES} byte limit",
+                        )
                     text_parts.append(content)
                 tool_call_deltas = delta.get("tool_calls")
                 if isinstance(tool_call_deltas, list):
                     for tc in tool_call_deltas:
-                        _merge_tool_call(tool_buffers, tc)
+                        tool_argument_bytes += _merge_tool_call(
+                            tool_buffers, tc,
+                        )
+                        if (
+                            text_bytes + tool_argument_bytes
+                            > _MAX_COMPLETION_BUFFER_BYTES
+                        ):
+                            raise _CompletionTooLargeError(
+                                "completion buffers exceeded "
+                                f"{_MAX_COMPLETION_BUFFER_BYTES} byte limit",
+                            )
     except (
         aiohttp.ClientConnectorError,
         aiohttp.ServerDisconnectedError,
@@ -684,10 +726,11 @@ async def _stream_once(
         TimeoutError,
     ) as exc:
         raise _RetryableError(f"{label}: {exc}") from exc
-    except _SSEEventTooLargeError as exc:
-        # Do not continue a completion after dropping one of its deltas: it
-        # could have contained text or a fragment of a tool call. Retrying is
-        # safe because no buffered calls run until this function succeeds.
+    except (_SSEEventTooLargeError, _CompletionTooLargeError) as exc:
+        # Do not continue a completion after dropping one of its deltas or
+        # hitting a retained-state cap: it could contain text or a fragment
+        # of a tool call. Retrying is safe because no buffered calls run until
+        # this function succeeds.
         raise _RetryableError(f"{label}: {exc}") from exc
 
     if not saw_terminal_marker:
@@ -696,10 +739,17 @@ async def _stream_once(
         )
 
     # Normalize tool_buffers into the OpenAI tool_calls list shape.
-    tool_calls = [
-        tool_buffers[idx] for idx in sorted(tool_buffers.keys())
-        if tool_buffers[idx].get("function", {}).get("name")
-    ]
+    tool_calls: list[dict] = []
+    for idx in sorted(tool_buffers.keys()):
+        buf = tool_buffers[idx]
+        function = buf.get("function")
+        if not isinstance(function, dict) or not function.get("name"):
+            continue
+        argument_parts = buf.pop("_argument_parts", [])
+        buf.pop("_argument_bytes", None)
+        if isinstance(argument_parts, list):
+            function["arguments"] = "".join(argument_parts)
+        tool_calls.append(buf)
     return "".join(text_parts), tool_calls
 
 
@@ -783,55 +833,99 @@ async def _iter_sse_events(
 
 def _merge_tool_call(
     buffers: dict[int, dict[str, Any]], delta: object,
-) -> None:
-    """Fold a single streaming tool_call delta into the index'd buffer."""
+) -> int:
+    """Fold a streaming tool-call delta into its buffer and return byte delta.
+
+    Argument fragments remain as a list until the stream completes, avoiding
+    quadratic copying from repeatedly appending to one growing string. The
+    return value tracks a replacement or append in the caller's aggregate
+    completion budget.
+    """
     if not isinstance(delta, dict):
-        return
+        return 0
 
     idx = delta.get("index", 0)
     # Indices are used as dictionary keys and sorted at the end of the
     # stream. Reject booleans, strings, and negative values so malformed
     # events cannot create incomparable keys or otherwise disrupt a turn.
     if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
-        return
+        return 0
 
     fn = delta.get("function")
     # A function-less chunk can legitimately carry the id before later
     # chunks supply the function name/arguments. A non-object ``function``
     # field, on the other hand, is not a valid tool-call delta.
     if fn is not None and not isinstance(fn, dict):
-        return
+        return 0
 
     # Pre-seed with a synthetic id so we always have something to put in the
     # tool-result message's tool_call_id field; some servers reject empty
     # tool_call_ids. The server-provided id below overrides this if present.
-    buf = buffers.setdefault(idx, {
-        "id": f"call_{idx}_{uuid.uuid4().hex[:8]}",
-        "type": "function",
-        "function": {"name": "", "arguments": ""},
-    })
+    buf = buffers.get(idx)
+    if buf is None:
+        if len(buffers) >= _MAX_TOOL_CALLS_PER_COMPLETION:
+            raise _CompletionTooLargeError(
+                "completion exceeded "
+                f"{_MAX_TOOL_CALLS_PER_COMPLETION} tool calls",
+            )
+        buf = {
+            "id": f"call_{idx}_{uuid.uuid4().hex[:8]}",
+            "type": "function",
+            "function": {"name": "", "arguments": ""},
+            "_argument_parts": [],
+            "_argument_bytes": 0,
+        }
+        buffers[idx] = buf
     call_id = delta.get("id")
     if isinstance(call_id, str) and call_id:
         buf["id"] = call_id
     if fn is None:
-        return
+        return 0
 
     name = fn.get("name")
     if isinstance(name, str) and name:
         buf["function"]["name"] = name
     args_frag = fn.get("arguments")
+    argument_parts = buf.get("_argument_parts")
+    if not isinstance(argument_parts, list):
+        argument_parts = []
+        buf["_argument_parts"] = argument_parts
+    previous_bytes = buf.get("_argument_bytes", 0)
+    if not isinstance(previous_bytes, int):
+        previous_bytes = 0
     if isinstance(args_frag, str):
-        # Arguments stream in as JSON-string fragments; concatenate.
-        buf["function"]["arguments"] += args_frag
+        # Arguments stream in as JSON-string fragments. Keep fragments until
+        # the response is complete, so repeated small deltas stay linear.
+        fragment_bytes = len(args_frag.encode("utf-8", errors="replace"))
+        next_bytes = previous_bytes + fragment_bytes
+        if next_bytes > _MAX_TOOL_ARGUMENT_BYTES:
+            raise _CompletionTooLargeError(
+                "tool-call arguments exceeded "
+                f"{_MAX_TOOL_ARGUMENT_BYTES} byte limit",
+            )
+        argument_parts.append(args_frag)
+        buf["_argument_bytes"] = next_bytes
+        return fragment_bytes
     elif isinstance(args_frag, dict):
         # Some servers (GLM / Z.ai, some local runtimes) send the whole
         # arguments object in one delta instead of string fragments.
         try:
-            buf["function"]["arguments"] = json.dumps(args_frag)
+            serialized = json.dumps(args_frag)
         except (TypeError, ValueError):
             # This cannot arise from decoded JSON, but keeps this boundary
             # safe for custom providers that call it directly.
             logger.debug("Ignoring non-serializable tool-call arguments")
+            return 0
+        serialized_bytes = len(serialized.encode("utf-8", errors="replace"))
+        if serialized_bytes > _MAX_TOOL_ARGUMENT_BYTES:
+            raise _CompletionTooLargeError(
+                "tool-call arguments exceeded "
+                f"{_MAX_TOOL_ARGUMENT_BYTES} byte limit",
+            )
+        buf["_argument_parts"] = [serialized]
+        buf["_argument_bytes"] = serialized_bytes
+        return serialized_bytes - previous_bytes
+    return 0
 
 
 # ---------------------------------------------------------------------------

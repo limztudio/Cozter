@@ -355,6 +355,133 @@ class OpenAIStreamShapeTests(unittest.TestCase):
 
         asyncio.run(collect())
 
+    def test_completion_text_has_an_aggregate_size_cap(self) -> None:
+        events = [
+            {"choices": [{"delta": {"content": "abcd"}}]},
+            {"choices": [{"delta": {"content": "efgh"}}]},
+        ]
+        with mock.patch.object(oa, "_MAX_COMPLETION_TEXT_BYTES", 7):
+            with self.assertRaisesRegex(
+                oa._RetryableError, "completion text exceeded",
+            ):
+                self._stream(events)
+
+    def test_fragmented_tool_arguments_are_joined_at_completion(self) -> None:
+        text, tool_calls = self._stream([
+            {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path":',
+                            },
+                        }],
+                    },
+                }],
+            },
+            {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {"arguments": '"x.txt"}'},
+                        }],
+                    },
+                }],
+            },
+        ])
+
+        self.assertEqual(text, "")
+        self.assertEqual(tool_calls, [{
+            "id": "call-1",
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "arguments": '{"path":"x.txt"}',
+            },
+        }])
+
+    def test_tool_argument_and_completion_buffer_caps_are_enforced(self) -> None:
+        argument_events = [
+            {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "abcd",
+                            },
+                        }],
+                    },
+                }],
+            },
+            {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {"arguments": "efgh"},
+                        }],
+                    },
+                }],
+            },
+        ]
+        with mock.patch.object(oa, "_MAX_TOOL_ARGUMENT_BYTES", 7):
+            with self.assertRaisesRegex(
+                oa._RetryableError, "tool-call arguments exceeded",
+            ):
+                self._stream(argument_events)
+
+        buffer_events = [
+            {"choices": [{"delta": {"content": "abc"}}]},
+            {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {
+                                "name": "read_file",
+                                "arguments": "defg",
+                            },
+                        }],
+                    },
+                }],
+            },
+        ]
+        with (
+            mock.patch.object(oa, "_MAX_COMPLETION_TEXT_BYTES", 10),
+            mock.patch.object(oa, "_MAX_TOOL_ARGUMENT_BYTES", 10),
+            mock.patch.object(oa, "_MAX_COMPLETION_BUFFER_BYTES", 6),
+        ):
+            with self.assertRaisesRegex(
+                oa._RetryableError, "completion buffers exceeded",
+            ):
+                self._stream(buffer_events)
+
+    def test_completion_tool_call_count_is_bounded(self) -> None:
+        events = [
+            {
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": i,
+                            "function": {"name": "read_file"},
+                        }],
+                    },
+                }],
+            }
+            for i in range(3)
+        ]
+        with mock.patch.object(oa, "_MAX_TOOL_CALLS_PER_COMPLETION", 2):
+            with self.assertRaisesRegex(
+                oa._RetryableError, "completion exceeded 2 tool calls",
+            ):
+                self._stream(events)
+
     def test_malformed_tool_call_delta_is_a_no_op(self) -> None:
         buffers: dict[int, dict[str, object]] = {}
         malformed_deltas: tuple[object, ...] = (
