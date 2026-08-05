@@ -7,10 +7,9 @@ import shutil
 from ..base import (
     AgentTool,
     ensure_parent_dir,
-    resolve_source_destination,
+    prepare_source_destination,
     source_destination_parameters,
     summarize_path_pair,
-    validate_source_destination,
 )
 
 
@@ -25,13 +24,12 @@ class CopyFileTool(AgentTool):
     parameters = source_destination_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        raw_src, raw_dst, src, dst = resolve_source_destination(
-            workspace_path, args,
+        paths = prepare_source_destination(
+            workspace_path, args, file_action="copy",
         )
-        if error := validate_source_destination(
-            raw_src, raw_dst, src, dst, file_action="copy",
-        ):
-            return error
+        if isinstance(paths, str):
+            return paths
+        raw_src, raw_dst, src, dst = paths
         try:
             ensure_parent_dir(dst)
             shutil.copy2(src, dst)

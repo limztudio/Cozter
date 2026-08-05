@@ -22,6 +22,7 @@ from Cozter.agent_tools.base import (
 )
 from Cozter.agent_tools.builtin.apply_patch import ApplyPatchTool
 from Cozter.agent_tools.builtin.bash import BashTool
+from Cozter.agent_tools.builtin.copy_file import CopyFileTool
 from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin.grep import GrepTool
@@ -254,6 +255,26 @@ class MoveFileToolTests(unittest.TestCase):
 
                 self.assertIn("cannot be inside", result)
                 self.assertFalse(os.path.exists(os.path.join(source, "child")))
+
+        asyncio.run(run())
+
+
+class CopyFileToolTests(unittest.TestCase):
+    def test_copy_rejects_a_source_directory(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.makedirs(os.path.join(tmp, "source"))
+                destination = os.path.join(tmp, "destination")
+
+                result = await CopyFileTool().run(tmp, {
+                    "source": "source",
+                    "destination": "destination",
+                })
+
+                self.assertEqual(
+                    result, "Not a file (refusing to copy): source",
+                )
+                self.assertFalse(os.path.exists(destination))
 
         asyncio.run(run())
 

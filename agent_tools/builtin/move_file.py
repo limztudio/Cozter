@@ -7,10 +7,9 @@ import os
 from ..base import (
     AgentTool,
     ensure_parent_dir,
-    resolve_source_destination,
+    prepare_source_destination,
     source_destination_parameters,
     summarize_path_pair,
-    validate_source_destination,
 )
 from ...utils import is_path_within
 
@@ -25,11 +24,10 @@ class MoveFileTool(AgentTool):
     parameters = source_destination_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        raw_src, raw_dst, src, dst = resolve_source_destination(
-            workspace_path, args,
-        )
-        if error := validate_source_destination(raw_src, raw_dst, src, dst):
-            return error
+        paths = prepare_source_destination(workspace_path, args)
+        if isinstance(paths, str):
+            return paths
+        raw_src, raw_dst, src, dst = paths
         if os.path.isdir(src) and is_path_within(dst, src):
             return (
                 "Error: destination cannot be inside the source directory: "

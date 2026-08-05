@@ -833,7 +833,19 @@ class BotPlatform(ABC):
             await ctx.reply_text("Cancelled.")
             return
 
-        uid = ctx.user_id
+        task_running, cancelled_work = await self._cancel_user_work(ctx.user_id)
+        if task_running or cancelled_work:
+            await ctx.reply_text("Cancelled.")
+            return
+        await ctx.reply_text("Nothing to cancel.")
+
+    async def _cancel_user_work(self, uid: str) -> tuple[bool, bool]:
+        """Cancel a user's foreground turn and discard its queued work.
+
+        Return whether a foreground task was running and whether any paused,
+        queued, delayed, or detached work was removed. Both ``/cancel`` and
+        ``/stop`` use the same cleanup; only their no-work reply differs.
+        """
         was_awaiting = uid in self._awaiting_answer
         self._awaiting_answer.discard(uid)
 
@@ -845,18 +857,13 @@ class BotPlatform(ABC):
 
         drained: list = []
         _drain_queue(self._message_queues.get(uid), collect=drained)
+        # Keep cancelled work from returning after a restart, including work
+        # that was paused in memory without a foreground task.
         persisted = await self._clear_persistent_queue(uid)
         delayed_replies = await self._clear_reply_deliveries(uid)
-        cleared = max(len(drained), persisted, delayed_replies)
         detached_cancelled = await self._cancel_detached_tasks(uid)
-
-        if task_running:
-            await ctx.reply_text("Cancelled.")
-            return
-        if was_awaiting or cleared or detached_cancelled:
-            await ctx.reply_text("Cancelled.")
-            return
-        await ctx.reply_text("Nothing to cancel.")
+        cleared = max(len(drained), persisted, delayed_replies)
+        return task_running, bool(was_awaiting or cleared or detached_cancelled)
 
     # ----- /new (dir-input flow) -----------------------------------------
 
@@ -1716,29 +1723,8 @@ class BotPlatform(ABC):
     async def cmd_stop(self, ctx: BotContext) -> None:
         # /stop abandons a pending question and every queued prompt,
         # including queues that are paused without a foreground turn.
-        uid = ctx.user_id
-        was_awaiting = uid in self._awaiting_answer
-        self._awaiting_answer.discard(uid)
-
-        task = self._running_tasks.get(uid)
-        task_running = task is not None and not task.done()
-        if task_running:
-            self._cancel_acknowledged.add(uid)
-            task.cancel()
-
-        drained: list = []
-        _drain_queue(self._message_queues.get(uid), collect=drained)
-        # Clear the persistent queue so stopped work doesn't come back on
-        # the next restart, even when the queue is only paused in memory.
-        persisted = await self._clear_persistent_queue(uid)
-        delayed_replies = await self._clear_reply_deliveries(uid)
-        cleared = max(len(drained), persisted, delayed_replies)
-        detached_cancelled = await self._cancel_detached_tasks(uid)
-
-        if task_running:
-            await ctx.reply_text("Cancelled.")
-            return
-        if was_awaiting or cleared or detached_cancelled:
+        task_running, cancelled_work = await self._cancel_user_work(ctx.user_id)
+        if task_running or cancelled_work:
             await ctx.reply_text("Cancelled.")
             return
         await ctx.reply_text("Nothing is running.")
