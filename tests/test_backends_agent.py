@@ -1264,18 +1264,29 @@ class ZaiBackendTests(unittest.TestCase):
             },
         )
 
-    def test_current_text_glms_stream_tool_call_arguments(self) -> None:
+    def test_current_tool_capable_glms_stream_tool_call_arguments(self) -> None:
         backend = ZaiBackend()
-        for model in (None, *zai_mod._TOOL_STREAM_MODELS):
+        expected_models = {
+            "glm-5.2",
+            "glm-5v-turbo",
+            "glm-5.1",
+            "glm-5-turbo",
+            "glm-5",
+            "glm-4.7",
+            "glm-4.7-flash",
+            "glm-4.7-flashx",
+            "glm-4.6",
+            "glm-4.6v",
+            "glm-4.6v-flashx",
+            "glm-4.6v-flash",
+        }
+        self.assertEqual(zai_mod._TOOL_STREAM_MODELS, expected_models)
+        for model in (None, *expected_models):
             with self.subTest(model=model):
                 self.assertEqual(
                     backend._tool_request_fields(model), {"tool_stream": True},
                 )
         for model in (
-            "glm-5v-turbo",
-            "glm-4.6v",
-            "glm-4.6v-flashx",
-            "glm-4.6v-flash",
             "glm-4.5",
             "private-glm",
         ):

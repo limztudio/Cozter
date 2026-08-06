@@ -76,11 +76,15 @@ _MODEL_CONTEXT_WINDOWS = {
     "glm-4.5-flash": 200_000,
     "glm-4-32b-0414-128k": 128_000,
 }
-# Z.ai documents ``tool_stream`` for its GLM-4.6-and-newer text families.
-# Keep vision-capable and account-private IDs out until their respective API
-# references explicitly advertise the request field.
+# Z.ai documents ``tool_stream`` for GLM-4.6 and newer. Its current vision
+# documentation explicitly confirms native function calling for the GLM-4.6V
+# family and function calling plus streaming for GLM-5V-Turbo, so those
+# curated agent models can use the same incremental tool-call path as the
+# text models. Account-private IDs remain opt-in until their capability is
+# known rather than receiving an unsupported optional field.
 _TOOL_STREAM_MODELS = frozenset({
     "glm-5.2",
+    "glm-5v-turbo",
     "glm-5.1",
     "glm-5-turbo",
     "glm-5",
@@ -88,6 +92,9 @@ _TOOL_STREAM_MODELS = frozenset({
     "glm-4.7-flash",
     "glm-4.7-flashx",
     "glm-4.6",
+    "glm-4.6v",
+    "glm-4.6v-flashx",
+    "glm-4.6v-flash",
 })
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
@@ -171,13 +178,13 @@ class ZaiBackend(CachedOpenAIChatBackend):
         }
 
     def _tool_request_fields(self, model: str | None) -> dict:
-        """Enable incremental tool-call deltas on documented text models.
+        """Enable incremental tool-call deltas on documented agent models.
 
-        ``tool_stream`` is supported by Z.ai's GLM-4.6-and-newer text model
-        families. The shared SSE parser already joins incremental
-        OpenAI-style tool-call arguments. Vision-capable and unrecognized
-        account-specific IDs intentionally omit the optional field until
-        provider documentation confirms their compatibility.
+        ``tool_stream`` is supported by Z.ai's GLM-4.6-and-newer tool-capable
+        model families. The shared SSE parser already joins incremental
+        OpenAI-style tool-call arguments. Unrecognized account-specific IDs
+        intentionally omit the optional field until provider documentation
+        confirms their compatibility.
         """
         selected = model or self.default_model
         return {"tool_stream": True} if selected in _TOOL_STREAM_MODELS else {}
