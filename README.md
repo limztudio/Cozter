@@ -49,6 +49,12 @@ drop-in plugin system that works across every backend.
   ledger. A failed chat send or restart retries that finished text before
   later work, rather than rerunning agent tools; attachment uploads remain
   best-effort so a retry cannot duplicate a file
+- **Platform-safe text delivery**: long replies are split at chat-surface API
+  boundaries. Telegram applies its 4,096-character limit to both rich agent
+  replies and plain command/status output; Signal preserves rich-text styling
+  as it splits messages at 4,000 characters; and Slack keeps plain chunks
+  below 39,000 characters and rich Markdown blocks below 12,000 while
+  balancing fenced code blocks
 - **File flow in both directions**: chat uploads are saved into the
   workspace and text-like files are inlined into the next prompt; agent
   replies can upload workspace files or generated images back to chat
@@ -558,7 +564,9 @@ Telegram, Slack, and Signal uploads are copied into
 prompt includes the saved relative path, and text-like files up to
 50,000 characters are inlined directly into the prompt. Larger text files
 and binary files are referenced by path so the selected backend can inspect
-them with its normal tools.
+them with its normal tools. Cozter reads at most 50,001 characters when
+making that decision, so a large accepted text upload is not decoded in full
+just to determine that it should be referenced by path.
 
 `max_upload_bytes` is enforced before an outbound transfer and throughout an
 inbound copy or download. Incoming files are staged beside their final path
@@ -777,7 +785,10 @@ picker queries the configured Z.ai `/models` endpoint and retains its curated
 agent-capable fallback, including text-compatible multimodal models such as
 `glm-5v-turbo` and `glm-4.6v`, if the account cannot be queried. Codex,
 llama, and Z.ai refresh their live catalogs periodically, so long-running
-services see CLI, server, and account model changes. Copilot
+services see CLI, server, and account model changes. HTTP catalog responses
+over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates
+the IDs, keeps at most 4,096, and ignores IDs longer than 512 characters.
+Copilot
 uses a short ACP handshake without sending
 a prompt, and refreshes a successful account catalog periodically. Its picker
 also accepts ACP's provider-grouped model selectors, so account-approved
@@ -936,10 +947,14 @@ memory use to grow without bound. A later valid event can still be processed.
 OpenAI-compatible backends also bound the retained state for one streamed
 completion: 4 MiB of assistant text, 4 MiB of arguments for any one tool
 call, 8 MiB across retained text and tool arguments, and 128 tool calls. A
-limit breach is handled as a retryable completion failure before any buffered
-tool call executes. Tool-argument fragments are joined only after a
+per-completion limit breach is handled as a retryable failure before any
+buffered tool call executes. Tool-argument fragments are joined only after a
 completion finishes, which avoids repeated copying as a long streamed
-argument arrives.
+argument arrives. Across a tool-using HTTP agent run, the retained system,
+user, assistant, tool, and continuation messages are also capped at 32 MiB.
+Cozter refuses a message that would exceed that total and asks the user to
+narrow the task or reduce tool output; if the assistant's requested tool-call
+message itself cannot be retained, its tools are not run.
 
 Persisted session state is treated as recovery data rather than trusted input:
 malformed last-session pointers, unsafe session IDs, and session files whose
