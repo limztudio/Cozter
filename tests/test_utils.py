@@ -269,6 +269,17 @@ class IntegerParsingTests(unittest.TestCase):
 
 
 class TextChunkTests(unittest.TestCase):
+    def test_text_chunk_ranges_preserve_boundaries(self) -> None:
+        text = "one\n\ntwo\nthree"
+
+        ranges = utils.text_chunk_ranges(text, 5)
+
+        self.assertEqual(ranges, [(0, 5), (5, 9), (9, 14)])
+        self.assertEqual(
+            [text[start:end] for start, end in ranges],
+            utils.split_text_chunks(text, 5),
+        )
+
     def test_split_text_chunks_preserves_newlines_and_blank_lines(self) -> None:
         text = "one\n\ntwo\nthree"
 

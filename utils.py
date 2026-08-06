@@ -502,33 +502,41 @@ def parse_bullets(block: str | None) -> list[str]:
     return items
 
 
-def split_text_chunks(text: str, limit: int) -> list[str]:
-    """Split text into <=limit chunks, preferring newline boundaries.
+def text_chunk_ranges(text: str, limit: int) -> list[tuple[int, int]]:
+    """Return contiguous <=limit text ranges, preferring newline boundaries.
 
-    Concatenating the returned chunks always reconstructs *text* exactly.
-    When a newline is used as a boundary it stays at the end of the prior
-    chunk, rather than being silently discarded with any adjacent blank
-    lines.
+    The ranges always cover *text* exactly. When a newline is used as a
+    boundary it stays at the end of the preceding range, rather than being
+    silently discarded with any adjacent blank lines. Keeping offsets also
+    lets rich-text senders preserve style ranges after splitting.
     """
     if limit < 1:
         raise ValueError("limit must be >= 1")
     if len(text) <= limit:
-        return [text]
-    chunks: list[str] = []
+        return [(0, len(text))]
+    ranges: list[tuple[int, int]] = []
     start = 0
     text_len = len(text)
     while text_len - start > limit:
         split_at = text.rfind("\n", start, start + limit)
         if split_at >= 0:
-            # Keep the separator in the preceding chunk. This both preserves
-            # the original text and makes a leading newline a valid boundary.
             end = split_at + 1
         else:
             end = start + limit
-        chunks.append(text[start:end])
+        ranges.append((start, end))
         start = end
-    chunks.append(text[start:])
-    return chunks
+    ranges.append((start, text_len))
+    return ranges
+
+
+def split_text_chunks(text: str, limit: int) -> list[str]:
+    """Split text into <=limit chunks, preferring newline boundaries.
+
+    Concatenating the returned chunks always reconstructs *text* exactly.
+    """
+    return [
+        text[start:end] for start, end in text_chunk_ranges(text, limit)
+    ]
 
 
 async def drain_llm_subprocess(

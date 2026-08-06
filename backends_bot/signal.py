@@ -23,7 +23,7 @@ from ..config import (
     DEFAULT_RECENT_WORKSPACE_LIMIT,
 )
 from .. import schedules, session, workspace
-from ..utils import split_text_chunks
+from ..utils import split_text_chunks, text_chunk_ranges
 from .base import (
     AttachmentInfo,
     BotContext,
@@ -1150,7 +1150,7 @@ def _signal_rich_text_chunks(
             chunk,
             _signal_style_strings_for_chunk(body, spans, start, end),
         )
-        for start, end in _signal_chunk_ranges(body, limit)
+        for start, end in text_chunk_ranges(body, limit)
         if (chunk := body[start:end])
     ]
 
@@ -1289,30 +1289,6 @@ def _single_marker_can_close(text: str, index: int) -> bool:
 
 def _is_word_char(value: str) -> bool:
     return bool(value and re.match(r"\w", value))
-
-
-def _signal_chunk_ranges(text: str, limit: int) -> list[tuple[int, int]]:
-    if limit < 1:
-        raise ValueError("limit must be >= 1")
-    if len(text) <= limit:
-        return [(0, len(text))]
-    ranges: list[tuple[int, int]] = []
-    start = 0
-    while start < len(text):
-        if len(text) - start <= limit:
-            ranges.append((start, len(text)))
-            break
-        split_at = text.rfind("\n", start, start + limit)
-        if split_at >= 0:
-            # Keep the separator in the preceding chunk so chunks always
-            # reconstruct the rendered body exactly.  Dropping it loses
-            # formatting from long rich replies at Signal's size boundary.
-            end = split_at + 1
-        else:
-            end = start + limit
-        ranges.append((start, end))
-        start = end
-    return ranges
 
 
 def _signal_style_strings_for_chunk(
