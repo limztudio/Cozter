@@ -634,6 +634,36 @@ class OpenAIToolLimitTests(unittest.TestCase):
         self.assertEqual(calls[0]["tool_stream"], True)
         self.assertNotIn("tool_stream", calls[1])
 
+    def test_message_budget_stops_before_oversized_tool_turn(self) -> None:
+        calls: list[dict] = []
+        executed = False
+
+        async def stream(*args, **kwargs):
+            calls.append(copy.deepcopy(args[1]))
+            return "x" * 10_000, [_tool_call("call-1", "x.txt")]
+
+        async def execute_tool(name, args, workspace_path, approval, emit):
+            nonlocal executed
+            executed = True
+            return "unexpected"
+
+        oa._stream_completion = stream
+        oa.tools.execute_tool = execute_tool
+
+        proc = _CaptureProc()
+        with mock.patch.object(oa, "_MAX_AGENT_MESSAGE_BYTES", 9_000):
+            asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
+                proc, "/tmp", "work", None, "auto", False, 0,
+            ))
+
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(executed)
+        self.assertTrue(any(
+            event.get("type") == "error"
+            and "conversation exceeded" in event.get("message", "")
+            for event in proc.events
+        ))
+
 
 class OpenAIToolPermissionTests(unittest.TestCase):
     def test_tool_schema_fails_closed_for_unknown_permission(self) -> None:

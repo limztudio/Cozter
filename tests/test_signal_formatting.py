@@ -54,6 +54,16 @@ class SignalFormattingTests(unittest.TestCase):
             ],
         )
 
+    def test_rich_chunks_preserve_newline_at_size_boundary(self) -> None:
+        text = "a" * 3_999 + "\n" + "b"
+
+        chunks = _signal_rich_text_chunks(text, limit=4_000)
+
+        self.assertEqual("".join(body for body, _styles in chunks), text)
+        self.assertEqual([body for body, _styles in chunks], [
+            "a" * 3_999 + "\n", "b",
+        ])
+
 
 class _CapturingSignalBot(SignalBot):
     def __init__(self) -> None:

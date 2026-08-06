@@ -55,10 +55,25 @@ _MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_TEXT_BYTES = 4 * 1024 * 1024
 _MAX_TOOL_ARGUMENT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_BUFFER_BYTES = 8 * 1024 * 1024
+# Tool loops retain every assistant and tool message for the next completion.
+# Per-completion limits alone therefore still permit an unbounded aggregate
+# request body across many turns (and Z.ai's auto-continue segments). Keep
+# the retained conversation below a comfortably-large but finite ceiling.
+_MAX_AGENT_MESSAGE_BYTES = 32 * 1024 * 1024
 # Models normally issue only a small batch of calls before receiving their
 # results. This also bounds the bookkeeping for malformed streams that keep
 # inventing new tool-call indexes without sending argument text.
 _MAX_TOOL_CALLS_PER_COMPLETION = 128
+# Model discovery runs against operator-configured endpoints too.  Keep a
+# malformed proxy or server from making a model-picker request retain an
+# unbounded response before the backend can fall back to its safe defaults.
+# One MiB comfortably fits thousands of ordinary model IDs.
+_MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
+# Catalog entries are later displayed in chat pickers and may be inserted into
+# request payloads.  Provider model IDs are normally short, so reject absurd
+# values rather than carrying attacker-controlled megabyte strings around.
+_MAX_MODEL_ID_CHARS = 512
+_MAX_MODEL_IDS = 4_096
 # Error responses never reach the model in full (their messages are trimmed
 # below), so do not let a misconfigured or hostile endpoint make the bot
 # buffer an arbitrarily large HTML/JSON error document first.
@@ -85,13 +100,19 @@ def extract_model_ids(payload: object) -> tuple[str, ...]:
     ids: list[str] = []
     seen: set[str] = set()
     for entry in data:
+        if len(ids) >= _MAX_MODEL_IDS:
+            break
         if not isinstance(entry, dict):
             continue
         model_id = entry.get("id")
         if not isinstance(model_id, str):
             continue
         model_id = model_id.strip()
-        if model_id and model_id not in seen:
+        if (
+            model_id
+            and len(model_id) <= _MAX_MODEL_ID_CHARS
+            and model_id not in seen
+        ):
             seen.add(model_id)
             ids.append(model_id)
     return tuple(ids)
@@ -114,8 +135,21 @@ def fetch_model_ids(
     if headers:
         request = urllib.request.Request(url, headers=headers, method="GET")
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+        body = response.read(_MAX_MODEL_DISCOVERY_BYTES + 1)
+    if len(body) > _MAX_MODEL_DISCOVERY_BYTES:
+        raise ValueError(
+            "model catalog response exceeded "
+            f"{_MAX_MODEL_DISCOVERY_BYTES} byte limit"
+        )
+    payload = json.loads(body.decode("utf-8"))
     return extract_model_ids(payload)
+
+
+def _message_payload_bytes(message: dict[str, Any]) -> int:
+    """Return the approximate UTF-8 JSON size retained for one chat message."""
+    # Match the default JSON escaping used by aiohttp's request serializer so
+    # non-ASCII strings cannot evade the aggregate wire/memory budget.
+    return len(json.dumps(message).encode("utf-8"))
 
 
 class OpenAIChatBackend(Backend):
@@ -267,6 +301,31 @@ class OpenAIChatBackend(Backend):
             },
             {"role": "user", "content": prompt},
         ]
+        message_bytes = sum(_message_payload_bytes(message) for message in messages)
+
+        def append_message(message: dict[str, Any]) -> bool:
+            """Retain *message* only while the aggregate safety cap permits."""
+            nonlocal message_bytes
+            message_size = _message_payload_bytes(message)
+            if message_bytes + message_size > _MAX_AGENT_MESSAGE_BYTES:
+                return False
+            messages.append(message)
+            message_bytes += message_size
+            return True
+
+        def emit_message_limit_error() -> None:
+            proc.emit({
+                "type": "error",
+                "message": (
+                    f"{self.name} agent conversation exceeded the "
+                    f"{_MAX_AGENT_MESSAGE_BYTES // (1024 * 1024)} MiB "
+                    "safety limit; narrow the task or reduce tool output."
+                ),
+            })
+
+        if message_bytes > _MAX_AGENT_MESSAGE_BYTES:
+            emit_message_limit_error()
+            return
         tool_repeat_counts: dict[str, int] = {}
 
         segment = 1
@@ -293,8 +352,6 @@ class OpenAIChatBackend(Backend):
                 }
                 if tool_calls:
                     assistant_msg["tool_calls"] = tool_calls
-                messages.append(assistant_msg)
-
                 # Surface this turn's commentary even if more tool calls
                 # follow; otherwise the user would only see whatever the
                 # model says in the FINAL turn, losing "Let me check that
@@ -306,6 +363,13 @@ class OpenAIChatBackend(Backend):
                     })
 
                 if not tool_calls:
+                    return
+
+                # This response will be sent back to the model alongside the
+                # next tool result.  Refuse before running a requested tool
+                # if retaining it would already exceed the run-wide bound.
+                if not append_message(assistant_msg):
+                    emit_message_limit_error()
                     return
 
                 # Execute each requested tool and append the result.
@@ -341,12 +405,15 @@ class OpenAIChatBackend(Backend):
 
                     # Include ``name`` alongside tool_call_id; strict
                     # servers reject tool messages without it.
-                    messages.append({
+                    tool_message = {
                         "role": "tool",
                         "tool_call_id": call.get("id", ""),
                         "name": name,
                         "content": result,
-                    })
+                    }
+                    if not append_message(tool_message):
+                        emit_message_limit_error()
+                        return
 
             if not self._auto_continue_after_tool_limit():
                 break
@@ -366,7 +433,7 @@ class OpenAIChatBackend(Backend):
                 "%s reached %d tool-call turns; continuing segment %d",
                 self.name, max_agent_turns, segment,
             )
-            messages.append({
+            continuation_message = {
                 "role": "user",
                 "content": (
                     "You reached Cozter's internal tool-call segment "
@@ -375,11 +442,14 @@ class OpenAIChatBackend(Backend):
                     "repeat completed tool calls unless the inputs or "
                     "workspace state have changed."
                 ),
-            })
+            }
+            if not append_message(continuation_message):
+                emit_message_limit_error()
+                return
 
         # If we fall out of the loop, force one final no-tools response
         # instead of returning only an error.
-        messages.append({
+        final_request_message = {
             "role": "user",
             "content": (
                 "You have reached the tool-call limit. Do not call any more"
@@ -387,7 +457,10 @@ class OpenAIChatBackend(Backend):
                 " provide the final answer now. If something is incomplete,"
                 " clearly say what is missing."
             ),
-        })
+        }
+        if not append_message(final_request_message):
+            emit_message_limit_error()
+            return
 
         payload = _completion_payload(messages, request_model, effort_fields)
         assistant_text, _ = await _stream_completion(

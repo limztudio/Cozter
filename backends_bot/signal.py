@@ -1302,13 +1302,16 @@ def _signal_chunk_ranges(text: str, limit: int) -> list[tuple[int, int]]:
         if len(text) - start <= limit:
             ranges.append((start, len(text)))
             break
-        end = text.rfind("\n", start, start + limit)
-        if end <= start:
+        split_at = text.rfind("\n", start, start + limit)
+        if split_at >= 0:
+            # Keep the separator in the preceding chunk so chunks always
+            # reconstruct the rendered body exactly.  Dropping it loses
+            # formatting from long rich replies at Signal's size boundary.
+            end = split_at + 1
+        else:
             end = start + limit
         ranges.append((start, end))
         start = end
-        while start < len(text) and text[start] == "\n":
-            start += 1
     return ranges
 
 

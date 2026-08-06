@@ -9,6 +9,9 @@ from unittest import mock
 
 from Cozter import config
 from Cozter.backends_bot.base import (
+    AttachmentInfo,
+    BotContext,
+    _INLINE_SIZE_LIMIT,
     UploadTooLargeError,
     reserve_upload_path,
     upload_limit_message,
@@ -57,6 +60,41 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(platform=type(bot).__name__):
                     with self.assertRaises(UploadTooLargeError):
                         await bot.send_file("chat", path)
+
+    async def test_text_attachment_reads_only_inline_limit_plus_one(self) -> None:
+        bot = SignalBot(
+            ["https://signal.group/#test"], jsonrpc_socket="/tmp/signal.sock",
+        )
+        bot._require_ws = mock.AsyncMock(return_value="/workspace")
+        bot._dispatch_ai = mock.AsyncMock()
+        attachment = AttachmentInfo(
+            local_path="/workspace/large.txt",
+            filename="large.txt",
+            kind="document",
+        )
+        ctx = BotContext(
+            user_id="u1",
+            chat_id="chat",
+            text="",
+            command=None,
+            args="",
+            attachment=attachment,
+            platform=bot,
+        )
+        opened = mock.mock_open(
+            read_data="x" * (_INLINE_SIZE_LIMIT + 1),
+        )
+
+        with mock.patch("builtins.open", opened):
+            await bot._ai_file(ctx)
+
+        opened.assert_called_once_with(
+            attachment.local_path, encoding="utf-8", errors="replace",
+        )
+        opened.return_value.read.assert_called_once_with(_INLINE_SIZE_LIMIT + 1)
+        prompt = bot._dispatch_ai.await_args.args[1]
+        self.assertIn("over 50,000 chars", prompt)
+        self.assertNotIn("[File contents", prompt)
 
     async def test_telegram_rejects_metadata_before_requesting_file(self) -> None:
         bot = TelegramBot("token", ["1"], max_upload_bytes=3)

@@ -19,6 +19,11 @@ class TestBot(BotPlatform):
     keeping the abstract-platform plumbing in one place.
     """
 
+    # This is a reusable fake rather than a pytest test case.  Its historical
+    # name starts with ``Test``, so mark it explicitly to keep pytest's
+    # collection warnings from obscuring real test failures.
+    __test__ = False
+
     @property
     def platform_id(self) -> str:
         return "test:bot"

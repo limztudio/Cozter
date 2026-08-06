@@ -55,6 +55,14 @@ _TEXT_EXTENSIONS = frozenset({
     ".log", ".diff", ".patch",
 })
 _INLINE_SIZE_LIMIT = 50_000
+
+
+def _read_inline_text_attachment(path: str) -> str:
+    """Read only enough text to decide whether an attachment can be inlined."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read(_INLINE_SIZE_LIMIT + 1)
+
+
 UPLOADS_DIR = "uploads"
 # Status previews are useful, but they must never hold up the model stream or
 # the final answer when a platform API call is slow or a Socket Mode
@@ -3011,10 +3019,13 @@ class BotPlatform(ABC):
         ext = os.path.splitext(att.filename)[1].lower()
         if ext in _TEXT_EXTENSIONS:
             try:
-                with open(
-                    att.local_path, encoding="utf-8", errors="replace",
-                ) as f:
-                    content = f.read()
+                # Uploads can be far larger than the 50k-character prompt
+                # allowance.  Read only the decision boundary and do it off
+                # the event loop, rather than decoding an entire accepted
+                # multi-megabyte attachment merely to decline inlining it.
+                content = await asyncio.to_thread(
+                    _read_inline_text_attachment, att.local_path,
+                )
                 if len(content) <= _INLINE_SIZE_LIMIT:
                     parts.append(
                         f"[File contents of {att.filename}]\n"
@@ -3023,7 +3034,8 @@ class BotPlatform(ABC):
                     )
                 else:
                     parts.append(
-                        f"[File too large to inline ({len(content):,} chars);"
+                        "[File too large to inline (over "
+                        f"{_INLINE_SIZE_LIMIT:,} chars);"
                         f" read it from {rel_path}]"
                     )
             except OSError:

@@ -125,10 +125,19 @@ class TelegramBot(BotPlatform):
         if not text:
             return None
         if not rich:
-            msg = await self.app.bot.send_message(
-                chat_id=chat_id, text=text,
-            )
-            return MessageHandle(chat_id=str(chat_id), message_id=str(msg.message_id))
+            # Command output and other plain replies can exceed Telegram's
+            # 4,096-character API cap just as rich agent replies can.  Split
+            # them with the same lossless helper instead of failing the
+            # entire durable delivery.
+            last: MessageHandle | None = None
+            for chunk in split_text_chunks(text, _TELEGRAM_TEXT_LIMIT):
+                msg = await self.app.bot.send_message(
+                    chat_id=chat_id, text=chunk,
+                )
+                last = MessageHandle(
+                    chat_id=str(chat_id), message_id=str(msg.message_id),
+                )
+            return last
 
         # Rich path: convert markdown → HTML and split for Telegram limits.
         html = _md_to_html(text)

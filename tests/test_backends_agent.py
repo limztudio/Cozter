@@ -1135,6 +1135,43 @@ class ZaiBackendTests(unittest.TestCase):
             ("glm-company", "glm-private"),
         )
 
+    def test_model_ids_ignore_excessively_large_entries_and_cap_count(self) -> None:
+        self.assertEqual(
+            extract_model_ids({
+                "data": [
+                    {"id": "valid-model"},
+                    {"id": "x" * (openai_agent_mod._MAX_MODEL_ID_CHARS + 1)},
+                ],
+            }),
+            ("valid-model",),
+        )
+        capped = extract_model_ids({
+            "data": [
+                {"id": f"model-{i}"}
+                for i in range(openai_agent_mod._MAX_MODEL_IDS + 1)
+            ],
+        })
+        self.assertEqual(len(capped), openai_agent_mod._MAX_MODEL_IDS)
+        self.assertEqual(capped[0], "model-0")
+        self.assertEqual(capped[-1], f"model-{openai_agent_mod._MAX_MODEL_IDS - 1}")
+
+    def test_model_discovery_rejects_oversized_response(self) -> None:
+        response = mock.MagicMock()
+        response.read.return_value = b"x" * (
+            openai_agent_mod._MAX_MODEL_DISCOVERY_BYTES + 1
+        )
+        response.__enter__.return_value = response
+        with mock.patch.object(
+            openai_agent_mod.urllib.request, "urlopen", return_value=response,
+        ):
+            with self.assertRaisesRegex(ValueError, "model catalog response"):
+                openai_agent_mod.fetch_model_ids(
+                    "https://models.example.test/v1/models", timeout=1,
+                )
+        response.read.assert_called_once_with(
+            openai_agent_mod._MAX_MODEL_DISCOVERY_BYTES + 1,
+        )
+
     def test_available_models_queries_configured_account_once(self) -> None:
         response = mock.MagicMock()
         response.read.return_value = json.dumps({
