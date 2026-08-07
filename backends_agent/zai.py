@@ -45,6 +45,10 @@ _FALLBACK_MODELS = (
     "glm-4.6v",
     "glm-4.6v-flashx",
     "glm-4.6v-flash",
+    # GLM-4.5V accepts text alongside its image/video/file inputs. It can
+    # therefore serve ordinary text agent turns, although it does not support
+    # the optional incremental ``tool_stream`` protocol below.
+    "glm-4.5v",
     "glm-4.5",
     "glm-4.5-air",
     "glm-4.5-x",
@@ -69,6 +73,7 @@ _MODEL_CONTEXT_WINDOWS = {
     "glm-4.6v": 128_000,
     "glm-4.6v-flashx": 128_000,
     "glm-4.6v-flash": 128_000,
+    "glm-4.5v": 64_000,
     "glm-4.5": 128_000,
     "glm-4.5-air": 128_000,
     "glm-4.5-x": 128_000,
@@ -96,7 +101,26 @@ _TOOL_STREAM_MODELS = frozenset({
     "glm-4.6v-flashx",
     "glm-4.6v-flash",
 })
+# Z.ai's catalog can include models that are invoked through a different API
+# path (for example image generation, OCR, or audio transcription). Cozter
+# drives ``/chat/completions`` and should not display those IDs as agent
+# choices. Keep this deliberately small and exact: unknown/private IDs stay
+# selectable because they may be valid chat models on an operator's account.
+_NON_CHAT_COMPLETION_MODEL_IDS = frozenset({
+    "glm-ocr",
+    "glm-image",
+    "cogview-4-250304",
+    "glm-asr-2512",
+})
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
+
+
+def _chat_completion_model_ids(model_ids: tuple[str, ...]) -> tuple[str, ...]:
+    """Drop known Z.ai IDs that require an endpoint other than chat."""
+    return tuple(
+        model_id for model_id in model_ids
+        if model_id.casefold() not in _NON_CHAT_COMPLETION_MODEL_IDS
+    )
 
 
 class ZaiBackend(CachedOpenAIChatBackend):
@@ -142,7 +166,13 @@ class ZaiBackend(CachedOpenAIChatBackend):
             )
             return _FALLBACK_MODELS
 
-        return model_ids or _FALLBACK_MODELS
+        chat_models = _chat_completion_model_ids(model_ids)
+        if not chat_models and model_ids:
+            logger.debug(
+                "Z.ai model catalog contained no chat-completion models; "
+                "using fallback",
+            )
+        return chat_models or _FALLBACK_MODELS
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 

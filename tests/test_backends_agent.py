@@ -1088,6 +1088,7 @@ class ZaiBackendTests(unittest.TestCase):
                 self.assertEqual(
                     backend.context_window_tokens(model), 128_000,
                 )
+        self.assertEqual(backend.context_window_tokens("glm-4.5v"), 64_000)
         self.assertEqual(backend.context_window_tokens("glm-4.5-air"), 128_000)
         self.assertEqual(
             backend.context_window_tokens("glm-4.5-flash"), 200_000,
@@ -1108,6 +1109,7 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-4.6v",
             "glm-4.6v-flashx",
             "glm-4.6v-flash",
+            "glm-4.5v",
             "glm-4.5",
             "glm-4.5-air",
             "glm-4.5-x",
@@ -1175,7 +1177,14 @@ class ZaiBackendTests(unittest.TestCase):
     def test_available_models_queries_configured_account_once(self) -> None:
         response = mock.MagicMock()
         response.read.return_value = json.dumps({
-            "data": [{"id": "glm-company"}, {"id": "glm-private"}],
+            "data": [
+                {"id": "glm-company"},
+                {"id": "glm-ocr"},
+                {"id": "GLM-IMAGE"},
+                {"id": "cogView-4-250304"},
+                {"id": "glm-asr-2512"},
+                {"id": "glm-private"},
+            ],
         }).encode("utf-8")
         response.__enter__.return_value = response
         with (
@@ -1225,6 +1234,20 @@ class ZaiBackendTests(unittest.TestCase):
             self.assertEqual(ZaiBackend().available_models, zai_mod._FALLBACK_MODELS)
 
         urlopen_mock.assert_not_called()
+
+    def test_non_chat_only_catalog_falls_back_to_agent_models(self) -> None:
+        with (
+            mock.patch.object(
+                zai_mod.cfg, "get_zai_api_key", return_value="key",
+            ),
+            mock.patch.object(
+                zai_mod, "fetch_model_ids",
+                return_value=("glm-ocr", "glm-image", "glm-asr-2512"),
+            ),
+        ):
+            self.assertEqual(
+                ZaiBackend().available_models, zai_mod._FALLBACK_MODELS,
+            )
 
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
         # Z.ai's base already carries /api/paas/v4, so no extra /v1.
@@ -1324,6 +1347,7 @@ class ZaiBackendTests(unittest.TestCase):
                     backend._tool_request_fields(model), {"tool_stream": True},
                 )
         for model in (
+            "glm-4.5v",
             "glm-4.5",
             "private-glm",
         ):

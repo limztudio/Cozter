@@ -783,7 +783,9 @@ The `llama` model picker queries `llama_server_url/v1/models` and falls
 back to `auto` if the server is down or returns no model IDs. The `zai`
 picker queries the configured Z.ai `/models` endpoint and retains its curated
 agent-capable fallback, including text-compatible multimodal models such as
-`glm-5v-turbo` and `glm-4.6v`, if the account cannot be queried. Codex,
+`glm-5v-turbo`, `glm-4.6v`, and `glm-4.5v`, if the account cannot be queried.
+It filters Z.ai's known image, OCR, and audio-only IDs because those require
+different endpoints, while preserving unknown/private chat-model IDs. Codex,
 llama, and Z.ai refresh their live catalogs periodically, so long-running
 services see CLI, server, and account model changes. HTTP catalog responses
 over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates
