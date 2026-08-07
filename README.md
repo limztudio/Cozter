@@ -70,7 +70,8 @@ drop-in plugin system that works across every backend.
 Run Cozter directly from its source checkout; it does not ship an installable
 package, console script, or build artifact. Deploy the checkout itself rather
 than running `pip install .`. Run the following from the checkout's parent
-directory:
+directory. For the CI-covered path, first confirm that `python` is Python
+3.11 or 3.12 (`python --version`):
 
 ```bash
 git clone https://gitlab.com/mgneh/cozter.git Cozter
@@ -454,6 +455,9 @@ The session router is only used when there is no valid
 `last_session.json` entry, such as a new workspace or a deleted session.
 `/newsession` explicitly creates and pins a fresh session; otherwise each user
 continues the same session across bot restarts and platform reconnects.
+If an initial turn is still being routed while that user explicitly chooses a
+different session, the newer choice remains pinned for the next message; the
+in-flight turn keeps the session that was selected for it.
 
 Colony consolidation includes sessions whose long-term list is empty, so their
 names still help it retire stale workspace memory. If a workspace has no
@@ -593,7 +597,10 @@ POSIX, `;` on Windows); blank entries are ignored and `~` is expanded.
 At the end of a run, Cozter also snapshots newly created or modified image
 files in the workspace and attaches them unless the agent already referenced
 them explicitly; shared external output directories always require an
-explicit `[[attach: ...]]` marker. Replies can end with
+explicit `[[attach: ...]]` marker. The workspace-only scan resolves image
+links and ignores a link whose final target is outside the workspace, so a
+trusted external artifact cannot become an automatic attachment merely by
+being linked into a workspace. Replies can end with
 `[[await]]` when the agent needs a user decision; the marker is stripped
 and that user's queued work pauses until the next message arrives.
 
@@ -608,6 +615,12 @@ Drop a `.py` file into `agent_tools/plugins/` and every agent discovers it
 on next restart. Whether a backend can invoke it still follows its selected
 permission mode. Files whose names start with `_` are skipped, which is useful
 for disabled examples or local scratch tools. One file, two invocation paths:
+
+Treat plugins as trusted bot code: discovery imports their modules in the
+Cozter process, so module-level code runs at startup and any dependencies must
+be installed in the project environment. Restart after adding, removing, or
+changing a plugin. `tool_timeout` limits an individual invocation but does not
+sandbox plugin code.
 
 - **HTTP backends** (`llama`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
@@ -929,6 +942,10 @@ content before the file is unlinked. Failed hunks leave the target in place.
 Normal unified-diff hunks must also match the line counts declared in their
 headers before any target is written, so a malformed or truncated patch is
 rejected instead of being treated as a smaller valid edit.
+`write_file`, `edit_file`, `multi_edit`, and updates to existing files through
+`apply_patch` replace content through a temporary file. An unsuccessful
+replacement leaves the prior contents intact, and existing file mode bits are
+preserved.
 `copy_file` only copies files, while `move_file` can move a file or directory
 but refuses to move a directory into its own subtree. Both operations refuse
 to replace an existing destination and create a missing destination parent
@@ -1114,6 +1131,9 @@ manager such as `systemd` with `Restart=always` remains useful for boot-time
 startup and unexpected exits. CLI mode uses an outer respawner process and
 relaunches itself in the same terminal. Daemon platforms restore persisted
 queues after either path starts again; CLI mode currently does not.
+If a message is accepted just as an update becomes pending, Cozter keeps that
+already-persisted message queued and does not start its agent turn against a
+checkout that is about to change.
 
 ## Runtime diagnostics
 
