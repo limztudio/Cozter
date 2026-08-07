@@ -582,29 +582,28 @@ class SignalBot(BotPlatform):
 
         if text.startswith("/"):
             await self.dispatch_command(
-                self._ctx(sender_id, group_id, text=text),
+                self._ctx(group_id, text=text),
             )
             return
 
         if isinstance(attachments, list) and attachments:
             await self._handle_attachments(
-                sender_id, group_id, text, attachments,
+                group_id, text, attachments,
             )
             return
 
         if text:
             await self.dispatch_text(
-                self._ctx(sender_id, group_id, text=text),
+                self._ctx(group_id, text=text),
             )
 
     async def _handle_attachments(
         self,
-        sender_id: str,
         group_id: str,
         caption: str,
         attachments: list[Any],
     ) -> None:
-        ctx_for_reply = self._ctx(sender_id, group_id, text=caption)
+        ctx_for_reply = self._ctx(group_id, text=caption)
         ws = workspace.get_current(ctx_for_reply.user_id, self.platform_id)
         if not ws or not os.path.isdir(ws):
             await ctx_for_reply.reply_text(NO_WORKSPACE_TEXT)
@@ -645,7 +644,7 @@ class SignalBot(BotPlatform):
             if info is None:
                 continue
             await self.dispatch_file(
-                self._ctx(sender_id, group_id, attachment=info),
+                self._ctx(group_id, attachment=info),
             )
 
     async def _materialize_attachment(
@@ -684,7 +683,6 @@ class SignalBot(BotPlatform):
 
     def _ctx(
         self,
-        _sender_id: str,
         group_id: str,
         *,
         text: str = "",
