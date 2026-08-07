@@ -1174,6 +1174,64 @@ class QueueStateFallbackTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_direct_dispatch_queues_when_update_starts_during_persist(
+        self,
+    ) -> None:
+        """A prompt persisted before an update must not begin a new turn."""
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                dispatch_task: asyncio.Task | None = None
+                queue_file_lock_held = False
+                try:
+                    bot = QueueDrainBot()
+                    entered_persist = asyncio.Event()
+                    original_persist = bot._persist_enqueue
+
+                    async def persist_after_signal(*args, **kwargs):
+                        entered_persist.set()
+                        return await original_persist(*args, **kwargs)
+
+                    await bot._queue_file_lock.acquire()
+                    queue_file_lock_held = True
+                    with mock.patch.object(
+                        bot,
+                        "_persist_enqueue",
+                        side_effect=persist_after_signal,
+                    ):
+                        dispatch_task = asyncio.create_task(
+                            bot._dispatch_ai(
+                                bot.make_context("u1", "chat", text="race"),
+                                "race",
+                            ),
+                        )
+                        await asyncio.wait_for(entered_persist.wait(), timeout=1)
+                        self.assertFalse(dispatch_task.done())
+
+                        bot._update_restart_pending = True
+                        bot._queue_file_lock.release()
+                        queue_file_lock_held = False
+                        await dispatch_task
+
+                    self.assertEqual(bot.ran, [])
+                    queued = bot._message_queues["u1"].get_nowait()
+                    self.assertEqual(queued[:2], ("race", "chat"))
+                    self.assertFalse(queued[3])
+                    persisted = bot._read_queue_file()["u1"]
+                    self.assertEqual([entry["text"] for entry in persisted], ["race"])
+                    self.assertEqual(persisted[0]["id"], queued[2])
+                finally:
+                    if queue_file_lock_held:
+                        bot._queue_file_lock.release()
+                    if dispatch_task is not None and not dispatch_task.done():
+                        dispatch_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await dispatch_task
+                    workspace.CONFIG_DIR = old_config_dir
+
+        asyncio.run(run())
+
     def test_stop_clears_paused_queue_without_running_turn(self) -> None:
         async def run(pause: str) -> None:
             with tempfile.TemporaryDirectory() as tmp:

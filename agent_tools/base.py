@@ -480,26 +480,32 @@ def read_text_for_edit(path: str) -> tuple[str, bool] | str:
 
 
 def write_text_after_edit(path: str, text: str, *, uses_crlf: bool) -> None:
-    """Atomically replace edited *text*, restoring its newline convention.
+    """Atomically replace text at *path*, restoring its newline convention.
 
     ``newline=""`` disables the platform newline translation open() would
     otherwise apply on write (which turns every ``\\n`` into ``\\r\\n`` on
     Windows), so only the bytes the edit actually changed differ on disk.
     Write into the target's directory and replace only after the full file is
     flushed: a write failure can then leave the old source intact instead of
-    truncating it midway through an edit or patch application.
+    truncating it midway through an edit, patch application, or overwrite.
+    Existing files retain their mode; a missing target is created through the
+    same atomic replacement path.
     """
     if uses_crlf:
         text = text.replace("\n", "\r\n")
     parent = os.path.dirname(path) or "."
-    original_mode = stat.S_IMODE(os.stat(path).st_mode)
+    try:
+        original_mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        original_mode = None
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.chmod(tmp_path, original_mode)
+        if original_mode is not None:
+            os.chmod(tmp_path, original_mode)
         os.replace(tmp_path, path)
     except Exception:
         with suppress(OSError):

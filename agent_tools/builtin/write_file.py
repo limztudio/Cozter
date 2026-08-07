@@ -10,6 +10,7 @@ from ..base import (
     object_parameters,
     resolve_inside_workspace,
     summarize_path,
+    write_text_after_edit,
 )
 
 
@@ -40,8 +41,10 @@ class WriteFileTool(AgentTool):
         if os.path.exists(target) and not os.path.isfile(target):
             return f"Error: not a regular file: {args.get('path')}"
         ensure_parent_dir(target)
-        with open(target, "w", encoding="utf-8") as f:
-            f.write(content)
+        # Keep a pre-existing file intact if the replacement write fails
+        # (for example from ENOSPC or an interrupted filesystem). The shared
+        # helper also preserves an existing file's permission bits.
+        write_text_after_edit(target, content, uses_crlf=False)
         return f"Wrote {len(content)} chars to {args.get('path')}"
 
     def summarize(self, args: dict) -> str:

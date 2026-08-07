@@ -97,6 +97,28 @@ class AttachmentGuardTests(unittest.TestCase):
             self.assertTrue(explicit.startswith(os.path.realpath(ws) + os.sep))
             self.assertNotEqual(explicit, os.path.realpath(external_image))
 
+    def test_auto_detection_ignores_workspace_symlink_to_trusted_root(self) -> None:
+        """A workspace link must not make a trusted shared root auto-scanned."""
+        with tempfile.TemporaryDirectory() as ws, \
+                tempfile.TemporaryDirectory() as external:
+            external_image = os.path.join(external, "other-turn.png")
+            self._write_png(external_image)
+            workspace_link = os.path.join(ws, "linked-image.png")
+            try:
+                os.symlink(external_image, workspace_link)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"file symlinks unavailable: {exc}")
+
+            with mock.patch.dict(
+                os.environ, {"COZTER_ATTACHMENT_ROOTS": external}, clear=False,
+            ):
+                before = agent._snapshot_attachment_images(ws)
+                with open(external_image, "ab") as f:
+                    f.write(b"updated after snapshot")
+                detected = agent._collect_new_attachment_images(before, ws)
+
+            self.assertEqual(detected, [])
+
     def test_external_image_copy_rejects_symlinked_destination(self) -> None:
         """A workspace state symlink must not redirect an image copy outside."""
         with tempfile.TemporaryDirectory() as ws, \

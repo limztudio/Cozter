@@ -280,6 +280,44 @@ class CopyFileToolTests(unittest.TestCase):
 
 
 class WriteFileToolTests(unittest.TestCase):
+    def test_write_file_overwrites_existing_file(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "note.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("original")
+
+                result = await WriteFileTool().run(tmp, {
+                    "path": "note.txt", "content": "replacement",
+                })
+
+                self.assertEqual(result, "Wrote 11 chars to note.txt")
+                with open(path, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "replacement")
+
+        asyncio.run(run())
+
+    def test_write_file_keeps_original_when_atomic_replace_fails(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "note.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("original")
+
+                with mock.patch(
+                    "Cozter.agent_tools.base.os.replace",
+                    side_effect=OSError("simulated replace failure"),
+                ):
+                    with self.assertRaisesRegex(OSError, "simulated"):
+                        await WriteFileTool().run(tmp, {
+                            "path": "note.txt", "content": "replacement",
+                        })
+
+                with open(path, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "original")
+
+        asyncio.run(run())
+
     def test_write_file_rejects_existing_special_path(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:

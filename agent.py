@@ -450,6 +450,7 @@ def _prepare_resolved_attachment(
 def _iter_image_files(root: str, *, skip_dirs: bool) -> list[str]:
     paths: list[str] = []
     try:
+        root_real = os.path.realpath(root)
         for dirpath, dirnames, filenames in os.walk(root):
             if skip_dirs:
                 dirnames[:] = [
@@ -460,7 +461,10 @@ def _iter_image_files(root: str, *, skip_dirs: bool) -> list[str]:
                 if ext not in _IMAGE_EXTENSIONS:
                     continue
                 path = os.path.realpath(os.path.join(dirpath, filename))
-                if os.path.isfile(path):
+                # os.walk lists file symlinks even when it does not follow
+                # directory symlinks. Do not let a workspace symlink turn a
+                # workspace-only auto-scan into an external-artifact scan.
+                if is_path_within(path, root_real) and os.path.isfile(path):
                     paths.append(path)
     except OSError:
         logger.warning("Failed to scan image artifacts under %s", root,
@@ -1335,7 +1339,13 @@ async def _resolve_or_create_user_session(
             backend_name=summary_backend,
         )
     assert isinstance(session_id, str) and session_id
-    session.set_last_session(workspace_path, user_id, session_id)
+    # Routing can await a summary backend. If the user creates or selects a
+    # session during that wait, their explicit choice must remain the target
+    # for the *next* message instead of being silently overwritten by this
+    # older in-flight turn. The read/compare/write below has no await point,
+    # so command handling on this event loop cannot interleave it.
+    if session.get_last_session(workspace_path, user_id) == last_session_id:
+        session.set_last_session(workspace_path, user_id, session_id)
     return session_id, session_data
 
 

@@ -3105,6 +3105,32 @@ class BotPlatform(ABC):
         # disk to be resumed by restore_queues() after restart.
         entry_id = await self._persist_enqueue(uid, text, chat_id)
         await lock.acquire()
+        # The durable enqueue above can wait for another queue-file update.
+        # An auto-update may therefore pause intake after the first gate but
+        # before this prompt owns the user lock. Do not let that accepted
+        # entry start an agent turn against a checkout about to change: put
+        # it in RAM too so an aborted update can resume it without needing a
+        # process restart. It was already persisted, so make room for this
+        # one entry even if concurrent queued messages filled the normal cap.
+        if self._update_restart_pending:
+            lock.release()
+            queued = self._message_queues.get(uid)
+            q = self._ensure_message_queue(
+                uid,
+                min_size=(queued.qsize() if queued is not None else 0) + 1,
+            )
+            q.put_nowait((text, chat_id, entry_id, False))
+            await self._resume_awaiting_answer(
+                uid, q, entry_id, reason="update became pending",
+            )
+            await ctx.reply_text(
+                "Update restart pending. Queued for after restart."
+            )
+            # Normally this returns immediately while the update is pending.
+            # Starting it still covers a no-update/cancel race that resumes
+            # intake after the entry was placed in memory.
+            self._start_queue_drain(uid)
+            return
         # The user is sending a message — if the previous turn paused
         # for an answer ([[await]]), this message is the answer. Clear
         # the flag *after* lock acquisition: any concurrent drain task

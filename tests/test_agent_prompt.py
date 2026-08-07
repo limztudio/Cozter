@@ -5,6 +5,7 @@ to a character budget, dropping the oldest recent messages first. A larger
 budget must keep more history; the user's new message is always present.
 """
 
+import asyncio
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -181,6 +182,42 @@ class SessionResolutionTests(unittest.IsolatedAsyncioTestCase):
         route.assert_awaited_once_with(
             "new work", tmp, "summary-model", backend_name="claude_code",
         )
+
+    async def test_router_does_not_overwrite_newer_selected_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            routed = session.create_session(tmp, name="Routed")
+            self.assertIsNone(session.get_last_session(tmp, "user"))
+            entered_router = asyncio.Event()
+            release_router = asyncio.Event()
+
+            async def blocked_router(*_args, **_kwargs):
+                entered_router.set()
+                await release_router.wait()
+                return routed["id"], routed
+
+            with mock.patch.object(
+                agent.router,
+                "select_or_create_session",
+                new=mock.AsyncMock(side_effect=blocked_router),
+            ) as route:
+                resolve_task = asyncio.create_task(
+                    agent._resolve_or_create_user_session(
+                        "new work", tmp, "user", "summary-model", "codex",
+                    ),
+                )
+                await asyncio.wait_for(entered_router.wait(), timeout=1)
+
+                newer = session.create_session(tmp, name="Newer choice")
+                session.set_last_session(tmp, "user", newer["id"])
+                release_router.set()
+                session_id, data = await resolve_task
+
+            self.assertEqual(session_id, routed["id"])
+            self.assertEqual(data, routed)
+            self.assertEqual(session.get_last_session(tmp, "user"), newer["id"])
+            route.assert_awaited_once_with(
+                "new work", tmp, "summary-model", backend_name="codex",
+            )
 
 
 class DetachedTaskRequestTests(unittest.TestCase):
