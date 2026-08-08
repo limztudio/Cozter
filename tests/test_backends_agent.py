@@ -911,6 +911,17 @@ class BackendModelTests(unittest.TestCase):
         self,
     ) -> None:
         backend = ClaudeCodeBackend()
+        # Current model pins use 1M by default; aliases are deliberately
+        # omitted below because their resolved model can vary by account/CLI.
+        for model in (
+            "claude-fable-5",
+            "claude-opus-5",
+            "claude-sonnet-5",
+        ):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    backend.context_window_tokens(model), 1_000_000,
+                )
         for model in claude_code_mod._ONE_MILLION_CONTEXT_MODELS:
             with self.subTest(model=model):
                 self.assertEqual(

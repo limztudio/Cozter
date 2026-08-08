@@ -767,10 +767,11 @@ catalog. Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
 aliases, the supported `fable[1m]`, `sonnet[1m]`, `opus[1m]`, and
 `opusplan[1m]` long-context aliases, and verified version pins (including
-Opus 5). Fable 5/Sonnet 5 1M variants are exposed by the CLI through their
-aliases; full provider-specific pins can be supplied through `extra_models`.
-Claude's `/fast` is a session toggle rather than a selectable `*-fast` model
-ID. Llama and Z.ai discover models live from their configured HTTP endpoints.
+Fable 5, Sonnet 5, and Opus 5. Those explicit current-generation pins have
+documented 1M-token windows; mutable aliases remain capacity-unknown until
+their resolved model is known. Claude's `/fast` is a session toggle rather
+than a selectable `*-fast` model ID. Llama and Z.ai discover models live from
+their configured HTTP endpoints.
 `llama` and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
 and points at Z.ai's endpoint. GLM-4.6-and-newer tool-capable models,

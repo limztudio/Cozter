@@ -54,12 +54,18 @@ _NO_EFFORT_MODELS = frozenset({
 _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 
 # Claude Code does not expose a safe, non-interactive account model catalog
-# with numeric capacities. Keep only its explicitly selectable 1M variants;
-# aliases, default selection, and arbitrary/private IDs stay unknown so
-# compaction keeps the message-interval safeguard. An operator can configure
-# a private deployment through model_context_windows in Cozter's config.json.
+# with numeric capacities. Keep only explicit, provider-documented 1M pins
+# and the CLI's explicit ``[1m]`` selections; aliases, default selection, and
+# arbitrary/private IDs stay unknown so compaction keeps the message-interval
+# safeguard. An operator can configure a private deployment through
+# model_context_windows in Cozter's config.json.
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
+    # The current Fable/Opus/Sonnet 5 pins have a 1M window by default.
+    # Do not infer that capacity for their mutable CLI aliases.
+    "claude-fable-5",
+    "claude-opus-5",
+    "claude-sonnet-5",
     "fable[1m]",
     "sonnet[1m]",
     "opus[1m]",
