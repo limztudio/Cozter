@@ -673,6 +673,14 @@ class OpenAIToolPermissionTests(unittest.TestCase):
         schema = oa._tools_for_approval("confirm", False)
         self.assertEqual(schema, oa.tools.READ_ONLY_TOOL_SCHEMA)
 
+    def test_auto_withholds_direct_host_shell(self) -> None:
+        schema = oa._tools_for_approval("auto", False)
+        self.assertEqual(schema, oa.tools.AUTO_TOOL_SCHEMA)
+        assert schema is not None
+        self.assertNotIn(
+            "bash", {entry["function"]["name"] for entry in schema},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

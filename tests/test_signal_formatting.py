@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from unittest import mock
 from typing import Any
 
 from Cozter.backends_bot.base import MessageHandle
@@ -276,6 +277,36 @@ class SignalGroupResolutionTests(unittest.TestCase):
                 ("listGroups", None),
             ],
         )
+
+
+class SignalReceiveStartupTests(unittest.TestCase):
+    def test_receive_start_recovers_when_socket_eof_precedes_state_mark(self) -> None:
+        """An EOF just after subscribe must not leave startup disconnected."""
+        async def run() -> tuple[SignalBot, mock.AsyncMock]:
+            bot = SignalBot([SIGNAL_GROUP_URL], jsonrpc_socket="/tmp/s")
+
+            async def reconnect(*, resubscribe: bool) -> None:
+                self.assertTrue(resubscribe)
+                bot._receive_subscription = 42
+                bot._receive_subscribed = True
+
+            reconnect_mock = mock.AsyncMock(side_effect=reconnect)
+
+            # Simulate the reader task clearing its transport state while the
+            # subscribe RPC is completing, before startup marks receive active.
+            bot._subscribe_receive = mock.AsyncMock(return_value=41)  # type: ignore[method-assign]
+            bot._jsonrpc_connected = mock.Mock(return_value=False)  # type: ignore[method-assign]
+            bot._connect_jsonrpc = reconnect_mock  # type: ignore[method-assign]
+
+            await bot._start_receive_subscription()
+            return bot, reconnect_mock
+
+        bot, reconnect_mock = asyncio.run(run())
+
+        reconnect_mock.assert_awaited_once_with(resubscribe=True)
+        self.assertTrue(bot._receive_started)
+        self.assertTrue(bot._receive_subscribed)
+        self.assertEqual(bot._receive_subscription, 42)
 
 
 if __name__ == "__main__":

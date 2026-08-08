@@ -65,6 +65,10 @@ class AgentTool(ABC):
       - ``order``: integer for the tool-list ordering sent to the model.
         Lower comes first; ties broken alphabetically by ``name``.
         Defaults to 100.
+      - ``requires_full_permission``: whether an HTTP agent must be in
+        ``full`` mode before this tool can be exposed or executed. Use this
+        for tools that can escape Cozter's workspace-bounded safety model
+        (for example, a direct host shell). Defaults to ``False``.
       - ``summarize(args)``: one-line status-display formatter. The
         default returns just the tool name.
 
@@ -79,6 +83,7 @@ class AgentTool(ABC):
     parameters: ClassVar[dict[str, Any]] = {}
     file_action: ClassVar[str | None] = None
     order: ClassVar[int] = 100
+    requires_full_permission: ClassVar[bool] = False
 
     # Whether this tool was loaded from ``agent_tools/plugins/`` (True)
     # vs ``agent_tools/builtin/`` (False). Set by the package loader

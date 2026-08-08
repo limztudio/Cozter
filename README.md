@@ -345,10 +345,11 @@ a manual "continue".
 `max_permission` (default `auto`) caps the highest `/permission` mode any
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <
 full`. `full` is the only mode that requests each CLI's explicit bypass flag
-(arbitrary code execution) for any authorized chat participant. Keep the
-default `auto` to prevent that bypass, or set it to `full` only when an
-operator explicitly accepts that risk; provider-native sandbox and approval
-behavior still differs by CLI. `deny` exposes no tools to the HTTP and Copilot
+(arbitrary code execution) and exposes the in-process HTTP agents' direct host
+shell for any authorized chat participant. Keep the default `auto` to prevent
+those bypasses, or set it to `full` only when an operator explicitly accepts
+that risk; provider-native sandbox and approval behavior still differs by CLI.
+`deny` exposes no tools to the HTTP and Copilot
 backends; Codex and Claude Code use their strongest non-interactive
 read-only/plan modes, which may still inspect the workspace. `/permission`
 rejects a higher mode, and an already-stored higher value is clamped down.
@@ -783,8 +784,9 @@ Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its
 workspace-write sandbox for `auto`, and a read-only sandbox for `confirm`
 and `deny`. `llama` and `zai` run in-process: `deny` exposes no tools and
-`confirm` exposes only read-only tools, with writes and shell blocked again
-by `execute_tool`. `claude_code` uses bypass only for `full`, `acceptEdits`
+`confirm` exposes only read-only tools. `auto` permits only Cozter's
+workspace-bounded tools; both it and `confirm` block the direct host shell
+again at execution time. `claude_code` uses bypass only for `full`, `acceptEdits`
 for `auto`, and plan mode for `confirm`/`deny`. `copilot` uses `--yolo` only
 for `full`, `--allow-all-tools` (while retaining path and URL checks) for
 `auto`, and an explicit empty tool list for `confirm`/`deny`. Internal

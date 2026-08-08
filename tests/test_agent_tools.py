@@ -462,6 +462,46 @@ class BashToolTests(unittest.TestCase):
             f"child process {child_pid} survived bash tool timeout",
         )
 
+    @unittest.skipIf(os.name == "nt", "POSIX process group behavior")
+    def test_timeout_kills_child_after_shell_exits(self) -> None:
+        """A background child can keep the shell's stdout pipe open alone."""
+        async def run() -> tuple[str, int]:
+            with tempfile.TemporaryDirectory() as tmp:
+                pid_path = os.path.join(tmp, "child.pid")
+                result = await BashTool().run(
+                    tmp,
+                    {
+                        # Do not wait: the shell exits immediately, while the
+                        # child retains the inherited stdout pipe.
+                        "command": "sleep 30 & echo $! > child.pid",
+                        "timeout": 1,
+                    },
+                )
+                with open(pid_path, encoding="utf-8") as f:
+                    child_pid = int(f.read().strip())
+                return result, child_pid
+
+        result, child_pid = asyncio.run(run())
+        try:
+            self.assertIn("timed out after 1s", result)
+
+            deadline = time.monotonic() + 2
+            while (
+                self._process_is_running(child_pid)
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.05)
+
+            self.assertFalse(
+                self._process_is_running(child_pid),
+                f"child process {child_pid} survived after shell exit",
+            )
+        finally:
+            try:
+                os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+
 
 class PluginScriptTests(unittest.TestCase):
     def test_plugin_module_invocation_does_not_preload_target(self) -> None:
@@ -685,6 +725,32 @@ class ConfirmPermissionGateTests(unittest.TestCase):
             self.assertFalse(result.startswith("Blocked"), result)
             self.assertTrue(os.path.exists(os.path.join(tmp, "x.txt")))
 
+    def test_auto_blocks_direct_host_shell(self) -> None:
+        """A stray HTTP tool call must not bypass the auto-mode schema."""
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                target = os.path.join(tmp, "should-not-exist")
+                events: list[dict] = []
+                result = await agent_tools.execute_tool(
+                    "bash",
+                    {"command": "touch should-not-exist"},
+                    tmp,
+                    "auto",
+                    events.append,
+                )
+
+                self.assertTrue(result.startswith("Blocked"), result)
+                self.assertFalse(os.path.exists(target))
+                self.assertEqual(events[-1]["output"], result)
+
+        asyncio.run(run())
+
+    def test_auto_keeps_unknown_tool_response(self) -> None:
+        """The full-only gate applies only to registered tools."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._execute("not_a_real_tool", {}, "auto", tmp)
+        self.assertEqual(result, "Unknown tool: not_a_real_tool")
+
     def test_deny_blocks_a_stray_tool_call(self) -> None:
         """The execution boundary remains safe if a backend emits a tool anyway."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -712,6 +778,14 @@ class ConfirmPermissionGateTests(unittest.TestCase):
         self.assertTrue(names.issubset(agent_tools.READ_ONLY_TOOL_NAMES))
         self.assertIn("read_file", names)
         self.assertNotIn("write_file", names)
+        self.assertNotIn("bash", names)
+
+    def test_auto_schema_excludes_full_only_shell(self) -> None:
+        names = {
+            entry["function"]["name"]
+            for entry in agent_tools.AUTO_TOOL_SCHEMA
+        }
+        self.assertIn("write_file", names)
         self.assertNotIn("bash", names)
 
 

@@ -279,8 +279,11 @@ DEFAULT_FLEXIBLE_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
 AVAILABLE_PERMISSIONS = ["full", "auto", "confirm", "deny"]
 DEFAULT_PERMISSION = "auto"
 PERMISSION_DESCRIPTIONS = {
-    "full": "Full access - bypass all approvals and sandbox",
-    "auto": "Run tool calls automatically (sandboxed where supported)",
+    "full": "Full access - includes direct host-shell access and CLI bypasses",
+    "auto": (
+        "Run workspace-bounded tools automatically; direct host shell "
+        "access requires full"
+    ),
     "confirm": (
         "Cautious - HTTP backends expose read-only tools; CLI backends use"
         " a restricted read-only or plan mode."

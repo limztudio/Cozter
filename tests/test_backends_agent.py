@@ -1185,6 +1185,38 @@ class ZaiBackendTests(unittest.TestCase):
             openai_agent_mod._MAX_MODEL_DISCOVERY_BYTES + 1,
         )
 
+    def test_authenticated_model_discovery_does_not_forward_bearer_on_redirect(
+        self,
+    ) -> None:
+        """urllib must not carry an API key to a redirected endpoint."""
+        response = mock.MagicMock()
+        response.read.return_value = b'{"data": []}'
+        response.__enter__.return_value = response
+        with mock.patch.object(
+            openai_agent_mod.urllib.request, "urlopen", return_value=response,
+        ) as urlopen_mock:
+            openai_agent_mod.fetch_model_ids(
+                "https://models.example.test/v1/models",
+                timeout=1,
+                headers={"Authorization": "Bearer secret"},
+            )
+
+        request = urlopen_mock.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer secret")
+        redirected = (
+            openai_agent_mod.urllib.request.HTTPRedirectHandler()
+            .redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {},
+                "http://redirect.example.test/models",
+            )
+        )
+        assert redirected is not None
+        self.assertIsNone(redirected.get_header("Authorization"))
+
     def test_available_models_queries_configured_account_once(self) -> None:
         response = mock.MagicMock()
         response.read.return_value = json.dumps({

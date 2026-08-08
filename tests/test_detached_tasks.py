@@ -1,7 +1,10 @@
 """Regression coverage for restart-safe detached task callbacks."""
 
+import asyncio
 import json
 import os
+import signal
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -257,6 +260,257 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
                 output = await backend.get_detached_task_output("/work", task_id)
 
         self.assertEqual(output, "First result.\n\nFinal result.")
+
+    async def test_output_caps_visible_transcript_text(self) -> None:
+        backend = ClaudeCodeBackend()
+        task_id = "048e1065"
+        session_id = "048e1065-aaaa-bbbb-cccc-0123456789ab"
+        with tempfile.TemporaryDirectory() as claude_home:
+            state_path = os.path.join(
+                claude_home, "jobs", task_id, "state.json",
+            )
+            transcript_path = os.path.join(
+                claude_home, "projects", "-work", f"{session_id}.jsonl",
+            )
+            os.makedirs(os.path.dirname(state_path))
+            os.makedirs(os.path.dirname(transcript_path))
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "cwd": "/work",
+                    "state": "done",
+                    "sessionId": session_id,
+                    "linkScanPath": transcript_path,
+                }, f)
+            with open(transcript_path, "w", encoding="utf-8") as f:
+                for text in ("first", "second"):
+                    f.write(json.dumps({"message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": text}],
+                    }}) + "\n")
+
+            with (
+                mock.patch.object(
+                    claude_code_mod, "_claude_home", return_value=claude_home,
+                ),
+                mock.patch.object(
+                    claude_code_mod, "_MAX_DETACHED_OUTPUT_TEXT_BYTES", 8,
+                ),
+            ):
+                output = await backend.get_detached_task_output("/work", task_id)
+
+        # The separator is part of the retained output budget too.
+        self.assertEqual(output, "first\n\ns")
+        self.assertLessEqual(len(output.encode("utf-8")), 8)
+
+    async def test_output_skips_oversized_transcript_line_and_keeps_parsing(
+        self,
+    ) -> None:
+        backend = ClaudeCodeBackend()
+        task_id = "048e1065"
+        session_id = "048e1065-aaaa-bbbb-cccc-0123456789ab"
+        with tempfile.TemporaryDirectory() as claude_home:
+            state_path = os.path.join(
+                claude_home, "jobs", task_id, "state.json",
+            )
+            transcript_path = os.path.join(
+                claude_home, "projects", "-work", f"{session_id}.jsonl",
+            )
+            os.makedirs(os.path.dirname(state_path))
+            os.makedirs(os.path.dirname(transcript_path))
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "cwd": "/work",
+                    "state": "done",
+                    "sessionId": session_id,
+                    "linkScanPath": transcript_path,
+                    "output": {"result": "state fallback"},
+                }, f)
+            with open(transcript_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "x" * 512}],
+                }}) + "\n")
+                f.write(json.dumps({"message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "usable result"}],
+                }}) + "\n")
+
+            with (
+                mock.patch.object(
+                    claude_code_mod, "_claude_home", return_value=claude_home,
+                ),
+                mock.patch.object(
+                    claude_code_mod, "_MAX_DETACHED_TRANSCRIPT_LINE_BYTES", 128,
+                ),
+            ):
+                output = await backend.get_detached_task_output("/work", task_id)
+
+        self.assertEqual(output, "usable result")
+
+    async def test_output_caps_state_summary_fallback(self) -> None:
+        backend = ClaudeCodeBackend()
+        task_id = "048e1065"
+        with tempfile.TemporaryDirectory() as claude_home:
+            state_path = os.path.join(
+                claude_home, "jobs", task_id, "state.json",
+            )
+            os.makedirs(os.path.dirname(state_path))
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "cwd": "/work",
+                    "state": "done",
+                    "sessionId": "048e1065-aaaa-bbbb-cccc-0123456789ab",
+                    "output": {"result": "x" * 32},
+                }, f)
+
+            with (
+                mock.patch.object(
+                    claude_code_mod, "_claude_home", return_value=claude_home,
+                ),
+                mock.patch.object(
+                    claude_code_mod, "_MAX_DETACHED_OUTPUT_TEXT_BYTES", 20,
+                ),
+            ):
+                output = await backend.get_detached_task_output("/work", task_id)
+
+        self.assertEqual(
+            output,
+            "x" * 8 + claude_code_mod._DETACHED_OUTPUT_TRUNCATION_MARKER,
+        )
+        self.assertLessEqual(len(output.encode("utf-8")), 20)
+
+    async def test_control_command_rejects_oversized_streams_after_draining(
+        self,
+    ) -> None:
+        script = (
+            "import sys\n"
+            "sys.stdout.buffer.write(b'x' * (1024 * 1024))\n"
+            "sys.stdout.buffer.flush()\n"
+            "sys.stderr.buffer.write(b'y' * (1024 * 1024))\n"
+            "sys.stderr.buffer.flush()\n"
+        )
+        with mock.patch.object(
+            claude_code_mod, "_MAX_DETACHED_COMMAND_OUTPUT_BYTES", 128,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "command output exceeded the 128 byte limit",
+            ):
+                await asyncio.wait_for(
+                    claude_code_mod._run_claude_command(
+                        [sys.executable, "-c", script], cwd=os.getcwd(),
+                    ),
+                    timeout=5,
+                )
+
+    @unittest.skipIf(os.name == "nt", "inherits POSIX subprocess pipes")
+    async def test_control_command_timeout_reaps_launcher_with_open_pipes(
+        self,
+    ) -> None:
+        created: list[asyncio.subprocess.Process] = []
+        real_create = claude_code_mod.create_captured_subprocess
+
+        async def capture_process(*args, **kwargs):
+            proc = await real_create(*args, **kwargs)
+            created.append(proc)
+            return proc
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_path = os.path.join(temp_dir, "inherited-pipe-child.pid")
+            script = (
+                "import subprocess, sys, time\n"
+                "child = subprocess.Popen([\n"
+                "    sys.executable, '-c', 'import time; time.sleep(60)'\n"
+                "])\n"
+                "with open(sys.argv[1], 'w', encoding='utf-8') as f:\n"
+                "    f.write(str(child.pid))\n"
+                "sys.stdout.buffer.write(b'x' * 1024)\n"
+                "sys.stdout.buffer.flush()\n"
+                "time.sleep(60)\n"
+            )
+            child_pid: int | None = None
+            try:
+                with (
+                    mock.patch.object(
+                        claude_code_mod,
+                        "create_captured_subprocess",
+                        side_effect=capture_process,
+                    ),
+                    mock.patch.object(
+                        claude_code_mod,
+                        "_DETACHED_COMMAND_TIMEOUT_SEC",
+                        0.05,
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "command timed out"),
+                ):
+                    await asyncio.wait_for(
+                        claude_code_mod._run_claude_command(
+                            [sys.executable, "-c", script, pid_path],
+                            cwd=temp_dir,
+                        ),
+                        timeout=2,
+                    )
+            finally:
+                try:
+                    with open(pid_path, encoding="utf-8") as f:
+                        child_pid = int(f.read())
+                except (OSError, ValueError):
+                    pass
+                if child_pid is not None:
+                    try:
+                        os.kill(child_pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+
+        self.assertEqual(len(created), 1)
+        self.assertIsNotNone(created[0].returncode)
+
+    @unittest.skipIf(os.name == "nt", "inherits POSIX subprocess pipes")
+    async def test_control_launcher_exit_keeps_background_ack_from_open_pipes(
+        self,
+    ) -> None:
+        """A Claude supervisor may retain the launcher's stdout/stderr."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pid_path = os.path.join(temp_dir, "supervisor.pid")
+            script = (
+                "import subprocess, sys\n"
+                "child = subprocess.Popen([\n"
+                "    sys.executable, '-c', 'import time; time.sleep(60)'\n"
+                "])\n"
+                "with open(sys.argv[1], 'w', encoding='utf-8') as f:\n"
+                "    f.write(str(child.pid))\n"
+                "print('backgrounded · 048e1065', flush=True)\n"
+            )
+            child_pid: int | None = None
+            try:
+                with (
+                    mock.patch.object(
+                        claude_code_mod,
+                        "_DETACHED_COMMAND_STREAM_DRAIN_TIMEOUT_SEC",
+                        0.05,
+                    ),
+                    self.assertLogs(claude_code_mod.logger, level="WARNING"),
+                ):
+                    result = await asyncio.wait_for(
+                        claude_code_mod._run_claude_command(
+                            [sys.executable, "-c", script, pid_path],
+                            cwd=temp_dir,
+                        ),
+                        timeout=2,
+                    )
+                self.assertEqual(
+                    result, (0, "backgrounded · 048e1065", ""),
+                )
+            finally:
+                try:
+                    with open(pid_path, encoding="utf-8") as f:
+                        child_pid = int(f.read())
+                except (OSError, ValueError):
+                    pass
+                if child_pid is not None:
+                    try:
+                        os.kill(child_pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
 
     async def test_output_ignores_symlinked_transcript_outside_projects(
         self,

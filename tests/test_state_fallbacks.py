@@ -1232,6 +1232,152 @@ class QueueStateFallbackTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_stop_discards_direct_dispatch_waiting_for_turn_lock(self) -> None:
+        """A second pre-stop direct dispatch must not run after the first."""
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                first_task: asyncio.Task | None = None
+                second_task: asyncio.Task | None = None
+                queue_file_lock_held = False
+                try:
+                    bot = _GatedDrainBot()
+                    original_persist = bot._persist_enqueue
+                    first_entered_persist = asyncio.Event()
+
+                    async def persist_after_signal(*args, **kwargs):
+                        first_entered_persist.set()
+                        return await original_persist(*args, **kwargs)
+
+                    # Both dispatches pass their initial lock.locked() check.
+                    # The first then owns the admission barrier while blocked
+                    # in persistence and the second waits behind it.
+                    await bot._queue_file_lock.acquire()
+                    queue_file_lock_held = True
+                    with mock.patch.object(
+                        bot,
+                        "_persist_enqueue",
+                        side_effect=persist_after_signal,
+                    ):
+                        first_task = asyncio.create_task(
+                            bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
+                        )
+                        await asyncio.wait_for(
+                            first_entered_persist.wait(), timeout=1,
+                        )
+                        second_task = asyncio.create_task(
+                            bot._dispatch_ai(_queue_ctx(bot, "second"), "second"),
+                        )
+                        await asyncio.sleep(0)
+                        bot._queue_file_lock.release()
+                        queue_file_lock_held = False
+
+                        for _ in range(20):
+                            if bot.ran:
+                                break
+                            await asyncio.sleep(0)
+                        self.assertEqual(bot.ran, ["first"])
+
+                        await bot.cmd_stop(bot.make_context("u1", "chat"))
+                        await first_task
+                        for _ in range(20):
+                            await asyncio.sleep(0)
+
+                        self.assertTrue(second_task.done())
+                        await second_task
+                        self.assertEqual(bot.ran, ["first"])
+                        self.assertEqual(bot._read_queue_file(), {})
+                finally:
+                    if queue_file_lock_held:
+                        bot._queue_file_lock.release()
+                    bot.gate.set()
+                    for task in (first_task, second_task):
+                        if task is not None and not task.done():
+                            task.cancel()
+                    await asyncio.gather(
+                        *(task for task in (first_task, second_task)
+                          if task is not None),
+                        return_exceptions=True,
+                    )
+                    workspace.CONFIG_DIR = old_config_dir
+
+        asyncio.run(run())
+
+    def test_stop_clears_queued_dispatch_holding_admission_barrier(self) -> None:
+        """A pre-stop queued write is cleared after its admission commits."""
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                old_config_dir = workspace.CONFIG_DIR
+                workspace.CONFIG_DIR = tmp
+                first_task: asyncio.Task | None = None
+                second_task: asyncio.Task | None = None
+                try:
+                    bot = _GatedDrainBot()
+                    first_task = asyncio.create_task(
+                        bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
+                    )
+                    for _ in range(20):
+                        if bot.ran:
+                            break
+                        await asyncio.sleep(0)
+                    self.assertEqual(bot.ran, ["first"])
+
+                    original_persist = bot._persist_enqueue
+                    second_entered_persist = asyncio.Event()
+                    release_second_persist = asyncio.Event()
+
+                    async def pause_second_persist(*args, **kwargs):
+                        if args[1] == "second":
+                            second_entered_persist.set()
+                            await release_second_persist.wait()
+                        return await original_persist(*args, **kwargs)
+
+                    with mock.patch.object(
+                        bot,
+                        "_persist_enqueue",
+                        side_effect=pause_second_persist,
+                    ):
+                        second_task = asyncio.create_task(
+                            bot._dispatch_ai(
+                                _queue_ctx(bot, "second"), "second",
+                            ),
+                        )
+                        await asyncio.wait_for(
+                            second_entered_persist.wait(), timeout=1,
+                        )
+
+                        # /stop cancels the active turn promptly, then waits
+                        # behind the second dispatch's admission barrier so it
+                        # can clear that pre-stop write durably.
+                        stop_task = asyncio.create_task(
+                            bot.cmd_stop(bot.make_context("u1", "chat")),
+                        )
+                        await first_task
+                        self.assertFalse(stop_task.done())
+                        release_second_persist.set()
+                        await stop_task
+                        await second_task
+                        for _ in range(20):
+                            await asyncio.sleep(0)
+
+                    self.assertEqual(bot.ran, ["first"])
+                    self.assertTrue(bot._message_queues["u1"].empty())
+                    self.assertEqual(bot._read_queue_file(), {})
+                finally:
+                    bot.gate.set()
+                    for task in (first_task, second_task):
+                        if task is not None and not task.done():
+                            task.cancel()
+                    await asyncio.gather(
+                        *(task for task in (first_task, second_task)
+                          if task is not None),
+                        return_exceptions=True,
+                    )
+                    workspace.CONFIG_DIR = old_config_dir
+
+        asyncio.run(run())
+
     def test_stop_clears_paused_queue_without_running_turn(self) -> None:
         async def run(pause: str) -> None:
             with tempfile.TemporaryDirectory() as tmp:

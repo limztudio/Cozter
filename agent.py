@@ -24,15 +24,19 @@ from .backends_agent.base import (
 from .utils import (
     COZTER_DIR,
     await_cancelled,
+    close_subprocess_pipe,
     cleanup_backend_process,
     create_background_task,
     drain_text_stream,
+    finish_process_stderr,
+    has_managed_process_group,
     is_path_within,
-    iter_json_events,
+    iter_process_json_events,
     kill_and_wait,
     run_internal_backend,
     take_recent_lines,
     terminate_process_group,
+    wait_for_process_exit,
 )
 from .utils import drain_queue as _drain_queue
 
@@ -848,6 +852,8 @@ async def _drive_backend(
 
     result = AgentResult()
     restarting = False
+    completed_stream = False
+    cancelled = False
     stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
 
     def _log_non_json_line(line: str) -> None:
@@ -874,8 +880,10 @@ async def _drive_backend(
 
     assert proc.stdout is not None  # spawned with stdout=PIPE
     try:
-        async for event in iter_json_events(
-            proc.stdout, on_invalid=_log_non_json_line,
+        async for event in iter_process_json_events(
+            proc,
+            on_invalid=_log_non_json_line,
+            preserve_process_tree=lambda: bool(result.detached_tasks),
         ):
             prev_count = len(result.events)
             backend.parse_event(event, result)
@@ -884,8 +892,10 @@ async def _drive_backend(
                 for ev in result.events[prev_count:]:
                     await on_event(ev)
 
-        await proc.wait()
+        await wait_for_process_exit(proc)
+        completed_stream = True
     except asyncio.CancelledError:
+        cancelled = True
         logger.info(
             "%s run cancelled, killing subprocess %d",
             backend.name, proc.pid,
@@ -896,14 +906,43 @@ async def _drive_backend(
         # cancellation can. Never let any exceptional stream exit leave
         # the backend (or its stderr drain task) running in the
         # background.
-        if proc.returncode is None:
-            await kill_and_wait(proc)
-        if inject_task and not inject_task.done():
-            inject_task.cancel()
-            await await_cancelled(inject_task)
         try:
-            stderr = await stderr_task
+            # An exceptional/cancelled/restarting stream owns no durable
+            # provider task, so tear down its complete process tree now.
+            # The clean normal path is deliberately deferred until after the
+            # final injection drain below, where we know it will not restart.
+            if (
+                proc.returncode is None
+                or cancelled
+                or not completed_stream
+                or restarting
+            ):
+                await kill_and_wait(proc)
+            if inject_task and not inject_task.done():
+                inject_task.cancel()
+                await await_cancelled(inject_task)
+            stderr = await finish_process_stderr(
+                proc,
+                stderr_task,
+                preserve_process_tree=lambda: bool(result.detached_tasks),
+            )
+        except BaseException:
+            # A reader/teardown failure arrives after the foreground stream
+            # completed, but it is still not a clean turn that may retain
+            # ordinary children.
+            if has_managed_process_group(proc):
+                terminate_process_group(proc)
+            raise
         finally:
+            # A second cancellation can interrupt the awaited teardown above.
+            # Never leave either reader/watcher behind in that case.
+            if inject_task and not inject_task.done():
+                inject_task.cancel()
+                await await_cancelled(inject_task)
+            if not stderr_task.done():
+                close_subprocess_pipe(proc, 2)
+                stderr_task.cancel()
+                await await_cancelled(stderr_task)
             await cleanup_backend_process(backend, proc, log=logger)
     if stderr:
         logger.debug("%s stderr: %s", backend.name, stderr)
@@ -916,9 +955,21 @@ async def _drive_backend(
     # (or finalizing a direct turn), so an accepted message cannot land in
     # the watcher teardown gap and disappear.
     if _take_pending_injections(inject_queue, injected):
+        # The watcher was already stopped during teardown, so this late
+        # injection cannot have signalled a parent that had cleanly exited.
+        # Do it here before rebuilding the prompt for the restart.
+        if has_managed_process_group(proc):
+            terminate_process_group(proc)
         return result, True
     if close_inject_on_completion:
         _close_inject_queue(inject_queue)
+
+    # This is a genuinely completed foreground turn: all stream cleanup and
+    # the final injection race have settled.  Stop ordinary same-group child
+    # work, but preserve a backend-reported provider task that Cozter tracks
+    # through its detached-task ledger.
+    if has_managed_process_group(proc) and not result.detached_tasks:
+        terminate_process_group(proc)
 
     # Keyed on the *text*, not on the events: a backend that streamed tool
     # calls and then died still owes the caller an answer, and leaving it

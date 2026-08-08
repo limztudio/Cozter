@@ -150,6 +150,19 @@ def _is_confirm_read_only(tool: AgentTool | None) -> bool:
     )
 
 
+def _is_auto_allowed(tool: AgentTool | None) -> bool:
+    """Return whether *tool* is safe to expose to HTTP agents in auto mode.
+
+    ``auto`` may edit files through Cozter's workspace-checked built-ins, but
+    it must not silently grant direct host access. New tools default to this
+    mode; an author must explicitly mark an escape-capable one with
+    ``requires_full_permission``.
+    """
+    return tool is not None and not bool(
+        getattr(tool, "requires_full_permission", False),
+    )
+
+
 def _read_only_tool_schema(
     registered_tools: tuple[AgentTool, ...],
 ) -> list[dict[str, Any]]:
@@ -161,9 +174,22 @@ def _read_only_tool_schema(
     ]
 
 
+def _auto_tool_schema(
+    registered_tools: tuple[AgentTool, ...],
+) -> list[dict[str, Any]]:
+    """Build the HTTP auto-mode schema, withholding full-only tools."""
+    return [
+        {"type": "function", "function": tool.schema}
+        for tool in registered_tools
+        if _is_auto_allowed(tool)
+    ]
+
+
 TOOL_SCHEMA: list[dict[str, Any]] = [
     {"type": "function", "function": t.schema} for t in _TOOLS
 ]
+
+AUTO_TOOL_SCHEMA: list[dict[str, Any]] = _auto_tool_schema(_TOOLS)
 
 READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = _read_only_tool_schema(_TOOLS)
 
@@ -248,6 +274,24 @@ async def execute_tool(
             "permits read-only tools. Ask the user to switch permission to "
             "auto or full to allow changes, or continue using read-only "
             "tools (read_file, list_dir, glob, grep, web_search, web_fetch)."
+        )
+        emit({"type": "tool_result", "name": name, "output": result})
+        return result
+
+    if (
+        approval == "auto"
+        and tool is not None
+        and not _is_auto_allowed(tool)
+    ):
+        # The schema normally withholds these tools, but a provider can emit
+        # a stray/hallucinated call. Re-check at execution time so ``auto``
+        # never becomes a back door to the unrestricted host shell.
+        logger.info("auto mode blocked full-only tool: %s", name)
+        result = (
+            f"Blocked: '{name}' requires full permission because it can "
+            "access the host outside Cozter's workspace-bounded tool "
+            "surface. Switch to full only if the operator accepts that "
+            "risk."
         )
         emit({"type": "tool_result", "name": name, "output": result})
         return result
@@ -349,6 +393,7 @@ def cli_plugin_prelude() -> str:
 
 
 __all__ = [
+    "AUTO_TOOL_SCHEMA",
     "READ_ONLY_TOOL_NAMES",
     "READ_ONLY_TOOL_SCHEMA",
     "TOOL_SCHEMA",

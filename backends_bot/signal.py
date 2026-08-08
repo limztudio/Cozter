@@ -209,9 +209,7 @@ class SignalBot(BotPlatform):
             self._migrate_group_schedules_from_current_workspaces()
             await self._migrate_group_queue_state()
             await self._start_daemon_services()
-            self._receive_subscription = await self._subscribe_receive()
-            self._receive_started = True
-            self._receive_subscribed = True
+            await self._start_receive_subscription()
         except Exception:
             await self._stop_jsonrpc()
             raise
@@ -424,6 +422,43 @@ class SignalBot(BotPlatform):
     async def _subscribe_receive_once(self) -> int | None:
         result = await self._rpc_request_once("subscribeReceive", timeout=30)
         return int(result) if isinstance(result, int) else None
+
+    async def _start_receive_subscription(self) -> None:
+        """Subscribe during startup without losing an immediate socket EOF.
+
+        The reader task can observe EOF after ``subscribeReceive`` returns but
+        before :meth:`start` records that receive handling is active.  Its
+        normal reconnect path intentionally does nothing until receive has
+        started, so that ordering would leave the bot marked subscribed on a
+        dead transport.  Record the completed subscription and receive state
+        together, then recover explicitly if the reader already went away.
+        Once ``_receive_started`` is true, any later EOF schedules the normal
+        reconnect path.
+        """
+        subscription = await self._subscribe_receive()
+
+        # Keep this state transition await-free.  If EOF happened while the
+        # subscription request was in flight, the reader has already cleared
+        # the transport; if it happens after this block, it sees
+        # ``_receive_started`` and schedules a reconnect itself.
+        self._receive_subscription = subscription
+        self._receive_started = True
+        self._receive_subscribed = True
+        if self._jsonrpc_connected():
+            return
+
+        # The just-returned subscription belonged to the closed connection.
+        # Clear it before asking the normal reconnect path to create a fresh
+        # subscription on the new transport.
+        self._receive_subscription = None
+        self._receive_subscribed = False
+        try:
+            await self._connect_jsonrpc(resubscribe=True)
+        except BaseException:
+            # Match failed-startup semantics: a caller that retries start()
+            # must not inherit a partially enabled receive state.
+            self._receive_started = False
+            raise
 
     def _schedule_jsonrpc_reconnect(self) -> None:
         if self._stop_requested.is_set() or not self._receive_started:

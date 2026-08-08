@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import sys
+from dataclasses import dataclass, field
 
 from .base import (
     AgentResult, Backend, ChatEvent, DetachedTaskStatus,
@@ -30,7 +31,9 @@ from .base import (
     create_prompt_subprocess, executable_command, record_error_event,
     set_error_result, truncate_status_text,
 )
-from ..utils import is_path_within
+from ..utils import (
+    close_subprocess_pipe, is_path_within, wait_for_process_exit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +93,31 @@ _BACKGROUND_BASH_RE = re.compile(
 _SAFE_BACKGROUND_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _DETACHED_COMMAND_TIMEOUT_SEC = 30
 _BACKGROUND_GUARD_TIMEOUT_SEC = 5
+# A normal control launcher closes its inherited pipes with the parent.  If a
+# Claude supervisor keeps them open instead, retain any already-drained
+# prefix but release those pipe transports promptly rather than waiting for
+# the worker itself to finish.
+_DETACHED_COMMAND_STREAM_DRAIN_TIMEOUT_SEC = 1.0
+_DETACHED_COMMAND_EXIT_CLEANUP_TIMEOUT_SEC = 1.0
+# Detached-task controls are small metadata commands.  Keep each stream well
+# below the size of a normal chat reply, while still leaving plenty of room
+# for a busy ``claude agents --json`` response.  The limit is per stream so a
+# verbose diagnostic cannot starve the stdout reader and deadlock the child.
+_MAX_DETACHED_COMMAND_OUTPUT_BYTES = 1 * 1024 * 1024
+_DETACHED_COMMAND_READ_BYTES = 64 * 1024
+# Claude's durable JSONL can include tool payloads much larger than the
+# assistant text we need to deliver.  Bound an individual physical line
+# before calling ``json.loads`` and separately bound the visible text kept
+# across the whole transcript.
+# JSON framing and metadata add overhead around a valid 4 MiB visible result,
+# so permit a larger (still finite) record before deciding it is malformed.
+_MAX_DETACHED_TRANSCRIPT_LINE_BYTES = 8 * 1024 * 1024
+_MAX_DETACHED_OUTPUT_TEXT_BYTES = 4 * 1024 * 1024
+# ``state.json`` carries the fallback result too.  Loading it with
+# ``json.load`` would otherwise materialize an arbitrarily large provider
+# file before the result-text cap below can take effect.
+_MAX_DETACHED_STATE_BYTES = 8 * 1024 * 1024
+_DETACHED_OUTPUT_TRUNCATION_MARKER = "\n[truncated]"
 
 def _background_guard_settings() -> str:
     """Return the session-only Claude hook that blocks orphaned Bash jobs."""
@@ -123,6 +151,60 @@ def _decode_cli_output(value: bytes | None) -> str:
     return (value or b"").decode("utf-8", errors="replace").strip()
 
 
+def _truncate_utf8_text(
+    value: str,
+    limit: int,
+    *,
+    marker: str = "",
+) -> tuple[str, bool]:
+    """Return at most *limit* UTF-8 bytes without splitting a character.
+
+    When it fits, *marker* makes a clipped detached result unambiguous while
+    staying inside the same cap.  Extremely small test/configured limits may
+    be too short even for the marker; in that case the bounded prefix is the
+    only possible safe result.
+    """
+    limit = max(0, limit)
+    encoded = value.encode("utf-8", errors="replace")
+    if len(encoded) <= limit:
+        return value, False
+    marker_bytes = marker.encode("utf-8", errors="replace")
+    prefix_limit = limit
+    if marker_bytes and len(marker_bytes) <= limit:
+        prefix_limit -= len(marker_bytes)
+    # ``value`` can contain lone surrogates.  Encode with replacement above,
+    # then decode only a complete UTF-8 prefix so the resulting text remains
+    # safe for JSON/state delivery and fits the byte budget.
+    return (
+        encoded[:prefix_limit].decode("utf-8", errors="ignore")
+        + (marker if prefix_limit != limit else ""),
+        True,
+    )
+
+
+def _append_bounded_transcript_text(
+    parts: list[str],
+    used_bytes: int,
+    text: str,
+) -> tuple[int, bool]:
+    """Append one visible transcript message within the aggregate cap.
+
+    The separator is counted too: otherwise many tiny messages could evade
+    the cap during the final ``join``.  Returning ``True`` means the retained
+    output reached its limit and the caller can stop parsing the transcript.
+    """
+    value = text if not parts else "\n\n" + text
+    retained, truncated = _truncate_utf8_text(
+        value,
+        _MAX_DETACHED_OUTPUT_TEXT_BYTES - used_bytes,
+        marker=_DETACHED_OUTPUT_TRUNCATION_MARKER,
+    )
+    if retained:
+        parts.append(retained)
+        used_bytes += len(retained.encode("utf-8", errors="replace"))
+    return used_bytes, truncated
+
+
 def _background_task_ids(text: str) -> list[str]:
     """Extract only Claude's dedicated background-launch output lines."""
     normalized = _ANSI_ESCAPE_RE.sub("", text).replace("\r\n", "\n")
@@ -152,9 +234,12 @@ def _local_background_state(
         return None
     path = os.path.join(_claude_home(), "jobs", task_id, "state.json")
     try:
-        with open(path, encoding="utf-8") as f:
-            state = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        with open(path, "rb") as f:
+            raw_state = f.read(_MAX_DETACHED_STATE_BYTES + 1)
+        if len(raw_state) > _MAX_DETACHED_STATE_BYTES:
+            return None
+        state = json.loads(raw_state)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(state, dict) or not _workspace_contains(
         workspace_path, state.get("cwd"),
@@ -176,19 +261,59 @@ def _local_background_status(
 
 
 def _transcript_text_from_content(content: object) -> str:
-    """Flatten one persisted Claude assistant message's visible text blocks."""
+    """Flatten one persisted Claude assistant message's visible text blocks.
+
+    A transcript line is capped before this runs, but one message can still
+    contain many text blocks.  Keep this intermediate result bounded as well
+    instead of building an arbitrarily large ``parts`` list before the outer
+    transcript accumulator gets a chance to enforce its limit.
+    """
     if isinstance(content, str):
-        return content.strip()
+        return _truncate_utf8_text(
+            content.strip(),
+            _MAX_DETACHED_OUTPUT_TEXT_BYTES,
+            marker=_DETACHED_OUTPUT_TRUNCATION_MARKER,
+        )[0]
     if not isinstance(content, list):
         return ""
     parts: list[str] = []
+    used_bytes = 0
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "text":
             continue
         text = block.get("text")
         if isinstance(text, str) and text.strip():
-            parts.append(text.strip())
-    return "\n".join(parts)
+            value = text.strip()
+            if parts:
+                value = "\n" + value
+            retained, truncated = _truncate_utf8_text(
+                value,
+                _MAX_DETACHED_OUTPUT_TEXT_BYTES - used_bytes,
+                marker=_DETACHED_OUTPUT_TRUNCATION_MARKER,
+            )
+            if retained:
+                parts.append(retained)
+                used_bytes += len(retained.encode("utf-8", errors="replace"))
+            if truncated:
+                break
+    return "".join(parts)
+
+
+def _iter_bounded_transcript_lines(path: str):
+    """Yield complete JSONL records without retaining an unbounded line."""
+    with open(path, "rb") as f:
+        while line := f.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1):
+            if len(line) <= _MAX_DETACHED_TRANSCRIPT_LINE_BYTES:
+                yield line
+                continue
+
+            # ``readline(limit)`` returns a prefix of an oversized physical
+            # line.  Discard the rest in equally bounded chunks so a malformed
+            # no-newline record cannot make the next fragment look like JSON.
+            while not line.endswith(b"\n"):
+                line = f.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1)
+                if not line:
+                    break
 
 
 def _local_background_output(workspace_path: str, task_id: str) -> str:
@@ -229,32 +354,124 @@ def _local_background_output(workspace_path: str, task_id: str) -> str:
             paths.append(real_path)
     for path in paths:
         texts: list[str] = []
+        text_bytes = 0
         try:
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        item = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(item, dict):
-                        continue
-                    message = item.get("message")
-                    if not isinstance(message, dict) or message.get("role") != "assistant":
-                        continue
-                    text = _transcript_text_from_content(message.get("content"))
-                    if text:
-                        texts.append(text)
+            for line in _iter_bounded_transcript_lines(path):
+                try:
+                    item = json.loads(line)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                message = item.get("message")
+                if not isinstance(message, dict) or message.get("role") != "assistant":
+                    continue
+                text = _transcript_text_from_content(message.get("content"))
+                if text:
+                    text_bytes, truncated = _append_bounded_transcript_text(
+                        texts, text_bytes, text,
+                    )
+                    if truncated:
+                        break
         except OSError:
             continue
         if texts:
-            return "\n\n".join(texts)
+            return "".join(texts)
 
     output = state.get("output")
     if isinstance(output, dict):
         summary = output.get("result")
         if isinstance(summary, str):
-            return summary.strip()
+            return _truncate_utf8_text(
+                summary.strip(),
+                _MAX_DETACHED_OUTPUT_TEXT_BYTES,
+                marker=_DETACHED_OUTPUT_TRUNCATION_MARKER,
+            )[0]
     return ""
+
+
+@dataclass
+class _CappedCommandOutput:
+    """Mutable bounded stream state, retained if a reader is abandoned."""
+
+    data: bytearray = field(default_factory=bytearray)
+    truncated: bool = False
+
+
+async def _read_capped_command_stream(
+    stream: asyncio.StreamReader | None,
+    output: _CappedCommandOutput,
+) -> None:
+    """Drain one control-command stream while retaining only its prefix.
+
+    Draining continues after the cap so a noisy stdout or stderr cannot block
+    the sibling stream or leave the command wedged on a full pipe.  Callers
+    reject the command rather than parsing this partial prefix as JSON or a
+    background-launch acknowledgement.
+    """
+    if stream is None:
+        return
+    while chunk := await stream.read(_DETACHED_COMMAND_READ_BYTES):
+        remaining = _MAX_DETACHED_COMMAND_OUTPUT_BYTES - len(output.data)
+        if remaining > 0:
+            output.data.extend(chunk[:remaining])
+        if len(chunk) > remaining:
+            output.truncated = True
+
+
+async def _abandon_command_readers(
+    proc: asyncio.subprocess.Process,
+    readers: tuple[asyncio.Task[None], asyncio.Task[None]],
+) -> None:
+    """Release output readers that a supervisor descendant kept open."""
+    close_subprocess_pipe(proc, 1)
+    close_subprocess_pipe(proc, 2)
+    for reader in readers:
+        if not reader.done():
+            reader.cancel()
+    await asyncio.gather(*readers, return_exceptions=True)
+
+
+async def _capture_claude_command_output(
+    proc: asyncio.subprocess.Process,
+) -> tuple[tuple[bytes, bool], tuple[bytes, bool]]:
+    """Drain both command streams without waiting on inherited pipes."""
+    stdout = _CappedCommandOutput()
+    stderr = _CappedCommandOutput()
+    stdout_task = asyncio.create_task(
+        _read_capped_command_stream(proc.stdout, stdout),
+    )
+    stderr_task = asyncio.create_task(
+        _read_capped_command_stream(proc.stderr, stderr),
+    )
+    readers = (stdout_task, stderr_task)
+    try:
+        # Unlike ``Process.wait()``, this observes the child watcher return
+        # code without waiting for pipe EOF from a detached supervisor.
+        await wait_for_process_exit(proc)
+        _done, pending = await asyncio.wait(
+            readers, timeout=_DETACHED_COMMAND_STREAM_DRAIN_TIMEOUT_SEC,
+        )
+        if pending:
+            logger.warning(
+                "Claude Code control launcher exited with output pipes "
+                "still open; using bounded partial output",
+            )
+            await _abandon_command_readers(proc, readers)
+        else:
+            # Propagate a genuine read failure rather than silently parsing a
+            # partial response as an agent list or launch acknowledgement.
+            await asyncio.gather(*readers)
+        return (
+            (bytes(stdout.data), stdout.truncated),
+            (bytes(stderr.data), stderr.truncated),
+        )
+    except BaseException:
+        # ``wait_for`` cancels this coroutine on timeout.  A background
+        # descendant may keep its inherited pipe open after the launcher has
+        # exited, so do not leave either reader behind waiting for EOF.
+        await _abandon_command_readers(proc, readers)
+        raise
 
 
 async def _run_claude_command(
@@ -263,16 +480,42 @@ async def _run_claude_command(
     """Run a short Claude control command without owning its worker tree."""
     proc = await create_captured_subprocess(cmd, cwd=cwd)
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=_DETACHED_COMMAND_TIMEOUT_SEC,
+        stdout_result, stderr_result = await asyncio.wait_for(
+            _capture_claude_command_output(proc),
+            timeout=_DETACHED_COMMAND_TIMEOUT_SEC,
         )
     except TimeoutError as exc:
         # Do not kill the command's process group here. ``claude --bg``
         # hands a worker to Claude's supervisor; timing out while the
         # launcher is slow must not terminate the detached session itself.
-        proc.kill()
-        await proc.wait()
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                # The launcher can exit in the small race between the
+                # returncode check and ``kill``; its child watcher will still
+                # make the bounded cleanup below observe that exit.
+                pass
+        close_subprocess_pipe(proc, 1)
+        close_subprocess_pipe(proc, 2)
+        try:
+            await asyncio.wait_for(
+                wait_for_process_exit(proc),
+                timeout=_DETACHED_COMMAND_EXIT_CLEANUP_TIMEOUT_SEC,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Claude Code detached-task control launcher did not exit "
+                "after timeout",
+            )
         raise RuntimeError("Claude Code detached-task command timed out") from exc
+    stdout, stdout_truncated = stdout_result
+    stderr, stderr_truncated = stderr_result
+    if stdout_truncated or stderr_truncated:
+        raise RuntimeError(
+            "Claude Code detached-task command output exceeded the "
+            f"{_MAX_DETACHED_COMMAND_OUTPUT_BYTES} byte limit",
+        )
     return proc.returncode or 0, _decode_cli_output(stdout), _decode_cli_output(stderr)
 
 

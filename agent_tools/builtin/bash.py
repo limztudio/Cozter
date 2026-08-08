@@ -8,7 +8,11 @@ import shutil
 from typing import Any, ClassVar
 
 from ..base import AgentTool, coerce_int_arg
-from ...utils import kill_and_wait
+from ...utils import (
+    has_managed_process_group,
+    kill_and_wait,
+    mark_process_group_leader,
+)
 
 # Bash tool default timeout (model can override via the ``timeout``
 # argument up to this hard cap).
@@ -25,6 +29,10 @@ _BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024  # 4 MB
 
 class BashTool(AgentTool):
     name = "bash"
+    # This shell is intentionally unrestricted: ``cwd`` confines only the
+    # starting directory, not paths, environment access, network access, or
+    # child processes. Keep it out of HTTP agents' default ``auto`` mode.
+    requires_full_permission = True
     description = (
         "Run a shell command in the workspace. Use sparingly; prefer"
         " read_file/write_file/edit_file for file ops."
@@ -63,6 +71,10 @@ class BashTool(AgentTool):
         try:
             proc = await asyncio.create_subprocess_exec(
                 *shell, command,
+                # A tool must never inherit Cozter's interactive stdin: a
+                # shell command such as ``cat`` could otherwise consume a
+                # CLI user's next message (or a secret piped to the bot).
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=workspace_path,
@@ -70,6 +82,8 @@ class BashTool(AgentTool):
             )
         except FileNotFoundError:
             return "Error: shell not found"
+        if os.name != "nt":
+            mark_process_group_leader(proc)
 
         if proc.stdout is None:  # PIPE was requested, so this is defensive
             await _kill_command_tree(proc)
@@ -155,7 +169,7 @@ async def _read_capped(
 
 async def _kill_command_tree(proc: asyncio.subprocess.Process) -> None:
     """Terminate the shell and any children it spawned."""
-    if proc.returncode is not None:
+    if proc.returncode is not None and not has_managed_process_group(proc):
         return
     # Shared cleanup uses a POSIX process group where available and
     # ``taskkill /T`` on Windows, so a timed-out shell cannot leave build or

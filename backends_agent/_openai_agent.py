@@ -133,7 +133,13 @@ def fetch_model_ids(
     """
     request: str | urllib.request.Request = url
     if headers:
-        request = urllib.request.Request(url, headers=headers, method="GET")
+        request = urllib.request.Request(url, method="GET")
+        for name, value in headers.items():
+            # urllib's default redirect handler copies ordinary request
+            # headers to the new URL, including across origins and HTTPS to
+            # HTTP. Authentication must never follow that redirect, so keep
+            # it in Request.unredirected_hdrs instead.
+            request.add_unredirected_header(name, value)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         body = response.read(_MAX_MODEL_DISCOVERY_BYTES + 1)
     if len(body) > _MAX_MODEL_DISCOVERY_BYTES:
@@ -1016,7 +1022,8 @@ def _tools_for_approval(
       so confirm becomes a look-but-don't-touch surface; ``execute_tool``
       also blocks state-changing tools as a backstop. Use /style
       collaborative for ask-before-acting on state changes.
-    - auto / full: the full tool set.
+    - auto: workspace-bounded tools; direct host-access tools require full.
+    - full: the full tool set.
     """
     # A malformed approval value must never widen the tool surface. Only the
     # two explicit write-capable modes get the full schema; deny, compaction,
@@ -1025,6 +1032,8 @@ def _tools_for_approval(
         return None
     if approval == "confirm":
         return tools.READ_ONLY_TOOL_SCHEMA or None
+    if approval == "auto":
+        return tools.AUTO_TOOL_SCHEMA or None
     return tools.TOOL_SCHEMA
 
 

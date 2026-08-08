@@ -386,6 +386,16 @@ class BotPlatform(ABC):
         # Users whose running task was already acknowledged by /cancel
         # or /stop, so the cancelled task should not send a second reply.
         self._cancel_acknowledged: set[str] = set()
+        # Monotonic per-user epochs prevent a dispatch which passed its
+        # initial admission check before /stop from becoming runnable after
+        # /stop has cleared the in-memory and durable queues.  In particular,
+        # persistence itself awaits a shared file lock, so it can complete
+        # after cancellation unless the dispatch revalidates this epoch.
+        self._cancel_generations: dict[str, int] = {}
+        # Serializes a user's durable inbound admission with /cancel and
+        # /stop. This closes the crash window between a cancellation clearing
+        # the queue file and an older dispatch persisting its entry.
+        self._dispatch_admission_locks: dict[str, asyncio.Lock] = {}
 
     def _check_upload_size(self, size: object) -> None:
         """Raise before accepting or sending a known-oversized file."""
@@ -683,6 +693,14 @@ class BotPlatform(ABC):
             self._task_locks[uid] = lock
         return lock
 
+    def _ensure_dispatch_admission_lock(self, uid: str) -> asyncio.Lock:
+        """Return the per-user barrier for durable inbound queue writes."""
+        lock = self._dispatch_admission_locks.get(uid)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._dispatch_admission_locks[uid] = lock
+        return lock
+
     def _ensure_message_queue(
         self, uid: str, *, min_size: int = 0,
     ) -> asyncio.Queue:
@@ -854,20 +872,35 @@ class BotPlatform(ABC):
         queued, delayed, or detached work was removed. Both ``/cancel`` and
         ``/stop`` use the same cleanup; only their no-work reply differs.
         """
-        was_awaiting = uid in self._awaiting_answer
-        self._awaiting_answer.discard(uid)
+        # Advance this before the first await below. A dispatch that already
+        # chose an intake path but is suspended in _persist_enqueue() then
+        # recognizes that /stop happened before it makes its entry runnable.
+        self._cancel_generations[uid] = (
+            self._cancel_generations.get(uid, 0) + 1
+        )
 
+        # Signal a foreground agent immediately. A different dispatch can
+        # briefly own the admission barrier while it commits its durable
+        # entry, but that must not delay process cancellation itself.
         task = self._running_tasks.get(uid)
         task_running = task is not None and not task.done()
         if task_running:
             self._cancel_acknowledged.add(uid)
             task.cancel()
 
-        drained: list = []
-        _drain_queue(self._message_queues.get(uid), collect=drained)
-        # Keep cancelled work from returning after a restart, including work
-        # that was paused in memory without a foreground task.
-        persisted = await self._clear_persistent_queue(uid)
+        # Keep the generation bump and durable clear ordered against every
+        # _persist_admitted_dispatch_entry() call. An older dispatch which
+        # owns this lock writes before the clear; one that acquires it later
+        # sees the new generation and writes nothing.
+        admission_lock = self._ensure_dispatch_admission_lock(uid)
+        async with admission_lock:
+            was_awaiting = uid in self._awaiting_answer
+            self._awaiting_answer.discard(uid)
+            drained: list = []
+            _drain_queue(self._message_queues.get(uid), collect=drained)
+            # Keep cancelled work from returning after a restart, including
+            # work that was paused in memory without a foreground task.
+            persisted = await self._clear_persistent_queue(uid)
         delayed_replies = await self._clear_reply_deliveries(uid)
         detached_cancelled = await self._cancel_detached_tasks(uid)
         cleared = max(len(drained), persisted, delayed_replies)
@@ -2042,6 +2075,30 @@ class BotPlatform(ABC):
             self._write_queue_file(data)
         return entry_id
 
+    async def _persist_admitted_dispatch_entry(
+        self,
+        uid: str,
+        text: str,
+        chat_id: str,
+        generation: int,
+        *,
+        ephemeral: bool = False,
+    ) -> str | None:
+        """Persist a pre-cancellation dispatch, or reject it as stale.
+
+        ``/stop`` advances the generation before it waits for this admission
+        barrier and clears the durable queue while holding it. Consequently a
+        dispatch that captured an older generation either writes before that
+        clear or is rejected before it can write after it.
+        """
+        admission_lock = self._ensure_dispatch_admission_lock(uid)
+        async with admission_lock:
+            if self._cancel_generations.get(uid, 0) != generation:
+                return None
+            return await self._persist_enqueue(
+                uid, text, chat_id, ephemeral=ephemeral,
+            )
+
     async def _persist_complete(
         self, uid: str, entry_id: str,
     ) -> None:
@@ -2941,6 +2998,7 @@ class BotPlatform(ABC):
         """
         command = sched.get("command", "")
         chat_id = sched.get("chat_id", "")
+        generation = self._cancel_generations.get(uid, 0)
         if not command or not chat_id:
             return
 
@@ -2976,10 +3034,18 @@ class BotPlatform(ABC):
         except Exception:
             logger.warning("Failed to announce scheduled command")
 
-        entry_id = await self._persist_enqueue(
-            uid, command, chat_id, ephemeral=True,
+        entry_id = await self._persist_admitted_dispatch_entry(
+            uid, command, chat_id, generation, ephemeral=True,
         )
+        if entry_id is None:
+            return
+        if self._cancel_generations.get(uid, 0) != generation:
+            await self._discard_cancelled_dispatch_entry(uid, entry_id)
+            return
         await q.put((command, chat_id, entry_id, True))
+        if self._cancel_generations.get(uid, 0) != generation:
+            await self._discard_cancelled_dispatch_entry(uid, entry_id, q)
+            return
 
         # Kick the queue drainer in a background task; if a turn is
         # already running, _drain_message_queue breaks out immediately
@@ -3051,19 +3117,49 @@ class BotPlatform(ABC):
         self._cancel_acknowledged.discard(uid)
         lock.release()
 
+    async def _discard_cancelled_dispatch_entry(
+        self, uid: str, entry_id: str, q: asyncio.Queue | None = None,
+    ) -> None:
+        """Remove an entry whose dispatch began before /cancel or /stop.
+
+        The queue file may already have been cleared by the command.  Still
+        complete by id because a dispatch can persist after that clear while
+        it was suspended waiting on the queue-file lock.
+        """
+        if q is not None:
+            self._select_queue_entry(q, lambda entry: entry[2] == entry_id)
+        try:
+            await self._persist_complete(uid, entry_id)
+        except Exception:
+            logger.warning(
+                "Failed to discard cancelled queue entry %s for user %s",
+                entry_id, uid, exc_info=True,
+            )
+
     async def _dispatch_ai(self, ctx: BotContext, text: str) -> None:
         uid = ctx.user_id
         chat_id = ctx.chat_id
+        generation = self._cancel_generations.get(uid, 0)
         if self._update_restart_pending:
             self._ensure_task_lock(uid)
             q = self._ensure_message_queue(uid)
             if q.full():
                 await ctx.reply_text("Queue full. Try again after restart.")
             else:
-                entry_id = await self._persist_enqueue(
-                    uid, text, chat_id,
+                entry_id = await self._persist_admitted_dispatch_entry(
+                    uid, text, chat_id, generation,
                 )
+                if entry_id is None:
+                    return
+                if self._cancel_generations.get(uid, 0) != generation:
+                    await self._discard_cancelled_dispatch_entry(uid, entry_id)
+                    return
                 await q.put((text, chat_id, entry_id, False))
+                if self._cancel_generations.get(uid, 0) != generation:
+                    await self._discard_cancelled_dispatch_entry(
+                        uid, entry_id, q,
+                    )
+                    return
                 await self._resume_awaiting_answer(
                     uid, q, entry_id, reason="update was pending",
                 )
@@ -3080,10 +3176,20 @@ class BotPlatform(ABC):
                 await ctx.reply_text("Queue full. Wait or /stop first.")
             else:
                 was_awaiting = uid in self._awaiting_answer
-                entry_id = await self._persist_enqueue(
-                    uid, text, chat_id,
+                entry_id = await self._persist_admitted_dispatch_entry(
+                    uid, text, chat_id, generation,
                 )
+                if entry_id is None:
+                    return
+                if self._cancel_generations.get(uid, 0) != generation:
+                    await self._discard_cancelled_dispatch_entry(uid, entry_id)
+                    return
                 await q.put((text, chat_id, entry_id, False))
+                if self._cancel_generations.get(uid, 0) != generation:
+                    await self._discard_cancelled_dispatch_entry(
+                        uid, entry_id, q,
+                    )
+                    return
                 if was_awaiting:
                     await self._resume_awaiting_answer(
                         uid, q, entry_id, reason="turn was finishing",
@@ -3103,8 +3209,18 @@ class BotPlatform(ABC):
         # Direct path: persist BEFORE acquiring the lock so a crash
         # between persist and processing still leaves the entry on
         # disk to be resumed by restore_queues() after restart.
-        entry_id = await self._persist_enqueue(uid, text, chat_id)
+        entry_id = await self._persist_admitted_dispatch_entry(
+            uid, text, chat_id, generation,
+        )
+        if entry_id is None:
+            return
         await lock.acquire()
+        if self._cancel_generations.get(uid, 0) != generation:
+            try:
+                await self._discard_cancelled_dispatch_entry(uid, entry_id)
+            finally:
+                lock.release()
+            return
         # The durable enqueue above can wait for another queue-file update.
         # An auto-update may therefore pause intake after the first gate but
         # before this prompt owns the user lock. Do not let that accepted

@@ -8,7 +8,12 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from ..utils import kill_and_wait
+from ..utils import (
+    close_subprocess_pipe,
+    has_managed_process_group,
+    kill_and_wait,
+    mark_process_group_leader,
+)
 
 # Keep model pickers responsive to local CLI/account-policy changes without
 # probing on every request. All backend catalogs use the same refresh cadence.
@@ -294,7 +299,7 @@ async def _create_piped_subprocess(
     start_new_session: bool = False,
 ) -> asyncio.subprocess.Process:
     """Spawn a process whose stdout and stderr are always captured."""
-    return await asyncio.create_subprocess_exec(
+    proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=stdin,
         stdout=asyncio.subprocess.PIPE,
@@ -303,16 +308,26 @@ async def _create_piped_subprocess(
         env=env,
         start_new_session=start_new_session,
     )
+    if start_new_session:
+        mark_process_group_leader(proc)
+    return proc
 
 
 async def _reap_failed_prompt_subprocess(
     proc: asyncio.subprocess.Process,
 ) -> None:
     """Kill/reap a subprocess whose prompt could not be delivered."""
-    if proc.returncode is None:
-        await kill_and_wait(proc)
-    else:
-        await proc.wait()
+    try:
+        if proc.returncode is None or has_managed_process_group(proc):
+            await kill_and_wait(proc)
+        else:
+            await proc.wait()
+    finally:
+        # This path has no stdout/stderr readers.  A descendant which escaped
+        # the owned group can retain either inherited descriptor after its
+        # launcher exits, so release the unused transports explicitly.
+        close_subprocess_pipe(proc, 1)
+        close_subprocess_pipe(proc, 2)
 
 
 class Backend(ABC):
