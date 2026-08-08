@@ -27,6 +27,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import BinaryIO, ClassVar
+from urllib.parse import urlparse
+
+import aiohttp
 
 from .. import (
     agent, backends_agent, colony, config, schedules, session, updater,
@@ -205,6 +208,43 @@ async def write_limited_async_stream(
             if upload_size_exceeds_limit(written, max_upload_bytes):
                 raise UploadTooLargeError(max_upload_bytes)
             output.write(chunk)
+
+
+def is_http_url(url: str) -> bool:
+    """Whether *url* uses one of the network schemes attachment adapters allow."""
+    return urlparse(url).scheme in ("http", "https")
+
+
+async def download_http_file(
+    url: str,
+    local_path: str,
+    max_upload_bytes: int,
+    *,
+    headers: dict[str, str] | None = None,
+) -> None:
+    """Download an HTTP(S) attachment atomically while enforcing its cap.
+
+    Platform adapters supply any provider-specific request headers, while
+    this shared transport path consistently validates the scheme, handles
+    HTTP errors, rejects known oversize files, and cleans up partial streams.
+    """
+    if not is_http_url(url):
+        raise ValueError(f"Refusing to fetch non-http url: {url!r}")
+
+    async with (
+        aiohttp.ClientSession() as session,
+        session.get(url, headers=headers) as response,
+    ):
+        response.raise_for_status()
+        if upload_size_exceeds_limit(
+            response.content_length, max_upload_bytes,
+        ):
+            raise UploadTooLargeError(max_upload_bytes)
+        await write_limited_async_stream(
+            response.content.iter_chunked(64 * 1024),
+            local_path,
+            max_upload_bytes,
+        )
 
 
 def copy_file_with_limit(

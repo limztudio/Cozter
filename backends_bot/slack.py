@@ -14,9 +14,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-from urllib.parse import urlparse
-
-import aiohttp
 
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import (
@@ -40,11 +37,11 @@ from .base import (
     NO_WORKSPACE_TEXT,
     UploadTooLargeError,
     attachment_kind_from_mime,
+    download_http_file,
     ensure_upload_dir,
     reserve_upload_path,
     upload_limit_message,
     upload_size_exceeds_limit,
-    write_limited_async_stream,
 )
 from .formatting import escape_html_entities, render_fenced_markdown
 
@@ -562,19 +559,7 @@ async def _download_private(
 ) -> None:
     """Download a bounded ``url_private`` file using the bot token."""
     # Slack private URLs require Authorization: Bearer <bot-token>.
-    if urlparse(url).scheme not in ("http", "https"):
-        raise ValueError(f"Refusing to fetch non-http url: {url!r}")
     headers = {"Authorization": f"Bearer {bot_token}"}
-    async with (
-        aiohttp.ClientSession() as s,
-        s.get(url, headers=headers) as resp,
-    ):
-        resp.raise_for_status()
-        if upload_size_exceeds_limit(resp.content_length, max_upload_bytes):
-            raise UploadTooLargeError(max_upload_bytes)
-
-        await write_limited_async_stream(
-            resp.content.iter_chunked(64 * 1024),
-            local_path,
-            max_upload_bytes,
-        )
+    await download_http_file(
+        url, local_path, max_upload_bytes, headers=headers,
+    )

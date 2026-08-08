@@ -26,6 +26,43 @@ from Cozter.backends_bot.telegram import (
 from Cozter.tests.helpers import temporary_config
 
 
+class _OversizeDownloadStream:
+    async def iter_chunked(self, _size):
+        yield b"abc"
+        yield b"d"
+
+
+class _OversizeDownloadResponse:
+    content_length = None
+    content = _OversizeDownloadStream()
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class _OversizeDownloadRequest:
+    async def __aenter__(self):
+        return _OversizeDownloadResponse()
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+class _OversizeDownloadSession:
+    def __init__(self):
+        self.request_kwargs: dict[str, object] = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    def get(self, _url, **kwargs):
+        self.request_kwargs = kwargs
+        return _OversizeDownloadRequest()
+
+
 class UploadLimitConfigTests(unittest.TestCase):
     def test_loader_normalizes_an_invalid_platform_limit(self) -> None:
         with temporary_config({
@@ -180,45 +217,18 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_telegram_stream_limit_removes_partial_download(self) -> None:
-        class Stream:
-            async def iter_chunked(self, _size):
-                yield b"abc"
-                yield b"d"
-
-        class Response:
-            content_length = None
-            content = Stream()
-
-            def raise_for_status(self) -> None:
-                return None
-
-        class Request:
-            async def __aenter__(self):
-                return Response()
-
-            async def __aexit__(self, *_args):
-                return None
-
-        class Session:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_args):
-                return None
-
-            def get(self, _url, **_kwargs):
-                return Request()
-
         file = SimpleNamespace(file_path="https://files.example/large")
         with tempfile.TemporaryDirectory() as tmp:
             destination = os.path.join(tmp, "large.bin")
+            download_session = _OversizeDownloadSession()
             with mock.patch(
-                "Cozter.backends_bot.telegram.aiohttp.ClientSession",
-                return_value=Session(),
+                "Cozter.backends_bot.base.aiohttp.ClientSession",
+                return_value=download_session,
             ):
                 with self.assertRaises(UploadTooLargeError):
                     await _download_telegram_file(file, destination, 3)
 
+            self.assertEqual(download_session.request_kwargs, {"headers": None})
             self.assertFalse(os.path.exists(destination))
             self.assertEqual(os.listdir(tmp), [])
 
@@ -253,40 +263,12 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_slack_stream_limit_removes_partial_download(self) -> None:
-        class Stream:
-            async def iter_chunked(self, _size):
-                yield b"abc"
-                yield b"d"
-
-        class Response:
-            content_length = None
-            content = Stream()
-
-            def raise_for_status(self) -> None:
-                return None
-
-        class Request:
-            async def __aenter__(self):
-                return Response()
-
-            async def __aexit__(self, *_args):
-                return None
-
-        class Session:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_args):
-                return None
-
-            def get(self, _url, **_kwargs):
-                return Request()
-
         with tempfile.TemporaryDirectory() as tmp:
             destination = os.path.join(tmp, "large.bin")
+            download_session = _OversizeDownloadSession()
             with mock.patch(
-                "Cozter.backends_bot.slack.aiohttp.ClientSession",
-                return_value=Session(),
+                "Cozter.backends_bot.base.aiohttp.ClientSession",
+                return_value=download_session,
             ):
                 with self.assertRaises(UploadTooLargeError):
                     await _download_private(
@@ -296,6 +278,9 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
                         max_upload_bytes=3,
                     )
 
+            self.assertEqual(download_session.request_kwargs, {
+                "headers": {"Authorization": "Bearer bot-token"},
+            })
             self.assertFalse(os.path.exists(destination))
             self.assertEqual(os.listdir(tmp), [])
 

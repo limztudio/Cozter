@@ -6,9 +6,7 @@ import asyncio
 import logging
 import os
 import re
-from urllib.parse import urlparse
 
-import aiohttp
 from telegram import Update
 from telegram.error import NetworkError
 from telegram.ext import (
@@ -35,11 +33,11 @@ from .base import (
     NO_WORKSPACE_TEXT,
     UploadTooLargeError,
     copy_file_with_limit,
+    download_http_file,
     ensure_upload_dir,
+    is_http_url,
     reserve_upload_path,
     upload_limit_message,
-    upload_size_exceeds_limit,
-    write_limited_async_stream,
 )
 from .formatting import render_fenced_markdown
 from .formatting import escape_html_entities, strip_html_markup
@@ -499,32 +497,10 @@ async def _download_telegram_file(
     if not isinstance(url, str):
         raise RuntimeError("Telegram supplied an invalid attachment download URL")
 
-    if urlparse(url).scheme in ("http", "https"):
-        await _download_telegram_url(url, local_path, max_upload_bytes)
+    if is_http_url(url):
+        await download_http_file(url, local_path, max_upload_bytes)
         return
 
     await asyncio.to_thread(
         copy_file_with_limit, file_path, local_path, max_upload_bytes,
     )
-
-
-async def _download_telegram_url(
-    url: str,
-    local_path: str,
-    max_upload_bytes: int,
-) -> None:
-    """Stream an HTTP(S) Telegram file without writing beyond the cap."""
-    async with (
-        aiohttp.ClientSession() as session,
-        session.get(url) as response,
-    ):
-        response.raise_for_status()
-        if upload_size_exceeds_limit(
-            response.content_length, max_upload_bytes,
-        ):
-            raise UploadTooLargeError(max_upload_bytes)
-        await write_limited_async_stream(
-            response.content.iter_chunked(64 * 1024),
-            local_path,
-            max_upload_bytes,
-        )
