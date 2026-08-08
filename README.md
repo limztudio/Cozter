@@ -581,6 +581,14 @@ Concurrent uploads reserve distinct destination names (for example,
 `report (2).pdf`) before downloading, so matching filenames cannot overwrite
 one another.
 
+Telegram and Slack URL downloads share one bounded HTTP transport. Their
+initial download URL must use HTTP(S); a declared `Content-Length` over the
+configured cap is rejected before its body is read, and an absent or incorrect
+length is still enforced while streaming. Slack supplies its bot authorization
+header through that same path. Signal attachments arrive through its daemon as
+local files or bounded base64 payloads and receive the same size enforcement
+before they are published into the workspace.
+
 Agents can attach files back to chat by emitting a line like:
 
 ```text
