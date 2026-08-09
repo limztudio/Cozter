@@ -25,6 +25,7 @@ from Cozter.agent_tools.builtin.bash import BashTool
 from Cozter.agent_tools.builtin.copy_file import CopyFileTool
 from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
+from Cozter.agent_tools.builtin import grep as grep_mod
 from Cozter.agent_tools.builtin.grep import GrepTool
 from Cozter.agent_tools.builtin.multi_edit import MultiEditTool
 from Cozter.agent_tools.builtin.move_file import MoveFileTool
@@ -601,6 +602,25 @@ class DiscoveryToolTests(unittest.TestCase):
                 )
 
             self.assertEqual(result, [])
+
+    def test_grep_stops_catastrophic_regex_in_a_reaped_process(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "slow.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("a" * 30_000 + "!")
+                started = time.monotonic()
+                with mock.patch.object(
+                    grep_mod, "_GREP_MAX_SCAN_SECONDS", 0.1,
+                ):
+                    result = await GrepTool().run(
+                        tmp, {"pattern": "(a+)+$"},
+                    )
+
+            self.assertLess(time.monotonic() - started, 3.0)
+            self.assertIn("Grep timed out", result)
+
+        asyncio.run(run())
 
     def test_multi_edit_rejects_ambiguous_edit_without_partial_write(
         self,

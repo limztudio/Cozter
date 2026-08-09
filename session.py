@@ -13,7 +13,8 @@ import os
 import uuid
 from datetime import datetime
 
-from .utils import COZTER_DIR, take_recent_lines
+from . import workspace as workspace_mod
+from .utils import take_recent_lines
 from .utils import load_json_object
 from .utils import normalize_string_list
 from .utils import save_json_object
@@ -30,7 +31,7 @@ LAST_SESSION_FILE = "last_session.json"
 
 
 def _sessions_dir(workspace: str) -> str:
-    return os.path.join(workspace, COZTER_DIR, SESSIONS_DIR)
+    return workspace_mod.workspace_state_path(workspace, SESSIONS_DIR)
 
 
 def _is_safe_session_id(session_id: object) -> bool:
@@ -57,7 +58,7 @@ def _session_path(workspace: str, session_id: str) -> str:
 
 
 def _last_session_path(workspace: str) -> str:
-    return os.path.join(workspace, COZTER_DIR, LAST_SESSION_FILE)
+    return workspace_mod.workspace_state_path(workspace, LAST_SESSION_FILE)
 
 
 # ---------------------------------------------------------------------------

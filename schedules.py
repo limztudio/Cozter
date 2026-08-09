@@ -12,10 +12,9 @@ Each ``<schedule_dict>``:
 """
 
 import logging
-import os
 from datetime import datetime, time as dt_time, timedelta
 
-from .utils import COZTER_DIR
+from . import workspace as workspace_mod
 from .utils import load_json_object
 from .utils import parse_decimal_int
 from .utils import save_json_object
@@ -31,7 +30,7 @@ DAY_ABBREV: tuple[str, ...] = (
 
 
 def _path(workspace: str) -> str:
-    return os.path.join(workspace, COZTER_DIR, SCHEDULES_FILE)
+    return workspace_mod.workspace_state_path(workspace, SCHEDULES_FILE)
 
 
 def _load_all(workspace: str) -> dict:

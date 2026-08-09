@@ -15,6 +15,7 @@ DEFAULT_MESSAGE_QUEUE_SIZE = 50
 # Bound a single attachment well below the JSON-RPC stream backstop and
 # common chat-platform quotas. Operators with a justified need can raise it.
 DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+_PERMISSION_LEVELS = frozenset({"full", "auto", "confirm", "deny"})
 
 _DEFAULT_CONFIG = {
     "telegram_bot_tokens": [],
@@ -220,15 +221,21 @@ def get_max_permission() -> str:
 
     Defaults to ``"auto"``, which forbids the sandbox-bypassing ``"full"``
     mode across every workspace. An operator must explicitly set ``"full"``
-    to allow that bypass, or can use ``"deny"`` for a read-only bot. Invalid
-    values fall back to the default. Enforced in :mod:`workspace` (clamps the
-    effective permission and rejects setting a higher one via
+    to allow that bypass, or can use ``"deny"`` for a read-only bot. Runtime
+    config edits that are malformed fail closed to ``"deny"`` rather than
+    accidentally widening a previously restrictive ceiling. Daemon startup
+    rejects malformed values with a clear error. Enforced in :mod:`workspace`
+    (clamps the effective permission and rejects setting a higher one via
     ``/permission``).
     """
     val = _read_config_value("max_permission")
-    if isinstance(val, str) and val in ("full", "auto", "confirm", "deny"):
-        return val
-    return cast(str, _DEFAULT_CONFIG["max_permission"])
+    if val is None:
+        return cast(str, _DEFAULT_CONFIG["max_permission"])
+    if isinstance(val, str):
+        normalized = val.strip()
+        if normalized in _PERMISSION_LEVELS:
+            return normalized
+    return "deny"
 
 
 def get_zai_api_key() -> str:
@@ -383,6 +390,19 @@ def load_config() -> dict:
         sys.exit(1)
 
     cfg = {**_DEFAULT_CONFIG, **cfg}
+
+    raw_max_permission = cfg.get("max_permission")
+    if isinstance(raw_max_permission, str):
+        normalized_max_permission = raw_max_permission.strip()
+    else:
+        normalized_max_permission = ""
+    if normalized_max_permission not in _PERMISSION_LEVELS:
+        print(
+            f"ERROR: 'max_permission' in {CONFIG_PATH} must be one of "
+            "deny, confirm, auto, or full."
+        )
+        sys.exit(1)
+    cfg["max_permission"] = normalized_max_permission
 
     # These values are consumed directly from the returned mapping by the
     # launcher/platform constructors rather than through the defensive getter

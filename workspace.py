@@ -6,7 +6,7 @@ from collections.abc import Callable
 from . import backends_agent
 from . import config
 from . import flexible
-from .utils import CONFIG_DIR, COZTER_DIR
+from .utils import CONFIG_DIR, COZTER_DIR, is_path_within
 from .utils import load_json_object
 from .utils import save_json_object
 
@@ -29,6 +29,51 @@ def canonicalize_workspace_path(path: str) -> str:
         return os.path.normcase(os.path.realpath(os.path.abspath(path)))
     except (OSError, ValueError):
         return path
+
+
+def _workspace_state_dir(path: str, *, create: bool = False) -> tuple[str, str]:
+    """Return ``(workspace_root, state_dir)`` after enforcing containment.
+
+    Workspace state is normally stored directly in ``<workspace>/.cozter``.
+    A workspace is user-selectable, though, so an existing ``.cozter``
+    symlink must never redirect settings, sessions, schedules, or uploads to
+    another directory owned by the bot account.  Internal symlinks remain
+    usable when their resolved target stays inside the canonical workspace.
+    """
+    root = canonicalize_workspace_path(path)
+    if not root or "\x00" in root:
+        raise ValueError("invalid workspace path")
+    state_dir = os.path.join(root, COZTER_DIR)
+    try:
+        if create:
+            os.makedirs(state_dir, exist_ok=True)
+    except OSError as exc:
+        raise ValueError(f"could not create workspace state directory: {exc}") from exc
+    if not is_path_within(state_dir, root):
+        raise ValueError("workspace state directory escapes the workspace")
+    return root, os.path.realpath(state_dir)
+
+
+def workspace_state_path(workspace_path: str, *parts: str) -> str:
+    """Build a state path that resolves inside *workspace_path*.
+
+    This validates both the ``.cozter`` directory and every existing path
+    component below it, rejecting a symlinked sessions/uploads/file target
+    before code can read or write through it.
+    """
+    root, state_dir = _workspace_state_dir(workspace_path)
+    if any(
+        not isinstance(part, str)
+        or not part
+        or "\x00" in part
+        or os.path.isabs(part)
+        for part in parts
+    ):
+        raise ValueError("invalid workspace state path component")
+    candidate = os.path.join(state_dir, *parts)
+    if not is_path_within(candidate, root):
+        raise ValueError("workspace state path escapes the workspace")
+    return candidate
 
 
 def _load_all() -> dict:
@@ -60,10 +105,14 @@ def get_current(
     if not isinstance(current, dict):
         return None
     path = current.get(str(bot_id))
-    return (
-        canonicalize_workspace_path(path)
-        if isinstance(path, str) and path else None
-    )
+    if not isinstance(path, str) or not path:
+        return None
+    canonical = canonicalize_workspace_path(path)
+    try:
+        workspace_state_path(canonical)
+    except ValueError:
+        return None
+    return canonical
 
 
 def get_recent(
@@ -79,6 +128,10 @@ def get_recent(
         if not isinstance(path, str) or not path:
             continue
         canonical = canonicalize_workspace_path(path)
+        try:
+            workspace_state_path(canonical)
+        except ValueError:
+            continue
         if canonical in seen:
             continue
         seen.add(canonical)
@@ -104,7 +157,12 @@ def iter_current_workspaces(
             continue
         path = current.get(str(bot_id))
         if isinstance(path, str) and path:
-            pairs.append((uid, canonicalize_workspace_path(path)))
+            canonical = canonicalize_workspace_path(path)
+            try:
+                workspace_state_path(canonical)
+            except ValueError:
+                continue
+            pairs.append((uid, canonical))
     return pairs
 
 
@@ -245,9 +303,8 @@ def _merge_recent(primary: str, *recent_lists: object) -> list[str]:
 
 
 def ensure_cozter_dir(path: str) -> None:
-    """Create .cozter folder inside the workspace if it doesn't exist."""
-    cozter_path = os.path.join(path, COZTER_DIR)
-    os.makedirs(cozter_path, exist_ok=True)
+    """Create the workspace state directory without following an escape."""
+    _workspace_state_dir(path, create=True)
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +380,7 @@ DEFAULT_REASONING_EFFORT = 0
 
 
 def _settings_path(workspace_path: str) -> str:
-    return os.path.join(workspace_path, COZTER_DIR, "settings.json")
+    return workspace_state_path(workspace_path, "settings.json")
 
 
 def _load_settings(workspace_path: str) -> dict:

@@ -1,10 +1,10 @@
 """Behavioral tests for the runtime-diagnostics plumbing in ``__main__``.
 
-``__main__`` checks whether a fresh virtual environment is missing required
-runtime modules at import time. We neutralize its dependency-repair call
-before importing so these tests stay hermetic and don't hit the network, while
-still exercising the real ``dump_runtime_diagnostics`` / ``_enable_faulthandler``
-code paths.
+``__main__`` checks whether a fresh virtual environment is missing or has an
+incompatible version of a required runtime dependency at import time. We
+neutralize its dependency-repair call before importing so these tests stay
+hermetic and don't hit the network, while still exercising the real
+``dump_runtime_diagnostics`` / ``_enable_faulthandler`` code paths.
 """
 
 import asyncio
@@ -42,8 +42,9 @@ def _load_main_module():
     os.environ["COZTER_VENV_REEXEC"] = "1"
     try:
         import importlib
-        import Cozter.__main__ as main_mod
-        importlib.reload(main_mod)  # in case an earlier import cached deps
+        with contextlib.redirect_stderr(io.StringIO()):
+            import Cozter.__main__ as main_mod
+            importlib.reload(main_mod)  # in case an earlier import cached deps
         return main_mod
     finally:
         subprocess.check_call = real_check_call
@@ -72,23 +73,21 @@ class VenvBootstrapTests(unittest.TestCase):
     def test_dependency_bootstrap_skips_pip_when_runtime_is_complete(self) -> None:
         main = _load_main_module()
         with (
-            mock.patch.object(main, "find_spec", return_value=object()) as find,
+            mock.patch.object(main, "_runtime_dependency_issues", return_value=[]),
             mock.patch.object(main.subprocess, "check_call") as install,
         ):
             main._install_deps()
 
-        self.assertEqual(find.call_count, len(main._REQUIRED_RUNTIME_MODULES))
         install.assert_not_called()
 
-    def test_dependency_bootstrap_installs_only_when_a_module_is_missing(self) -> None:
+    def test_dependency_bootstrap_installs_when_runtime_is_incompatible(self) -> None:
         main = _load_main_module()
-        missing_module = main._REQUIRED_RUNTIME_MODULES[-1]
-
-        def find(module: str):
-            return None if module == missing_module else object()
-
         with (
-            mock.patch.object(main, "find_spec", side_effect=find),
+            mock.patch.object(
+                main,
+                "_runtime_dependency_issues",
+                return_value=["aiohttp 3.14.1 does not satisfy >=3.14.3"],
+            ),
             mock.patch.object(main.subprocess, "check_call") as install,
         ):
             main._install_deps()
@@ -98,10 +97,29 @@ class VenvBootstrapTests(unittest.TestCase):
         self.assertEqual(args[0][:4], [main.sys.executable, "-m", "pip", "install"])
         self.assertEqual(kwargs["timeout"], main._DEPENDENCY_INSTALL_TIMEOUT_SEC)
 
+    def test_dependency_check_detects_an_outdated_declared_version(self) -> None:
+        main = _load_main_module()
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as req_file:
+            req_file.write("aiohttp>=3.14.3,<4\n")
+            req_file.flush()
+            with (
+                mock.patch.object(main, "find_spec", return_value=object()),
+                mock.patch.object(
+                    main, "distribution_version", return_value="3.14.1",
+                ),
+            ):
+                issues = main._runtime_dependency_issues(req_file.name)
+
+        self.assertEqual(
+            issues, ["aiohttp 3.14.1 does not satisfy <4,>=3.14.3"],
+        )
+
     def test_dependency_bootstrap_reports_a_bounded_install_timeout(self) -> None:
         main = _load_main_module()
         with (
-            mock.patch.object(main, "find_spec", return_value=None),
+            mock.patch.object(
+                main, "_runtime_dependency_issues", return_value=["missing aiohttp"],
+            ),
             mock.patch.object(
                 main.subprocess,
                 "check_call",
@@ -110,6 +128,16 @@ class VenvBootstrapTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "Timed out installing"):
                 main._install_deps()
+
+    def test_unsupported_python_is_rejected_before_bootstrap(self) -> None:
+        main = _load_main_module()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as exited:
+                main._require_supported_python((3, 10))
+
+        self.assertEqual(exited.exception.code, 1)
+        self.assertIn("requires Python 3.11", stderr.getvalue())
 
     def test_windows_bootstrap_supervises_venv_restarts(self) -> None:
         main = _load_main_module()

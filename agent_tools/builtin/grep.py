@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
 import os
 import re
 import stat
+import time
+from typing import Any
 
 from ..base import (
     AgentTool,
@@ -22,6 +25,15 @@ _GREP_MAX_FILE_BYTES = 1_000_000  # 1 MB
 # Per-match-line truncation so one giant minified line can't blow past
 # the agent's tool-result cap and hide every other match.
 _GREP_MAX_LINE_CHARS = 200
+# Python's built-in regex engine has no per-match deadline. Run scans in a
+# short-lived process and cap its lifetime so a catastrophic pattern cannot
+# leave an abandoned executor thread consuming CPU after the tool timeout.
+_GREP_MAX_SCAN_SECONDS = 30.0
+_GREP_WORKER_JOIN_SECONDS = 0.5
+
+
+class _GrepScanTimeout(RuntimeError):
+    """Raised internally when the isolated grep worker exceeded its budget."""
 
 
 class GrepTool(AgentTool):
@@ -89,16 +101,20 @@ class GrepTool(AgentTool):
         )
 
         # regex.search on adversarial input (catastrophic backtracking) is
-        # CPU-bound and cannot be interrupted at an await point, so running it
-        # inline would wedge the single event loop for every user - and the
-        # execute_tool timeout, which can only fire at an await, could never
-        # abort it. Run the whole scan in a worker thread: the loop stays
-        # responsive and the tool timeout can return cleanly (the runaway
-        # thread is abandoned rather than freezing the bot).
+        # CPU-bound and cannot be interrupted at an await point. A thread
+        # would keep running after asyncio cancels its await, so isolate the
+        # whole scan in a killable process instead.
+        timeout = _grep_scan_timeout()
         try:
             results = await asyncio.to_thread(
-                self._scan,
+                _scan_in_subprocess,
                 workspace_path, search_root, file_glob, regex, max_results,
+                timeout,
+            )
+        except _GrepScanTimeout:
+            return (
+                f"Grep timed out after {timeout:g}s and was stopped. "
+                "Simplify the regex or narrow the search path."
             )
         except Exception as exc:
             return f"Grep failed: {exc}"
@@ -153,3 +169,101 @@ class GrepTool(AgentTool):
 
     def summarize(self, args: dict) -> str:
         return f"grep: {args.get('pattern', '?')}"
+
+
+def _grep_scan_timeout() -> float:
+    """Return a finite worker deadline no greater than tool_timeout."""
+    # Import lazily because this builtin is discovered while agent_tools is
+    # initializing. The generic tool wrapper reads the same setting, so an
+    # isolated worker always exits no later than that outer timeout.
+    from ... import config
+
+    return min(float(config.get_tool_timeout()), _GREP_MAX_SCAN_SECONDS)
+
+
+def _scan_worker(
+    result_conn: Any,
+    workspace_path: str,
+    search_root: str,
+    file_glob: str,
+    regex: re.Pattern[str],
+    max_results: int,
+) -> None:
+    """Run one scan in a child process and return its bounded result."""
+    try:
+        result_conn.send((True, GrepTool._scan(
+            workspace_path, search_root, file_glob, regex, max_results,
+        )))
+    except BaseException as exc:
+        # This isolated child is always reaped by the parent. Preserve a
+        # concise failure for the tool caller instead of silently returning
+        # an empty match set if the filesystem scan itself broke.
+        try:
+            result_conn.send((False, f"{type(exc).__name__}: {exc}"))
+        except Exception:
+            pass
+    finally:
+        result_conn.close()
+
+
+def _stop_scan_worker(proc: Any) -> None:
+    """Join a completed worker or forcibly stop an overdue one."""
+    proc.join(_GREP_WORKER_JOIN_SECONDS)
+    if not proc.is_alive():
+        return
+    proc.terminate()
+    proc.join(_GREP_WORKER_JOIN_SECONDS)
+    if proc.is_alive():
+        proc.kill()
+        proc.join(_GREP_WORKER_JOIN_SECONDS)
+
+
+def _scan_in_subprocess(
+    workspace_path: str,
+    search_root: str,
+    file_glob: str,
+    regex: re.Pattern[str],
+    max_results: int,
+    timeout: float,
+) -> list[str]:
+    """Run grep work in a process that is always reaped by its deadline."""
+    context = multiprocessing.get_context("spawn")
+    receive_conn, send_conn = context.Pipe(duplex=False)
+    proc = context.Process(
+        target=_scan_worker,
+        args=(
+            send_conn, workspace_path, search_root, file_glob, regex,
+            max_results,
+        ),
+        daemon=True,
+    )
+    try:
+        proc.start()
+    except Exception:
+        receive_conn.close()
+        send_conn.close()
+        raise
+    send_conn.close()
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if receive_conn.poll(max(0.0, min(remaining, 0.1))):
+                ok, payload = receive_conn.recv()
+                if not ok:
+                    raise RuntimeError(str(payload))
+                if (
+                    not isinstance(payload, list)
+                    or not all(isinstance(line, str) for line in payload)
+                ):
+                    raise RuntimeError("grep worker returned an invalid result")
+                return payload
+            if remaining <= 0:
+                raise _GrepScanTimeout
+            if not proc.is_alive():
+                # A child that exits without writing a result is a real scan
+                # failure, not a no-match result.
+                raise RuntimeError("grep worker exited without a result")
+    finally:
+        receive_conn.close()
+        _stop_scan_worker(proc)

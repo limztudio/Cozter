@@ -13,7 +13,7 @@ from unittest import mock
 
 from Cozter import agent, colony, config, schedules, session, workspace
 from Cozter.backends_agent.base import ChatEvent
-from Cozter.backends_bot.base import BotContext, BotPlatform
+from Cozter.backends_bot.base import BotContext, BotPlatform, ensure_upload_dir
 from Cozter.tests.helpers import TestBot, temporary_config
 
 
@@ -192,8 +192,75 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
         with temporary_config({"max_permission": "auto"}) as path:
             self.assertEqual(config.get_max_permission(), "auto")
             with open(path, "w", encoding="utf-8") as f:
+                json.dump({"max_permission": " deny "}, f)
+            self.assertEqual(config.get_max_permission(), "deny")
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump({"max_permission": "nonsense"}, f)
-            self.assertEqual(config.get_max_permission(), "auto")
+            self.assertEqual(config.get_max_permission(), "deny")
+
+    def test_invalid_max_permission_blocks_daemon_start(self) -> None:
+        with temporary_config({
+            "telegram_bot_tokens": ["token"],
+            "user_ids": [1],
+            "max_permission": "nonsense",
+        }):
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                self.assertRaises(SystemExit) as exited,
+            ):
+                config.load_config()
+        self.assertEqual(exited.exception.code, 1)
+
+    def test_workspace_state_paths_reject_symlink_escapes(self) -> None:
+        with tempfile.TemporaryDirectory() as ws, \
+                tempfile.TemporaryDirectory() as outside:
+            try:
+                os.symlink(
+                    outside, os.path.join(ws, ".cozter"),
+                    target_is_directory=True,
+                )
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "escapes the workspace"):
+                workspace.ensure_cozter_dir(ws)
+            with self.assertRaisesRegex(ValueError, "escapes the workspace"):
+                workspace.set_permission(ws, "deny")
+            self.assertEqual(os.listdir(outside), [])
+
+    def test_workspace_state_paths_reject_nested_symlink_escapes(self) -> None:
+        with tempfile.TemporaryDirectory() as ws, \
+                tempfile.TemporaryDirectory() as outside:
+            state_dir = os.path.join(ws, ".cozter")
+            os.makedirs(state_dir)
+            try:
+                os.symlink(
+                    outside, os.path.join(state_dir, "sessions"),
+                    target_is_directory=True,
+                )
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "escapes the workspace"):
+                session.create_session(ws)
+            self.assertEqual(os.listdir(outside), [])
+
+    def test_workspace_upload_path_rejects_symlink_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as ws, \
+                tempfile.TemporaryDirectory() as outside:
+            state_dir = os.path.join(ws, ".cozter")
+            os.makedirs(state_dir)
+            try:
+                os.symlink(
+                    outside, os.path.join(state_dir, "uploads"),
+                    target_is_directory=True,
+                )
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "escapes the workspace"):
+                ensure_upload_dir(ws)
+            self.assertEqual(os.listdir(outside), [])
 
     @unittest.skipIf(os.name == "nt", "POSIX mode bits are not Windows ACLs")
     def test_new_config_is_created_owner_only(self) -> None:

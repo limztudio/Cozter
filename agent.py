@@ -22,7 +22,6 @@ from .backends_agent.base import (
     append_text_result, set_error_result,
 )
 from .utils import (
-    COZTER_DIR,
     await_cancelled,
     close_subprocess_pipe,
     cleanup_backend_process,
@@ -369,15 +368,19 @@ def _copy_generated_image_into_workspace(
     if is_path_within(src_real, ws_real):
         return src_real
 
-    dest_dir = os.path.join(workspace_path, COZTER_DIR, "generated_images")
     try:
+        dest_dir = workspace_mod.workspace_state_path(
+            workspace_path, "generated_images",
+        )
         os.makedirs(dest_dir, exist_ok=True)
         # ``.cozter`` is workspace state, but a writable workspace can still
         # contain a symlink at this path.  Resolve after creating the
         # directory and reject an escape *before* copying: otherwise an
         # explicitly allowed external image could be written through that
         # symlink somewhere outside the workspace.
-        dest_dir = os.path.realpath(dest_dir)
+        dest_dir = workspace_mod.workspace_state_path(
+            workspace_path, "generated_images",
+        )
         if not is_path_within(dest_dir, ws_real):
             logger.warning(
                 "Refusing generated-image destination outside workspace: %s",
@@ -387,7 +390,7 @@ def _copy_generated_image_into_workspace(
         dest = _unique_path(dest_dir, _safe_generated_image_name(src_real, ext))
         shutil.copy2(src_real, dest)
         return os.path.realpath(dest)
-    except OSError:
+    except (OSError, ValueError):
         logger.warning(
             "Failed to copy generated image into workspace: %s", src,
             exc_info=True,

@@ -2,7 +2,31 @@ import os
 import subprocess
 import sys
 import time
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 from importlib.util import find_spec
+from typing import Any
+
+
+_MINIMUM_PYTHON = (3, 11)
+
+
+def _require_supported_python(
+    version: tuple[int, int] | None = None,
+) -> None:
+    """Exit before setup when Python cannot run Cozter's supported runtime."""
+    actual = version or sys.version_info[:2]
+    if actual < _MINIMUM_PYTHON:
+        print(
+            "Cozter requires Python "
+            f"{_MINIMUM_PYTHON[0]}.{_MINIMUM_PYTHON[1]} or newer; "
+            f"found {actual[0]}.{actual[1]}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
+_require_supported_python()
 
 
 _CLI_MODE_FLAGS = frozenset({"-cli", "--cli"})
@@ -81,6 +105,75 @@ _REQUIRED_RUNTIME_MODULES = (
 )
 
 
+def _requirement_parser() -> Any:
+    """Return a PEP 508 parser without requiring a project dependency.
+
+    A fresh venv has pip (and therefore its vendored packaging parser), but
+    use a public ``packaging`` install when present. Keeping this lazy means a
+    stripped system Python still reaches the normal bootstrap error rather
+    than failing while importing the launcher itself.
+    """
+    try:
+        from packaging.requirements import Requirement as PublicRequirement
+        return PublicRequirement
+    except ImportError:
+        try:
+            from pip._vendor.packaging.requirements import (
+                Requirement as VendoredRequirement,
+            )
+            return VendoredRequirement
+        except ImportError as exc:
+            raise RuntimeError(
+                "no PEP 508 requirements parser is available",
+            ) from exc
+
+
+def _iter_runtime_requirements(path: str):
+    """Yield active PEP 508 requirements from the checked-in requirements file."""
+    parser = _requirement_parser()
+    with open(path, encoding="utf-8") as req_file:
+        for raw_line in req_file:
+            line = raw_line.split("#", 1)[0].strip()
+            if not line or line.startswith("-"):
+                continue
+            requirement = parser(line)
+            if requirement.marker is None or requirement.marker.evaluate():
+                yield requirement
+
+
+def _runtime_dependency_issues(req_file: str) -> list[str]:
+    """Return missing imports or installed versions outside requirements.txt.
+
+    This is local metadata work only, so normal startup does not contact a
+    package index. It closes the manual-update gap where a pre-existing venv
+    still imports an older dependency after requirements tightened its safe
+    version range.
+    """
+    issues: list[str] = []
+    for module in _REQUIRED_RUNTIME_MODULES:
+        if find_spec(module) is None:
+            issues.append(f"missing module {module}")
+
+    try:
+        requirements = tuple(_iter_runtime_requirements(req_file))
+    except (OSError, RuntimeError, ValueError) as exc:
+        issues.append(f"could not parse requirements.txt ({exc})")
+        return issues
+
+    for requirement in requirements:
+        try:
+            installed = distribution_version(requirement.name)
+        except PackageNotFoundError:
+            issues.append(f"{requirement.name} is not installed")
+            continue
+        if requirement.specifier and installed not in requirement.specifier:
+            issues.append(
+                f"{requirement.name} {installed} does not satisfy "
+                f"{requirement.specifier}"
+            )
+    return list(dict.fromkeys(issues))
+
+
 def _running_in_venv() -> bool:
     return sys.prefix != getattr(sys, "base_prefix", sys.prefix)
 
@@ -125,7 +218,7 @@ _ensure_venv_and_reexec()
 
 
 def _install_deps() -> None:
-    """Install requirements only when a newly-created venv is incomplete.
+    """Repair missing or version-incompatible declared runtime dependencies.
 
     ``pip install -r`` is deliberately not run on every daemon start: pip may
     contact an index even when every dependency is already installed, which
@@ -137,16 +230,14 @@ def _install_deps() -> None:
     if not os.path.exists(req_file):
         return
 
-    missing = [
-        name for name in _REQUIRED_RUNTIME_MODULES if find_spec(name) is None
-    ]
-    if not missing:
+    issues = _runtime_dependency_issues(req_file)
+    if not issues:
         return
 
     try:
         print(
-            "Cozter: installing missing runtime dependencies: "
-            + ", ".join(missing),
+            "Cozter: installing required runtime dependencies: "
+            + "; ".join(issues),
             file=sys.stderr,
         )
         subprocess.check_call(
@@ -156,7 +247,7 @@ def _install_deps() -> None:
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             "Timed out installing missing runtime dependencies after "
-            f"{_DEPENDENCY_INSTALL_TIMEOUT_SEC}s: {', '.join(missing)}"
+            f"{_DEPENDENCY_INSTALL_TIMEOUT_SEC}s: {', '.join(issues)}"
         ) from exc
 
 

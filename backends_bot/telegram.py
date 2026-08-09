@@ -390,8 +390,8 @@ class TelegramBot(BotPlatform):
                 await ctx.reply_text(NO_WORKSPACE_TEXT)
             return
 
-        upload_dir = ensure_upload_dir(ws)
         try:
+            upload_dir = ensure_upload_dir(ws)
             with reserve_upload_path(upload_dir, filename) as local_path:
                 await _download_telegram_file(
                     tg_file, local_path, self.max_upload_bytes,

@@ -503,7 +503,13 @@ class SlackBot(BotPlatform):
             await ctx_for_reply.reply_text(NO_WORKSPACE_TEXT)
             return
 
-        upload_dir = ensure_upload_dir(ws)
+        try:
+            upload_dir = ensure_upload_dir(ws)
+        except (OSError, ValueError) as exc:
+            await ctx_for_reply.reply_text(
+                f"Workspace state is unsafe: {exc}", rich=False,
+            )
+            return
 
         for f in files:
             # Use the user-supplied name if meaningful; otherwise fall back

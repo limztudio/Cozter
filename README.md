@@ -122,8 +122,9 @@ python -m Cozter
 ```
 
 On startup, Cozter creates or re-execs through a project-local `.venv` when
-needed. It installs `requirements.txt` only when required runtime modules are
-missing; an update that changes the requirements installs them before restart.
+needed. It installs `requirements.txt` only when a required runtime module is
+missing or its installed version falls outside the declared requirement; an
+update that changes the requirements installs them before restart.
 
 ### Windows Task Scheduler
 
@@ -356,6 +357,8 @@ that risk; provider-native sandbox and approval behavior still differs by CLI.
 backends; Codex and Claude Code use their strongest non-interactive
 read-only/plan modes, which may still inspect the workspace. `/permission`
 rejects a higher mode, and an already-stored higher value is clamped down.
+Whitespace around a valid value is accepted; any other malformed value blocks
+daemon startup and fails closed to `deny` if introduced while the daemon runs.
 
 `show_usage` (default `true`) appends a compact per-turn token/cost footer
 (e.g. `📊 12.5k in · 28 out · $0.01`) after each reply, for backends that

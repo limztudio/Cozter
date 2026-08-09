@@ -35,7 +35,6 @@ from .. import (
     agent, backends_agent, colony, config, schedules, session, updater,
     workspace,
 )
-from ..utils import COZTER_DIR
 from ..utils import await_cancelled
 from ..utils import create_background_task
 from ..utils import drain_queue as _drain_queue
@@ -79,9 +78,11 @@ NO_WORKSPACE_TEXT = (
 
 def ensure_upload_dir(workspace_path: str) -> str:
     """Return the workspace upload directory, creating it if needed."""
-    upload_dir = os.path.join(workspace_path, COZTER_DIR, UPLOADS_DIR)
+    upload_dir = workspace.workspace_state_path(workspace_path, UPLOADS_DIR)
     os.makedirs(upload_dir, exist_ok=True)
-    return upload_dir
+    # Validate once more after creation: a pre-existing nested symlink can
+    # otherwise redirect an attachment write outside the selected workspace.
+    return workspace.workspace_state_path(workspace_path, UPLOADS_DIR)
 
 
 @contextmanager
@@ -975,7 +976,15 @@ class BotPlatform(ABC):
             )
             self._expect_input(ctx.user_id, self._receive_new_dir)
             return
-        workspace.ensure_cozter_dir(path)
+        try:
+            workspace.ensure_cozter_dir(path)
+        except ValueError as exc:
+            await ctx.reply_text(
+                f"Failed to initialize secure workspace state: {exc}\n\n"
+                "Please choose a different directory (or /cancel):"
+            )
+            self._expect_input(ctx.user_id, self._receive_new_dir)
+            return
         workspace.select_workspace(ctx.user_id, path, self.platform_id)
         await ctx.reply_text(f"Workspace created and selected:\n{path}")
 
@@ -1047,7 +1056,17 @@ class BotPlatform(ABC):
                     "Use /open to choose from recent workspaces."
                 )
             return
-        workspace.ensure_cozter_dir(path)
+        try:
+            workspace.ensure_cozter_dir(path)
+        except ValueError as exc:
+            message = f"Workspace state is unsafe: {exc}"
+            if rearm_on_error:
+                message += "\n\nPlease enter a different directory (or /cancel):"
+                self._expect_input(ctx.user_id, self._receive_open_dir)
+            else:
+                message += "\n\nUse /open to choose a different workspace."
+            await ctx.reply_text(message)
+            return
         workspace.select_workspace(ctx.user_id, path, self.platform_id)
         await ctx.reply_text(f"Workspace selected:\n{path}")
 
@@ -3100,6 +3119,13 @@ class BotPlatform(ABC):
         ws = workspace.get_current(ctx.user_id, self.platform_id)
         if not ws or not os.path.isdir(ws):
             await ctx.reply_text(NO_WORKSPACE_TEXT)
+            return None
+        try:
+            workspace.ensure_cozter_dir(ws)
+        except ValueError:
+            await ctx.reply_text(
+                "Workspace state is unsafe. Choose another workspace with /open."
+            )
             return None
         return ws
 

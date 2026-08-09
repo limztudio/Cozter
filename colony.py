@@ -23,12 +23,10 @@ consolidation pass.
 """
 
 import logging
-import os
 import re
 
 from . import backends_agent, session
 from . import workspace as workspace_mod
-from .utils import COZTER_DIR
 from .utils import (
     create_background_task,
     extract_marker_block,
@@ -47,7 +45,7 @@ COLONY_CAP = 100  # hard cap on items so the prompt context stays bounded
 
 
 def _path(workspace: str) -> str:
-    return os.path.join(workspace, COZTER_DIR, COLONY_FILE)
+    return workspace_mod.workspace_state_path(workspace, COLONY_FILE)
 
 
 def _load(workspace: str) -> dict:
