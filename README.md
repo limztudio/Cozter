@@ -193,7 +193,8 @@ limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
 - Python package dependencies from `requirements.txt`:
   `python-telegram-bot`, `slack-bolt`, and `aiohttp`. The
   launcher bootstraps them into the project-local `.venv` when required
-  runtime modules are missing; normal starts do not invoke pip.
+  runtime modules are missing or an installed version falls outside the
+  declared requirement; normal starts do not invoke pip.
 - Optional external services:
   Telegram and Slack need their platform tokens; Signal also requires a
   separately installed and running `signal-cli` JSON-RPC daemon.
@@ -284,13 +285,16 @@ identical call after that many executions, and `llama_socket_timeout`
 
 Agent turns do not have a wall-clock timeout; long-running work is
 allowed to finish. `tool_timeout` (default 120s) still caps each
-individual tool call for HTTP backends, so one wedged plugin call cannot
-block the agent loop indefinitely. `update_idle_timeout` (default 1200s)
-controls how often the auto-update loop dumps diagnostics while waiting
-for active turns; it keeps waiting instead of restarting through active
-work. `dump_traceback_interval` (default 0) enables optional periodic
-thread dumps when set above zero; on-demand `SIGUSR1` diagnostics remain
-available either way.
+cooperative/asynchronous individual tool call for HTTP backends. It is not a
+plugin sandbox: trusted plugin code that blocks the event loop synchronously
+can still stall the process and must isolate blocking work itself. CLI-backend
+plugin scripts instead use that CLI's shell/tool policy and are not governed
+by `tool_timeout`. `update_idle_timeout` (default 1200s) controls how often
+the auto-update loop dumps diagnostics while waiting for active turns; it
+keeps waiting instead of restarting through active work.
+`dump_traceback_interval` (default 0) enables optional periodic thread dumps
+when set above zero; on-demand `SIGUSR1` diagnostics remain available either
+way.
 
 `extra_models` adds model IDs to a backend's `/model`, `/summarymodel`, and
 flexible-tier model pickers on top of its built-in list, keyed by backend name
@@ -353,6 +357,9 @@ full`. `full` is the only mode that requests each CLI's explicit bypass flag
 shell for any authorized chat participant. Keep the default `auto` to prevent
 those bypasses, or set it to `full` only when an operator explicitly accepts
 that risk; provider-native sandbox and approval behavior still differs by CLI.
+Trusted HTTP plugins are not sandboxed: an author must set
+`requires_full_permission = True` for a plugin that can escape Cozter's
+workspace-bounded tool model. See [Plugins](#plugins) for that contract.
 `deny` exposes no tools to the HTTP and Copilot
 backends; Codex and Claude Code use their strongest non-interactive
 read-only/plan modes, which may still inspect the workspace. `/permission`
@@ -437,6 +444,12 @@ When a workspace is selected, Cozter canonicalizes its path. Opening the
 same directory through `.`, `..`, a trailing slash, or a symlink therefore
 uses the same sessions, settings, recent-workspace entry, and per-workspace
 turn locks rather than creating parallel state for path aliases.
+
+Cozter also keeps its runtime state physically inside that canonical
+workspace. When opening or using a workspace, it refuses a `.cozter`
+directory—or an existing state component such as `sessions/`, `uploads/`, or
+`generated_images/`—that resolves through a symlink outside the workspace.
+Symlinks whose resolved targets remain inside the workspace continue to work.
 
 The global runtime files are deliberately small JSON documents:
 
@@ -634,8 +647,11 @@ for disabled examples or local scratch tools. One file, two invocation paths:
 Treat plugins as trusted bot code: discovery imports their modules in the
 Cozter process, so module-level code runs at startup and any dependencies must
 be installed in the project environment. Restart after adding, removing, or
-changing a plugin. `tool_timeout` limits an individual invocation but does not
-sandbox plugin code.
+changing a plugin. For HTTP backends, `tool_timeout` bounds a
+cooperative/asynchronous plugin call but cannot preempt synchronous
+event-loop blocking; it does not sandbox plugin code. CLI-backend plugins run
+through that CLI's own shell/tool policy and are not governed by Cozter's
+`tool_timeout`.
 
 - **HTTP backends** (`llama`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
@@ -650,6 +666,15 @@ For HTTP backends, `deny` exposes no tools. Under `/permission confirm`,
 plugins are never exposed or executed—even if a plugin reuses a built-in
 read-only tool's name. That mode uses only Cozter's fixed read-only built-ins;
 select `auto` or `full` when an HTTP plugin needs to run.
+
+Under HTTP `/permission auto`, plugins are exposed by default. A plugin that
+can access host resources outside Cozter's workspace-bounded tool model—for
+example arbitrary paths, commands, credentials, or sockets—**must** declare
+`requires_full_permission = True` on its `AgentTool` class; otherwise it
+remains available in `auto`. This flag controls HTTP-tool availability only;
+it does not sandbox trusted plugin code or alter CLI-backend shell behavior.
+Tool names are global, so choose a unique `name`: a later plugin registration
+replaces any earlier tool with the same name, including a built-in.
 
 Plugin template:
 
@@ -693,6 +718,10 @@ model, keeping accidental huge outputs from consuming the whole context.
 `read_file` reads at most 128 KiB per call; its line-offset scan is also
 bounded at 16 MiB so a pathological offset cannot leave a worker thread
 walking an enormous file.
+`grep` only opens regular files up to 1 MB and runs its regex scan in a
+killable worker process. It stops and reaps that worker after the smaller of
+`tool_timeout` and 30 seconds, so an expensive pattern cannot keep consuming
+CPU after a timeout; narrow the pattern or search path if that happens.
 The `web_search` and `web_fetch` tools also cap downloaded response bodies
 at 5 MiB and share the bounded `read_bounded_text()` reader in
 `agent_tools/base.py`. `web_search` uses the common request setup;
@@ -799,10 +828,12 @@ Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its
 workspace-write sandbox for `auto`, and a read-only sandbox for `confirm`
 and `deny`. `llama` and `zai` run in-process: `deny` exposes no tools and
-`confirm` exposes only read-only tools. `auto` permits only Cozter's
-workspace-bounded tools; both it and `confirm` block the direct host shell
-again at execution time. `claude_code` uses bypass only for `full`, `acceptEdits`
-for `auto`, and plan mode for `confirm`/`deny`. `copilot` uses `--yolo` only
+`confirm` exposes only read-only tools. `auto` permits Cozter's
+workspace-bounded built-ins plus plugins that do not declare themselves
+full-only with `requires_full_permission`; both it and `confirm` block the
+built-in direct host shell again at execution time. `claude_code` uses bypass
+only for `full`, `acceptEdits` for `auto`, and plan mode for `confirm`/`deny`.
+`copilot` uses `--yolo` only
 for `full`, `--allow-all-tools` (while retaining path and URL checks) for
 `auto`, and an explicit empty tool list for `confirm`/`deny`. Internal
 router, titling, and compaction calls always use `deny`, so conversation
@@ -1200,6 +1231,11 @@ construction, attachment handling, run-lock cancellation, session
 picking, auto-titling, compaction, platform/Slack/Signal rich-text formatting,
 status-latency and thinking-status display, runtime diagnostics, updater
 behavior, agent-tool helpers, and built-in discovery/edit/patch safety.
+
+If `codex` is on `PATH`, one catalog-consistency test also invokes
+`codex debug models` with a 15-second timeout; it skips when that command
+fails, times out, or returns no visible models. To avoid that optional CLI
+probe, run the suite with Codex absent from `PATH`.
 
 For a local developer check with a CI-supported Python version, create the
 project venv with Python 3.11 or 3.12 and install the runtime dependencies

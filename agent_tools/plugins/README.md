@@ -21,10 +21,23 @@ the plugin's `os.getcwd()` returns the right path.
 ## Conventions
 
 - File name `foo.py` → tool name typically `foo` (match `cls.name`).
+- Tool names are global. Choose a unique `name`: a later plugin registration
+  replaces an earlier tool with the same name, including a built-in.
 - File names starting with `_` are skipped by the loader, which is useful
   for disabled examples or local scratch plugins.
 - The shipped `current_time.py` plugin is live and can be invoked through
   the same module path pattern as any other plugin.
+
+## Permissions and safety
+
+Plugins are trusted code. An HTTP backend in `/permission auto` exposes a
+plugin unless its class sets `requires_full_permission = True`. Set that flag
+for any capability that can access host resources outside Cozter's
+workspace-bounded tool model, such as arbitrary paths, commands, credentials,
+or sockets. The flag only controls HTTP-tool availability; it does not
+sandbox plugin code. HTTP calls are bounded by `tool_timeout` only while they
+yield control to the event loop, while CLI-backend plugin scripts follow that
+CLI's own shell/tool policy instead.
 
 ## Template
 
@@ -39,6 +52,8 @@ from ..base import AgentTool
 class MyTool(AgentTool):
     name = "my_tool"
     description = "What this does, from the model's perspective."
+    # Set True for a host-escaping capability; otherwise auto may expose it.
+    # requires_full_permission = True
     parameters = {
         "type": "object",
         "properties": {
