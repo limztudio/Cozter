@@ -53,6 +53,7 @@ _MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
 # process without bound. Tool arguments get their own cap because one call
 # should never monopolize the whole completion buffer.
 _MAX_COMPLETION_TEXT_BYTES = 4 * 1024 * 1024
+_MAX_COMPLETION_REASONING_BYTES = 4 * 1024 * 1024
 _MAX_TOOL_ARGUMENT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_BUFFER_BYTES = 8 * 1024 * 1024
 # Tool loops retain every assistant and tool message for the next completion.
@@ -211,6 +212,25 @@ class OpenAIChatBackend(Backend):
         """
         return {}
 
+    def _preserve_reasoning_content(self, _model: str | None) -> bool:
+        """Whether assistant reasoning must be retained across tool turns.
+
+        Some OpenAI-compatible providers require their opaque reasoning
+        blocks to be returned unmodified with the following tool result.
+        Keep that provider-specific message field opt-in: ordinary
+        OpenAI-compatible servers must continue receiving the standard
+        assistant/tool transcript shape.
+        """
+        return False
+
+    def _preserved_reasoning_request_fields(
+        self,
+        _model: str | None,
+        _effort_fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return provider fields needed when preserving reasoning blocks."""
+        return {}
+
     def _max_agent_turns(self) -> int:
         return 40
 
@@ -295,6 +315,7 @@ class OpenAIChatBackend(Backend):
         # Translate the 0-100 effort into provider-native request fields. An
         # empty mapping means "do not override the server default".
         effort_fields = self._effort_fields(effort, request_model)
+        preserve_reasoning = self._preserve_reasoning_content(request_model)
 
         # The endpoint is stateless, so the model has no idea what cwd it is
         # operating against unless we tell it. CLI backends learn the
@@ -333,20 +354,40 @@ class OpenAIChatBackend(Backend):
             emit_message_limit_error()
             return
         tool_repeat_counts: dict[str, int] = {}
+        has_preserved_reasoning = False
+
+        def completion_payload(
+            tools_schema: list[dict] | None,
+        ) -> dict[str, Any]:
+            """Build one provider request from the retained transcript."""
+            payload = _completion_payload(
+                messages, request_model, effort_fields, tools_schema,
+            )
+            # The initial tool-enabled request can create reasoning that must
+            # be replayed on its next turn. A no-tools final request can also
+            # follow one of those turns, so preserve its provider setting
+            # whenever the retained transcript already carries reasoning.
+            if preserve_reasoning and (
+                tools_schema is not None or has_preserved_reasoning
+            ):
+                payload.update(self._preserved_reasoning_request_fields(
+                    request_model, effort_fields,
+                ))
+            if tools_schema is not None:
+                payload["tool_choice"] = "auto"
+                payload.update(self._tool_request_fields(request_model))
+            return payload
 
         segment = 1
         while True:
             for _ in range(max_agent_turns):
-                payload = _completion_payload(
-                    messages, request_model, effort_fields, tools_schema,
-                )
-                if tools_schema is not None:
-                    payload["tool_choice"] = "auto"
-                    payload.update(self._tool_request_fields(request_model))
+                payload = completion_payload(tools_schema)
 
-                assistant_text, tool_calls = await _stream_completion(
-                    endpoint, payload, headers, sock_read, max_retries,
-                    self.name, timeout_setting,
+                assistant_text, reasoning_content, tool_calls = (
+                    await _stream_completion(
+                        endpoint, payload, headers, sock_read, max_retries,
+                        self.name, timeout_setting,
+                    )
                 )
 
                 # OpenAI spec: when ``tool_calls`` is present, ``content``
@@ -358,6 +399,13 @@ class OpenAIChatBackend(Backend):
                 }
                 if tool_calls:
                     assistant_msg["tool_calls"] = tool_calls
+                    if preserve_reasoning and reasoning_content:
+                        # Z.ai validates the exact, ordered block from its
+                        # preceding assistant response before accepting a
+                        # tool result. This is opaque provider state, never
+                        # user-facing assistant text.
+                        assistant_msg["reasoning_content"] = reasoning_content
+                        has_preserved_reasoning = True
                 # Surface this turn's commentary even if more tool calls
                 # follow; otherwise the user would only see whatever the
                 # model says in the FINAL turn, losing "Let me check that
@@ -468,8 +516,8 @@ class OpenAIChatBackend(Backend):
             emit_message_limit_error()
             return
 
-        payload = _completion_payload(messages, request_model, effort_fields)
-        assistant_text, _ = await _stream_completion(
+        payload = completion_payload(None)
+        assistant_text, _, _ = await _stream_completion(
             endpoint, payload, headers, sock_read, max_retries, self.name,
             timeout_setting,
         )
@@ -641,10 +689,11 @@ async def _stream_completion(
     max_retries: int,
     label: str,
     timeout_setting: str = "the configured socket timeout",
-) -> tuple[str, list[dict]]:
+) -> tuple[str, str, list[dict]]:
     """POST the chat/completions endpoint (streaming); retry transient fails.
 
-    Returns ``(text, tool_calls)``. Connection drops, read timeouts, and
+    Returns ``(text, reasoning_content, tool_calls)``. Connection drops,
+    read timeouts, and
     HTTP 429/5xx are retried with exponential backoff up to *max_retries*
     times - retrying a completion is safe because tool side effects only
     run *after* this returns. A bad status or malformed response is not
@@ -676,7 +725,7 @@ async def _stream_once(
     headers: dict[str, str],
     sock_read: int,
     label: str,
-) -> tuple[str, list[dict]]:
+) -> tuple[str, str, list[dict]]:
     """One streaming attempt; raise _RetryableError for transient failures.
 
     Parses Server-Sent Events. ``data:`` lines carry JSON deltas;
@@ -684,6 +733,8 @@ async def _stream_once(
     """
     text_parts: list[str] = []
     text_bytes = 0
+    reasoning_parts: list[str] = []
+    reasoning_bytes = 0
     tool_argument_bytes = 0
     # Tool calls arrive in pieces: we accumulate by index because the
     # OpenAI streaming protocol fragments name/arguments across deltas.
@@ -776,7 +827,7 @@ async def _stream_once(
                             f"{_MAX_COMPLETION_TEXT_BYTES} byte limit",
                         )
                     if (
-                        text_bytes + tool_argument_bytes
+                        text_bytes + reasoning_bytes + tool_argument_bytes
                         > _MAX_COMPLETION_BUFFER_BYTES
                     ):
                         raise _CompletionTooLargeError(
@@ -784,6 +835,25 @@ async def _stream_once(
                             f"{_MAX_COMPLETION_BUFFER_BYTES} byte limit",
                         )
                     text_parts.append(content)
+                reasoning_content = delta.get("reasoning_content")
+                if isinstance(reasoning_content, str) and reasoning_content:
+                    reasoning_bytes += len(
+                        reasoning_content.encode("utf-8", errors="replace"),
+                    )
+                    if reasoning_bytes > _MAX_COMPLETION_REASONING_BYTES:
+                        raise _CompletionTooLargeError(
+                            "completion reasoning exceeded "
+                            f"{_MAX_COMPLETION_REASONING_BYTES} byte limit",
+                        )
+                    if (
+                        text_bytes + reasoning_bytes + tool_argument_bytes
+                        > _MAX_COMPLETION_BUFFER_BYTES
+                    ):
+                        raise _CompletionTooLargeError(
+                            "completion buffers exceeded "
+                            f"{_MAX_COMPLETION_BUFFER_BYTES} byte limit",
+                        )
+                    reasoning_parts.append(reasoning_content)
                 tool_call_deltas = delta.get("tool_calls")
                 if isinstance(tool_call_deltas, list):
                     for tc in tool_call_deltas:
@@ -791,7 +861,7 @@ async def _stream_once(
                             tool_buffers, tc,
                         )
                         if (
-                            text_bytes + tool_argument_bytes
+                            text_bytes + reasoning_bytes + tool_argument_bytes
                             > _MAX_COMPLETION_BUFFER_BYTES
                         ):
                             raise _CompletionTooLargeError(
@@ -829,7 +899,7 @@ async def _stream_once(
         if isinstance(argument_parts, list):
             function["arguments"] = "".join(argument_parts)
         tool_calls.append(buf)
-    return "".join(text_parts), tool_calls
+    return "".join(text_parts), "".join(reasoning_parts), tool_calls
 
 
 async def _read_error_body(resp: aiohttp.ClientResponse) -> str:

@@ -65,7 +65,8 @@ _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
     # The current Fable/Opus/Sonnet 5 pins have a 1M window by default.
-    # Do not infer that capacity for their mutable CLI aliases.
+    # Do not infer 1M capacity for mutable aliases or bare 4.x pins: Claude
+    # Code can select their 200K variant based on account/provider settings.
     "claude-fable-5",
     "claude-opus-5",
     "claude-sonnet-5",
@@ -78,7 +79,6 @@ _ONE_MILLION_CONTEXT_MODELS = frozenset({
     "claude-opus-4-8[1m]",
     "claude-opus-4-6[1m]",
     "claude-sonnet-4-6[1m]",
-    "claude-sonnet-4-5-20250929[1m]",
 })
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -549,9 +549,8 @@ class ClaudeCodeBackend(Backend):
     #     Sonnet 4.5, Haiku 4.5). From Opus/Sonnet 4.6 on, the ID is undated
     #     and inventing a date suffix 404s.
     #   - ``[1m]`` is only valid on aliases/models whose registry exposes a
-    #     long-context variant. The current picker exposes Fable 5 and Sonnet
-    #     5 through the ``fable[1m]`` and ``sonnet[1m]`` aliases; explicit
-    #     Opus 4.6 through Opus 5 pins also support the suffix. Keep full
+    #     long-context variant. Current 1M aliases and variants appear below,
+    #     but Sonnet 4.5 remains a 200K model. Keep full
     #     Fable/Sonnet suffixes out of this curated picker unless the CLI
     #     exposes them as picker entries.
     #   - Fast mode is a session toggle (``/fast``) on Opus 5/4.8/4.7, not a
@@ -578,7 +577,6 @@ class ClaudeCodeBackend(Backend):
         "claude-opus-4-6",
         "claude-opus-4-5",
         "claude-opus-4-5-20251101",
-        "claude-opus-4-1",
         "claude-sonnet-4-6",
         "claude-sonnet-4-5",
         "claude-sonnet-4-5-20250929",
@@ -589,7 +587,6 @@ class ClaudeCodeBackend(Backend):
         "claude-opus-4-8[1m]",
         "claude-opus-4-6[1m]",
         "claude-sonnet-4-6[1m]",
-        "claude-sonnet-4-5-20250929[1m]",
     )
     default_model = "default"
     default_summary_model = "haiku"

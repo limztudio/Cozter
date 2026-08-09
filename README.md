@@ -340,7 +340,10 @@ with `/agent`, pick a model with `/model` (default `glm-5.2`), and add private
 or regional GLM ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai
 coding turns automatically continue into another tool-enabled segment when
 Cozter's internal tool-call segment limit is reached, instead of stopping for
-a manual "continue".
+a manual "continue". For current documented GLM agent models, Cozter also
+enables Z.ai's preserved-thinking protocol and returns the exact opaque
+`reasoning_content` with the next tool result; that provider state is never
+shown in the chat reply.
 
 `max_permission` (default `auto`) caps the highest `/permission` mode any
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <
@@ -776,11 +779,12 @@ catalog. Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
 aliases, the supported `fable[1m]`, `sonnet[1m]`, `opus[1m]`, and
 `opusplan[1m]` long-context aliases, and verified version pins (including
-Fable 5, Sonnet 5, and Opus 5. Those explicit current-generation pins have
-documented 1M-token windows; mutable aliases remain capacity-unknown until
-their resolved model is known. Claude's `/fast` is a session toggle rather
-than a selectable `*-fast` model ID. Llama and Z.ai discover models live from
-their configured HTTP endpoints.
+Fable 5, Sonnet 5, Opus 5, and explicit `[1m]` variants of other documented
+long-context models). Those selected 1M variants have documented 1M-token
+windows; mutable aliases and bare 4.x pins remain capacity-unknown because
+their active window can vary by account and provider. Claude's `/fast` is a
+session toggle rather than a selectable `*-fast` model ID. Llama and Z.ai
+discover models live from their configured HTTP endpoints.
 `llama` and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
 and points at Z.ai's endpoint. GLM-4.6-and-newer tool-capable models,
@@ -814,6 +818,9 @@ llama, and Z.ai refresh their live catalogs periodically, so long-running
 services see CLI, server, and account model changes. HTTP catalog responses
 over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates
 the IDs, keeps at most 4,096, and ignores IDs longer than 512 characters.
+Z.ai's documented GLM-4.5-and-newer agent models also preserve their opaque
+reasoning blocks across tool calls, while the older GLM-4-32B fallback and
+unknown/private IDs retain the ordinary OpenAI-compatible transcript shape.
 Copilot
 uses a short ACP handshake without sending
 a prompt, and refreshes a successful account catalog periodically. Its picker

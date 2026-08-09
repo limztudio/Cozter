@@ -894,7 +894,6 @@ class BackendModelTests(unittest.TestCase):
             "claude-opus-4-6",
             "claude-opus-4-5",
             "claude-opus-4-5-20251101",
-            "claude-opus-4-1",
             "claude-sonnet-4-6",
             "claude-sonnet-4-5",
             "claude-sonnet-4-5-20250929",
@@ -902,17 +901,16 @@ class BackendModelTests(unittest.TestCase):
             "claude-haiku-4-5-20251001",
             "claude-opus-5[1m]",
             "claude-opus-4-8[1m]",
-            "claude-sonnet-4-5-20250929[1m]",
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)
 
-    def test_claude_context_windows_are_known_only_for_explicit_1m_models(
+    def test_claude_context_windows_cover_verified_current_1m_models(
         self,
     ) -> None:
         backend = ClaudeCodeBackend()
-        # Current model pins use 1M by default; aliases are deliberately
-        # omitted below because their resolved model can vary by account/CLI.
+        # Aliases and bare 4.x pins remain omitted: their resolved model can
+        # vary by account and CLI provider.
         for model in (
             "claude-fable-5",
             "claude-opus-5",
@@ -927,7 +925,11 @@ class BackendModelTests(unittest.TestCase):
                 self.assertEqual(
                     backend.context_window_tokens(model), 1_000_000,
                 )
-        for model in ("default", "sonnet", "claude-opus-4-8", "private"):
+        for model in (
+            "default", "sonnet", "claude-opus-4-8", "claude-opus-4-7",
+            "claude-opus-4-6", "claude-sonnet-4-6",
+            "claude-sonnet-4-5-20250929", "private",
+        ):
             with self.subTest(model=model):
                 self.assertIsNone(backend.context_window_tokens(model))
 
@@ -948,6 +950,10 @@ class BackendModelTests(unittest.TestCase):
             "claude-opus-4-6-fast",
             "claude-opus-4-7-fast",
             "claude-opus-4-8-fast",
+            # Opus 4.1 retired on 2026-08-05.
+            "claude-opus-4-1",
+            # Sonnet 4.5 has a 200K window; it never exposed a 1M variant.
+            "claude-sonnet-4-5-20250929[1m]",
             # The current CLI picker exposes Fable/Sonnet 5's 1M variants via
             # aliases. Keep full suffixed IDs out until they become entries.
             "claude-sonnet-5[1m]",
@@ -1087,6 +1093,9 @@ class ZaiBackendTests(unittest.TestCase):
     def test_context_windows_cover_only_published_curated_ids(self) -> None:
         backend = ZaiBackend()
         self.assertEqual(backend.context_window_tokens("glm-5.2"), 1_000_000)
+        self.assertEqual(
+            backend.context_window_tokens("GLM-5.2[1M]"), 1_000_000,
+        )
         self.assertEqual(
             backend.context_window_tokens("glm-5v-turbo"), 200_000,
         )
@@ -1366,6 +1375,40 @@ class ZaiBackendTests(unittest.TestCase):
                 "reasoning_effort": "max",
             },
         )
+        self.assertEqual(
+            backend._effort_fields(50, "GLM-5.2[1M]"),
+            {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "medium",
+            },
+        )
+
+    def test_preserved_thinking_is_limited_to_documented_glm_models(
+        self,
+    ) -> None:
+        backend = ZaiBackend()
+        self.assertEqual(
+            zai_mod._PRESERVED_THINKING_MODELS,
+            set(zai_mod._FALLBACK_MODELS) - {"glm-4-32b-0414-128k"},
+        )
+        for model in ("glm-5.2", "GLM-5.2[1M]", "glm-4.5-air"):
+            with self.subTest(model=model):
+                self.assertTrue(backend._preserve_reasoning_content(model))
+        for model in ("glm-4-32b-0414-128k", "private-glm"):
+            with self.subTest(model=model):
+                self.assertFalse(backend._preserve_reasoning_content(model))
+
+        self.assertEqual(
+            backend._preserved_reasoning_request_fields("glm-5.2", {}),
+            {"thinking": {"type": "enabled", "clear_thinking": False}},
+        )
+        self.assertEqual(
+            backend._preserved_reasoning_request_fields(
+                "glm-5.2",
+                {"thinking": {"type": "disabled"}},
+            ),
+            {"thinking": {"type": "disabled", "clear_thinking": False}},
+        )
 
     def test_current_tool_capable_glms_stream_tool_call_arguments(self) -> None:
         backend = ZaiBackend()
@@ -1389,6 +1432,10 @@ class ZaiBackendTests(unittest.TestCase):
                 self.assertEqual(
                     backend._tool_request_fields(model), {"tool_stream": True},
                 )
+        self.assertEqual(
+            backend._tool_request_fields("GLM-5.2[1M]"),
+            {"tool_stream": True},
+        )
         for model in (
             "glm-4.5v",
             "glm-4.5",

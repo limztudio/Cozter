@@ -118,6 +118,10 @@ class BotCommandTests(unittest.TestCase):
         self._run(self.bot._receive_effort(self._ctx(text="9" * 5_000)))
         self.assertIn("Not a number", self._last())
 
+    def test_effort_help_lists_zai_mapping(self) -> None:
+        self._run(self.bot.cmd_effort(self._ctx()))
+        self.assertIn("zai:", self._last())
+
     # -- /context ----------------------------------------------------------
     def test_context_sets_budget(self) -> None:
         self._run(self.bot.cmd_context(self._ctx(args="8000")))

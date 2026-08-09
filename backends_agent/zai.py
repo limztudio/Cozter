@@ -81,6 +81,30 @@ _MODEL_CONTEXT_WINDOWS = {
     "glm-4.5-flash": 200_000,
     "glm-4-32b-0414-128k": 128_000,
 }
+# Z.ai's GLM-4.5-and-newer agent models can preserve the exact opaque
+# ``reasoning_content`` emitted before a tool call. The older 4-32B fallback
+# has no documented thinking/preserved-reasoning contract, so keep its
+# request and transcript shape untouched.
+_PRESERVED_THINKING_MODELS = frozenset({
+    "glm-5.2",
+    "glm-5v-turbo",
+    "glm-5.1",
+    "glm-5-turbo",
+    "glm-5",
+    "glm-4.7",
+    "glm-4.7-flash",
+    "glm-4.7-flashx",
+    "glm-4.6",
+    "glm-4.6v",
+    "glm-4.6v-flashx",
+    "glm-4.6v-flash",
+    "glm-4.5v",
+    "glm-4.5",
+    "glm-4.5-air",
+    "glm-4.5-x",
+    "glm-4.5-airx",
+    "glm-4.5-flash",
+})
 # Z.ai documents ``tool_stream`` for GLM-4.6 and newer. Its current vision
 # documentation explicitly confirms native function calling for the GLM-4.6V
 # family and function calling plus streaming for GLM-5V-Turbo, so those
@@ -123,6 +147,16 @@ def _chat_completion_model_ids(model_ids: tuple[str, ...]) -> tuple[str, ...]:
     )
 
 
+def _capability_model_id(model: str | None) -> str:
+    """Normalize Z.ai's model suffixes for local capability lookups.
+
+    The request must keep the exact selected ID -- notably the Coding Plan's
+    ``glm-5.2[1m]`` long-context spelling -- while effort, tool-streaming,
+    context, and preserved-thinking support are shared with its base model.
+    """
+    return (model or "").strip().casefold().removesuffix("[1m]")
+
+
 class ZaiBackend(CachedOpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
@@ -138,7 +172,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
 
     def context_window_tokens(self, model: str | None) -> int | None:
         """Return a published capacity for a curated Z.ai model ID."""
-        selected = model or self.default_model
+        selected = _capability_model_id(model or self.default_model)
         return _MODEL_CONTEXT_WINDOWS.get(selected)
 
     # ---- model discovery -----------------------------------------------
@@ -196,7 +230,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
     ) -> dict:
         if percent <= 0:
             return {}
-        if model == "glm-5.2":
+        if _capability_model_id(model or self.default_model) == "glm-5.2":
             return {
                 "thinking": {"type": "enabled"},
                 "reasoning_effort": self.convert_effort(percent),
@@ -207,6 +241,33 @@ class ZaiBackend(CachedOpenAIChatBackend):
             },
         }
 
+    def _preserve_reasoning_content(self, model: str | None) -> bool:
+        """Whether this documented GLM model accepts retained reasoning."""
+        return _capability_model_id(
+            model or self.default_model,
+        ) in _PRESERVED_THINKING_MODELS
+
+    def _preserved_reasoning_request_fields(
+        self,
+        model: str | None,
+        effort_fields: dict,
+    ) -> dict:
+        """Enable Z.ai's preserved-thinking contract for an agent turn.
+
+        The Coding Plan endpoint enables this by default, while the standard
+        endpoint requires ``clear_thinking: false``. Preserve the caller's
+        explicit thinking mode and reasoning effort; when no effort override
+        was selected, request the provider's normal enabled-thinking mode so
+        an upcoming tool result can carry the required opaque block.
+        """
+        del model  # Capability was checked by _preserve_reasoning_content.
+        thinking = effort_fields.get("thinking")
+        if isinstance(thinking, dict):
+            return {
+                "thinking": {**thinking, "clear_thinking": False},
+            }
+        return {"thinking": {"type": "enabled", "clear_thinking": False}}
+
     def _tool_request_fields(self, model: str | None) -> dict:
         """Enable incremental tool-call deltas on documented agent models.
 
@@ -216,7 +277,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
         intentionally omit the optional field until provider documentation
         confirms their compatibility.
         """
-        selected = model or self.default_model
+        selected = _capability_model_id(model or self.default_model)
         return {"tool_stream": True} if selected in _TOOL_STREAM_MODELS else {}
 
     def _auto_continue_after_tool_limit(self) -> bool:

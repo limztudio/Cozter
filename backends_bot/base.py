@@ -1505,6 +1505,8 @@ class BotPlatform(ABC):
             " max, while Haiku and legacy pins use their default\n"
             "  copilot:     1-16 minimal / 17-33 low / 34-50 medium"
             " / 51-66 high / 67-83 xhigh / 84-100 max\n\n"
+            "  zai:         GLM-5.2 uses seven bands; other GLMs toggle"
+            " thinking off below 50% and on at 50%+\n\n"
             "Applies to your chat turns (not compaction/routing)."
             "\nEnter a number 0-100 (or /cancel):"
         )

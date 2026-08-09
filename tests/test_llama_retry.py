@@ -73,10 +73,33 @@ class OpenAIRetryLoopTests(unittest.TestCase):
             calls["n"] += 1
             if calls["n"] < 3:
                 raise oa._RetryableError("boom")
-            return ("ok", [])
+            return "ok", "", []
 
-        self.assertEqual(self._run(once), ("ok", []))
+        self.assertEqual(self._run(once), ("ok", "", []))
         self.assertEqual(calls["n"], 3)
+
+    def test_retry_discards_partial_reasoning_from_failed_stream(self) -> None:
+        failed = _SSEResponse([
+            b'data: {"choices":[{"delta":{"reasoning_content":"old"}}]}\n\n',
+        ])
+        succeeded = _SSEResponse([
+            b'data: {"choices":[{"delta":{"reasoning_content":"new"}}]}\n\n'
+            b'data: {"choices":[{"delta":{"content":"answer"}}]}\n\n'
+            b'data: [DONE]\n\n',
+        ])
+        with (
+            mock.patch.object(
+                oa.aiohttp,
+                "ClientSession",
+                side_effect=[_SSESession(failed), _SSESession(succeeded)],
+            ),
+            mock.patch.object(oa, "_backoff_delay", return_value=0.0),
+        ):
+            result = asyncio.run(oa._stream_completion(
+                "http://x/chat/completions", {}, {}, 300, 1, "test",
+            ))
+
+        self.assertEqual(result, ("answer", "new", []))
 
     def test_gives_up_after_max_retries(self) -> None:
         calls = {"n": 0}
@@ -164,7 +187,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
 
     def _stream(
         self, events: list[object], *, include_done: bool = True,
-    ) -> tuple[str, list[dict]]:
+    ) -> tuple[str, str, list[dict]]:
         lines = [
             f"data: {json.dumps(event)}\n\n".encode()
             for event in events
@@ -181,7 +204,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
     def test_malformed_sse_shapes_are_ignored_without_losing_valid_deltas(
         self,
     ) -> None:
-        text, tool_calls = self._stream([
+        text, reasoning, tool_calls = self._stream([
             [],
             "not a completion object",
             {"choices": None},
@@ -222,6 +245,52 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         ])
 
         self.assertEqual(text, "Hello world")
+        self.assertEqual(reasoning, "")
+        self.assertEqual(tool_calls, [{
+            "id": "call-1",
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "arguments": '{"path":"x.txt"}',
+            },
+        }])
+
+    def test_reasoning_deltas_are_retained_separately_and_in_order(
+        self,
+    ) -> None:
+        text, reasoning, tool_calls = self._stream([
+            {"choices": [{"delta": {"reasoning_content": "inspect "}}]},
+            {
+                "choices": [{
+                    "delta": {
+                        "content": "Checking ",
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path":',
+                            },
+                        }],
+                    },
+                }],
+            },
+            {"choices": [{"delta": {"reasoning_content": "the file"}}]},
+            {
+                "choices": [{
+                    "delta": {
+                        "content": "now.",
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": {"arguments": '"x.txt"}'},
+                        }],
+                    },
+                }],
+            },
+        ])
+
+        self.assertEqual(text, "Checking now.")
+        self.assertEqual(reasoning, "inspect the file")
         self.assertEqual(tool_calls, [{
             "id": "call-1",
             "type": "function",
@@ -288,7 +357,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             ], include_done=False)
 
     def test_standard_finish_reason_allows_eof_without_done(self) -> None:
-        text, tool_calls = self._stream([
+        text, reasoning, tool_calls = self._stream([
             {
                 "choices": [{
                     "delta": {"content": "complete"},
@@ -298,6 +367,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         ], include_done=False)
 
         self.assertEqual(text, "complete")
+        self.assertEqual(reasoning, "")
         self.assertEqual(tool_calls, [])
 
     def test_error_finish_reason_never_returns_partial_tool_call(self) -> None:
@@ -321,7 +391,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             ])
 
     def test_multiline_sse_data_event_is_decoded_once(self) -> None:
-        async def stream() -> tuple[str, list[dict]]:
+        async def stream() -> tuple[str, str, list[dict]]:
             content = _SSEContent([
                 b'data: {"choices":\n'
                 b'data: [{"delta":{"content":"hello"}}]}\n\n'
@@ -337,8 +407,9 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                     "http://x/chat/completions", {}, {}, 30, "test",
                 )
 
-        text, tool_calls = asyncio.run(stream())
+        text, reasoning, tool_calls = asyncio.run(stream())
         self.assertEqual(text, "hello")
+        self.assertEqual(reasoning, "")
         self.assertEqual(tool_calls, [])
 
     def test_multiline_sse_event_has_an_aggregate_size_cap(self) -> None:
@@ -366,8 +437,19 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             ):
                 self._stream(events)
 
+    def test_completion_reasoning_has_an_aggregate_size_cap(self) -> None:
+        events = [
+            {"choices": [{"delta": {"reasoning_content": "abcd"}}]},
+            {"choices": [{"delta": {"reasoning_content": "efgh"}}]},
+        ]
+        with mock.patch.object(oa, "_MAX_COMPLETION_REASONING_BYTES", 7):
+            with self.assertRaisesRegex(
+                oa._RetryableError, "completion reasoning exceeded",
+            ):
+                self._stream(events)
+
     def test_fragmented_tool_arguments_are_joined_at_completion(self) -> None:
-        text, tool_calls = self._stream([
+        text, reasoning, tool_calls = self._stream([
             {
                 "choices": [{
                     "delta": {
@@ -395,6 +477,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         ])
 
         self.assertEqual(text, "")
+        self.assertEqual(reasoning, "")
         self.assertEqual(tool_calls, [{
             "id": "call-1",
             "type": "function",
@@ -519,6 +602,18 @@ class _ToolStreamingBackend(_ToolLimitBackend):
         return {"tool_stream": True}
 
 
+class _ReasoningToolBackend(_ToolLimitBackend):
+    def _preserve_reasoning_content(self, _model: str | None) -> bool:
+        return True
+
+    def _preserved_reasoning_request_fields(
+        self,
+        _model: str | None,
+        _effort_fields: dict,
+    ) -> dict[str, object]:
+        return {"thinking": {"type": "enabled", "clear_thinking": False}}
+
+
 class _CaptureProc:
     def __init__(self) -> None:
         self.events: list[dict] = []
@@ -554,8 +649,8 @@ class OpenAIToolLimitTests(unittest.TestCase):
             payload = args[1]
             calls.append(copy.deepcopy(payload))
             if len(calls) <= 2:
-                return "", [_tool_call(f"call-{len(calls)}", "x.txt")]
-            return "done", []
+                return "", "", [_tool_call(f"call-{len(calls)}", "x.txt")]
+            return "done", "", []
 
         async def execute_tool(name, args, workspace_path, approval, emit):
             emit({"type": "tool_use", "name": name, "input": args})
@@ -587,8 +682,8 @@ class OpenAIToolLimitTests(unittest.TestCase):
             payload = args[1]
             calls.append(copy.deepcopy(payload))
             if len(calls) == 1:
-                return "", [_tool_call("call-1", "x.txt")]
-            return "", []
+                return "", "", [_tool_call("call-1", "x.txt")]
+            return "", "", []
 
         async def execute_tool(name, args, workspace_path, approval, emit):
             return f"{name} ok"
@@ -617,8 +712,8 @@ class OpenAIToolLimitTests(unittest.TestCase):
             payload = args[1]
             calls.append(copy.deepcopy(payload))
             if len(calls) == 1:
-                return "", [_tool_call("call-1", "x.txt")]
-            return "done", []
+                return "", "", [_tool_call("call-1", "x.txt")]
+            return "done", "", []
 
         async def execute_tool(name, args, workspace_path, approval, emit):
             return f"{name} ok"
@@ -634,13 +729,64 @@ class OpenAIToolLimitTests(unittest.TestCase):
         self.assertEqual(calls[0]["tool_stream"], True)
         self.assertNotIn("tool_stream", calls[1])
 
+    def test_preserved_reasoning_is_replayed_only_for_opt_in_backends(
+        self,
+    ) -> None:
+        calls: list[dict] = []
+
+        async def stream(*args, **kwargs):
+            calls.append(copy.deepcopy(args[1]))
+            if len(calls) == 1:
+                return (
+                    "Checking the file.",
+                    "Need inspect the file before answering.",
+                    [_tool_call("call-1", "x.txt")],
+                )
+            return "Done.", "", []
+
+        async def execute_tool(name, args, workspace_path, approval, emit):
+            return f"{name} result"
+
+        oa._stream_completion = stream
+        oa.tools.execute_tool = execute_tool
+
+        proc = _CaptureProc()
+        asyncio.run(_ReasoningToolBackend(auto_continue=False)._run_agent(
+            proc, "/tmp", "work", None, "auto", False, 0,
+        ))
+
+        self.assertEqual(calls[0]["thinking"], {
+            "type": "enabled", "clear_thinking": False,
+        })
+        self.assertEqual(calls[1]["thinking"], {
+            "type": "enabled", "clear_thinking": False,
+        })
+        assistant_message = calls[1]["messages"][-3]
+        self.assertEqual(assistant_message, {
+            "role": "assistant",
+            "content": "Checking the file.",
+            "reasoning_content": "Need inspect the file before answering.",
+            "tool_calls": [_tool_call("call-1", "x.txt")],
+        })
+        self.assertEqual(calls[1]["messages"][-2], {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "name": "read_file",
+            "content": "read_file result",
+        })
+        self.assertEqual(
+            [event["text"] for event in proc.events
+             if event.get("type") == "assistant_text"],
+            ["Checking the file.", "Done."],
+        )
+
     def test_message_budget_stops_before_oversized_tool_turn(self) -> None:
         calls: list[dict] = []
         executed = False
 
         async def stream(*args, **kwargs):
             calls.append(copy.deepcopy(args[1]))
-            return "x" * 10_000, [_tool_call("call-1", "x.txt")]
+            return "x" * 10_000, "", [_tool_call("call-1", "x.txt")]
 
         async def execute_tool(name, args, workspace_path, approval, emit):
             nonlocal executed
