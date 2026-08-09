@@ -76,6 +76,18 @@ NO_WORKSPACE_TEXT = (
     "No workspace selected (or it was deleted). Use /new or /open."
 )
 
+
+def _record_with_required_string_fields(
+    value: object, required: tuple[str, ...],
+) -> dict | None:
+    """Return a durable record only when all identity fields are strings."""
+    if not isinstance(value, dict) or not all(
+        isinstance(value.get(key), str) and value[key] for key in required
+    ):
+        return None
+    return value
+
+
 def ensure_upload_dir(workspace_path: str) -> str:
     """Return the workspace upload directory, creating it if needed."""
     upload_dir = workspace.workspace_state_path(workspace_path, UPLOADS_DIR)
@@ -442,6 +454,18 @@ class BotPlatform(ABC):
         """Raise before accepting or sending a known-oversized file."""
         if upload_size_exceeds_limit(size, self.max_upload_bytes):
             raise UploadTooLargeError(self.max_upload_bytes)
+
+    async def _attachment_upload_dir(self, ctx: BotContext) -> str | None:
+        """Return a safe upload directory, replying when no workspace exists."""
+        ws = workspace.get_current(ctx.user_id, self.platform_id)
+        if not ws or not os.path.isdir(ws):
+            await ctx.reply_text(NO_WORKSPACE_TEXT)
+            return None
+        try:
+            return ensure_upload_dir(ws)
+        except (OSError, ValueError) as exc:
+            await ctx.reply_text(f"Workspace state is unsafe: {exc}")
+            return None
 
     def _check_upload_path(self, path: str) -> None:
         """Raise before an outbound adapter hands a large file to its API."""
@@ -1583,26 +1607,49 @@ class BotPlatform(ABC):
 
     # ----- /compact -------------------------------------------------------
 
+    @staticmethod
+    def _first_command_argument(ctx: BotContext) -> str:
+        """Return the normalized first argument supplied to a command."""
+        arguments = ctx.args.strip().lower().split()
+        return arguments[0] if arguments else ""
+
+    @staticmethod
+    async def _set_decimal_workspace_setting(
+        ctx: BotContext,
+        workspace_path: str,
+        argument: str,
+        *,
+        setter: Callable[[str, int], None],
+        success_message: str,
+    ) -> bool:
+        """Set a decimal workspace value, returning whether it was handled."""
+        if not argument.isdecimal():
+            return False
+        value = parse_decimal_int(argument)
+        if value is None:
+            await ctx.reply_text("Error: number is too large.")
+            return True
+        try:
+            setter(workspace_path, value)
+        except ValueError as exc:
+            await ctx.reply_text(f"Error: {exc}")
+            return True
+        await ctx.reply_text(success_message.format(value=value))
+        return True
+
     async def cmd_compact(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
         if ws is None:
             return
-        arg = ctx.args.strip().lower().split()
-        first = arg[0] if arg else ""
+        first = self._first_command_argument(ctx)
 
-        if first.isdecimal():
-            interval = parse_decimal_int(first)
-            if interval is None:
-                await ctx.reply_text("Error: number is too large.")
-                return
-            try:
-                workspace.set_compact_interval(ws, interval)
-            except ValueError as e:
-                await ctx.reply_text(f"Error: {e}")
-                return
-            await ctx.reply_text(
-                f"Fallback compact interval set to {interval} messages."
-            )
+        if await self._set_decimal_workspace_setting(
+            ctx,
+            ws,
+            first,
+            setter=workspace.set_compact_interval,
+            success_message="Fallback compact interval set to {value} messages.",
+        ):
             return
 
         current = workspace.get_compact_interval(ws)
@@ -1628,22 +1675,15 @@ class BotPlatform(ABC):
         ws = await self._require_ws(ctx)
         if ws is None:
             return
-        arg = ctx.args.strip().lower().split()
-        first = arg[0] if arg else ""
+        first = self._first_command_argument(ctx)
 
-        if first.isdecimal():
-            budget = parse_decimal_int(first)
-            if budget is None:
-                await ctx.reply_text("Error: number is too large.")
-                return
-            try:
-                workspace.set_history_budget(ws, budget)
-            except ValueError as e:
-                await ctx.reply_text(f"Error: {e}")
-                return
-            await ctx.reply_text(
-                f"Context budget set to {budget} characters."
-            )
+        if await self._set_decimal_workspace_setting(
+            ctx,
+            ws,
+            first,
+            setter=workspace.set_history_budget,
+            success_message="Context budget set to {value} characters.",
+        ):
             return
 
         current = workspace.get_history_budget(ws)
@@ -1761,8 +1801,7 @@ class BotPlatform(ABC):
         ws = await self._require_ws(ctx)
         if ws is None:
             return
-        arg = ctx.args.strip().lower().split()
-        first = arg[0] if arg else ""
+        first = self._first_command_argument(ctx)
 
         if first == "now":
             await ctx.reply_text("Consolidating colony...")
@@ -1782,17 +1821,13 @@ class BotPlatform(ABC):
                 )
             return
 
-        if first.isdecimal():
-            n = parse_decimal_int(first)
-            if n is None:
-                await ctx.reply_text("Error: number is too large.")
-                return
-            try:
-                workspace.set_colony_interval(ws, n)
-            except ValueError as e:
-                await ctx.reply_text(f"Error: {e}")
-                return
-            await ctx.reply_text(f"Colony interval set to {n} compaction(s).")
+        if await self._set_decimal_workspace_setting(
+            ctx,
+            ws,
+            first,
+            setter=workspace.set_colony_interval,
+            success_message="Colony interval set to {value} compaction(s).",
+        ):
             return
 
         items = colony.get_items(ws)
@@ -2256,24 +2291,20 @@ class BotPlatform(ABC):
         records: list[dict] = []
         required = ("id", "user_id", "chat_id")
         for value_item in value:
-            if not isinstance(value_item, dict):
+            record = _record_with_required_string_fields(value_item, required)
+            if record is None:
                 continue
-            if not all(
-                isinstance(value_item.get(key), str) and value_item[key]
-                for key in required
-            ):
-                continue
-            messages = value_item.get("messages")
+            messages = record.get("messages")
             if not isinstance(messages, list) or not all(
                 isinstance(message, str) for message in messages
             ):
                 continue
             records.append({
-                "id": value_item["id"],
-                "user_id": value_item["user_id"],
-                "chat_id": value_item["chat_id"],
+                "id": record["id"],
+                "user_id": record["user_id"],
+                "chat_id": record["chat_id"],
                 "messages": list(messages),
-                "awaiting": value_item.get("awaiting") is True,
+                "awaiting": record.get("awaiting") is True,
             })
         return records
 
@@ -2546,14 +2577,10 @@ class BotPlatform(ABC):
             "user_id", "chat_id",
         )
         for value_item in value:
-            if not isinstance(value_item, dict):
+            record = _record_with_required_string_fields(value_item, required)
+            if record is None:
                 continue
-            if not all(
-                isinstance(value_item.get(key), str) and value_item[key]
-                for key in required
-            ):
-                continue
-            record = dict(value_item)
+            record = dict(record)
             if not isinstance(record.get("session_id"), str):
                 record["session_id"] = None
             for key in ("delivery_text", "last_reported_state"):
@@ -3204,6 +3231,29 @@ class BotPlatform(ABC):
                 entry_id, uid, exc_info=True,
             )
 
+    async def _persist_and_queue_dispatch(
+        self,
+        uid: str,
+        text: str,
+        chat_id: str,
+        generation: int,
+        q: asyncio.Queue,
+    ) -> str | None:
+        """Persist and enqueue a dispatch unless cancellation made it stale."""
+        entry_id = await self._persist_admitted_dispatch_entry(
+            uid, text, chat_id, generation,
+        )
+        if entry_id is None:
+            return None
+        if self._cancel_generations.get(uid, 0) != generation:
+            await self._discard_cancelled_dispatch_entry(uid, entry_id)
+            return None
+        await q.put((text, chat_id, entry_id, False))
+        if self._cancel_generations.get(uid, 0) != generation:
+            await self._discard_cancelled_dispatch_entry(uid, entry_id, q)
+            return None
+        return entry_id
+
     async def _dispatch_ai(self, ctx: BotContext, text: str) -> None:
         uid = ctx.user_id
         chat_id = ctx.chat_id
@@ -3214,19 +3264,10 @@ class BotPlatform(ABC):
             if q.full():
                 await ctx.reply_text("Queue full. Try again after restart.")
             else:
-                entry_id = await self._persist_admitted_dispatch_entry(
-                    uid, text, chat_id, generation,
+                entry_id = await self._persist_and_queue_dispatch(
+                    uid, text, chat_id, generation, q,
                 )
                 if entry_id is None:
-                    return
-                if self._cancel_generations.get(uid, 0) != generation:
-                    await self._discard_cancelled_dispatch_entry(uid, entry_id)
-                    return
-                await q.put((text, chat_id, entry_id, False))
-                if self._cancel_generations.get(uid, 0) != generation:
-                    await self._discard_cancelled_dispatch_entry(
-                        uid, entry_id, q,
-                    )
                     return
                 await self._resume_awaiting_answer(
                     uid, q, entry_id, reason="update was pending",
@@ -3244,19 +3285,10 @@ class BotPlatform(ABC):
                 await ctx.reply_text("Queue full. Wait or /stop first.")
             else:
                 was_awaiting = uid in self._awaiting_answer
-                entry_id = await self._persist_admitted_dispatch_entry(
-                    uid, text, chat_id, generation,
+                entry_id = await self._persist_and_queue_dispatch(
+                    uid, text, chat_id, generation, q,
                 )
                 if entry_id is None:
-                    return
-                if self._cancel_generations.get(uid, 0) != generation:
-                    await self._discard_cancelled_dispatch_entry(uid, entry_id)
-                    return
-                await q.put((text, chat_id, entry_id, False))
-                if self._cancel_generations.get(uid, 0) != generation:
-                    await self._discard_cancelled_dispatch_entry(
-                        uid, entry_id, q,
-                    )
                     return
                 if was_awaiting:
                     await self._resume_awaiting_answer(

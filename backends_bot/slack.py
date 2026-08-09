@@ -26,7 +26,6 @@ from ..config import (
     DEFAULT_MESSAGE_QUEUE_SIZE,
     DEFAULT_RECENT_WORKSPACE_LIMIT,
 )
-from .. import workspace
 from ..utils import split_text_chunks
 from .base import (
     AttachmentInfo,
@@ -34,11 +33,9 @@ from .base import (
     BotPlatform,
     COMMAND_NAMES,
     MessageHandle,
-    NO_WORKSPACE_TEXT,
     UploadTooLargeError,
     attachment_kind_from_mime,
     download_http_file,
-    ensure_upload_dir,
     reserve_upload_path,
     upload_limit_message,
     upload_size_exceeds_limit,
@@ -496,19 +493,9 @@ class SlackBot(BotPlatform):
         # Caller (_on_message) has already verified channel authorization.
         uid = str(event["user"])
         channel = str(event["channel"])
-        ws = workspace.get_current(uid, self.platform_id)
-
         ctx_for_reply = self._ctx(uid, channel, text=caption)
-        if not ws or not os.path.isdir(ws):
-            await ctx_for_reply.reply_text(NO_WORKSPACE_TEXT)
-            return
-
-        try:
-            upload_dir = ensure_upload_dir(ws)
-        except (OSError, ValueError) as exc:
-            await ctx_for_reply.reply_text(
-                f"Workspace state is unsafe: {exc}", rich=False,
-            )
+        upload_dir = await self._attachment_upload_dir(ctx_for_reply)
+        if upload_dir is None:
             return
 
         for f in files:

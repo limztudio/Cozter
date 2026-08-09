@@ -238,7 +238,7 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
         bot.send_text = mock.AsyncMock(return_value=None)
 
         with tempfile.TemporaryDirectory() as ws, mock.patch(
-            "Cozter.backends_bot.slack.workspace.get_current",
+            "Cozter.backends_bot.base.workspace.get_current",
             return_value=ws,
         ), mock.patch(
             "Cozter.backends_bot.slack._download_private",
@@ -409,7 +409,7 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         with tempfile.TemporaryDirectory() as ws, mock.patch(
-            "Cozter.backends_bot.slack.workspace.get_current",
+            "Cozter.backends_bot.base.workspace.get_current",
             return_value=ws,
         ), mock.patch(
             "Cozter.backends_bot.slack._download_private",

@@ -34,6 +34,29 @@ def _starts_shell_comment(text: str, index: int) -> bool:
     return index == 0 or text[index - 1].isspace() or text[index - 1] in ";|&()<>"
 
 
+def _advance_shell_quote_or_escape(
+    text: str, index: int, quote: str,
+) -> tuple[int, str] | None:
+    """Advance over one quoted or escaped shell fragment, when present.
+
+    The lightweight shell scanners below use the same quote and backslash
+    rules.  Keeping them here prevents their safety behavior from drifting
+    when one scanner is tightened without the other.
+    """
+    char = text[index]
+    if quote:
+        if char == "\\" and quote == '"':
+            return index + 2, quote
+        if char == quote:
+            quote = ""
+        return index + 1, quote
+    if char in "\"'":
+        return index + 1, char
+    if char == "\\":
+        return index + 2, quote
+    return None
+
+
 def _heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
     """Find straightforward here-document delimiters on one command line.
 
@@ -47,22 +70,11 @@ def _heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
     quote = ""
     index = 0
     while index < len(line):
+        advanced = _advance_shell_quote_or_escape(line, index, quote)
+        if advanced is not None:
+            index, quote = advanced
+            continue
         char = line[index]
-        if quote:
-            if char == "\\" and quote == '"':
-                index += 2
-                continue
-            if char == quote:
-                quote = ""
-            index += 1
-            continue
-        if char in "\"'":
-            quote = char
-            index += 1
-            continue
-        if char == "\\":
-            index += 2
-            continue
         if char == "#" and _starts_shell_comment(line, index):
             break
         if not line.startswith("<<", index) or line.startswith("<<<", index):
@@ -154,22 +166,11 @@ def _has_background_operator(command: str) -> bool:
     quote = ""
     index = 0
     while index < len(command):
+        advanced = _advance_shell_quote_or_escape(command, index, quote)
+        if advanced is not None:
+            index, quote = advanced
+            continue
         char = command[index]
-        if quote:
-            if char == "\\" and quote == '"':
-                index += 2
-                continue
-            if char == quote:
-                quote = ""
-            index += 1
-            continue
-        if char in "\"'":
-            quote = char
-            index += 1
-            continue
-        if char == "\\":
-            index += 2
-            continue
         if char == "#" and _starts_shell_comment(command, index):
             newline = command.find("\n", index + 1)
             index = len(command) if newline == -1 else newline + 1

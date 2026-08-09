@@ -312,6 +312,12 @@ class TelegramBot(BotPlatform):
             return
         await self.dispatch_text(ctx)
 
+    async def _reply_file_error(self, update: Update, text: str) -> None:
+        """Reply to a file event when its context can still be resolved."""
+        ctx = self._build_context(update, text="")
+        if ctx:
+            await ctx.reply_text(text)
+
     async def _on_file(
         self, update: Update, _context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
@@ -362,9 +368,9 @@ class TelegramBot(BotPlatform):
         try:
             self._check_upload_size(getattr(media, "file_size", None))
         except UploadTooLargeError:
-            ctx = self._build_context(update, text="")
-            if ctx:
-                await ctx.reply_text(upload_limit_message(self.max_upload_bytes))
+            await self._reply_file_error(
+                update, upload_limit_message(self.max_upload_bytes),
+            )
             return
 
         tg_file = await media.get_file()
@@ -374,9 +380,9 @@ class TelegramBot(BotPlatform):
             # that case too.
             self._check_upload_size(getattr(tg_file, "file_size", None))
         except UploadTooLargeError:
-            ctx = self._build_context(update, text="")
-            if ctx:
-                await ctx.reply_text(upload_limit_message(self.max_upload_bytes))
+            await self._reply_file_error(
+                update, upload_limit_message(self.max_upload_bytes),
+            )
             return
 
         caption = (message.caption or "").strip()
@@ -397,14 +403,12 @@ class TelegramBot(BotPlatform):
                     tg_file, local_path, self.max_upload_bytes,
                 )
         except UploadTooLargeError:
-            ctx = self._build_context(update, text="")
-            if ctx:
-                await ctx.reply_text(upload_limit_message(self.max_upload_bytes))
+            await self._reply_file_error(
+                update, upload_limit_message(self.max_upload_bytes),
+            )
             return
         except Exception as e:
-            ctx = self._build_context(update, text="")
-            if ctx:
-                await ctx.reply_text(f"Failed to download file: {e}")
+            await self._reply_file_error(update, f"Failed to download file: {e}")
             return
 
         ctx = self._build_context(

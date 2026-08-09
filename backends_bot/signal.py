@@ -29,11 +29,9 @@ from .base import (
     BotContext,
     BotPlatform,
     MessageHandle,
-    NO_WORKSPACE_TEXT,
     UploadTooLargeError,
     attachment_kind_from_mime,
     copy_file_with_limit,
-    ensure_upload_dir,
     reserve_upload_path,
     upload_limit_message,
     upload_size_exceeds_limit,
@@ -639,15 +637,8 @@ class SignalBot(BotPlatform):
         attachments: list[Any],
     ) -> None:
         ctx_for_reply = self._ctx(group_id, text=caption)
-        ws = workspace.get_current(ctx_for_reply.user_id, self.platform_id)
-        if not ws or not os.path.isdir(ws):
-            await ctx_for_reply.reply_text(NO_WORKSPACE_TEXT)
-            return
-
-        try:
-            upload_dir = ensure_upload_dir(ws)
-        except (OSError, ValueError) as exc:
-            await ctx_for_reply.reply_text(f"Workspace state is unsafe: {exc}")
+        upload_dir = await self._attachment_upload_dir(ctx_for_reply)
+        if upload_dir is None:
             return
 
         for att in attachments:
