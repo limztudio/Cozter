@@ -490,6 +490,18 @@ class Backend(ABC):
         """Default model for one of flexible's difficulty tiers."""
         return self.tier_models.get(tier) or self.default_model
 
+    def available_models_for_workspace(
+        self, _workspace_path: str,
+    ) -> tuple[str, ...]:
+        """Return models selectable in one workspace.
+
+        Most backends have an account-wide or static catalog, so the
+        workspace does not affect their result. Backends whose provider
+        applies project-level policy can override this without making every
+        caller special-case that policy.
+        """
+        return self.available_models
+
     def resolve_configured_model(self, model: str) -> str:
         """Return an explicit stored model that is safe to launch.
 
@@ -501,6 +513,18 @@ class Backend(ABC):
         settings are read on the bot's event loop before a turn begins.
         """
         return model
+
+    def resolve_configured_model_for_workspace(
+        self, model: str, _workspace_path: str,
+    ) -> str:
+        """Resolve a stored model using any workspace-scoped catalog.
+
+        The default preserves the existing account-wide/static behavior.
+        Implementations with project-level policy should only accept a
+        configured model when the matching workspace catalog is still fresh.
+        This must not perform blocking discovery during a foreground turn.
+        """
+        return self.resolve_configured_model(model)
 
     def context_window_tokens(self, _model: str | None) -> int | None:
         """Return the active context-window capacity for *model*, if known.

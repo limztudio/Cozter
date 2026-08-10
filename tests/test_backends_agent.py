@@ -60,6 +60,20 @@ class BackendSharedHelperTests(unittest.TestCase):
     def test_context_window_hook_defaults_to_unknown(self) -> None:
         self.assertIsNone(_DummyBackend().context_window_tokens("any-model"))
 
+    def test_workspace_model_hooks_default_to_existing_behavior(self) -> None:
+        backend = _DummyBackend()
+        backend.available_models = ("model-a",)
+        self.assertEqual(
+            backend.available_models_for_workspace("/workspace"),
+            ("model-a",),
+        )
+        self.assertEqual(
+            backend.resolve_configured_model_for_workspace(
+                "private-model", "/workspace",
+            ),
+            "private-model",
+        )
+
 
 class BackendPermissionCommandTests(unittest.TestCase):
     def _codex_command(
@@ -720,7 +734,9 @@ class BackendModelTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             isolated_home = os.path.join(temp_dir, "copilot-home")
+            workspace_path = os.path.join(temp_dir, "policy-project")
             os.mkdir(isolated_home)
+            os.mkdir(workspace_path)
             with (
                 mock.patch.object(copilot_mod.shutil, "which", return_value="copilot"),
                 mock.patch.object(copilot_mod, "executable_command", return_value=["copilot"]),
@@ -732,11 +748,12 @@ class BackendModelTests(unittest.TestCase):
                 mock.patch.object(copilot_mod.subprocess, "Popen", return_value=proc) as popen,
             ):
                 self.assertEqual(
-                    CopilotBackend().available_models,
+                    CopilotBackend().available_models_for_workspace(workspace_path),
                     ("auto", "allowed-only"),
                 )
 
             self.assertEqual(popen.call_args.kwargs["env"]["COPILOT_HOME"], isolated_home)
+            self.assertEqual(popen.call_args.kwargs["cwd"], workspace_path)
             self.assertFalse(os.path.exists(isolated_home))
 
         command = popen.call_args.args[0]
@@ -752,45 +769,129 @@ class BackendModelTests(unittest.TestCase):
             {"jsonrpc": "2.0", "method": "initialized", "params": {}},
             sent,
         )
+        session_requests = [
+            message for message in sent if message.get("method") == "session/new"
+        ]
+        self.assertEqual(
+            session_requests[0]["params"]["cwd"], workspace_path,
+        )
         proc.terminate.assert_called_once()
 
     def test_copilot_retries_failures_and_caches_only_success(self) -> None:
         backend = CopilotBackend()
+        workspace_path = "/workspaces/retry"
+        workspace_key = backend._workspace_catalog_key(workspace_path)
         with mock.patch.object(
             backend,
             "_discover_models",
             side_effect=[None, ("auto", "allowed-only")],
         ) as discover:
-            self.assertEqual(backend.available_models, ("auto",))
+            self.assertEqual(
+                backend.available_models_for_workspace(workspace_path), ("auto",),
+            )
             # A short fallback throttle prevents an unavailable CLI from
             # spawning another ACP process for every picker interaction.
-            self.assertEqual(backend.available_models, ("auto",))
-            self.assertEqual(discover.call_count, 1)
-            backend._fallback_expires_at = 0
             self.assertEqual(
-                backend.available_models,
+                backend.available_models_for_workspace(workspace_path), ("auto",),
+            )
+            self.assertEqual(discover.call_count, 1)
+            backend._workspace_fallback_expires_at[workspace_key] = 0
+            self.assertEqual(
+                backend.available_models_for_workspace(workspace_path),
                 ("auto", "allowed-only"),
             )
             self.assertEqual(
-                backend.available_models,
+                backend.available_models_for_workspace(workspace_path),
                 ("auto", "allowed-only"),
             )
 
         self.assertEqual(discover.call_count, 2)
-
-    def test_copilot_stale_configured_model_fails_closed_to_auto(self) -> None:
-        backend = CopilotBackend()
-        backend._cached_models = ("auto", "company-allowed")
-        backend._catalog_expires_at = time.monotonic() + 60
         self.assertEqual(
-            backend.resolve_configured_model("company-allowed"),
+            discover.call_args_list,
+            [mock.call(workspace_key), mock.call(workspace_key)],
+        )
+
+    def test_copilot_catalog_cache_is_isolated_by_workspace(self) -> None:
+        backend = CopilotBackend()
+        blocked_workspace = "/workspaces/blocked"
+        allowed_workspace = "/workspaces/allowed"
+        blocked_key = backend._workspace_catalog_key(blocked_workspace)
+        allowed_key = backend._workspace_catalog_key(allowed_workspace)
+        with mock.patch.object(
+            backend,
+            "_discover_models",
+            side_effect=[None, ("auto", "project-allowed")],
+        ) as discover:
+            self.assertEqual(
+                backend.available_models_for_workspace(blocked_workspace),
+                ("auto",),
+            )
+            self.assertEqual(
+                backend.available_models_for_workspace(allowed_workspace),
+                ("auto", "project-allowed"),
+            )
+            # The failure throttle for one project must not hide an allowed
+            # model in another, and the successful catalog must not revive it
+            # in the project whose policy returned no named choices.
+            self.assertEqual(
+                backend.available_models_for_workspace(blocked_workspace),
+                ("auto",),
+            )
+            self.assertEqual(
+                backend.resolve_configured_model_for_workspace(
+                    "project-allowed", blocked_workspace,
+                ),
+                "auto",
+            )
+            self.assertEqual(
+                backend.resolve_configured_model_for_workspace(
+                    "project-allowed", allowed_workspace,
+                ),
+                "project-allowed",
+            )
+
+        self.assertEqual(
+            discover.call_args_list,
+            [mock.call(blocked_key), mock.call(allowed_key)],
+        )
+
+    def test_copilot_configured_model_is_workspace_scoped_and_fails_closed(
+        self,
+    ) -> None:
+        backend = CopilotBackend()
+        allowed_workspace = "/workspaces/allowed"
+        other_workspace = "/workspaces/other"
+        allowed_key = backend._workspace_catalog_key(allowed_workspace)
+        backend._workspace_model_catalogs[allowed_key] = (
+            ("auto", "company-allowed"), time.monotonic() + 60,
+        )
+        self.assertEqual(
+            backend.resolve_configured_model_for_workspace(
+                "company-allowed", allowed_workspace,
+            ),
             "company-allowed",
         )
-        self.assertEqual(backend.resolve_configured_model("blocked-model"), "auto")
-
-        backend._catalog_expires_at = 0
         self.assertEqual(
-            backend.resolve_configured_model("company-allowed"), "auto",
+            backend.resolve_configured_model_for_workspace(
+                "blocked-model", allowed_workspace,
+            ),
+            "auto",
+        )
+        self.assertEqual(
+            backend.resolve_configured_model_for_workspace(
+                "company-allowed", other_workspace,
+            ),
+            "auto",
+        )
+
+        backend._workspace_model_catalogs[allowed_key] = (
+            ("auto", "company-allowed"), 0,
+        )
+        self.assertEqual(
+            backend.resolve_configured_model_for_workspace(
+                "company-allowed", allowed_workspace,
+            ),
+            "auto",
         )
 
     def test_copilot_cmd_shim_cleanup_kills_its_process_tree(self) -> None:

@@ -527,6 +527,48 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                     ["auto", "company-allowed"],
                 )
 
+    def test_available_models_uses_workspace_scoped_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            workspace.set_backend_name(tmp, "copilot")
+            catalog = mock.Mock(return_value=("auto", "project-allowed"))
+            backend = SimpleNamespace(
+                available_models=("auto",),
+                available_models_for_workspace=catalog,
+                allow_unverified_extra_models=False,
+            )
+
+            with mock.patch.object(
+                workspace.backends_agent, "get_backend", return_value=backend,
+            ):
+                self.assertEqual(
+                    workspace.get_available_models(tmp),
+                    ["auto", "project-allowed"],
+                )
+
+            catalog.assert_called_once_with(tmp)
+
+    def test_configured_model_uses_workspace_scoped_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            workspace.set_backend_name(tmp, "copilot")
+            workspace.set_model(tmp, "blocked-model")
+            resolver = mock.Mock(return_value="auto")
+            backend = SimpleNamespace(
+                default_model="auto",
+                default_summary_model="auto",
+                tier_models={},
+                resolve_configured_model=mock.Mock(return_value="blocked-model"),
+                resolve_configured_model_for_workspace=resolver,
+            )
+
+            with mock.patch.object(
+                workspace.backends_agent, "get_backend", return_value=backend,
+            ):
+                self.assertEqual(workspace.get_model(tmp), "auto")
+
+            resolver.assert_called_once_with("blocked-model", tmp)
+
 
 class ColonyStateFallbackTests(unittest.TestCase):
     def test_colony_state_normalizes_missing_or_invalid_keys(self) -> None:

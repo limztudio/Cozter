@@ -140,14 +140,18 @@ class CopilotBackend(Backend):
     effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
 
     def __init__(self) -> None:
-        # The backend is a process-wide singleton. Cache only an ACP result,
-        # never a failed probe: a transient sign-in/network failure should
-        # keep the picker fail-closed to ``auto`` but recover on its next
-        # open. Refresh successful results periodically so changed enterprise
-        # policy is reflected without restarting Cozter.
-        self._cached_models: tuple[str, ...] | None = None
-        self._catalog_expires_at = 0.0
-        self._fallback_expires_at = 0.0
+        # The backend is a process-wide singleton, but Copilot applies some
+        # model policies at the repository level (for example a workspace's
+        # .github/allowed_models.txt). Cache ACP results per canonical
+        # workspace, never a failed probe: a transient sign-in/network
+        # failure should keep that picker fail-closed to ``auto`` but recover
+        # on its next open. Refresh successful results periodically so
+        # changed account or repository policy is reflected without a bot
+        # restart.
+        self._workspace_model_catalogs: dict[
+            str, tuple[tuple[str, ...], float],
+        ] = {}
+        self._workspace_fallback_expires_at: dict[str, float] = {}
         self._models_lock = threading.Lock()
         self._process_homes: dict[int, str] = {}
         self._process_homes_lock = threading.Lock()
@@ -167,52 +171,86 @@ class CopilotBackend(Backend):
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
+        """Named models enabled for the current-directory project.
+
+        Callers that know the selected workspace should use
+        :meth:`available_models_for_workspace`; this compatibility property
+        retains the base backend interface for non-workspace callers.
+        """
+        return self.available_models_for_workspace(os.getcwd())
+
+    @staticmethod
+    def _workspace_catalog_key(workspace_path: str) -> str:
+        """Return a stable cache key for a repository-scoped ACP catalog."""
+        return os.path.normcase(os.path.realpath(os.path.abspath(workspace_path)))
+
+    def available_models_for_workspace(
+        self, workspace_path: str,
+    ) -> tuple[str, ...]:
         """Named models enabled for the authenticated Copilot account.
 
         ACP's ``session/new`` response contains the account-aware model
         selector. The generic CLI help catalog is intentionally never used,
-        because it can advertise models this account cannot select. If ACP
-        cannot produce a structured selector, return only ``auto``.
+        because it can advertise models this account cannot select. The ACP
+        session uses the requested workspace as its current directory, so
+        repository policy is included too. If ACP cannot produce a structured
+        selector, return only ``auto``.
         """
-        cached = fresh_model_catalog(
-            self._cached_models, self._catalog_expires_at,
+        workspace_key = self._workspace_catalog_key(workspace_path)
+        now = time.monotonic()
+        catalog = self._workspace_model_catalogs.get(workspace_key)
+        cached = (
+            fresh_model_catalog(*catalog, now=now)
+            if catalog is not None
+            else None
         )
         if cached is not None:
             return cached
-        if time.monotonic() < self._fallback_expires_at:
+        if now < self._workspace_fallback_expires_at.get(workspace_key, 0.0):
             return _FALLBACK_MODELS
 
         with self._models_lock:
-            cached = fresh_model_catalog(
-                self._cached_models, self._catalog_expires_at,
+            now = time.monotonic()
+            catalog = self._workspace_model_catalogs.get(workspace_key)
+            cached = (
+                fresh_model_catalog(*catalog, now=now)
+                if catalog is not None
+                else None
             )
             if cached is not None:
                 return cached
-            if time.monotonic() < self._fallback_expires_at:
+            if now < self._workspace_fallback_expires_at.get(
+                workspace_key, 0.0,
+            ):
                 return _FALLBACK_MODELS
 
             # An expired catalog must not keep displaying names that a newly
             # applied policy might have removed. A failed refresh therefore
             # deliberately falls back to only ``auto`` rather than this old
             # value.
-            self._cached_models = None
-            models = self._discover_models()
+            self._workspace_model_catalogs.pop(workspace_key, None)
+            models = self._discover_models(workspace_key)
             if models is not None:
-                self._cached_models = models
-                self._catalog_expires_at = (
-                    time.monotonic() + MODEL_CATALOG_TTL_SEC
+                self._workspace_model_catalogs[workspace_key] = (
+                    models, time.monotonic() + MODEL_CATALOG_TTL_SEC,
                 )
-                self._fallback_expires_at = 0.0
+                self._workspace_fallback_expires_at.pop(workspace_key, None)
                 return models
             # This is a short retry throttle, not a model-list cache: it
             # prevents an absent/broken CLI from spawning a new process for
             # each input while still recovering quickly after sign-in.
-            self._fallback_expires_at = (
+            self._workspace_fallback_expires_at[workspace_key] = (
                 time.monotonic() + _MODEL_FAILURE_RETRY_SEC
             )
             return _FALLBACK_MODELS
 
     def resolve_configured_model(self, model: str) -> str:
+        """Resolve a stored model for a non-workspace caller's CWD."""
+        return self.resolve_configured_model_for_workspace(model, os.getcwd())
+
+    def resolve_configured_model_for_workspace(
+        self, model: str, workspace_path: str,
+    ) -> str:
         """Keep stored Copilot choices inside a fresh ACP catalog.
 
         This intentionally does not launch ACP from a chat turn. Until a
@@ -220,16 +258,20 @@ class CopilotBackend(Backend):
         ``auto`` is safer than forwarding a possibly policy-disabled stored
         model ID to the CLI.
         """
-        models = self._cached_models
+        catalog = self._workspace_model_catalogs.get(
+            self._workspace_catalog_key(workspace_path),
+        )
+        if catalog is None:
+            return self.default_model
+        models, expires_at = catalog
         if (
-            models is not None
-            and time.monotonic() < self._catalog_expires_at
+            time.monotonic() < expires_at
             and model in models
         ):
             return model
         return self.default_model
 
-    def _discover_models(self) -> tuple[str, ...] | None:
+    def _discover_models(self, workspace_path: str) -> tuple[str, ...] | None:
         binary = shutil.which(self.executable)
         if binary is None:
             logger.debug("copilot not on PATH; model picker is auto-only")
@@ -266,7 +308,7 @@ class CopilotBackend(Backend):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                cwd=os.getcwd(),
+                cwd=workspace_path,
                 env=env,
             )
             if proc.stdout is None:
@@ -309,7 +351,7 @@ class CopilotBackend(Backend):
                 messages,
                 request_id=2,
                 method="session/new",
-                params={"cwd": os.path.abspath(os.getcwd()), "mcpServers": []},
+                params={"cwd": workspace_path, "mcpServers": []},
                 deadline=deadline,
             )
             if session is None:

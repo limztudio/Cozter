@@ -804,10 +804,11 @@ its own, only the three tiers above.
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-air` |
 
 Codex discovers its visible local CLI catalog, while Copilot queries its
-authenticated ACP model selector and fails closed to `auto` if that catalog
-cannot be read. This keeps enterprise-disabled Copilot models out of the
-picker; a stored Copilot choice also uses `auto` until it appears in a fresh
-catalog. Claude Code has no safe non-interactive account catalog, so it keeps
+authenticated ACP model selector from the selected workspace and fails closed
+to `auto` if that catalog cannot be read. This keeps enterprise-disabled and
+workspace-policy-disabled Copilot models out of the picker; a stored Copilot
+choice also uses `auto` until it appears in that workspace's fresh catalog.
+Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
 aliases, the supported `fable[1m]`, `sonnet[1m]`, `opus[1m]`, and
 `opusplan[1m]` long-context aliases, and verified version pins (including
@@ -857,9 +858,12 @@ reasoning blocks across tool calls, while the older GLM-4-32B fallback and
 unknown/private IDs retain the ordinary OpenAI-compatible transcript shape.
 Copilot
 uses a short ACP handshake without sending
-a prompt, and refreshes a successful account catalog periodically. Its picker
-also accepts ACP's provider-grouped model selectors, so account-approved
-models stay visible without a hard-coded catalog. The `copilot` backend keeps
+a prompt, and refreshes a successful workspace-specific catalog periodically.
+The ACP probe runs from the selected workspace so project policy, including
+`.github/allowed_models.txt`, applies to the picker and stored-model check.
+Its picker also accepts ACP's provider-grouped model selectors, so
+account-approved models stay visible without a hard-coded catalog. The
+`copilot` backend keeps
 prompts under the Windows
 command-line limit by dropping the oldest composed context when a prompt
 exceeds its cap; the current user message is kept at the tail. Each Copilot

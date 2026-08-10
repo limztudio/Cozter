@@ -518,11 +518,19 @@ def _with_extra_models(
     return models
 
 
-def _available_models_for_backend(backend_name: str) -> list[str]:
+def _available_models_for_backend(
+    backend_name: str, workspace_path: str | None = None,
+) -> list[str]:
     backend = backends_agent.get_backend(backend_name)
+    workspace_models = getattr(backend, "available_models_for_workspace", None)
+    models = (
+        workspace_models(workspace_path)
+        if workspace_path is not None and callable(workspace_models)
+        else backend.available_models
+    )
     return _with_extra_models(
         backend_name,
-        backend.available_models,
+        models,
         allow_unverified_extras=getattr(
             backend, "allow_unverified_extra_models", True,
         ),
@@ -533,7 +541,9 @@ def _available_models_for_selected_backend(
     workspace_path: str,
     backend_name_getter: Callable[[str], str],
 ) -> list[str]:
-    return _available_models_for_backend(backend_name_getter(workspace_path))
+    return _available_models_for_backend(
+        backend_name_getter(workspace_path), workspace_path,
+    )
 
 
 def get_available_models(workspace_path: str) -> list[str]:
@@ -580,12 +590,21 @@ def _default_model(backend, scope: str) -> str:
 
 
 def _resolve_model(
-    settings: dict, backend_name: str, scope: str = CHAT_SCOPE,
+    settings: dict,
+    backend_name: str,
+    scope: str = CHAT_SCOPE,
+    *,
+    workspace_path: str | None = None,
 ) -> str:
     backend_name = _coerce_backend_name(backend_name)
     backend = backends_agent.get_backend(backend_name)
     configured = settings.get(_model_key(backend_name, scope))
     if isinstance(configured, str) and configured:
+        workspace_resolver = getattr(
+            backend, "resolve_configured_model_for_workspace", None,
+        )
+        if workspace_path is not None and callable(workspace_resolver):
+            return workspace_resolver(configured, workspace_path)
         return backend.resolve_configured_model(configured)
     return _default_model(backend, scope)
 
@@ -605,8 +624,10 @@ def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
     )
     return (
         backend_name,
-        _resolve_model(s, backend_name),
-        _resolve_model(s, summary_backend, SUMMARY_SCOPE),
+        _resolve_model(s, backend_name, workspace_path=workspace_path),
+        _resolve_model(
+            s, summary_backend, SUMMARY_SCOPE, workspace_path=workspace_path,
+        ),
         _clamp_permission(_coerce_permission(s.get("permission"))),
         summary_backend,
     )
@@ -614,7 +635,11 @@ def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
 
 def get_model(workspace_path: str) -> str:
     s = _load_settings(workspace_path)
-    return _resolve_model(s, _coerce_backend_name(s.get("backend")))
+    return _resolve_model(
+        s,
+        _coerce_backend_name(s.get("backend")),
+        workspace_path=workspace_path,
+    )
 
 
 def set_model(workspace_path: str, model: str) -> None:
@@ -629,7 +654,9 @@ def get_summary_model(workspace_path: str) -> str:
         s.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
         allowed=DIRECT_BACKENDS,
     )
-    return _resolve_model(s, summary_backend, SUMMARY_SCOPE)
+    return _resolve_model(
+        s, summary_backend, SUMMARY_SCOPE, workspace_path=workspace_path,
+    )
 
 
 def set_summary_model(workspace_path: str, model: str) -> None:
@@ -686,7 +713,10 @@ def get_flexible_model(workspace_path: str, tier: str) -> str:
     _validate_tier(tier)
     s = _load_settings(workspace_path)
     return _resolve_model(
-        s, _resolve_flexible_backend(s, tier), _flexible_scope(tier),
+        s,
+        _resolve_flexible_backend(s, tier),
+        _flexible_scope(tier),
+        workspace_path=workspace_path,
     )
 
 
@@ -702,7 +732,7 @@ def set_flexible_model(workspace_path: str, tier: str, model: str) -> None:
 def get_available_flexible_models(workspace_path: str, tier: str) -> list[str]:
     """List models for the agent bound to *tier*."""
     backend_name = get_flexible_backend_name(workspace_path, tier)
-    return _available_models_for_backend(backend_name)
+    return _available_models_for_backend(backend_name, workspace_path)
 
 
 def get_flexible_run_config(
@@ -715,7 +745,12 @@ def get_flexible_run_config(
         backend_name = _resolve_flexible_backend(s, tier)
         resolved[tier] = (
             backend_name,
-            _resolve_model(s, backend_name, _flexible_scope(tier)),
+            _resolve_model(
+                s,
+                backend_name,
+                _flexible_scope(tier),
+                workspace_path=workspace_path,
+            ),
         )
     return resolved
 
