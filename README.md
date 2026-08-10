@@ -859,8 +859,11 @@ unknown/private IDs retain the ordinary OpenAI-compatible transcript shape.
 Copilot
 uses a short ACP handshake without sending
 a prompt, and refreshes a successful workspace-specific catalog periodically.
-The ACP probe runs from the selected workspace so project policy, including
-`.github/allowed_models.txt`, applies to the picker and stored-model check.
+Its successful-catalog and failed-probe caches are each pruned to 64
+workspaces, evicting expired and least-fresh entries; an evicted workspace is
+simply rediscovered when it is opened again. The ACP probe runs from the
+selected workspace so project policy, including `.github/allowed_models.txt`,
+applies to the picker and stored-model check.
 Its picker also accepts ACP's provider-grouped model selectors, so
 account-approved models stay visible without a hard-coded catalog. The
 `copilot` backend keeps
@@ -1065,8 +1068,9 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests: `tests/conftest.py` plus focused `unittest` modules covering
-  agent attachments, prompts, process cleanup, and post-turn behavior;
+- Tests: `tests/conftest.py`, shared `tests/helpers.py`, plus focused
+  `unittest` modules covering agent attachments, prompts, process cleanup,
+  and post-turn behavior;
   backend model defaults, event parsing, and llama retry; bot and Slack
   commands; compaction; the flexible meta-agent; inject; import binding;
   run locks, session picking, and auto-titling; platform, Slack, and Signal rich-text
