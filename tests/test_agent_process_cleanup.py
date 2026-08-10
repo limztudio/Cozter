@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-import signal
 import sys
 import tempfile
 import time
@@ -13,7 +12,12 @@ from Cozter import agent, session, utils
 from Cozter.backends_agent import base as backend_base
 from Cozter.backends_agent.base import ChatEvent, append_detached_task
 from Cozter.backends_bot.base import _InjectQueue
-from Cozter.tests.helpers import create_python_script_process
+from Cozter.tests.helpers import (
+    create_python_script_process,
+    kill_process,
+    process_is_running,
+    wait_for_process_exit,
+)
 
 
 class _StreamingBackend:
@@ -43,24 +47,6 @@ class _StreamingBackend:
 
 
 class AgentProcessCleanupTests(unittest.TestCase):
-    @staticmethod
-    def _process_is_running(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        # A reparented child may briefly remain as a zombie after SIGKILL;
-        # it cannot keep a pipe open or mutate a workspace.
-        try:
-            with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
-                return f.read().split()[2] != "Z"
-        except OSError:
-            # macOS and other POSIX systems may not mount Linux's /proc;
-            # a successful kill(0) still means the process is live there.
-            return True
-
     def test_captured_subprocess_closes_stdin_and_captures_output(self) -> None:
         async def run() -> None:
             script = (
@@ -288,30 +274,18 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     if not completed and os.path.exists(pid_path):
                         with open(pid_path, encoding="utf-8") as f:
                             child_pid = int(f.read())
-                        try:
-                            os.kill(child_pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        kill_process(child_pid)
 
         _result, restarting, child_pid = asyncio.run(run())
         try:
             self.assertFalse(restarting)
 
-            deadline = time.monotonic() + 2
-            while (
-                self._process_is_running(child_pid)
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.05)
-            self.assertFalse(
-                self._process_is_running(child_pid),
+            self.assertTrue(
+                wait_for_process_exit(child_pid),
                 f"child process {child_pid} survived its exited parent",
             )
         finally:
-            try:
-                os.kill(child_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_process(child_pid)
 
     @unittest.skipIf(os.name == "nt", "POSIX process group behavior")
     def test_exited_parent_json_flood_is_bounded_and_reaped(self) -> None:
@@ -365,29 +339,17 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     if not completed and os.path.exists(pid_path):
                         with open(pid_path, encoding="utf-8") as f:
                             child_pid = int(f.read())
-                        try:
-                            os.kill(child_pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        kill_process(child_pid)
 
         restarting, child_pid = asyncio.run(run())
         try:
             self.assertFalse(restarting)
-            deadline = time.monotonic() + 2
-            while (
-                self._process_is_running(child_pid)
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.05)
-            self.assertFalse(
-                self._process_is_running(child_pid),
+            self.assertTrue(
+                wait_for_process_exit(child_pid),
                 f"JSON-flood child {child_pid} survived stream cleanup",
             )
         finally:
-            try:
-                os.kill(child_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_process(child_pid)
 
     def test_exited_parent_keeps_finite_buffered_events(self) -> None:
         """Slow event delivery must not discard an ordinary final backlog."""
@@ -487,10 +449,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     if not completed and os.path.exists(pid_path):
                         with open(pid_path, encoding="utf-8") as f:
                             child_pid = int(f.read())
-                        try:
-                            os.kill(child_pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        kill_process(child_pid)
 
         result, restarting, child_pid, elapsed = asyncio.run(run())
         try:
@@ -501,14 +460,11 @@ class AgentProcessCleanupTests(unittest.TestCase):
             )
             self.assertLess(elapsed, 3.5)
             self.assertTrue(
-                self._process_is_running(child_pid),
+                process_is_running(child_pid),
                 "recognized detached task was killed during stream cleanup",
             )
         finally:
-            try:
-                os.kill(child_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_process(child_pid)
 
     @unittest.skipIf(os.name == "nt", "POSIX process group behavior")
     def test_exited_parent_with_closed_pipes_is_reaped(self) -> None:
@@ -558,30 +514,18 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     if not completed and os.path.exists(pid_path):
                         with open(pid_path, encoding="utf-8") as f:
                             child_pid = int(f.read())
-                        try:
-                            os.kill(child_pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        kill_process(child_pid)
 
         restarting, child_pid = asyncio.run(run())
         try:
             self.assertFalse(restarting)
 
-            deadline = time.monotonic() + 2
-            while (
-                self._process_is_running(child_pid)
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.05)
-            self.assertFalse(
-                self._process_is_running(child_pid),
+            self.assertTrue(
+                wait_for_process_exit(child_pid),
                 f"closed-pipe child {child_pid} survived normal cleanup",
             )
         finally:
-            try:
-                os.kill(child_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_process(child_pid)
 
     @unittest.skipIf(os.name == "nt", "POSIX process group behavior")
     def test_internal_drain_reaps_exited_parent_with_inherited_pipes(self) -> None:
@@ -624,30 +568,18 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     if not completed and os.path.exists(pid_path):
                         with open(pid_path, encoding="utf-8") as f:
                             child_pid = int(f.read())
-                        try:
-                            os.kill(child_pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        kill_process(child_pid)
 
         text, child_pid = asyncio.run(run())
         try:
             self.assertEqual(text, "summary")
 
-            deadline = time.monotonic() + 2
-            while (
-                self._process_is_running(child_pid)
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.05)
-            self.assertFalse(
-                self._process_is_running(child_pid),
+            self.assertTrue(
+                wait_for_process_exit(child_pid),
                 f"child process {child_pid} survived internal drain cleanup",
             )
         finally:
-            try:
-                os.kill(child_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_process(child_pid)
 
     @unittest.skipIf(os.name == "nt", "POSIX setsid behavior")
     def test_detached_stderr_child_cannot_hang_turn_cleanup(self) -> None:
@@ -697,19 +629,13 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     if not completed and os.path.exists(pid_path):
                         with open(pid_path, encoding="utf-8") as f:
                             child_pid = int(f.read())
-                        try:
-                            os.kill(child_pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                        kill_process(child_pid)
 
         elapsed, child_pid = asyncio.run(run())
         try:
             self.assertLess(elapsed, 2.5)
         finally:
-            try:
-                os.kill(child_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_process(child_pid)
 
 
 if __name__ == "__main__":

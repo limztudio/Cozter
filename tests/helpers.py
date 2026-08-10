@@ -1,12 +1,14 @@
-"""Shared fixtures for tests that exercise :class:`BotPlatform` behavior."""
+"""Shared fixtures and helpers for tests."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
 import asyncio
 import json
 import os
+import signal
 import sys
 import tempfile
+import time
 
 from Cozter import config
 from Cozter.backends_bot.base import BotPlatform, MessageHandle
@@ -75,3 +77,38 @@ async def create_python_script_process(script: str) -> asyncio.subprocess.Proces
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+
+
+def process_is_running(pid: int) -> bool:
+    """Return whether a process is live, treating Linux zombies as exited."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A reparented child may briefly remain as a zombie after SIGKILL; it
+    # cannot keep a pipe open or mutate a workspace. Other POSIX systems may
+    # not mount Linux's /proc, where a successful kill(0) is sufficient.
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
+            parts = f.read().split()
+            return len(parts) <= 2 or parts[2] != "Z"
+    except OSError:
+        return True
+
+
+def wait_for_process_exit(pid: int, timeout: float = 2.0) -> bool:
+    """Wait briefly for a child process to exit and report its final state."""
+    deadline = time.monotonic() + timeout
+    while process_is_running(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return not process_is_running(pid)
+
+
+def kill_process(pid: int) -> None:
+    """Best-effort test cleanup for a process which may already be gone."""
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass

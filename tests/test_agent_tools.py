@@ -32,6 +32,7 @@ from Cozter.agent_tools.builtin.move_file import MoveFileTool
 from Cozter.agent_tools.builtin.read_file import ReadFileTool
 from Cozter.agent_tools.builtin.tree import TreeTool
 from Cozter.agent_tools.builtin.write_file import WriteFileTool
+from Cozter.tests.helpers import kill_process, wait_for_process_exit
 
 
 class AgentToolHelperTests(unittest.TestCase):
@@ -416,25 +417,6 @@ class ReadFileToolTests(unittest.TestCase):
 
 
 class BashToolTests(unittest.TestCase):
-    @staticmethod
-    def _process_is_running(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        if os.name == "posix":
-            try:
-                with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
-                    stat = f.read()
-            except OSError:
-                return True
-            parts = stat.split()
-            if len(parts) > 2 and parts[2] == "Z":
-                return False
-        return True
-
     @unittest.skipIf(os.name == "nt", "POSIX process group behavior")
     def test_timeout_kills_child_process_group(self) -> None:
         async def run() -> tuple[str, int]:
@@ -454,12 +436,8 @@ class BashToolTests(unittest.TestCase):
         result, child_pid = asyncio.run(run())
         self.assertIn("timed out after 1s", result)
 
-        deadline = time.monotonic() + 2
-        while self._process_is_running(child_pid) and time.monotonic() < deadline:
-            time.sleep(0.05)
-
-        self.assertFalse(
-            self._process_is_running(child_pid),
+        self.assertTrue(
+            wait_for_process_exit(child_pid),
             f"child process {child_pid} survived bash tool timeout",
         )
 
@@ -486,22 +464,12 @@ class BashToolTests(unittest.TestCase):
         try:
             self.assertIn("timed out after 1s", result)
 
-            deadline = time.monotonic() + 2
-            while (
-                self._process_is_running(child_pid)
-                and time.monotonic() < deadline
-            ):
-                time.sleep(0.05)
-
-            self.assertFalse(
-                self._process_is_running(child_pid),
+            self.assertTrue(
+                wait_for_process_exit(child_pid),
                 f"child process {child_pid} survived after shell exit",
             )
         finally:
-            try:
-                os.kill(child_pid, 9)
-            except ProcessLookupError:
-                pass
+            kill_process(child_pid)
 
 
 class PluginScriptTests(unittest.TestCase):
