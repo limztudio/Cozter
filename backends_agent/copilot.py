@@ -53,6 +53,11 @@ _MODEL_DISCOVERY_TIMEOUT_SEC = 12
 _MODEL_FAILURE_RETRY_SEC = 15
 _MAX_ACP_MESSAGES_PER_REQUEST = 100
 _COPILOT_HOME_FILES = ("config.json", "settings.json")
+# Copilot policies are workspace-scoped, but a long-running bot can visit an
+# unbounded number of workspaces. These are short-lived discovery caches, not
+# durable state, so keep their memory use bounded even when callers never
+# revisit an old workspace after its TTL expires.
+_MAX_WORKSPACE_MODEL_CACHE_ENTRIES = 64
 
 # ``auto`` is accepted by Copilot even if a named-model catalog cannot be
 # queried. Do not fall back to the generic models from ``copilot help``:
@@ -184,6 +189,33 @@ class CopilotBackend(Backend):
         """Return a stable cache key for a repository-scoped ACP catalog."""
         return os.path.normcase(os.path.realpath(os.path.abspath(workspace_path)))
 
+    def _prune_workspace_model_caches(
+        self, now: float, *, keep_key: str,
+    ) -> None:
+        """Discard expired and least-fresh workspace discovery cache entries.
+
+        Model catalogs and failed-probe throttles are both keyed by arbitrary
+        workspace paths.  Without pruning, a daemon that serves many projects
+        retains a path and a cache record for every project until restart.
+        This runs only while the discovery lock is held; eviction can merely
+        cause a later picker to rediscover a catalog and never changes the
+        fail-closed model resolution behavior.
+        """
+        for cache in (
+            self._workspace_model_catalogs,
+            self._workspace_fallback_expires_at,
+        ):
+            def expiry(cache_key: str) -> float:
+                value = cache[cache_key]
+                return value[1] if isinstance(value, tuple) else value
+
+            for cache_key in tuple(cache):
+                if cache_key != keep_key and expiry(cache_key) <= now:
+                    cache.pop(cache_key, None)
+            while len(cache) >= _MAX_WORKSPACE_MODEL_CACHE_ENTRIES:
+                oldest_key = min(cache, key=expiry)
+                cache.pop(oldest_key, None)
+
     def available_models_for_workspace(
         self, workspace_path: str,
     ) -> tuple[str, ...]:
@@ -224,6 +256,7 @@ class CopilotBackend(Backend):
             ):
                 return _FALLBACK_MODELS
 
+            self._prune_workspace_model_caches(now, keep_key=workspace_key)
             # An expired catalog must not keep displaying names that a newly
             # applied policy might have removed. A failed refresh therefore
             # deliberately falls back to only ``auto`` rather than this old

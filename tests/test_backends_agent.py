@@ -855,6 +855,43 @@ class BackendModelTests(unittest.TestCase):
             [mock.call(blocked_key), mock.call(allowed_key)],
         )
 
+    def test_copilot_workspace_catalog_caches_stay_bounded(self) -> None:
+        limit = copilot_mod._MAX_WORKSPACE_MODEL_CACHE_ENTRIES
+        now = time.monotonic()
+
+        backend = CopilotBackend()
+        backend._workspace_model_catalogs = {
+            f"/catalog/{index}": (("auto", f"model-{index}"), now + 60)
+            for index in range(limit)
+        }
+        with mock.patch.object(
+            backend, "_discover_models", return_value=("auto", "new-model"),
+        ):
+            self.assertEqual(
+                backend.available_models_for_workspace("/catalog/new"),
+                ("auto", "new-model"),
+            )
+        self.assertEqual(len(backend._workspace_model_catalogs), limit)
+        self.assertIn(
+            backend._workspace_catalog_key("/catalog/new"),
+            backend._workspace_model_catalogs,
+        )
+
+        backend = CopilotBackend()
+        backend._workspace_fallback_expires_at = {
+            f"/fallback/{index}": now + 60 for index in range(limit)
+        }
+        with mock.patch.object(backend, "_discover_models", return_value=None):
+            self.assertEqual(
+                backend.available_models_for_workspace("/fallback/new"),
+                ("auto",),
+            )
+        self.assertEqual(len(backend._workspace_fallback_expires_at), limit)
+        self.assertIn(
+            backend._workspace_catalog_key("/fallback/new"),
+            backend._workspace_fallback_expires_at,
+        )
+
     def test_copilot_configured_model_is_workspace_scoped_and_fails_closed(
         self,
     ) -> None:
