@@ -309,5 +309,33 @@ class SignalReceiveStartupTests(unittest.TestCase):
         self.assertEqual(bot._receive_subscription, 42)
 
 
+class SignalJsonRpcRequestTests(unittest.TestCase):
+    def test_cancelled_request_is_removed_from_pending_map(self) -> None:
+        class Writer:
+            def __init__(self) -> None:
+                self.written = asyncio.Event()
+
+            def write(self, _data: bytes) -> None:
+                self.written.set()
+
+            async def drain(self) -> None:
+                return None
+
+        async def run() -> None:
+            bot = SignalBot([SIGNAL_GROUP_URL], jsonrpc_socket="/tmp/s")
+            writer = Writer()
+            bot._jsonrpc_writer = writer  # type: ignore[assignment]
+            bot._jsonrpc_connected = lambda: True  # type: ignore[method-assign]
+
+            request = asyncio.create_task(bot._rpc_request_once("test"))
+            await writer.written.wait()
+            request.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await request
+            self.assertEqual(bot._jsonrpc_pending, {})
+
+        asyncio.run(run())
+
+
 if __name__ == "__main__":
     unittest.main()

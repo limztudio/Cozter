@@ -212,8 +212,14 @@ def parse_openai_call(call: dict) -> tuple[str, dict]:
     using other tool-call formats should construct ``(name, args)``
     themselves and call :func:`execute_tool` directly.
     """
-    fn = call.get("function") or {}
-    name = fn.get("name", "")
+    if not isinstance(call, dict):
+        return "", {}
+    fn = call.get("function")
+    if not isinstance(fn, dict):
+        return "", {}
+    name = fn.get("name")
+    if not isinstance(name, str):
+        name = ""
     raw = fn.get("arguments")
     # Per the OpenAI spec, ``arguments`` is a JSON-encoded string, but some
     # servers (GLM / Z.ai and various local runtimes) return an already
@@ -240,6 +246,13 @@ async def execute_tool(
     emit: _EmitFn,
 ) -> str:
     """Run a tool by name; emit status events; return the result string."""
+    # Tool calls come from provider output, so do not let a malformed
+    # non-string/unhashable name fail before this wrapper can return a
+    # model-facing error and emit the matching result event.
+    if not isinstance(name, str):
+        name = ""
+    if not isinstance(args, dict):
+        args = {}
     tool = _BY_NAME.get(name)
 
     emit({
@@ -349,6 +362,10 @@ def tool_signature(name: str, args: dict) -> str:
 
 def summarize_tool_use(name: str, args: dict) -> str:
     """One-line status-display summary of a tool invocation."""
+    if not isinstance(name, str):
+        return ""
+    if not isinstance(args, dict):
+        args = {}
     tool = _BY_NAME.get(name)
     return tool.summarize(args) if tool else name
 

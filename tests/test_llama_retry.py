@@ -390,6 +390,28 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 },
             ])
 
+    def test_length_finish_reason_never_returns_partial_tool_call(self) -> None:
+        with self.assertRaisesRegex(
+            oa._RetryableError, "length while a tool call was pending",
+        ):
+            self._stream([
+                {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "call-1",
+                                "function": {
+                                    "name": "write_file",
+                                    "arguments": '{"path":"x.txt",',
+                                },
+                            }],
+                        },
+                        "finish_reason": "length",
+                    }],
+                },
+            ])
+
     def test_multiline_sse_data_event_is_decoded_once(self) -> None:
         async def stream() -> tuple[str, str, list[dict]]:
             content = _SSEContent([

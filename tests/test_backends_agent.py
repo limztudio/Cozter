@@ -708,6 +708,21 @@ class BackendModelTests(unittest.TestCase):
         self.assertEqual(models[-1], "model-4094")
         self.assertNotIn("x" * 513, models)
 
+    def test_copilot_acp_catalog_bounds_invalid_option_inspection(self) -> None:
+        """A catalog full of rejected entries cannot scan without bound."""
+        values = [
+            {"value": "x" * (copilot_mod._MAX_ACP_MODEL_ID_CHARS + 1)},
+            {"value": "duplicate"},
+            {"value": "duplicate"},
+            {"value": "y" * (copilot_mod._MAX_ACP_MODEL_ID_CHARS + 1)},
+            {"value": "must-not-be-reached"},
+        ]
+        with mock.patch.object(copilot_mod, "_MAX_ACP_OPTION_NODES", 4):
+            self.assertEqual(
+                copilot_mod._catalog_model_ids(values, key="value"),
+                ("auto", "duplicate"),
+            )
+
     def test_copilot_acp_parser_uses_model_label_without_category(self) -> None:
         self.assertEqual(
             copilot_mod._parse_acp_model_options({
@@ -1134,6 +1149,34 @@ class CopilotPromptCapTests(unittest.TestCase):
         # (ARG_MAX ~2 MB) this lands well above the old fixed 28K cap.
         self.assertGreaterEqual(cap, 28_000)
         self.assertLessEqual(cap, 1_000_000)
+
+    def test_posix_prompt_cap_respects_single_argument_limit(self) -> None:
+        with (
+            mock.patch.object(copilot_mod.sys, "platform", "linux"),
+            mock.patch.object(
+                copilot_mod.os, "sysconf", return_value=2_097_152,
+            ),
+        ):
+            self.assertEqual(
+                copilot_mod._max_prompt_chars(),
+                copilot_mod._POSIX_PROMPT_ARG_BYTES,
+            )
+
+    def test_windows_prompt_cap_counts_utf16_units_not_code_points(self) -> None:
+        # An astral character takes two UTF-16 units in CreateProcessW. A
+        # character-count cap could otherwise exceed Windows' command-line
+        # limit despite appearing to be below it.
+        with mock.patch.object(copilot_mod.sys, "platform", "win32"):
+            self.assertEqual(
+                copilot_mod._truncate_prompt_for_argv("x😀😀😀", 4),
+                "😀😀",
+            )
+            self.assertEqual(copilot_mod._prompt_argv_units("😀😀"), 4)
+            quoted = 'say "hello" to Copilot'
+            self.assertGreater(
+                copilot_mod._prompt_argv_units(quoted),
+                len(quoted.encode("utf-16-le")) // 2,
+            )
 
 
 class BackendHealthCheckTests(unittest.TestCase):

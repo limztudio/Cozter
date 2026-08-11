@@ -467,7 +467,7 @@ def load_json_object(
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         (log or logger).warning(
             "Corrupt or unreadable %s (%s): %s", label, path, e,
         )

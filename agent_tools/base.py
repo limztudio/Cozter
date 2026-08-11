@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import errno
 import html
 import fnmatch
 import os
 import re
 import stat
 import tempfile
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, suppress
@@ -516,6 +518,129 @@ def write_text_after_edit(path: str, text: str, *, uses_crlf: bool) -> None:
         with suppress(OSError):
             os.unlink(tmp_path)
         raise
+
+
+def create_text_file_atomically(
+    path: str, text: str, *, uses_crlf: bool,
+) -> bool:
+    """Create *path* only when absent, without exposing partial contents.
+
+    The temporary file and target live in the same directory.  Linking the
+    completed temporary inode to the target is an atomic no-clobber create:
+    unlike ``os.replace``, it fails with :class:`FileExistsError` if another
+    writer created the target after the caller's preflight check.  On a
+    writable filesystem without hard-link support, an exclusive target
+    reservation preserves no-clobber behavior while degrading only the
+    crash-atomicity of a brand-new file. Return ``True`` when this call
+    created the target and ``False`` when it already existed.
+    """
+    if uses_crlf:
+        text = text.replace("\n", "\r\n")
+    parent = os.path.dirname(path) or "."
+    fd, tmp_path = _new_text_temp_file(parent, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp_path, path)
+        except FileExistsError:
+            return False
+        except OSError as exc:
+            if not _hard_link_unsupported(exc):
+                raise
+            return _copy_to_exclusive_new_path(tmp_path, path)
+        return True
+    finally:
+        # After a successful link the target retains the completed inode, so
+        # removing the temporary name cannot affect it.  Best-effort cleanup
+        # also handles failures before the target existed.
+        with suppress(OSError):
+            os.unlink(tmp_path)
+
+
+def _new_text_temp_file(parent: str, target_path: str) -> tuple[int, str]:
+    """Open a same-directory temp file with normal file-creation mode.
+
+    ``tempfile.mkstemp`` intentionally forces 0600. Source files created by
+    a patch historically followed ``open(..., "w")`` and therefore used
+    0666 masked by the process umask, so reserve our random temporary name
+    with that same mode before it becomes the final hard-linked file.
+    """
+    prefix = f".{os.path.basename(target_path) or 'new'}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    for _ in range(100):
+        tmp_path = os.path.join(parent, f"{prefix}.{uuid.uuid4().hex}.tmp")
+        try:
+            return os.open(tmp_path, flags, 0o666), tmp_path
+        except FileExistsError:
+            continue
+    raise FileExistsError("could not reserve a unique temporary file")
+
+
+def _hard_link_unsupported(exc: OSError) -> bool:
+    """Whether a failed link warrants the exclusive-create fallback."""
+    unsupported_errnos = {
+        errno.EPERM,
+        errno.EXDEV,
+        errno.ENOSYS,
+        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+        errno.EOPNOTSUPP,
+    }
+    if exc.errno in unsupported_errnos:
+        return True
+    # Windows reports these when the volume or share does not support hard
+    # links. Do not fall back for arbitrary access or I/O failures.
+    return getattr(exc, "winerror", None) in {1, 50}
+
+
+def _copy_to_exclusive_new_path(tmp_path: str, path: str) -> bool:
+    """Copy a completed temp file through an atomically reserved new path.
+
+    This fallback is for filesystems without hard links. ``O_EXCL`` keeps
+    the no-clobber contract even when another process races us. A crash while
+    copying can leave a partial *new* target, but can never replace another
+    writer's target; an ordinary write error removes our reservation when it
+    still names the same inode.
+    """
+    fd: int | None = None
+    reserved_stat: os.stat_result | None = None
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    except FileExistsError:
+        return False
+    try:
+        reserved_stat = os.fstat(fd)
+        with (
+            open(tmp_path, "rb") as source,
+            os.fdopen(fd, "wb", closefd=True) as output,
+        ):
+            fd = None
+            while chunk := source.read(64 * 1024):
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        return True
+    except BaseException:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
+        if reserved_stat is not None:
+            _unlink_if_same_file(path, reserved_stat)
+        raise
+
+
+def _unlink_if_same_file(path: str, expected: os.stat_result) -> None:
+    """Remove a failed exclusive reservation only if nobody replaced it."""
+    try:
+        current = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return
+    if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+        return
+    with suppress(OSError):
+        os.unlink(path)
 
 
 async def read_bounded_text(resp: aiohttp.ClientResponse) -> str:

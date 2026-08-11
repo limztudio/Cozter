@@ -67,6 +67,13 @@ def workspace_state_path(workspace_path: str, *parts: str) -> str:
         or not part
         or "\x00" in part
         or os.path.isabs(part)
+        or part in {".", ".."}
+        # State helpers pass one filename/directory at a time.  Reject both
+        # separator spellings even on POSIX, where a backslash is otherwise a
+        # legal filename character, so persisted or cross-platform input
+        # cannot use a single component to walk out of ``.cozter``.
+        or "/" in part
+        or "\\" in part
         for part in parts
     ):
         raise ValueError("invalid workspace state path component")

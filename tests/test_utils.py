@@ -208,6 +208,18 @@ class JsonHelperTests(unittest.TestCase):
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(json.load(f), {"ok": True})
 
+    def test_load_json_object_ignores_non_utf8_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "state.json")
+            with open(path, "wb") as f:
+                f.write(b"\xff")
+
+            with self.assertLogs(utils.logger, level="WARNING"):
+                self.assertEqual(
+                    utils.load_json_object(path, "state file"),
+                    {},
+                )
+
     def test_atomic_write_syncs_target_directory_after_replace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "state.json")

@@ -380,7 +380,7 @@ def load_config() -> dict:
 
     try:
         cfg = _load_config_object()
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         print(f"ERROR: config.json is corrupted or unreadable: {e}")
         print(f"Fix or delete {CONFIG_PATH}, then restart.")
         sys.exit(1)

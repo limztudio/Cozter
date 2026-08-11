@@ -15,6 +15,7 @@ import re
 
 from ..base import (
     AgentTool,
+    create_text_file_atomically,
     ensure_parent_dir,
     object_parameters,
     resolve_inside_workspace,
@@ -265,8 +266,6 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
 
     # Creation: --- /dev/null
     if fp.old_path is None:
-        if os.path.exists(target):
-            return f"{fp.new_path}: skipped (file already exists)"
         new_lines: list[str] = []
         for h in fp.hunks:
             new_lines.extend(h.new)
@@ -274,8 +273,11 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
         out = "\n".join(new_lines)
         if new_lines:
             out += "\n"
-        with open(target, "w", encoding="utf-8", newline="") as f:
-            f.write(out)
+        # Do not turn a concurrent creator into a silent overwrite.  The
+        # no-clobber helper also keeps failed writes from exposing a partial
+        # new source file.
+        if not create_text_file_atomically(target, out, uses_crlf=False):
+            return f"{fp.new_path}: skipped (file already exists)"
         return f"{fp.new_path}: created ({len(new_lines)} lines)"
 
     # Modification

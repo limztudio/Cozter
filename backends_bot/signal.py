@@ -550,7 +550,10 @@ class SignalBot(BotPlatform):
                 writer.write(line.encode("utf-8"))
                 await writer.drain()
             response = await asyncio.wait_for(fut, timeout=timeout)
-        except Exception:
+        except BaseException:
+            # CancelledError inherits BaseException.  Leaving its future in
+            # this map until a response (which may never arrive) retains
+            # stale requests for the life of a healthy socket.
             self._jsonrpc_pending.pop(request_id, None)
             raise
         if not isinstance(response, dict):
@@ -693,8 +696,14 @@ class SignalBot(BotPlatform):
 
         with reserve_upload_path(upload_dir, filename) as local_path:
             if source_path:
-                copy_file_with_limit(
-                    source_path, local_path, self.max_upload_bytes,
+                # A local signal-cli attachment can be several megabytes.
+                # Keep the bounded filesystem copy off the JSON-RPC/event
+                # loop just like Telegram's local Bot API path.
+                await asyncio.to_thread(
+                    copy_file_with_limit,
+                    source_path,
+                    local_path,
+                    self.max_upload_bytes,
                 )
             else:
                 result = await self._rpc_request(

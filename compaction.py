@@ -351,11 +351,25 @@ async def _maybe_compact_under_maintenance_lock(
         )
         return
     async with workspace_mod.get_lock(workspace_path):
+        # The summarizer runs outside this lock. A user can rename the
+        # session while it is in flight, so do not let a title derived from
+        # the older snapshot overwrite that newer choice. The summary itself
+        # is still safe to apply: set_summary trims only the prefix captured
+        # in that snapshot and keeps any appended messages.
+        latest = session.load_session(workspace_path, session_id)
+        if latest is None:
+            return
+        title_to_save = new_title
+        if latest.get("name") != data.get("name"):
+            title_to_save = None
+            logger.debug(
+                "Skipping stale compaction title for session %s", session_id,
+            )
         session.set_summary(
             workspace_path, session_id, new_summary,
             keep_recent=KEEP_RECENT_AFTER_COMPACT,
             long_term_rewrite=new_long_term,
-            title=new_title,
+            title=title_to_save,
             # Only trim the contiguous prefix actually sent to the summary
             # backend. A foreground turn can append more while the summary
             # runs, and oversized histories intentionally leave their later

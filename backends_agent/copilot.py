@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 # Floor applied on every platform: the Windows CreateProcess command line
 # caps at 32767 chars for the whole argv, so keep the prompt well under it.
 _WINDOWS_PROMPT_CHARS = 28_000
+# Linux also limits one individual argument (MAX_ARG_STRLEN) to 131072 bytes,
+# independently of the much larger aggregate ARG_MAX. Leave room for its NUL
+# terminator and keep the same conservative limit for other POSIX platforms.
+_POSIX_PROMPT_ARG_BYTES = 128_000
 _ACP_PROTOCOL_VERSION = 1
 _MODEL_DISCOVERY_TIMEOUT_SEC = 12
 _MODEL_FAILURE_RETRY_SEC = 15
@@ -58,6 +62,12 @@ _MAX_ACP_MESSAGES_PER_REQUEST = 100
 # selectable IDs are already far beyond a usable picker.
 _MAX_ACP_MODEL_ID_CHARS = 512
 _MAX_ACP_MODEL_OPTIONS = 4_096
+# The output cap alone does not constrain an ACP response made entirely of
+# duplicate, overlong, or otherwise invalid entries. Bound both the number of
+# option nodes inspected and the nested group depth so a malformed catalog
+# cannot monopolize the synchronous picker path.
+_MAX_ACP_OPTION_NODES = _MAX_ACP_MODEL_OPTIONS * 4
+_MAX_ACP_OPTION_GROUP_DEPTH = 16
 _COPILOT_HOME_FILES = ("config.json", "settings.json")
 # Copilot policies are workspace-scoped, but a long-running bot can visit an
 # unbounded number of workspaces. These are short-lived discovery caches, not
@@ -71,12 +81,13 @@ _MAX_WORKSPACE_MODEL_CACHE_ENTRIES = 64
 _FALLBACK_MODELS = ("auto",)
 
 def _max_prompt_chars() -> int:
-    """Largest prompt (chars) we can safely pass to copilot via ``-p``.
+    """Largest prompt argv budget we can safely pass to Copilot via ``-p``.
 
     copilot delivers the prompt as a single argv value - it has no
     prompt-via-stdin or ``--prompt-file`` path yet - so the OS exec limit
     applies. Windows' CreateProcess caps the whole command line at 32767
-    chars; POSIX bounds argv + env combined by ARG_MAX (commonly ~2 MB).
+    UTF-16 code units; POSIX bounds argv + env combined by ARG_MAX (commonly
+    ~2 MB, measured in bytes).
     Use a conservative fraction of ARG_MAX to leave room for env vars, the
     executable path, and the other flags. The old fixed 28K cap truncated
     POSIX prompts far below both the OS limit and agent.py's own 50K
@@ -87,10 +98,45 @@ def _max_prompt_chars() -> int:
     try:
         arg_max = os.sysconf("SC_ARG_MAX")
     except (ValueError, OSError, AttributeError):
-        arg_max = 0
+        return _POSIX_PROMPT_ARG_BYTES
     if arg_max <= 0:
-        return 128_000
-    return max(_WINDOWS_PROMPT_CHARS, min(arg_max // 4, 1_000_000))
+        return _POSIX_PROMPT_ARG_BYTES
+    return min(
+        _POSIX_PROMPT_ARG_BYTES,
+        max(_WINDOWS_PROMPT_CHARS, min(arg_max // 4, 1_000_000)),
+    )
+
+
+def _prompt_argv_units(prompt: str) -> int:
+    """Return the platform unit count consumed by one prompt argv value."""
+    if sys.platform == "win32":
+        # CreateProcessW receives the fully quoted command line, not raw argv
+        # values. ``list2cmdline`` is the same quoting routine subprocess
+        # uses, so quotes/backslashes in the prompt cannot evade this cap;
+        # astral characters still consume two UTF-16 units.
+        encoded = subprocess.list2cmdline([prompt])
+        return len(encoded.encode("utf-16-le", errors="replace")) // 2
+    return len(prompt.encode("utf-8", errors="replace"))
+
+
+def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
+    """Keep the newest complete characters that fit in an argv unit budget."""
+    if _prompt_argv_units(prompt) <= limit:
+        return prompt
+
+    # The tail contains the current user request; the preamble and older
+    # context are at the head. Binary-searching a character boundary avoids
+    # splitting an emoji or UTF-8 sequence while keeping the operation small
+    # even for a large configured history budget.
+    lower = 0
+    upper = len(prompt)
+    while lower < upper:
+        middle = (lower + upper) // 2
+        if _prompt_argv_units(prompt[middle:]) <= limit:
+            upper = middle
+        else:
+            lower = middle + 1
+    return prompt[lower:]
 
 
 def _create_isolated_copilot_home() -> str:
@@ -435,17 +481,17 @@ class CopilotBackend(Backend):
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
         max_prompt_chars = _max_prompt_chars()
-        if len(prompt) > max_prompt_chars:
+        prompt_units = _prompt_argv_units(prompt)
+        if prompt_units > max_prompt_chars:
             # Keep the tail: the user's current message is at the end of the
             # composed prompt, and the head (capability-hint preamble + old context)
             # is the least costly to drop.
             logger.warning(
-                "Copilot prompt %d chars exceeds %d-char cap; "
-                "dropping oldest %d chars of context",
-                len(prompt), max_prompt_chars,
-                len(prompt) - max_prompt_chars,
+                "Copilot prompt %d argv units exceeds %d-unit cap; "
+                "dropping oldest context",
+                prompt_units, max_prompt_chars,
             )
-            prompt = prompt[-max_prompt_chars:]
+            prompt = _truncate_prompt_for_argv(prompt, max_prompt_chars)
 
         prefix = executable_command(self.executable)
         cmd: list[str] = [
@@ -692,31 +738,47 @@ def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
 
     models: list[str] = []
     seen: set[str] = set()
+    inspected = 0
+    # Iterative depth-first traversal preserves ACP's declared order without
+    # copying a potentially huge top-level list or risking Python recursion
+    # limits on malformed nested groups. Each frame holds (options, next
+    # index, group depth).
+    pending: list[tuple[list, int, int]] = [(values, 0, 0)]
+    while pending and len(models) < _MAX_ACP_MODEL_OPTIONS:
+        options, index, depth = pending[-1]
+        if index >= len(options):
+            pending.pop()
+            continue
+        pending[-1] = (options, index + 1, depth)
 
-    def collect(options: object) -> None:
-        if not isinstance(options, list):
-            return
-        for value in options:
-            if len(models) >= _MAX_ACP_MODEL_OPTIONS:
-                return
-            if not isinstance(value, dict):
-                continue
-            model = value.get(key)
-            if isinstance(model, str):
-                model = model.strip()
-                if (
-                    model
-                    and len(model) <= _MAX_ACP_MODEL_ID_CHARS
-                    and model not in seen
-                ):
-                    seen.add(model)
-                    if model != "auto":
-                        models.append(model)
-            # ACP's grouped-select form nests another list under ``options``.
-            # An ordinary option has no such list, so this is a no-op there.
-            collect(value.get("options"))
+        inspected += 1
+        if inspected > _MAX_ACP_OPTION_NODES:
+            logger.debug(
+                "copilot ACP model catalog exceeded %d option nodes",
+                _MAX_ACP_OPTION_NODES,
+            )
+            break
 
-    collect(values)
+        value = options[index]
+        if not isinstance(value, dict):
+            continue
+        model = value.get(key)
+        if isinstance(model, str):
+            model = model.strip()
+            if (
+                model
+                and len(model) <= _MAX_ACP_MODEL_ID_CHARS
+                and model not in seen
+            ):
+                seen.add(model)
+                if model != "auto":
+                    models.append(model)
+
+        # ACP's grouped-select form nests another list under ``options``.
+        # An ordinary option has no such list, so this is a no-op there.
+        nested = value.get("options")
+        if isinstance(nested, list) and depth < _MAX_ACP_OPTION_GROUP_DEPTH:
+            pending.append((nested, 0, depth + 1))
     # Auto is an official Copilot model-selection sentinel. It remains
     # available even when an ACP catalog lists concrete models only.
     return ("auto", *models) if models or "auto" in seen else ()

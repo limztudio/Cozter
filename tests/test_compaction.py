@@ -7,10 +7,56 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from Cozter import colony, compaction, session
+from Cozter import colony, compaction, session, workspace
 
 
 class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stale_compaction_title_does_not_overwrite_manual_rename(
+        self,
+    ) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def delayed_compact(*_args, **_kwargs):
+            started.set()
+            await release.wait()
+            return ("x" * 100, [], "Stale Compaction Title", 6)
+
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path)
+            session.append_messages(workspace_path, data["id"], [
+                {"role": "user", "content": f"message-{i}"}
+                for i in range(6)
+            ])
+            with (
+                mock.patch.object(
+                    compaction.workspace_mod, "get_compact_interval", return_value=1,
+                ),
+                mock.patch.object(
+                    compaction, "compact_session", side_effect=delayed_compact,
+                ),
+                mock.patch.object(
+                    compaction.colony, "bump_compact_count", return_value=1,
+                ),
+                mock.patch.object(compaction.colony, "maybe_trigger"),
+            ):
+                task = asyncio.create_task(compaction.maybe_compact(
+                    workspace_path, data["id"], "model", backend_name="backend",
+                ))
+                await asyncio.wait_for(started.wait(), timeout=1)
+
+                async with workspace.get_lock(workspace_path):
+                    session.set_session_name(
+                        workspace_path, data["id"], "Manual Session Name",
+                    )
+
+                release.set()
+                await task
+
+            latest = session.load_session(workspace_path, data["id"])
+            assert latest is not None
+            self.assertEqual(latest["name"], "Manual Session Name")
+
     async def test_same_session_compacts_only_once_at_a_time(self) -> None:
         started = asyncio.Event()
         release = asyncio.Event()

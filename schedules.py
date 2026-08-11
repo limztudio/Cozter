@@ -250,10 +250,17 @@ def parse_iso(value: object) -> datetime | None:
         return None
     try:
         parsed = datetime.fromisoformat(value)
-    except ValueError:
+    except (OverflowError, ValueError):
         return None
     if parsed.tzinfo is not None and parsed.utcoffset() is not None:
-        return parsed.astimezone().replace(tzinfo=None)
+        try:
+            return parsed.astimezone().replace(tzinfo=None)
+        except (OverflowError, OSError, ValueError):
+            # An otherwise valid offset timestamp at datetime's representable
+            # edge can underflow/overflow while converting to local time.
+            # Treat hand-edited state like any other malformed timestamp so
+            # one schedule cannot abort the entire scheduler tick.
+            return None
     return parsed
 
 

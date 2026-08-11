@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import os
 import re
 import stat
@@ -813,6 +814,33 @@ class ExecuteToolTimeoutTests(unittest.TestCase):
 
 
 class ExecuteToolResultTests(unittest.TestCase):
+    def test_execute_tool_normalizes_malformed_call_fields(self) -> None:
+        async def run() -> tuple[str, list[dict]]:
+            events: list[dict] = []
+            return (
+                await agent_tools.execute_tool(
+                    ["read_file"],  # type: ignore[arg-type]
+                    ["not an object"],  # type: ignore[arg-type]
+                    "/tmp",
+                    "auto",
+                    events.append,
+                ),
+                events,
+            )
+
+        result, events = asyncio.run(run())
+
+        self.assertEqual(result, "Unknown tool: ")
+        self.assertEqual(events, [
+            {
+                "type": "tool_use",
+                "name": "",
+                "input": {},
+                "file_action": None,
+            },
+            {"type": "tool_result", "name": "", "output": result},
+        ])
+
     def test_execute_tool_handles_non_text_result(self) -> None:
         class NonTextTool:
             file_action = None
@@ -873,6 +901,16 @@ class ParseOpenAICallTests(unittest.TestCase):
                 {"function": {"name": "x", "arguments": raw}},
             )
             self.assertEqual(args, {}, f"raw={raw!r}")
+
+    def test_malformed_function_or_name_yields_empty_name(self) -> None:
+        for call in (
+            {},
+            {"function": None},
+            {"function": "not an object"},
+            {"function": {"name": ["read_file"]}},
+        ):
+            with self.subTest(call=call):
+                self.assertEqual(agent_tools.parse_openai_call(call), ("", {}))
 
 
 class TreeToolTests(unittest.TestCase):
@@ -967,6 +1005,80 @@ class ApplyPatchToolTests(unittest.TestCase):
             self.assertIn("already exists", out)
             with open(p, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "keep me\n")
+
+    def test_create_keeps_target_absent_when_atomic_create_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "new.txt")
+            patch = (
+                "--- /dev/null\n+++ b/new.txt\n"
+                "@@ -0,0 +1 @@\n+new content\n"
+            )
+
+            with mock.patch(
+                "Cozter.agent_tools.base.os.link",
+                side_effect=OSError("simulated link failure"),
+            ):
+                with self.assertRaisesRegex(OSError, "simulated link"):
+                    self._run(tmp, patch)
+
+            self.assertFalse(os.path.exists(p))
+
+    @unittest.skipIf(os.name == "nt", "POSIX mode/umask semantics")
+    def test_create_uses_normal_file_creation_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            previous_umask = os.umask(0o027)
+            try:
+                out = self._run(tmp, (
+                    "--- /dev/null\n+++ b/new.txt\n"
+                    "@@ -0,0 +1 @@\n+new content\n"
+                ))
+            finally:
+                os.umask(previous_umask)
+
+            self.assertIn("created", out)
+            self.assertEqual(
+                stat.S_IMODE(os.stat(os.path.join(tmp, "new.txt")).st_mode),
+                0o640,
+            )
+
+    def test_create_falls_back_when_hard_links_are_unsupported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "new.txt")
+            with mock.patch(
+                "Cozter.agent_tools.base.os.link",
+                side_effect=OSError(errno.EOPNOTSUPP, "unsupported"),
+            ):
+                out = self._run(tmp, (
+                    "--- /dev/null\n+++ b/new.txt\n"
+                    "@@ -0,0 +1 @@\n+fallback content\n"
+                ))
+
+            self.assertIn("created", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "fallback content\n")
+
+    def test_create_does_not_clobber_concurrent_creator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "new.txt")
+            patch = (
+                "--- /dev/null\n+++ b/new.txt\n"
+                "@@ -0,0 +1 @@\n+patch content\n"
+            )
+
+            def concurrent_create(_source: str, destination: str) -> None:
+                with open(destination, "w", encoding="utf-8") as f:
+                    f.write("other writer\n")
+                raise FileExistsError(destination)
+
+            with mock.patch(
+                "Cozter.agent_tools.base.os.link",
+                side_effect=concurrent_create,
+            ):
+                out = self._run(tmp, patch)
+
+            self.assertIn("already exists", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "other writer\n")
 
     def test_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

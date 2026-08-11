@@ -174,6 +174,14 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
         self.assertFalse(available)
         self.assertFalse(self._pulled(calls))
 
+    def test_git_os_error_is_treated_as_an_unavailable_updater(self) -> None:
+        # Permission and resource errors are just as unable to run Git as a
+        # missing executable; an update check must not crash the daemon loop.
+        with mock.patch.object(updater, "_git", side_effect=PermissionError):
+            self.assertEqual(updater.get_current_version(), "(unknown)")
+            self.assertFalse(updater.check_for_update())
+            self.assertFalse(updater.fetch_and_pull())
+
 
 class UpdaterRequirementsTests(unittest.TestCase):
     def test_unchanged_requirements_skip_install(self) -> None:

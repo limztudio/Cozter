@@ -211,6 +211,25 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 config.load_config()
         self.assertEqual(exited.exception.code, 1)
 
+    def test_non_utf8_config_blocks_daemon_start_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "wb") as f:
+                f.write(b"\xff")
+            old_path = config.CONFIG_PATH
+            config.CONFIG_PATH = path
+            try:
+                with (
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                    self.assertRaises(SystemExit) as exited,
+                ):
+                    config.load_config()
+            finally:
+                config.CONFIG_PATH = old_path
+
+        self.assertEqual(exited.exception.code, 1)
+        self.assertIn("corrupted or unreadable", output.getvalue())
+
     def test_workspace_state_paths_reject_symlink_escapes(self) -> None:
         with tempfile.TemporaryDirectory() as ws, \
                 tempfile.TemporaryDirectory() as outside:
@@ -244,6 +263,14 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "escapes the workspace"):
                 session.create_session(ws)
             self.assertEqual(os.listdir(outside), [])
+
+    def test_workspace_state_paths_reject_component_traversal(self) -> None:
+        """A state path must stay below .cozter, not merely the workspace."""
+        with tempfile.TemporaryDirectory() as ws:
+            for component in (".", "..", "../settings.json", "a/b", "a\\b"):
+                with self.subTest(component=component):
+                    with self.assertRaisesRegex(ValueError, "invalid workspace"):
+                        workspace.workspace_state_path(ws, component)
 
     def test_workspace_upload_path_rejects_symlink_escape(self) -> None:
         with tempfile.TemporaryDirectory() as ws, \
@@ -739,6 +766,18 @@ class ScheduleParserTests(unittest.TestCase):
         self.assertIsNotNone(parsed)
         assert parsed is not None
         self.assertIsNone(parsed.tzinfo)
+
+    def test_parse_iso_ignores_offset_values_that_overflow_local_time(self) -> None:
+        # Conversion depends on the host timezone, so force the exceptional
+        # branch rather than relying on one particular local UTC offset.
+        parsed = SimpleNamespace(
+            tzinfo=object(),
+            utcoffset=lambda: 0,
+            astimezone=mock.Mock(side_effect=OverflowError),
+        )
+        fake_datetime = SimpleNamespace(fromisoformat=lambda _value: parsed)
+        with mock.patch.object(schedules, "datetime", fake_datetime):
+            self.assertIsNone(schedules.parse_iso("2026-01-05T10:00:00+00:00"))
 
     def test_most_recent_slot_ignores_malformed_schedule_fields(self) -> None:
         now = datetime(2026, 1, 5, 10, 0)  # Monday

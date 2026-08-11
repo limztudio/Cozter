@@ -744,6 +744,7 @@ async def _stream_once(
     # is the usual marker, while a handful of OpenAI-compatible servers end
     # cleanly after a standard finish_reason instead.
     saw_terminal_marker = False
+    terminal_finish_reason: str | None = None
 
     try:
         async with (
@@ -806,6 +807,7 @@ async def _stream_once(
                 if isinstance(finish_reason, str) and finish_reason:
                     if finish_reason in _EOF_SUCCESS_FINISH_REASONS:
                         saw_terminal_marker = True
+                        terminal_finish_reason = finish_reason
                     else:
                         # A terminal provider error can arrive alongside a
                         # [DONE] sentinel and partially accumulated tool
@@ -885,6 +887,16 @@ async def _stream_once(
     if not saw_terminal_marker:
         raise _RetryableError(
             f"{label} stream ended before a completion marker",
+        )
+
+    # ``length`` means the provider hit its output cap.  A text-only reply
+    # can still be presented as a truncated answer, but a tool call at that
+    # boundary may be missing argument fragments.  Never run a potentially
+    # truncated action; retrying the completion is safe because no tool has
+    # executed yet.
+    if terminal_finish_reason == "length" and tool_buffers:
+        raise _RetryableError(
+            f"{label} stream ended with length while a tool call was pending",
         )
 
     # Normalize tool_buffers into the OpenAI tool_calls list shape.

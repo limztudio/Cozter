@@ -39,7 +39,7 @@ def _git_str(*args: str, default: str = "") -> str:
     """Run a git command and return stripped stdout; `default` if unavailable."""
     try:
         return _git(*args).stdout.strip() or default
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return default
 
 
@@ -59,7 +59,7 @@ def _working_tree_dirty() -> bool:
     """
     try:
         result = _git("status", "--porcelain")
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return True
     if result.returncode != 0:
         return True
@@ -79,7 +79,7 @@ def _local_ahead_of_upstream() -> bool:
         upstream_result = _git(
             "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return True
     # A non-zero rev-parse normally means this branch has no configured
     # upstream. Do not issue a bare ``git pull`` in that state: it cannot
@@ -93,7 +93,7 @@ def _local_ahead_of_upstream() -> bool:
         count_result = _git(
             "rev-list", "--count", f"{upstream}..HEAD",
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return True
     # Once an upstream resolved, failure to compare it with HEAD is an
     # indeterminate state. Treat it as locally ahead so auto-update never
@@ -137,7 +137,7 @@ def _fetch_origin() -> bool:
     """Refresh remote refs without modifying the working tree."""
     try:
         fetch = _git("fetch", "origin")
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         logger.error("git not available or timed out, skipping update check")
         return False
     if fetch.returncode != 0:
@@ -191,7 +191,7 @@ def _remote_update_available() -> bool:
             return int(behind_result.stdout.strip()) > 0
         except ValueError:
             return False
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         logger.error("git not available or timed out, skipping update check")
         return False
 
@@ -231,7 +231,7 @@ def fetch_and_pull() -> bool:
             pull = _git("pull", "--ff-only")
             if pull.returncode != 0:
                 logger.warning("git pull failed: %s", pull.stderr.strip())
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         logger.error("git not available or timed out, skipping update check")
         return False
 
@@ -252,7 +252,7 @@ def requirements_changed_since_startup() -> bool:
         result = _git(
             "diff", "--quiet", _STARTUP_COMMIT, "HEAD", "--", "requirements.txt",
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
         return True
     if result.returncode == 0:
         return False
