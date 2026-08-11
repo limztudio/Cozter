@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from Cozter import session, workspace
+from Cozter import schedules, session, workspace
 from Cozter.backends_bot.base import BotContext
 from Cozter.tests.helpers import TestBot
 
@@ -138,6 +138,24 @@ class BotCommandTests(unittest.TestCase):
             with self.subTest(handler=handler.__name__):
                 self._run(handler(self._ctx(args=too_long)))
                 self.assertEqual(self._last(), "Error: number is too large.")
+
+    # -- /reserve ----------------------------------------------------------
+    def test_reserve_wizard_binds_days_and_time_across_callbacks(self) -> None:
+        self._run(self.bot.cmd_reserve(self._ctx()))
+        self._run(self.bot.dispatch_text(self._ctx(text="mon,wed")))
+        self.assertIn("Enter time", self._last())
+
+        self._run(self.bot.dispatch_text(self._ctx(text="09:30")))
+        self.assertIn("Enter the command", self._last())
+
+        self._run(self.bot.dispatch_text(self._ctx(text="run report")))
+
+        self.assertIn("Schedule created", self._last())
+        entries = schedules.list_schedules(self.ws, self.uid)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["days"], ["mon", "wed"])
+        self.assertEqual(entries[0]["time"], "09:30")
+        self.assertEqual(entries[0]["command"], "run report")
 
     # -- /doctor -----------------------------------------------------------
     def test_doctor_lists_every_direct_backend(self) -> None:

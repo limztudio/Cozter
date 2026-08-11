@@ -303,13 +303,18 @@ class BackendModelTests(unittest.TestCase):
             self.assertIn(model, models)
 
     def test_codex_fallback_metadata_covers_every_model(self) -> None:
+        specs = codex_mod._FALLBACK_MODEL_SPECS
         self.assertEqual(
-            set(codex_mod._FALLBACK_MODELS),
-            set(codex_mod._FALLBACK_MODEL_EFFORT_LEVELS),
+            tuple(model for model, _efforts, _window in specs),
+            codex_mod._FALLBACK_MODELS,
         )
         self.assertEqual(
-            set(codex_mod._FALLBACK_MODELS),
-            set(codex_mod._FALLBACK_MODEL_CONTEXT_WINDOWS),
+            {model: efforts for model, efforts, _window in specs},
+            codex_mod._FALLBACK_MODEL_EFFORT_LEVELS,
+        )
+        self.assertEqual(
+            {model: window for model, _efforts, window in specs},
+            codex_mod._FALLBACK_MODEL_CONTEXT_WINDOWS,
         )
 
     def test_codex_effort_uses_levels_supported_by_selected_picker_model(
@@ -1290,10 +1295,25 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
 
-    def test_fallback_context_windows_cover_every_model(self) -> None:
+    def test_fallback_metadata_is_projected_from_one_catalog(self) -> None:
+        specs = zai_mod._FALLBACK_MODEL_SPECS
         self.assertEqual(
-            set(zai_mod._FALLBACK_MODELS),
-            set(zai_mod._MODEL_CONTEXT_WINDOWS),
+            tuple(spec.name for spec in specs),
+            zai_mod._FALLBACK_MODELS,
+        )
+        self.assertEqual(
+            {spec.name: spec.context_window for spec in specs},
+            zai_mod._MODEL_CONTEXT_WINDOWS,
+        )
+        self.assertEqual(
+            frozenset(
+                spec.name for spec in specs if spec.preserves_reasoning
+            ),
+            zai_mod._PRESERVED_THINKING_MODELS,
+        )
+        self.assertEqual(
+            frozenset(spec.name for spec in specs if spec.streams_tools),
+            zai_mod._TOOL_STREAM_MODELS,
         )
 
     def test_context_windows_cover_only_published_curated_ids(self) -> None:

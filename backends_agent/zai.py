@@ -17,6 +17,7 @@ includes the version so only ``/chat/completions`` is appended),
 from __future__ import annotations
 
 import logging
+from typing import NamedTuple
 
 from .. import config as cfg
 from ._openai_agent import CachedOpenAIChatBackend, fetch_model_ids
@@ -24,107 +25,57 @@ from ._openai_agent import CachedOpenAIChatBackend, fetch_model_ids
 logger = logging.getLogger(__name__)
 
 
-# Safety net for unavailable/unauthorized model discovery.  The installed
-# account's ``/models`` catalog is preferred whenever it can be queried.
-_FALLBACK_MODELS = (
-    "glm-5.2",
-    # Current multimodal coding model. It accepts text-only agent turns and
-    # function calls, so it stays usable even though Cozter does not yet send
-    # image inputs through this backend.
-    "glm-5v-turbo",
-    "glm-5.1",
-    "glm-5-turbo",
-    "glm-5",
-    "glm-4.7",
-    "glm-4.7-flash",
-    "glm-4.7-flashx",
-    "glm-4.6",
-    # These vision-capable variants also accept text-only turns and native
-    # function calls, so they can run Cozter's in-process agent loop even
-    # before the frontend grows image-attachment support for this backend.
-    "glm-4.6v",
-    "glm-4.6v-flashx",
-    "glm-4.6v-flash",
-    # GLM-4.5V accepts text alongside its image/video/file inputs. It can
-    # therefore serve ordinary text agent turns, although it does not support
-    # the optional incremental ``tool_stream`` protocol below.
-    "glm-4.5v",
-    "glm-4.5",
-    "glm-4.5-air",
-    "glm-4.5-x",
-    "glm-4.5-airx",
-    "glm-4.5-flash",
-    "glm-4-32b-0414-128k",
+class _FallbackModelSpec(NamedTuple):
+    """Curated Z.ai fallback metadata for one chat-completion model."""
+
+    name: str
+    context_window: int
+    preserves_reasoning: bool
+    streams_tools: bool
+
+
+# Safety net for unavailable/unauthorized model discovery. The installed
+# account's ``/models`` catalog is preferred whenever it can be queried. Keep
+# every fallback capability alongside its model ID so picker order, compaction,
+# preserved reasoning, and tool streaming cannot drift apart. Provider-published
+# capacities apply only to these curated public IDs; private/discovered models
+# stay unknown until an operator configures model_context_windows.
+#
+# GLM-4.5V accepts text-only turns but not the optional ``tool_stream`` field.
+# The older 4-32B fallback has no documented preserved-thinking contract.
+_FALLBACK_MODEL_SPECS = (
+    _FallbackModelSpec("glm-5.2", 1_000_000, True, True),
+    # Current multimodal coding model supports text-only turns and functions.
+    _FallbackModelSpec("glm-5v-turbo", 200_000, True, True),
+    _FallbackModelSpec("glm-5.1", 200_000, True, True),
+    _FallbackModelSpec("glm-5-turbo", 200_000, True, True),
+    _FallbackModelSpec("glm-5", 200_000, True, True),
+    _FallbackModelSpec("glm-4.7", 200_000, True, True),
+    _FallbackModelSpec("glm-4.7-flash", 200_000, True, True),
+    _FallbackModelSpec("glm-4.7-flashx", 200_000, True, True),
+    _FallbackModelSpec("glm-4.6", 200_000, True, True),
+    # Vision variants also accept text-only turns and native function calls.
+    _FallbackModelSpec("glm-4.6v", 128_000, True, True),
+    _FallbackModelSpec("glm-4.6v-flashx", 128_000, True, True),
+    _FallbackModelSpec("glm-4.6v-flash", 128_000, True, True),
+    _FallbackModelSpec("glm-4.5v", 64_000, True, False),
+    _FallbackModelSpec("glm-4.5", 128_000, True, False),
+    _FallbackModelSpec("glm-4.5-air", 128_000, True, False),
+    _FallbackModelSpec("glm-4.5-x", 128_000, True, False),
+    _FallbackModelSpec("glm-4.5-airx", 128_000, True, False),
+    _FallbackModelSpec("glm-4.5-flash", 200_000, True, False),
+    _FallbackModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
 )
-# Provider-published capacities for the curated, public IDs above. The live
-# OpenAI-compatible /models response only standardizes IDs, so private or
-# newly discovered models intentionally remain unknown until an operator adds
-# model_context_windows to config.json.
+_FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _MODEL_CONTEXT_WINDOWS = {
-    "glm-5.2": 1_000_000,
-    "glm-5v-turbo": 200_000,
-    "glm-5.1": 200_000,
-    "glm-5-turbo": 200_000,
-    "glm-5": 200_000,
-    "glm-4.7": 200_000,
-    "glm-4.7-flash": 200_000,
-    "glm-4.7-flashx": 200_000,
-    "glm-4.6": 200_000,
-    "glm-4.6v": 128_000,
-    "glm-4.6v-flashx": 128_000,
-    "glm-4.6v-flash": 128_000,
-    "glm-4.5v": 64_000,
-    "glm-4.5": 128_000,
-    "glm-4.5-air": 128_000,
-    "glm-4.5-x": 128_000,
-    "glm-4.5-airx": 128_000,
-    "glm-4.5-flash": 200_000,
-    "glm-4-32b-0414-128k": 128_000,
+    spec.name: spec.context_window for spec in _FALLBACK_MODEL_SPECS
 }
-# Z.ai's GLM-4.5-and-newer agent models can preserve the exact opaque
-# ``reasoning_content`` emitted before a tool call. The older 4-32B fallback
-# has no documented thinking/preserved-reasoning contract, so keep its
-# request and transcript shape untouched.
-_PRESERVED_THINKING_MODELS = frozenset({
-    "glm-5.2",
-    "glm-5v-turbo",
-    "glm-5.1",
-    "glm-5-turbo",
-    "glm-5",
-    "glm-4.7",
-    "glm-4.7-flash",
-    "glm-4.7-flashx",
-    "glm-4.6",
-    "glm-4.6v",
-    "glm-4.6v-flashx",
-    "glm-4.6v-flash",
-    "glm-4.5v",
-    "glm-4.5",
-    "glm-4.5-air",
-    "glm-4.5-x",
-    "glm-4.5-airx",
-    "glm-4.5-flash",
-})
-# Z.ai documents ``tool_stream`` for GLM-4.6 and newer. Its current vision
-# documentation explicitly confirms native function calling for the GLM-4.6V
-# family and function calling plus streaming for GLM-5V-Turbo, so those
-# curated agent models can use the same incremental tool-call path as the
-# text models. Account-private IDs remain opt-in until their capability is
-# known rather than receiving an unsupported optional field.
-_TOOL_STREAM_MODELS = frozenset({
-    "glm-5.2",
-    "glm-5v-turbo",
-    "glm-5.1",
-    "glm-5-turbo",
-    "glm-5",
-    "glm-4.7",
-    "glm-4.7-flash",
-    "glm-4.7-flashx",
-    "glm-4.6",
-    "glm-4.6v",
-    "glm-4.6v-flashx",
-    "glm-4.6v-flash",
-})
+_PRESERVED_THINKING_MODELS = frozenset(
+    spec.name for spec in _FALLBACK_MODEL_SPECS if spec.preserves_reasoning
+)
+_TOOL_STREAM_MODELS = frozenset(
+    spec.name for spec in _FALLBACK_MODEL_SPECS if spec.streams_tools
+)
 # Z.ai's catalog can include models that are invoked through a different API
 # path (for example image generation, OCR, or audio transcription). Cozter
 # drives ``/chat/completions`` and should not display those IDs as agent

@@ -17,40 +17,33 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Safety net for hosts where the CLI is unavailable, unauthenticated, or an
-# older/company-managed build does not support ``codex debug models``.  The
-# live catalog is preferred whenever the installed CLI can provide one.
-_FALLBACK_MODELS = (
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.3-codex-spark",
-)
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
-_FALLBACK_MODEL_EFFORT_LEVELS = {
-    "gpt-5.6-sol": (*_COMMON_EFFORT_LEVELS, "max", "ultra"),
-    "gpt-5.6-terra": (*_COMMON_EFFORT_LEVELS, "max", "ultra"),
-    "gpt-5.6-luna": (*_COMMON_EFFORT_LEVELS, "max"),
-    "gpt-5.5": _COMMON_EFFORT_LEVELS,
-    "gpt-5.4": _COMMON_EFFORT_LEVELS,
-    "gpt-5.4-mini": _COMMON_EFFORT_LEVELS,
-    "gpt-5.3-codex-spark": _COMMON_EFFORT_LEVELS,
-}
+# Safety net for hosts where the CLI is unavailable, unauthenticated, or an
+# older/company-managed build does not support ``codex debug models``.  Keep
+# every fallback capability beside its model ID so this data cannot drift
+# across the picker, reasoning-effort, and compaction paths.  The live catalog
+# is still preferred whenever the installed CLI can provide one.
 # ``codex debug models`` is authoritative when its short-lived cache is warm.
 # These values preserve useful token-aware compaction before a user opens the
 # picker or on hosts where the catalog probe is unavailable.  They are active
 # CLI windows, not the larger maximum capability a model may advertise.
+_FALLBACK_MODEL_SPECS = (
+    ("gpt-5.6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
+    ("gpt-5.6-terra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
+    ("gpt-5.6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
+    ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
+    ("gpt-5.4", _COMMON_EFFORT_LEVELS, 272_000),
+    ("gpt-5.4-mini", _COMMON_EFFORT_LEVELS, 272_000),
+    ("gpt-5.3-codex-spark", _COMMON_EFFORT_LEVELS, 128_000),
+)
+_FALLBACK_MODELS = tuple(
+    model for model, _efforts, _window in _FALLBACK_MODEL_SPECS
+)
+_FALLBACK_MODEL_EFFORT_LEVELS: dict[str, tuple[str, ...]] = {
+    model: efforts for model, efforts, _window in _FALLBACK_MODEL_SPECS
+}
 _FALLBACK_MODEL_CONTEXT_WINDOWS = {
-    "gpt-5.6-sol": 272_000,
-    "gpt-5.6-terra": 272_000,
-    "gpt-5.6-luna": 272_000,
-    "gpt-5.5": 272_000,
-    "gpt-5.4": 272_000,
-    "gpt-5.4-mini": 272_000,
-    "gpt-5.3-codex-spark": 128_000,
+    model: window for model, _efforts, window in _FALLBACK_MODEL_SPECS
 }
 _MODEL_DISCOVERY_TIMEOUT_SEC = 15
 

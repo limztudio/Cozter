@@ -302,6 +302,15 @@ def close_subprocess_pipe(proc: object, fd: int) -> None:
             pipe_transport.close()
 
 
+async def abandon_subprocess_stream_task(
+    proc: object, fd: int, task: asyncio.Task,
+) -> None:
+    """Close an abandoned stream, cancel its reader, and await its exit."""
+    close_subprocess_pipe(proc, fd)
+    task.cancel()
+    await await_cancelled(task)
+
+
 async def kill_and_wait(proc: asyncio.subprocess.Process) -> None:
     """Kill a subprocess (its group if it leads one) and await its exit.
 
@@ -395,17 +404,13 @@ async def finish_process_stderr(
                 "abandoning stream drain",
                 getattr(proc, "pid", "?"),
             )
-            close_subprocess_pipe(proc, 2)
-            stderr_task.cancel()
-            await await_cancelled(stderr_task)
+            await abandon_subprocess_stream_task(proc, 2, stderr_task)
             return ""
     except asyncio.CancelledError:
         # A second cancellation during a turn's finally block must not leave
         # a background reader attached to a leaked pipe.
         if not stderr_task.done():
-            close_subprocess_pipe(proc, 2)
-            stderr_task.cancel()
-            await await_cancelled(stderr_task)
+            await abandon_subprocess_stream_task(proc, 2, stderr_task)
         raise
 
 
@@ -901,9 +906,7 @@ async def drain_llm_subprocess(
                 terminate_process_group(proc)
         finally:
             if not stderr_task.done():
-                close_subprocess_pipe(proc, 2)
-                stderr_task.cancel()
-                await await_cancelled(stderr_task)
+                await abandon_subprocess_stream_task(proc, 2, stderr_task)
             await cleanup_backend_process(backend, proc, log=active_log)
         if finished and not raw:
             suffix = f": {stderr}" if stderr else ""

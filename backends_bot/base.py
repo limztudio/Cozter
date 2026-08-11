@@ -1971,10 +1971,10 @@ class BotPlatform(ABC):
             "Enter time in HH:MM (24-hour) format (or /cancel):"
         )
 
-        async def _time_cb(next_ctx: BotContext) -> None:
-            await self._receive_reserve_time(next_ctx, days)
-
-        self._expect_input(ctx.user_id, _time_cb)
+        self._expect_input(
+            ctx.user_id,
+            functools.partial(self._receive_reserve_time, days=days),
+        )
 
     async def _receive_reserve_time(
         self, ctx: BotContext, days: list[str],
@@ -1986,20 +1986,24 @@ class BotPlatform(ABC):
                 " (or /cancel):"
             )
 
-            async def _retry(next_ctx: BotContext) -> None:
-                await self._receive_reserve_time(next_ctx, days)
-
-            self._expect_input(ctx.user_id, _retry)
+            self._expect_input(
+                ctx.user_id,
+                functools.partial(self._receive_reserve_time, days=days),
+            )
             return
         await ctx.reply_text(
             f"Time: {time_str}\n\n"
             "Enter the command to run at that time (or /cancel):"
         )
 
-        async def _cmd_cb(next_ctx: BotContext) -> None:
-            await self._receive_reserve_command(next_ctx, days, time_str)
-
-        self._expect_input(ctx.user_id, _cmd_cb)
+        self._expect_input(
+            ctx.user_id,
+            functools.partial(
+                self._receive_reserve_command,
+                days=days,
+                time_str=time_str,
+            ),
+        )
 
     async def _receive_reserve_command(
         self, ctx: BotContext, days: list[str], time_str: str,
@@ -2010,12 +2014,14 @@ class BotPlatform(ABC):
                 "Command cannot be empty. Try again (or /cancel):"
             )
 
-            async def _retry(next_ctx: BotContext) -> None:
-                await self._receive_reserve_command(
-                    next_ctx, days, time_str,
-                )
-
-            self._expect_input(ctx.user_id, _retry)
+            self._expect_input(
+                ctx.user_id,
+                functools.partial(
+                    self._receive_reserve_command,
+                    days=days,
+                    time_str=time_str,
+                ),
+            )
             return
 
         ws = await self._require_ws(ctx)

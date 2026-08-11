@@ -38,6 +38,20 @@ class InternalBackendStub:
 
 
 class ProcessDrainTests(unittest.TestCase):
+    def test_abandon_subprocess_stream_task_closes_and_cancels_reader(self) -> None:
+        async def run() -> None:
+            task = asyncio.create_task(asyncio.Event().wait())
+            await asyncio.sleep(0)
+            proc = object()
+
+            with mock.patch.object(utils, "close_subprocess_pipe") as close:
+                await utils.abandon_subprocess_stream_task(proc, 2, task)
+
+            close.assert_called_once_with(proc, 2)
+            self.assertTrue(task.cancelled())
+
+        asyncio.run(run())
+
     def test_iter_json_events_discards_an_oversized_line(self) -> None:
         async def run() -> None:
             script = (
