@@ -2,10 +2,12 @@
 
 A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot)
 and OpenAI-compatible HTTP backends (local llama-server and Z.ai), exposing
-them through Telegram, Slack, Signal, or a plain terminal. One bot process,
-multiple workspaces, per-workspace settings, durable sessions with
-automatic compaction, persistent turn queues, file attachments, and a
-drop-in plugin system that works across every backend.
+them through Telegram, Slack, Signal, or a plain terminal. One Cozter
+process hosts either the local terminal or one configured daemon surface—with
+one Telegram bot instance per configured token—across multiple workspaces,
+with per-workspace settings, durable sessions with automatic compaction,
+persistent turn queues, file attachments, and a drop-in plugin system that
+works across every backend.
 
 ## What it gives you
 
@@ -57,7 +59,8 @@ drop-in plugin system that works across every backend.
   balancing fenced code blocks
 - **File flow in both directions**: chat uploads are saved into the
   workspace and text-like files are inlined into the next prompt; agent
-  replies can upload workspace files or generated images back to chat
+  replies can upload workspace files or generated images back to chat, while
+  CLI mode prints their local paths
 - **Recurring scheduled prompts on Telegram, Slack, and Signal**: `/reserve`
   queues prompts on selected weekdays and runs them in throwaway sessions so
   routine jobs do not pollute the user's active conversation
@@ -498,6 +501,9 @@ assistant reply, Cozter asks the selected summary backend for a short topical
 title for the session picker. The result is written only while that placeholder
 is still current, so a newer compaction title or custom persisted name is not
 overwritten by a late background title request.
+Likewise, a compaction title derived from an older snapshot is discarded if
+the session was renamed while compaction ran, so it cannot overwrite the
+manual name.
 
 ## Commands
 
@@ -533,7 +539,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/reserve` | Create a recurring scheduled prompt |
 | `/schedules` | List schedules and delete one by number |
 | `/version` | Show the current git version and last commit date |
-| `/doctor` | Check each backend's readiness (CLI on PATH / HTTP backend configured or reachable) |
+| `/doctor` | Check each backend's readiness (CLI executable, llama endpoint, or Z.ai API key) |
 | `/cancel` | Cancel a picker/wizard, pending answer, running turn, or queued work |
 | `/start` | Confirm the bot is running |
 
@@ -615,6 +621,8 @@ Agents can attach files back to chat by emitting a line like:
 ```
 
 The path may be relative to the workspace or an absolute path inside it.
+On the local CLI, an attachment is not transferred anywhere; Cozter prints
+`[Attached file: /absolute/path]` so it can be opened locally.
 Generated images under `$CODEX_HOME/generated_images` (or
 `~/.codex/generated_images` when `CODEX_HOME` is unset) and any
 directories listed in `COZTER_ATTACHMENT_ROOTS` are also accepted. Cozter
@@ -853,8 +861,10 @@ llama, and Z.ai refresh their live catalogs periodically, so long-running
 services see CLI, server, and account model changes. HTTP catalog responses
 over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates
 the IDs, keeps at most 4,096, and ignores IDs longer than 512 characters.
-Copilot applies the same ID and count bounds to its authenticated ACP catalog
-before it reaches a model picker or workspace cache.
+Copilot applies the same 512-character-ID and 4,096-model bounds to its
+authenticated ACP catalog, and stops parsing a malformed group tree after
+16,384 option nodes or 16 nested groups before it reaches a model picker or
+workspace cache.
 Z.ai's documented GLM-4.5-and-newer agent models also preserve their opaque
 reasoning blocks across tool calls, while the older GLM-4-32B fallback and
 unknown/private IDs retain the ordinary OpenAI-compatible transcript shape.
@@ -868,11 +878,10 @@ selected workspace so project policy, including `.github/allowed_models.txt`,
 applies to the picker and stored-model check.
 Its picker also accepts ACP's provider-grouped model selectors, so
 account-approved models stay visible without a hard-coded catalog. The
-`copilot` backend keeps
-prompts under the Windows
-command-line limit by dropping the oldest composed context when a prompt
-exceeds its cap; the current user message is kept at the tail. Each Copilot
-run also uses a short-lived private CLI home, so its planner, worker, and
+`copilot` backend keeps its `-p` prompt within the platform's single-argument
+limit—quoted UTF-16 units on Windows and UTF-8 bytes on POSIX—by dropping the
+oldest composed context; the current user message stays at the tail. Each
+Copilot run also uses a short-lived private CLI home, so its planner, worker, and
 merge calls do not appear in Copilot's session history or get exported to
 GitHub web and mobile; Cozter's workspace session remains the durable
 conversation record. The private home copies `config.json` and `settings.json`
@@ -997,9 +1006,13 @@ process-shaped contract through `backends_agent/_http_proc.py`, so the
 orchestrator uses one cleanup model for CLI and API agents.
 
 The built-in file tools also fail closed at workspace boundaries. In
-particular, `apply_patch` will not use a create patch to overwrite an existing
-file, and a delete patch must match the current file and remove all of its
-content before the file is unlinked. Failed hunks leave the target in place.
+particular, an `apply_patch` create patch uses an atomic no-clobber link where
+the filesystem supports it, with an exclusive-create fallback: it cannot
+overwrite a file another writer creates concurrently, and a failed preparation
+leaves no partial target. New patch-created files use normal file-creation
+permissions (subject to the process umask); a delete patch must match the
+current file and remove all of its content before the file is unlinked. Failed
+hunks leave the target in place.
 Normal unified-diff hunks must also match the line counts declared in their
 headers before any target is written, so a malformed or truncated patch is
 rejected instead of being treated as a smaller valid edit.
@@ -1030,8 +1043,12 @@ call, 8 MiB across retained text and tool arguments, and 128 tool calls. A
 per-completion limit breach is handled as a retryable failure before any
 buffered tool call executes. Tool-argument fragments are joined only after a
 completion finishes, which avoids repeated copying as a long streamed
-argument arrives. Across a tool-using HTTP agent run, the retained system,
-user, assistant, tool, and continuation messages are also capped at 32 MiB.
+argument arrives. If a provider ends with `finish_reason: "length"` while a
+tool call is pending, Cozter uses its configured retry budget rather than
+executing potentially partial arguments; a text-only length-limited reply is
+delivered as truncated text. Across a tool-using HTTP agent run, the retained
+system, user, assistant, tool, and continuation messages are also capped at
+32 MiB.
 Cozter refuses a message that would exceed that total and asks the user to
 narrow the task or reduce tool output; if the assistant's requested tool-call
 message itself cannot be retained, its tools are not run.
