@@ -683,6 +683,31 @@ class BackendModelTests(unittest.TestCase):
             ),
         )
 
+    def test_copilot_acp_catalog_bounds_model_ids_and_count(self) -> None:
+        values = [
+            {"value": "valid-model"},
+            {"value": "x" * (copilot_mod._MAX_ACP_MODEL_ID_CHARS + 1)},
+        ]
+        values.extend(
+            {"value": f"model-{index}"}
+            for index in range(copilot_mod._MAX_ACP_MODEL_OPTIONS + 1)
+        )
+
+        models = copilot_mod._parse_acp_model_options({
+            "configOptions": [{
+                "id": "model",
+                "category": "model",
+                "type": "select",
+                "options": values,
+            }],
+        })
+
+        self.assertEqual(len(models), copilot_mod._MAX_ACP_MODEL_OPTIONS + 1)
+        self.assertEqual(models[0], "auto")
+        self.assertEqual(models[1], "valid-model")
+        self.assertEqual(models[-1], "model-4094")
+        self.assertNotIn("x" * 513, models)
+
     def test_copilot_acp_parser_uses_model_label_without_category(self) -> None:
         self.assertEqual(
             copilot_mod._parse_acp_model_options({

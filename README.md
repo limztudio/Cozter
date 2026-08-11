@@ -853,6 +853,8 @@ llama, and Z.ai refresh their live catalogs periodically, so long-running
 services see CLI, server, and account model changes. HTTP catalog responses
 over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates
 the IDs, keeps at most 4,096, and ignores IDs longer than 512 characters.
+Copilot applies the same ID and count bounds to its authenticated ACP catalog
+before it reaches a model picker or workspace cache.
 Z.ai's documented GLM-4.5-and-newer agent models also preserve their opaque
 reasoning blocks across tool calls, while the older GLM-4-32B fallback and
 unknown/private IDs retain the ordinary OpenAI-compatible transcript shape.

@@ -52,6 +52,12 @@ _ACP_PROTOCOL_VERSION = 1
 _MODEL_DISCOVERY_TIMEOUT_SEC = 12
 _MODEL_FAILURE_RETRY_SEC = 15
 _MAX_ACP_MESSAGES_PER_REQUEST = 100
+# ACP's account-aware catalog is provider-controlled data that ultimately
+# reaches chat pickers and workspace caches. Keep it in line with the HTTP
+# backend catalog limits: normal model IDs are short, and thousands of
+# selectable IDs are already far beyond a usable picker.
+_MAX_ACP_MODEL_ID_CHARS = 512
+_MAX_ACP_MODEL_OPTIONS = 4_096
 _COPILOT_HOME_FILES = ("config.json", "settings.json")
 # Copilot policies are workspace-scoped, but a long-running bot can visit an
 # unbounded number of workspaces. These are short-lived discovery caches, not
@@ -691,12 +697,18 @@ def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
         if not isinstance(options, list):
             return
         for value in options:
+            if len(models) >= _MAX_ACP_MODEL_OPTIONS:
+                return
             if not isinstance(value, dict):
                 continue
             model = value.get(key)
             if isinstance(model, str):
                 model = model.strip()
-                if model and model not in seen:
+                if (
+                    model
+                    and len(model) <= _MAX_ACP_MODEL_ID_CHARS
+                    and model not in seen
+                ):
                     seen.add(model)
                     if model != "auto":
                         models.append(model)
