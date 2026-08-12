@@ -212,6 +212,16 @@ class OpenAIChatBackend(Backend):
         """
         return {}
 
+    def _supports_tools_for_model(self, _model: str | None) -> bool:
+        """Whether the selected model accepts this agent's function schema.
+
+        OpenAI-compatible backends normally support function tools for every
+        selected model. A provider can opt out a documented chat-only model
+        without exposing a tool schema it will reject; the model still gets a
+        normal text-only agent turn.
+        """
+        return True
+
     def _preserve_reasoning_content(self, _model: str | None) -> bool:
         """Whether assistant reasoning must be retained across tool turns.
 
@@ -308,6 +318,8 @@ class OpenAIChatBackend(Backend):
         #   * confirm -> read-only tools only (look-but-don't-touch)
         #   * auto / full -> all tools
         tools_schema = _tools_for_approval(approval, compaction)
+        if tools_schema and not self._supports_tools_for_model(request_model):
+            tools_schema = None
         enabled_tool_names = tuple(
             entry["function"]["name"] for entry in tools_schema
         ) if tools_schema else ()

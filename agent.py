@@ -1426,6 +1426,14 @@ async def launch_detached(
             )
 
         summary_backend = summary_backend_name or backend.name
+        if not summary_model:
+            default_summary_model = getattr(
+                backends_agent.get_backend(summary_backend),
+                "default_summary_model",
+                None,
+            )
+            if isinstance(default_summary_model, str) and default_summary_model:
+                summary_model = default_summary_model
         session_id, session_data = await _resolve_or_create_user_session(
             prompt,
             workspace_path,
@@ -1573,6 +1581,18 @@ async def _run_turn(
     summary_backend = summary_backend_name or (
         backends_agent.DEFAULT_DIRECT_BACKEND if is_flexible else backend.name
     )
+    # Bot callers resolve this from persisted workspace settings, but public
+    # callers may omit it. Keep routing, flexible planning, compaction, and
+    # titling on the summary backend's intended default instead of letting a
+    # backend silently fall back to its general chat-model default.
+    if not summary_model:
+        default_summary_model = getattr(
+            backends_agent.get_backend(summary_backend),
+            "default_summary_model",
+            None,
+        )
+        if isinstance(default_summary_model, str) and default_summary_model:
+            summary_model = default_summary_model
     compaction_context_targets = _compaction_context_targets(
         workspace_path,
         backend,

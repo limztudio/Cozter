@@ -268,10 +268,15 @@ class BackendPermissionCommandTests(unittest.TestCase):
         )
         self.assertNotIn("--effort", haiku_command)
 
-        opus_41_command = self._claude_command(
-            "auto", model="claude-opus-4-1", effort=100,
-        )
-        self.assertNotIn("--effort", opus_41_command)
+        for model in ("claude-opus-4-5", "claude-opus-4-5-20251101"):
+            with self.subTest(model=model):
+                opus_45_command = self._claude_command(
+                    "auto", model=model, effort=100,
+                )
+                self.assertEqual(
+                    opus_45_command[opus_45_command.index("--effort") + 1],
+                    "max",
+                )
 
 
 class BackendModelTests(unittest.TestCase):
@@ -1088,28 +1093,18 @@ class BackendModelTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertIn(model, models)
 
-    def test_claude_context_windows_cover_verified_current_1m_models(
+    def test_claude_context_windows_cover_only_explicit_1m_models(
         self,
     ) -> None:
         backend = ClaudeCodeBackend()
-        # Aliases and bare 4.x pins remain omitted: their resolved model can
-        # vary by account and CLI provider.
-        for model in (
-            "claude-fable-5",
-            "claude-opus-5",
-            "claude-sonnet-5",
-        ):
-            with self.subTest(model=model):
-                self.assertEqual(
-                    backend.context_window_tokens(model), 1_000_000,
-                )
         for model in claude_code_mod._ONE_MILLION_CONTEXT_MODELS:
             with self.subTest(model=model):
                 self.assertEqual(
                     backend.context_window_tokens(model), 1_000_000,
                 )
         for model in (
-            "default", "sonnet", "claude-opus-4-8", "claude-opus-4-7",
+            "default", "sonnet", "claude-fable-5", "claude-opus-5",
+            "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7",
             "claude-opus-4-6", "claude-sonnet-4-6",
             "claude-sonnet-4-5-20250929", "private",
         ):
@@ -1461,6 +1456,7 @@ class ZaiBackendTests(unittest.TestCase):
                 {"id": "GLM-IMAGE"},
                 {"id": "cogView-4-250304"},
                 {"id": "glm-asr-2512"},
+                {"id": "AutoGLM-Phone-Multilingual"},
                 {"id": "glm-private"},
             ],
         }).encode("utf-8")
@@ -1636,11 +1632,10 @@ class ZaiBackendTests(unittest.TestCase):
             {"thinking": {"type": "disabled", "clear_thinking": False}},
         )
 
-    def test_current_tool_capable_glms_stream_tool_call_arguments(self) -> None:
+    def test_text_glms_stream_tool_call_arguments(self) -> None:
         backend = ZaiBackend()
         expected_models = {
             "glm-5.2",
-            "glm-5v-turbo",
             "glm-5.1",
             "glm-5-turbo",
             "glm-5",
@@ -1648,9 +1643,6 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-4.7-flash",
             "glm-4.7-flashx",
             "glm-4.6",
-            "glm-4.6v",
-            "glm-4.6v-flashx",
-            "glm-4.6v-flash",
         }
         self.assertEqual(zai_mod._TOOL_STREAM_MODELS, expected_models)
         for model in (None, *expected_models):
@@ -1663,6 +1655,10 @@ class ZaiBackendTests(unittest.TestCase):
             {"tool_stream": True},
         )
         for model in (
+            "glm-5v-turbo",
+            "glm-4.6v",
+            "glm-4.6v-flashx",
+            "glm-4.6v-flash",
             "glm-4.5v",
             "glm-4.5",
             "private-glm",
@@ -1680,6 +1676,30 @@ class ZaiBackendTests(unittest.TestCase):
             backend._effort_fields(50, "glm-5.1"),
             {"thinking": {"type": "enabled"}},
         )
+
+    def test_compulsory_thinking_models_never_disable_thinking(self) -> None:
+        backend = ZaiBackend()
+        self.assertEqual(
+            zai_mod._COMPULSORY_THINKING_MODELS,
+            {"glm-4.7", "glm-4.5v"},
+        )
+        for model in zai_mod._COMPULSORY_THINKING_MODELS:
+            with self.subTest(model=model):
+                self.assertEqual(
+                    backend._effort_fields(1, model),
+                    {"thinking": {"type": "enabled"}},
+                )
+                self.assertEqual(
+                    backend._effort_fields(49, model),
+                    {"thinking": {"type": "enabled"}},
+                )
+
+    def test_glm_4_5v_uses_chat_only_agent_path(self) -> None:
+        backend = ZaiBackend()
+        self.assertFalse(backend._supports_tools_for_model("glm-4.5v"))
+        self.assertTrue(backend._supports_tools_for_model("glm-4.6v"))
+        self.assertTrue(backend._supports_tools_for_model("glm-5v-turbo"))
+        self.assertTrue(backend._supports_tools_for_model("private-glm"))
 
     def test_multimodal_models_use_thinking_switch(self) -> None:
         backend = ZaiBackend()

@@ -624,6 +624,11 @@ class _ToolStreamingBackend(_ToolLimitBackend):
         return {"tool_stream": True}
 
 
+class _NoToolBackend(_ToolLimitBackend):
+    def _supports_tools_for_model(self, _model: str | None) -> bool:
+        return False
+
+
 class _ReasoningToolBackend(_ToolLimitBackend):
     def _preserve_reasoning_content(self, _model: str | None) -> bool:
         return True
@@ -750,6 +755,28 @@ class OpenAIToolLimitTests(unittest.TestCase):
 
         self.assertEqual(calls[0]["tool_stream"], True)
         self.assertNotIn("tool_stream", calls[1])
+
+    def test_model_without_function_support_receives_a_chat_only_turn(self) -> None:
+        calls: list[dict] = []
+
+        async def stream(*args, **kwargs):
+            calls.append(copy.deepcopy(args[1]))
+            return "done", "", []
+
+        oa._stream_completion = stream
+        proc = _CaptureProc()
+        asyncio.run(_NoToolBackend(auto_continue=False)._run_agent(
+            proc, "/tmp", "work", None, "auto", False, 0,
+        ))
+
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("tools", calls[0])
+        self.assertNotIn("tool_choice", calls[0])
+        self.assertEqual(
+            [event["text"] for event in proc.events
+             if event.get("type") == "assistant_text"],
+            ["done"],
+        )
 
     def test_preserved_reasoning_is_replayed_only_for_opt_in_backends(
         self,

@@ -41,6 +41,8 @@ logger = logging.getLogger(__name__)
 # exceptions separate from the aliases below: aliases intentionally follow
 # whichever current model the installed Claude Code resolves for the account.
 _FOUR_LEVEL_EFFORT_MODELS = frozenset({
+    "claude-opus-4-5",
+    "claude-opus-4-5-20251101",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
 })
@@ -48,28 +50,22 @@ _NO_EFFORT_MODELS = frozenset({
     "haiku",
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
-    "claude-opus-4-1",
-    "claude-opus-4-5",
-    "claude-opus-4-5-20251101",
     "claude-sonnet-4-5",
     "claude-sonnet-4-5-20250929",
 })
 _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 
 # Claude Code does not expose a safe, non-interactive account model catalog
-# with numeric capacities. Keep only explicit, provider-documented 1M pins
-# and the CLI's explicit ``[1m]`` selections; aliases, default selection, and
-# arbitrary/private IDs stay unknown so compaction keeps the message-interval
-# safeguard. An operator can configure a private deployment through
-# model_context_windows in Cozter's config.json.
+# with numeric capacities. Keep only the CLI's explicit ``[1m]`` selections:
+# a bare current-model ID can resolve to a provider or plan with a smaller
+# window. Aliases, default selection, and arbitrary/private IDs likewise stay
+# unknown so compaction keeps the message-interval safeguard. An operator can
+# configure a known deployment through model_context_windows in Cozter's
+# config.json.
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
-    # The current Fable/Opus/Sonnet 5 pins have a 1M window by default.
-    # Do not infer 1M capacity for mutable aliases or bare 4.x pins: Claude
-    # Code can select their 200K variant based on account/provider settings.
-    "claude-fable-5",
-    "claude-opus-5",
-    "claude-sonnet-5",
+    # Only an explicit CLI long-context selection is portable across
+    # Anthropic API, Bedrock, Vertex, Foundry, and gateway deployments.
     "fable[1m]",
     "sonnet[1m]",
     "opus[1m]",

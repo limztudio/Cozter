@@ -41,12 +41,14 @@ class _FallbackModelSpec(NamedTuple):
 # capacities apply only to these curated public IDs; private/discovered models
 # stay unknown until an operator configures model_context_windows.
 #
-# GLM-4.5V accepts text-only turns but not the optional ``tool_stream`` field.
-# The older 4-32B fallback has no documented preserved-thinking contract.
+# GLM-4.5V accepts text-only turns but not function tools in the documented
+# vision request schema. The older 4-32B fallback has no documented
+# preserved-thinking contract.
 _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-5.2", 1_000_000, True, True),
-    # Current multimodal coding model supports text-only turns and functions.
-    _FallbackModelSpec("glm-5v-turbo", 200_000, True, True),
+    # This vision model supports text and native functions, but its request
+    # schema does not accept the text-only ``tool_stream`` extension.
+    _FallbackModelSpec("glm-5v-turbo", 200_000, True, False),
     _FallbackModelSpec("glm-5.1", 200_000, True, True),
     _FallbackModelSpec("glm-5-turbo", 200_000, True, True),
     _FallbackModelSpec("glm-5", 200_000, True, True),
@@ -54,10 +56,11 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4.7-flash", 200_000, True, True),
     _FallbackModelSpec("glm-4.7-flashx", 200_000, True, True),
     _FallbackModelSpec("glm-4.6", 200_000, True, True),
-    # Vision variants also accept text-only turns and native function calls.
-    _FallbackModelSpec("glm-4.6v", 128_000, True, True),
-    _FallbackModelSpec("glm-4.6v-flashx", 128_000, True, True),
-    _FallbackModelSpec("glm-4.6v-flash", 128_000, True, True),
+    # Vision variants also accept text-only turns and native function calls,
+    # but not the text-only ``tool_stream`` extension.
+    _FallbackModelSpec("glm-4.6v", 128_000, True, False),
+    _FallbackModelSpec("glm-4.6v-flashx", 128_000, True, False),
+    _FallbackModelSpec("glm-4.6v-flash", 128_000, True, False),
     _FallbackModelSpec("glm-4.5v", 64_000, True, False),
     _FallbackModelSpec("glm-4.5", 128_000, True, False),
     _FallbackModelSpec("glm-4.5-air", 128_000, True, False),
@@ -86,7 +89,19 @@ _NON_CHAT_COMPLETION_MODEL_IDS = frozenset({
     "glm-image",
     "cogview-4-250304",
     "glm-asr-2512",
+    # This is a specialized phone-use agent, not a general chat-completions
+    # model for Cozter's workspace tool surface.
+    "autoglm-phone-multilingual",
 })
+# Z.ai's vision request schema documents native function tools for the
+# GLM-4.6V family (and its specialized phone agent), but not GLM-4.5V. Keep
+# GLM-4.5V available for text-only use while never sending it an unsupported
+# tool schema. Unknown/private IDs retain the normal OpenAI-compatible path.
+_NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
+# The provider documents these two exact models as always reasoning even when
+# the thinking toggle is supplied. Do not send the contradictory disabled
+# setting for a low Cozter effort percentage.
+_COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
 
@@ -186,11 +201,21 @@ class ZaiBackend(CachedOpenAIChatBackend):
                 "thinking": {"type": "enabled"},
                 "reasoning_effort": self.convert_effort(percent),
             }
+        if _capability_model_id(
+            model or self.default_model,
+        ) in _COMPULSORY_THINKING_MODELS:
+            return {"thinking": {"type": "enabled"}}
         return {
             "thinking": {
                 "type": "enabled" if percent >= 50 else "disabled",
             },
         }
+
+    def _supports_tools_for_model(self, model: str | None) -> bool:
+        """Avoid sending a function schema to documented chat-only models."""
+        return _capability_model_id(
+            model or self.default_model,
+        ) not in _NO_FUNCTION_TOOL_MODELS
 
     def _preserve_reasoning_content(self, model: str | None) -> bool:
         """Whether this documented GLM model accepts retained reasoning."""
@@ -222,11 +247,12 @@ class ZaiBackend(CachedOpenAIChatBackend):
     def _tool_request_fields(self, model: str | None) -> dict:
         """Enable incremental tool-call deltas on documented agent models.
 
-        ``tool_stream`` is supported by Z.ai's GLM-4.6-and-newer tool-capable
-        model families. The shared SSE parser already joins incremental
-        OpenAI-style tool-call arguments. Unrecognized account-specific IDs
-        intentionally omit the optional field until provider documentation
-        confirms their compatibility.
+        ``tool_stream`` is supported by Z.ai's text chat-completion models
+        from GLM-4.6 onward. Its vision request schema deliberately omits the
+        field, so multimodal models keep standard streamed tool-call deltas.
+        The shared SSE parser handles either shape. Unrecognized
+        account-specific IDs intentionally omit the optional field until
+        provider documentation confirms their compatibility.
         """
         selected = _capability_model_id(model or self.default_model)
         return {"tool_stream": True} if selected in _TOOL_STREAM_MODELS else {}

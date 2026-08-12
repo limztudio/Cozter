@@ -12,9 +12,54 @@ from Cozter.backends_agent.base import AgentResult
 class _ImmediateBackend:
     name = "post-turn-test"
     supports_typed_plugins = True
+    default_summary_model = "summary-default"
 
 
 class AgentPostTurnMaintenanceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_omitted_summary_model_uses_backend_default(self) -> None:
+        maintenance_tasks: list[asyncio.Task] = []
+        backend = _ImmediateBackend()
+
+        async def fast_backend(*_args, **_kwargs):
+            return AgentResult(text="reply"), False
+
+        original_background_task = agent.create_background_task
+
+        def capture_background_task(coro, *, name, log=None):
+            task = original_background_task(coro, name=name, log=log)
+            maintenance_tasks.append(task)
+            return task
+
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            with (
+                mock.patch.object(
+                    agent.backends_agent, "get_backend", return_value=backend,
+                ),
+                mock.patch.object(
+                    agent, "_drive_backend", side_effect=fast_backend,
+                ),
+                mock.patch.object(
+                    agent.compaction, "maybe_compact", new_callable=mock.AsyncMock,
+                ) as compact,
+                mock.patch.object(
+                    agent.titling, "maybe_auto_title", new_callable=mock.AsyncMock,
+                ),
+                mock.patch.object(
+                    agent, "create_background_task",
+                    side_effect=capture_background_task,
+                ),
+            ):
+                result = await agent.run(
+                    "hello", workspace_path, 1,
+                    backend_name=backend.name, session_id=data["id"],
+                )
+                await asyncio.gather(*maintenance_tasks)
+
+        self.assertEqual(result.text, "reply")
+        self.assertEqual(len(maintenance_tasks), 1)
+        self.assertEqual(compact.await_args.args[2], "summary-default")
+
     async def test_compaction_does_not_block_the_agent_result(self) -> None:
         """A slow compaction must not delay delivery to a chat platform."""
         started = asyncio.Event()

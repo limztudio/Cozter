@@ -351,7 +351,9 @@ Cozter's internal tool-call segment limit is reached, instead of stopping for
 a manual "continue". For current documented GLM agent models, Cozter also
 enables Z.ai's preserved-thinking protocol and returns the exact opaque
 `reasoning_content` with the next tool result; that provider state is never
-shown in the chat reply.
+shown in the chat reply. `glm-4.5v` remains selectable for text-only chat,
+but Cozter does not send it the generic function-tool schema that Z.ai's
+vision API does not support.
 
 `max_permission` (default `auto`) caps the highest `/permission` mode any
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <
@@ -821,17 +823,18 @@ a curated list that `extra_models` can extend. Its picker offers standard
 aliases, the supported `fable[1m]`, `sonnet[1m]`, `opus[1m]`, and
 `opusplan[1m]` long-context aliases, and verified version pins (including
 Fable 5, Sonnet 5, Opus 5, and explicit `[1m]` variants of other documented
-long-context models). Those selected 1M variants have documented 1M-token
-windows; mutable aliases and bare 4.x pins remain capacity-unknown because
-their active window can vary by account and provider. Claude's `/fast` is a
-session toggle rather than a selectable `*-fast` model ID. Llama and Z.ai
-discover models live from their configured HTTP endpoints.
+long-context models). Only the explicit `[1m]` selections receive Cozter's
+1M-token context metadata; aliases and bare version pins remain
+capacity-unknown because their active window can vary by account and provider.
+Claude's `/fast` is a session toggle rather than a selectable `*-fast` model
+ID. Llama and Z.ai discover models live from their configured HTTP endpoints.
 `llama` and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
-and points at Z.ai's endpoint. GLM-4.6-and-newer tool-capable models,
-including the curated GLM-4.6V family and GLM-5V-Turbo, opt into Z.ai's
-incremental tool-call argument stream, which the shared SSE parser merges
-before executing the requested tool.
+and points at Z.ai's endpoint. Its text chat-completion models from GLM-4.6
+onward opt into Z.ai's incremental tool-call argument stream; multimodal
+models use their standard streamed function-call deltas because the vision
+request schema does not accept `tool_stream`. The shared SSE parser merges
+either shape before executing a requested tool.
 
 Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its
@@ -912,8 +915,8 @@ maps the percentage to its own vocabulary and request shape:
 |---|---|---|
 | `codex` | Model-aware: 4–6 levels | `ultra` (Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
-| `zai` | GLM-5.2: 7 levels; older GLM: thinking toggle | `payload["reasoning_effort"] = "max"` |
-| `claude_code` | Model-aware: current Fable / Sonnet 5 / Opus 4.7+ use 5 levels; 4.6 uses 4; Haiku and legacy pins use their defaults | `--effort max` for supported current models |
+| `zai` | GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
+| `claude_code` | Model-aware: current Fable / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.5–4.6 and Sonnet 4.6 use 4; Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
 
 The setting applies only to user-facing chat turns. Internal calls
