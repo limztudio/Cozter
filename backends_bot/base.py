@@ -1637,19 +1637,34 @@ class BotPlatform(ABC):
         await ctx.reply_text(success_message.format(value=value))
         return True
 
-    async def cmd_compact(self, ctx: BotContext) -> None:
+    async def _workspace_for_decimal_setting(
+        self,
+        ctx: BotContext,
+        *,
+        setter: Callable[[str, int], None],
+        success_message: str,
+    ) -> str | None:
+        """Return the workspace when a decimal setting was not handled."""
         ws = await self._require_ws(ctx)
         if ws is None:
-            return
-        first = self._first_command_argument(ctx)
-
+            return None
         if await self._set_decimal_workspace_setting(
             ctx,
             ws,
-            first,
+            self._first_command_argument(ctx),
+            setter=setter,
+            success_message=success_message,
+        ):
+            return None
+        return ws
+
+    async def cmd_compact(self, ctx: BotContext) -> None:
+        ws = await self._workspace_for_decimal_setting(
+            ctx,
             setter=workspace.set_compact_interval,
             success_message="Fallback compact interval set to {value} messages.",
-        ):
+        )
+        if ws is None:
             return
 
         current = workspace.get_compact_interval(ws)
@@ -1672,18 +1687,12 @@ class BotPlatform(ABC):
     # ----- /context -------------------------------------------------------
 
     async def cmd_context(self, ctx: BotContext) -> None:
-        ws = await self._require_ws(ctx)
-        if ws is None:
-            return
-        first = self._first_command_argument(ctx)
-
-        if await self._set_decimal_workspace_setting(
+        ws = await self._workspace_for_decimal_setting(
             ctx,
-            ws,
-            first,
             setter=workspace.set_history_budget,
             success_message="Context budget set to {value} characters.",
-        ):
+        )
+        if ws is None:
             return
 
         current = workspace.get_history_budget(ws)

@@ -1421,6 +1421,27 @@ async def _resolve_or_create_user_session(
     return session_id, session_data
 
 
+def _resolve_summary_model(
+    summary_model: str | None, summary_backend: str,
+) -> str | None:
+    """Fill an omitted summary model from its selected backend.
+
+    Foreground and detached turns both route and maintain the same session
+    state.  Keeping this fallback here ensures they cannot silently diverge
+    when a backend changes its summary-model default.
+    """
+    if summary_model:
+        return summary_model
+    default_summary_model = getattr(
+        backends_agent.get_backend(summary_backend),
+        "default_summary_model",
+        None,
+    )
+    if isinstance(default_summary_model, str) and default_summary_model:
+        return default_summary_model
+    return summary_model
+
+
 async def launch_detached(
     prompt: str,
     workspace_path: str,
@@ -1446,14 +1467,7 @@ async def launch_detached(
             )
 
         summary_backend = summary_backend_name or backend.name
-        if not summary_model:
-            default_summary_model = getattr(
-                backends_agent.get_backend(summary_backend),
-                "default_summary_model",
-                None,
-            )
-            if isinstance(default_summary_model, str) and default_summary_model:
-                summary_model = default_summary_model
+        summary_model = _resolve_summary_model(summary_model, summary_backend)
         session_id, session_data = await _resolve_or_create_user_session(
             prompt,
             workspace_path,
@@ -1605,14 +1619,7 @@ async def _run_turn(
     # callers may omit it. Keep routing, flexible planning, compaction, and
     # titling on the summary backend's intended default instead of letting a
     # backend silently fall back to its general chat-model default.
-    if not summary_model:
-        default_summary_model = getattr(
-            backends_agent.get_backend(summary_backend),
-            "default_summary_model",
-            None,
-        )
-        if isinstance(default_summary_model, str) and default_summary_model:
-            summary_model = default_summary_model
+    summary_model = _resolve_summary_model(summary_model, summary_backend)
     compaction_context_targets = _compaction_context_targets(
         workspace_path,
         backend,

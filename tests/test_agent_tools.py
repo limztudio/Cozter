@@ -15,6 +15,7 @@ from Cozter.agent_tools.base import (
     _path_matches_glob,
     apply_string_replacement,
     coerce_int_arg,
+    move_path_no_clobber,
     path_property,
     read_bounded_text,
     replacement_properties,
@@ -320,6 +321,40 @@ class MoveFileToolTests(unittest.TestCase):
                     self.assertEqual(f.read(), "concurrent contents")
 
         asyncio.run(run())
+
+    def test_move_rolls_back_published_target_when_source_unlink_fails(
+        self,
+    ) -> None:
+        """Regular files and symlinks keep all-or-nothing move semantics."""
+        for source_kind in ("file", "symlink"):
+            with self.subTest(source_kind=source_kind), tempfile.TemporaryDirectory() as tmp:
+                source = os.path.join(tmp, "source")
+                destination = os.path.join(tmp, "destination")
+                if source_kind == "file":
+                    with open(source, "w", encoding="utf-8") as f:
+                        f.write("contents")
+                else:
+                    try:
+                        os.symlink("target", source)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(f"symlinks unavailable: {exc}")
+
+                original_unlink = os.unlink
+
+                def fail_source_unlink(path: str, *args, **kwargs) -> None:
+                    if path == source:
+                        raise OSError("simulated source unlink failure")
+                    original_unlink(path, *args, **kwargs)
+
+                with mock.patch(
+                    "Cozter.agent_tools.base.os.unlink",
+                    side_effect=fail_source_unlink,
+                ):
+                    with self.assertRaisesRegex(OSError, "simulated source"):
+                        move_path_no_clobber(source, destination)
+
+                self.assertTrue(os.path.lexists(source))
+                self.assertFalse(os.path.lexists(destination))
 
 
 class CopyFileToolTests(unittest.TestCase):

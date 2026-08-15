@@ -123,6 +123,10 @@ class BotCommandTests(unittest.TestCase):
         self.assertIn("zai:", self._last())
 
     # -- /context ----------------------------------------------------------
+    def test_compact_sets_interval(self) -> None:
+        self._run(self.bot.cmd_compact(self._ctx(args="12")))
+        self.assertEqual(workspace.get_compact_interval(self.ws), 12)
+
     def test_context_sets_budget(self) -> None:
         self._run(self.bot.cmd_context(self._ctx(args="8000")))
         self.assertEqual(workspace.get_history_budget(self.ws), 8000)

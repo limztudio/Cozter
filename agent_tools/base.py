@@ -545,15 +545,7 @@ def create_text_file_atomically(
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        try:
-            os.link(tmp_path, path)
-        except FileExistsError:
-            return False
-        except OSError as exc:
-            if not _hard_link_unsupported(exc):
-                raise
-            return _copy_to_exclusive_new_path(tmp_path, path)
-        return True
+        return _publish_new_file_no_clobber(tmp_path, path)
     finally:
         # After a successful link the target retains the completed inode, so
         # removing the temporary name cannot affect it.  Best-effort cleanup
@@ -586,22 +578,31 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
         shutil.copy2(source_path, tmp_path)
         with open(tmp_path, "rb") as tmp_file:
             os.fsync(tmp_file.fileno())
-        try:
-            os.link(tmp_path, target_path)
-        except FileExistsError:
-            return False
-        except OSError as exc:
-            if not _hard_link_unsupported(exc):
-                raise
-            return _copy_to_exclusive_new_path(
-                tmp_path, target_path, preserve_metadata=True,
-            )
-        return True
+        return _publish_new_file_no_clobber(
+            tmp_path, target_path, preserve_metadata=True,
+        )
     finally:
         # A successful hard link owns the same inode independently, and the
         # fallback has copied it. In every case this temporary name is ours.
         with suppress(OSError):
             os.unlink(tmp_path)
+
+
+def _publish_new_file_no_clobber(
+    tmp_path: str, target_path: str, *, preserve_metadata: bool = False,
+) -> bool:
+    """Publish a completed temporary file only if *target_path* is vacant."""
+    try:
+        os.link(tmp_path, target_path)
+    except FileExistsError:
+        return False
+    except OSError as exc:
+        if not _hard_link_unsupported(exc):
+            raise
+        return _copy_to_exclusive_new_path(
+            tmp_path, target_path, preserve_metadata=preserve_metadata,
+        )
+    return True
 
 
 def _new_text_temp_file(parent: str, target_path: str) -> tuple[int, str]:
@@ -763,6 +764,43 @@ def _move_regular_file_no_clobber(source_path: str, target_path: str) -> bool:
             return False
         target_stat = os.stat(target_path, follow_symlinks=False)
 
+    _complete_no_clobber_move(
+        source_path, target_path, source_stat, target_stat,
+    )
+    return True
+
+
+def _move_symlink_no_clobber(source_path: str, target_path: str) -> bool:
+    """Move a symlink without following or overwriting either endpoint."""
+    source_stat = os.stat(source_path, follow_symlinks=False)
+    link_target = os.readlink(source_path)
+    try:
+        os.symlink(
+            link_target,
+            target_path,
+            target_is_directory=os.path.isdir(source_path),
+        )
+    except FileExistsError:
+        return False
+    target_stat = os.stat(target_path, follow_symlinks=False)
+    _complete_no_clobber_move(
+        source_path, target_path, source_stat, target_stat,
+    )
+    return True
+
+
+def _remove_owned_target(target_path: str, expected: os.stat_result) -> None:
+    """Remove the target only when it still names the file we just created."""
+    _unlink_if_same_file(target_path, expected)
+
+
+def _complete_no_clobber_move(
+    source_path: str,
+    target_path: str,
+    source_stat: os.stat_result,
+    target_stat: os.stat_result,
+) -> None:
+    """Remove a source after safe publication, or roll back only our target."""
     try:
         current_source = os.stat(source_path, follow_symlinks=False)
     except OSError as exc:
@@ -781,43 +819,6 @@ def _move_regular_file_no_clobber(source_path: str, target_path: str) -> bool:
         # destination untouched.
         _remove_owned_target(target_path, target_stat)
         raise
-    return True
-
-
-def _move_symlink_no_clobber(source_path: str, target_path: str) -> bool:
-    """Move a symlink without following or overwriting either endpoint."""
-    source_stat = os.stat(source_path, follow_symlinks=False)
-    link_target = os.readlink(source_path)
-    try:
-        os.symlink(
-            link_target,
-            target_path,
-            target_is_directory=os.path.isdir(source_path),
-        )
-    except FileExistsError:
-        return False
-    target_stat = os.stat(target_path, follow_symlinks=False)
-    try:
-        current_source = os.stat(source_path, follow_symlinks=False)
-    except OSError as exc:
-        _remove_owned_target(target_path, target_stat)
-        raise OSError("source changed while move was in progress") from exc
-    if (current_source.st_dev, current_source.st_ino) != (
-        source_stat.st_dev, source_stat.st_ino,
-    ):
-        _remove_owned_target(target_path, target_stat)
-        raise OSError("source changed while move was in progress")
-    try:
-        os.unlink(source_path)
-    except OSError:
-        _remove_owned_target(target_path, target_stat)
-        raise
-    return True
-
-
-def _remove_owned_target(target_path: str, expected: os.stat_result) -> None:
-    """Remove the target only when it still names the file we just created."""
-    _unlink_if_same_file(target_path, expected)
 
 
 def _rename_path_no_clobber(source_path: str, target_path: str) -> bool:

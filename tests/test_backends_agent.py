@@ -861,6 +861,29 @@ class BackendModelTests(unittest.TestCase):
             [mock.call(workspace_key), mock.call(workspace_key)],
         )
 
+    def test_copilot_rechecks_cache_after_waiting_for_discovery_lock(self) -> None:
+        backend = CopilotBackend()
+        workspace_path = "/workspaces/concurrent"
+        workspace_key = backend._workspace_catalog_key(workspace_path)
+
+        class CatalogInstallingLock:
+            def __enter__(self) -> None:
+                backend._workspace_model_catalogs[workspace_key] = (
+                    ("auto", "allowed-only"), time.monotonic() + 60,
+                )
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        backend._models_lock = CatalogInstallingLock()
+        with mock.patch.object(backend, "_discover_models") as discover:
+            self.assertEqual(
+                backend.available_models_for_workspace(workspace_path),
+                ("auto", "allowed-only"),
+            )
+
+        discover.assert_not_called()
+
     def test_copilot_catalog_cache_is_isolated_by_workspace(self) -> None:
         backend = CopilotBackend()
         blocked_workspace = "/workspaces/blocked"

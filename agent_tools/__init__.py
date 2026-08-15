@@ -232,6 +232,12 @@ def parse_openai_call(call: dict) -> tuple[str, dict]:
     return name, args
 
 
+def _emit_tool_result(emit: _EmitFn, name: str, result: str) -> str:
+    """Emit and return one model-facing tool result consistently."""
+    emit({"type": "tool_result", "name": name, "output": result})
+    return result
+
+
 async def execute_tool(
     name: str,
     args: dict,
@@ -267,8 +273,7 @@ async def execute_tool(
             f"Blocked: '{name}' cannot run because permission mode "
             f"'{approval}' permits no tools."
         )
-        emit({"type": "tool_result", "name": name, "output": result})
-        return result
+        return _emit_tool_result(emit, name, result)
 
     if approval == "confirm" and not _is_confirm_read_only(tool):
         # A chat surface can't prompt per tool call, so "confirm" is a
@@ -282,8 +287,7 @@ async def execute_tool(
             "auto or full to allow changes, or continue using read-only "
             "tools (read_file, list_dir, glob, grep, web_search, web_fetch)."
         )
-        emit({"type": "tool_result", "name": name, "output": result})
-        return result
+        return _emit_tool_result(emit, name, result)
 
     if (
         approval == "auto"
@@ -300,8 +304,7 @@ async def execute_tool(
             "surface. Switch to full only if the operator accepts that "
             "risk."
         )
-        emit({"type": "tool_result", "name": name, "output": result})
-        return result
+        return _emit_tool_result(emit, name, result)
 
     if tool is None:
         result = f"Unknown tool: {name}"
@@ -341,8 +344,7 @@ async def execute_tool(
             + f"\n... [truncated, {len(result)} chars total]"
         )
 
-    emit({"type": "tool_result", "name": name, "output": result})
-    return result
+    return _emit_tool_result(emit, name, result)
 
 
 def tool_signature(name: str, args: dict) -> str:

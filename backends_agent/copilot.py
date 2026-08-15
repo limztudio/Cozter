@@ -268,6 +268,22 @@ class CopilotBackend(Backend):
                 oldest_key = min(cache, key=expiry)
                 cache.pop(oldest_key, None)
 
+    def _cached_workspace_models(
+        self, workspace_key: str, now: float,
+    ) -> tuple[str, ...] | None:
+        """Return a fresh catalog or a throttled fail-closed fallback."""
+        catalog = self._workspace_model_catalogs.get(workspace_key)
+        cached = (
+            fresh_model_catalog(*catalog, now=now)
+            if catalog is not None
+            else None
+        )
+        if cached is not None:
+            return cached
+        if now < self._workspace_fallback_expires_at.get(workspace_key, 0.0):
+            return _FALLBACK_MODELS
+        return None
+
     def available_models_for_workspace(
         self, workspace_path: str,
     ) -> tuple[str, ...]:
@@ -282,31 +298,15 @@ class CopilotBackend(Backend):
         """
         workspace_key = self._workspace_catalog_key(workspace_path)
         now = time.monotonic()
-        catalog = self._workspace_model_catalogs.get(workspace_key)
-        cached = (
-            fresh_model_catalog(*catalog, now=now)
-            if catalog is not None
-            else None
-        )
+        cached = self._cached_workspace_models(workspace_key, now)
         if cached is not None:
             return cached
-        if now < self._workspace_fallback_expires_at.get(workspace_key, 0.0):
-            return _FALLBACK_MODELS
 
         with self._models_lock:
             now = time.monotonic()
-            catalog = self._workspace_model_catalogs.get(workspace_key)
-            cached = (
-                fresh_model_catalog(*catalog, now=now)
-                if catalog is not None
-                else None
-            )
+            cached = self._cached_workspace_models(workspace_key, now)
             if cached is not None:
                 return cached
-            if now < self._workspace_fallback_expires_at.get(
-                workspace_key, 0.0,
-            ):
-                return _FALLBACK_MODELS
 
             self._prune_workspace_model_caches(now, keep_key=workspace_key)
             # An expired catalog must not keep displaying names that a newly
