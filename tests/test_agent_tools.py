@@ -23,6 +23,7 @@ from Cozter.agent_tools.base import (
 )
 from Cozter.agent_tools.builtin.apply_patch import ApplyPatchTool
 from Cozter.agent_tools.builtin.bash import BashTool
+from Cozter.agent_tools.builtin import copy_file as copy_file_mod
 from Cozter.agent_tools.builtin.copy_file import CopyFileTool
 from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
@@ -263,6 +264,43 @@ class MoveFileToolTests(unittest.TestCase):
 
 
 class CopyFileToolTests(unittest.TestCase):
+    def test_copy_does_not_clobber_a_destination_created_after_preflight(
+        self,
+    ) -> None:
+        """A concurrent creator must win instead of being overwritten."""
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                source = os.path.join(tmp, "source.txt")
+                destination = os.path.join(tmp, "destination.txt")
+                with open(source, "w", encoding="utf-8") as f:
+                    f.write("source contents")
+
+                original_ensure_parent_dir = copy_file_mod.ensure_parent_dir
+
+                def create_competing_destination(path: str) -> None:
+                    original_ensure_parent_dir(path)
+                    with open(destination, "w", encoding="utf-8") as f:
+                        f.write("concurrent contents")
+
+                with mock.patch.object(
+                    copy_file_mod,
+                    "ensure_parent_dir",
+                    side_effect=create_competing_destination,
+                ):
+                    result = await CopyFileTool().run(
+                        tmp,
+                        {"source": "source.txt", "destination": "destination.txt"},
+                    )
+
+                self.assertEqual(
+                    result,
+                    "Destination already exists: destination.txt",
+                )
+                with open(destination, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "concurrent contents")
+
+        asyncio.run(run())
+
     def test_copy_rejects_a_source_directory(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:

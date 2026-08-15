@@ -8,7 +8,6 @@ import asyncio
 import logging
 import os
 import re
-import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -17,6 +16,7 @@ from . import (
     session, titling,
 )
 from . import workspace as workspace_mod
+from .agent_tools.base import copy_file_atomically
 from .backends_agent.base import (
     NO_RESPONSE_TEXT, AgentResult, ChatEvent, append_detached_task_request,
     append_text_result, set_error_result,
@@ -341,14 +341,29 @@ def _safe_generated_image_name(src: str, ext: str) -> str:
     return f"{safe or 'generated-image'}{ext}"
 
 
-def _unique_path(directory: str, filename: str) -> str:
+def _copy_to_unique_path(source: str, directory: str, filename: str) -> str | None:
+    """Publish *source* under an available filename without clobbering one.
+
+    The generated-image directory may receive concurrent agent turns. Pick a
+    readable basename first, but let the atomic no-clobber copy decide whether
+    a candidate is actually available: an ``exists()`` check followed by a
+    normal copy could overwrite a file that appeared in between.
+    """
     stem, ext = os.path.splitext(filename)
-    candidate = os.path.join(directory, filename)
-    i = 2
-    while os.path.exists(candidate):
-        candidate = os.path.join(directory, f"{stem}-{i}{ext}")
-        i += 1
-    return candidate
+    for index in range(1, 1_001):
+        candidate = os.path.join(
+            directory,
+            filename if index == 1 else f"{stem}-{index}{ext}",
+        )
+        # This is only a fast path: the atomic publisher below remains the
+        # authority because another writer can create the name immediately
+        # after this check. Skipping known collisions avoids recopied image
+        # data when a long-lived workspace already has many attachments.
+        if os.path.lexists(candidate):
+            continue
+        if copy_file_atomically(source, candidate):
+            return os.path.realpath(candidate)
+    return None
 
 
 def _copy_generated_image_into_workspace(
@@ -387,9 +402,14 @@ def _copy_generated_image_into_workspace(
                 dest_dir,
             )
             return None
-        dest = _unique_path(dest_dir, _safe_generated_image_name(src_real, ext))
-        shutil.copy2(src_real, dest)
-        return os.path.realpath(dest)
+        dest = _copy_to_unique_path(
+            src_real, dest_dir, _safe_generated_image_name(src_real, ext),
+        )
+        if dest is None:
+            logger.warning(
+                "Could not reserve a generated-image destination after 1,000 attempts",
+            )
+        return dest
     except (OSError, ValueError):
         logger.warning(
             "Failed to copy generated image into workspace: %s", src,

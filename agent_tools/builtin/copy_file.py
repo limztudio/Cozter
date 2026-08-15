@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import shutil
-
 from ..base import (
     AgentTool,
+    copy_file_atomically,
     ensure_parent_dir,
     prepare_source_destination,
     source_destination_parameters,
@@ -32,7 +31,11 @@ class CopyFileTool(AgentTool):
         raw_src, raw_dst, src, dst = paths
         try:
             ensure_parent_dir(dst)
-            shutil.copy2(src, dst)
+            # Do not trust the preflight absence check alone: another writer
+            # can create a file or symlink before a normal copy opens dst.
+            # The shared helper publishes only a completed, no-clobber copy.
+            if not copy_file_atomically(src, dst):
+                return f"Destination already exists: {raw_dst}"
         except OSError as exc:
             return f"Copy failed: {exc}"
         return f"Copied: {raw_src} -> {raw_dst}"

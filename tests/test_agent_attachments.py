@@ -146,6 +146,41 @@ class AttachmentGuardTests(unittest.TestCase):
             self.assertIsNone(copied)
             self.assertEqual(os.listdir(outside), [])
 
+    def test_external_image_copy_keeps_a_concurrent_destination(self) -> None:
+        """A generated-image race must choose a new name, never overwrite."""
+        with tempfile.TemporaryDirectory() as ws, \
+                tempfile.TemporaryDirectory() as external:
+            source = os.path.join(external, "artifact.png")
+            self._write_png(source)
+            original_copy = agent.copy_file_atomically
+            first_destination = ""
+            call_count = 0
+
+            def publish_with_competitor(src: str, destination: str) -> bool:
+                nonlocal first_destination, call_count
+                call_count += 1
+                if call_count == 1:
+                    first_destination = destination
+                    with open(destination, "wb") as f:
+                        f.write(b"concurrent image")
+                return original_copy(src, destination)
+
+            with (
+                mock.patch.dict(
+                    os.environ, {"COZTER_ATTACHMENT_ROOTS": external}, clear=False,
+                ),
+                mock.patch.object(
+                    agent, "copy_file_atomically", side_effect=publish_with_competitor,
+                ),
+            ):
+                copied = agent.prepare_attachment_path(source, ws)
+
+            self.assertIsNotNone(copied)
+            assert copied is not None
+            self.assertTrue(copied.endswith("-2.png"))
+            with open(first_destination, "rb") as f:
+                self.assertEqual(f.read(), b"concurrent image")
+
 
 if __name__ == "__main__":
     unittest.main()

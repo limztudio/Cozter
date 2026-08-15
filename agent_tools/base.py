@@ -7,6 +7,7 @@ import html
 import fnmatch
 import os
 import re
+import shutil
 import stat
 import tempfile
 import uuid
@@ -560,6 +561,48 @@ def create_text_file_atomically(
             os.unlink(tmp_path)
 
 
+def copy_file_atomically(source_path: str, target_path: str) -> bool:
+    """Copy one file to a new path without ever overwriting a concurrent file.
+
+    A preflight ``exists()`` check alone cannot uphold a no-clobber contract:
+    another writer can create a file (or a symlink) before ``shutil.copy2``
+    opens the destination, causing that operation to overwrite it or follow
+    the link.  Copy into a completed same-directory temporary file first,
+    then publish it with a hard link, whose target creation is atomic and
+    fails when the destination already exists.  The no-hard-link fallback
+    retains the same no-clobber guarantee through an exclusive reservation.
+
+    Return ``True`` only when this call created *target_path*; return
+    ``False`` if it already existed when publishing the completed copy.
+    """
+    parent = os.path.dirname(target_path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
+    os.close(fd)
+    try:
+        # copy2 preserves the documented file metadata on the normal,
+        # hard-link publication path. Sync the completed temporary contents
+        # before making the destination name visible.
+        shutil.copy2(source_path, tmp_path)
+        with open(tmp_path, "rb") as tmp_file:
+            os.fsync(tmp_file.fileno())
+        try:
+            os.link(tmp_path, target_path)
+        except FileExistsError:
+            return False
+        except OSError as exc:
+            if not _hard_link_unsupported(exc):
+                raise
+            return _copy_to_exclusive_new_path(
+                tmp_path, target_path, preserve_metadata=True,
+            )
+        return True
+    finally:
+        # A successful hard link owns the same inode independently, and the
+        # fallback has copied it. In every case this temporary name is ours.
+        with suppress(OSError):
+            os.unlink(tmp_path)
+
+
 def _new_text_temp_file(parent: str, target_path: str) -> tuple[int, str]:
     """Open a same-directory temp file with normal file-creation mode.
 
@@ -595,7 +638,9 @@ def _hard_link_unsupported(exc: OSError) -> bool:
     return getattr(exc, "winerror", None) in {1, 50}
 
 
-def _copy_to_exclusive_new_path(tmp_path: str, path: str) -> bool:
+def _copy_to_exclusive_new_path(
+    tmp_path: str, path: str, *, preserve_metadata: bool = False,
+) -> bool:
     """Copy a completed temp file through an atomically reserved new path.
 
     This fallback is for filesystems without hard links. ``O_EXCL`` keeps
@@ -620,6 +665,8 @@ def _copy_to_exclusive_new_path(tmp_path: str, path: str) -> bool:
             while chunk := source.read(64 * 1024):
                 output.write(chunk)
             output.flush()
+            if preserve_metadata:
+                _copy_file_metadata_to_fd(tmp_path, output.fileno())
             os.fsync(output.fileno())
         return True
     except BaseException:
@@ -629,6 +676,29 @@ def _copy_to_exclusive_new_path(tmp_path: str, path: str) -> bool:
         if reserved_stat is not None:
             _unlink_if_same_file(path, reserved_stat)
         raise
+
+
+def _copy_file_metadata_to_fd(source_path: str, target_fd: int) -> None:
+    """Best-effort copy of standard file metadata through an open target fd.
+
+    The no-hard-link fallback must not re-open the just-reserved destination
+    by pathname: another actor could replace that name between the exclusive
+    create and metadata copy. File-descriptor operations preserve mode and
+    timestamps without that race. Extended metadata remains platform-specific
+    in the fallback, while the normal ``copy2`` + link path retains it.
+    """
+    source_stat = os.stat(source_path, follow_symlinks=False)
+    try:
+        os.fchmod(target_fd, stat.S_IMODE(source_stat.st_mode))
+        os.utime(
+            target_fd,
+            ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
+        )
+    except (AttributeError, OSError):
+        # Some Windows filesystems do not support descriptor-based metadata
+        # operations. The completed bytes and no-clobber guarantee matter
+        # more than metadata on that fallback path.
+        return
 
 
 def _unlink_if_same_file(path: str, expected: os.stat_result) -> None:
