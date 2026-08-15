@@ -1080,6 +1080,12 @@ checks pass.
 The string-edit tools honor a broad `replace_all` operation only when its
 tool argument is the literal JSON boolean `true`; malformed truthy values
 retain the safer unique-match behavior.
+For existing UTF-8 text files, `edit_file`, `multi_edit`, and modification
+patches normalize CRLF while matching their line-oriented input, then restore
+the file's original CRLF convention on write. Replacement text that already
+contains CRLF is normalized before restoration, so an edit cannot introduce
+duplicate carriage returns. Non-UTF-8 files are refused rather than rewritten
+with replacement characters.
 Regression coverage for these paths lives in
 `tests/test_agent_process_cleanup.py`, `tests/test_utils.py`, and
 `tests/test_agent_tools.py`.
