@@ -66,11 +66,12 @@ _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
     # Only an explicit CLI long-context selection is portable across
     # Anthropic API, Bedrock, Vertex, Foundry, and gateway deployments. The
-    # current CLI exposes [1m] variants for Sonnet and Opus; Fable's native
-    # 1M window is selected through its ordinary alias on direct Anthropic
-    # sessions, not a ``fable[1m]`` model ID.
+    # current CLI exposes [1m] variants for Sonnet, Opus, and Fable. Keep the
+    # capacity attached only to the explicit selection: an ordinary alias can
+    # resolve through a provider or account tier with a smaller window.
     "sonnet[1m]",
     "opus[1m]",
+    "fable[1m]",
     "claude-opus-4-7[1m]",
     "claude-opus-5[1m]",
     "claude-opus-4-8[1m]",
@@ -546,9 +547,9 @@ class ClaudeCodeBackend(Backend):
     #     Sonnet 4.5, Haiku 4.5). From Opus/Sonnet 4.6 on, the ID is undated
     #     and inventing a date suffix 404s.
     #   - ``[1m]`` is only valid on aliases/models whose registry exposes a
-    #     long-context variant. The current aliases are ``sonnet[1m]`` and
-    #     ``opus[1m]``; ``fable[1m]`` and ``opusplan[1m]`` are not selectable
-    #     model IDs. Sonnet 4.5 remains a 200K model. Keep full
+    #     long-context variant. The current aliases are ``sonnet[1m]``,
+    #     ``opus[1m]``, and ``fable[1m]``; ``opusplan[1m]`` is not a
+    #     selectable model ID. Sonnet 4.5 remains a 200K model. Keep full
     #     Fable/Sonnet suffixes out of this curated picker unless the CLI
     #     exposes them as picker entries.
     #   - Fast mode is a session toggle (``/fast``) on Opus 5/4.8/4.7, not a
@@ -565,6 +566,7 @@ class ClaudeCodeBackend(Backend):
         "opusplan",
         "sonnet[1m]",
         "opus[1m]",
+        "fable[1m]",
         "claude-fable-5",
         "claude-sonnet-5",
         "claude-opus-5",
