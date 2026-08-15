@@ -300,6 +300,22 @@ def replacement_properties() -> dict[str, Any]:
     }
 
 
+def path_replacement_parameters() -> dict[str, Any]:
+    """Return the shared schema for a file path and one text replacement.
+
+    Like :func:`replacement_properties`, this builds a fresh nested mapping
+    for each caller so a tool or plugin can safely augment its schema without
+    mutating another tool's definition.
+    """
+    return object_parameters(
+        {
+            "path": path_property(),
+            **replacement_properties(),
+        },
+        ["path", "old_string", "new_string"],
+    )
+
+
 def prepare_source_destination(
     workspace: str,
     args: dict,

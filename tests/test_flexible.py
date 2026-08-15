@@ -239,7 +239,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             workspace.ensure_cozter_dir(ws)
             workspace.set_flexible_backend_name(ws, "high", "claude_code")
 
-            result, restarting = await self._run(ws)
+            _, restarting = await self._run(ws)
 
         self.assertFalse(restarting)
         self.assertEqual(

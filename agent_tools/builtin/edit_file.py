@@ -8,9 +8,8 @@ from typing import Any, ClassVar
 from ..base import (
     AgentTool,
     apply_string_replacement,
-    path_property,
+    path_replacement_parameters,
     read_text_for_edit,
-    replacement_properties,
     resolve_inside_workspace,
     summarize_path,
     validate_replacement_strings,
@@ -26,14 +25,7 @@ class EditFileTool(AgentTool):
         " *new_string* in *path*. By default requires a unique match;"
         " pass *replace_all*=true to replace every occurrence."
     )
-    parameters: ClassVar[dict[str, Any]] = {
-        "type": "object",
-        "properties": {
-            "path": path_property(),
-            **replacement_properties(),
-        },
-        "required": ["path", "old_string", "new_string"],
-    }
+    parameters: ClassVar[dict[str, Any]] = path_replacement_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
         target = resolve_inside_workspace(workspace_path, args.get("path", ""))
