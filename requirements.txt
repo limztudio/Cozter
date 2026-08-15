@@ -1,5 +1,8 @@
-python-telegram-bot>=21.0
-slack-bolt>=1.18.0
+# Keep runtime integrations within reviewed major-release lines.  The bot
+# exercises both adapters in CI, but an unbounded major upgrade can still
+# introduce a breaking API change between otherwise identical deployments.
+python-telegram-bot>=21.0,<23
+slack-bolt>=1.18.0,<2
 # Keep installs on a supported, security-fixed aiohttp line while avoiding an
 # unreviewed future major-version upgrade.
 aiohttp>=3.14.3,<4
