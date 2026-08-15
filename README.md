@@ -844,15 +844,14 @@ workspace-policy-disabled Copilot models out of the picker; a stored Copilot
 choice also uses `auto` until it appears in that workspace's fresh catalog.
 Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
-aliases, the supported `fable[1m]`, `sonnet[1m]`, `opus[1m]`, and
-`opusplan[1m]` long-context aliases, and verified version pins (including
-Fable 5, Sonnet 5, Opus 5, and explicit `[1m]` variants of other documented
-long-context models). Only the explicit `[1m]` selections receive Cozter's
-1M-token context metadata; aliases and bare version pins remain
-capacity-unknown because their active window can vary by account and provider.
-Claude Code's own `/fast` is a session toggle, not a Cozter command or a
-selectable `*-fast` model ID. Llama and Z.ai discover models live from their
-configured HTTP endpoints.
+aliases, the supported `sonnet[1m]` and `opus[1m]` long-context aliases, and
+verified version pins (including Fable 5, Sonnet 5, Opus 5, and explicit
+`[1m]` variants of other documented long-context models). Only the explicit
+`[1m]` selections receive Cozter's 1M-token context metadata; aliases and bare
+version pins remain capacity-unknown because their active window can vary by
+account and provider. Claude Code's own `/fast` is a session toggle, not a
+Cozter command or a selectable `*-fast` model ID. Llama and Z.ai discover
+models live from their configured HTTP endpoints.
 `llama` and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
 and points at Z.ai's endpoint. Its text chat-completion models from GLM-4.6

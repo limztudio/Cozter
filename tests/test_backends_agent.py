@@ -1072,8 +1072,8 @@ class BackendModelTests(unittest.TestCase):
         models = ClaudeCodeBackend.available_models
         for model in (
             "sonnet",
-            "fable[1m]",
-            "opusplan[1m]",
+            "sonnet[1m]",
+            "opus[1m]",
             "claude-fable-5",
             "claude-sonnet-5",
             "claude-opus-5",
@@ -1136,6 +1136,10 @@ class BackendModelTests(unittest.TestCase):
             # aliases. Keep full suffixed IDs out until they become entries.
             "claude-sonnet-5[1m]",
             "claude-fable-5[1m]",
+            # The documented 1M aliases are Sonnet and Opus. Fable's native
+            # window uses its ordinary alias; ``opusplan`` has no [1m] entry.
+            "fable[1m]",
+            "opusplan[1m]",
         ):
             with self.subTest(model=model):
                 self.assertNotIn(model, models)
