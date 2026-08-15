@@ -9,6 +9,12 @@ with per-workspace settings, durable sessions with automatic compaction,
 persistent turn queues, file attachments, and a drop-in plugin system that
 works across every backend.
 
+Cozter is for a trusted individual or small trusted group, not a multi-tenant
+service. Authorized participants can select workspaces the service account can
+access and, depending on the chosen backend and permission mode, direct an
+agent to change them. Run it as a dedicated non-privileged OS user; plugins
+are trusted in-process code, not sandboxed extensions.
+
 ## What it gives you
 
 - **A default meta-agent plus five direct agent backends**, picked per
@@ -456,6 +462,11 @@ directory—or an existing state component such as `sessions/`, `uploads/`, or
 `generated_images/`—that resolves through a symlink outside the workspace.
 Symlinks whose resolved targets remain inside the workspace continue to work.
 
+Foreground agent turns for one workspace are serialized, including turns from
+different authorized users and scheduled `/reserve` jobs. This prevents their
+file edits from interleaving; work in separate workspaces can still run
+independently.
+
 The global runtime files are deliberately small JSON documents:
 
 - `.config/config.json` — daemon chat-surface and backend settings
@@ -629,7 +640,10 @@ Generated images under `$CODEX_HOME/generated_images` (or
 `~/.codex/generated_images` when `CODEX_HOME` is unset) and any
 directories listed in `COZTER_ATTACHMENT_ROOTS` are also accepted. Cozter
 copies explicitly referenced external images into `.cozter/generated_images/`
-before upload so chat platforms never receive arbitrary external paths.
+before upload so chat platforms never receive arbitrary external paths. That
+copy is published without clobbering an existing file: if a name collides,
+including with a concurrent writer, Cozter tries readable `-2`, `-3`, …
+suffixes (up to 1,000 candidates) and leaves the competing file untouched.
 `COZTER_ATTACHMENT_ROOTS` is an OS-path-separator-delimited list (`:` on
 POSIX, `;` on Windows); blank entries are ignored and `~` is expanded.
 At the end of a run, Cozter also snapshots newly created or modified image
@@ -786,6 +800,11 @@ cheap/mid/strong models automatically (its `tier_models` table). `/model`
 and `/doctor` print the current wiring. A tier can only point at a *direct*
 backend — never at `flexible` itself, which would plan forever.
 
+A flexible turn can make one planner call, up to 12 worker calls, and one
+merge call. Because tiers may use different backends, a single request can
+also be sent to multiple configured providers. Select a direct backend when a
+single-provider path or more predictable request cost is important.
+
 Two behaviors are worth knowing. Under `/style collaborative`, the turn can
 stop and wait for you (`[[await]]`) at either end of the pipeline: the
 planner may ask **one** clarifying question instead of guessing, and the
@@ -813,6 +832,11 @@ its own, only the three tiers above.
 | `llama` | Unauthenticated OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-air` |
 
+When a caller does not explicitly select a summary model, Cozter uses the
+selected summary backend's `default_summary_model` for routing, planning,
+compaction, and session titling. This gives direct library callers the same
+summary-model defaults that workspace settings use.
+
 Codex discovers its visible local CLI catalog, while Copilot queries its
 authenticated ACP model selector from the selected workspace and fails closed
 to `auto` if that catalog cannot be read. This keeps enterprise-disabled and
@@ -826,8 +850,9 @@ Fable 5, Sonnet 5, Opus 5, and explicit `[1m]` variants of other documented
 long-context models). Only the explicit `[1m]` selections receive Cozter's
 1M-token context metadata; aliases and bare version pins remain
 capacity-unknown because their active window can vary by account and provider.
-Claude's `/fast` is a session toggle rather than a selectable `*-fast` model
-ID. Llama and Z.ai discover models live from their configured HTTP endpoints.
+Claude Code's own `/fast` is a session toggle, not a Cozter command or a
+selectable `*-fast` model ID. Llama and Z.ai discover models live from their
+configured HTTP endpoints.
 `llama` and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
 and points at Z.ai's endpoint. Its text chat-completion models from GLM-4.6
@@ -860,8 +885,9 @@ agent-capable fallback, including text-compatible multimodal models such as
 `glm-5v-turbo`, `glm-4.6v`, and `glm-4.5v`, if the account cannot be queried.
 It filters Z.ai's known image, OCR, and audio-only IDs because those require
 different endpoints, while preserving unknown/private chat-model IDs. Codex,
-llama, and Z.ai refresh their live catalogs periodically, so long-running
-services see CLI, server, and account model changes. HTTP catalog responses
+llama, and Z.ai refresh their live catalogs lazily when a model picker is
+opened after its 60-second cache expires, so long-running services see CLI,
+server, and account model changes without a restart. HTTP catalog responses
 over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates
 the IDs, keeps at most 4,096, and ignores IDs longer than 512 characters.
 Copilot applies the same 512-character-ID and 4,096-model bounds to its
@@ -1024,7 +1050,10 @@ rejected instead of being treated as a smaller valid edit.
 replacement leaves the prior contents intact, and existing file mode bits are
 preserved.
 `copy_file` only copies files, while `move_file` can move a file or directory
-but refuses to move a directory into its own subtree. Both operations refuse
+but refuses to move a directory into its own subtree. `copy_file` completes a
+same-directory temporary copy before atomically publishing a new destination
+(with an exclusive-create fallback where hard links are unavailable), so a
+concurrent file or symlink can never be overwritten. Both operations refuse
 to replace an existing destination and create a missing destination parent
 directory only after their source and destination checks pass.
 The string-edit tools honor a broad `replace_all` operation only when its
@@ -1122,8 +1151,8 @@ that owns them:
   `agent.py:_run_flexible()` and its per-tier settings in `workspace.py`
 - Tool/plugin behavior: `agent_tools/__init__.py`, `agent_tools/base.py`,
   `agent_tools/builtin/`, and `agent_tools/plugins/README.md`; shared
-  validation, workspace-boundary checks, HTTP request setup, and bounded
-  response reading live in `agent_tools/base.py`
+  validation, workspace-boundary checks, no-clobber file publication, HTTP
+  request setup, and bounded response reading live in `agent_tools/base.py`
 - Workspace, session, queue, schedule, compaction, and colony state:
   `workspace.py`, `session.py`, `schedules.py`, `compaction.py`, and
   `colony.py`
