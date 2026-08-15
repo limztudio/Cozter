@@ -163,25 +163,15 @@ def _is_auto_allowed(tool: AgentTool | None) -> bool:
     )
 
 
-def _read_only_tool_schema(
+def _filtered_tool_schema(
     registered_tools: tuple[AgentTool, ...],
+    predicate: Callable[[AgentTool], bool],
 ) -> list[dict[str, Any]]:
-    """Build the confirm-mode schema from builtin read-only tools only."""
+    """Build a tool schema from the registered tools matching *predicate*."""
     return [
         {"type": "function", "function": tool.schema}
         for tool in registered_tools
-        if _is_confirm_read_only(tool)
-    ]
-
-
-def _auto_tool_schema(
-    registered_tools: tuple[AgentTool, ...],
-) -> list[dict[str, Any]]:
-    """Build the HTTP auto-mode schema, withholding full-only tools."""
-    return [
-        {"type": "function", "function": tool.schema}
-        for tool in registered_tools
-        if _is_auto_allowed(tool)
+        if predicate(tool)
     ]
 
 
@@ -189,9 +179,13 @@ TOOL_SCHEMA: list[dict[str, Any]] = [
     {"type": "function", "function": t.schema} for t in _TOOLS
 ]
 
-AUTO_TOOL_SCHEMA: list[dict[str, Any]] = _auto_tool_schema(_TOOLS)
+AUTO_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
+    _TOOLS, _is_auto_allowed,
+)
 
-READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = _read_only_tool_schema(_TOOLS)
+READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
+    _TOOLS, _is_confirm_read_only,
+)
 
 
 # ---------------------------------------------------------------------------

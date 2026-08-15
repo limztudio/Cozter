@@ -437,16 +437,17 @@ def _coerce_backend_name(
     settings file can never route back into the meta-agent.
     """
     options = AVAILABLE_BACKENDS if allowed is None else allowed
-    if isinstance(name, str) and name in options:
-        return name
-    return default
+    return _coerce_choice(name, options, default)
+
+
+def _coerce_choice(value: object, options: list[str], default: str) -> str:
+    """Return a valid stored option, otherwise its safe default."""
+    return value if isinstance(value, str) and value in options else default
 
 
 def _coerce_permission(permission: object) -> str:
-    return (
-        permission
-        if isinstance(permission, str) and permission in AVAILABLE_PERMISSIONS
-        else DEFAULT_PERMISSION
+    return _coerce_choice(
+        permission, AVAILABLE_PERMISSIONS, DEFAULT_PERMISSION,
     )
 
 
@@ -781,11 +782,7 @@ def set_permission(workspace_path: str, permission: str) -> None:
 
 
 def _coerce_style(style: object) -> str:
-    return (
-        style
-        if isinstance(style, str) and style in AVAILABLE_STYLES
-        else DEFAULT_STYLE
-    )
+    return _coerce_choice(style, AVAILABLE_STYLES, DEFAULT_STYLE)
 
 
 def get_interaction_style(workspace_path: str) -> str:

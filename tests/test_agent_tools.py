@@ -726,7 +726,9 @@ class ConfirmPermissionGateTests(unittest.TestCase):
                 "read_file",
                 {
                     entry["function"]["name"]
-                    for entry in agent_tools._read_only_tool_schema((plugin,))
+                    for entry in agent_tools._filtered_tool_schema(
+                        (plugin,), agent_tools._is_confirm_read_only,
+                    )
                 },
             )
 

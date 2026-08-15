@@ -29,7 +29,6 @@ from ..config import (
 from ..utils import split_text_chunks
 from .base import (
     AttachmentInfo,
-    BotContext,
     BotPlatform,
     COMMAND_NAMES,
     MessageHandle,
@@ -391,25 +390,6 @@ class SlackBot(BotPlatform):
     # discarded so it can't be interpreted as user input.
     _ALLOWED_SUBTYPES = frozenset({None, "file_share"})
 
-    def _ctx(
-        self,
-        uid: str,
-        channel: str,
-        *,
-        text: str = "",
-        command: str | None = None,
-        args: str = "",
-        attachment: AttachmentInfo | None = None,
-    ) -> BotContext:
-        return self.make_context(
-            uid,
-            channel,
-            text=text,
-            command=command,
-            args=args,
-            attachment=attachment,
-        )
-
     def _make_command_handler(self, name: str):
         async def handler(ack, command, **_kwargs) -> None:
             await ack()
@@ -422,7 +402,7 @@ class SlackBot(BotPlatform):
                 )
                 return
             args = (command.get("text") or "").strip()
-            ctx = self._ctx(uid, channel, command=name, args=args)
+            ctx = self.make_context(uid, channel, command=name, args=args)
             try:
                 await self.dispatch_command(ctx)
             except Exception:
@@ -467,7 +447,7 @@ class SlackBot(BotPlatform):
         if not text:
             return
 
-        await self.dispatch_text(self._ctx(uid, channel, text=text))
+        await self.dispatch_text(self.make_context(uid, channel, text=text))
 
     async def _on_app_mention(self, event, **_kwargs) -> None:
         """Handle a direct Slack mention as ordinary input.
@@ -493,7 +473,7 @@ class SlackBot(BotPlatform):
         # Caller (_on_message) has already verified channel authorization.
         uid = str(event["user"])
         channel = str(event["channel"])
-        ctx_for_reply = self._ctx(uid, channel, text=caption)
+        ctx_for_reply = self.make_context(uid, channel, text=caption)
         upload_dir = await self._attachment_upload_dir(ctx_for_reply)
         if upload_dir is None:
             return
@@ -537,7 +517,7 @@ class SlackBot(BotPlatform):
                 )
                 continue
 
-            await self.dispatch_file(self._ctx(
+            await self.dispatch_file(self.make_context(
                 uid, channel,
                 attachment=AttachmentInfo(local_path, filename, kind, caption),
             ))
