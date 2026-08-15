@@ -500,6 +500,18 @@ names still help it retire stale workspace memory. If a workspace has no
 sessions left, a colony pass clears its shared memory rather than carrying
 deleted-session facts into later conversations.
 
+Maintenance prompts treat persisted model output as recovery data, not as an
+unbounded source of context. The session router sends at most 20 sessions and
+caps each description at 600 characters. Compaction clips an oversized prior
+summary and sends a contiguous oldest prefix of raw history; even when its
+first raw message alone is too large, it sends a marked prefix so a later pass
+can advance the history without skipping to a newer message. Colony consolidation
+caps its aggregate input at 100,000 characters, reserves at most 25,000 for
+the previous colony list, and keeps every included session block complete when
+it trims a long title or memory item. These limits affect only the internal
+maintenance prompt; compaction and colony state are rewritten only after a
+successful response.
+
 For a direct agent turn, automatic compaction follows that selected model's
 known input window. For a flexible turn, it follows the smallest known window
 among the summary model and all three tier models. The stored context is
@@ -1044,6 +1056,10 @@ hunks leave the target in place.
 Normal unified-diff hunks must also match the line counts declared in their
 headers before any target is written, so a malformed or truncated patch is
 rejected instead of being treated as a smaller valid edit.
+Patch parsing also preserves the requested final-newline state from a unified
+diff's `\ No newline at end of file` marker. A misplaced marker or a creation
+hunk that claims old-side/context lines is rejected rather than silently
+changing the patch's meaning.
 `write_file`, `edit_file`, `multi_edit`, and updates to existing files through
 `apply_patch` replace content through a temporary file. An unsuccessful
 replacement leaves the prior contents intact, and existing file mode bits are
@@ -1052,9 +1068,15 @@ preserved.
 but refuses to move a directory into its own subtree. `copy_file` completes a
 same-directory temporary copy before atomically publishing a new destination
 (with an exclusive-create fallback where hard links are unavailable), so a
-concurrent file or symlink can never be overwritten. Both operations refuse
-to replace an existing destination and create a missing destination parent
-directory only after their source and destination checks pass.
+concurrent file or symlink can never be overwritten. `move_file` publishes
+regular files and symlinks without clobbering a late destination, then removes
+the source only after that publication is safe; if that final removal cannot
+be completed, it rolls back only the target it created. For directories and
+other non-file paths, it uses the OS's no-replace rename primitive and fails
+where that guarantee is unavailable rather than falling back to a replacing
+rename. Both operations refuse to replace an existing destination and create
+a missing destination parent directory only after their source and destination
+checks pass.
 The string-edit tools honor a broad `replace_all` operation only when its
 tool argument is the literal JSON boolean `true`; malformed truthy values
 retain the safer unique-match behavior.
