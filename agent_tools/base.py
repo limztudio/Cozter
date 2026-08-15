@@ -488,6 +488,18 @@ def read_text_for_edit(path: str) -> tuple[str, bool] | str:
     return text, uses_crlf
 
 
+def _restore_text_newlines(text: str, *, uses_crlf: bool) -> str:
+    """Restore CRLF safely after an edit normalized the original file.
+
+    Replacement text comes directly from a tool call and can already contain
+    CRLF sequences. Normalize those first, then restore the target's newline
+    convention, so an inserted ``\r\n`` does not become ``\r\r\n``.
+    """
+    if not uses_crlf:
+        return text
+    return text.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
 def write_text_after_edit(path: str, text: str, *, uses_crlf: bool) -> None:
     """Atomically replace text at *path*, restoring its newline convention.
 
@@ -500,8 +512,7 @@ def write_text_after_edit(path: str, text: str, *, uses_crlf: bool) -> None:
     Existing files retain their mode; a missing target is created through the
     same atomic replacement path.
     """
-    if uses_crlf:
-        text = text.replace("\n", "\r\n")
+    text = _restore_text_newlines(text, uses_crlf=uses_crlf)
     parent = os.path.dirname(path) or "."
     try:
         original_mode = stat.S_IMODE(os.stat(path).st_mode)
@@ -536,8 +547,7 @@ def create_text_file_atomically(
     crash-atomicity of a brand-new file. Return ``True`` when this call
     created the target and ``False`` when it already existed.
     """
-    if uses_crlf:
-        text = text.replace("\n", "\r\n")
+    text = _restore_text_newlines(text, uses_crlf=uses_crlf)
     parent = os.path.dirname(path) or "."
     fd, tmp_path = _new_text_temp_file(parent, path)
     try:

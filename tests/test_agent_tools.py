@@ -191,6 +191,43 @@ class BuiltinEditToolTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_edit_tools_preserve_inserted_crlf_sequences(self) -> None:
+        """New CRLF text must not gain a second carriage return on write."""
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                edit_path = os.path.join(tmp, "edit.txt")
+                multi_path = os.path.join(tmp, "multi.txt")
+                for path in (edit_path, multi_path):
+                    with open(path, "wb") as f:
+                        f.write(b"a\r\n")
+
+                edit_result = await EditFileTool().run(
+                    tmp,
+                    {
+                        "path": "edit.txt",
+                        "old_string": "a",
+                        "new_string": "b\r\nc",
+                    },
+                )
+                multi_result = await MultiEditTool().run(
+                    tmp,
+                    {
+                        "path": "multi.txt",
+                        "edits": [{
+                            "old_string": "a",
+                            "new_string": "b\r\nc",
+                        }],
+                    },
+                )
+
+                self.assertIn("Replaced", edit_result)
+                self.assertIn("Applied", multi_result)
+                for path in (edit_path, multi_path):
+                    with open(path, "rb") as f:
+                        self.assertEqual(f.read(), b"b\r\nc\r\n")
+
+        asyncio.run(run())
+
     def test_edit_tools_require_boolean_true_for_replace_all(self) -> None:
         """A malformed string must not turn a unique edit into a broad one."""
         async def run() -> None:
