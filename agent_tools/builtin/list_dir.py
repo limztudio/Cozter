@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import os
 from typing import Any, ClassVar
 
@@ -70,13 +71,28 @@ class ListDirTool(AgentTool):
     def _list_entries(
         target: str, max_results: int,
     ) -> tuple[list[str], int]:
-        """Enumerate, sort, and classify entries off the event loop."""
-        entries = sorted(os.listdir(target))
+        """Return sorted leading entries without materializing a huge directory.
+
+        We still scan every entry to report the exact omitted count, but a
+        bounded heap keeps memory at ``O(max_results)`` and reduces selection
+        work from sorting every name to ``O(n log max_results)``.
+        """
+        entry_count = 0
+
+        def entries():
+            nonlocal entry_count
+            with os.scandir(target) as scan:
+                for entry in scan:
+                    entry_count += 1
+                    yield entry.name, entry.is_dir()
+
+        selected = heapq.nsmallest(
+            max_results, entries(), key=lambda entry: entry[0],
+        )
         lines = [
-            f"{entry}/" if os.path.isdir(os.path.join(target, entry)) else entry
-            for entry in entries[:max_results]
+            f"{name}/" if is_dir else name for name, is_dir in selected
         ]
-        return lines, len(entries)
+        return lines, entry_count
 
     def summarize(self, args: dict) -> str:
         return summarize_path("list_dir", args, ".")

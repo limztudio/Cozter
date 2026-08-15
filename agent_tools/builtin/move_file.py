@@ -7,6 +7,7 @@ import os
 from ..base import (
     AgentTool,
     ensure_parent_dir,
+    move_path_no_clobber,
     prepare_source_destination,
     source_destination_parameters,
     summarize_path_pair,
@@ -35,7 +36,8 @@ class MoveFileTool(AgentTool):
             )
         try:
             ensure_parent_dir(dst)
-            os.rename(src, dst)
+            if not move_path_no_clobber(src, dst):
+                return f"Destination already exists: {raw_dst}"
         except OSError as exc:
             return f"Move failed: {exc}"
         return f"Moved: {raw_src} -> {raw_dst}"

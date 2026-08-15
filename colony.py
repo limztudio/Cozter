@@ -149,6 +149,10 @@ CONSOLIDATE_PROMPT = (
 )
 CONSOLIDATE_TIMEOUT = 360  # heavier than per-session compaction; aggregates all sessions
 CONSOLIDATE_MAX_INPUT_CHARS = 100_000
+# Leave most of the aggregate prompt for current session evidence.  Existing
+# colony state is persisted/model-produced text too, so its item-count cap
+# alone cannot prevent it from crowding every session out of a pass.
+CONSOLIDATE_COLONY_CHARS = CONSOLIDATE_MAX_INPUT_CHARS // 4
 
 _SESSION_BLOCK_RE = re.compile(
     r"\[SESSION:([^\]\s]+)\](.*?)\[/SESSION\]", re.DOTALL,
@@ -178,6 +182,67 @@ def _parse_consolidate_output(
         per_session[sid] = parse_bullets(m.group(2))
 
     return new_colony, per_session
+
+
+def _bounded_colony_lines(items: list[str], budget: int) -> tuple[list[str], bool]:
+    """Format a bounded prefix of colony items without dropping all context.
+
+    If one old item is itself enormous, retain a marked prefix rather than
+    skipping it and returning no session input at all.  This affects only the
+    consolidation prompt; stored colony text is left untouched until the
+    model returns a replacement list.
+    """
+    lines: list[str] = []
+    used = 0
+    for index, item in enumerate(items):
+        separator = 1 if lines else 0
+        remaining = budget - used - separator
+        if remaining <= 0:
+            return lines, True
+        line = f"- {item}"
+        if len(line) > remaining:
+            if remaining == 1:
+                lines.append("…")
+            else:
+                lines.append(line[:remaining - 1] + "…")
+            return lines, True
+        lines.append(line)
+        used += separator + len(line)
+        if index == len(items) - 1:
+            return lines, False
+    return lines, False
+
+
+def _build_bounded_session_block(
+    session_id: str,
+    name: object,
+    long_term: object,
+    budget: int,
+) -> str:
+    """Build one complete [SESSION] block within its remaining prompt budget."""
+    if not isinstance(name, str) or not name:
+        name = session_id[:8]
+    closing = "[/SESSION]\n"
+    header_suffix = f"\n[SESSION:{session_id}]\n"
+    name_space = budget - len("Session: ") - len(header_suffix) - len(closing)
+    if name_space < 1:
+        return ""
+    # A session title helps the model retain topic context, but it cannot be
+    # allowed to consume the space needed for the actual memory block.
+    rendered_name = name[:min(name_space, 2_000)]
+    if len(name) > len(rendered_name):
+        rendered_name = (
+            rendered_name[:-1] + "…" if len(rendered_name) > 1 else "…"
+        )
+    prefix = f"Session: {rendered_name}{header_suffix}"
+    item_budget = budget - len(prefix) - len(closing)
+    if item_budget < 0:
+        return ""
+    raw_items = long_term if isinstance(long_term, list) else []
+    items = [item for item in raw_items if isinstance(item, str) and item]
+    item_lines, _truncated = _bounded_colony_lines(items, item_budget)
+    body = "\n".join(item_lines)
+    return prefix + (body + "\n" if body else "") + closing
 
 
 def maybe_trigger(
@@ -277,8 +342,16 @@ async def _consolidate_inner(
         return True
 
     parts: list[str] = ["Current colony list:"]
-    if existing_colony:
-        parts.extend(f"- {it}" for it in existing_colony)
+    colony_lines, colony_truncated = _bounded_colony_lines(
+        existing_colony, CONSOLIDATE_COLONY_CHARS,
+    )
+    if colony_lines:
+        parts.extend(colony_lines)
+        if colony_truncated:
+            logger.warning(
+                "Colony input exceeded %d chars; truncating existing colony context",
+                CONSOLIDATE_COLONY_CHARS,
+            )
     else:
         parts.append("(empty)")
     parts.append("")
@@ -289,15 +362,10 @@ async def _consolidate_inner(
     used = sum(len(p) + 1 for p in parts)
     included: list[str] = []
     for sid, name, lt in inputs:
-        block_lines = [
-            f"Session: {name}",
-            f"[SESSION:{sid}]",
-        ]
-        block_lines.extend(f"- {it}" for it in lt)
-        block_lines.append("[/SESSION]")
-        block_lines.append("")
-        block = "\n".join(block_lines)
-        if used + len(block) > CONSOLIDATE_MAX_INPUT_CHARS:
+        block = _build_bounded_session_block(
+            sid, name, lt, CONSOLIDATE_MAX_INPUT_CHARS - used,
+        )
+        if not block:
             logger.warning(
                 "Colony input over budget; dropping %d session(s) from "
                 "consolidation pass",

@@ -3,6 +3,7 @@
 import unittest
 from typing import ClassVar
 
+from Cozter import router
 from Cozter.backends_bot.base import BotPlatform
 
 
@@ -44,6 +45,21 @@ class SessionPickerTests(unittest.TestCase):
         self.assertIsNone(BotPlatform._pick_option(
             "9" * 5_000, ["first", "second"],
         ))
+
+    def test_router_accepts_safe_punctuated_ids_and_bounds_state(self) -> None:
+        session_id = "restored-session_1"
+        block = router._build_session_block({
+            "id": session_id,
+            "name": "N" * 5_000,
+            "summary": "S" * 5_000,
+            "long_term": ["L" * 5_000] * 5,
+        })
+
+        self.assertIn(f"id: {session_id}", block)
+        self.assertLessEqual(len(block), router.ROUTER_PER_SESSION_CHARS)
+        self.assertEqual(
+            router._parse_router_output(session_id, {session_id}), session_id,
+        )
 
 
 if __name__ == "__main__":

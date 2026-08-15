@@ -39,6 +39,12 @@ class _Hunk:
         self.new_count = new_count
         self.old: list[str] = []  # context + deleted lines (content only)
         self.new: list[str] = []  # context + added lines (content only)
+        # A unified diff's "\\ No newline at end of file" marker applies to
+        # the immediately preceding body line.  Remember which side of this
+        # hunk is the output EOF so apply can preserve the requested newline
+        # state instead of inheriting it blindly from the old file.
+        self.last_marker: str | None = None
+        self.new_ends_with_newline: bool | None = None
 
     @property
     def complete(self) -> bool:
@@ -74,6 +80,28 @@ class _FilePatch:
         self.old_path = old_path  # None == /dev/null (creation)
         self.new_path = new_path  # None == /dev/null (deletion)
         self.hunks: list[_Hunk] = []
+
+    def validate(self) -> None:
+        """Reject patch forms that cannot apply to their declared source."""
+        if self.old_path is not None:
+            return
+        for hunk in self.hunks:
+            # A creation diff's old side is /dev/null, so it cannot contain
+            # a context or deletion line.  Previously those lines were simply
+            # discarded while the new side was written, turning a malformed
+            # diff into a different successful file creation.
+            if hunk.old:
+                raise _PatchError(
+                    "creation hunk contains old/context lines for /dev/null",
+                )
+            if hunk.old_count not in (None, 0):
+                raise _PatchError(
+                    "creation hunk must declare zero old-file lines",
+                )
+            if hunk.old_count == 0 and hunk.start != 0:
+                raise _PatchError(
+                    "creation hunk must start at old-file line 0",
+                )
 
 
 class ApplyPatchTool(AgentTool):
@@ -162,6 +190,17 @@ def _parse_patch(text: str) -> list[_FilePatch]:
     pending_old: str | None = None
 
     for line in text.splitlines():
+        if line == "\\ No newline at end of file":
+            if hunk is None or hunk.last_marker is None:
+                raise _PatchError(
+                    "no-newline marker does not follow a hunk body line",
+                )
+            # The marker is emitted only for a final old/new line.  A marker
+            # following a deletion means the replacement side ends with a
+            # newline; one following an addition/context means it does not.
+            hunk.new_ends_with_newline = hunk.last_marker == "-"
+            hunk.last_marker = None
+            continue
         # File-header-looking content is legal inside a hunk: deleting a line
         # that starts with ``--`` produces ``--- ...`` in the diff, and adding
         # one that starts with ``++`` produces ``+++ ...``. Only recognize the
@@ -178,6 +217,7 @@ def _parse_patch(text: str) -> list[_FilePatch]:
         if line.startswith("--- "):
             if hunk is not None:
                 hunk.old.append(line[1:])
+                hunk.last_marker = "-"
                 continue
             pending_old = _header_path(line[4:])
             hunk = None
@@ -185,6 +225,7 @@ def _parse_patch(text: str) -> list[_FilePatch]:
         if line.startswith("+++ "):
             if hunk is not None:
                 hunk.new.append(line[1:])
+                hunk.last_marker = "+"
                 continue
             current = _FilePatch(pending_old, _header_path(line[4:]))
             patches.append(current)
@@ -202,13 +243,12 @@ def _parse_patch(text: str) -> list[_FilePatch]:
             continue
         if hunk is None:
             continue  # preamble / "diff --git" / "index" lines
-        if line.startswith("\\"):
-            continue  # "\ No newline at end of file"
         if not line:
             # A bare empty line is an empty context line (some emitters drop
             # the leading space).
             hunk.old.append("")
             hunk.new.append("")
+            hunk.last_marker = " "
             continue
         marker, content = line[0], line[1:]
         if marker == " ":
@@ -221,11 +261,16 @@ def _parse_patch(text: str) -> list[_FilePatch]:
         else:
             hunk.validate()
             hunk = None  # a non-body line ends this hunk
+            continue
+        hunk.last_marker = marker
 
     if hunk is not None:
         hunk.validate()
 
-    return [p for p in patches if p.hunks]
+    parsed = [p for p in patches if p.hunks]
+    for file_patch in parsed:
+        file_patch.validate()
+    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +316,7 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
             new_lines.extend(h.new)
         ensure_parent_dir(target)
         out = "\n".join(new_lines)
-        if new_lines:
+        if new_lines and _new_file_ends_with_newline(fp.hunks, default=True):
             out += "\n"
         # Do not turn a concurrent creator into a silent overwrite.  The
         # no-clobber helper also keeps failed writes from exposing a partial
@@ -293,7 +338,7 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
         return f"{fp.new_path}: {applied}"
 
     out = "\n".join(applied)
-    if had_nl:
+    if applied and _new_file_ends_with_newline(fp.hunks, default=had_nl):
         out += "\n"
     write_text_after_edit(target, out, uses_crlf=uses_crlf)
     return f"{fp.new_path}: applied {len(fp.hunks)} hunk(s)"
@@ -319,6 +364,14 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
     if had_nl and lines and lines[-1] == "":
         lines.pop()  # drop the trailing "" left by the final newline
     return lines, had_nl, uses_crlf
+
+
+def _new_file_ends_with_newline(hunks: list[_Hunk], *, default: bool) -> bool:
+    """Return the output EOF-newline state requested by the latest hunk."""
+    for hunk in reversed(hunks):
+        if hunk.new_ends_with_newline is not None:
+            return hunk.new_ends_with_newline
+    return default
 
 
 def _apply_hunks(lines: list[str], hunks: list[_Hunk]) -> list[str] | str:

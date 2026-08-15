@@ -411,6 +411,35 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 covered_count - compaction.KEEP_RECENT_AFTER_COMPACT,
             )
 
+    async def test_oversized_first_message_can_be_compacted(self) -> None:
+        """The oldest oversized entry must not permanently block compaction."""
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            session.append_messages(workspace_path, data["id"], [{
+                "role": "user",
+                "content": "x" * (compaction.MAX_SUMMARY_CHARS + 1),
+            }])
+            with (
+                mock.patch.object(
+                    compaction.backends_agent,
+                    "get_backend",
+                    return_value=SimpleNamespace(name="test"),
+                ),
+                mock.patch.object(
+                    compaction,
+                    "run_internal_backend",
+                    new=mock.AsyncMock(return_value="[SUMMARY]\nbrief\n[/SUMMARY]"),
+                ) as run_summary,
+            ):
+                _summary, _long_term, _title, covered = await compaction.compact_session(
+                    workspace_path, data["id"], "model", backend_name="test",
+                )
+
+            self.assertEqual(covered, 1)
+            prompt = run_summary.await_args.args[2]
+            self.assertIn("…", prompt)
+            self.assertLess(len(prompt), compaction.MAX_SUMMARY_CHARS)
+
     async def test_oversized_previous_summary_can_be_replaced(self) -> None:
         """A bad historical summary must not block every future compaction."""
         async def fake_summary(*_args, **_kwargs) -> str:
@@ -475,6 +504,39 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             prompt = run_consolidate.await_args.args[2]
             self.assertIn(f"[SESSION:{data['id']}]", prompt)
             self.assertEqual(colony.get_items(workspace_path), [])
+
+    async def test_colony_oversized_existing_state_still_includes_sessions(self) -> None:
+        """Existing memory cannot consume the whole consolidation budget."""
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Current Topic")
+            loaded = session.load_session(workspace_path, data["id"])
+            assert loaded is not None
+            loaded["long_term"] = ["Current session evidence."]
+            session.save_session(workspace_path, data["id"], loaded)
+            colony.set_items(
+                workspace_path,
+                ["x" * (colony.CONSOLIDATE_MAX_INPUT_CHARS * 2)],
+            )
+            output = (
+                "[COLONY]\n- Rewritten shared fact.\n[/COLONY]\n\n"
+                f"[SESSION:{data['id']}]\n- Current session evidence.\n[/SESSION]"
+            )
+            with mock.patch.object(
+                colony, "run_internal_backend", new=mock.AsyncMock(
+                    return_value=output,
+                ),
+            ) as run_consolidate:
+                applied = await colony.consolidate(
+                    workspace_path, "model", backend_name="codex",
+                )
+
+            self.assertTrue(applied)
+            prompt = run_consolidate.await_args.args[2]
+            self.assertIn(f"[SESSION:{data['id']}]", prompt)
+            self.assertLess(
+                len(prompt),
+                len(colony.CONSOLIDATE_PROMPT) + colony.CONSOLIDATE_MAX_INPUT_CHARS + 10,
+            )
 
     async def test_colony_is_cleared_when_no_sessions_remain(self) -> None:
         """Deleted sessions must not leave stale workspace memory behind."""

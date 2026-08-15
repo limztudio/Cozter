@@ -840,6 +840,32 @@ class ScheduleParserTests(unittest.TestCase):
             self.assertTrue(schedules.remove_schedule(tmp, "u1", "a"))
             self.assertEqual(schedules.list_schedules(tmp, "u1"), [])
 
+    def test_schedule_migration_ignores_unhashable_persisted_ids(self) -> None:
+        """One malformed schedule ID must not abort legacy-key migration."""
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            path = os.path.join(tmp, ".cozter", "schedules.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "legacy": [
+                        {"id": ["bad"], "chat_id": "old"},
+                        {"id": "valid", "chat_id": "old"},
+                    ],
+                    "target": [{"id": {"bad": "target"}}],
+                }, f)
+
+            moved = schedules.migrate_schedules(
+                tmp, ["legacy"], "target",
+                source_chat_id="old", target_chat_id="new",
+            )
+
+            self.assertEqual(moved, 2)
+            migrated = schedules.list_schedules(tmp, "target")
+            self.assertEqual(len(migrated), 3)
+            self.assertEqual(migrated[-2]["id"], ["bad"])
+            self.assertEqual(migrated[-1]["id"], "valid")
+            self.assertEqual(migrated[-1]["chat_id"], "new")
+
     def test_scheduler_skips_schedule_without_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws = os.path.join(tmp, "ws")

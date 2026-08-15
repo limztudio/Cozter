@@ -395,13 +395,25 @@ def _take_oldest_message_lines(messages: list[dict], budget: int) -> list[str]:
     history. Selecting a newest suffix made it possible to mark older,
     omitted messages as summarized and then delete them. Keep the prefix
     contiguous and let a later pass compact the remaining suffix once the
-    raw overlap has advanced.
+    raw overlap has advanced. If the very first message alone exceeds the
+    budget, return a marked prefix of it so compaction can still make forward
+    progress instead of retrying the same uncompactable history forever.
     """
     lines: list[str] = []
     used = 0
     for message in messages:
         line = session.format_msg_line(message, cap=None)
         if used + len(line) > budget:
+            if not lines and budget > 0:
+                # An exceptionally large first message must not block all
+                # future compactions: only a contiguous oldest prefix may be
+                # removed, so skipping it means every later pass chooses the
+                # same zero-message prefix.  Give the summary model a marked
+                # prefix and let successful compaction advance the history.
+                if budget == 1:
+                    lines.append("…")
+                else:
+                    lines.append(line[:budget - 1] + "…")
             break
         lines.append(line)
         # Match utils.take_recent_lines' conservative accounting for the

@@ -3,7 +3,6 @@ user message, or creates a new one when no session is a good fit.
 """
 
 import logging
-import re
 
 from . import backends_agent, session
 from .utils import run_internal_backend
@@ -31,7 +30,49 @@ ROUTER_MAX_SESSIONS = 20  # cap input size; sessions are listed newest-first
 ROUTER_PER_SESSION_CHARS = 600
 ROUTER_PROMPT_PREVIEW_CHARS = 1_000
 
-_ROUTER_LINE_RE = re.compile(r"^[A-Za-z0-9]+$")
+
+def _truncate_router_text(text: str, limit: int) -> str:
+    """Keep one router field/block within *limit* characters."""
+    if len(text) <= limit:
+        return text
+    if limit <= 1:
+        return "…"[:limit]
+    return text[:limit - 1] + "…"
+
+
+def _build_session_block(data: dict) -> str:
+    """Return one bounded session description for the routing prompt.
+
+    Session summaries and long-term memory are model-produced persisted text,
+    so neither may be trusted to remain small.  Keeping the whole block under
+    the advertised per-session cap protects the router even when old state is
+    malformed or unusually verbose.  The id remains first, allowing a useful
+    choice whenever it fits in normal session-id bounds.
+    """
+    sid = data["id"]
+    raw_name = data.get("name")
+    name = raw_name if isinstance(raw_name, str) and raw_name else sid[:8]
+    block = [
+        f"id: {sid}",
+        f"name: {_truncate_router_text(name, ROUTER_PER_SESSION_CHARS)}",
+    ]
+    summary = data.get("summary")
+    if isinstance(summary, str) and summary:
+        block.append(
+            "summary: " + _truncate_router_text(
+                summary, ROUTER_PER_SESSION_CHARS,
+            ),
+        )
+    long_term = data.get("long_term")
+    if isinstance(long_term, list):
+        items = [
+            _truncate_router_text(item, ROUTER_PER_SESSION_CHARS)
+            for item in long_term[:5]
+            if isinstance(item, str) and item
+        ]
+        if items:
+            block.append("long-term: " + "; ".join(items))
+    return _truncate_router_text("\n".join(block), ROUTER_PER_SESSION_CHARS)
 
 
 def _build_router_prompt(prompt: str, sessions_data: list[dict]) -> str:
@@ -45,21 +86,8 @@ def _build_router_prompt(prompt: str, sessions_data: list[dict]) -> str:
     parts.append(f"Existing sessions ({len(sessions_data)}, newest first):")
     parts.append("")
     for s in sessions_data:
-        sid = s["id"]
-        block = [
-            f"id: {sid}",
-            f"name: {s.get('name') or sid[:8]}",
-        ]
-        sm = s.get("summary")
-        if sm:
-            if len(sm) > ROUTER_PER_SESSION_CHARS:
-                sm = sm[:ROUTER_PER_SESSION_CHARS] + "…"
-            block.append(f"summary: {sm}")
-        lt = s.get("long_term") or []
-        if lt:
-            block.append("long-term: " + "; ".join(lt[:5]))
-        block.append("")
-        parts.extend(block)
+        parts.append(_build_session_block(s))
+        parts.append("")
     parts.append(
         "Output exactly one line: a session id from the list above, or NEW."
     )
@@ -80,7 +108,11 @@ def _parse_router_output(raw: str, valid_ids: set[str]) -> str | None:
             continue
         if token.upper() == "NEW":
             return "NEW"
-        if _ROUTER_LINE_RE.match(token) and token in valid_ids:
+        # Session state deliberately permits safe IDs with punctuation such
+        # as ``-`` and ``_``.  Membership is the relevant safety check here;
+        # a narrower grammar silently made those valid restored sessions
+        # unrouteable.
+        if token in valid_ids:
             return token
     return None
 

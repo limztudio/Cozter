@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import os
 
 from ..base import (
@@ -73,31 +74,42 @@ class TreeTool(AgentTool):
     ) -> bool:
         """Append *path*'s tree to *lines*; return True if the cap was hit."""
         try:
-            with os.scandir(path) as it:
-                # Directories first, then files, each alphabetically.
-                entries = sorted(
-                    it,
-                    key=lambda e: (not e.is_dir(follow_symlinks=False), e.name),
-                )
+            remaining = max_entries - len(lines)
+
+            def entries():
+                with os.scandir(path) as scan:
+                    for entry in scan:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                        if is_dir and entry.name in DISCOVERY_SKIP_DIRS:
+                            continue
+                        yield is_dir, entry.name, entry.path
+
+            # The global result cap means no more than ``remaining`` entries
+            # from this directory can ever be shown. Keep just one extra so
+            # we can retain the existing truncation indicator without sorting
+            # every entry in a large generated directory.
+            selected = heapq.nsmallest(
+                remaining + 1,
+                entries(),
+                key=lambda entry: (not entry[0], entry[1]),
+            )
         except OSError:
             return False
-        for entry in entries:
+        truncated = len(selected) > remaining
+        for is_dir, name, entry_path in selected[:remaining]:
             if len(lines) >= max_entries:
                 return True
-            is_dir = entry.is_dir(follow_symlinks=False)
-            if is_dir and entry.name in DISCOVERY_SKIP_DIRS:
-                continue
-            lines.append(f"{indent}{entry.name}{'/' if is_dir else ''}")
+            lines.append(f"{indent}{name}{'/' if is_dir else ''}")
             if (
                 is_dir
                 and level + 1 < max_depth
                 and self._walk(
-                    entry.path, level + 1, max_depth,
+                    entry_path, level + 1, max_depth,
                     indent + "  ", lines, max_entries,
                 )
             ):
                 return True
-        return False
+        return truncated
 
     def summarize(self, args: dict) -> str:
         return summarize_path("tree", args)

@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
@@ -711,6 +712,170 @@ def _unlink_if_same_file(path: str, expected: os.stat_result) -> None:
         return
     with suppress(OSError):
         os.unlink(path)
+
+
+def move_path_no_clobber(source_path: str, target_path: str) -> bool:
+    """Move a path only when *target_path* does not already exist.
+
+    ``os.rename`` replaces an existing target on POSIX, so the ordinary
+    absence preflight performed by ``move_file`` cannot uphold its documented
+    no-clobber contract when another writer creates the target in between.
+    Regular files use an atomic hard-link publication (with the existing
+    no-clobber copy fallback across filesystems); symlinks use exclusive
+    symlink creation.  Directories and special files need the OS's native
+    no-replace rename primitive, because they cannot be safely represented by
+    a temporary file/link pair.
+
+    Return ``True`` after a completed move and ``False`` only when another
+    path already owns the target name.  Other errors leave the source in
+    place whenever this helper can do so safely.
+    """
+    if os.path.islink(source_path):
+        return _move_symlink_no_clobber(source_path, target_path)
+    if os.path.isfile(source_path):
+        return _move_regular_file_no_clobber(source_path, target_path)
+    return _rename_path_no_clobber(source_path, target_path)
+
+
+def _move_regular_file_no_clobber(source_path: str, target_path: str) -> bool:
+    """Publish a regular file at a new name before unlinking its old name."""
+    source_stat = os.stat(source_path, follow_symlinks=False)
+    try:
+        # A hard link is an atomic create: unlike rename, it refuses to
+        # replace a destination which appeared after preflight.  Unlinking the
+        # original afterwards is a true rename on the usual same-filesystem
+        # path and preserves all file metadata.
+        os.link(source_path, target_path, follow_symlinks=False)
+        # The target is the same inode as the source at publication time, so
+        # this identity remains safe even if another writer later changes the
+        # source path.
+        target_stat = source_stat
+    except FileExistsError:
+        return False
+    except OSError as exc:
+        if not _hard_link_unsupported(exc):
+            raise
+        # A workspace may cross a mount boundary or live on a filesystem
+        # without hard links.  The shared helper publishes a finished copy
+        # with the same no-clobber guarantee; remove the source only after it
+        # succeeds.
+        if not copy_file_atomically(source_path, target_path):
+            return False
+        target_stat = os.stat(target_path, follow_symlinks=False)
+
+    try:
+        current_source = os.stat(source_path, follow_symlinks=False)
+    except OSError as exc:
+        _remove_owned_target(target_path, target_stat)
+        raise OSError("source changed while move was in progress") from exc
+    if (current_source.st_dev, current_source.st_ino) != (
+        source_stat.st_dev, source_stat.st_ino,
+    ):
+        _remove_owned_target(target_path, target_stat)
+        raise OSError("source changed while move was in progress")
+    try:
+        os.unlink(source_path)
+    except OSError:
+        # Preserve all-or-nothing behavior when the target was ours.  If a
+        # different actor replaced it, _unlink_if_same_file leaves that newer
+        # destination untouched.
+        _remove_owned_target(target_path, target_stat)
+        raise
+    return True
+
+
+def _move_symlink_no_clobber(source_path: str, target_path: str) -> bool:
+    """Move a symlink without following or overwriting either endpoint."""
+    source_stat = os.stat(source_path, follow_symlinks=False)
+    link_target = os.readlink(source_path)
+    try:
+        os.symlink(
+            link_target,
+            target_path,
+            target_is_directory=os.path.isdir(source_path),
+        )
+    except FileExistsError:
+        return False
+    target_stat = os.stat(target_path, follow_symlinks=False)
+    try:
+        current_source = os.stat(source_path, follow_symlinks=False)
+    except OSError as exc:
+        _remove_owned_target(target_path, target_stat)
+        raise OSError("source changed while move was in progress") from exc
+    if (current_source.st_dev, current_source.st_ino) != (
+        source_stat.st_dev, source_stat.st_ino,
+    ):
+        _remove_owned_target(target_path, target_stat)
+        raise OSError("source changed while move was in progress")
+    try:
+        os.unlink(source_path)
+    except OSError:
+        _remove_owned_target(target_path, target_stat)
+        raise
+    return True
+
+
+def _remove_owned_target(target_path: str, expected: os.stat_result) -> None:
+    """Remove the target only when it still names the file we just created."""
+    _unlink_if_same_file(target_path, expected)
+
+
+def _rename_path_no_clobber(source_path: str, target_path: str) -> bool:
+    """Use a platform-native no-replace rename for non-file paths."""
+    if os.name == "nt":
+        # Python documents Windows os.rename as failing when the destination
+        # exists, unlike POSIX's replacement behavior.
+        try:
+            os.rename(source_path, target_path)
+        except FileExistsError:
+            return False
+        return True
+    if sys.platform.startswith("linux"):
+        return _linux_rename_no_replace(source_path, target_path)
+    raise OSError(
+        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+        "atomic no-clobber rename is unavailable for this path type",
+    )
+
+
+def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
+    """Call Linux ``renameat2(..., RENAME_NOREPLACE)`` through libc."""
+    import ctypes
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = libc.renameat2
+    except (AttributeError, OSError) as exc:
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+            "atomic no-clobber rename is unavailable on this system",
+        ) from exc
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    if renameat2(
+        -100, os.fsencode(source_path), -100, os.fsencode(target_path), 1,
+    ) == 0:
+        return True
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        return False
+    if error in {
+        errno.EINVAL,
+        errno.ENOSYS,
+        errno.EOPNOTSUPP,
+        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+    }:
+        raise OSError(
+            getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+            "atomic no-clobber rename is unavailable for this filesystem",
+        )
+    raise OSError(error, os.strerror(error), target_path)
 
 
 async def read_bounded_text(resp: aiohttp.ClientResponse) -> str:

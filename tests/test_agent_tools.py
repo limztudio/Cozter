@@ -30,6 +30,7 @@ from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin import grep as grep_mod
 from Cozter.agent_tools.builtin.grep import GrepTool
 from Cozter.agent_tools.builtin.multi_edit import MultiEditTool
+from Cozter.agent_tools.builtin import move_file as move_file_mod
 from Cozter.agent_tools.builtin.move_file import MoveFileTool
 from Cozter.agent_tools.builtin.read_file import ReadFileTool
 from Cozter.agent_tools.builtin.tree import TreeTool
@@ -246,6 +247,25 @@ class BuiltinEditToolTests(unittest.TestCase):
 
 
 class MoveFileToolTests(unittest.TestCase):
+    def test_move_regular_file(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                source = os.path.join(tmp, "source.txt")
+                destination = os.path.join(tmp, "destination.txt")
+                with open(source, "w", encoding="utf-8") as f:
+                    f.write("contents")
+
+                result = await MoveFileTool().run(tmp, {
+                    "source": "source.txt", "destination": "destination.txt",
+                })
+
+                self.assertEqual(result, "Moved: source.txt -> destination.txt")
+                self.assertFalse(os.path.exists(source))
+                with open(destination, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "contents")
+
+        asyncio.run(run())
+
     def test_directory_cannot_move_into_its_own_child(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
@@ -259,6 +279,45 @@ class MoveFileToolTests(unittest.TestCase):
 
                 self.assertIn("cannot be inside", result)
                 self.assertFalse(os.path.exists(os.path.join(source, "child")))
+
+        asyncio.run(run())
+
+    def test_move_does_not_clobber_a_destination_created_after_preflight(
+        self,
+    ) -> None:
+        """A concurrent destination must win and leave the source intact."""
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                source = os.path.join(tmp, "source.txt")
+                destination = os.path.join(tmp, "destination.txt")
+                with open(source, "w", encoding="utf-8") as f:
+                    f.write("source contents")
+
+                original_ensure_parent_dir = move_file_mod.ensure_parent_dir
+
+                def create_competing_destination(path: str) -> None:
+                    original_ensure_parent_dir(path)
+                    with open(destination, "w", encoding="utf-8") as f:
+                        f.write("concurrent contents")
+
+                with mock.patch.object(
+                    move_file_mod,
+                    "ensure_parent_dir",
+                    side_effect=create_competing_destination,
+                ):
+                    result = await MoveFileTool().run(
+                        tmp,
+                        {"source": "source.txt", "destination": "destination.txt"},
+                    )
+
+                self.assertEqual(
+                    result,
+                    "Destination already exists: destination.txt",
+                )
+                with open(source, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "source contents")
+                with open(destination, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "concurrent contents")
 
         asyncio.run(run())
 
@@ -1023,6 +1082,38 @@ class ApplyPatchToolTests(unittest.TestCase):
             with open(p, "rb") as f:
                 self.assertEqual(f.read(), b"line1\r\nchanged\r\n")
 
+    def test_modify_applies_requested_final_newline_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "newline.txt")
+            with open(p, "wb") as f:
+                f.write(b"old\n")
+
+            out = self._run(tmp, (
+                "--- a/newline.txt\n+++ b/newline.txt\n"
+                "@@ -1 +1 @@\n-old\n+tail\n"
+                "\\ No newline at end of file\n"
+            ))
+
+            self.assertIn("applied", out)
+            with open(p, "rb") as f:
+                self.assertEqual(f.read(), b"tail")
+
+    def test_modify_can_restore_a_final_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "newline.txt")
+            with open(p, "wb") as f:
+                f.write(b"old")
+
+            out = self._run(tmp, (
+                "--- a/newline.txt\n+++ b/newline.txt\n"
+                "@@ -1 +1 @@\n-old\n"
+                "\\ No newline at end of file\n+tail\n"
+            ))
+
+            self.assertIn("applied", out)
+            with open(p, "rb") as f:
+                self.assertEqual(f.read(), b"tail\n")
+
     def test_create(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = self._run(tmp, (
@@ -1033,6 +1124,32 @@ class ApplyPatchToolTests(unittest.TestCase):
             created = os.path.join(tmp, "new", "dir", "created.txt")
             with open(created, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "hello\nworld\n")
+
+    def test_create_rejects_an_old_side_for_dev_null(self) -> None:
+        """Malformed creation diffs must not silently discard old-side text."""
+        with tempfile.TemporaryDirectory() as tmp:
+            created = os.path.join(tmp, "new.txt")
+            out = self._run(tmp, (
+                "--- /dev/null\n+++ b/new.txt\n"
+                "@@ -1 +1 @@\n-old-side-must-not-exist\n+new\n"
+            ))
+
+            self.assertIn("could not parse patch", out)
+            self.assertIn("creation hunk", out)
+            self.assertFalse(os.path.exists(created))
+
+    def test_create_preserves_requested_missing_final_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            created = os.path.join(tmp, "new.txt")
+            out = self._run(tmp, (
+                "--- /dev/null\n+++ b/new.txt\n"
+                "@@ -0,0 +1 @@\n+tail\n"
+                "\\ No newline at end of file\n"
+            ))
+
+            self.assertIn("created", out)
+            with open(created, "rb") as f:
+                self.assertEqual(f.read(), b"tail")
 
     def test_create_does_not_overwrite_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

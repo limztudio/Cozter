@@ -105,9 +105,17 @@ def migrate_schedules(
     target = data.get(target_key, [])
     if not isinstance(target, list):
         target = []
+    # Schedule IDs are generated as strings, but this is persisted state and
+    # may have been hand-edited or migrated from an older installation.  Do
+    # not put arbitrary truthy JSON values (lists/dicts are unhashable) into
+    # the de-duplication set: one malformed record must not abort migration of
+    # every other schedule.
     seen_ids = {
-        s.get("id") for s in target
-        if isinstance(s, dict) and s.get("id")
+        schedule_id
+        for s in target
+        if isinstance(s, dict)
+        and isinstance((schedule_id := s.get("id")), str)
+        and schedule_id
     }
 
     moved = 0
@@ -129,8 +137,13 @@ def migrate_schedules(
             if source_chat_id and sched_chat_id != source_chat_id:
                 remaining.append(sched)
                 continue
-            sched_id = sched.get("id")
-            if sched_id and sched_id in seen_ids:
+            raw_sched_id = sched.get("id")
+            sched_id = (
+                raw_sched_id
+                if isinstance(raw_sched_id, str) and raw_sched_id
+                else None
+            )
+            if sched_id is not None and sched_id in seen_ids:
                 changed = True
                 continue
 
@@ -139,7 +152,7 @@ def migrate_schedules(
             if target_chat_id:
                 migrated["chat_id"] = target_chat_id
             target.append(migrated)
-            if sched_id:
+            if sched_id is not None:
                 seen_ids.add(sched_id)
             moved += 1
             changed = True

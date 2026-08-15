@@ -25,12 +25,14 @@ class DiscoveryToolAsyncTests(unittest.TestCase):
         async def run() -> None:
             started = threading.Event()
             release = threading.Event()
-            real_listdir = os.listdir
+            tool = ListDirTool()
 
-            def slow_listdir(path: str) -> list[str]:
+            def slow_list_entries(
+                _path: str, _max_results: int,
+            ) -> tuple[list[str], int]:
                 started.set()
                 release.wait(timeout=1)
-                return real_listdir(path)
+                return ["directory/", "file.txt"], 2
 
             with tempfile.TemporaryDirectory() as workspace:
                 os.mkdir(os.path.join(workspace, "directory"))
@@ -39,11 +41,10 @@ class DiscoveryToolAsyncTests(unittest.TestCase):
                     encoding="utf-8",
                 ):
                     pass
-                with mock.patch(
-                    "Cozter.agent_tools.builtin.list_dir.os.listdir",
-                    side_effect=slow_listdir,
+                with mock.patch.object(
+                    tool, "_list_entries", side_effect=slow_list_entries,
                 ):
-                    task = asyncio.create_task(ListDirTool().run(workspace, {}))
+                    task = asyncio.create_task(tool.run(workspace, {}))
                     try:
                         await _wait_for_start(started)
                         self.assertFalse(task.done())
