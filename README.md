@@ -203,7 +203,11 @@ limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
   `python-telegram-bot`, `slack-bolt`, and `aiohttp`. The
   launcher bootstraps them into the project-local `.venv` when required
   runtime modules are missing or an installed version falls outside the
-  declared requirement; normal starts do not invoke pip.
+  declared requirement; normal starts do not invoke pip. The declared ranges
+  keep each integration on a reviewed major-release line
+  (`python-telegram-bot >=21,<23`, `slack-bolt >=1.18,<2`, and
+  `aiohttp >=3.14.3,<4`), so bootstrap can take compatible fixes without
+  silently adopting an unreviewed major API change.
 - Optional external services:
   Telegram and Slack need their platform tokens; Signal also requires a
   separately installed and running `signal-cli` JSON-RPC daemon.
@@ -529,6 +533,9 @@ overwritten by a late background title request.
 Likewise, a compaction title derived from an older snapshot is discarded if
 the session was renamed while compaction ran, so it cannot overwrite the
 manual name.
+The complete auto-title request is capped at 8,000 characters, with half of
+its remaining context budget reserved for recent messages. An oversized stored
+summary therefore cannot crowd the current exchange out of the title prompt.
 
 ## Commands
 
@@ -1055,9 +1062,19 @@ leaves no partial target. New patch-created files use normal file-creation
 permissions (subject to the process umask); a delete patch must match the
 current file and remove all of its content before the file is unlinked. Failed
 hunks leave the target in place.
+Each built-in file path is checked both lexically and after resolution, so an
+existing symlink cannot escape the workspace. Content tools follow a safe
+in-workspace final symlink; `delete_file` and `move_file` instead operate on
+that final link itself, while still rejecting a link that resolves outside the
+workspace.
 Normal unified-diff hunks must also match the line counts declared in their
 headers before any target is written, so a malformed or truncated patch is
 rejected instead of being treated as a smaller valid edit.
+`apply_patch` caps one incoming diff at 1 MiB and 20,000 lines, and caps each
+existing or resulting target at 1 MiB and 50,000 lines. The relevant target is
+left unchanged when one of those bounds is exceeded. `edit_file` and
+`multi_edit` similarly refuse source text above 5 MiB, including if the file
+grows after its initial size check.
 Patch parsing also preserves the requested final-newline state from a unified
 diff's `\ No newline at end of file` marker. A misplaced marker or a creation
 hunk that claims old-side/context lines is rejected rather than silently
