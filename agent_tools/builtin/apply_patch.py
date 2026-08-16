@@ -19,6 +19,7 @@ from ..base import (
     ensure_parent_dir,
     object_parameters,
     resolve_inside_workspace,
+    utf8_byte_limit_exceeded,
     write_text_after_edit,
 )
 
@@ -166,7 +167,7 @@ class ApplyPatchTool(AgentTool):
         patch = args.get("patch")
         if not isinstance(patch, str):
             return "apply_patch"
-        if _utf8_byte_limit_exceeded(patch, _MAX_PATCH_BYTES):
+        if utf8_byte_limit_exceeded(patch, _MAX_PATCH_BYTES):
             return "apply_patch (patch too large)"
         n = patch.count("\n+++ ") + (1 if patch.startswith("+++ ") else 0)
         return f"apply_patch ({n} file{'s' if n != 1 else ''})"
@@ -179,7 +180,7 @@ class ApplyPatchTool(AgentTool):
 
 def _validate_patch_limits(text: str) -> None:
     """Reject a patch before splitting it into unbounded line lists."""
-    if _utf8_byte_limit_exceeded(text, _MAX_PATCH_BYTES):
+    if utf8_byte_limit_exceeded(text, _MAX_PATCH_BYTES):
         raise _PatchError(
             "patch exceeds the "
             f"{_MAX_PATCH_BYTES:,}-byte limit; split it into smaller patches",
@@ -189,30 +190,6 @@ def _validate_patch_limits(text: str) -> None:
             "patch exceeds the "
             f"{_MAX_PATCH_LINES:,}-line limit; split it into smaller patches",
         )
-
-
-def _utf8_byte_limit_exceeded(text: str, limit: int) -> bool:
-    """Return whether UTF-8 encoding *text* would exceed *limit* bytes.
-
-    Do this incrementally rather than allocating ``text.encode()`` merely to
-    measure an already-large tool argument. Surrogates count as their
-    three-byte UTF-8 representation so even an unusual direct Python caller
-    remains safely bounded before the normal UTF-8 writer handles it.
-    """
-    used = 0
-    for char in text:
-        codepoint = ord(char)
-        if codepoint <= 0x7F:
-            used += 1
-        elif codepoint <= 0x7FF:
-            used += 2
-        elif codepoint <= 0xFFFF:
-            used += 3
-        else:
-            used += 4
-        if used > limit:
-            return True
-    return False
 
 
 def _splitline_limit_exceeded(text: str, limit: int) -> bool:
@@ -514,42 +491,11 @@ def _output_limit_error(
     """Return a model-facing limit error for a would-be patched file."""
     if line_count > _MAX_FILE_LINES:
         return f"patched file would exceed the {_MAX_FILE_LINES:,}-line limit"
-    if _encoded_output_limit_exceeded(text, _MAX_FILE_BYTES, uses_crlf):
+    if utf8_byte_limit_exceeded(
+        text, _MAX_FILE_BYTES, restore_crlf=uses_crlf,
+    ):
         return f"patched file would exceed the {_MAX_FILE_BYTES:,}-byte limit"
     return None
-
-
-def _encoded_output_limit_exceeded(
-    text: str, limit: int, uses_crlf: bool,
-) -> bool:
-    """Measure output bytes without allocating a CRLF-restored copy."""
-    used = 0
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if uses_crlf and char == "\r" and index + 1 < len(text):
-            if text[index + 1] == "\n":
-                used += 2
-                index += 2
-                if used > limit:
-                    return True
-                continue
-        if uses_crlf and char == "\n":
-            used += 2
-        else:
-            codepoint = ord(char)
-            if codepoint <= 0x7F:
-                used += 1
-            elif codepoint <= 0x7FF:
-                used += 2
-            elif codepoint <= 0xFFFF:
-                used += 3
-            else:
-                used += 4
-        if used > limit:
-            return True
-        index += 1
-    return False
 
 
 def _new_file_ends_with_newline(hunks: list[_Hunk], *, default: bool) -> bool:

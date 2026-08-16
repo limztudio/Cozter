@@ -70,6 +70,26 @@ class ApplyPatchLimitsTests(unittest.TestCase):
 
         self.assertIn("file exceeds the 8-byte limit", out)
 
+    def test_target_byte_limit_counts_restored_crlf_bytes(self) -> None:
+        patch = (
+            "--- a/data.txt\n+++ b/data.txt\n"
+            "@@ -1 +1 @@\n-old\n+é\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "data.txt")
+            with open(path, "wb") as f:
+                f.write(b"old\r\n")
+
+            with mock.patch.object(
+                apply_patch_module, "_MAX_FILE_BYTES", 3,
+            ):
+                out = self._run(tmp, patch)
+
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), b"old\r\n")
+
+        self.assertIn("file exceeds the 3-byte limit", out)
+
     def test_target_line_limit_leaves_file_unchanged(self) -> None:
         patch = (
             "--- a/data.txt\n+++ b/data.txt\n"

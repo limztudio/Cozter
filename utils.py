@@ -232,6 +232,17 @@ def has_managed_process_group(proc: object) -> bool:
     return os.name != "nt" and isinstance(group_id, int) and group_id > 0
 
 
+def _kill_process_group(group_id: int) -> bool:
+    """Kill one non-current POSIX process group, if it is still reachable."""
+    try:
+        if group_id != os.getpgid(0):
+            os.killpg(group_id, signal.SIGKILL)
+            return True
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    return False
+
+
 def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
     """Force-stop a subprocess and, where possible, all of its children.
 
@@ -264,21 +275,15 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
         # for a CLI wrapper to exit after spawning a child that inherited its
         # pipes; at that point getpgid(parent_pid) raises ProcessLookupError,
         # but the original group (and its descendants) still exists.
-        pgid = getattr(proc, _PROCESS_GROUP_ID_ATTR)
-        try:
-            if pgid != os.getpgid(0):
-                os.killpg(pgid, signal.SIGKILL)
-                return
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+        if _kill_process_group(getattr(proc, _PROCESS_GROUP_ID_ATTR)):
+            return
     elif isinstance(pid, int) and pid > 0:
         try:
             pgid = os.getpgid(pid)
-            if pgid != os.getpgid(0):
-                os.killpg(pgid, signal.SIGKILL)
-                return
         except (ProcessLookupError, PermissionError, OSError):
-            pass  # already gone or no permission - fall back below
+            pgid = None  # already gone or no permission - fall back below
+        if pgid is not None and _kill_process_group(pgid):
+            return
     with contextlib.suppress(OSError):
         proc.kill()
 

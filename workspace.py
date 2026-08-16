@@ -111,10 +111,14 @@ def get_current(
     current = _get_user(user_id).get("current", {})
     if not isinstance(current, dict):
         return None
-    path = current.get(str(bot_id))
-    if not isinstance(path, str) or not path:
+    return _valid_workspace_path(current.get(str(bot_id)))
+
+
+def _valid_workspace_path(value: object) -> str | None:
+    """Return a canonical state-safe workspace path from persisted data."""
+    if not isinstance(value, str) or not value:
         return None
-    canonical = canonicalize_workspace_path(path)
+    canonical = canonicalize_workspace_path(value)
     try:
         workspace_state_path(canonical)
     except ValueError:
@@ -132,12 +136,8 @@ def get_recent(
     paths: list[str] = []
     seen: set[str] = set()
     for path in recent:
-        if not isinstance(path, str) or not path:
-            continue
-        canonical = canonicalize_workspace_path(path)
-        try:
-            workspace_state_path(canonical)
-        except ValueError:
+        canonical = _valid_workspace_path(path)
+        if canonical is None:
             continue
         if canonical in seen:
             continue
@@ -162,13 +162,8 @@ def iter_current_workspaces(
         current = state.get("current")
         if not isinstance(current, dict):
             continue
-        path = current.get(str(bot_id))
-        if isinstance(path, str) and path:
-            canonical = canonicalize_workspace_path(path)
-            try:
-                workspace_state_path(canonical)
-            except ValueError:
-                continue
+        canonical = _valid_workspace_path(current.get(str(bot_id)))
+        if canonical is not None:
             pairs.append((uid, canonical))
     return pairs
 

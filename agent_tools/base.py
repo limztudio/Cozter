@@ -237,6 +237,48 @@ def coerce_int_arg(
     return number
 
 
+def utf8_byte_limit_exceeded(
+    text: str,
+    limit: int,
+    *,
+    restore_crlf: bool = False,
+) -> bool:
+    """Return whether encoded *text* would exceed *limit* bytes.
+
+    Count UTF-8 bytes incrementally instead of allocating a potentially large
+    encoded copy.  When *restore_crlf* is true, a lone LF represents the CRLF
+    sequence that a later atomic writer will restore; an existing CRLF stays
+    one two-byte newline rather than becoming ``\r\r\n``.
+    """
+    used = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if restore_crlf and char == "\r" and index + 1 < len(text):
+            if text[index + 1] == "\n":
+                used += 2
+                index += 2
+                if used > limit:
+                    return True
+                continue
+        if restore_crlf and char == "\n":
+            used += 2
+        else:
+            codepoint = ord(char)
+            if codepoint <= 0x7F:
+                used += 1
+            elif codepoint <= 0x7FF:
+                used += 2
+            elif codepoint <= 0xFFFF:
+                used += 3
+            else:
+                used += 4
+        if used > limit:
+            return True
+        index += 1
+    return False
+
+
 def require_nonempty_string_arg(
     args: dict,
     key: str,
@@ -577,10 +619,7 @@ def write_text_after_edit(path: str, text: str, *, uses_crlf: bool) -> None:
         original_mode = None
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
+        _write_text_to_fd(fd, text)
         if original_mode is not None:
             os.chmod(tmp_path, original_mode)
         os.replace(tmp_path, path)
@@ -608,10 +647,7 @@ def create_text_file_atomically(
     parent = os.path.dirname(path) or "."
     fd, tmp_path = _new_text_temp_file(parent, path)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
+        _write_text_to_fd(fd, text)
         return _publish_new_file_no_clobber(tmp_path, path)
     finally:
         # After a successful link the target retains the completed inode, so
@@ -619,6 +655,14 @@ def create_text_file_atomically(
         # also handles failures before the target existed.
         with suppress(OSError):
             os.unlink(tmp_path)
+
+
+def _write_text_to_fd(fd: int, text: str) -> None:
+    """Write and flush UTF-8 text to an owned temporary-file descriptor."""
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def copy_file_atomically(source_path: str, target_path: str) -> bool:
