@@ -23,8 +23,22 @@ from ..base import (
 )
 
 
+# Applying a patch necessarily materializes both the patch and the target
+# text. Keep those allocations comfortably bounded: agents can split a large
+# edit into several calls, while one accidental generated file must not make a
+# single tool invocation consume unbounded memory or CPU.
+_MAX_PATCH_BYTES = 1 * 1024 * 1024
+_MAX_PATCH_LINES = 20_000
+_MAX_FILE_BYTES = 1 * 1024 * 1024
+_MAX_FILE_LINES = 50_000
+
+
 class _PatchError(Exception):
     """The patch text could not be parsed as a unified diff."""
+
+
+class _FileLimitError(Exception):
+    """A target file is too large for one safe patch operation."""
 
 
 class _Hunk:
@@ -127,10 +141,16 @@ class ApplyPatchTool(AgentTool):
 
     async def run(self, workspace_path: str, args: dict) -> str:
         patch = args.get("patch")
-        if not isinstance(patch, str) or not patch.strip():
+        if not isinstance(patch, str):
             return "Error: 'patch' must be a non-empty unified diff"
         try:
-            file_patches = _parse_patch(patch)
+            _validate_patch_limits(patch)
+        except _PatchError as exc:
+            return f"Error: {exc}"
+        if not patch.strip():
+            return "Error: 'patch' must be a non-empty unified diff"
+        try:
+            file_patches = _parse_patch(patch, validate_limits=False)
         except _PatchError as exc:
             return f"Error: could not parse patch: {exc}"
         if not file_patches:
@@ -146,6 +166,8 @@ class ApplyPatchTool(AgentTool):
         patch = args.get("patch")
         if not isinstance(patch, str):
             return "apply_patch"
+        if _utf8_byte_limit_exceeded(patch, _MAX_PATCH_BYTES):
+            return "apply_patch (patch too large)"
         n = patch.count("\n+++ ") + (1 if patch.startswith("+++ ") else 0)
         return f"apply_patch ({n} file{'s' if n != 1 else ''})"
 
@@ -153,6 +175,79 @@ class ApplyPatchTool(AgentTool):
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
+
+
+def _validate_patch_limits(text: str) -> None:
+    """Reject a patch before splitting it into unbounded line lists."""
+    if _utf8_byte_limit_exceeded(text, _MAX_PATCH_BYTES):
+        raise _PatchError(
+            "patch exceeds the "
+            f"{_MAX_PATCH_BYTES:,}-byte limit; split it into smaller patches",
+        )
+    if _splitline_limit_exceeded(text, _MAX_PATCH_LINES):
+        raise _PatchError(
+            "patch exceeds the "
+            f"{_MAX_PATCH_LINES:,}-line limit; split it into smaller patches",
+        )
+
+
+def _utf8_byte_limit_exceeded(text: str, limit: int) -> bool:
+    """Return whether UTF-8 encoding *text* would exceed *limit* bytes.
+
+    Do this incrementally rather than allocating ``text.encode()`` merely to
+    measure an already-large tool argument. Surrogates count as their
+    three-byte UTF-8 representation so even an unusual direct Python caller
+    remains safely bounded before the normal UTF-8 writer handles it.
+    """
+    used = 0
+    for char in text:
+        codepoint = ord(char)
+        if codepoint <= 0x7F:
+            used += 1
+        elif codepoint <= 0x7FF:
+            used += 2
+        elif codepoint <= 0xFFFF:
+            used += 3
+        else:
+            used += 4
+        if used > limit:
+            return True
+    return False
+
+
+def _splitline_limit_exceeded(text: str, limit: int) -> bool:
+    """Return whether ``text.splitlines()`` would have over *limit* lines.
+
+    ``str.splitlines()`` would first allocate every line. Count its line
+    boundaries directly instead, including CRLF as one boundary, so a patch
+    made of tiny lines cannot bypass the byte cap with list overhead.
+    """
+    if not text:
+        return False
+
+    line_count = 0
+    ended_with_break = False
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char == "\r":
+            if index + 1 < length and text[index + 1] == "\n":
+                index += 1
+            line_count += 1
+            ended_with_break = True
+        elif char in "\n\v\f\x1c\x1d\x1e\x85\u2028\u2029":
+            line_count += 1
+            ended_with_break = True
+        else:
+            ended_with_break = False
+        if line_count > limit:
+            return True
+        index += 1
+
+    if not ended_with_break:
+        line_count += 1
+    return line_count > limit
 
 
 def _strip_git_prefix(path: str) -> str:
@@ -180,10 +275,19 @@ def _parse_hunk_header(
         new_count = int(match.group(3) or "1")
     except ValueError as exc:
         raise _PatchError("hunk header contains an invalid line count") from exc
+    if old_count > _MAX_PATCH_LINES or new_count > _MAX_PATCH_LINES:
+        raise _PatchError(
+            "hunk declares more lines than the "
+            f"{_MAX_PATCH_LINES:,}-line patch limit",
+        )
     return start, old_count, new_count
 
 
-def _parse_patch(text: str) -> list[_FilePatch]:
+def _parse_patch(
+    text: str, *, validate_limits: bool = True,
+) -> list[_FilePatch]:
+    if validate_limits:
+        _validate_patch_limits(text)
     patches: list[_FilePatch] = []
     current: _FilePatch | None = None
     hunk: _Hunk | None = None
@@ -291,6 +395,8 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
             return f"{fp.old_path}: already absent"
         try:
             file_lines, _had_nl, _crlf = _read_file_lines(target)
+        except _FileLimitError as exc:
+            return f"{fp.old_path}: {exc}; not deleted"
         except UnicodeDecodeError:
             return f"{fp.old_path}: not valid UTF-8 (binary?); not deleted"
         applied = _apply_hunks(file_lines, fp.hunks)
@@ -314,10 +420,15 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
         new_lines: list[str] = []
         for h in fp.hunks:
             new_lines.extend(h.new)
-        ensure_parent_dir(target)
         out = "\n".join(new_lines)
         if new_lines and _new_file_ends_with_newline(fp.hunks, default=True):
             out += "\n"
+        output_error = _output_limit_error(
+            out, len(new_lines), uses_crlf=False,
+        )
+        if output_error is not None:
+            return f"{fp.new_path}: skipped ({output_error})"
+        ensure_parent_dir(target)
         # Do not turn a concurrent creator into a silent overwrite.  The
         # no-clobber helper also keeps failed writes from exposing a partial
         # new source file.
@@ -330,6 +441,8 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
         return f"{fp.new_path}: skipped (file not found)"
     try:
         file_lines, had_nl, uses_crlf = _read_file_lines(target)
+    except _FileLimitError as exc:
+        return f"{fp.new_path}: skipped ({exc})"
     except UnicodeDecodeError:
         return f"{fp.new_path}: not valid UTF-8 (binary?); not patched"
 
@@ -340,6 +453,11 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     out = "\n".join(applied)
     if applied and _new_file_ends_with_newline(fp.hunks, default=had_nl):
         out += "\n"
+    output_error = _output_limit_error(
+        out, len(applied), uses_crlf=uses_crlf,
+    )
+    if output_error is not None:
+        return f"{fp.new_path}: skipped ({output_error})"
     write_text_after_edit(target, out, uses_crlf=uses_crlf)
     return f"{fp.new_path}: applied {len(fp.hunks)} hunk(s)"
 
@@ -353,17 +471,85 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
     normalized to ``\\n`` for hunk matching; the returned ``uses_crlf`` flag
     lets the writer restore the original line endings.
     """
+    if os.stat(path).st_size > _MAX_FILE_BYTES:
+        raise _FileLimitError(
+            f"file exceeds the {_MAX_FILE_BYTES:,}-byte limit",
+        )
     with open(path, "rb") as f:
-        raw = f.read()
+        # The size check above is only a fast path: the file can grow after
+        # stat(), so keep the actual read bounded too.
+        raw = f.read(_MAX_FILE_BYTES + 1)
+    if len(raw) > _MAX_FILE_BYTES:
+        raise _FileLimitError(
+            f"file exceeds the {_MAX_FILE_BYTES:,}-byte limit",
+        )
     content = raw.decode("utf-8")  # UnicodeDecodeError on binary -> caller
     uses_crlf = "\r\n" in content
     if uses_crlf:
         content = content.replace("\r\n", "\n")
+    if _newline_line_limit_exceeded(content, _MAX_FILE_LINES):
+        raise _FileLimitError(
+            f"file exceeds the {_MAX_FILE_LINES:,}-line limit",
+        )
     had_nl = content.endswith("\n")
     lines = content.split("\n")
     if had_nl and lines and lines[-1] == "":
         lines.pop()  # drop the trailing "" left by the final newline
     return lines, had_nl, uses_crlf
+
+
+def _newline_line_limit_exceeded(text: str, limit: int) -> bool:
+    """Return whether patch's LF-normalized representation has too many lines."""
+    if not text:
+        return 1 > limit
+    line_count = text.count("\n")
+    if not text.endswith("\n"):
+        line_count += 1
+    return line_count > limit
+
+
+def _output_limit_error(
+    text: str, line_count: int, *, uses_crlf: bool,
+) -> str | None:
+    """Return a model-facing limit error for a would-be patched file."""
+    if line_count > _MAX_FILE_LINES:
+        return f"patched file would exceed the {_MAX_FILE_LINES:,}-line limit"
+    if _encoded_output_limit_exceeded(text, _MAX_FILE_BYTES, uses_crlf):
+        return f"patched file would exceed the {_MAX_FILE_BYTES:,}-byte limit"
+    return None
+
+
+def _encoded_output_limit_exceeded(
+    text: str, limit: int, uses_crlf: bool,
+) -> bool:
+    """Measure output bytes without allocating a CRLF-restored copy."""
+    used = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if uses_crlf and char == "\r" and index + 1 < len(text):
+            if text[index + 1] == "\n":
+                used += 2
+                index += 2
+                if used > limit:
+                    return True
+                continue
+        if uses_crlf and char == "\n":
+            used += 2
+        else:
+            codepoint = ord(char)
+            if codepoint <= 0x7F:
+                used += 1
+            elif codepoint <= 0x7FF:
+                used += 2
+            elif codepoint <= 0xFFFF:
+                used += 3
+            else:
+                used += 4
+        if used > limit:
+            return True
+        index += 1
+    return False
 
 
 def _new_file_ends_with_newline(hunks: list[_Hunk], *, default: bool) -> bool:
@@ -394,14 +580,56 @@ def _locate(lines: list[str], hunk: _Hunk) -> int | None:
         return None
     hint = min(max(hunk.start - 1, 0), n - m)
     # Exact match: hint first, then a full scan.
-    if lines[hint:hint + m] == old:
+    if _matches_at(lines, old, hint):
         return hint
-    for p in range(n - m + 1):
-        if lines[p:p + m] == old:
-            return p
+    exact = _find_first(lines, old)
+    if exact is not None:
+        return exact
     # Fuzzy match: ignore trailing whitespace.
     old_stripped = [s.rstrip() for s in old]
-    for p in [hint, *range(n - m + 1)]:
-        if [s.rstrip() for s in lines[p:p + m]] == old_stripped:
-            return p
+    if _matches_at(lines, old_stripped, hint, strip_trailing=True):
+        return hint
+    return _find_first(lines, old_stripped, strip_trailing=True)
+
+
+def _matches_at(
+    lines: list[str], expected: list[str], start: int, *, strip_trailing: bool = False,
+) -> bool:
+    """Compare one candidate without allocating a list slice."""
+    for offset, wanted in enumerate(expected):
+        actual = lines[start + offset]
+        if strip_trailing:
+            actual = actual.rstrip()
+        if actual != wanted:
+            return False
+    return True
+
+
+def _find_first(
+    lines: list[str], expected: list[str], *, strip_trailing: bool = False,
+) -> int | None:
+    """Find *expected* in *lines* with a linear Knuth-Morris-Pratt scan."""
+    prefix = _kmp_prefix(expected)
+    matched = 0
+    for index, line in enumerate(lines):
+        actual = line.rstrip() if strip_trailing else line
+        while matched and actual != expected[matched]:
+            matched = prefix[matched - 1]
+        if actual == expected[matched]:
+            matched += 1
+            if matched == len(expected):
+                return index - len(expected) + 1
     return None
+
+
+def _kmp_prefix(values: list[str]) -> list[int]:
+    """Build the KMP failure table for a non-empty hunk old side."""
+    prefix = [0] * len(values)
+    matched = 0
+    for index in range(1, len(values)):
+        while matched and values[index] != values[matched]:
+            matched = prefix[matched - 1]
+        if values[index] == values[matched]:
+            matched += 1
+            prefix[index] = matched
+    return prefix

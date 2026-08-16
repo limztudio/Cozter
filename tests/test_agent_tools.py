@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -27,6 +28,7 @@ from Cozter.agent_tools.builtin.apply_patch import ApplyPatchTool
 from Cozter.agent_tools.builtin.bash import BashTool
 from Cozter.agent_tools.builtin import copy_file as copy_file_mod
 from Cozter.agent_tools.builtin.copy_file import CopyFileTool
+from Cozter.agent_tools.builtin.delete_file import DeleteFileTool
 from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin import grep as grep_mod
@@ -320,6 +322,35 @@ class MoveFileToolTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_move_symlink_moves_the_link_not_its_target(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                target = os.path.join(tmp, "target.txt")
+                source = os.path.join(tmp, "source-link.txt")
+                destination = os.path.join(tmp, "moved-link.txt")
+                with open(target, "w", encoding="utf-8") as f:
+                    f.write("target contents")
+                try:
+                    os.symlink("target.txt", source)
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(f"symlinks unavailable: {exc}")
+
+                result = await MoveFileTool().run(tmp, {
+                    "source": "source-link.txt",
+                    "destination": "moved-link.txt",
+                })
+
+                self.assertEqual(
+                    result, "Moved: source-link.txt -> moved-link.txt",
+                )
+                self.assertFalse(os.path.lexists(source))
+                self.assertTrue(os.path.islink(destination))
+                self.assertEqual(os.readlink(destination), "target.txt")
+                with open(target, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "target contents")
+
+        asyncio.run(run())
+
     def test_directory_cannot_move_into_its_own_child(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
@@ -375,6 +406,32 @@ class MoveFileToolTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_move_rejects_a_dangling_symlink_destination(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                source = os.path.join(tmp, "source.txt")
+                destination = os.path.join(tmp, "destination.txt")
+                with open(source, "w", encoding="utf-8") as f:
+                    f.write("source contents")
+                try:
+                    os.symlink("missing-target.txt", destination)
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(f"symlinks unavailable: {exc}")
+
+                result = await MoveFileTool().run(tmp, {
+                    "source": "source.txt",
+                    "destination": "destination.txt",
+                })
+
+                self.assertEqual(
+                    result,
+                    "Destination already exists: destination.txt",
+                )
+                self.assertTrue(os.path.exists(source))
+                self.assertTrue(os.path.lexists(destination))
+
+        asyncio.run(run())
+
     def test_move_rolls_back_published_target_when_source_unlink_fails(
         self,
     ) -> None:
@@ -408,6 +465,62 @@ class MoveFileToolTests(unittest.TestCase):
 
                 self.assertTrue(os.path.lexists(source))
                 self.assertFalse(os.path.lexists(destination))
+
+
+class DeleteFileToolTests(unittest.TestCase):
+    def test_delete_symlink_removes_the_link_not_its_target(self) -> None:
+        async def run() -> None:
+            for target_kind in ("file", "directory", "dangling"):
+                with self.subTest(target_kind=target_kind), tempfile.TemporaryDirectory() as tmp:
+                    target = os.path.join(tmp, "target")
+                    link = os.path.join(tmp, "link")
+                    if target_kind == "file":
+                        with open(target, "w", encoding="utf-8") as f:
+                            f.write("target contents")
+                    elif target_kind == "directory":
+                        os.mkdir(target)
+                    try:
+                        os.symlink("target", link)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(f"symlinks unavailable: {exc}")
+
+                    result = await DeleteFileTool().run(tmp, {"path": "link"})
+
+                    self.assertEqual(result, "Deleted: link")
+                    self.assertFalse(os.path.lexists(link))
+                    if target_kind == "file":
+                        with open(target, encoding="utf-8") as f:
+                            self.assertEqual(f.read(), "target contents")
+                    elif target_kind == "directory":
+                        self.assertTrue(os.path.isdir(target))
+                    else:
+                        self.assertFalse(os.path.lexists(target))
+
+        asyncio.run(run())
+
+    def test_delete_rejects_a_symlink_escaping_the_workspace(self) -> None:
+        async def run() -> None:
+            with (
+                tempfile.TemporaryDirectory() as workspace_path,
+                tempfile.TemporaryDirectory() as outside_path,
+            ):
+                outside_file = os.path.join(outside_path, "outside.txt")
+                link = os.path.join(workspace_path, "escape")
+                with open(outside_file, "w", encoding="utf-8") as f:
+                    f.write("outside contents")
+                try:
+                    os.symlink(outside_file, link)
+                except (NotImplementedError, OSError) as exc:
+                    self.skipTest(f"symlinks unavailable: {exc}")
+
+                with self.assertRaisesRegex(ValueError, "escapes workspace"):
+                    await DeleteFileTool().run(workspace_path, {"path": "escape"})
+
+                self.assertTrue(os.path.lexists(link))
+                with open(outside_file, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "outside contents")
+
+        asyncio.run(run())
 
 
 class CopyFileToolTests(unittest.TestCase):
@@ -680,6 +793,106 @@ class PluginScriptTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("RuntimeWarning", proc.stderr)
         self.assertIn("+00:00", proc.stdout.strip())
+
+
+class PluginLoadingTests(unittest.TestCase):
+    def test_failed_plugin_import_restores_colliding_registration(self) -> None:
+        """A broken plugin cannot replace a builtin as an unmarked tool."""
+        original_registry = list(agent_tools.AgentTool.registry)
+        original_read_file = next(
+            tool for tool in original_registry if tool.name == "read_file"
+        )
+        failed_plugins: list[agent_tools.AgentTool] = []
+
+        def import_module(name: str) -> object:
+            if name == "Cozter.agent_tools.plugins":
+                return SimpleNamespace(__path__=[])
+            self.assertEqual(name, "Cozter.agent_tools.plugins.broken")
+
+            class BrokenPlugin(agent_tools.AgentTool):
+                name = "read_file"
+                description = "Broken colliding plugin."
+                parameters = {"type": "object"}
+
+                async def run(self, workspace_path: str, args: dict) -> str:
+                    del workspace_path, args
+                    return "unreachable"
+
+            failed_plugins.append(agent_tools.AgentTool.registry[-1])
+            raise RuntimeError("simulated plugin import failure")
+
+        mod_info = SimpleNamespace(name="broken")
+        try:
+            with (
+                mock.patch.object(
+                    agent_tools.pkgutil,
+                    "iter_modules",
+                    return_value=[mod_info],
+                ),
+                mock.patch.object(
+                    agent_tools.importlib,
+                    "import_module",
+                    side_effect=import_module,
+                ),
+                mock.patch.object(agent_tools.logger, "exception"),
+            ):
+                agent_tools._load_subpackage("plugins", mark_as_plugin=True)
+
+            self.assertEqual(agent_tools.AgentTool.registry, original_registry)
+            self.assertIs(
+                next(
+                    tool for tool in agent_tools.AgentTool.registry
+                    if tool.name == "read_file"
+                ),
+                original_read_file,
+            )
+            self.assertFalse(original_read_file.is_plugin)
+            self.assertNotIn(failed_plugins[0], agent_tools.AgentTool.registry)
+        finally:
+            agent_tools.AgentTool.registry[:] = original_registry
+
+    def test_successful_plugin_import_is_registered_and_marked(self) -> None:
+        """The failed-import rollback does not change normal plugin loading."""
+        original_registry = list(agent_tools.AgentTool.registry)
+        loaded_plugins: list[agent_tools.AgentTool] = []
+
+        def import_module(name: str) -> object:
+            if name == "Cozter.agent_tools.plugins":
+                return SimpleNamespace(__path__=[])
+            self.assertEqual(name, "Cozter.agent_tools.plugins.working")
+
+            class WorkingPlugin(agent_tools.AgentTool):
+                name = "test_successful_plugin"
+                description = "Working test plugin."
+                parameters = {"type": "object"}
+
+                async def run(self, workspace_path: str, args: dict) -> str:
+                    del workspace_path, args
+                    return "ok"
+
+            loaded_plugins.append(agent_tools.AgentTool.registry[-1])
+            return SimpleNamespace()
+
+        mod_info = SimpleNamespace(name="working")
+        try:
+            with (
+                mock.patch.object(
+                    agent_tools.pkgutil,
+                    "iter_modules",
+                    return_value=[mod_info],
+                ),
+                mock.patch.object(
+                    agent_tools.importlib,
+                    "import_module",
+                    side_effect=import_module,
+                ),
+            ):
+                agent_tools._load_subpackage("plugins", mark_as_plugin=True)
+
+            self.assertIn(loaded_plugins[0], agent_tools.AgentTool.registry)
+            self.assertTrue(loaded_plugins[0].is_plugin)
+        finally:
+            agent_tools.AgentTool.registry[:] = original_registry
 
 
 class DiscoveryToolTests(unittest.TestCase):

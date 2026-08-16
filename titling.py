@@ -115,22 +115,45 @@ async def generate(
     if data is None:
         return None
 
+    # Keep the complete backend input bounded, including the fixed title
+    # instructions. Reserve half of the remaining room for the current
+    # exchange so an oversized persisted summary cannot hide it entirely.
+    prompt_prefix = f"{TITLE_PROMPT}\n\n"
+    context_budget = max(0, TITLE_CONTEXT_CHARS - len(prompt_prefix))
+    recent_reserve = context_budget // 2
+
     parts: list[str] = []
     summary = data.get("summary")
     if summary:
-        parts.append(f"Previous summary:\n{summary}\n")
+        # Session files can be hand-edited or come from older versions; keep
+        # malformed persisted values from breaking an otherwise best-effort
+        # title pass while still applying the same prompt cap.
+        summary_text = summary if isinstance(summary, str) else str(summary)
+        summary_prefix = "Previous summary:\n"
+        recent_header = "Recent messages:"
+        # The summary block ends with a newline and ``join`` supplies one
+        # more before the recent-message header.
+        summary_overhead = len(summary_prefix) + 2 + len(recent_header)
+        summary_budget = max(
+            0, context_budget - recent_reserve - summary_overhead,
+        )
+        if summary_budget:
+            parts.append(f"{summary_prefix}{summary_text[:summary_budget]}\n")
     parts.append("Recent messages:")
 
-    # Newest-first under a tight char budget; the title only needs the
-    # gist, so we don't pull the whole history.
+    # Newest-first under the remaining budget; the title only needs the
+    # gist, so we don't pull the whole history. ``take_recent_messages``
+    # counts a newline after each returned line, while joining it below adds
+    # one before each line, hence the one-character reserve.
+    message_budget = max(0, context_budget - len("\n".join(parts)) - 1)
     msg_lines = session.take_recent_messages(
-        data.get("messages", []), TITLE_CONTEXT_CHARS,
+        data.get("messages", []), message_budget,
     )
     if not msg_lines:
         return None
     parts.extend(msg_lines)
 
-    full_prompt = f"{TITLE_PROMPT}\n\n" + "\n".join(parts)
+    full_prompt = prompt_prefix + "\n".join(parts)
 
     raw = await run_internal_backend(
         backend,

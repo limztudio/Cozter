@@ -6,7 +6,6 @@ import errno
 import html
 import fnmatch
 import os
-import re
 import shutil
 import stat
 import sys
@@ -183,23 +182,40 @@ class AgentTool(ABC):
 # ---------------------------------------------------------------------------
 
 
-def resolve_inside_workspace(workspace: str, path: str) -> str:
-    """Return absolute path; raise if it escapes the workspace.
+def resolve_workspace_entry(workspace: str, path: str) -> str:
+    """Return a checked absolute path without dereferencing its endpoint.
 
     ``path`` may be relative to the workspace root or an absolute path
-    inside it. Symlinks are followed via ``os.path.realpath`` and the
-    resolved target must stay under the workspace root.
+    inside it. Both its lexical spelling and its current resolved target
+    must stay under the workspace root. Returning the lexical endpoint is
+    important for operations on a final symlink: deleting or moving
+    ``link.txt`` must affect the link itself, not its target. Intermediate
+    symlinks remain resolved by the OS when the returned path is used.
     """
     if not isinstance(path, str) or not path:
         raise ValueError("path must be a non-empty string")
     abs_ws = os.path.realpath(workspace)
-    candidate = (
-        path if os.path.isabs(path) else os.path.join(workspace, path)
+    candidate = os.path.abspath(
+        path if os.path.isabs(path) else os.path.join(abs_ws, path)
     )
-    abs_path = os.path.realpath(candidate)
-    if not is_path_within(abs_path, abs_ws):
+    try:
+        lexical_inside = os.path.commonpath((candidate, abs_ws)) == abs_ws
+    except (OSError, ValueError):
+        lexical_inside = False
+    if not lexical_inside or not is_path_within(candidate, abs_ws):
         raise ValueError(f"path escapes workspace: {path}")
-    return abs_path
+    return candidate
+
+
+def resolve_inside_workspace(workspace: str, path: str) -> str:
+    """Return the resolved target path; raise if it escapes the workspace.
+
+    Most file-content tools deliberately follow a final symlink after
+    verifying that it resolves inside the workspace. Path-entry operations
+    such as move and delete should instead use
+    :func:`resolve_workspace_entry` to preserve the final link.
+    """
+    return os.path.realpath(resolve_workspace_entry(workspace, path))
 
 
 def coerce_int_arg(
@@ -321,17 +337,23 @@ def prepare_source_destination(
     args: dict,
     *,
     file_action: str | None = None,
+    preserve_final_symlinks: bool = False,
 ) -> tuple[str, str, str, str] | str:
     """Return validated transfer paths or a model-facing preflight error."""
     raw_src = args.get("source", "")
     raw_dst = args.get("destination", "")
-    src = resolve_inside_workspace(workspace, raw_src)
-    dst = resolve_inside_workspace(workspace, raw_dst)
-    if not os.path.exists(src):
+    resolver = (
+        resolve_workspace_entry
+        if preserve_final_symlinks else resolve_inside_workspace
+    )
+    src = resolver(workspace, raw_src)
+    dst = resolver(workspace, raw_dst)
+    exists = os.path.lexists if preserve_final_symlinks else os.path.exists
+    if not exists(src):
         return f"Source not found: {raw_src}"
     if file_action is not None and not os.path.isfile(src):
         return f"Not a file (refusing to {file_action}): {raw_src}"
-    if os.path.exists(dst):
+    if exists(dst):
         return f"Destination already exists: {raw_dst}"
     return raw_src, raw_dst, src, dst
 
@@ -475,6 +497,17 @@ def apply_string_replacement(
     return content.replace(old, new, replacements), count, replacements
 
 
+_MAX_EDIT_FILE_BYTES = 5 * 1024 * 1024  # 5 MiB
+
+
+def _edit_file_too_large_error() -> str:
+    """Return the shared model-facing error for oversized edit targets."""
+    return (
+        "file is too large to edit "
+        f"(maximum {_MAX_EDIT_FILE_BYTES:,} bytes)"
+    )
+
+
 def read_text_for_edit(path: str) -> tuple[str, bool] | str:
     """Read a UTF-8 text file for in-place editing.
 
@@ -482,15 +515,23 @@ def read_text_for_edit(path: str) -> tuple[str, bool] | str:
     ``\\n`` so newline-based match strings still match a CRLF file, and
     *uses_crlf* records the file's convention so :func:`write_text_after_edit`
     can restore it byte-for-byte. Returns a model-facing error string (no
-    ``Error:`` prefix) if the file is not valid UTF-8 - a read-modify-write
-    edit would otherwise replace every non-UTF-8 byte in the whole file with
-    U+FFFD, silently corrupting content the edit never touched, so we refuse.
+    ``Error:`` prefix) if the file exceeds the edit-size limit or is not valid
+    UTF-8. A read-modify-write edit would otherwise replace every non-UTF-8
+    byte in the whole file with U+FFFD, silently corrupting content the edit
+    never touched, so we refuse.
     """
     try:
         with open(path, "rb") as f:
-            raw = f.read()
+            if os.fstat(f.fileno()).st_size > _MAX_EDIT_FILE_BYTES:
+                return _edit_file_too_large_error()
+            # The stat above avoids reading known-large files, but a writer
+            # can grow the file immediately afterward. Keep this read bounded
+            # too, and use one extra byte to distinguish an exact-limit file.
+            raw = f.read(_MAX_EDIT_FILE_BYTES + 1)
     except OSError as exc:
         return f"could not read file: {exc}"
+    if len(raw) > _MAX_EDIT_FILE_BYTES:
+        return _edit_file_too_large_error()
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -942,21 +983,160 @@ async def open_http_response(
         yield response
 
 
+_HTML_RAW_TEXT_TAGS = frozenset({"script", "style"})
+_HTML_TAG_WHITESPACE = frozenset(" \t\n\r\f")
+
+
+def _is_html_tag_start(value: str, index: int) -> bool:
+    """Return whether ``value[index:]`` begins a conventional HTML tag."""
+    index += 1  # Skip '<'.
+    if index < len(value) and value[index] == "/":
+        index += 1
+    if index >= len(value):
+        return False
+    character = value[index]
+    return "A" <= character <= "Z" or "a" <= character <= "z"
+
+
+def _scan_html_tag_end(value: str, index: int) -> int | None:
+    """Return the index after an unquoted '>', or ``None`` if absent."""
+    quote = ""
+    while index < len(value):
+        character = value[index]
+        if quote:
+            if character == quote:
+                quote = ""
+        elif character in "\"'":
+            quote = character
+        elif character == ">":
+            return index + 1
+        index += 1
+    return None
+
+
+def _scan_html_markup(
+    value: str,
+    index: int,
+) -> tuple[str, bool, bool, int] | None:
+    """Parse markup at *index*, returning tag, close/self-close flags, and end.
+
+    The scanner deliberately only recognizes conventional tag starts.  It is
+    tolerant of malformed attributes, but returns ``None`` for unfinished
+    markup so callers can retain it as visible text instead of rescanning the
+    same suffix.
+    """
+    assert value[index] == "<"
+    length = len(value)
+
+    if value.startswith("<!--", index):
+        end = value.find("-->", index + 4)
+        if end < 0:
+            return None
+        return "", False, False, end + 3
+
+    marker = index + 1
+    if marker < length and value[marker] in "!?":
+        markup_end = _scan_html_tag_end(value, marker + 1)
+        if markup_end is None:
+            return None
+        return "", False, False, markup_end
+
+    is_end_tag = marker < length and value[marker] == "/"
+    if is_end_tag:
+        marker += 1
+    if marker >= length:
+        return None
+
+    character = value[marker]
+    if not ("A" <= character <= "Z" or "a" <= character <= "z"):
+        return None
+
+    name_start = marker
+    while (
+        marker < length
+        and value[marker] not in _HTML_TAG_WHITESPACE
+        and value[marker] not in "/>"
+    ):
+        marker += 1
+    tag = value[name_start:marker].lower()
+
+    markup_end = _scan_html_tag_end(value, marker)
+    if markup_end is None:
+        return None
+
+    before_end = markup_end - 2
+    while before_end >= marker and value[before_end] in _HTML_TAG_WHITESPACE:
+        before_end -= 1
+    is_self_closing = not is_end_tag and value[before_end] == "/"
+    return tag, is_end_tag, is_self_closing, markup_end
+
+
+def _skip_html_raw_text(value: str, index: int, tag: str) -> int:
+    """Return the first position after a matching raw-text closing tag.
+
+    ``script`` and ``style`` contents are raw text, so tags inside them must
+    not be parsed.  This scans forward exactly once and treats an unfinished
+    closing tag as the end of the document, keeping malformed input bounded.
+    """
+    length = len(value)
+    tag_length = len(tag)
+    while index < length:
+        if (
+            value[index] == "<"
+            and index + tag_length + 2 <= length
+            and value[index + 1:index + 2] == "/"
+            and value[index + 2:index + tag_length + 2].lower() == tag
+        ):
+            name_end = index + tag_length + 2
+            if (
+                name_end == length
+                or value[name_end] in _HTML_TAG_WHITESPACE
+                or value[name_end] in "/>"
+            ):
+                end = _scan_html_tag_end(value, name_end)
+                return end if end is not None else length
+        index += 1
+    return length
+
+
 def html_to_text(value: str) -> str:
-    """Strip script/style blocks and remaining tags; collapse whitespace."""
-    value = re.sub(
-        r"<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>",
-        " ",
-        value,
-        flags=re.IGNORECASE,
-    )
-    value = re.sub(
-        r"<style\b[^<]*(?:(?!</style>)<[^<]*)*</style>",
-        " ",
-        value,
-        flags=re.IGNORECASE,
-    )
-    value = re.sub(r"<[^>]+>", " ", value)
-    value = html.unescape(value)
-    value = re.sub(r"\s+", " ", value)
-    return value.strip()
+    """Convert HTML to readable text with a single-pass, non-regex scanner."""
+    parts: list[str] = []
+    index = 0
+    length = len(value)
+    while index < length:
+        if value[index] != "<":
+            next_markup = value.find("<", index)
+            if next_markup < 0:
+                parts.append(value[index:])
+                break
+            parts.append(value[index:next_markup])
+            index = next_markup
+            continue
+
+        # A literal '<' should remain visible.  For markup-shaped but
+        # unfinished input, preserve the remaining text and stop rather than
+        # repeatedly scanning the same malformed suffix.
+        if not _is_html_tag_start(value, index) and not (
+            index + 1 < length and value[index + 1] in "!?"
+        ):
+            parts.append("<")
+            index += 1
+            continue
+
+        markup = _scan_html_markup(value, index)
+        if markup is None:
+            parts.append(value[index:])
+            break
+
+        tag, is_end_tag, is_self_closing, index = markup
+        parts.append(" ")
+        if (
+            not is_end_tag
+            and not is_self_closing
+            and tag in _HTML_RAW_TEXT_TAGS
+        ):
+            index = _skip_html_raw_text(value, index, tag)
+            parts.append(" ")
+
+    return " ".join(html.unescape("".join(parts)).split())

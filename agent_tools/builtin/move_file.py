@@ -25,11 +25,20 @@ class MoveFileTool(AgentTool):
     parameters = source_destination_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        paths = prepare_source_destination(workspace_path, args)
+        paths = prepare_source_destination(
+            workspace_path, args, preserve_final_symlinks=True,
+        )
         if isinstance(paths, str):
             return paths
         raw_src, raw_dst, src, dst = paths
-        if os.path.isdir(src) and is_path_within(dst, src):
+        # A symlink to a directory is still a single filesystem entry: it can
+        # safely be moved even when its target directory contains the new
+        # link. Only a real source directory has the self-descendant hazard.
+        if (
+            not os.path.islink(src)
+            and os.path.isdir(src)
+            and is_path_within(dst, src)
+        ):
             return (
                 "Error: destination cannot be inside the source directory: "
                 f"{raw_dst}"

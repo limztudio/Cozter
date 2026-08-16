@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import unittest
 from unittest import mock
 
+from Cozter.agent_tools.base import html_to_text
 from Cozter.agent_tools.builtin.web_fetch import (
     WebFetchTool,
     _NonPublicAddressError,
@@ -184,3 +185,22 @@ class WebFetchSecurityTests(unittest.TestCase):
             asyncio.run(run()),
             "Error: URL host must be a publicly routable address",
         )
+
+
+class HtmlToTextTests(unittest.TestCase):
+    def test_strips_raw_content_and_decodes_visible_text(self) -> None:
+        self.assertEqual(
+            html_to_text(
+                "<h1>One &amp; two</h1>"
+                "<script>ignored <b>code</b></script>"
+                "<style>.hidden { display: none; }</style>"
+                "<p>Three&nbsp;four</p>",
+            ),
+            "One & two Three four",
+        )
+
+    def test_handles_repeated_unclosed_script_tags(self) -> None:
+        # This fixed-size malformed shape made the former regex repeatedly
+        # rescan its suffix.  Assert the safe output rather than elapsed time.
+        malformed = "<script>" * 4_096 + "hidden text"
+        self.assertEqual(html_to_text(malformed), "")

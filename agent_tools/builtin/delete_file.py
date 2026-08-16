@@ -7,7 +7,7 @@ import os
 from ..base import (
     AgentTool,
     path_parameters,
-    resolve_inside_workspace,
+    resolve_workspace_entry,
     summarize_path,
 )
 
@@ -23,10 +23,13 @@ class DeleteFileTool(AgentTool):
 
     async def run(self, workspace_path: str, args: dict) -> str:
         raw_path = args.get("path", "")
-        target = resolve_inside_workspace(workspace_path, raw_path)
-        if not os.path.exists(target):
+        # Keep the final pathname intact: unlinking a symlink must remove the
+        # link rather than its in-workspace target. The resolver still checks
+        # that an existing link cannot point outside the workspace.
+        target = resolve_workspace_entry(workspace_path, raw_path)
+        if not os.path.lexists(target):
             return f"File not found: {raw_path}"
-        if not os.path.isfile(target):
+        if not (os.path.isfile(target) or os.path.islink(target)):
             return f"Not a file (refusing to delete): {raw_path}"
         try:
             os.remove(target)

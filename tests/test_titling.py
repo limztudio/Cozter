@@ -9,6 +9,40 @@ from Cozter import session, titling, workspace
 
 
 class AutoTitlingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_oversized_summary_keeps_title_prompt_bounded_and_recent(
+        self,
+    ) -> None:
+        data = {
+            "summary": "old context " + ("x" * titling.TITLE_CONTEXT_CHARS),
+            "messages": [
+                {"role": "user", "content": "recent user context"},
+                {"role": "assistant", "content": "recent assistant context"},
+            ],
+        }
+
+        with (
+            mock.patch.object(
+                titling.backends_agent,
+                "get_backend",
+                return_value=mock.sentinel.backend,
+            ),
+            mock.patch.object(
+                titling,
+                "run_internal_backend",
+                new=mock.AsyncMock(return_value="Recent Context Title"),
+            ) as run_title,
+        ):
+            title = await titling.generate(
+                "/workspace", "session", "model", backend_name="test",
+                _preloaded_data=data,
+            )
+
+        self.assertEqual(title, "Recent Context Title")
+        prompt = run_title.await_args.args[2]
+        self.assertLessEqual(len(prompt), titling.TITLE_CONTEXT_CHARS)
+        self.assertIn("Recent messages:\nUser: recent user context", prompt)
+        self.assertIn("Assistant: recent assistant context", prompt)
+
     async def test_stale_auto_title_does_not_overwrite_newer_session_name(
         self,
     ) -> None:

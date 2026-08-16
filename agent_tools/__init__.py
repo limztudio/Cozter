@@ -86,17 +86,22 @@ def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
     for _mod_info in pkgutil.iter_modules(pkg.__path__):
         if _mod_info.name.startswith("_"):
             continue
-        before = {id(t) for t in AgentTool.registry}
+        before = list(AgentTool.registry)
         try:
             importlib.import_module(f"{pkg_name}.{_mod_info.name}")
         except Exception:
+            # A module can define a concrete AgentTool before later import
+            # code fails. Class definition self-registers it (and may evict a
+            # colliding builtin), so restore the whole pre-import registry.
+            AgentTool.registry[:] = before
             logger.exception(
                 "Failed to load %s.%s", pkg_name, _mod_info.name,
             )
             continue
         if mark_as_plugin:
+            before_ids = {id(t) for t in before}
             for t in AgentTool.registry:
-                if id(t) not in before:
+                if id(t) not in before_ids:
                     t.is_plugin = True
 
 
