@@ -916,17 +916,19 @@ workspaces, evicting expired and least-fresh entries; an evicted workspace is
 simply rediscovered when it is opened again. The ACP probe runs from the
 selected workspace so project policy, including `.github/allowed_models.txt`,
 applies to the picker and stored-model check.
-Its picker also accepts ACP's provider-grouped model selectors, so
-account-approved models stay visible without a hard-coded catalog. The
-`copilot` backend keeps its `-p` prompt within the platform's single-argument
-limit—quoted UTF-16 units on Windows and UTF-8 bytes on POSIX—by dropping the
-oldest composed context; the current user message stays at the tail. Each
-Copilot run also uses a short-lived private CLI home, so its planner, worker, and
-merge calls do not appear in Copilot's session history or get exported to
-GitHub web and mobile; Cozter's workspace session remains the durable
-conversation record. The private home copies `config.json` and `settings.json`
-from `$COPILOT_HOME` when it is set, otherwise from `~/.copilot`; set
-`COPILOT_HOME` before launch when the source profile lives elsewhere.
+Its picker also accepts ACP's provider-grouped model selectors and both legacy
+session metadata forms (`models.availableModels` and top-level
+`availableModels`), so account-approved models stay visible without a
+hard-coded catalog. The `copilot` backend keeps its `-p` prompt within the
+platform's single-argument limit—quoted UTF-16 units on Windows and UTF-8 bytes
+on POSIX—by dropping the oldest composed context; the current user message
+stays at the tail. Each Copilot run also uses a short-lived private CLI home,
+so its planner, worker, and merge calls do not appear in Copilot's session
+history or get exported to GitHub web and mobile; Cozter's workspace session
+remains the durable conversation record. The private home copies `config.json`
+and `settings.json` from `$COPILOT_HOME` when it is set, otherwise from
+`~/.copilot`; set `COPILOT_HOME` before launch when the source profile lives
+elsewhere.
 
 Codex uses discovered effort and context-window metadata only while its
 60-second catalog cache is fresh. Until `/model` refreshes an expired cache,

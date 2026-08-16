@@ -658,6 +658,26 @@ class BackendModelTests(unittest.TestCase):
             ("auto", "company-allowed"),
         )
 
+    def test_copilot_acp_direct_metadata_catalog_beats_config_fallback(
+        self,
+    ) -> None:
+        """Older ACP SDKs put SessionModelState at the result top level."""
+        self.assertEqual(
+            copilot_mod._parse_acp_model_options({
+                "availableModels": [
+                    {"modelId": " company-allowed "},
+                    {"modelId": "company-allowed"},
+                    {"modelId": "partner-approved"},
+                ],
+                "configOptions": [{
+                    "id": "model", "category": "model",
+                    "type": "select",
+                    "options": [{"value": "generic-but-blocked"}],
+                }],
+            }),
+            ("auto", "company-allowed", "partner-approved"),
+        )
+
     def test_copilot_acp_parser_flattens_grouped_model_selector(self) -> None:
         """Current ACP permits provider-grouped options without a category."""
         self.assertEqual(

@@ -681,11 +681,12 @@ class CopilotBackend(Backend):
 def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
     """Extract the ACP session's account-aware model selector.
 
-    Copilot's session metadata has an ``availableModels`` list with exact
-    model IDs. ACP's standard ``configOptions`` model selector is retained
-    as a compatibility fallback for builds that do not expose that metadata.
-    The ACP category is optional, so recognize the protocol's usual
-    ``model``/``models`` selector IDs and labels as well.
+    Copilot has exposed the legacy session model state in both
+    ``models.availableModels`` and top-level ``availableModels`` forms. Both
+    contain exact, account- and workspace-policy-scoped IDs, so prefer either
+    one over ACP's standard ``configOptions`` model selector. The category is
+    optional, so recognize the protocol's usual ``model``/``models`` selector
+    IDs and labels as well.
     """
     if not isinstance(payload, dict):
         return ()
@@ -697,6 +698,13 @@ def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
         )
         if models:
             return models
+
+    # Older ACP SDKs surfaced the same SessionModelState directly on the
+    # session/new result. Keep this compatibility path before configOptions:
+    # both forms are provider-authoritative, unlike a generic CLI help list.
+    models = _catalog_model_ids(payload.get("availableModels"), key="modelId")
+    if models:
+        return models
 
     config_options = payload.get("configOptions")
     if not isinstance(config_options, list):
