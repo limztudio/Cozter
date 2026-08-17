@@ -1336,11 +1336,17 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
 
-    def test_fallback_metadata_is_projected_from_one_catalog(self) -> None:
-        specs = zai_mod._FALLBACK_MODEL_SPECS
+    def test_fallback_metadata_is_projected_from_curated_catalogs(self) -> None:
+        specs = zai_mod._ALL_FALLBACK_MODEL_SPECS
+        self.assertEqual(
+            tuple(
+                spec.name for spec in zai_mod._FALLBACK_MODEL_SPECS
+            ),
+            zai_mod._FALLBACK_MODELS,
+        )
         self.assertEqual(
             tuple(spec.name for spec in specs),
-            zai_mod._FALLBACK_MODELS,
+            zai_mod._CODING_PLAN_FALLBACK_MODELS,
         )
         self.assertEqual(
             {spec.name: spec.context_window for spec in specs},
@@ -1359,6 +1365,7 @@ class ZaiBackendTests(unittest.TestCase):
 
     def test_context_windows_cover_only_published_curated_ids(self) -> None:
         backend = ZaiBackend()
+        self.assertEqual(backend.context_window_tokens("glm-5.3"), 1_000_000)
         self.assertEqual(backend.context_window_tokens("glm-5.2"), 1_000_000)
         self.assertEqual(
             backend.context_window_tokens("GLM-5.2[1M]"), 1_000_000,
@@ -1404,6 +1411,39 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-4.5-flash",
             "glm-4-32b-0414-128k",
         ))
+
+    def test_coding_plan_fallback_adds_glm_5_3_only_for_its_endpoint(
+        self,
+    ) -> None:
+        self.assertEqual(
+            zai_mod._CODING_PLAN_FALLBACK_MODELS,
+            ("glm-5.3", *zai_mod._FALLBACK_MODELS),
+        )
+        self.assertEqual(
+            zai_mod._coding_plan_fallback_models(
+                "https://api.z.ai/api/coding/paas/v4/",
+            ),
+            zai_mod._CODING_PLAN_FALLBACK_MODELS,
+        )
+        self.assertEqual(
+            zai_mod._coding_plan_fallback_models(
+                "https://api.z.ai/api/paas/v4",
+            ),
+            zai_mod._FALLBACK_MODELS,
+        )
+
+        with (
+            mock.patch.object(zai_mod.cfg, "get_zai_api_key", return_value=""),
+            mock.patch.object(
+                zai_mod.cfg,
+                "get_zai_base_url",
+                return_value="https://api.z.ai/api/coding/paas/v4",
+            ),
+        ):
+            self.assertEqual(
+                ZaiBackend().available_models,
+                zai_mod._CODING_PLAN_FALLBACK_MODELS,
+            )
 
     def test_model_ids_tolerate_malformed_payloads(self) -> None:
         for payload in (None, [], {}, {"data": None}, {"data": {}}):
@@ -1548,6 +1588,11 @@ class ZaiBackendTests(unittest.TestCase):
         with (
             mock.patch.object(zai_mod.cfg, "get_zai_api_key", return_value=""),
             mock.patch.object(
+                zai_mod.cfg,
+                "get_zai_base_url",
+                return_value="https://api.z.ai/api/paas/v4",
+            ),
+            mock.patch.object(
                 openai_agent_mod.urllib.request, "urlopen",
             ) as urlopen_mock,
         ):
@@ -1559,6 +1604,11 @@ class ZaiBackendTests(unittest.TestCase):
         with (
             mock.patch.object(
                 zai_mod.cfg, "get_zai_api_key", return_value="key",
+            ),
+            mock.patch.object(
+                zai_mod.cfg,
+                "get_zai_base_url",
+                return_value="https://api.z.ai/api/paas/v4",
             ),
             mock.patch.object(
                 zai_mod, "fetch_model_ids",
@@ -1651,6 +1701,35 @@ class ZaiBackendTests(unittest.TestCase):
             },
         )
 
+    def test_glm_5_3_uses_its_reasoning_only_effort_scale(self) -> None:
+        backend = ZaiBackend()
+        self.assertEqual(
+            backend.effort_levels_for_model("GLM-5.3"),
+            ("low", "high", "max"),
+        )
+        self.assertEqual(backend._effort_fields(0, "glm-5.3"), {})
+        self.assertEqual(
+            backend._effort_fields(1, "glm-5.3"),
+            {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "low",
+            },
+        )
+        self.assertEqual(
+            backend._effort_fields(50, "glm-5.3"),
+            {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "high",
+            },
+        )
+        self.assertEqual(
+            backend._effort_fields(100, "glm-5.3"),
+            {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": "max",
+            },
+        )
+
     def test_preserved_thinking_is_limited_to_documented_glm_models(
         self,
     ) -> None:
@@ -1662,7 +1741,7 @@ class ZaiBackendTests(unittest.TestCase):
         for model in ("glm-5.2", "GLM-5.2[1M]", "glm-4.5-air"):
             with self.subTest(model=model):
                 self.assertTrue(backend._preserve_reasoning_content(model))
-        for model in ("glm-4-32b-0414-128k", "private-glm"):
+        for model in ("glm-5.3", "glm-4-32b-0414-128k", "private-glm"):
             with self.subTest(model=model):
                 self.assertFalse(backend._preserve_reasoning_content(model))
 
@@ -1701,6 +1780,7 @@ class ZaiBackendTests(unittest.TestCase):
             {"tool_stream": True},
         )
         for model in (
+            "glm-5.3",
             "glm-5v-turbo",
             "glm-4.6v",
             "glm-4.6v-flashx",

@@ -1,6 +1,6 @@
 """Z.ai (Zhipu GLM) backend: OpenAI-compatible cloud API.
 
-Z.ai serves the GLM models (glm-5.2, glm-5.1, glm-5, ...) through an
+Z.ai serves the GLM models (glm-5.3, glm-5.2, glm-5.1, glm-5, ...) through an
 OpenAI-compatible endpoint at ``https://api.z.ai/api/paas/v4`` with Bearer
 auth. It reuses the shared :class:`OpenAIChatBackend` loop; this module
 supplies only Z.ai's specifics - the endpoint, the Authorization header
@@ -69,15 +69,37 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4.5-flash", 200_000, True, False),
     _FallbackModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
 )
+# GLM-5.3 is currently exposed through the GLM Coding Plan endpoint, not the
+# general Open Platform endpoint.  Keep it in a separate catalog so a normal
+# Z.ai fallback never offers an ID that its configured endpoint will reject.
+# The current Coding Plan documentation confirms function calling, streaming,
+# and its own reasoning controls, but does not yet document the
+# ``clear_thinking`` or ``tool_stream`` contracts.  Leave those opt-ins off
+# until the API reference explicitly supports them.
+_CODING_PLAN_FALLBACK_MODEL_SPECS = (
+    _FallbackModelSpec("glm-5.3", 1_000_000, False, False),
+)
 _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
+_CODING_PLAN_FALLBACK_MODELS = tuple(
+    spec.name for spec in (
+        *_CODING_PLAN_FALLBACK_MODEL_SPECS,
+        *_FALLBACK_MODEL_SPECS,
+    )
+)
+_ALL_FALLBACK_MODEL_SPECS = (
+    *_CODING_PLAN_FALLBACK_MODEL_SPECS,
+    *_FALLBACK_MODEL_SPECS,
+)
 _MODEL_CONTEXT_WINDOWS = {
-    spec.name: spec.context_window for spec in _FALLBACK_MODEL_SPECS
+    spec.name: spec.context_window for spec in _ALL_FALLBACK_MODEL_SPECS
 }
 _PRESERVED_THINKING_MODELS = frozenset(
-    spec.name for spec in _FALLBACK_MODEL_SPECS if spec.preserves_reasoning
+    spec.name
+    for spec in _ALL_FALLBACK_MODEL_SPECS
+    if spec.preserves_reasoning
 )
 _TOOL_STREAM_MODELS = frozenset(
-    spec.name for spec in _FALLBACK_MODEL_SPECS if spec.streams_tools
+    spec.name for spec in _ALL_FALLBACK_MODEL_SPECS if spec.streams_tools
 )
 # Z.ai's catalog can include models that are invoked through a different API
 # path (for example image generation, OCR, or audio transcription). Cozter
@@ -102,6 +124,7 @@ _NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
 # the thinking toggle is supplied. Do not send the contradictory disabled
 # setting for a low Cozter effort percentage.
 _COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
+_GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
 
@@ -123,6 +146,14 @@ def _capability_model_id(model: str | None) -> str:
     return (model or "").strip().casefold().removesuffix("[1m]")
 
 
+def _coding_plan_fallback_models(base_url: str) -> tuple[str, ...]:
+    """Return the compatible curated catalog for a configured Z.ai URL."""
+    normalized = base_url.rstrip("/").casefold()
+    if normalized.endswith("/api/coding/paas/v4"):
+        return _CODING_PLAN_FALLBACK_MODELS
+    return _FALLBACK_MODELS
+
+
 class ZaiBackend(CachedOpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
@@ -130,11 +161,18 @@ class ZaiBackend(CachedOpenAIChatBackend):
     default_model = "glm-5.2"
     default_summary_model = "glm-4.5-air"
     tier_models = {"low": "glm-4.5-air", "mid": "glm-4.7", "high": "glm-5.2"}
-    # GLM-5.2 accepts seven reasoning-effort values. Other current text models
-    # expose only the thinking switch, handled separately in _effort_fields.
+    # GLM-5.2 accepts seven reasoning-effort values. GLM-5.3 has its own
+    # constrained three-level scale; other current text models expose only
+    # the thinking switch, handled separately in _effort_fields.
     effort_levels = (
         "none", "minimal", "low", "medium", "high", "xhigh", "max",
     )
+
+    def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
+        """Return the documented reasoning vocabulary for one GLM model."""
+        if _capability_model_id(model or self.default_model) == "glm-5.3":
+            return _GLM_5_3_EFFORT_LEVELS
+        return self.effort_levels
 
     def context_window_tokens(self, model: str | None) -> int | None:
         """Return a published capacity for a curated Z.ai model ID."""
@@ -148,11 +186,13 @@ class ZaiBackend(CachedOpenAIChatBackend):
 
     def _fetch_models(self) -> tuple[str, ...]:
         key = cfg.get_zai_api_key()
+        base_url = cfg.get_zai_base_url()
+        fallback_models = _coding_plan_fallback_models(base_url)
         if not key:
             logger.debug("Z.ai API key is unset; using fallback model list")
-            return _FALLBACK_MODELS
+            return fallback_models
 
-        url = self._models_endpoint()
+        url = base_url.rstrip("/") + "/models"
         try:
             model_ids = fetch_model_ids(
                 url,
@@ -164,7 +204,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
                 "Could not query Z.ai models at %s (%s); using fallback",
                 url, exc,
             )
-            return _FALLBACK_MODELS
+            return fallback_models
 
         chat_models = _chat_completion_model_ids(model_ids)
         if not chat_models and model_ids:
@@ -172,7 +212,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
                 "Z.ai model catalog contained no chat-completion models; "
                 "using fallback",
             )
-        return chat_models or _FALLBACK_MODELS
+        return chat_models or fallback_models
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 
@@ -196,14 +236,26 @@ class ZaiBackend(CachedOpenAIChatBackend):
     ) -> dict:
         if percent <= 0:
             return {}
-        if _capability_model_id(model or self.default_model) == "glm-5.2":
+        selected = _capability_model_id(model or self.default_model)
+        if selected == "glm-5.3":
+            # GLM-5.3 is reasoning-only and rejects the generic disabled
+            # setting. Its Coding Plan API accepts only these three effort
+            # levels, so map Cozter's percentage directly onto that scale.
+            levels = self.effort_levels_for_model(model)
+            index = min(
+                percent * len(levels) // 100,
+                len(levels) - 1,
+            )
+            return {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": levels[index],
+            }
+        if selected == "glm-5.2":
             return {
                 "thinking": {"type": "enabled"},
                 "reasoning_effort": self.convert_effort(percent),
             }
-        if _capability_model_id(
-            model or self.default_model,
-        ) in _COMPULSORY_THINKING_MODELS:
+        if selected in _COMPULSORY_THINKING_MODELS:
             return {"thinking": {"type": "enabled"}}
         return {
             "thinking": {

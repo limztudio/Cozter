@@ -352,14 +352,17 @@ your Z.ai account and paste it here. `zai_base_url` defaults to
 `/chat/completions` is appended); override it for a regional endpoint with a
 valid HTTPS URL. A blank, malformed, or non-HTTPS override falls back to the
 default so the API key is never sent over cleartext HTTP.
+GLM Coding Plan users can instead set it to
+`https://api.z.ai/api/coding/paas/v4`, which makes its `glm-5.3` fallback
+available when the account catalog cannot be queried.
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
 mirror the llama knobs and retry behavior for the cloud call. Select `zai`
 with `/agent`, pick a model with `/model` (default `glm-5.2`), and add private
 or regional GLM ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai
 coding turns automatically continue into another tool-enabled segment when
 Cozter's internal tool-call segment limit is reached, instead of stopping for
-a manual "continue". For current documented GLM agent models, Cozter also
-enables Z.ai's preserved-thinking protocol and returns the exact opaque
+a manual "continue". For documented GLM models with Z.ai's
+preserved-thinking request contract, Cozter returns the exact opaque
 `reasoning_content` with the next tool result; that provider state is never
 shown in the chat reply. `glm-4.5v` remains selectable for text-only chat,
 but Cozter does not send it the generic function-tool schema that Z.ai's
@@ -901,6 +904,11 @@ back to `auto` if the server is down or returns no model IDs. The `zai`
 picker queries the configured Z.ai `/models` endpoint and retains its curated
 agent-capable fallback, including text-compatible multimodal models such as
 `glm-5v-turbo`, `glm-4.6v`, and `glm-4.5v`, if the account cannot be queried.
+When `zai_base_url` uses Z.ai's GLM Coding Plan endpoint
+(`…/api/coding/paas/v4`), that fallback also offers its currently
+Coding-Plan-only `glm-5.3` model. Cozter maps `/effort` for it to Z.ai's
+supported `low` / `high` / `max` reasoning levels and otherwise leaves the
+general-endpoint fallback unchanged.
 It filters Z.ai's known image, OCR, and audio-only IDs because those require
 different endpoints, while preserving unknown/private chat-model IDs. Codex,
 llama, and Z.ai refresh their live catalogs lazily when a model picker is
