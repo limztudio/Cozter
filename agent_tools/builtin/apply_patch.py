@@ -270,7 +270,8 @@ def _parse_patch(
     hunk: _Hunk | None = None
     pending_old: str | None = None
 
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
         if line == "\\ No newline at end of file":
             if hunk is None or hunk.last_marker is None:
                 raise _PatchError(
@@ -287,9 +288,23 @@ def _parse_patch(
         # one that starts with ``++`` produces ``+++ ...``. Only recognize the
         # next file header once the current hunk's declared counts are full.
         if hunk is not None and hunk.complete:
+            # A completed hunk may be followed by another hunk or a complete
+            # ``---``/``+++`` file-header pair. A lone header-looking line is
+            # still an overlong hunk body line (for example ``--- value`` is
+            # a deletion of ``-- value``), not a harmless preamble. Reject it
+            # rather than clearing the hunk and silently discarding the edit.
+            next_line = lines[index + 1] if index + 1 < len(lines) else None
             if (
-                line.startswith((" ", "+", "-"))
-                and not line.startswith(("--- ", "+++ "))
+                not line
+                or line.startswith("+++ ")
+                or (
+                    line.startswith("--- ")
+                    and (next_line is None or not next_line.startswith("+++ "))
+                )
+                or (
+                    line.startswith((" ", "+", "-"))
+                    and not line.startswith("--- ")
+                )
             ):
                 raise _PatchError(
                     "hunk contains more body lines than its header declares",
@@ -348,10 +363,13 @@ def _parse_patch(
     if hunk is not None:
         hunk.validate()
 
-    parsed = [p for p in patches if p.hunks]
-    for file_patch in parsed:
+    if pending_old is not None:
+        raise _PatchError("file header is missing its +++ counterpart")
+    if any(not file_patch.hunks for file_patch in patches):
+        raise _PatchError("file header is missing a hunk")
+    for file_patch in patches:
         file_patch.validate()
-    return parsed
+    return patches
 
 
 # ---------------------------------------------------------------------------

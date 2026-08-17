@@ -462,6 +462,8 @@ def set_summary(
     long_term_rewrite: list[str] | None = None,
     title: str | None = None,
     summarized_count: int | None = None,
+    *,
+    first_message_tail: str | None = None,
 ) -> None:
     """Store a compacted summary, keeping only the last *keep_recent* messages.
 
@@ -480,6 +482,11 @@ def set_summary(
     drop those newer, un-summarized messages. Trimming against the snapshot
     count instead keeps everything appended since. None (manual/legacy callers)
     falls back to the current length.
+
+    first_message_tail is an internal lossless-compaction escape hatch for an
+    oversized oldest message. When supplied with summarized_count=0, the
+    summary covers only a bounded prefix while this replaces the same raw
+    message with its unseen suffix in the one durable write.
     """
     data = load_session(workspace, session_id)
     if data is None:
@@ -495,6 +502,10 @@ def set_summary(
     # after the snapshot. msgs[trimmed:] reduces to msgs[-keep_recent:] in the
     # no-race case.
     data["messages"] = msgs[trimmed:]
+    if first_message_tail is not None and data["messages"]:
+        first = data["messages"][0]
+        if isinstance(first, dict):
+            first["content"] = first_message_tail
     data["summary"] = summary
 
     if long_term_rewrite is not None:

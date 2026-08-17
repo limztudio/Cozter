@@ -155,6 +155,85 @@ def _bounded_previous_summary(summary: str) -> str:
     return summary[:keep] + marker + summary[-(budget - len(marker) - keep):]
 
 
+def _compaction_prompt_parts(
+    existing_summary: str | None,
+    existing_long_term: list[str],
+) -> list[str]:
+    """Build the fixed prefix of a compaction prompt before raw messages."""
+    parts: list[str] = []
+    if existing_long_term:
+        # Show up to 15% of the budget for the existing list so the model
+        # knows what to rewrite. With a target of <=30 items this is plenty.
+        lt_max = int(MAX_SUMMARY_CHARS * 0.15)
+        lt_lines = take_recent_lines(
+            existing_long_term, lt_max, lambda x: f"- {x}",
+        )
+        if lt_lines:
+            parts.append(
+                "Existing long-term items (rewrite this list per the "
+                "instructions above):"
+            )
+            parts.extend(lt_lines)
+            parts.append("")
+    if existing_summary:
+        parts.append(
+            "Previous summary:\n"
+            f"{_bounded_previous_summary(existing_summary)}\n"
+        )
+    parts.append("Conversation to summarize:")
+    return parts
+
+
+def _compaction_message_budget(parts: list[str]) -> int:
+    """Return the remaining raw-message budget for a prompt prefix."""
+    # Reserve a little extra for join separators and the backend's response
+    # envelope. This matches the existing conservative prompt accounting.
+    overhead = len(SUMMARY_PROMPT) + sum(len(part) for part in parts) + 200
+    return max(0, MAX_SUMMARY_CHARS - overhead)
+
+
+def _oversized_first_message_prefix(
+    data: dict,
+) -> tuple[str, int] | None:
+    """Return the raw prefix length for a safely-progressible first message.
+
+    ``_take_oldest_message_lines`` represents an oversized first line with a
+    bounded prefix plus an ellipsis.  Its unseen suffix must remain durable,
+    so this returns the exact number of original content characters exposed
+    before that marker.  The caller can replace the first message with the
+    suffix only after a successful summary is safely stored.
+    """
+    messages = data.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return None
+    first = messages[0]
+    if not isinstance(first, dict):
+        return None
+    content = first.get("content")
+    if not isinstance(content, str):
+        return None
+    summary = data.get("summary")
+    existing_summary = summary if isinstance(summary, str) else None
+    long_term = data.get("long_term")
+    existing_long_term = long_term if isinstance(long_term, list) else []
+    parts = _compaction_prompt_parts(
+        existing_summary, existing_long_term,
+    )
+    budget = _compaction_message_budget(parts)
+    line = session.format_msg_line(first, cap=None)
+    if len(line) <= budget:
+        return None
+    prefix = session.format_msg_line(
+        {"role": first.get("role"), "content": ""}, cap=None,
+    )
+    # The partial line consumes one character for the ellipsis inserted by
+    # _take_oldest_message_lines, so leave that slot out of the raw prefix.
+    content_chars = budget - len(prefix) - 1
+    if content_chars <= 0:
+        return None
+    return content, content_chars
+
+
 def _session_context_text(data: dict, colony_items: list[str]) -> str:
     """Render the persisted context blocks that precede a normal turn.
 
@@ -319,13 +398,33 @@ async def _maybe_compact_under_maintenance_lock(
             "context window)",
             len(msgs), interval,
         )
+    oversized_first = _oversized_first_message_prefix(data)
     existing_summary = data.get("summary") or ""
     new_summary, new_long_term, new_title, covered_count = await compact_session(
         workspace_path, session_id, summary_model,
         backend_name=backend_name,
         _preloaded_data=data,
     )
-    if not new_summary or covered_count <= KEEP_RECENT_AFTER_COMPACT:
+    if not new_summary:
+        logger.error(
+            "Compaction did not cover enough messages for session %s "
+            "(covered=%d, keep_recent=%d)",
+            session_id, covered_count, KEEP_RECENT_AFTER_COMPACT,
+        )
+        return
+    if oversized_first is not None:
+        # The prompt includes only a persisted prefix of the original first
+        # message. Save its summary, then retain the exact unseen suffix in
+        # that same message slot. Any other count would make a later raw
+        # message look covered even though it was not sent to the backend.
+        if covered_count != 1:
+            logger.error(
+                "Oversized-message compaction covered an unsafe number of "
+                "messages for session %s (covered=%d)",
+                session_id, covered_count,
+            )
+            return
+    elif covered_count <= KEEP_RECENT_AFTER_COMPACT:
         logger.error(
             "Compaction did not cover enough messages for session %s "
             "(covered=%d, keep_recent=%d)",
@@ -365,17 +464,45 @@ async def _maybe_compact_under_maintenance_lock(
             logger.debug(
                 "Skipping stale compaction title for session %s", session_id,
             )
-        session.set_summary(
-            workspace_path, session_id, new_summary,
-            keep_recent=KEEP_RECENT_AFTER_COMPACT,
-            long_term_rewrite=new_long_term,
-            title=title_to_save,
-            # Only trim the contiguous prefix actually sent to the summary
-            # backend. A foreground turn can append more while the summary
-            # runs, and oversized histories intentionally leave their later
-            # messages raw for the next pass.
-            summarized_count=covered_count,
-        )
+        if oversized_first is None:
+            session.set_summary(
+                workspace_path, session_id, new_summary,
+                keep_recent=KEEP_RECENT_AFTER_COMPACT,
+                long_term_rewrite=new_long_term,
+                title=title_to_save,
+                # Only trim the contiguous prefix actually sent to the summary
+                # backend. A foreground turn can append more while the summary
+                # runs, and oversized histories intentionally leave their later
+                # messages raw for the next pass.
+                summarized_count=covered_count,
+            )
+        else:
+            original_content, consumed_chars = oversized_first
+            messages = latest.get("messages")
+            if (
+                not isinstance(messages, list)
+                or not messages
+                or not isinstance(messages[0], dict)
+                or messages[0].get("content") != original_content
+            ):
+                # A non-append writer changed the oldest message while the
+                # summary was in flight. Keeping the raw message is safer
+                # than applying a suffix to unrelated session state.
+                logger.warning(
+                    "Skipping stale oversized-message compaction for "
+                    "session %s", session_id,
+                )
+                return
+            # Store the summary and unseen tail in one durable write. No raw
+            # entry is trimmed: the same oldest message becomes its suffix.
+            session.set_summary(
+                workspace_path, session_id, new_summary,
+                keep_recent=KEEP_RECENT_AFTER_COMPACT,
+                long_term_rewrite=new_long_term,
+                title=title_to_save,
+                summarized_count=0,
+                first_message_tail=original_content[consumed_chars:],
+            )
         colony_count = colony.bump_compact_count(workspace_path)
     lt_count = len(new_long_term) if new_long_term is not None else "?"
     logger.info(
@@ -456,34 +583,13 @@ async def compact_session(
 
     # Build the content to summarize, staying within a token budget.
     # Large prompts cause the summary model to return truncated/empty output.
-    parts: list[str] = []
-    if existing_long_term:
-        # Show up to 15% of the budget for the existing list so the model
-        # knows what to rewrite. With a target of <=30 items this is plenty.
-        lt_max = int(MAX_SUMMARY_CHARS * 0.15)
-        lt_lines = take_recent_lines(
-            existing_long_term, lt_max, lambda x: f"- {x}",
-        )
-        if lt_lines:
-            parts.append(
-                "Existing long-term items (rewrite this list per the "
-                "instructions above):"
-            )
-            parts.extend(lt_lines)
-            parts.append("")
-    if existing_summary:
-        parts.append(
-            "Previous summary:\n"
-            f"{_bounded_previous_summary(existing_summary)}\n"
-        )
-    parts.append("Conversation to summarize:")
+    parts = _compaction_prompt_parts(existing_summary, existing_long_term)
 
     # Add a contiguous oldest prefix until we hit the budget. cap=None so
     # the model sees full message content (compaction's budget is generous
     # enough to afford it). The caller only removes this exact prefix, which
     # prevents unsent messages from being mistaken for summarized history.
-    overhead = len(SUMMARY_PROMPT) + sum(len(p) for p in parts) + 200
-    budget = max(0, MAX_SUMMARY_CHARS - overhead)
+    budget = _compaction_message_budget(parts)
     msg_lines = _take_oldest_message_lines(messages, budget)
     parts.extend(msg_lines)
 

@@ -411,8 +411,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 covered_count - compaction.KEEP_RECENT_AFTER_COMPACT,
             )
 
-    async def test_oversized_first_message_can_be_compacted(self) -> None:
-        """The oldest oversized entry must not permanently block compaction."""
+    async def test_oversized_first_message_builds_a_bounded_prompt(self) -> None:
+        """Direct compaction still presents a marked bounded prefix."""
         with tempfile.TemporaryDirectory() as workspace_path:
             data = session.create_session(workspace_path, name="Manual")
             session.append_messages(workspace_path, data["id"], [{
@@ -439,6 +439,150 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             prompt = run_summary.await_args.args[2]
             self.assertIn("…", prompt)
             self.assertLess(len(prompt), compaction.MAX_SUMMARY_CHARS)
+
+    async def test_oversized_first_message_makes_lossless_progress(self) -> None:
+        """Applied compaction retains every unseen oversized-message suffix."""
+        async def fake_summary(*_args, **_kwargs) -> str:
+            return "[SUMMARY]\n" + ("s" * 100) + "\n[/SUMMARY]"
+
+        original = (
+            "begin:" + ("x" * (compaction.MAX_SUMMARY_CHARS * 2))
+            + ":UNSEEN_TAIL"
+        )
+        later_messages = [
+            {"role": "assistant", "content": f"later-{index}"}
+            for index in range(8)
+        ]
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            session.append_messages(workspace_path, data["id"], [
+                {"role": "user", "content": original},
+                *later_messages,
+            ])
+            with (
+                mock.patch.object(
+                    compaction.workspace_mod,
+                    "get_compact_interval",
+                    return_value=1,
+                ),
+                mock.patch.object(
+                    compaction.backends_agent,
+                    "get_backend",
+                    return_value=SimpleNamespace(name="test"),
+                ),
+                mock.patch.object(
+                    compaction,
+                    "run_internal_backend",
+                    side_effect=fake_summary,
+                ) as run_summary,
+                mock.patch.object(
+                    compaction.colony,
+                    "bump_compact_count",
+                    return_value=1,
+                ),
+                mock.patch.object(compaction.colony, "maybe_trigger"),
+            ):
+                await compaction.maybe_compact(
+                    workspace_path, data["id"], "model", backend_name="test",
+                )
+                first_prompt = run_summary.await_args_list[0].args[2]
+                first_prefix = first_prompt.split(
+                    "Conversation to summarize:\nUser: ", 1,
+                )[1][:-1]
+                self.assertTrue(first_prompt.endswith("…"))
+                self.assertTrue(original.startswith(first_prefix))
+
+                saved = session.load_session(workspace_path, data["id"])
+                assert saved is not None
+                self.assertEqual(saved["summary"], "s" * 100)
+                self.assertEqual(saved["compacted_count"], 0)
+                self.assertEqual(
+                    saved["messages"][0]["content"],
+                    original[len(first_prefix):],
+                )
+                self.assertTrue(
+                    saved["messages"][0]["content"].endswith("UNSEEN_TAIL"),
+                )
+                self.assertEqual(saved["messages"][1:], later_messages)
+
+                await compaction.maybe_compact(
+                    workspace_path, data["id"], "model", backend_name="test",
+                )
+                second_prompt = run_summary.await_args_list[1].args[2]
+                second_prefix = second_prompt.split(
+                    "Conversation to summarize:\nUser: ", 1,
+                )[1][:-1]
+                self.assertTrue(second_prompt.endswith("…"))
+
+            saved = session.load_session(workspace_path, data["id"])
+            assert saved is not None
+            self.assertEqual(saved["compacted_count"], 0)
+            self.assertEqual(
+                saved["messages"][0]["content"],
+                original[len(first_prefix) + len(second_prefix):],
+            )
+            self.assertTrue(
+                saved["messages"][0]["content"].endswith("UNSEEN_TAIL"),
+            )
+            self.assertEqual(saved["messages"][1:], later_messages)
+
+    async def test_oversized_message_keeps_concurrently_appended_turn(self) -> None:
+        """Replacing an oversized prefix must preserve a foreground append."""
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def delayed_summary(*_args, **_kwargs) -> str:
+            started.set()
+            await release.wait()
+            return "[SUMMARY]\n" + ("s" * 100) + "\n[/SUMMARY]"
+
+        original = "x" * (compaction.MAX_SUMMARY_CHARS * 2) + "UNSEEN"
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            session.append_messages(workspace_path, data["id"], [{
+                "role": "user", "content": original,
+            }])
+            with (
+                mock.patch.object(
+                    compaction.workspace_mod,
+                    "get_compact_interval",
+                    return_value=1,
+                ),
+                mock.patch.object(
+                    compaction.backends_agent,
+                    "get_backend",
+                    return_value=SimpleNamespace(name="test"),
+                ),
+                mock.patch.object(
+                    compaction,
+                    "run_internal_backend",
+                    side_effect=delayed_summary,
+                ),
+                mock.patch.object(
+                    compaction.colony,
+                    "bump_compact_count",
+                    return_value=1,
+                ),
+                mock.patch.object(compaction.colony, "maybe_trigger"),
+            ):
+                task = asyncio.create_task(compaction.maybe_compact(
+                    workspace_path, data["id"], "model", backend_name="test",
+                ))
+                await asyncio.wait_for(started.wait(), timeout=1)
+                async with workspace.get_lock(workspace_path):
+                    session.append_messages(workspace_path, data["id"], [{
+                        "role": "assistant", "content": "appended while waiting",
+                    }])
+                release.set()
+                await task
+
+            saved = session.load_session(workspace_path, data["id"])
+            assert saved is not None
+            self.assertTrue(saved["messages"][0]["content"].endswith("UNSEEN"))
+            self.assertEqual(saved["messages"][-1], {
+                "role": "assistant", "content": "appended while waiting",
+            })
+            self.assertEqual(saved["compacted_count"], 0)
 
     async def test_oversized_previous_summary_can_be_replaced(self) -> None:
         """A bad historical summary must not block every future compaction."""

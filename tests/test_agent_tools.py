@@ -1619,6 +1619,76 @@ class ApplyPatchToolTests(unittest.TestCase):
             with open(p, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "old\n")
 
+    def test_overlong_hunk_rejects_header_like_deleted_content(self) -> None:
+        """An extra deletion must not be mistaken for a new file header."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "overlong.txt")
+            self._write(p, "keep\n-- extra\n")
+
+            out = self._run(tmp, (
+                "--- a/overlong.txt\n+++ b/overlong.txt\n"
+                "@@ -1 +1 @@\n keep\n--- extra\n"
+            ))
+
+            self.assertIn("could not parse patch", out)
+            self.assertIn("more body lines", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "keep\n-- extra\n")
+
+    def test_overlong_hunk_rejects_header_like_added_content(self) -> None:
+        """An extra addition must not be mistaken for a new file header."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "overlong.txt")
+            self._write(p, "keep\n")
+
+            out = self._run(tmp, (
+                "--- a/overlong.txt\n+++ b/overlong.txt\n"
+                "@@ -1 +1 @@\n keep\n+++ extra\n"
+            ))
+
+            self.assertIn("could not parse patch", out)
+            self.assertIn("more body lines", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "keep\n")
+
+    def test_overlong_hunk_rejects_header_like_body_pair(self) -> None:
+        """A fake paired header without a hunk must not be discarded."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "overlong.txt")
+            self._write(p, "keep\n-- old marker\n++ new marker\n")
+
+            out = self._run(tmp, (
+                "--- a/overlong.txt\n+++ b/overlong.txt\n"
+                "@@ -1 +1 @@\n keep\n"
+                "--- old marker\n+++ new marker\n"
+            ))
+
+            self.assertIn("could not parse patch", out)
+            self.assertIn("missing a hunk", out)
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "keep\n-- old marker\n++ new marker\n")
+
+    def test_completed_hunk_allows_a_following_file_header_pair(self) -> None:
+        """A genuine second-file diff remains valid after a completed hunk."""
+        with tempfile.TemporaryDirectory() as tmp:
+            first = os.path.join(tmp, "first.txt")
+            second = os.path.join(tmp, "second.txt")
+            self._write(first, "old first\n")
+            self._write(second, "old second\n")
+
+            out = self._run(tmp, (
+                "--- a/first.txt\n+++ b/first.txt\n"
+                "@@ -1 +1 @@\n-old first\n+new first\n"
+                "--- a/second.txt\n+++ b/second.txt\n"
+                "@@ -1 +1 @@\n-old second\n+new second\n"
+            ))
+
+            self.assertEqual(out.count("applied 1 hunk"), 2)
+            with open(first, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "new first\n")
+            with open(second, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "new second\n")
+
     def test_overlong_hunk_number_is_reported_as_invalid_patch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = self._run(tmp, (
