@@ -512,9 +512,13 @@ unbounded source of context. The session router sends at most 20 sessions and
 caps each description at 600 characters. Compaction clips an oversized prior
 summary and sends a contiguous oldest prefix of raw history; even when its
 first raw message alone is too large, it sends a marked prefix so a later pass
-can advance the history without skipping to a newer message. Colony consolidation
-caps its aggregate input at 100,000 characters, reserves at most 25,000 for
-the previous colony list, and keeps every included session block complete when
+can advance the history without skipping to a newer message. After a successful
+partial compaction, Cozter atomically retains that first raw message's unseen
+suffix, so text that was not sent to the summarizer is never discarded. A
+failed or stale compaction leaves the original message unchanged. Colony
+consolidation caps its aggregate input at 100,000 characters, reserves at most
+25,000 for the previous colony list, and keeps every included session block
+complete when
 it trims a long title or memory item. These limits affect only the internal
 maintenance prompt; compaction and colony state are rewritten only after a
 successful response.
@@ -1078,6 +1082,9 @@ workspace.
 Normal unified-diff hunks must also match the line counts declared in their
 headers before any target is written, so a malformed or truncated patch is
 rejected instead of being treated as a smaller valid edit.
+Likewise, a lone file header, a file header without a hunk, or extra hunk-body
+content beyond its declared counts rejects the entire patch before any target
+is touched.
 `apply_patch` caps one incoming diff at 1 MiB and 20,000 lines, and caps each
 existing or resulting target at 1 MiB and 50,000 lines. The relevant target is
 left unchanged when one of those bounds is exceeded. `edit_file` and
