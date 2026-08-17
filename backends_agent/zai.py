@@ -181,9 +181,6 @@ class ZaiBackend(CachedOpenAIChatBackend):
 
     # ---- model discovery -----------------------------------------------
 
-    def _models_endpoint(self) -> str:
-        return cfg.get_zai_base_url().rstrip("/") + "/models"
-
     def _fetch_models(self) -> tuple[str, ...]:
         key = cfg.get_zai_api_key()
         base_url = cfg.get_zai_base_url()
