@@ -778,10 +778,13 @@ The `web_search` and `web_fetch` tools also cap downloaded response bodies
 at 5 MiB and share the bounded `read_bounded_text()` reader in
 `agent_tools/base.py`. `web_search` uses the common request setup;
 `web_fetch` instead uses a public-network-only client with redirect targets
-validated individually, preventing redirects into private addresses. The
-reader consumes chunked or slow responses until EOF or that ceiling instead
-of treating a short network read as the complete body; `web_fetch` then
-applies its separate `max_chars` output limit.
+validated individually, preventing redirects into private addresses. It
+classifies `text/*`, HTML, JSON, and XML media types case-insensitively, so
+servers that capitalize labels such as `Text/Plain` or `APPLICATION/JSON`
+still return readable content. The reader consumes chunked or slow responses
+until EOF or that ceiling instead of treating a short network read as the
+complete body; `web_fetch` then applies its separate `max_chars` output
+limit.
 CLI backends rely on their own bundled shell tool for plugin execution, so
 the plugin prelude only exposes how to call the extra tools; it does not
 change the CLI's native tool sandbox.
@@ -1135,17 +1138,17 @@ that line and resumes at the next newline rather than allowing the bot's
 memory use to grow without bound. A later valid event can still be processed.
 
 OpenAI-compatible backends also bound the retained state for one streamed
-completion: 4 MiB of assistant text, 4 MiB of arguments for any one tool
-call, 8 MiB across retained text and tool arguments, and 128 tool calls. A
-per-completion limit breach is handled as a retryable failure before any
-buffered tool call executes. Tool-argument fragments are joined only after a
-completion finishes, which avoids repeated copying as a long streamed
-argument arrives. If a provider ends with `finish_reason: "length"` while a
-tool call is pending, Cozter uses its configured retry budget rather than
-executing potentially partial arguments; a text-only length-limited reply is
-delivered as truncated text. Across a tool-using HTTP agent run, the retained
-system, user, assistant, tool, and continuation messages are also capped at
-32 MiB.
+completion: 4 MiB of assistant text, 4 MiB of retained reasoning content,
+4 MiB of arguments for any one tool call, 8 MiB across retained text,
+reasoning content, and tool arguments, and 128 tool calls. A per-completion
+limit breach is handled as a retryable failure before any buffered tool call
+executes. Tool-argument fragments are joined only after a completion
+finishes, which avoids repeated copying as a long streamed argument arrives.
+If a provider ends with `finish_reason: "length"` while a tool call is
+pending, Cozter uses its configured retry budget rather than executing
+potentially partial arguments; a text-only length-limited reply is delivered
+as truncated text. Across a tool-using HTTP agent run, the retained system,
+user, assistant, tool, and continuation messages are also capped at 32 MiB.
 Cozter refuses a message that would exceed that total and asks the user to
 narrow the task or reduce tool output; if the assistant's requested tool-call
 message itself cannot be retained, its tools are not run.
