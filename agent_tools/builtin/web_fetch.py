@@ -256,6 +256,7 @@ class WebFetchTool(AgentTool):
                         content_type = response.headers.get(
                             "content-type", "",
                         )
+                        normalized_content_type = content_type.casefold()
 
                         if response.status >= 400:
                             return (
@@ -264,10 +265,10 @@ class WebFetchTool(AgentTool):
                             )
 
                         if not (
-                            content_type.startswith("text/")
-                            or "html" in content_type
-                            or "json" in content_type
-                            or "xml" in content_type
+                            normalized_content_type.startswith("text/")
+                            or "html" in normalized_content_type
+                            or "json" in normalized_content_type
+                            or "xml" in normalized_content_type
                             or content_type == ""
                         ):
                             return (
@@ -289,7 +290,7 @@ class WebFetchTool(AgentTool):
         if title_match:
             title = html_to_text(title_match.group(1))
 
-        is_html = "html" in content_type.lower()
+        is_html = "html" in normalized_content_type
         text = html_to_text(body) if is_html else body
         text = text.strip()
 

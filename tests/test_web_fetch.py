@@ -187,6 +187,40 @@ class WebFetchSecurityTests(unittest.TestCase):
         )
 
 
+class WebFetchContentTypeTests(unittest.TestCase):
+    def test_case_insensitive_textual_content_types_are_readable(self) -> None:
+        async def run(content_type: str) -> str:
+            session = _ResponseSession([
+                _Response(
+                    status=200,
+                    url="https://public.example/document",
+                    headers={"content-type": content_type},
+                    body=b"Useful text",
+                ),
+            ])
+
+            @asynccontextmanager
+            async def fake_session():
+                yield session
+
+            with mock.patch(
+                "Cozter.agent_tools.builtin.web_fetch."
+                "_open_public_http_session",
+                fake_session,
+            ):
+                return await WebFetchTool().run(
+                    "",
+                    {"url": "https://public.example/document"},
+                )
+
+        for content_type in ("Text/Plain; Charset=UTF-8", "APPLICATION/JSON"):
+            with self.subTest(content_type=content_type):
+                self.assertEqual(
+                    asyncio.run(run(content_type)),
+                    "URL: https://public.example/document\n\nUseful text",
+                )
+
+
 class HtmlToTextTests(unittest.TestCase):
     def test_strips_raw_content_and_decodes_visible_text(self) -> None:
         self.assertEqual(
