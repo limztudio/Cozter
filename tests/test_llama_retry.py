@@ -577,6 +577,35 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                     ):
                         self._stream(events)
 
+    def test_tool_call_identifier_fields_are_bounded(self) -> None:
+        cases = (
+            (
+                "_MAX_TOOL_CALL_ID_CHARS",
+                {
+                    "id": "over",
+                    "function": {"name": "read_file"},
+                },
+                "tool-call id exceeded",
+            ),
+            (
+                "_MAX_TOOL_NAME_CHARS",
+                {
+                    "function": {"name": "over"},
+                },
+                "tool-call name exceeded",
+            ),
+        )
+        for setting, tool_call, message in cases:
+            with self.subTest(setting=setting), mock.patch.object(
+                oa, setting, 3,
+            ):
+                with self.assertRaisesRegex(oa._RetryableError, message):
+                    self._stream([{
+                        "choices": [{"delta": {
+                            "tool_calls": [{"index": 0, **tool_call}],
+                        }}],
+                    }])
+
     def test_completion_tool_call_count_is_bounded(self) -> None:
         events = [
             {

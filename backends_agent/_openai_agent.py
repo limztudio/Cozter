@@ -56,6 +56,12 @@ _MAX_COMPLETION_TEXT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_REASONING_BYTES = 4 * 1024 * 1024
 _MAX_TOOL_ARGUMENT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_BUFFER_BYTES = 8 * 1024 * 1024
+# Tool-call IDs and names are retained with every buffered call, but unlike
+# arguments they previously had no individual cap. Keep them comfortably
+# above normal provider limits while ensuring a malformed HTTP backend cannot
+# grow a completion's metadata outside the aggregate buffer budget.
+_MAX_TOOL_CALL_ID_CHARS = 512
+_MAX_TOOL_NAME_CHARS = 512
 # Tool loops retain every assistant and tool message for the next completion.
 # Per-completion limits alone therefore still permit an unbounded aggregate
 # request body across many turns (and Z.ai's auto-continue segments). Keep
@@ -1052,12 +1058,22 @@ def _merge_tool_call(
         buffers[idx] = buf
     call_id = delta.get("id")
     if isinstance(call_id, str) and call_id:
+        if len(call_id) > _MAX_TOOL_CALL_ID_CHARS:
+            raise _CompletionTooLargeError(
+                "tool-call id exceeded "
+                f"{_MAX_TOOL_CALL_ID_CHARS} character limit",
+            )
         buf["id"] = call_id
     if fn is None:
         return 0
 
     name = fn.get("name")
     if isinstance(name, str) and name:
+        if len(name) > _MAX_TOOL_NAME_CHARS:
+            raise _CompletionTooLargeError(
+                "tool-call name exceeded "
+                f"{_MAX_TOOL_NAME_CHARS} character limit",
+            )
         buf["function"]["name"] = name
     args_frag = fn.get("arguments")
     argument_parts = buf.get("_argument_parts")
