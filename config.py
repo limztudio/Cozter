@@ -199,7 +199,7 @@ def get_llama_max_retries() -> int:
     """Retry attempts for transient llama HTTP failures (>= 0; 0 disables).
 
     Zero is meaningful here ("do not retry"), so this uses the shared
-    shared integer reader with a zero minimum.
+    integer reader with a zero minimum.
     """
     return _get_int_at_least("llama_max_retries", 0)
 
