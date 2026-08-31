@@ -1366,6 +1366,9 @@ class ZaiBackendTests(unittest.TestCase):
     def test_context_windows_cover_only_published_curated_ids(self) -> None:
         backend = ZaiBackend()
         self.assertEqual(backend.context_window_tokens("glm-5.3"), 1_000_000)
+        self.assertEqual(
+            backend.context_window_tokens("glm-5.3-flash"), 1_000_000,
+        )
         self.assertEqual(backend.context_window_tokens("glm-5.2"), 1_000_000)
         self.assertEqual(
             backend.context_window_tokens("GLM-5.2[1M]"), 1_000_000,
@@ -1412,12 +1415,12 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-4-32b-0414-128k",
         ))
 
-    def test_coding_plan_fallback_adds_glm_5_3_only_for_its_endpoint(
+    def test_coding_plan_fallback_adds_glm_5_3_models_only_for_its_endpoint(
         self,
     ) -> None:
         self.assertEqual(
             zai_mod._CODING_PLAN_FALLBACK_MODELS,
-            ("glm-5.3", *zai_mod._FALLBACK_MODELS),
+            ("glm-5.3", "glm-5.3-flash", *zai_mod._FALLBACK_MODELS),
         )
         self.assertEqual(
             zai_mod._coding_plan_fallback_models(
@@ -1701,34 +1704,36 @@ class ZaiBackendTests(unittest.TestCase):
             },
         )
 
-    def test_glm_5_3_uses_its_reasoning_only_effort_scale(self) -> None:
+    def test_glm_5_3_family_uses_its_reasoning_only_effort_scale(self) -> None:
         backend = ZaiBackend()
-        self.assertEqual(
-            backend.effort_levels_for_model("GLM-5.3"),
-            ("low", "high", "max"),
-        )
-        self.assertEqual(backend._effort_fields(0, "glm-5.3"), {})
-        self.assertEqual(
-            backend._effort_fields(1, "glm-5.3"),
-            {
-                "thinking": {"type": "enabled"},
-                "reasoning_effort": "low",
-            },
-        )
-        self.assertEqual(
-            backend._effort_fields(50, "glm-5.3"),
-            {
-                "thinking": {"type": "enabled"},
-                "reasoning_effort": "high",
-            },
-        )
-        self.assertEqual(
-            backend._effort_fields(100, "glm-5.3"),
-            {
-                "thinking": {"type": "enabled"},
-                "reasoning_effort": "max",
-            },
-        )
+        for model in ("GLM-5.3", "GLM-5.3-FLASH"):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    backend.effort_levels_for_model(model),
+                    ("low", "high", "max"),
+                )
+                self.assertEqual(backend._effort_fields(0, model), {})
+                self.assertEqual(
+                    backend._effort_fields(1, model),
+                    {
+                        "thinking": {"type": "enabled"},
+                        "reasoning_effort": "low",
+                    },
+                )
+                self.assertEqual(
+                    backend._effort_fields(50, model),
+                    {
+                        "thinking": {"type": "enabled"},
+                        "reasoning_effort": "high",
+                    },
+                )
+                self.assertEqual(
+                    backend._effort_fields(100, model),
+                    {
+                        "thinking": {"type": "enabled"},
+                        "reasoning_effort": "max",
+                    },
+                )
 
     def test_preserved_thinking_is_limited_to_documented_glm_models(
         self,
@@ -1736,19 +1741,27 @@ class ZaiBackendTests(unittest.TestCase):
         backend = ZaiBackend()
         self.assertEqual(
             zai_mod._PRESERVED_THINKING_MODELS,
-            set(zai_mod._FALLBACK_MODELS) - {"glm-4-32b-0414-128k"},
+            (
+                set(zai_mod._FALLBACK_MODELS)
+                | {"glm-5.3", "glm-5.3-flash"}
+            ) - {"glm-4-32b-0414-128k"},
         )
-        for model in ("glm-5.2", "GLM-5.2[1M]", "glm-4.5-air"):
+        for model in (
+            "glm-5.3", "glm-5.3-flash", "glm-5.2", "GLM-5.2[1M]",
+            "glm-4.5-air",
+        ):
             with self.subTest(model=model):
                 self.assertTrue(backend._preserve_reasoning_content(model))
-        for model in ("glm-5.3", "glm-4-32b-0414-128k", "private-glm"):
+        for model in ("glm-4-32b-0414-128k", "private-glm"):
             with self.subTest(model=model):
                 self.assertFalse(backend._preserve_reasoning_content(model))
 
-        self.assertEqual(
-            backend._preserved_reasoning_request_fields("glm-5.2", {}),
-            {"thinking": {"type": "enabled", "clear_thinking": False}},
-        )
+        for model in ("glm-5.3", "glm-5.3-flash", "glm-5.2"):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    backend._preserved_reasoning_request_fields(model, {}),
+                    {"thinking": {"type": "enabled", "clear_thinking": False}},
+                )
         self.assertEqual(
             backend._preserved_reasoning_request_fields(
                 "glm-5.2",
@@ -1757,9 +1770,11 @@ class ZaiBackendTests(unittest.TestCase):
             {"thinking": {"type": "disabled", "clear_thinking": False}},
         )
 
-    def test_text_glms_stream_tool_call_arguments(self) -> None:
+    def test_documented_glms_stream_tool_call_arguments(self) -> None:
         backend = ZaiBackend()
         expected_models = {
+            "glm-5.3",
+            "glm-5.3-flash",
             "glm-5.2",
             "glm-5.1",
             "glm-5-turbo",
@@ -1780,7 +1795,6 @@ class ZaiBackendTests(unittest.TestCase):
             {"tool_stream": True},
         )
         for model in (
-            "glm-5.3",
             "glm-5v-turbo",
             "glm-4.6v",
             "glm-4.6v-flashx",

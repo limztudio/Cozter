@@ -1,10 +1,10 @@
 """Z.ai (Zhipu GLM) backend: OpenAI-compatible cloud API.
 
-Z.ai serves the GLM models (glm-5.3, glm-5.2, glm-5.1, glm-5, ...) through an
-OpenAI-compatible endpoint at ``https://api.z.ai/api/paas/v4`` with Bearer
-auth. It reuses the shared :class:`OpenAIChatBackend` loop; this module
-supplies only Z.ai's specifics - the endpoint, the Authorization header
-built from the configured API key, the model, and the GLM model list.
+Z.ai serves the GLM models (glm-5.3, glm-5.3-flash, glm-5.2, glm-5.1,
+glm-5, ...) through OpenAI-compatible endpoints with Bearer auth. It reuses
+the shared :class:`OpenAIChatBackend` loop; this module supplies only Z.ai's
+specifics - the endpoint, the Authorization header built from the configured
+API key, the model, and the GLM model list.
 
 Config: ``config.json``'s ``zai_api_key`` (required to use it),
 ``zai_base_url`` (default ``https://api.z.ai/api/paas/v4``, already
@@ -69,15 +69,17 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4.5-flash", 200_000, True, False),
     _FallbackModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
 )
-# GLM-5.3 is currently exposed through the GLM Coding Plan endpoint, not the
-# general Open Platform endpoint.  Keep it in a separate catalog so a normal
-# Z.ai fallback never offers an ID that its configured endpoint will reject.
-# The current Coding Plan documentation confirms function calling, streaming,
-# and its own reasoning controls, but does not yet document the
-# ``clear_thinking`` or ``tool_stream`` contracts.  Leave those opt-ins off
-# until the API reference explicitly supports them.
+# GLM-5.3 and GLM-5.3-Flash use the GLM Coding Plan's Chat Completion endpoint
+# rather than the general Open Platform endpoint that this backend uses by
+# default. Keep them in a separate catalog so a normal Z.ai fallback never
+# offers IDs that its configured endpoint will reject. Both models document a
+# 1M context window, mandatory three-level reasoning, function calling,
+# preserved thinking, and tool-call streaming. GLM-5.3-Flash is multimodal,
+# but unlike the older vision models its request documentation explicitly
+# supports ``tool_stream``.
 _CODING_PLAN_FALLBACK_MODEL_SPECS = (
-    _FallbackModelSpec("glm-5.3", 1_000_000, False, False),
+    _FallbackModelSpec("glm-5.3", 1_000_000, True, True),
+    _FallbackModelSpec("glm-5.3-flash", 1_000_000, True, True),
 )
 _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _CODING_PLAN_FALLBACK_MODELS = tuple(
@@ -124,6 +126,7 @@ _NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
 # the thinking toggle is supplied. Do not send the contradictory disabled
 # setting for a low Cozter effort percentage.
 _COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
+_GLM_5_3_REASONING_MODELS = frozenset({"glm-5.3", "glm-5.3-flash"})
 _GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
@@ -161,16 +164,19 @@ class ZaiBackend(CachedOpenAIChatBackend):
     default_model = "glm-5.2"
     default_summary_model = "glm-4.5-air"
     tier_models = {"low": "glm-4.5-air", "mid": "glm-4.7", "high": "glm-5.2"}
-    # GLM-5.2 accepts seven reasoning-effort values. GLM-5.3 has its own
-    # constrained three-level scale; other current text models expose only
-    # the thinking switch, handled separately in _effort_fields.
+    # GLM-5.2 accepts seven reasoning-effort values. The GLM-5.3 family has
+    # its own constrained three-level scale; other current text models expose
+    # only the thinking switch, handled separately in _effort_fields.
     effort_levels = (
         "none", "minimal", "low", "medium", "high", "xhigh", "max",
     )
 
     def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
         """Return the documented reasoning vocabulary for one GLM model."""
-        if _capability_model_id(model or self.default_model) == "glm-5.3":
+        if (
+            _capability_model_id(model or self.default_model)
+            in _GLM_5_3_REASONING_MODELS
+        ):
             return _GLM_5_3_EFFORT_LEVELS
         return self.effort_levels
 
@@ -234,10 +240,11 @@ class ZaiBackend(CachedOpenAIChatBackend):
         if percent <= 0:
             return {}
         selected = _capability_model_id(model or self.default_model)
-        if selected == "glm-5.3":
-            # GLM-5.3 is reasoning-only and rejects the generic disabled
-            # setting. Its Coding Plan API accepts only these three effort
-            # levels, so map Cozter's percentage directly onto that scale.
+        if selected in _GLM_5_3_REASONING_MODELS:
+            # This Coding Plan family is reasoning-only and rejects the
+            # generic disabled setting. Its API accepts only these three
+            # effort levels, so map Cozter's percentage directly onto that
+            # scale.
             levels = self.effort_levels_for_model(model)
             index = min(
                 percent * len(levels) // 100,
@@ -296,12 +303,12 @@ class ZaiBackend(CachedOpenAIChatBackend):
     def _tool_request_fields(self, model: str | None) -> dict:
         """Enable incremental tool-call deltas on documented agent models.
 
-        ``tool_stream`` is supported by Z.ai's text chat-completion models
-        from GLM-4.6 onward. Its vision request schema deliberately omits the
-        field, so multimodal models keep standard streamed tool-call deltas.
-        The shared SSE parser handles either shape. Unrecognized
-        account-specific IDs intentionally omit the optional field until
-        provider documentation confirms their compatibility.
+        ``tool_stream`` is supported by documented text chat-completion
+        models from GLM-4.6 onward, plus the GLM-5.3-Flash multimodal model.
+        Older vision schemas deliberately omit the field, so those models
+        keep standard streamed tool-call deltas. The shared SSE parser handles
+        either shape. Unrecognized account-specific IDs intentionally omit the
+        optional field until provider documentation confirms compatibility.
         """
         selected = _capability_model_id(model or self.default_model)
         return {"tool_stream": True} if selected in _TOOL_STREAM_MODELS else {}
