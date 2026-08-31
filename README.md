@@ -109,7 +109,9 @@ Then use `/doctor` to check backend readiness. A fresh workspace selects the
 `flexible` meta-agent, whose summary agent and three tiers default to Codex.
 If Codex is unavailable, select a configured direct backend with `/agent` and
 `/summaryagent`, or rebind flexible's summary agent and tiers before sending a
-task.
+task. Authenticate the selected CLI separately: `/doctor` checks executable,
+endpoint, or API-key availability, not account authorization or a successful
+agent turn.
 
 If you are already inside `Cozter/`, this compatibility launcher re-execs
 through the same package entry point:
@@ -199,7 +201,9 @@ limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
 - Python 3.11+ (CI targets 3.11 and 3.12; the codebase uses modern type syntax)
 - One agent backend CLI, server, or API key:
   `codex`, `claude`, `copilot`, an unauthenticated OpenAI-compatible HTTP
-  server for the `llama` backend, or Z.ai credentials for the `zai` backend
+  server for the `llama` backend that supports streaming
+  `/v1/chat/completions` and function tools, or Z.ai credentials for the
+  `zai` backend
 - Python package dependencies from `requirements.txt`:
   `python-telegram-bot`, `slack-bolt`, and `aiohttp`. The
   launcher bootstraps them into the project-local `.venv` when required
@@ -209,6 +213,10 @@ limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
   (`python-telegram-bot >=21,<23`, `slack-bolt >=1.18,<2`, and
   `aiohttp >=3.14.3,<4`), so bootstrap can take compatible fixes without
   silently adopting an unreviewed major API change.
+  A fresh managed launch also needs Python's `venv`/`ensurepip` support and
+  access to the configured package index. For offline or restricted
+  deployments, pre-create `.venv` and install `requirements.txt` from an
+  approved package source before launching Cozter.
 - Optional external services:
   Telegram and Slack need their platform tokens; Signal also requires a
   separately installed and running `signal-cli` JSON-RPC daemon.
@@ -269,6 +277,9 @@ example layout lives in `.config/config.example.json`):
   "show_usage": true
 }
 ```
+
+Treat `config.json` as a local secret: it can contain bot and API tokens, so
+do not commit it or share it.
 
 Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
 + `user_ids`, `slack_bot_token` + `slack_app_token` +
@@ -1139,10 +1150,11 @@ memory use to grow without bound. A later valid event can still be processed.
 OpenAI-compatible backends also bound the retained state for one streamed
 completion: 4 MiB of assistant text, 4 MiB of retained reasoning content,
 4 MiB of arguments for any one tool call, 8 MiB across retained text,
-reasoning content, and tool arguments, and 128 tool calls. A per-completion
-limit breach is handled as a retryable failure before any buffered tool call
-executes. Tool-argument fragments are joined only after a completion
-finishes, which avoids repeated copying as a long streamed argument arrives.
+reasoning content, and tool arguments, 512 characters each for a tool-call
+ID and name, and 128 tool calls. A per-completion limit breach is handled as
+a retryable failure before any buffered tool call executes. Tool-argument
+fragments are joined only after a completion finishes, which avoids repeated
+copying as a long streamed argument arrives.
 If a provider ends with `finish_reason: "length"` while a tool call is
 pending, Cozter uses its configured retry budget rather than executing
 potentially partial arguments; a text-only length-limited reply is delivered
