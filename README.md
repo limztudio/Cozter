@@ -29,9 +29,9 @@ are trusted in-process code, not sandboxed extensions.
   - `llama` — an unauthenticated OpenAI-compatible HTTP server (such as
     llama-server or LM Studio); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
-  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.2`,
-    `glm-5v-turbo`, `glm-4.6v`, `glm-5.1`, …; the Coding Plan also offers
-    `glm-5.3` and `glm-5.3-flash`); OpenAI-compatible, so it shares the
+  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.3`, `glm-5.2`,
+    `glm-5v-turbo`, `glm-4.6v`, `glm-5.1`, …; the Coding Plan additionally
+    offers multimodal `glm-5.3-flash`); OpenAI-compatible, so it shares the
     in-process loop — set `zai_api_key` in config
 - **Four chat surfaces**, selected at launch:
   - Telegram (`python -m Cozter`)
@@ -354,12 +354,12 @@ your Z.ai account and paste it here. `zai_base_url` defaults to
 valid HTTPS URL. A blank, malformed, or non-HTTPS override falls back to the
 default so the API key is never sent over cleartext HTTP.
 GLM Coding Plan users can instead set it to
-`https://api.z.ai/api/coding/paas/v4`, which makes its `glm-5.3` and
-`glm-5.3-flash` fallbacks available when the account catalog cannot be
-queried.
+`https://api.z.ai/api/coding/paas/v4`, which adds its `glm-5.3-flash`
+fallback when the account catalog cannot be queried. The normal endpoint's
+fallback already includes `glm-5.3`.
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
 mirror the llama knobs and retry behavior for the cloud call. Select `zai`
-with `/agent`, pick a model with `/model` (default `glm-5.2`), and add private
+with `/agent`, pick a model with `/model` (default `glm-5.3`), and add private
 or regional GLM ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai
 coding turns automatically continue into another tool-enabled segment when
 Cozter's internal tool-call segment limit is reached, instead of stopping for
@@ -861,7 +861,7 @@ its own, only the three tiers above.
 | `claude_code` | `claude --print --output-format stream-json --verbose` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
 | `llama` | Unauthenticated OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
-| `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.2` | `glm-4.5-air` |
+| `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.3` | `glm-4.5-air` |
 
 When a caller does not explicitly select a summary model, Cozter uses the
 selected summary backend's `default_summary_model` for routing, planning,
@@ -913,13 +913,12 @@ back to `auto` if the server is down or returns no model IDs. The `zai`
 picker queries the configured Z.ai `/models` endpoint and retains its curated
 agent-capable fallback, including text-compatible multimodal models such as
 `glm-5v-turbo`, `glm-4.6v`, and `glm-4.5v`, if the account cannot be queried.
-When `zai_base_url` uses Z.ai's GLM Coding Plan endpoint
-(`…/api/coding/paas/v4`), that fallback also offers its Coding Plan Chat
-Completion models: `glm-5.3` and multimodal `glm-5.3-flash`. Cozter maps
-`/effort` for both to Z.ai's supported `low` / `high` / `max` reasoning
-levels, preserves their opaque reasoning state between tool calls, and enables
-their documented tool-call streaming. The general-endpoint fallback remains
-unchanged.
+The normal Z.ai fallback includes the general endpoint's default
+`glm-5.3` model. When `zai_base_url` uses Z.ai's GLM Coding Plan endpoint
+(`…/api/coding/paas/v4`), it additionally offers multimodal
+`glm-5.3-flash`. Cozter maps `/effort` for both to Z.ai's supported `low` /
+`high` / `max` reasoning levels, preserves their opaque reasoning state
+between tool calls, and enables their documented tool-call streaming.
 It filters Z.ai's known image, OCR, and audio-only IDs because those require
 different endpoints, while preserving unknown/private chat-model IDs. Codex,
 llama, and Z.ai refresh their live catalogs lazily when a model picker is
@@ -980,7 +979,7 @@ maps the percentage to its own vocabulary and request shape:
 |---|---|---|
 | `codex` | Model-aware: 4–6 levels | `ultra` (Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
-| `zai` | GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
+| `zai` | GLM-5.3/Flash: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | Model-aware: current Fable / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.5–4.6 and Sonnet 4.6 use 4; Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
 

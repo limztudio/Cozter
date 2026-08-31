@@ -45,6 +45,11 @@ class _FallbackModelSpec(NamedTuple):
 # vision request schema. The older 4-32B fallback has no documented
 # preserved-thinking contract.
 _FALLBACK_MODEL_SPECS = (
+    # GLM-5.3 is now the general Open Platform endpoint's default flagship
+    # chat-completions model. Its documented 1M context, mandatory three-level
+    # reasoning, function calling, preserved thinking, and tool-call streaming
+    # match the Coding Plan variant.
+    _FallbackModelSpec("glm-5.3", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.2", 1_000_000, True, True),
     # This vision model supports text and native functions, but its request
     # schema does not accept the text-only ``tool_stream`` extension.
@@ -69,16 +74,13 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4.5-flash", 200_000, True, False),
     _FallbackModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
 )
-# GLM-5.3 and GLM-5.3-Flash use the GLM Coding Plan's Chat Completion endpoint
-# rather than the general Open Platform endpoint that this backend uses by
-# default. Keep them in a separate catalog so a normal Z.ai fallback never
-# offers IDs that its configured endpoint will reject. Both models document a
-# 1M context window, mandatory three-level reasoning, function calling,
-# preserved thinking, and tool-call streaming. GLM-5.3-Flash is multimodal,
-# but unlike the older vision models its request documentation explicitly
-# supports ``tool_stream``.
+# GLM-5.3-Flash remains a Coding Plan-only fallback. GLM-5.3 itself is now
+# available through the general Open Platform endpoint above, so keep only the
+# Flash extension separate: a normal fallback must never advertise an ID that
+# its configured endpoint rejects. Flash documents a 1M context window,
+# mandatory three-level reasoning, function calling, preserved thinking, and
+# tool-call streaming despite being multimodal.
 _CODING_PLAN_FALLBACK_MODEL_SPECS = (
-    _FallbackModelSpec("glm-5.3", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.3-flash", 1_000_000, True, True),
 )
 _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
@@ -161,9 +163,9 @@ class ZaiBackend(CachedOpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
-    default_model = "glm-5.2"
+    default_model = "glm-5.3"
     default_summary_model = "glm-4.5-air"
-    tier_models = {"low": "glm-4.5-air", "mid": "glm-4.7", "high": "glm-5.2"}
+    tier_models = {"low": "glm-4.5-air", "mid": "glm-4.7", "high": "glm-5.3"}
     # GLM-5.2 accepts seven reasoning-effort values. The GLM-5.3 family has
     # its own constrained three-level scale; other current text models expose
     # only the thinking switch, handled separately in _effort_fields.

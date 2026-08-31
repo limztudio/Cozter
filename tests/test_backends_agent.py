@@ -1333,6 +1333,8 @@ class ZaiBackendTests(unittest.TestCase):
     def test_fallback_models_are_current_and_selectable(self) -> None:
         models = zai_mod._FALLBACK_MODELS
         self.assertEqual(len(models), len(set(models)))
+        self.assertEqual(ZaiBackend.default_model, "glm-5.3")
+        self.assertEqual(ZaiBackend.tier_models["high"], "glm-5.3")
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
 
@@ -1394,6 +1396,7 @@ class ZaiBackendTests(unittest.TestCase):
 
     def test_fallback_picker_includes_current_agent_models(self) -> None:
         self.assertEqual(zai_mod._FALLBACK_MODELS, (
+            "glm-5.3",
             "glm-5.2",
             "glm-5v-turbo",
             "glm-5.1",
@@ -1415,12 +1418,12 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-4-32b-0414-128k",
         ))
 
-    def test_coding_plan_fallback_adds_glm_5_3_models_only_for_its_endpoint(
+    def test_coding_plan_fallback_adds_glm_5_3_flash_only_for_its_endpoint(
         self,
     ) -> None:
         self.assertEqual(
             zai_mod._CODING_PLAN_FALLBACK_MODELS,
-            ("glm-5.3", "glm-5.3-flash", *zai_mod._FALLBACK_MODELS),
+            ("glm-5.3-flash", *zai_mod._FALLBACK_MODELS),
         )
         self.assertEqual(
             zai_mod._coding_plan_fallback_models(
@@ -1669,8 +1672,8 @@ class ZaiBackendTests(unittest.TestCase):
     def test_request_model_falls_back_to_default(self) -> None:
         backend = ZaiBackend()
         self.assertEqual(backend._request_model("glm-4.7"), "glm-4.7")
-        self.assertEqual(backend._request_model(None), "glm-5.2")
-        self.assertEqual(backend._request_model(""), "glm-5.2")
+        self.assertEqual(backend._request_model(None), "glm-5.3")
+        self.assertEqual(backend._request_model(""), "glm-5.3")
 
     def test_glm_5_2_effort_uses_reasoning_request_shape(self) -> None:
         backend = ZaiBackend()
