@@ -672,6 +672,22 @@ class _CompletionTooLargeError(RuntimeError):
     """A completion exceeded its retained text, tool, or call-count limit."""
 
 
+def _check_completion_buffer_limit(
+    text_bytes: int,
+    reasoning_bytes: int,
+    tool_argument_bytes: int,
+) -> None:
+    """Raise when retained state for one completion exceeds its total cap."""
+    if (
+        text_bytes + reasoning_bytes + tool_argument_bytes
+        > _MAX_COMPLETION_BUFFER_BYTES
+    ):
+        raise _CompletionTooLargeError(
+            "completion buffers exceeded "
+            f"{_MAX_COMPLETION_BUFFER_BYTES} byte limit",
+        )
+
+
 def _backoff_delay(
     attempt: int, retry_after: float | None = None,
     *, base: float = 0.5, cap: float = 10.0,
@@ -840,14 +856,9 @@ async def _stream_once(
                             "completion text exceeded "
                             f"{_MAX_COMPLETION_TEXT_BYTES} byte limit",
                         )
-                    if (
-                        text_bytes + reasoning_bytes + tool_argument_bytes
-                        > _MAX_COMPLETION_BUFFER_BYTES
-                    ):
-                        raise _CompletionTooLargeError(
-                            "completion buffers exceeded "
-                            f"{_MAX_COMPLETION_BUFFER_BYTES} byte limit",
-                        )
+                    _check_completion_buffer_limit(
+                        text_bytes, reasoning_bytes, tool_argument_bytes,
+                    )
                     text_parts.append(content)
                 reasoning_content = delta.get("reasoning_content")
                 if isinstance(reasoning_content, str) and reasoning_content:
@@ -859,14 +870,9 @@ async def _stream_once(
                             "completion reasoning exceeded "
                             f"{_MAX_COMPLETION_REASONING_BYTES} byte limit",
                         )
-                    if (
-                        text_bytes + reasoning_bytes + tool_argument_bytes
-                        > _MAX_COMPLETION_BUFFER_BYTES
-                    ):
-                        raise _CompletionTooLargeError(
-                            "completion buffers exceeded "
-                            f"{_MAX_COMPLETION_BUFFER_BYTES} byte limit",
-                        )
+                    _check_completion_buffer_limit(
+                        text_bytes, reasoning_bytes, tool_argument_bytes,
+                    )
                     reasoning_parts.append(reasoning_content)
                 tool_call_deltas = delta.get("tool_calls")
                 if isinstance(tool_call_deltas, list):
@@ -874,14 +880,9 @@ async def _stream_once(
                         tool_argument_bytes += _merge_tool_call(
                             tool_buffers, tc,
                         )
-                        if (
-                            text_bytes + reasoning_bytes + tool_argument_bytes
-                            > _MAX_COMPLETION_BUFFER_BYTES
-                        ):
-                            raise _CompletionTooLargeError(
-                                "completion buffers exceeded "
-                                f"{_MAX_COMPLETION_BUFFER_BYTES} byte limit",
-                            )
+                        _check_completion_buffer_limit(
+                            text_bytes, reasoning_bytes, tool_argument_bytes,
+                        )
     except (
         aiohttp.ClientConnectorError,
         aiohttp.ServerDisconnectedError,

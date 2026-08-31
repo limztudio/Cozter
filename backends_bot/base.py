@@ -2151,12 +2151,20 @@ class BotPlatform(ABC):
         )
         return os.path.join(workspace.CONFIG_DIR, f"{stem}_{safe}.json")
 
+    def _read_platform_state_file(self, path: str, label: str) -> dict:
+        """Load one platform-scoped durable state file."""
+        return load_json_object(path, label, logger)
+
+    def _write_platform_state_file(self, path: str, data: dict) -> None:
+        """Atomically save one platform-scoped durable state file."""
+        save_json_object(path, data)
+
     def _queue_file_path(self) -> str:
         return self._platform_state_file_path("queue")
 
     def _read_queue_file(self) -> dict:
-        return load_json_object(
-            self._queue_file_path(), "queue file", logger,
+        return self._read_platform_state_file(
+            self._queue_file_path(), "queue file",
         )
 
     @staticmethod
@@ -2166,7 +2174,7 @@ class BotPlatform(ABC):
         return [entry for entry in value if isinstance(entry, dict)]
 
     def _write_queue_file(self, data: dict) -> None:
-        save_json_object(self._queue_file_path(), data)
+        self._write_platform_state_file(self._queue_file_path(), data)
 
     async def _persist_enqueue(
         self, uid: str, text: str, chat_id: str,
@@ -2291,12 +2299,14 @@ class BotPlatform(ABC):
         return self._platform_state_file_path("reply_deliveries")
 
     def _read_reply_deliveries_file(self) -> dict:
-        return load_json_object(
-            self._reply_deliveries_file_path(), "reply delivery ledger", logger,
+        return self._read_platform_state_file(
+            self._reply_deliveries_file_path(), "reply delivery ledger",
         )
 
     def _write_reply_deliveries_file(self, data: dict) -> None:
-        save_json_object(self._reply_deliveries_file_path(), data)
+        self._write_platform_state_file(
+            self._reply_deliveries_file_path(), data,
+        )
 
     @staticmethod
     def _reply_delivery_records(value: object) -> list[dict]:
@@ -2572,14 +2582,14 @@ class BotPlatform(ABC):
         return self._platform_state_file_path("detached_tasks")
 
     def _read_detached_tasks_file(self) -> dict:
-        return load_json_object(
-            self._detached_tasks_file_path(),
-            "detached task ledger",
-            logger,
+        return self._read_platform_state_file(
+            self._detached_tasks_file_path(), "detached task ledger",
         )
 
     def _write_detached_tasks_file(self, data: dict) -> None:
-        save_json_object(self._detached_tasks_file_path(), data)
+        self._write_platform_state_file(
+            self._detached_tasks_file_path(), data,
+        )
 
     @staticmethod
     def _detached_task_records(value: object) -> list[dict]:

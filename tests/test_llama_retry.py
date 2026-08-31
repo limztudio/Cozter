@@ -557,15 +557,25 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 }],
             },
         ]
+        reasoning_buffer_events = [
+            {"choices": [{"delta": {"content": "abc"}}]},
+            {"choices": [{"delta": {"reasoning_content": "defg"}}]},
+        ]
         with (
             mock.patch.object(oa, "_MAX_COMPLETION_TEXT_BYTES", 10),
+            mock.patch.object(oa, "_MAX_COMPLETION_REASONING_BYTES", 10),
             mock.patch.object(oa, "_MAX_TOOL_ARGUMENT_BYTES", 10),
             mock.patch.object(oa, "_MAX_COMPLETION_BUFFER_BYTES", 6),
         ):
-            with self.assertRaisesRegex(
-                oa._RetryableError, "completion buffers exceeded",
+            for source, events in (
+                ("tool arguments", buffer_events),
+                ("reasoning", reasoning_buffer_events),
             ):
-                self._stream(buffer_events)
+                with self.subTest(source=source):
+                    with self.assertRaisesRegex(
+                        oa._RetryableError, "completion buffers exceeded",
+                    ):
+                        self._stream(events)
 
     def test_completion_tool_call_count_is_bounded(self) -> None:
         events = [
