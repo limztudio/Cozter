@@ -357,6 +357,38 @@ warning: ignored after the catalog
         )
         self.assertEqual(grok_mod._parse_models_output("login failed"), ())
 
+    def test_grok_effort_uses_its_safe_four_level_fallback(self) -> None:
+        backend = GrokBackend()
+        self.assertEqual(
+            backend.effort_levels,
+            ("low", "medium", "high", "xhigh"),
+        )
+        self.assertIsNone(backend.convert_effort(0))
+        self.assertEqual(backend.convert_effort(1), "low")
+        self.assertEqual(backend.convert_effort(25), "medium")
+        self.assertEqual(backend.convert_effort(50), "high")
+        self.assertEqual(backend.convert_effort(100), "xhigh")
+
+        async def launch() -> tuple[str, ...]:
+            proc = mock.Mock()
+            with (
+                mock.patch.object(
+                    grok_mod, "executable_command", return_value=["grok"],
+                ),
+                mock.patch.object(
+                    grok_mod,
+                    "create_captured_subprocess",
+                    new=mock.AsyncMock(return_value=proc),
+                ) as create_process,
+            ):
+                await backend.launch(
+                    "/work", "hello", "grok-4.6", "auto", effort=100,
+                )
+            return tuple(create_process.await_args.args[0])
+
+        command = asyncio.run(launch())
+        self.assertEqual(command[command.index("--effort") + 1], "xhigh")
+
     def test_codex_fallback_models_are_current_and_selectable(self) -> None:
         models = codex_mod._FALLBACK_MODELS
         self.assertEqual(models, (

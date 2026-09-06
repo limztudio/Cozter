@@ -86,9 +86,12 @@ class GrokBackend(Backend):
     executable = "grok"
     default_model = "grok-4.6"
     default_summary_model = "grok-4.6"
-    # Grok Build's current CLI accepts these canonical levels. ``none`` is
-    # deliberately omitted: effort=0 already means do not override the model.
-    effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
+    # Grok Build's per-model fallback menu exposes these four levels. The
+    # parser also accepts power-user values such as ``minimal`` and ``max``,
+    # but models that do not publish their own effort menu need not support
+    # them. Keep Cozter's percentage picker on the safe shared subset.
+    # effort=0 still means do not override the model.
+    effort_levels = ("low", "medium", "high", "xhigh")
     # Grok's model catalog is account-dependent, so do not route flexible's
     # low tier to a potentially unavailable pinned model before its picker
     # refreshes. Every unset tier uses the policy-safe default_model.
