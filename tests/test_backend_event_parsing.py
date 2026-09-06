@@ -407,6 +407,29 @@ class GrokParseTests(unittest.TestCase):
         self.assertEqual(r.usage["total_cost_usd"], 0.0123)
         self.assertEqual(self.backend.extract_agent_text(event), "done")
 
+    def test_terminal_errors_list_is_shown_to_the_user(self) -> None:
+        """Grok Build uses ``errors``, not ``error``, on turn failures."""
+        r = _run(self.backend, [{
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "errors": [
+                "Couldn't set model 'gpt-5.4': unknown model id.",
+            ],
+        }])
+        self.assertEqual(
+            r.error,
+            "Couldn't set model 'gpt-5.4': unknown model id.",
+        )
+        self.assertIn("unknown model id", r.text)
+
+    def test_terminal_errors_without_text_stay_normalized(self) -> None:
+        r = _run(self.backend, [{
+            "type": "result", "is_error": True,
+            "errors": [{"message": "not a supported shape"}],
+        }])
+        self.assertEqual(r.error, "Unknown error")
+
     def test_late_error_preserves_streamed_text(self) -> None:
         r = _run(self.backend, [
             {"type": "assistant", "message": {"content": [

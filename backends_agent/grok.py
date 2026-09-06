@@ -206,7 +206,7 @@ class GrokBackend(Backend):
             return
 
         if etype == "error":
-            message = event.get("message", "Unknown error")
+            message = self._error_message(event)
             if result.text:
                 # A late provider error must be recorded, but must not erase
                 # a useful model reply that was already streamed.
@@ -282,7 +282,7 @@ class GrokBackend(Backend):
                 result.usage["total_cost_usd"] = cost
 
         if event.get("is_error"):
-            message = event.get("error") or event.get("result") or "Unknown error"
+            message = self._error_message(event)
             if result.text:
                 result.error = normalize_error_message(message)
             else:
@@ -299,6 +299,28 @@ class GrokBackend(Backend):
             and not any(item.kind == "text" for item in result.events)
         ):
             append_text_result(result, text)
+
+    @staticmethod
+    def _error_message(event: dict) -> str:
+        """Return Grok's human-readable error across its two envelopes.
+
+        Stream-level errors use ``message``.  Terminal headless failures,
+        including model-selection failures, instead expose one or more strings
+        under ``errors`` and leave both ``error`` and ``result`` absent.  Do
+        not stringify provider objects: an absent usable message must retain
+        the common ``Unknown error`` fallback instead of leaking a Python
+        representation into a chat reply.
+        """
+        for key in ("message", "error", "result"):
+            message = event.get(key)
+            if isinstance(message, str) and message.strip():
+                return message
+        errors = event.get("errors")
+        if isinstance(errors, list):
+            for message in errors:
+                if isinstance(message, str) and message.strip():
+                    return message
+        return "Unknown error"
 
     def _append_tool_event(self, block: dict, result: AgentResult) -> None:
         name = block.get("name") or "tool"
