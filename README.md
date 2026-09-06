@@ -399,8 +399,9 @@ daemon startup and fails closed to `deny` if introduced while the daemon runs.
 
 `show_usage` (default `true`) appends a compact per-turn token/cost footer
 (e.g. `📊 12.5k in · 28 out · $0.01`) after each reply, for backends that
-report usage — `codex` (`turn.completed`) and `claude_code` (`result`).
-Other backends stay silent. Set it to `false` to suppress the footer.
+report usage — `codex` (`turn.completed`) and `claude_code` / `grok`
+(`result`). Other backends stay silent. Set it to `false` to suppress
+the footer.
 
 Pending chat turns on daemon platforms are persisted in
 `Cozter/.config/queue_<platform>.json`, so clean restarts, auto-updates,
@@ -921,6 +922,8 @@ them to Grok's workspace sandbox. Grok's native `auto` classifier is a TUI
 feature that this CLI currently ignores in headless runs, so Cozter does
 not send `--permission-mode auto`. `confirm`/`deny` use `dontAsk` with the
 read-only sandbox and only `read_file`, `grep`, and `list_dir` exposed.
+Grok still shows its MCP discovery/execution pair under an allowlist, so
+those calls are also denied explicitly.
 Internal router, titling, and compaction calls always use `deny`, so conversation
 content cannot elevate their permissions. For ask-before-acting behavior on
 any backend, use `/style collaborative` — it pauses the turn (via
@@ -940,7 +943,11 @@ It filters Z.ai's known image, OCR, and audio-only IDs because those require
 different endpoints, while preserving unknown/private chat-model IDs. Codex,
 llama, Z.ai, and Grok refresh their live catalogs lazily when a model picker is
 opened after its 60-second cache expires, so long-running services see CLI,
-server, and account model changes without a restart. HTTP catalog responses
+server, and account model changes without a restart. Grok and the
+OpenAI-compatible HTTP backends share that fail-closed TTL cache
+(`CachedModelCatalog` in `backends_agent/base.py`). Codex and Copilot keep
+their own caches because they store extra per-model metadata or
+workspace-scoped policy catalogs. HTTP catalog responses
 over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates
 the IDs, keeps at most 4,096, and ignores IDs longer than 512 characters.
 Copilot applies the same 512-character-ID and 4,096-model bounds to its
@@ -986,7 +993,9 @@ truncated by the platform argv limit.
 Provider event envelopes are treated as untrusted input. A missing, blank, or
 non-text backend error message is normalized to `Unknown error` before it is
 stored or shown, rather than exposing a provider object or breaking the turn
-parser. If a backend has
+parser. Claude Code and Grok apply the same Messages-style terminal `result`
+helper, so usage, cost, fallback text, and late errors stay consistent
+across those two CLIs. If a backend has
 already streamed an assistant reply, a late stream or terminal error is
 retained on the turn without replacing that reply.
 
@@ -998,7 +1007,7 @@ maps the percentage to its own vocabulary and request shape:
 
 | Backend | Bands | What gets sent at 100% |
 |---|---|---|
-| `codex` | Model-aware: 4–6 levels | `ultra` (Sol/Terra), `max` (Luna), or `xhigh` (others) |
+| `codex` | Model-aware: 4–6 levels | `ultra` (Astra/Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
 | `zai` | GLM-5.3/Flash: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | Model-aware: current Fable / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.5–4.6 and Sonnet 4.6 use 4; Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
@@ -1053,22 +1062,24 @@ Cozter/
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
 ├── utils.py              shared state, queue, and backend-process helpers
-├── tests/                unittest coverage for commands, state, queues, schedules, compaction, backends, flexible, prompts, tools, attachments, and updates
+├── tests/                unittest coverage for commands, state, queues, schedules, compaction, backends, catalogs, flexible, prompts, tools, attachments, and updates
 ├── .config/config.example.json
 │
 ├── backends_agent/       agent backends (one file per agent)
-│   ├── base.py             abstract Backend; convert_effort, supports_typed_plugins
+│   ├── base.py             abstract Backend; convert_effort, supports_typed_plugins;
+│   │                       shared catalog TTL cache, fallback tables, and
+│   │                       Messages-style terminal result handling
 │   ├── codex.py            wraps `codex exec`
 │   ├── claude_code.py      wraps `claude --print`
 │   ├── claude_background_guard.py
 │   │                       session-only Claude Bash hook that blocks
 │   │                       untracked background launches
 │   ├── copilot.py          wraps `copilot`
-│   ├── grok.py             wraps `grok --prompt-file`
+│   ├── grok.py             wraps `grok --prompt-file`; uses CachedModelCatalog
 │   ├── flexible.py         flexible meta-agent backend (no CLI of its own)
 │   ├── _http_proc.py       process-like adapter and error handling for HTTP backends
-│   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop
-│   │                       and cached live-model discovery
+│   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop;
+│   │                       HTTP backends inherit the shared catalog cache
 │   ├── llama.py            local /v1/chat/completions backend hooks
 │   └── zai.py              Z.ai /api/paas/v4/chat/completions backend hooks
 │
@@ -1213,12 +1224,13 @@ ignored for local secrets and runtime queues.
 - Tests: `tests/conftest.py`, shared `tests/helpers.py`, plus focused
   `unittest` modules covering agent attachments, prompts, process cleanup,
   and post-turn behavior;
-  backend model defaults, event parsing, and llama retry; bot and Slack
-  commands; compaction; the flexible meta-agent; inject; import binding;
-  run locks, session picking, and auto-titling; platform, Slack, and Signal rich-text
-  formatting; durable reply delivery; runtime diagnostics; state fallbacks;
-  status latency and thinking-status display; updater behavior; utilities; and the
-  built-in/plugin tool surface
+  backend model defaults, shared catalog/result helpers, event parsing, and
+  llama retry; bot and Slack commands; compaction; the flexible meta-agent;
+  inject; import binding; run locks, session picking, and auto-titling;
+  platform, Slack, and Signal rich-text formatting; durable reply delivery;
+  detached tasks and Claude's background-launch guard; runtime diagnostics;
+  state fallbacks; status latency and thinking-status display; updater
+  behavior; utilities; upload limits; and the built-in/plugin tool surface
 
 The normal working checkout may also contain ignored runtime state such as
 `.venv/`, `.cozter/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
@@ -1236,7 +1248,9 @@ that owns them:
   shared fenced-Markdown segmentation and rendering live in
   `backends_bot/formatting.py`, including Signal's styled-span input
 - Backend names, model defaults, effort bands, and health checks:
-  `backends_agent/__init__.py` plus the concrete backend modules
+  `backends_agent/__init__.py` plus the concrete backend modules.
+  Shared catalog TTL, fallback tables, and Messages-style terminal result
+  handling live in `backends_agent/base.py`
 - Flexible's tiers, grading rubric, planner/merge prompts, and plan
   parsing: `flexible.py`; its orchestration loop lives in
   `agent.py:_run_flexible()` and its per-tier settings in `workspace.py`
@@ -1375,13 +1389,15 @@ subprocess) and `parse_event()` (translate the CLI's JSONL events to
 Run the current unit tests from the parent directory, or set
 `PYTHONPATH` to the parent when running inside the repository. Discovery
 covers malformed state/config fallbacks, persistent queue restoration,
-schedule parsing, backend model defaults and event parsing, llama retry
-behavior, the flexible meta-agent's planning/merge, post-turn and inject
-flow, subprocess draining and exceptional-path cleanup, prompt
-construction, attachment handling, run-lock cancellation, session
-picking, auto-titling, compaction, platform/Slack/Signal rich-text formatting,
-status-latency and thinking-status display, runtime diagnostics, updater
-behavior, agent-tool helpers, and built-in discovery/edit/patch safety.
+schedule parsing, backend model defaults, shared catalog/result helpers,
+event parsing, llama retry behavior, the flexible meta-agent's
+planning/merge, post-turn and inject flow, subprocess draining and
+exceptional-path cleanup, prompt construction, attachment handling,
+run-lock cancellation, session picking, auto-titling, compaction,
+platform/Slack/Signal rich-text formatting, status-latency and
+thinking-status display, runtime diagnostics, updater behavior,
+detached tasks, agent-tool helpers, and built-in discovery/edit/patch
+safety.
 
 If `codex` is on `PATH`, one catalog-consistency test also invokes
 `codex debug models` with a 15-second timeout; it skips when that command
