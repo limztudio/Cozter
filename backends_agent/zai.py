@@ -45,11 +45,16 @@ class _FallbackModelSpec(NamedTuple):
 # vision request schema. The older 4-32B fallback has no documented
 # preserved-thinking contract.
 _FALLBACK_MODEL_SPECS = (
-    # GLM-5.3 is now the general Open Platform endpoint's default flagship
+    # GLM-5.3 is the general Open Platform endpoint's default flagship
     # chat-completions model. Its documented 1M context, mandatory three-level
     # reasoning, function calling, preserved thinking, and tool-call streaming
     # match the Coding Plan variant.
     _FallbackModelSpec("glm-5.3", 1_000_000, True, True),
+    # GLM-5.3-Flash is now sold on the same general endpoint (native
+    # multimodal, 1M context, the same mandatory three-level reasoning, and
+    # documented tool-call streaming). Keep it here so the default fallback
+    # never omits a current public chat ID.
+    _FallbackModelSpec("glm-5.3-flash", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.2", 1_000_000, True, True),
     # This vision model supports text and native functions, but its request
     # schema does not accept the text-only ``tool_stream`` extension.
@@ -74,15 +79,11 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4.5-flash", 200_000, True, False),
     _FallbackModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
 )
-# GLM-5.3-Flash remains a Coding Plan-only fallback. GLM-5.3 itself is now
-# available through the general Open Platform endpoint above, so keep only the
-# Flash extension separate: a normal fallback must never advertise an ID that
-# its configured endpoint rejects. Flash documents a 1M context window,
-# mandatory three-level reasoning, function calling, preserved thinking, and
-# tool-call streaming despite being multimodal.
-_CODING_PLAN_FALLBACK_MODEL_SPECS = (
-    _FallbackModelSpec("glm-5.3-flash", 1_000_000, True, True),
-)
+# Extra IDs that the GLM Coding Plan endpoint accepts but the general Open
+# Platform endpoint rejects. Empty now that GLM-5.3-Flash is a public general
+# chat-completions model; keep the split so a later Coding Plan-only ID cannot
+# leak into the default fallback.
+_CODING_PLAN_FALLBACK_MODEL_SPECS: tuple[_FallbackModelSpec, ...] = ()
 _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _CODING_PLAN_FALLBACK_MODELS = tuple(
     spec.name for spec in (
@@ -243,7 +244,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
             return {}
         selected = _capability_model_id(model or self.default_model)
         if selected in _GLM_5_3_REASONING_MODELS:
-            # This Coding Plan family is reasoning-only and rejects the
+            # This GLM-5.3 family is reasoning-only and rejects the
             # generic disabled setting. Its API accepts only these three
             # effort levels, so map Cozter's percentage directly onto that
             # scale.

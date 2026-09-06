@@ -567,6 +567,7 @@ class ClaudeCodeBackend(Backend):
         "sonnet[1m]",
         "opus[1m]",
         "fable[1m]",
+        "claude-fable-5-1",
         "claude-fable-5",
         "claude-sonnet-5",
         "claude-opus-5",

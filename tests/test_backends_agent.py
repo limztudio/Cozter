@@ -528,11 +528,11 @@ warning: ignored after the catalog
     def test_codex_fallback_models_are_current_and_selectable(self) -> None:
         models = codex_mod._FALLBACK_MODELS
         self.assertEqual(models, (
+            "gpt-6-astra",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
             "gpt-5.5",
-            "gpt-5.4",
             "gpt-5.4-mini",
             "gpt-5.3-codex-spark",
         ))
@@ -571,6 +571,10 @@ warning: ignored after the catalog
         self.assertIsNone(backend.convert_effort(0))
         self.assertEqual(backend.convert_effort(1), "low")
         self.assertEqual(backend.convert_effort(100), "ultra")
+        self.assertEqual(
+            backend.effort_levels_for_model("gpt-6-astra"),
+            ("low", "medium", "high", "xhigh", "max", "ultra"),
+        )
         self.assertEqual(
             backend.effort_levels_for_model("gpt-5.6-luna"),
             ("low", "medium", "high", "xhigh", "max"),
@@ -1352,6 +1356,7 @@ warning: ignored after the catalog
             "sonnet[1m]",
             "opus[1m]",
             "fable[1m]",
+            "claude-fable-5-1",
             "claude-fable-5",
             "claude-sonnet-5",
             "claude-opus-5",
@@ -1381,7 +1386,8 @@ warning: ignored after the catalog
                     backend.context_window_tokens(model), 1_000_000,
                 )
         for model in (
-            "default", "sonnet", "claude-fable-5", "claude-opus-5",
+            "default", "sonnet", "claude-fable-5-1", "claude-fable-5",
+            "claude-opus-5",
             "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7",
             "claude-opus-4-6", "claude-sonnet-4-6",
             "claude-sonnet-4-5-20250929", "private",
@@ -1414,6 +1420,7 @@ warning: ignored after the catalog
             # aliases. Keep full suffixed IDs out until they become entries.
             "claude-sonnet-5[1m]",
             "claude-fable-5[1m]",
+            "claude-fable-5-1[1m]",
             # ``opusplan`` has no [1m] entry.
             "opusplan[1m]",
         ):
@@ -1631,6 +1638,7 @@ class ZaiBackendTests(unittest.TestCase):
     def test_fallback_picker_includes_current_agent_models(self) -> None:
         self.assertEqual(zai_mod._FALLBACK_MODELS, (
             "glm-5.3",
+            "glm-5.3-flash",
             "glm-5.2",
             "glm-5v-turbo",
             "glm-5.1",
@@ -1652,13 +1660,15 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-4-32b-0414-128k",
         ))
 
-    def test_coding_plan_fallback_adds_glm_5_3_flash_only_for_its_endpoint(
+    def test_coding_plan_fallback_matches_general_catalog_while_empty(
         self,
     ) -> None:
+        self.assertEqual(zai_mod._CODING_PLAN_FALLBACK_MODEL_SPECS, ())
         self.assertEqual(
             zai_mod._CODING_PLAN_FALLBACK_MODELS,
-            ("glm-5.3-flash", *zai_mod._FALLBACK_MODELS),
+            zai_mod._FALLBACK_MODELS,
         )
+        self.assertIn("glm-5.3-flash", zai_mod._FALLBACK_MODELS)
         self.assertEqual(
             zai_mod._coding_plan_fallback_models(
                 "https://api.z.ai/api/coding/paas/v4/",
@@ -1978,10 +1988,7 @@ class ZaiBackendTests(unittest.TestCase):
         backend = ZaiBackend()
         self.assertEqual(
             zai_mod._PRESERVED_THINKING_MODELS,
-            (
-                set(zai_mod._FALLBACK_MODELS)
-                | {"glm-5.3", "glm-5.3-flash"}
-            ) - {"glm-4-32b-0414-128k"},
+            set(zai_mod._FALLBACK_MODELS) - {"glm-4-32b-0414-128k"},
         )
         for model in (
             "glm-5.3", "glm-5.3-flash", "glm-5.2", "GLM-5.2[1M]",

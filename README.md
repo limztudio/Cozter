@@ -29,10 +29,9 @@ are trusted in-process code, not sandboxed extensions.
   - `llama` — an unauthenticated OpenAI-compatible HTTP server (such as
     llama-server or LM Studio); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
-  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.3`, `glm-5.2`,
-    `glm-5v-turbo`, `glm-4.6v`, `glm-5.1`, …; the Coding Plan additionally
-    offers multimodal `glm-5.3-flash`); OpenAI-compatible, so it shares the
-    in-process loop — set `zai_api_key` in config
+  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.3`, `glm-5.3-flash`,
+    `glm-5.2`, `glm-5v-turbo`, `glm-4.6v`, `glm-5.1`, …); OpenAI-compatible,
+    so it shares the in-process loop — set `zai_api_key` in config
 - **Four chat surfaces**, selected at launch:
   - Telegram (`python -m Cozter`)
   - Slack (Socket Mode; native Markdown rendering for AI replies; same
@@ -365,9 +364,8 @@ your Z.ai account and paste it here. `zai_base_url` defaults to
 valid HTTPS URL. A blank, malformed, or non-HTTPS override falls back to the
 default so the API key is never sent over cleartext HTTP.
 GLM Coding Plan users can instead set it to
-`https://api.z.ai/api/coding/paas/v4`, which adds its `glm-5.3-flash`
-fallback when the account catalog cannot be queried. The normal endpoint's
-fallback already includes `glm-5.3`.
+`https://api.z.ai/api/coding/paas/v4`. The normal endpoint's fallback already
+includes `glm-5.3` and multimodal `glm-5.3-flash`.
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
 mirror the llama knobs and retry behavior for the cloud call. Select `zai`
 with `/agent`, pick a model with `/model` (default `glm-5.3`), and add private
@@ -888,9 +886,9 @@ choice also uses `auto` until it appears in that workspace's fresh catalog.
 Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
 aliases, the supported `sonnet[1m]`, `opus[1m]`, and `fable[1m]` long-context
-aliases, and verified version pins (including Fable 5, Sonnet 5, Opus 5, and
-explicit `[1m]` variants of other documented long-context models). Only the
-explicit `[1m]` selections receive Cozter's 1M-token context metadata;
+aliases, and verified version pins (including Fable 5.1, Fable 5, Sonnet 5,
+Opus 5, and explicit `[1m]` variants of other documented long-context models).
+Only the explicit `[1m]` selections receive Cozter's 1M-token context metadata;
 aliases and bare version pins remain capacity-unknown because their active
 window can vary by account and provider. Claude Code's own `/fast` is a
 session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama
@@ -898,9 +896,10 @@ and Z.ai discover models live from their configured HTTP endpoints.
 `llama` and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
 and points at Z.ai's endpoint. Its text chat-completion models from GLM-4.6
-onward opt into Z.ai's incremental tool-call argument stream; multimodal
-models use their standard streamed function-call deltas because the vision
-request schema does not accept `tool_stream`. The shared SSE parser merges
+onward, plus multimodal `glm-5.3-flash`, opt into Z.ai's incremental
+tool-call argument stream; older vision models use their standard streamed
+function-call deltas because that vision request schema does not accept
+`tool_stream`. The shared SSE parser merges
 either shape before executing a requested tool.
 
 Permission modes are backend-specific because a chat bot cannot answer a
@@ -932,11 +931,10 @@ picker queries the configured Z.ai `/models` endpoint and retains its curated
 agent-capable fallback, including text-compatible multimodal models such as
 `glm-5v-turbo`, `glm-4.6v`, and `glm-4.5v`, if the account cannot be queried.
 The normal Z.ai fallback includes the general endpoint's default
-`glm-5.3` model. When `zai_base_url` uses Z.ai's GLM Coding Plan endpoint
-(`…/api/coding/paas/v4`), it additionally offers multimodal
-`glm-5.3-flash`. Cozter maps `/effort` for both to Z.ai's supported `low` /
-`high` / `max` reasoning levels, preserves their opaque reasoning state
-between tool calls, and enables their documented tool-call streaming.
+`glm-5.3` model and multimodal `glm-5.3-flash`. Cozter maps `/effort` for
+both to Z.ai's supported `low` / `high` / `max` reasoning levels, preserves
+their opaque reasoning state between tool calls, and enables their documented
+tool-call streaming.
 It filters Z.ai's known image, OCR, and audio-only IDs because those require
 different endpoints, while preserving unknown/private chat-model IDs. Codex,
 llama, Z.ai, and Grok refresh their live catalogs lazily when a model picker is
