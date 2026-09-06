@@ -9,8 +9,10 @@ import threading
 import time
 
 from .base import (
+    CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
-    create_prompt_subprocess, executable_command, record_backend_error,
+    create_prompt_subprocess, executable_command, fallback_model_tables,
+    record_backend_error,
     set_error_result,
     truncate_status_text,
 )
@@ -36,16 +38,11 @@ _FALLBACK_MODEL_SPECS = (
     ("gpt-5.4-mini", _COMMON_EFFORT_LEVELS, 272_000),
     ("gpt-5.3-codex-spark", _COMMON_EFFORT_LEVELS, 128_000),
 )
-_FALLBACK_MODELS = tuple(
-    model for model, _efforts, _window in _FALLBACK_MODEL_SPECS
-)
-_FALLBACK_MODEL_EFFORT_LEVELS: dict[str, tuple[str, ...]] = {
-    model: efforts for model, efforts, _window in _FALLBACK_MODEL_SPECS
-}
-_FALLBACK_MODEL_CONTEXT_WINDOWS = {
-    model: window for model, _efforts, window in _FALLBACK_MODEL_SPECS
-}
-_MODEL_DISCOVERY_TIMEOUT_SEC = 15
+(
+    _FALLBACK_MODELS,
+    _FALLBACK_MODEL_EFFORT_LEVELS,
+    _FALLBACK_MODEL_CONTEXT_WINDOWS,
+) = fallback_model_tables(_FALLBACK_MODEL_SPECS)
 
 
 def _parse_debug_models_metadata(
@@ -246,7 +243,7 @@ class CodexBackend(Backend):
             proc = subprocess.run(
                 [*prefix, "debug", "models"],
                 capture_output=True,
-                timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
+                timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.debug(
@@ -271,7 +268,7 @@ class CodexBackend(Backend):
                         "debug", "models",
                     ],
                     capture_output=True,
-                    timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
+                    timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
                 )
             except (subprocess.TimeoutExpired, OSError) as exc:
                 logger.debug(

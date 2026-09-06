@@ -29,18 +29,20 @@ import shutil
 import subprocess
 import tempfile
 import threading
-import time
 
 from .base import (
-    MODEL_CATALOG_TTL_SEC,
+    CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
     AgentResult,
     Backend,
+    CachedModelCatalog,
     ChatEvent,
     append_text_result,
+    apply_terminal_result_event,
     create_captured_subprocess,
     executable_command,
-    fresh_model_catalog,
+    fallback_model_tables,
     record_backend_error,
+    terminal_result_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,16 +59,11 @@ _FALLBACK_MODEL_SPECS = (
     ("grok-4.6", (*_COMMON_EFFORT_LEVELS, "xhigh"), 500_000),
     ("grok-4.5", _COMMON_EFFORT_LEVELS, 500_000),
 )
-_FALLBACK_MODELS = tuple(
-    model for model, _efforts, _window in _FALLBACK_MODEL_SPECS
-)
-_FALLBACK_MODEL_EFFORT_LEVELS: dict[str, tuple[str, ...]] = {
-    model: efforts for model, efforts, _window in _FALLBACK_MODEL_SPECS
-}
-_FALLBACK_MODEL_CONTEXT_WINDOWS = {
-    model: window for model, _efforts, window in _FALLBACK_MODEL_SPECS
-}
-_MODEL_DISCOVERY_TIMEOUT_SEC = 15
+(
+    _FALLBACK_MODELS,
+    _FALLBACK_MODEL_EFFORT_LEVELS,
+    _FALLBACK_MODEL_CONTEXT_WINDOWS,
+) = fallback_model_tables(_FALLBACK_MODEL_SPECS)
 _MODEL_LINE_RE = re.compile(r"^\s*[*-]\s+(\S+)\s*(?:\([^)]*\))?\s*$")
 _PROMPT_FILE_PREFIX = "cozter-grok-prompt-"
 
@@ -129,7 +126,7 @@ def _remove_prompt_file(path: str) -> None:
         pass
 
 
-class GrokBackend(Backend):
+class GrokBackend(CachedModelCatalog, Backend):
     name = "grok"
     executable = "grok"
     default_model = "grok-4.6"
@@ -163,9 +160,7 @@ class GrokBackend(Backend):
     }
 
     def __init__(self) -> None:
-        self._cached_models: tuple[str, ...] | None = None
-        self._catalog_expires_at = 0.0
-        self._model_catalog_lock = threading.Lock()
+        super().__init__()
         self._prompt_files: dict[int, str] = {}
         self._prompt_files_lock = threading.Lock()
 
@@ -174,27 +169,10 @@ class GrokBackend(Backend):
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
         """Return Grok models available to the currently authenticated CLI."""
-        return self._model_catalog()
+        return self._live_model_catalog()
 
-    def _model_catalog(self) -> tuple[str, ...]:
-        cached = fresh_model_catalog(
-            self._cached_models, self._catalog_expires_at,
-        )
-        if cached is not None:
-            return cached
-
-        with self._model_catalog_lock:
-            cached = fresh_model_catalog(
-                self._cached_models, self._catalog_expires_at,
-            )
-            if cached is not None:
-                return cached
-            models = self._discover_models()
-            self._cached_models = models
-            self._catalog_expires_at = time.monotonic() + MODEL_CATALOG_TTL_SEC
-            return models
-
-    def _discover_models(self) -> tuple[str, ...]:
+    def _fetch_models(self) -> tuple[str, ...]:
+        """Probe the installed Grok CLI for the current account catalog."""
         if shutil.which(self.executable) is None:
             logger.debug("grok not on PATH; using fallback model list")
             return _FALLBACK_MODELS
@@ -202,7 +180,7 @@ class GrokBackend(Backend):
             proc = subprocess.run(
                 [*executable_command(self.executable), "models"],
                 capture_output=True,
-                timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
+                timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.debug("grok models probe failed (%s); using fallback", exc)
@@ -309,7 +287,9 @@ class GrokBackend(Backend):
             return
 
         if etype == "result":
-            self._handle_result(event, result)
+            apply_terminal_result_event(
+                event, result, error_message=self._error_message(event),
+            )
             return
 
         if etype == "error":
@@ -339,11 +319,9 @@ class GrokBackend(Backend):
 
     def extract_agent_text(self, event: dict) -> str | None:
         """Return Grok's terminal reply for internal summary calls."""
-        etype = event.get("type", "")
-        if etype == "result" and not event.get("is_error"):
-            text = event.get("result")
-            return text if isinstance(text, str) and text else None
-        if etype != "assistant":
+        if event.get("type") == "result":
+            return terminal_result_text(event)
+        if event.get("type") != "assistant":
             return None
         message = event.get("message") or {}
         if not isinstance(message, dict):
@@ -375,29 +353,6 @@ class GrokBackend(Backend):
                     append_text_result(result, text)
             elif block_type == "tool_use":
                 self._append_tool_event(block, result)
-
-    def _handle_result(self, event: dict, result: AgentResult) -> None:
-        usage = event.get("usage")
-        if isinstance(usage, dict):
-            result.usage = dict(usage)
-            cost = event.get("total_cost_usd")
-            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
-                result.usage["total_cost_usd"] = cost
-
-        if event.get("is_error"):
-            record_backend_error(result, self._error_message(event))
-            return
-
-        # In normal streams the last assistant message has already supplied
-        # this reply. Keep the terminal field as a compatibility fallback for
-        # a truncated/older stream that emits only ``result``.
-        text = event.get("result")
-        if (
-            isinstance(text, str)
-            and text
-            and not any(item.kind == "text" for item in result.events)
-        ):
-            append_text_result(result, text)
 
     @staticmethod
     def _error_message(event: dict) -> str:

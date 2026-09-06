@@ -17,11 +17,17 @@ from Cozter.backends_agent import codex as codex_mod
 from Cozter.backends_agent import copilot as copilot_mod
 from Cozter.backends_agent import grok as grok_mod
 from Cozter.backends_agent.base import (
+    CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
     AgentResult,
     Backend,
+    CachedModelCatalog,
+    ChatEvent,
+    apply_terminal_result_event,
+    fallback_model_tables,
     fresh_model_catalog,
     record_backend_error,
     record_error_event,
+    terminal_result_text,
 )
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
@@ -86,6 +92,80 @@ class BackendSharedHelperTests(unittest.TestCase):
         self.assertEqual(fresh_model_catalog(models, 20.0, now=19.9), models)
         self.assertIsNone(fresh_model_catalog(models, 20.0, now=20.0))
         self.assertIsNone(fresh_model_catalog(None, 100.0, now=0.0))
+
+    def test_fallback_model_tables_project_every_row(self) -> None:
+        models, efforts, windows = fallback_model_tables((
+            ("model-a", ("low", "high"), 100),
+            ("model-b", ("low",), 200),
+        ))
+        self.assertEqual(models, ("model-a", "model-b"))
+        self.assertEqual(
+            efforts,
+            {"model-a": ("low", "high"), "model-b": ("low",)},
+        )
+        self.assertEqual(windows, {"model-a": 100, "model-b": 200})
+
+    def test_cached_model_catalog_refreshes_after_expiry(self) -> None:
+        class Catalog(CachedModelCatalog):
+            def __init__(self) -> None:
+                super().__init__()
+                self.calls = 0
+
+            def _fetch_models(self) -> tuple[str, ...]:
+                self.calls += 1
+                return (f"model-{self.calls}",)
+
+        catalog = Catalog()
+        self.assertEqual(catalog._live_model_catalog(), ("model-1",))
+        self.assertEqual(catalog._live_model_catalog(), ("model-1",))
+        catalog._catalog_expires_at = 0
+        self.assertEqual(catalog._live_model_catalog(), ("model-2",))
+        self.assertEqual(catalog.calls, 2)
+
+    def test_terminal_result_helpers_cover_usage_error_and_fallback(self) -> None:
+        self.assertEqual(
+            terminal_result_text({"type": "result", "result": "done"}),
+            "done",
+        )
+        self.assertIsNone(terminal_result_text({
+            "type": "result", "is_error": True, "result": "nope",
+        }))
+        self.assertIsNone(terminal_result_text({
+            "type": "assistant", "result": "done",
+        }))
+
+        fallback = AgentResult()
+        apply_terminal_result_event(
+            {
+                "type": "result",
+                "result": "done",
+                "usage": {"input_tokens": 3},
+                "total_cost_usd": 0.5,
+            },
+            fallback,
+        )
+        self.assertEqual(fallback.text, "done")
+        assert fallback.usage is not None
+        self.assertEqual(fallback.usage["input_tokens"], 3)
+        self.assertEqual(fallback.usage["total_cost_usd"], 0.5)
+
+        streamed = AgentResult()
+        streamed.text = "already answered"
+        streamed.events.append(ChatEvent(kind="text", content="already answered"))
+        apply_terminal_result_event(
+            {"type": "result", "is_error": True, "error": "nope"},
+            streamed,
+        )
+        self.assertEqual(streamed.text, "already answered")
+        self.assertEqual(streamed.error, "nope")
+
+        custom = AgentResult()
+        apply_terminal_result_event(
+            {"type": "result", "is_error": True, "errors": ["bad model"]},
+            custom,
+            error_message="bad model",
+        )
+        self.assertEqual(custom.error, "bad model")
 
     def test_record_error_event_normalizes_bad_messages(self) -> None:
         result = AgentResult()
@@ -719,7 +799,7 @@ warning: ignored after the catalog
         run_mock.assert_called_with(
             ["codex", "debug", "models"],
             capture_output=True,
-            timeout=codex_mod._MODEL_DISCOVERY_TIMEOUT_SEC,
+            timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
         )
 
     def test_codex_discovery_falls_back_after_failed_probes(self) -> None:

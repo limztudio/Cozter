@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -18,6 +19,14 @@ from ..utils import (
 # Keep model pickers responsive to local CLI/account-policy changes without
 # probing on every request. All backend catalogs use the same refresh cadence.
 MODEL_CATALOG_TTL_SEC = 60.0
+# Codex and Grok both probe a local CLI for the live catalog. Copilot and the
+# HTTP backends keep their own shorter timeouts because those probes talk to a
+# different process or network endpoint.
+CLI_MODEL_DISCOVERY_TIMEOUT_SEC = 15
+
+# One curated CLI fallback row: model id, reasoning-effort vocabulary, and the
+# published active context window used before a live catalog is available.
+FallbackModelSpec = tuple[str, tuple[str, ...], int]
 
 
 def resolve_executable_prefix(name: str) -> list[str] | None:
@@ -72,6 +81,64 @@ def fresh_model_catalog(
     if models is not None and current < expires_at:
         return models
     return None
+
+
+def fallback_model_tables(
+    specs: tuple[FallbackModelSpec, ...],
+) -> tuple[
+    tuple[str, ...],
+    dict[str, tuple[str, ...]],
+    dict[str, int],
+]:
+    """Project curated ``(model, efforts, window)`` rows into lookup tables."""
+    models = tuple(model for model, _efforts, _window in specs)
+    efforts = {
+        model: model_efforts for model, model_efforts, _window in specs
+    }
+    windows = {model: window for model, _efforts, window in specs}
+    return models, efforts, windows
+
+
+class CachedModelCatalog:
+    """Thread-safe TTL cache for a backend's live, account-aware model list.
+
+    HTTP OpenAI-compatible backends and the Grok CLI share the same fail-closed
+    refresh: serve a warm catalog, otherwise probe once under a lock. Codex and
+    Copilot keep their own caches because they store extra per-model metadata
+    or workspace-scoped policy catalogs.
+    """
+
+    _model_catalog_ttl_sec = MODEL_CATALOG_TTL_SEC
+
+    def __init__(self) -> None:
+        self._cached_models: tuple[str, ...] | None = None
+        self._catalog_expires_at = 0.0
+        self._models_lock = threading.Lock()
+
+    def _fetch_models(self) -> tuple[str, ...]:
+        """Return this provider's current model catalog."""
+        raise NotImplementedError
+
+    def _live_model_catalog(self) -> tuple[str, ...]:
+        """Return the cached catalog, refreshing it after the shared TTL."""
+        cached = fresh_model_catalog(
+            self._cached_models, self._catalog_expires_at,
+        )
+        if cached is not None:
+            return cached
+
+        with self._models_lock:
+            cached = fresh_model_catalog(
+                self._cached_models, self._catalog_expires_at,
+            )
+            if cached is not None:
+                return cached
+            models = self._fetch_models()
+            self._cached_models = models
+            self._catalog_expires_at = (
+                time.monotonic() + self._model_catalog_ttl_sec
+            )
+            return models
 
 
 @dataclass
@@ -226,6 +293,47 @@ def record_error_event(event: dict, result: AgentResult) -> bool:
         return False
     record_backend_error(result, event.get("message"))
     return True
+
+
+def terminal_result_text(event: dict) -> str | None:
+    """Return Messages-style terminal ``result`` text when it is usable."""
+    if event.get("type") != "result" or event.get("is_error"):
+        return None
+    text = event.get("result")
+    return text if isinstance(text, str) and text else None
+
+
+def apply_terminal_result_event(
+    event: dict,
+    result: AgentResult,
+    *,
+    error_message: object | None = None,
+) -> None:
+    """Apply a Messages-style terminal ``result`` event to *result*.
+
+    Claude Code and Grok both emit this envelope: usage and optional cost,
+    an ``is_error`` flag, and a fallback ``result`` string used only when no
+    assistant text was streamed. Error text can be provider-specific; pass
+    *error_message* to override the default ``error`` / ``result`` fields.
+    """
+    usage = event.get("usage")
+    if isinstance(usage, dict):
+        result.usage = dict(usage)
+        cost = event.get("total_cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            result.usage["total_cost_usd"] = cost
+    if event.get("is_error"):
+        if error_message is None:
+            error_message = event.get("error") or event.get("result")
+        record_backend_error(result, error_message)
+        return
+    text = event.get("result")
+    if (
+        isinstance(text, str)
+        and text
+        and not any(item.kind == "text" for item in result.events)
+    ):
+        append_text_result(result, text)
 
 
 def truncate_status_text(text: object, *, limit: int = 200) -> str:

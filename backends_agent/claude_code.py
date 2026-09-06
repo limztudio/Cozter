@@ -27,9 +27,10 @@ from dataclasses import dataclass, field
 
 from .base import (
     AgentResult, Backend, ChatEvent, DetachedTaskStatus,
-    append_detached_task, append_text_result, create_captured_subprocess,
-    create_prompt_subprocess, executable_command, record_backend_error,
-    record_error_event, truncate_status_text,
+    append_detached_task, append_text_result, apply_terminal_result_event,
+    create_captured_subprocess,
+    create_prompt_subprocess, executable_command,
+    record_error_event, terminal_result_text, truncate_status_text,
 )
 from ..utils import (
     close_subprocess_pipe, is_path_within, wait_for_process_exit,
@@ -814,28 +815,7 @@ class ClaudeCodeBackend(Backend):
             # The terminal event. If the assistant streamed text blocks
             # above, we already captured them; otherwise fall back to
             # the cumulative 'result' field.
-            usage = event.get("usage")
-            if isinstance(usage, dict):
-                result.usage = dict(usage)
-                cost = event.get("total_cost_usd")
-                if isinstance(cost, (int, float)) and not isinstance(cost, bool):
-                    result.usage["total_cost_usd"] = cost
-            if event.get("is_error"):
-                err = (
-                    event.get("error")
-                    or event.get("result")
-                    or "Unknown error"
-                )
-                # A late terminal error must not erase a streamed reply.
-                record_backend_error(result, err)
-                return
-            text = event.get("result", "")
-            if (
-                isinstance(text, str)
-                and text
-                and not any(e.kind == "text" for e in result.events)
-            ):
-                append_text_result(result, text)
+            apply_terminal_result_event(event, result)
             return
 
         if etype == "user":
@@ -863,11 +843,9 @@ class ClaudeCodeBackend(Backend):
         # Compaction prefers the terminal result.result field since it's
         # the aggregated, fully-rendered final reply. Streaming assistant
         # text blocks are partials and may not include the full answer.
-        etype = event.get("type", "")
-        if etype == "result" and not event.get("is_error"):
-            text = event.get("result", "")
-            return text if isinstance(text, str) and text else None
-        if etype == "assistant":
+        if event.get("type") == "result":
+            return terminal_result_text(event)
+        if event.get("type") == "assistant":
             msg = event.get("message", {}) or {}
             if not isinstance(msg, dict):
                 return None

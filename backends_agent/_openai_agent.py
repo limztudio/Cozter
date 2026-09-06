@@ -19,8 +19,6 @@ import asyncio
 import json
 import logging
 import random
-import threading
-import time
 import urllib.request
 import uuid
 from collections.abc import AsyncIterator
@@ -32,8 +30,7 @@ from .. import agent_tools as tools
 from ..utils import iter_bounded_lines
 from ._http_proc import HttpAgentProcess, http_error_translator
 from .base import (
-    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
-    fresh_model_catalog,
+    AgentResult, Backend, CachedModelCatalog, ChatEvent, append_text_result,
     record_error_event,
 )
 
@@ -596,7 +593,7 @@ class OpenAIChatBackend(Backend):
         return None
 
 
-class CachedOpenAIChatBackend(OpenAIChatBackend):
+class CachedOpenAIChatBackend(CachedModelCatalog, OpenAIChatBackend):
     """OpenAI-compatible backend with a short-lived, thread-safe model cache.
 
     Providers can implement :meth:`_fetch_models` to obtain their live model
@@ -604,37 +601,9 @@ class CachedOpenAIChatBackend(OpenAIChatBackend):
     model picker while retaining the existing one-minute refresh cadence.
     """
 
-    _model_catalog_ttl_sec = MODEL_CATALOG_TTL_SEC
-
-    def __init__(self) -> None:
-        self._cached_models: tuple[str, ...] | None = None
-        self._catalog_expires_at = 0.0
-        self._models_lock = threading.Lock()
-
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
-        cached = fresh_model_catalog(
-            self._cached_models, self._catalog_expires_at,
-        )
-        if cached is not None:
-            return cached
-
-        with self._models_lock:
-            cached = fresh_model_catalog(
-                self._cached_models, self._catalog_expires_at,
-            )
-            if cached is not None:
-                return cached
-            models = self._fetch_models()
-            self._cached_models = models
-            self._catalog_expires_at = (
-                time.monotonic() + self._model_catalog_ttl_sec
-            )
-            return models
-
-    def _fetch_models(self) -> tuple[str, ...]:
-        """Return this provider's current model catalog."""
-        raise NotImplementedError
+        return self._live_model_catalog()
 
 
 # ---------------------------------------------------------------------------
