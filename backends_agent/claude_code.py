@@ -28,8 +28,8 @@ from dataclasses import dataclass, field
 from .base import (
     AgentResult, Backend, ChatEvent, DetachedTaskStatus,
     append_detached_task, append_text_result, create_captured_subprocess,
-    create_prompt_subprocess, executable_command, record_error_event,
-    set_error_result, truncate_status_text,
+    create_prompt_subprocess, executable_command, record_backend_error,
+    record_error_event, truncate_status_text,
 )
 from ..utils import (
     close_subprocess_pipe, is_path_within, wait_for_process_exit,
@@ -826,7 +826,8 @@ class ClaudeCodeBackend(Backend):
                     or event.get("result")
                     or "Unknown error"
                 )
-                set_error_result(result, err)
+                # A late terminal error must not erase a streamed reply.
+                record_backend_error(result, err)
                 return
             text = event.get("result", "")
             if (

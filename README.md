@@ -1,6 +1,6 @@
 # Cozter
 
-A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot)
+A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot, grok)
 and OpenAI-compatible HTTP backends (local llama-server and Z.ai), exposing
 them through Telegram, Slack, Signal, or a plain terminal. One Cozter
 process hosts either the local terminal or one configured daemon surface—with
@@ -17,7 +17,7 @@ are trusted in-process code, not sandboxed extensions.
 
 ## What it gives you
 
-- **A default meta-agent plus five direct agent backends**, picked per
+- **A default meta-agent plus six direct agent backends**, picked per
   workspace:
   - `flexible` (default) — a meta-agent that sizes the work with a cheap
     summary-model call, splits it into up to 12 sub-tasks, routes each to
@@ -26,6 +26,7 @@ are trusted in-process code, not sandboxed extensions.
   - `codex` — OpenAI's CLI (`codex exec`)
   - `claude_code` — Anthropic's CLI (`claude --print`)
   - `copilot` — GitHub's CLI
+  - `grok` — xAI's Grok Build CLI (`grok --prompt-file`)
   - `llama` — an unauthenticated OpenAI-compatible HTTP server (such as
     llama-server or LM Studio); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
@@ -199,7 +200,7 @@ limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
 
 - Python 3.11+ (CI targets 3.11 and 3.12; the codebase uses modern type syntax)
 - One agent backend CLI, server, or API key:
-  `codex`, `claude`, `copilot`, an unauthenticated OpenAI-compatible HTTP
+  `codex`, `claude`, `copilot`, `grok`, an unauthenticated OpenAI-compatible HTTP
   server for the `llama` backend that supports streaming
   `/v1/chat/completions` and function tools, or Z.ai credentials for the
   `zai` backend
@@ -568,7 +569,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 |---|---|
 | `/new` | Prompt for a new workspace directory, create it, and select it |
 | `/open [path-or-number]` | Switch to an existing workspace |
-| `/agent` | Pick the agent backend (flexible / codex / claude_code / copilot / llama / zai) |
+| `/agent` | Pick the agent backend (flexible / codex / claude_code / copilot / grok / llama / zai) |
 | `/model` | Pick the chat model for the current backend |
 | `/agent_flexible_{low,mid,high}` | Pick the agent the flexible tier routes to |
 | `/model_flexible_{low,mid,high}` | Pick the model the flexible tier routes to |
@@ -717,7 +718,7 @@ through that CLI's own shell/tool policy and are not governed by Cozter's
 - **HTTP backends** (`llama`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
   the 16 built-in tools in `agent_tools/builtin/`
-- **CLI backends** (`codex`, `claude_code`, `copilot`) can't have
+- **CLI backends** (`codex`, `claude_code`, `copilot`, `grok`) can't have
   external tools injected into their fixed toolkit. The bot
   instead lists each plugin in their prompt and tells the model to
   invoke it through the backend's own `bash` / `shell` tool as
@@ -985,9 +986,9 @@ truncated by the platform argv limit.
 Provider event envelopes are treated as untrusted input. A missing, blank, or
 non-text backend error message is normalized to `Unknown error` before it is
 stored or shown, rather than exposing a provider object or breaking the turn
-parser. If Codex has
-already streamed an assistant reply, a late stream error is retained on the
-turn without replacing that reply.
+parser. If a backend has
+already streamed an assistant reply, a late stream or terminal error is
+retained on the turn without replacing that reply.
 
 ## Reasoning effort
 
@@ -1063,6 +1064,7 @@ Cozter/
 │   │                       session-only Claude Bash hook that blocks
 │   │                       untracked background launches
 │   ├── copilot.py          wraps `copilot`
+│   ├── grok.py             wraps `grok --prompt-file`
 │   ├── flexible.py         flexible meta-agent backend (no CLI of its own)
 │   ├── _http_proc.py       process-like adapter and error handling for HTTP backends
 │   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop
@@ -1198,8 +1200,8 @@ ignored for local secrets and runtime queues.
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/base.py`, `_http_proc.py`,
   `_openai_agent.py`, `codex.py`, `claude_code.py`,
-  `claude_background_guard.py`, `copilot.py`, `flexible.py`, `llama.py`,
-  and `zai.py`
+  `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
+  `llama.py`, and `zai.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
   the 16 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
@@ -1363,9 +1365,10 @@ are:
 5. `agent_tools/__init__.py` for the auto-discovery and plugin
    bridging
 
-The CLI-backend files (`codex.py`, `claude_code.py`, `copilot.py`) are
-thin: each defines `launch()` (build argv, spawn subprocess) and
-`parse_event()` (translate the CLI's JSONL events to `ChatEvent`s).
+The CLI-backend files (`codex.py`, `claude_code.py`, `copilot.py`,
+`grok.py`) are thin: each defines `launch()` (build argv, spawn
+subprocess) and `parse_event()` (translate the CLI's JSONL events to
+`ChatEvent`s).
 
 ## Development checks
 

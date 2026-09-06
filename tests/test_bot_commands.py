@@ -165,7 +165,7 @@ class BotCommandTests(unittest.TestCase):
     def test_doctor_lists_every_direct_backend(self) -> None:
         self._run(self.bot.cmd_doctor(self._ctx()))
         out = self._last()
-        for name in ("codex", "claude_code", "copilot", "llama", "zai"):
+        for name in ("codex", "claude_code", "copilot", "grok", "llama", "zai"):
             self.assertIn(name, out)
 
     # -- /agent ------------------------------------------------------------

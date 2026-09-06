@@ -39,7 +39,7 @@ import time
 from .base import (
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
     create_captured_subprocess, executable_command, fresh_model_catalog,
-    set_error_result, truncate_status_text,
+    record_backend_error, truncate_status_text,
 )
 from ..utils import terminate_windows_process_tree
 
@@ -607,7 +607,7 @@ class CopilotBackend(Backend):
                     msg = err
             if not msg:
                 msg = "Unknown error"
-            set_error_result(result, msg)
+            record_backend_error(result, msg)
             return
 
         # Fall through: treat as assistant text if it looks like one.

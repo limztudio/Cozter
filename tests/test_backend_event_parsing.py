@@ -293,6 +293,16 @@ class ClaudeCodeParseTests(unittest.TestCase):
         ])
         self.assertEqual(r.error, "nope")
 
+    def test_late_result_error_preserves_streamed_text(self) -> None:
+        r = _run(self.backend, [
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "hi there"},
+            ]}},
+            {"type": "result", "is_error": True, "error": "nope"},
+        ])
+        self.assertEqual(r.text, "hi there")
+        self.assertEqual(r.error, "nope")
+
     def test_result_error_with_non_text_message_is_normalized(self) -> None:
         r = _run(self.backend, [{
             "type": "result", "is_error": True,
@@ -361,6 +371,15 @@ class CopilotParseTests(unittest.TestCase):
         r = _run(self.backend, [
             {"type": "error", "message": "bad"},
         ])
+        self.assertEqual(r.error, "bad")
+
+    def test_late_error_preserves_streamed_text(self) -> None:
+        r = _run(self.backend, [
+            {"type": "assistant_message", "role": "assistant",
+             "text": "answer"},
+            {"type": "error", "message": "bad"},
+        ])
+        self.assertEqual(r.text, "answer")
         self.assertEqual(r.error, "bad")
 
     def test_error_with_non_text_message_is_normalized(self) -> None:
@@ -492,6 +511,14 @@ class LlamaParseTests(unittest.TestCase):
         r = _run(self.backend, [
             {"type": "error", "message": "explode"},
         ])
+        self.assertEqual(r.error, "explode")
+
+    def test_late_error_preserves_streamed_text(self) -> None:
+        r = _run(self.backend, [
+            {"type": "assistant_text", "text": "yo"},
+            {"type": "error", "message": "explode"},
+        ])
+        self.assertEqual(r.text, "yo")
         self.assertEqual(r.error, "explode")
 
 

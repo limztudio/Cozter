@@ -10,7 +10,7 @@ import time
 
 from .base import (
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
-    create_prompt_subprocess, executable_command, normalize_error_message,
+    create_prompt_subprocess, executable_command, record_backend_error,
     set_error_result,
     truncate_status_text,
 )
@@ -415,12 +415,9 @@ class CodexBackend(Backend):
             # report.
             msg = event.get("message", "Unknown error")
             logger.warning("Codex stream error: %s", msg)
-            if result.text:
-                # The model already answered. Keep the error, but never let
-                # a late one overwrite the reply the user is owed.
-                result.error = normalize_error_message(msg)
-            else:
-                set_error_result(result, msg)
+            # The model may already have answered. Keep the error, but never
+            # let a late one overwrite the reply the user is owed.
+            record_backend_error(result, msg)
 
     def extract_agent_text(self, event: dict) -> str | None:
         if event.get("type") != "item.completed":

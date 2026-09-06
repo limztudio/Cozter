@@ -39,8 +39,8 @@ from .base import (
     append_text_result,
     create_captured_subprocess,
     executable_command,
-    normalize_error_message,
-    set_error_result,
+    fresh_model_catalog,
+    record_backend_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -177,16 +177,22 @@ class GrokBackend(Backend):
         return self._model_catalog()
 
     def _model_catalog(self) -> tuple[str, ...]:
-        now = time.monotonic()
-        if self._cached_models is not None and now < self._catalog_expires_at:
-            return self._cached_models
+        cached = fresh_model_catalog(
+            self._cached_models, self._catalog_expires_at,
+        )
+        if cached is not None:
+            return cached
 
         with self._model_catalog_lock:
-            now = time.monotonic()
-            if self._cached_models is None or now >= self._catalog_expires_at:
-                self._cached_models = self._discover_models()
-                self._catalog_expires_at = time.monotonic() + MODEL_CATALOG_TTL_SEC
-        return self._cached_models
+            cached = fresh_model_catalog(
+                self._cached_models, self._catalog_expires_at,
+            )
+            if cached is not None:
+                return cached
+            models = self._discover_models()
+            self._cached_models = models
+            self._catalog_expires_at = time.monotonic() + MODEL_CATALOG_TTL_SEC
+            return models
 
     def _discover_models(self) -> tuple[str, ...]:
         if shutil.which(self.executable) is None:
@@ -307,13 +313,9 @@ class GrokBackend(Backend):
             return
 
         if etype == "error":
-            message = self._error_message(event)
-            if result.text:
-                # A late provider error must be recorded, but must not erase
-                # a useful model reply that was already streamed.
-                result.error = normalize_error_message(message)
-            else:
-                set_error_result(result, message)
+            # A late provider error must be recorded, but must not erase
+            # a useful model reply that was already streamed.
+            record_backend_error(result, self._error_message(event))
             return
 
         # ``system``, ``user`` (tool result), reasoning, and metadata events
@@ -383,11 +385,7 @@ class GrokBackend(Backend):
                 result.usage["total_cost_usd"] = cost
 
         if event.get("is_error"):
-            message = self._error_message(event)
-            if result.text:
-                result.error = normalize_error_message(message)
-            else:
-                set_error_result(result, message)
+            record_backend_error(result, self._error_message(event))
             return
 
         # In normal streams the last assistant message has already supplied

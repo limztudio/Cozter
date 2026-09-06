@@ -3,10 +3,10 @@
 Drop a ``.py`` file here that subclasses ``AgentTool`` and it gets
 auto-loaded on bot startup. The same file works two ways:
 
-  - HTTP backends (llama, future Mistral/Gemini/etc.) see plugins as
+  - HTTP backends (llama, zai, future Mistral/Gemini/etc.) see plugins as
     typed tools alongside the built-in toolkit - no special handling
     needed.
-  - CLI backends (codex, claude_code, copilot) cannot have external
+  - CLI backends (codex, claude_code, copilot, grok) cannot have external
     tools injected, so the bot enumerates each plugin in their prompt
     and tells the model to invoke them via ``bash`` using
     ``python -m Cozter.agent_tools.plugins.<name>``.

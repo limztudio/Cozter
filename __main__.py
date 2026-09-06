@@ -79,7 +79,7 @@ if __name__ == "__main__" and not __package__:
 
 
 # Make ``Cozter`` importable from any subprocess we spawn (codex,
-# claude_code, copilot CLIs) and from any bash command they run. The
+# claude_code, copilot, grok CLIs) and from any bash command they run. The
 # CLI subprocesses inherit our env, so when the model invokes a plugin
 # via ``python -m Cozter.agent_tools.plugins.<name>``, Python can
 # resolve the package without the user setting PYTHONPATH manually.

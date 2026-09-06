@@ -5,7 +5,7 @@ serves both modes:
 
 - **HTTP backends** (`llama`, `zai`, future Mistral/Gemini/etc.) see plugins
   as typed tools — same schema as the built-in toolkit in `../builtin/`.
-- **CLI backends** (`codex`, `claude_code`, `copilot`) can't have
+- **CLI backends** (`codex`, `claude_code`, `copilot`, `grok`) can't have
   external tools injected, so the bot tells the model about each
   plugin in the system prompt and the model invokes it via the
   backend's built-in `bash` tool:

@@ -201,6 +201,19 @@ def set_error_result(
     append_text_result(result, display_text or f"Error: {error_message}")
 
 
+def record_backend_error(result: AgentResult, message: object) -> None:
+    """Record a backend error without replacing a streamed reply.
+
+    Stream adapters can emit a failure after the model has already answered.
+    The error still needs to be stored (flexible merge, detached-task gating),
+    but the user is owed the text that already arrived.
+    """
+    if result.text:
+        result.error = normalize_error_message(message)
+    else:
+        set_error_result(result, message)
+
+
 def record_error_event(event: dict, result: AgentResult) -> bool:
     """Record a simple ``{\"type\": \"error\"}`` event if present.
 
@@ -211,7 +224,7 @@ def record_error_event(event: dict, result: AgentResult) -> bool:
     """
     if event.get("type") != "error":
         return False
-    set_error_result(result, event.get("message"))
+    record_backend_error(result, event.get("message"))
     return True
 
 
@@ -370,7 +383,7 @@ class Backend(ABC):
 
     # Whether the bash/shell prelude in agent.py should be added when
     # supports_typed_plugins is False. CLI backends (codex/copilot/
-    # claude_code) keep this True because their model can shell-invoke
+    # claude_code/grok) keep this True because their model can shell-invoke
     # ``python -m Cozter.agent_tools.plugins.<name>`` via their bundled
     # bash tool. Pure HTTP-chat backends with no shell tool of their own
     # set this False - the prelude would describe plugins the model

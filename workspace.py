@@ -349,7 +349,7 @@ PERMISSION_DESCRIPTIONS = {
         " For ask-before-acting, use /style collaborative"
     ),
     "deny": (
-        "No tools for HTTP/Copilot; Codex/Claude use their strongest"
+        "No tools for HTTP/Copilot; Codex/Claude/Grok use their strongest"
         " non-interactive read-only or plan mode"
     ),
 }
@@ -357,7 +357,7 @@ PERMISSION_DESCRIPTIONS = {
 # Interaction style: how collaborative the agent is on interactive chat
 # turns. It selects which policy the shared prompt preamble in
 # agent.py carries, so it steers every backend the same way (codex,
-# copilot, claude_code, llama). Scheduled/ephemeral turns cannot pause on
+# copilot, claude_code, grok, llama). Scheduled/ephemeral turns cannot pause on
 # [[await]], so they always run autonomously regardless of this setting.
 AVAILABLE_STYLES = ["collaborative", "autonomous"]
 DEFAULT_STYLE = "collaborative"
@@ -858,7 +858,7 @@ def set_compact_interval(workspace_path: str, interval: int) -> None:
 # Character budget for the context block (colony + long-term memory +
 # session summary + recent messages) that agent.py prepends to each turn's
 # prompt. Measured in characters as a provider-agnostic proxy for tokens -
-# there is no single tokenizer across the codex/claude/copilot/llama
+# there is no single tokenizer across the codex/claude/copilot/grok/llama
 # backends - so raise it for large-context models and lower it for small
 # local ones. agent.py drops the oldest recent messages first to fit.
 DEFAULT_HISTORY_BUDGET = 50_000

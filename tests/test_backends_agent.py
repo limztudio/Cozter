@@ -20,6 +20,7 @@ from Cozter.backends_agent.base import (
     AgentResult,
     Backend,
     fresh_model_catalog,
+    record_backend_error,
     record_error_event,
 )
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
@@ -92,6 +93,19 @@ class BackendSharedHelperTests(unittest.TestCase):
         self.assertTrue(record_error_event({"type": "error", "message": 7}, result))
         self.assertEqual(result.error, "Unknown error")
         self.assertEqual(result.text, "Error: Unknown error")
+
+    def test_record_backend_error_preserves_a_streamed_reply(self) -> None:
+        result = AgentResult()
+        result.text = "already answered"
+        record_backend_error(result, "disconnected")
+        self.assertEqual(result.text, "already answered")
+        self.assertEqual(result.error, "disconnected")
+        self.assertEqual(result.events, [])
+
+        empty = AgentResult()
+        record_backend_error(empty, "boom")
+        self.assertEqual(empty.error, "boom")
+        self.assertEqual(empty.text, "Error: boom")
 
     def test_context_window_hook_defaults_to_unknown(self) -> None:
         self.assertIsNone(_DummyBackend().context_window_tokens("any-model"))
