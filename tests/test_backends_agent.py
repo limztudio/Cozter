@@ -14,6 +14,7 @@ from Cozter import config
 from Cozter.backends_agent import claude_code as claude_code_mod
 from Cozter.backends_agent import codex as codex_mod
 from Cozter.backends_agent import copilot as copilot_mod
+from Cozter.backends_agent import grok as grok_mod
 from Cozter.backends_agent.base import (
     AgentResult,
     Backend,
@@ -23,6 +24,7 @@ from Cozter.backends_agent.base import (
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
+from Cozter.backends_agent.grok import GrokBackend
 from Cozter.backends_agent.llama import LlamaBackend
 from Cozter.backends_agent import _openai_agent as openai_agent_mod
 from Cozter.backends_agent._openai_agent import extract_model_ids
@@ -166,6 +168,29 @@ class BackendPermissionCommandTests(unittest.TestCase):
 
         return asyncio.run(run())
 
+    def _grok_command(
+        self, approval: str, *, compaction: bool = False,
+    ) -> tuple[str, ...]:
+        async def run() -> tuple[str, ...]:
+            proc = mock.Mock()
+            with (
+                mock.patch.object(
+                    grok_mod, "executable_command", return_value=["grok"],
+                ),
+                mock.patch.object(
+                    grok_mod,
+                    "create_captured_subprocess",
+                    new=mock.AsyncMock(return_value=proc),
+                ) as create_process,
+            ):
+                await GrokBackend().launch(
+                    "/work", "summarize", None, approval,
+                    compaction=compaction,
+                )
+            return tuple(create_process.await_args.args[0])
+
+        return asyncio.run(run())
+
     def test_permission_argument_maps_are_explicit_and_fail_restricted(self) -> None:
         mappings = (
             (
@@ -188,6 +213,17 @@ class BackendPermissionCommandTests(unittest.TestCase):
                 ["--yolo"],
                 ["--allow-all-tools"],
                 ["--available-tools", ""],
+            ),
+            (
+                "grok",
+                grok_mod.GrokBackend(),
+                ["--always-approve"],
+                ["--permission-mode", "auto", "--sandbox", "workspace"],
+                [
+                    "--permission-mode", "dontAsk",
+                    "--sandbox", "read-only",
+                    "--tools", "read_file,grep,list_dir",
+                ],
             ),
         )
         for name, backend, full, auto, restricted in mappings:
@@ -229,6 +265,18 @@ class BackendPermissionCommandTests(unittest.TestCase):
         )
         self.assertNotIn("--allow-all-tools", copilot_command)
         self.assertNotIn("--yolo", copilot_command)
+
+        grok_command = self._grok_command("deny", compaction=True)
+        self.assertIn("--permission-mode", grok_command)
+        self.assertEqual(
+            grok_command[grok_command.index("--permission-mode") + 1],
+            "dontAsk",
+        )
+        self.assertIn("--sandbox", grok_command)
+        self.assertEqual(
+            grok_command[grok_command.index("--sandbox") + 1], "read-only",
+        )
+        self.assertNotIn("--always-approve", grok_command)
 
     def test_codex_auto_launch_uses_the_workspace_write_sandbox(self) -> None:
         command = self._codex_command("auto")
@@ -285,11 +333,29 @@ class BackendModelTests(unittest.TestCase):
             CodexBackend,
             ClaudeCodeBackend,
             CopilotBackend,
+            GrokBackend,
         ):
             with self.subTest(backend=backend_cls.name):
                 models = backend_cls().available_models
                 self.assertTrue(models)
                 self.assertEqual(len(models), len(set(models)))
+
+    def test_grok_model_listing_parser_uses_only_available_model_rows(self) -> None:
+        output = """You are logged in with grok.com.
+
+Default model: grok-4.6
+
+Available models:
+  * grok-4.6 (default)
+  - grok-4.5
+
+warning: ignored after the catalog
+"""
+        self.assertEqual(
+            grok_mod._parse_models_output(output),
+            ("grok-4.6", "grok-4.5"),
+        )
+        self.assertEqual(grok_mod._parse_models_output("login failed"), ())
 
     def test_codex_fallback_models_are_current_and_selectable(self) -> None:
         models = codex_mod._FALLBACK_MODELS

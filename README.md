@@ -871,6 +871,7 @@ its own, only the three tiers above.
 | `codex` | `codex exec --ephemeral --json` | `gpt-5.6-sol` | `gpt-5.6-luna` |
 | `claude_code` | `claude --print --output-format stream-json --verbose` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
+| `grok` | `grok -p … --output-format streaming-messages-json` | `grok-4.6` | `grok-4.6` |
 | `llama` | Unauthenticated OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.3` | `glm-4.5-air` |
 
@@ -879,8 +880,8 @@ selected summary backend's `default_summary_model` for routing, planning,
 compaction, and session titling. This gives direct library callers the same
 summary-model defaults that workspace settings use.
 
-Codex discovers its visible local CLI catalog, while Copilot queries its
-authenticated ACP model selector from the selected workspace and fails closed
+Codex and Grok discover their visible local CLI catalogs, while Copilot queries
+its authenticated ACP model selector from the selected workspace and fails closed
 to `auto` if that catalog cannot be read. This keeps enterprise-disabled and
 workspace-policy-disabled Copilot models out of the picker; a stored Copilot
 choice also uses `auto` until it appears in that workspace's fresh catalog.
@@ -914,7 +915,10 @@ only for `full`, `acceptEdits` for `auto`, and plan mode for `confirm`/`deny`.
 `copilot` uses `--yolo` only
 for `full`, `--allow-all-tools` (while retaining path and URL checks) for
 `auto`, and an explicit empty tool list for `confirm`/`deny`. Internal
-router, titling, and compaction calls always use `deny`, so conversation
+`grok` uses `--always-approve` only for `full`; `auto` runs in its workspace
+sandbox under Grok's native `auto` permission mode; and `confirm`/`deny` use
+its read-only sandbox with only `read_file`, `grep`, and `list_dir` exposed.
+Internal router, titling, and compaction calls always use `deny`, so conversation
 content cannot elevate their permissions. For ask-before-acting behavior on
 any backend, use `/style collaborative` — it pauses the turn (via
 `[[await]]`) for your reply instead of relying on a CLI approval flow.
@@ -932,7 +936,7 @@ The normal Z.ai fallback includes the general endpoint's default
 between tool calls, and enables their documented tool-call streaming.
 It filters Z.ai's known image, OCR, and audio-only IDs because those require
 different endpoints, while preserving unknown/private chat-model IDs. Codex,
-llama, and Z.ai refresh their live catalogs lazily when a model picker is
+llama, Z.ai, and Grok refresh their live catalogs lazily when a model picker is
 opened after its 60-second cache expires, so long-running services see CLI,
 server, and account model changes without a restart. HTTP catalog responses
 over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates

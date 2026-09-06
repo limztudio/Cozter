@@ -20,6 +20,7 @@ from .claude_code import ClaudeCodeBackend
 from .codex import CodexBackend
 from .copilot import CopilotBackend
 from .flexible import FlexibleBackend
+from .grok import GrokBackend
 from .llama import LlamaBackend
 from .zai import ZaiBackend
 
@@ -27,6 +28,7 @@ _DIRECT: dict[str, Backend] = {
     "codex": CodexBackend(),
     "copilot": CopilotBackend(),
     "claude_code": ClaudeCodeBackend(),
+    "grok": GrokBackend(),
     "llama": LlamaBackend(),
     "zai": ZaiBackend(),
 }
@@ -77,6 +79,7 @@ __all__ = [
     "CodexBackend",
     "CopilotBackend",
     "FlexibleBackend",
+    "GrokBackend",
     "LlamaBackend",
     "ZaiBackend",
     "get_backend",

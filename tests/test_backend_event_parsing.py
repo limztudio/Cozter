@@ -14,6 +14,7 @@ from Cozter.backends_agent.base import AgentResult, set_error_result
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
 from Cozter.backends_agent.copilot import CopilotBackend
+from Cozter.backends_agent.grok import GrokBackend
 from Cozter.backends_agent.llama import LlamaBackend
 
 
@@ -367,6 +368,65 @@ class CopilotParseTests(unittest.TestCase):
             {"type": "error", "message": ["bad"]},
         ])
         self.assertEqual(r.error, "Unknown error")
+
+
+
+class GrokParseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.backend = GrokBackend()
+
+    def test_assistant_text_block(self) -> None:
+        event = {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "answer"},
+        ]}}
+        r = _run(self.backend, [event])
+        self.assertEqual(r.text, "answer")
+        self.assertEqual(self.backend.extract_agent_text(event), "answer")
+
+    def test_tool_use_and_file_change(self) -> None:
+        r = _run(self.backend, [{
+            "type": "assistant", "message": {"content": [{
+                "type": "tool_use", "name": "search_replace",
+                "input": {"path": "src/main.py"},
+            }]},
+        }])
+        self.assertEqual(_kinds(r), ["tool", "file"])
+        self.assertIn("src/main.py", r.events[0].content)
+        self.assertIn("src/main.py", r.events[1].content)
+
+    def test_terminal_result_fallback_captures_usage_and_cost(self) -> None:
+        event = {
+            "type": "result", "subtype": "success", "result": "done",
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+            "total_cost_usd": 0.0123,
+        }
+        r = _run(self.backend, [event])
+        self.assertEqual(r.text, "done")
+        assert r.usage is not None
+        self.assertEqual(r.usage["input_tokens"], 100)
+        self.assertEqual(r.usage["total_cost_usd"], 0.0123)
+        self.assertEqual(self.backend.extract_agent_text(event), "done")
+
+    def test_late_error_preserves_streamed_text(self) -> None:
+        r = _run(self.backend, [
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "answer"},
+            ]}},
+            {"type": "error", "message": "stream closed"},
+        ])
+        self.assertEqual(r.text, "answer")
+        self.assertEqual(r.error, "stream closed")
+
+    def test_malformed_assistant_message_is_skipped(self) -> None:
+        for message in (None, "bad", [], {"content": None}):
+            with self.subTest(message=message):
+                r = _run(self.backend, [{
+                    "type": "assistant", "message": message,
+                }])
+                self.assertEqual(r.events, [])
+                self.assertIsNone(self.backend.extract_agent_text({
+                    "type": "assistant", "message": message,
+                }))
 
 
 class LlamaParseTests(unittest.TestCase):
