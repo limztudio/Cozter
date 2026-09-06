@@ -9,10 +9,16 @@ Cozter than the delta-oriented ``streaming-json`` format:
   - ``user.message.content`` contains tool results (not shown as chat status)
   - ``result`` carries the final aggregate reply plus usage and cost metadata
 
-The CLI receives its prompt in argv through ``-p``.  Its documented headless
-permission modes map Cozter's four levels to Grok's always-approve, auto, and
-strict deny-by-default modes.  Restricted calls additionally use Grok's
-read-only OS sandbox and allowlist only non-mutating workspace tools.
+The CLI receives its prompt through ``--prompt-file`` so Cozter's history
+budget is not truncated by the platform argv limit.  Headless permission
+modes map Cozter's four levels onto Grok flags that actually stick in
+headless ``--prompt-file`` runs: always-approve for ``full``, always-approve
+inside the workspace sandbox for ``auto``, and ``dontAsk`` plus a read-only
+sandbox for ``confirm``/``deny``.  Grok's native ``auto`` classifier is a
+TUI feature; this CLI currently ignores it in headless mode and falls back
+to ask/default, which would hang or deny tool calls.  Restricted calls also
+allowlist only non-mutating workspace tools and explicitly disallow the MCP
+discovery tools that Grok otherwise keeps visible.
 """
 
 import asyncio
@@ -21,6 +27,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -40,10 +47,28 @@ logger = logging.getLogger(__name__)
 
 # ``grok models`` is account-aware, but the picker must remain useful when
 # Grok is absent, unauthenticated, or its model-list command is unavailable.
-# Keep only currently documented CLI models in the conservative fallback.
-_FALLBACK_MODELS = ("grok-4.6", "grok-4.5")
+# Keep only currently documented CLI models in the conservative fallback,
+# with every capability beside its ID so picker, effort, and compaction
+# cannot drift apart.  Grok rejects unsupported ``--effort`` values, so
+# unpublished/custom IDs use the three-level subset both published models
+# share rather than grok-4.6's extra ``xhigh``.
+_COMMON_EFFORT_LEVELS = ("low", "medium", "high")
+_FALLBACK_MODEL_SPECS = (
+    ("grok-4.6", (*_COMMON_EFFORT_LEVELS, "xhigh"), 500_000),
+    ("grok-4.5", _COMMON_EFFORT_LEVELS, 500_000),
+)
+_FALLBACK_MODELS = tuple(
+    model for model, _efforts, _window in _FALLBACK_MODEL_SPECS
+)
+_FALLBACK_MODEL_EFFORT_LEVELS: dict[str, tuple[str, ...]] = {
+    model: efforts for model, efforts, _window in _FALLBACK_MODEL_SPECS
+}
+_FALLBACK_MODEL_CONTEXT_WINDOWS = {
+    model: window for model, _efforts, window in _FALLBACK_MODEL_SPECS
+}
 _MODEL_DISCOVERY_TIMEOUT_SEC = 15
 _MODEL_LINE_RE = re.compile(r"^\s*[*-]\s+(\S+)\s*(?:\([^)]*\))?\s*$")
+_PROMPT_FILE_PREFIX = "cozter-grok-prompt-"
 
 
 def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
@@ -81,24 +106,48 @@ def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
     return tuple(models)
 
 
+def _write_prompt_file(prompt: str) -> str:
+    """Write *prompt* to a private temp file and return its path."""
+    fd, path = tempfile.mkstemp(prefix=_PROMPT_FILE_PREFIX)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(prompt.encode("utf-8"))
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def _remove_prompt_file(path: str) -> None:
+    """Delete a prompt file, ignoring a race with an already-reaped path."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 class GrokBackend(Backend):
     name = "grok"
     executable = "grok"
     default_model = "grok-4.6"
     default_summary_model = "grok-4.6"
-    # Grok Build's per-model fallback menu exposes these four levels. The
-    # parser also accepts power-user values such as ``minimal`` and ``max``,
-    # but models that do not publish their own effort menu need not support
-    # them. Keep Cozter's percentage picker on the safe shared subset.
-    # effort=0 still means do not override the model.
-    effort_levels = ("low", "medium", "high", "xhigh")
+    # Default-model vocabulary. ``effort_levels_for_model`` narrows this for
+    # grok-4.5 and unpublished IDs; effort=0 still means do not override.
+    effort_levels = (*_COMMON_EFFORT_LEVELS, "xhigh")
     # Grok's model catalog is account-dependent, so do not route flexible's
     # low tier to a potentially unavailable pinned model before its picker
     # refreshes. Every unset tier uses the policy-safe default_model.
     tier_models: dict[str, str] = {}
     permission_arg_sets = {
         "full": ("--always-approve",),
-        "auto": ("--permission-mode", "auto", "--sandbox", "workspace"),
+        # Headless Grok currently ignores ``--permission-mode auto`` and
+        # reports ask/default instead. Always-approve still auto-runs tools
+        # so a chat turn cannot hang, while the workspace sandbox confines
+        # writes to CWD / Grok home / temp.
+        "auto": ("--always-approve", "--sandbox", "workspace"),
         "restricted": (
             "--permission-mode",
             "dontAsk",
@@ -106,6 +155,10 @@ class GrokBackend(Backend):
             "read-only",
             "--tools",
             "read_file,grep,list_dir",
+            # ``--tools`` is an allowlist, but Grok still exposes its MCP
+            # discovery/execution pair unless those names are denied.
+            "--disallowed-tools",
+            "search_tool,use_tool",
         ),
     }
 
@@ -113,6 +166,8 @@ class GrokBackend(Backend):
         self._cached_models: tuple[str, ...] | None = None
         self._catalog_expires_at = 0.0
         self._model_catalog_lock = threading.Lock()
+        self._prompt_files: dict[int, str] = {}
+        self._prompt_files_lock = threading.Lock()
 
     # ---- model discovery -----------------------------------------------
 
@@ -155,6 +210,24 @@ class GrokBackend(Backend):
             return _FALLBACK_MODELS
         return models
 
+    def effort_levels_for_model(
+        self, model: str | None,
+    ) -> tuple[str, ...]:
+        """Return only the effort values the selected Grok model accepts.
+
+        Grok exits the turn when ``--effort`` is not in the model's menu, so
+        unpublished and custom IDs stay on the shared three-level subset.
+        """
+        selected = (model or self.default_model).strip()
+        return _FALLBACK_MODEL_EFFORT_LEVELS.get(
+            selected, _COMMON_EFFORT_LEVELS,
+        )
+
+    def context_window_tokens(self, model: str | None) -> int | None:
+        """Return a published capacity for a known Grok CLI model ID."""
+        selected = (model or self.default_model).strip()
+        return _FALLBACK_MODEL_CONTEXT_WINDOWS.get(selected)
+
     # ---- launch ---------------------------------------------------------
 
     async def launch(
@@ -167,6 +240,7 @@ class GrokBackend(Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
+        prompt_path = _write_prompt_file(prompt)
         cmd: list[str] = [
             *executable_command(self.executable),
             "--cwd",
@@ -175,22 +249,46 @@ class GrokBackend(Backend):
             "streaming-messages-json",
         ]
         self.append_launch_options(cmd, model, effort, approval)
-        # Grok's documented non-interactive entry point. Keep it last so
-        # model/permission flags cannot be parsed as prompt text.
-        cmd += ["-p", prompt]
-        return await create_captured_subprocess(
-            cmd,
-            cwd=workspace_path,
-            # Keep launched shell commands in an owned POSIX process group;
-            # /stop and /inject can then stop the complete agent tree.
-            start_new_session=os.name != "nt",
-        )
+        # Keep the prompt argument last so model/permission flags cannot be
+        # parsed as prompt text. ``--prompt-file`` avoids the platform argv
+        # cap that ``-p`` inherits; Cozter's default history budget already
+        # exceeds Windows' CreateProcess limit.
+        cmd += ["--prompt-file", prompt_path]
+        try:
+            proc = await create_captured_subprocess(
+                cmd,
+                cwd=workspace_path,
+                # Keep launched shell commands in an owned POSIX process group;
+                # /stop and /inject can then stop the complete agent tree.
+                start_new_session=os.name != "nt",
+            )
+        except BaseException:
+            _remove_prompt_file(prompt_path)
+            raise
+        if isinstance(proc.pid, int):
+            with self._prompt_files_lock:
+                self._prompt_files[proc.pid] = prompt_path
+        else:
+            _remove_prompt_file(prompt_path)
+        return proc
+
+    async def cleanup_process(
+        self, proc: asyncio.subprocess.Process,
+    ) -> None:
+        """Remove this launch's prompt file after the process exits."""
+        path: str | None = None
+        if isinstance(proc.pid, int):
+            with self._prompt_files_lock:
+                path = self._prompt_files.pop(proc.pid, None)
+        if path is not None:
+            _remove_prompt_file(path)
 
     # ---- streaming event parsing ---------------------------------------
 
     _FILE_TOOL_NAMES = frozenset(
         {
             "search_replace",
+            "write",
             "write_file",
             "create_file",
             "edit_file",

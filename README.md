@@ -871,7 +871,7 @@ its own, only the three tiers above.
 | `codex` | `codex exec --ephemeral --json` | `gpt-5.6-sol` | `gpt-5.6-luna` |
 | `claude_code` | `claude --print --output-format stream-json --verbose` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
-| `grok` | `grok -p … --output-format streaming-messages-json` | `grok-4.6` | `grok-4.6` |
+| `grok` | `grok --prompt-file … --output-format streaming-messages-json` | `grok-4.6` | `grok-4.6` |
 | `llama` | Unauthenticated OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.3` | `glm-4.5-air` |
 
@@ -914,10 +914,13 @@ built-in direct host shell again at execution time. `claude_code` uses bypass
 only for `full`, `acceptEdits` for `auto`, and plan mode for `confirm`/`deny`.
 `copilot` uses `--yolo` only
 for `full`, `--allow-all-tools` (while retaining path and URL checks) for
-`auto`, and an explicit empty tool list for `confirm`/`deny`. Internal
-`grok` uses `--always-approve` only for `full`; `auto` runs in its workspace
-sandbox under Grok's native `auto` permission mode; and `confirm`/`deny` use
-its read-only sandbox with only `read_file`, `grep`, and `list_dir` exposed.
+`auto`, and an explicit empty tool list for `confirm`/`deny`.
+`grok` uses `--always-approve` only for `full`. `auto` still auto-approves
+tools so a headless turn cannot hang on a permission prompt, but confines
+them to Grok's workspace sandbox. Grok's native `auto` classifier is a TUI
+feature that this CLI currently ignores in headless runs, so Cozter does
+not send `--permission-mode auto`. `confirm`/`deny` use `dontAsk` with the
+read-only sandbox and only `read_file`, `grep`, and `list_dir` exposed.
 Internal router, titling, and compaction calls always use `deny`, so conversation
 content cannot elevate their permissions. For ask-before-acting behavior on
 any backend, use `/style collaborative` — it pauses the turn (via
@@ -975,7 +978,11 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative.
+authoritative. Grok's published `grok-4.6` and `grok-4.5` IDs use a 500K-token
+window for that same trigger; custom or private Grok models stay unknown
+until an operator sets `model_context_windows`. Grok delivers its prompt
+through `--prompt-file` rather than `-p`, so Cozter's history budget is not
+truncated by the platform argv limit.
 
 Provider event envelopes are treated as untrusted input. A missing, blank, or
 non-text backend error message is normalized to `Unknown error` before it is
@@ -997,7 +1004,7 @@ maps the percentage to its own vocabulary and request shape:
 | `zai` | GLM-5.3/Flash: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | Model-aware: current Fable / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.5–4.6 and Sonnet 4.6 use 4; Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
-| `grok` | 4 levels (`low`, `medium`, `high`, `xhigh`) | `--effort xhigh` |
+| `grok` | Model-aware: grok-4.6 uses 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on grok-4.6; `--effort high` otherwise |
 
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort
@@ -1014,7 +1021,7 @@ workspace:
   question and ends with `[[await]]`, pausing the queue until you reply.
   Small, reversible choices are made without asking. This is a
   backend-agnostic prompt policy, so it steers every backend (codex,
-  copilot, claude_code, llama, zai) the same way — not just the CLIs that
+  copilot, claude_code, grok, llama, zai) the same way — not just the CLIs that
   ask on their own.
 - `autonomous` — the agent decides and proceeds without asking, closer to
   a full-auto run.

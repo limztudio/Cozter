@@ -53,7 +53,7 @@ class DetachedTaskLaunch:
 # out-of-band markers Cozter understands and sets the agent's working
 # disposition. Because it rides on top of whatever the underlying CLI
 # does, it is the one lever that steers every backend (codex/copilot/
-# claude_code/llama) the same way.
+# claude_code/grok/llama/zai) the same way.
 #
 # Two variants: the collaboration policy (the Claude-Code-style
 # disposition — ask a short question and pause via [[await]] rather than

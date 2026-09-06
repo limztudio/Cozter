@@ -394,6 +394,17 @@ class GrokParseTests(unittest.TestCase):
         self.assertIn("src/main.py", r.events[0].content)
         self.assertIn("src/main.py", r.events[1].content)
 
+    def test_write_tool_is_a_file_change(self) -> None:
+        r = _run(self.backend, [{
+            "type": "assistant", "message": {"content": [{
+                "type": "tool_use", "name": "write",
+                "input": {"path": "README.md"},
+            }]},
+        }])
+        self.assertEqual(_kinds(r), ["tool", "file"])
+        self.assertIn("README.md", r.events[0].content)
+        self.assertIn("README.md", r.events[1].content)
+
     def test_terminal_result_fallback_captures_usage_and_cost(self) -> None:
         event = {
             "type": "result", "subtype": "success", "result": "done",

@@ -1,4 +1,5 @@
 import asyncio
+import glob
 import io
 import json
 import os
@@ -30,6 +31,39 @@ from Cozter.backends_agent import _openai_agent as openai_agent_mod
 from Cozter.backends_agent._openai_agent import extract_model_ids
 from Cozter.backends_agent import zai as zai_mod
 from Cozter.backends_agent.zai import ZaiBackend
+
+
+def _launch_grok_command(
+    approval: str,
+    *,
+    compaction: bool = False,
+    model: str | None = None,
+    effort: int = 0,
+    prompt: str = "summarize",
+) -> tuple[str, ...]:
+    async def run() -> tuple[str, ...]:
+        proc = mock.Mock()
+        proc.pid = 123
+        backend = GrokBackend()
+        with (
+            mock.patch.object(
+                grok_mod, "executable_command", return_value=["grok"],
+            ),
+            mock.patch.object(
+                grok_mod,
+                "create_captured_subprocess",
+                new=mock.AsyncMock(return_value=proc),
+            ) as create_process,
+        ):
+            await backend.launch(
+                "/work", prompt, model, approval,
+                compaction=compaction, effort=effort,
+            )
+        command = tuple(create_process.await_args.args[0])
+        await backend.cleanup_process(proc)
+        return command
+
+    return asyncio.run(run())
 
 
 class _DummyBackend(Backend):
@@ -169,27 +203,21 @@ class BackendPermissionCommandTests(unittest.TestCase):
         return asyncio.run(run())
 
     def _grok_command(
-        self, approval: str, *, compaction: bool = False,
+        self,
+        approval: str,
+        *,
+        compaction: bool = False,
+        model: str | None = None,
+        effort: int = 0,
+        prompt: str = "summarize",
     ) -> tuple[str, ...]:
-        async def run() -> tuple[str, ...]:
-            proc = mock.Mock()
-            with (
-                mock.patch.object(
-                    grok_mod, "executable_command", return_value=["grok"],
-                ),
-                mock.patch.object(
-                    grok_mod,
-                    "create_captured_subprocess",
-                    new=mock.AsyncMock(return_value=proc),
-                ) as create_process,
-            ):
-                await GrokBackend().launch(
-                    "/work", "summarize", None, approval,
-                    compaction=compaction,
-                )
-            return tuple(create_process.await_args.args[0])
-
-        return asyncio.run(run())
+        return _launch_grok_command(
+            approval,
+            compaction=compaction,
+            model=model,
+            effort=effort,
+            prompt=prompt,
+        )
 
     def test_permission_argument_maps_are_explicit_and_fail_restricted(self) -> None:
         mappings = (
@@ -218,11 +246,12 @@ class BackendPermissionCommandTests(unittest.TestCase):
                 "grok",
                 grok_mod.GrokBackend(),
                 ["--always-approve"],
-                ["--permission-mode", "auto", "--sandbox", "workspace"],
+                ["--always-approve", "--sandbox", "workspace"],
                 [
                     "--permission-mode", "dontAsk",
                     "--sandbox", "read-only",
                     "--tools", "read_file,grep,list_dir",
+                    "--disallowed-tools", "search_tool,use_tool",
                 ],
             ),
         )
@@ -276,7 +305,23 @@ class BackendPermissionCommandTests(unittest.TestCase):
         self.assertEqual(
             grok_command[grok_command.index("--sandbox") + 1], "read-only",
         )
+        self.assertEqual(
+            grok_command[grok_command.index("--disallowed-tools") + 1],
+            "search_tool,use_tool",
+        )
         self.assertNotIn("--always-approve", grok_command)
+        self.assertNotIn("-p", grok_command)
+
+    def test_grok_auto_launch_auto_approves_inside_the_workspace_sandbox(
+        self,
+    ) -> None:
+        command = self._grok_command("auto")
+        self.assertIn("--always-approve", command)
+        self.assertIn("--sandbox", command)
+        self.assertEqual(
+            command[command.index("--sandbox") + 1], "workspace",
+        )
+        self.assertNotIn("--permission-mode", command)
 
     def test_codex_auto_launch_uses_the_workspace_write_sandbox(self) -> None:
         command = self._codex_command("auto")
@@ -357,6 +402,25 @@ warning: ignored after the catalog
         )
         self.assertEqual(grok_mod._parse_models_output("login failed"), ())
 
+    def test_grok_fallback_metadata_covers_every_model(self) -> None:
+        specs = grok_mod._FALLBACK_MODEL_SPECS
+        self.assertEqual(
+            tuple(model for model, _efforts, _window in specs),
+            grok_mod._FALLBACK_MODELS,
+        )
+        self.assertEqual(
+            {model: efforts for model, efforts, _window in specs},
+            grok_mod._FALLBACK_MODEL_EFFORT_LEVELS,
+        )
+        self.assertEqual(
+            {model: window for model, _efforts, window in specs},
+            grok_mod._FALLBACK_MODEL_CONTEXT_WINDOWS,
+        )
+        self.assertIn(GrokBackend.default_model, grok_mod._FALLBACK_MODELS)
+        self.assertIn(
+            GrokBackend.default_summary_model, grok_mod._FALLBACK_MODELS,
+        )
+
     def test_grok_effort_uses_its_safe_four_level_fallback(self) -> None:
         backend = GrokBackend()
         self.assertEqual(
@@ -368,9 +432,47 @@ warning: ignored after the catalog
         self.assertEqual(backend.convert_effort(25), "medium")
         self.assertEqual(backend.convert_effort(50), "high")
         self.assertEqual(backend.convert_effort(100), "xhigh")
+        self.assertEqual(
+            backend.effort_levels_for_model("grok-4.6"),
+            ("low", "medium", "high", "xhigh"),
+        )
+        self.assertEqual(
+            backend.effort_levels_for_model("grok-4.5"),
+            ("low", "medium", "high"),
+        )
+        self.assertEqual(
+            backend.effort_levels_for_model("custom-model"),
+            ("low", "medium", "high"),
+        )
 
-        async def launch() -> tuple[str, ...]:
-            proc = mock.Mock()
+        command = _launch_grok_command(
+            "auto", model="grok-4.6", effort=100, prompt="hello",
+        )
+        self.assertEqual(command[command.index("--effort") + 1], "xhigh")
+
+        limited = _launch_grok_command(
+            "auto", model="grok-4.5", effort=100, prompt="hello",
+        )
+        self.assertEqual(limited[limited.index("--effort") + 1], "high")
+
+        unknown = _launch_grok_command(
+            "auto", model="company-grok", effort=100, prompt="hello",
+        )
+        self.assertEqual(unknown[unknown.index("--effort") + 1], "high")
+
+    def test_grok_context_windows_cover_only_published_cli_ids(self) -> None:
+        backend = GrokBackend()
+        self.assertEqual(backend.context_window_tokens(None), 500_000)
+        self.assertEqual(backend.context_window_tokens("grok-4.6"), 500_000)
+        self.assertEqual(backend.context_window_tokens("grok-4.5"), 500_000)
+        self.assertIsNone(backend.context_window_tokens("company-grok"))
+
+    def test_grok_prompt_is_delivered_by_file_and_cleaned_up(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 321
+        backend = GrokBackend()
+
+        async def run() -> None:
             with (
                 mock.patch.object(
                     grok_mod, "executable_command", return_value=["grok"],
@@ -382,12 +484,46 @@ warning: ignored after the catalog
                 ) as create_process,
             ):
                 await backend.launch(
-                    "/work", "hello", "grok-4.6", "auto", effort=100,
+                    "/work", "hello-prompt", "grok-4.6", "auto",
                 )
-            return tuple(create_process.await_args.args[0])
+                command = tuple(create_process.await_args.args[0])
+                self.assertIn("--prompt-file", command)
+                self.assertNotIn("-p", command)
+                path = command[command.index("--prompt-file") + 1]
+                self.assertTrue(os.path.isfile(path))
+                with open(path, encoding="utf-8") as handle:
+                    self.assertEqual(handle.read(), "hello-prompt")
+            await backend.cleanup_process(proc)
+            self.assertFalse(os.path.exists(path))
 
-        command = asyncio.run(launch())
-        self.assertEqual(command[command.index("--effort") + 1], "xhigh")
+        asyncio.run(run())
+
+    def test_grok_launch_failure_removes_the_prompt_file(self) -> None:
+        before = set(glob.glob(os.path.join(
+            tempfile.gettempdir(), f"{grok_mod._PROMPT_FILE_PREFIX}*",
+        )))
+
+        async def run() -> None:
+            with (
+                mock.patch.object(
+                    grok_mod, "executable_command", return_value=["grok"],
+                ),
+                mock.patch.object(
+                    grok_mod,
+                    "create_captured_subprocess",
+                    new=mock.AsyncMock(side_effect=OSError("boom")),
+                ),
+            ):
+                with self.assertRaises(OSError):
+                    await GrokBackend().launch(
+                        "/work", "hello-prompt", "grok-4.6", "auto",
+                    )
+
+        asyncio.run(run())
+        after = set(glob.glob(os.path.join(
+            tempfile.gettempdir(), f"{grok_mod._PROMPT_FILE_PREFIX}*",
+        )))
+        self.assertEqual(after, before)
 
     def test_codex_fallback_models_are_current_and_selectable(self) -> None:
         models = codex_mod._FALLBACK_MODELS
