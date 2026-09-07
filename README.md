@@ -887,9 +887,10 @@ workspace-policy-disabled Copilot models out of the picker; a stored Copilot
 choice also uses `auto` until it appears in that workspace's fresh catalog.
 Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
-aliases, the supported `sonnet[1m]`, `opus[1m]`, and `fable[1m]` long-context
-aliases, and verified version pins (including Fable 5.1, Fable 5, Sonnet 5,
-Opus 5, and explicit `[1m]` variants of other documented long-context models).
+aliases, the supported `sonnet[1m]`, `opus[1m]`, `fable[1m]`, and
+`opusplan[1m]` long-context aliases, and verified version pins (including
+Fable 5.1, Fable 5, Sonnet 5, Opus 5, and explicit `[1m]` variants of other
+documented long-context models).
 Only the explicit `[1m]` selections receive Cozter's 1M-token context metadata;
 aliases and bare version pins remain capacity-unknown because their active
 window can vary by account and provider. Claude Code's own `/fast` is a

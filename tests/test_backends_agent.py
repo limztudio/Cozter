@@ -1457,6 +1457,8 @@ warning: ignored after the catalog
             "sonnet[1m]",
             "opus[1m]",
             "fable[1m]",
+            "opusplan",
+            "opusplan[1m]",
             "claude-fable-5-1",
             "claude-fable-5",
             "claude-sonnet-5",
@@ -1487,7 +1489,8 @@ warning: ignored after the catalog
                     backend.context_window_tokens(model), 1_000_000,
                 )
         for model in (
-            "default", "sonnet", "claude-fable-5-1", "claude-fable-5",
+            "default", "sonnet", "opusplan", "claude-fable-5-1",
+            "claude-fable-5",
             "claude-opus-5",
             "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7",
             "claude-opus-4-6", "claude-sonnet-4-6",
@@ -1522,8 +1525,6 @@ warning: ignored after the catalog
             "claude-sonnet-5[1m]",
             "claude-fable-5[1m]",
             "claude-fable-5-1[1m]",
-            # ``opusplan`` has no [1m] entry.
-            "opusplan[1m]",
         ):
             with self.subTest(model=model):
                 self.assertNotIn(model, models)
