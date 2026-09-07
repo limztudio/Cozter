@@ -166,7 +166,13 @@ class ZaiBackend(CachedOpenAIChatBackend):
 
     default_model = "glm-5.3"
     default_summary_model = "glm-4.5-air"
-    tier_models = {"low": "glm-4.5-air", "mid": "glm-4.7", "high": "glm-5.3"}
+    # Flash is the current cheap general-endpoint model. Keep mid on GLM-4.7
+    # so the three tiers stay distinct without jumping to the glm-5.3 flagship.
+    tier_models = {
+        "low": "glm-5.3-flash",
+        "mid": "glm-4.7",
+        "high": "glm-5.3",
+    }
     # GLM-5.2 accepts seven reasoning-effort values. The GLM-5.3 family has
     # its own constrained three-level scale; other current text models expose
     # only the thinking switch, handled separately in _effort_fields.

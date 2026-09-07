@@ -106,8 +106,8 @@ class FlexibleSettingsTests(unittest.TestCase):
             self.assertEqual(
                 workspace.get_flexible_run_config(ws),
                 {
-                    "low": ("codex", "gpt-5.4-mini"),
-                    "mid": ("codex", "gpt-5.6-luna"),
+                    "low": ("codex", "gpt-5.6-luna"),
+                    "mid": ("codex", "gpt-5.6-terra"),
                     "high": ("codex", "gpt-5.6-sol"),
                 },
             )
@@ -120,7 +120,7 @@ class FlexibleSettingsTests(unittest.TestCase):
             self.assertEqual(workspace.get_flexible_model(ws, "high"), "opus")
             # Rebinding one tier leaves the others alone.
             self.assertEqual(
-                workspace.get_flexible_model(ws, "low"), "gpt-5.4-mini",
+                workspace.get_flexible_model(ws, "low"), "gpt-5.6-luna",
             )
 
     def test_copilot_tier_and_summary_defaults_use_policy_aware_auto(self) -> None:
@@ -243,7 +243,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(restarting)
         self.assertEqual(
-            self.driven, [("codex", "gpt-5.4-mini"), ("claude_code", "opus")],
+            self.driven, [("codex", "gpt-5.6-luna"), ("claude_code", "opus")],
         )
         self.assertEqual(
             self.internal, ["Flexible planner", "Flexible merge"],

@@ -35,7 +35,10 @@ _FALLBACK_MODEL_SPECS = (
     ("gpt-5.6-terra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
     ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
-    ("gpt-5.4-mini", _COMMON_EFFORT_LEVELS, 272_000),
+    # gpt-5.4 and gpt-5.4-mini retired from Codex ChatGPT sign-in on
+    # 2026-08-31; OpenAI's documented replacements are gpt-5.6-terra and
+    # gpt-5.6-luna. Keep Spark: the live CLI still lists that research
+    # preview, and it is the only remaining sub-272K Codex window.
     ("gpt-5.3-codex-spark", _COMMON_EFFORT_LEVELS, 128_000),
 )
 (
@@ -135,9 +138,12 @@ class CodexBackend(Backend):
     }
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.6-luna"
+    # Cheap/everyday/strong GPT-5.6 family. Keep the chat default on Sol:
+    # Astra is still rolling out, so a pinned gpt-6-astra default would fail
+    # closed on accounts whose live catalog has not listed it yet.
     tier_models = {
-        "low": "gpt-5.4-mini",
-        "mid": "gpt-5.6-luna",
+        "low": "gpt-5.6-luna",
+        "mid": "gpt-5.6-terra",
         "high": "gpt-5.6-sol",
     }
     common_effort_levels = _COMMON_EFFORT_LEVELS

@@ -627,9 +627,16 @@ warning: ignored after the catalog
             "gpt-5.6-terra",
             "gpt-5.6-luna",
             "gpt-5.5",
-            "gpt-5.4-mini",
             "gpt-5.3-codex-spark",
         ))
+        self.assertEqual(
+            CodexBackend.tier_models,
+            {
+                "low": "gpt-5.6-luna",
+                "mid": "gpt-5.6-terra",
+                "high": "gpt-5.6-sol",
+            },
+        )
         self.assertIn(CodexBackend.default_model, models)
         self.assertIn(CodexBackend.default_summary_model, models)
         for model in CodexBackend.tier_models.values():
@@ -674,7 +681,7 @@ warning: ignored after the catalog
             ("low", "medium", "high", "xhigh", "max"),
         )
         self.assertEqual(
-            backend.effort_levels_for_model("gpt-5.4-mini"),
+            backend.effort_levels_for_model("gpt-5.5"),
             ("low", "medium", "high", "xhigh"),
         )
         self.assertEqual(
@@ -1669,7 +1676,15 @@ class ZaiBackendTests(unittest.TestCase):
         models = zai_mod._FALLBACK_MODELS
         self.assertEqual(len(models), len(set(models)))
         self.assertEqual(ZaiBackend.default_model, "glm-5.3")
-        self.assertEqual(ZaiBackend.tier_models["high"], "glm-5.3")
+        self.assertEqual(ZaiBackend.default_summary_model, "glm-4.5-air")
+        self.assertEqual(
+            ZaiBackend.tier_models,
+            {
+                "low": "glm-5.3-flash",
+                "mid": "glm-4.7",
+                "high": "glm-5.3",
+            },
+        )
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
 
