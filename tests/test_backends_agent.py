@@ -25,6 +25,7 @@ from Cozter.backends_agent.base import (
     apply_terminal_result_event,
     fallback_model_tables,
     fresh_model_catalog,
+    messages_content_texts,
     record_backend_error,
     record_error_event,
     terminal_result_text,
@@ -121,6 +122,22 @@ class BackendSharedHelperTests(unittest.TestCase):
         catalog._catalog_expires_at = 0
         self.assertEqual(catalog._live_model_catalog(), ("model-2",))
         self.assertEqual(catalog.calls, 2)
+
+    def test_messages_content_texts_flattens_usable_envelopes(self) -> None:
+        self.assertEqual(messages_content_texts("hello"), ["hello"])
+        self.assertEqual(messages_content_texts(""), [])
+        self.assertIsNone(messages_content_texts(None))
+        self.assertIsNone(messages_content_texts({"type": "text"}))
+        self.assertEqual(
+            messages_content_texts([
+                {"type": "text", "text": "first"},
+                "raw",
+                {"type": "tool_use", "name": "Bash"},
+                {"type": "text", "text": ""},
+                {"type": "text", "text": "second"},
+            ]),
+            ["first", "second"],
+        )
 
     def test_terminal_result_helpers_cover_usage_error_and_fallback(self) -> None:
         self.assertEqual(

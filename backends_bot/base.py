@@ -38,6 +38,7 @@ from .. import (
 from ..utils import await_cancelled
 from ..utils import create_background_task
 from ..utils import drain_queue as _drain_queue
+from ..utils import ensure_lock
 from ..utils import load_json_object
 from ..utils import parse_decimal_int
 from ..utils import save_json_object
@@ -752,19 +753,11 @@ class BotPlatform(ABC):
         self._pending_input[user_id] = callback
 
     def _ensure_task_lock(self, uid: str) -> asyncio.Lock:
-        lock = self._task_locks.get(uid)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._task_locks[uid] = lock
-        return lock
+        return ensure_lock(self._task_locks, uid)
 
     def _ensure_dispatch_admission_lock(self, uid: str) -> asyncio.Lock:
         """Return the per-user barrier for durable inbound queue writes."""
-        lock = self._dispatch_admission_locks.get(uid)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._dispatch_admission_locks[uid] = lock
-        return lock
+        return ensure_lock(self._dispatch_admission_locks, uid)
 
     def _ensure_message_queue(
         self, uid: str, *, min_size: int = 0,
@@ -2340,11 +2333,7 @@ class BotPlatform(ABC):
 
     def _reply_delivery_lock(self, uid: str) -> asyncio.Lock:
         """Return the per-user lock for delivery/cancellation ordering."""
-        lock = self._reply_delivery_locks.get(uid)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._reply_delivery_locks[uid] = lock
-        return lock
+        return ensure_lock(self._reply_delivery_locks, uid)
 
     async def _get_reply_delivery_record(
         self, record_id: str,

@@ -303,6 +303,28 @@ def terminal_result_text(event: dict) -> str | None:
     return text if isinstance(text, str) and text else None
 
 
+def messages_content_texts(content: object) -> list[str] | None:
+    """Flatten Messages-style assistant ``content`` into text blocks.
+
+    Claude Code and Grok both emit either a bare string or a list of typed
+    blocks. Returns ``None`` when *content* is not one of those shapes so
+    callers can distinguish an unusable envelope from a usable one with no
+    text. Empty strings and non-text blocks are dropped.
+    """
+    if isinstance(content, str):
+        return [content] if content else []
+    if not isinstance(content, list):
+        return None
+    texts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if isinstance(text, str) and text:
+            texts.append(text)
+    return texts
+
+
 def apply_terminal_result_event(
     event: dict,
     result: AgentResult,

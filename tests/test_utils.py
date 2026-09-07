@@ -354,6 +354,15 @@ class PathBoundaryTests(unittest.TestCase):
             )
 
 
+class LockHelperTests(unittest.TestCase):
+    def test_ensure_lock_reuses_the_same_lock_per_key(self) -> None:
+        registry: dict[str, asyncio.Lock] = {}
+        first = utils.ensure_lock(registry, "a")
+        self.assertIs(first, utils.ensure_lock(registry, "a"))
+        self.assertIsNot(first, utils.ensure_lock(registry, "b"))
+        self.assertIsInstance(first, asyncio.Lock)
+
+
 class BackgroundTaskTests(unittest.TestCase):
     def test_create_background_task_logs_unhandled_exception(self) -> None:
         async def run() -> list[str]:

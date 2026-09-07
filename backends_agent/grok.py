@@ -41,6 +41,7 @@ from .base import (
     create_captured_subprocess,
     executable_command,
     fallback_model_tables,
+    messages_content_texts,
     record_backend_error,
     terminal_result_text,
 )
@@ -408,19 +409,7 @@ class GrokBackend(CachedModelCatalog, Backend):
     @staticmethod
     def _message_text(message: dict) -> str | None:
         """Flatten a complete Messages-style assistant text response."""
-        content = message.get("content")
-        if isinstance(content, str):
-            return content or None
-        if not isinstance(content, list):
+        texts = messages_content_texts(message.get("content"))
+        if texts is None:
             return None
-        texts = [
-            block["text"]
-            for block in content
-            if (
-                isinstance(block, dict)
-                and block.get("type") == "text"
-                and isinstance(block.get("text"), str)
-                and block["text"]
-            )
-        ]
         return "\n".join(texts) or None

@@ -48,11 +48,6 @@ logger = logging.getLogger(__name__)
 # Markdown -> Slack mrkdwn
 # ---------------------------------------------------------------------------
 
-# Slack mrkdwn uses the same HTML-entity escapes as Telegram; the shared
-# helper lives in formatting.py.
-_escape_mrkdwn = escape_html_entities
-
-
 # Private Use Area placeholders that won't collide with user text or
 # interfere with re.sub replacement-template parsing.
 # (Defined just below; also paired with _bold_sub for bold-first rewriting.)
@@ -82,7 +77,7 @@ def _md_to_mrkdwn(text: str) -> str:
 
 
 def _mrkdwn_line(line: str) -> str:
-    line = _escape_mrkdwn(line)
+    line = escape_html_entities(line)
     # Bold first, into placeholders, so the single-asterisk italic
     # regex below can't mis-match the `*bold*` we're about to emit.
     # Headers -> bold (Slack has no heading syntax).
@@ -100,7 +95,7 @@ def _mrkdwn_line(line: str) -> str:
 
 def _mrkdwn_code_block(lines: list[str]) -> list[str]:
     # Emit the accumulated block as-is, escaped for safety.
-    return ["```", *(_escape_mrkdwn(line) for line in lines), "```"]
+    return ["```", *(escape_html_entities(line) for line in lines), "```"]
 
 
 _SLACK_MAX_CHARS = 39_000  # Slack hard-caps around 40K; stay under.

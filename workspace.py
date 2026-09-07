@@ -7,6 +7,7 @@ from . import backends_agent
 from . import config
 from . import flexible
 from .utils import CONFIG_DIR, COZTER_DIR, is_path_within
+from .utils import ensure_lock
 from .utils import load_json_object
 from .utils import save_json_object
 
@@ -889,12 +890,7 @@ _locks: dict[str, asyncio.Lock] = {}
 def _lock_for(
     registry: dict[str, asyncio.Lock], workspace_path: str,
 ) -> asyncio.Lock:
-    canonical_path = canonicalize_workspace_path(workspace_path)
-    lock = registry.get(canonical_path)
-    if lock is None:
-        lock = asyncio.Lock()
-        registry[canonical_path] = lock
-    return lock
+    return ensure_lock(registry, canonicalize_workspace_path(workspace_path))
 
 
 def get_lock(workspace_path: str) -> asyncio.Lock:

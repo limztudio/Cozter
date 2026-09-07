@@ -30,6 +30,7 @@ from .base import (
     append_detached_task, append_text_result, apply_terminal_result_event,
     create_captured_subprocess,
     create_prompt_subprocess, executable_command,
+    messages_content_texts,
     record_error_event, terminal_result_text, truncate_status_text,
 )
 from ..utils import (
@@ -847,23 +848,15 @@ class ClaudeCodeBackend(Backend):
         # text blocks are partials and may not include the full answer.
         if event.get("type") == "result":
             return terminal_result_text(event)
-        if event.get("type") == "assistant":
-            msg = event.get("message", {}) or {}
-            if not isinstance(msg, dict):
-                return None
-            content = msg.get("content")
-            if isinstance(content, str):
-                return content or None
-            if not isinstance(content, list):
-                return None
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "text":
-                    text = block.get("text", "")
-                    if isinstance(text, str) and text:
-                        return text
-        return None
+        if event.get("type") != "assistant":
+            return None
+        msg = event.get("message") or {}
+        if not isinstance(msg, dict):
+            return None
+        texts = messages_content_texts(msg.get("content"))
+        if not texts:
+            return None
+        return texts[0]
 
     # -- helpers ----------------------------------------------------------
 

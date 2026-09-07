@@ -39,8 +39,11 @@ from .base import (
     reserve_upload_path,
     upload_limit_message,
 )
-from .formatting import render_fenced_markdown
-from .formatting import escape_html_entities, strip_html_markup
+from .formatting import (
+    escape_html_entities,
+    render_fenced_markdown,
+    strip_html_markup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +55,6 @@ _TELEGRAM_TEXT_LIMIT = 4096
 # Markdown -> Telegram HTML
 # ---------------------------------------------------------------------------
 
-# Telegram and Slack share the same HTML-entity escapes; the shared
-# helper lives in formatting.py.
-_escape_html = escape_html_entities
-
-
 def _md_to_html(text: str) -> str:
     """Convert common Markdown to Telegram-compatible HTML."""
     return render_fenced_markdown(
@@ -67,7 +65,7 @@ def _md_to_html(text: str) -> str:
 
 
 def _html_line(line: str) -> str:
-    line = _escape_html(line)
+    line = escape_html_entities(line)
     line = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", line)
     line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
     line = re.sub(r"__(.+?)__", r"<b>\1</b>", line)
@@ -78,7 +76,7 @@ def _html_line(line: str) -> str:
 
 
 def _html_code_block(lines: list[str]) -> list[str]:
-    escaped = _escape_html("\n".join(lines))
+    escaped = escape_html_entities("\n".join(lines))
     return [f"<pre>{escaped}</pre>"]
 
 

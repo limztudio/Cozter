@@ -133,6 +133,7 @@ _DETACHED_TASK_REQUEST_RE = re.compile(
     r"(?ims)^[ \t]*\[\[background:\s*(?P<prompt>.*?)\s*\]\]"
     r"[ \t]*(?:\r?\n|$)",
 )
+_EXTRA_BLANK_LINES_RE = re.compile(r"\n{3,}")
 _MAX_DETACHED_TASK_REQUESTS = 3
 _MAX_DETACHED_TASK_PROMPT_CHARS = 12_000
 
@@ -157,6 +158,11 @@ def _workspace_candidate_path(path: str, workspace_path: str) -> str:
     return path if os.path.isabs(path) else os.path.join(workspace_path, path)
 
 
+def _collapse_extra_blank_lines(text: str) -> str:
+    """Normalize leftover blank lines after stripping control markers."""
+    return _EXTRA_BLANK_LINES_RE.sub("\n\n", text).strip()
+
+
 def extract_attachment_sources(text: str, ws: str) -> tuple[str, list[str]]:
     """Parse attachment markers without copying external generated images."""
     paths: list[str] = []
@@ -177,8 +183,7 @@ def extract_attachment_sources(text: str, ws: str) -> tuple[str, list[str]]:
         return ""
 
     cleaned = _ATTACH_RE.sub(_sub, text)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned, paths
+    return _collapse_extra_blank_lines(cleaned), paths
 
 
 def _explicit_attachment_sources(
@@ -210,8 +215,7 @@ def extract_await(text: str) -> tuple[str, bool]:
     if not _AWAIT_RE.search(text):
         return text, False
     cleaned = _AWAIT_RE.sub("", text)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned, True
+    return _collapse_extra_blank_lines(cleaned), True
 
 
 def extract_detached_task_requests(text: str) -> tuple[str, list[str]]:
@@ -236,8 +240,7 @@ def extract_detached_task_requests(text: str) -> tuple[str, list[str]]:
         return ""
 
     cleaned = _DETACHED_TASK_REQUEST_RE.sub(_take, text)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned, prompts
+    return _collapse_extra_blank_lines(cleaned), prompts
 
 
 def _consume_detached_task_requests(result: AgentResult) -> None:
@@ -1109,8 +1112,7 @@ def _split_attach_markers(text: str) -> tuple[str, list[str]]:
     if not markers:
         return text, []
     cleaned = _ATTACH_RE.sub("", text)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-    return cleaned, markers
+    return _collapse_extra_blank_lines(cleaned), markers
 
 
 async def _run_flexible(

@@ -154,6 +154,17 @@ async def await_cancelled(task: Awaitable[object]) -> None:
         await task
 
 
+def ensure_lock(
+    registry: dict[str, asyncio.Lock], key: str,
+) -> asyncio.Lock:
+    """Return the lock for *key*, creating it on first use."""
+    lock = registry.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        registry[key] = lock
+    return lock
+
+
 def create_background_task(
     coro: Coroutine[Any, Any, _BackgroundResult],
     *,
