@@ -41,8 +41,9 @@ are trusted in-process code, not sandboxed extensions.
   - CLI (`python -m Cozter -cli`) — the terminal becomes the chat
 - **Per-workspace state**, scoped to `<workspace>/.cozter/`:
   sessions, last-session pointers, compaction history, agent choice,
-  model, permission level, reasoning effort, summary backend, colony
-  (long-term memory), uploads, generated image attachments, and schedules
+  model, permission, interaction style, reasoning effort, summary backend,
+  colony (long-term memory), uploads, generated image attachments, and
+  schedules
 - **Durable sessions with layered memory**: Cozter compacts older history
   from a conservative estimate of the active model's context capacity when
   that capacity is known, otherwise from the configured stored-message
@@ -837,10 +838,13 @@ the hard ones:
 ```
 
 Defaults put all three tiers on `codex` (`gpt-5.6-luna` / `gpt-5.6-terra` /
-`gpt-5.6-sol`); pointing a tier at another agent picks that agent's
-cheap/mid/strong models automatically (its `tier_models` table). `/model`
-and `/doctor` print the current wiring. A tier can only point at a *direct*
-backend — never at `flexible` itself, which would plan forever.
+`gpt-5.6-sol`). Codex keeps the high tier and chat default on Sol rather
+than Astra, which is still rolling out in some live catalogs. Pointing a
+tier at another agent picks that agent's cheap/mid/strong models
+automatically (its `tier_models` table) — for `zai` that is
+`glm-5.3-flash` / `glm-4.7` / `glm-5.3`. `/model` and `/doctor` print the
+current wiring. A tier can only point at a *direct* backend — never at
+`flexible` itself, which would plan forever.
 
 A flexible turn can make one planner call, up to 12 worker calls, and one
 merge call. Because tiers may use different backends, a single request can
@@ -985,7 +989,10 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. Grok's published `grok-4.6` and `grok-4.5` IDs use a 500K-token
+authoritative. That built-in Codex fallback is `gpt-6-astra`, the GPT-5.6
+Sol/Terra/Luna family, `gpt-5.5`, and `gpt-5.3-codex-spark` (the remaining
+sub-272K window); `gpt-5.4` and `gpt-5.4-mini` were retired from Codex
+ChatGPT sign-in. Grok's published `grok-4.6` and `grok-4.5` IDs use a 500K-token
 window for that same trigger; custom or private Grok models stay unknown
 until an operator sets `model_context_windows`. Grok delivers its prompt
 through `--prompt-file` rather than `-p`, so Cozter's history budget is not
@@ -996,7 +1003,9 @@ non-text backend error message is normalized to `Unknown error` before it is
 stored or shown, rather than exposing a provider object or breaking the turn
 parser. Claude Code and Grok apply the same Messages-style terminal `result`
 helper, so usage, cost, fallback text, and late errors stay consistent
-across those two CLIs. If a backend has
+across those two CLIs. They also share `messages_content_texts()` to flatten
+a Messages-style assistant `content` value — a bare string or a list of
+typed text blocks — into reply text. If a backend has
 already streamed an assistant reply, a late stream or terminal error is
 retained on the turn without replacing that reply.
 
@@ -1062,14 +1071,14 @@ Cozter/
 ├── workspace.py          per-workspace settings (model, permission, effort, ...)
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
-├── utils.py              shared state, queue, and backend-process helpers
+├── utils.py              shared state, queue, lock, marker-block, and backend-process helpers
 ├── tests/                unittest coverage for commands, state, queues, schedules, compaction, backends, catalogs, flexible, prompts, tools, attachments, and updates
 ├── .config/config.example.json
 │
 ├── backends_agent/       agent backends (one file per agent)
 │   ├── base.py             abstract Backend; convert_effort, supports_typed_plugins;
 │   │                       shared catalog TTL cache, fallback tables, and
-│   │                       Messages-style terminal result handling
+│   │                       Messages-style result and content helpers
 │   ├── codex.py            wraps `codex exec`
 │   ├── claude_code.py      wraps `claude --print`
 │   ├── claude_background_guard.py
@@ -1225,13 +1234,14 @@ ignored for local secrets and runtime queues.
 - Tests: `tests/conftest.py`, shared `tests/helpers.py`, plus focused
   `unittest` modules covering agent attachments, prompts, process cleanup,
   and post-turn behavior;
-  backend model defaults, shared catalog/result helpers, event parsing, and
-  llama retry; bot and Slack commands; compaction; the flexible meta-agent;
-  inject; import binding; run locks, session picking, and auto-titling;
-  platform, Slack, and Signal rich-text formatting; durable reply delivery;
-  detached tasks and Claude's background-launch guard; runtime diagnostics;
-  state fallbacks; status latency and thinking-status display; updater
-  behavior; utilities; upload limits; and the built-in/plugin tool surface
+  backend model defaults, shared catalog/result/content helpers, event
+  parsing, and llama retry; bot and Slack commands; compaction; the flexible
+  meta-agent; inject; import binding; run locks, session picking, and
+  auto-titling; platform, Slack, and Signal rich-text formatting; durable
+  reply delivery; detached tasks and Claude's background-launch guard;
+  runtime diagnostics; state fallbacks; status latency and thinking-status
+  display; updater behavior; utilities including the shared lock helper;
+  upload limits; and the built-in/plugin tool surface
 
 The normal working checkout may also contain ignored runtime state such as
 `.venv/`, `.cozter/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
@@ -1250,8 +1260,10 @@ that owns them:
   `backends_bot/formatting.py`, including Signal's styled-span input
 - Backend names, model defaults, effort bands, and health checks:
   `backends_agent/__init__.py` plus the concrete backend modules.
-  Shared catalog TTL, fallback tables, and Messages-style terminal result
-  handling live in `backends_agent/base.py`
+  Shared catalog TTL, fallback tables, Messages-style terminal result
+  handling, and assistant content flattening live in
+  `backends_agent/base.py`. Shared lock and `[TAG]` marker-block helpers
+  live in `utils.py`
 - Flexible's tiers, grading rubric, planner/merge prompts, and plan
   parsing: `flexible.py`; its orchestration loop lives in
   `agent.py:_run_flexible()` and its per-tier settings in `workspace.py`
@@ -1390,8 +1402,8 @@ subprocess) and `parse_event()` (translate the CLI's JSONL events to
 Run the current unit tests from the parent directory, or set
 `PYTHONPATH` to the parent when running inside the repository. Discovery
 covers malformed state/config fallbacks, persistent queue restoration,
-schedule parsing, backend model defaults, shared catalog/result helpers,
-event parsing, llama retry behavior, the flexible meta-agent's
+schedule parsing, backend model defaults, shared catalog/result/content
+helpers, event parsing, llama retry behavior, the flexible meta-agent's
 planning/merge, post-turn and inject flow, subprocess draining and
 exceptional-path cleanup, prompt construction, attachment handling,
 run-lock cancellation, session picking, auto-titling, compaction,
