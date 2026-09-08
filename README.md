@@ -367,7 +367,8 @@ valid HTTPS URL. A blank, malformed, or non-HTTPS override falls back to the
 default so the API key is never sent over cleartext HTTP.
 GLM Coding Plan users can instead set it to
 `https://api.z.ai/api/coding/paas/v4`. The normal endpoint's fallback already
-includes `glm-5.3` and multimodal `glm-5.3-flash`.
+includes `glm-5.3` and multimodal `glm-5.3-flash`; the Coding Plan fallback
+also offers the documented `glm-5.3[1m]` and `glm-5.3-flash[1m]` pins.
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
 mirror the llama knobs and retry behavior for the cloud call. Select `zai`
 with `/agent`, pick a model with `/model` (default `glm-5.3`), and add private
@@ -893,8 +894,8 @@ Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
 aliases, the supported `sonnet[1m]`, `opus[1m]`, `fable[1m]`, and
 `opusplan[1m]` long-context aliases, and verified version pins (including
-Fable 5.1, Fable 5, Sonnet 5, Opus 5, and explicit `[1m]` variants of other
-documented long-context models).
+Fable 5.1, Fable 5, Sonnet 5, Opus 5, `claude-sonnet-5[1m]`, and explicit
+`[1m]` variants of other documented long-context models).
 Only the explicit `[1m]` selections receive Cozter's 1M-token context metadata;
 aliases and bare version pins remain capacity-unknown because their active
 window can vary by account and provider. Claude Code's own `/fast` is a
@@ -940,8 +941,9 @@ picker queries the configured Z.ai `/models` endpoint and retains its curated
 agent-capable fallback, including text-compatible multimodal models such as
 `glm-5v-turbo`, `glm-4.6v`, and `glm-4.5v`, if the account cannot be queried.
 The normal Z.ai fallback includes the general endpoint's default
-`glm-5.3` model and multimodal `glm-5.3-flash`. Cozter maps `/effort` for
-both to Z.ai's supported `low` / `high` / `max` reasoning levels, preserves
+`glm-5.3` model and multimodal `glm-5.3-flash`. A Coding Plan base URL also
+surfaces `glm-5.3[1m]` and `glm-5.3-flash[1m]`. Cozter maps `/effort` for
+both families to Z.ai's supported `low` / `high` / `max` reasoning levels, preserves
 their opaque reasoning state between tool calls, and enables their documented
 tool-call streaming.
 It filters Z.ai's known image, OCR, and audio-only IDs because those require

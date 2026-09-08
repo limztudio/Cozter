@@ -1492,6 +1492,7 @@ warning: ignored after the catalog
             "claude-haiku-4-5-20251001",
             "claude-opus-5[1m]",
             "claude-opus-4-8[1m]",
+            "claude-sonnet-5[1m]",
         ):
             with self.subTest(model=model):
                 self.assertIn(model, models)
@@ -1537,9 +1538,9 @@ warning: ignored after the catalog
             "claude-opus-4-1",
             # Sonnet 4.5 has a 200K window; it never exposed a 1M variant.
             "claude-sonnet-4-5-20250929[1m]",
-            # The current CLI picker exposes Fable/Sonnet 5's 1M variants via
-            # aliases. Keep full suffixed IDs out until they become entries.
-            "claude-sonnet-5[1m]",
+            # Fable 5/5.1 already include 1M natively; the CLI migrates
+            # ``claude-fable-5[1m]`` to ``fable[1m]`` and does not expose
+            # those full IDs as picker entries.
             "claude-fable-5[1m]",
             "claude-fable-5-1[1m]",
         ):
@@ -1744,6 +1745,12 @@ class ZaiBackendTests(unittest.TestCase):
             backend.context_window_tokens("GLM-5.2[1M]"), 1_000_000,
         )
         self.assertEqual(
+            backend.context_window_tokens("glm-5.3[1m]"), 1_000_000,
+        )
+        self.assertEqual(
+            backend.context_window_tokens("glm-5.3-flash[1m]"), 1_000_000,
+        )
+        self.assertEqual(
             backend.context_window_tokens("glm-5v-turbo"), 200_000,
         )
         for model in (
@@ -1787,15 +1794,24 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-4-32b-0414-128k",
         ))
 
-    def test_coding_plan_fallback_matches_general_catalog_while_empty(
-        self,
-    ) -> None:
-        self.assertEqual(zai_mod._CODING_PLAN_FALLBACK_MODEL_SPECS, ())
+    def test_coding_plan_fallback_includes_documented_1m_pins(self) -> None:
+        self.assertEqual(
+            tuple(
+                spec.name for spec in zai_mod._CODING_PLAN_FALLBACK_MODEL_SPECS
+            ),
+            ("glm-5.3[1m]", "glm-5.3-flash[1m]"),
+        )
         self.assertEqual(
             zai_mod._CODING_PLAN_FALLBACK_MODELS,
-            zai_mod._FALLBACK_MODELS,
+            (
+                "glm-5.3[1m]",
+                "glm-5.3-flash[1m]",
+                *zai_mod._FALLBACK_MODELS,
+            ),
         )
         self.assertIn("glm-5.3-flash", zai_mod._FALLBACK_MODELS)
+        self.assertNotIn("glm-5.3[1m]", zai_mod._FALLBACK_MODELS)
+        self.assertNotIn("glm-5.3-flash[1m]", zai_mod._FALLBACK_MODELS)
         self.assertEqual(
             zai_mod._coding_plan_fallback_models(
                 "https://api.z.ai/api/coding/paas/v4/",
@@ -2080,7 +2096,9 @@ class ZaiBackendTests(unittest.TestCase):
 
     def test_glm_5_3_family_uses_its_reasoning_only_effort_scale(self) -> None:
         backend = ZaiBackend()
-        for model in ("GLM-5.3", "GLM-5.3-FLASH"):
+        for model in (
+            "GLM-5.3", "GLM-5.3-FLASH", "glm-5.3[1m]", "glm-5.3-flash[1m]",
+        ):
             with self.subTest(model=model):
                 self.assertEqual(
                     backend.effort_levels_for_model(model),
@@ -2115,10 +2133,12 @@ class ZaiBackendTests(unittest.TestCase):
         backend = ZaiBackend()
         self.assertEqual(
             zai_mod._PRESERVED_THINKING_MODELS,
-            set(zai_mod._FALLBACK_MODELS) - {"glm-4-32b-0414-128k"},
+            set(zai_mod._CODING_PLAN_FALLBACK_MODELS)
+            - {"glm-4-32b-0414-128k"},
         )
         for model in (
-            "glm-5.3", "glm-5.3-flash", "glm-5.2", "GLM-5.2[1M]",
+            "glm-5.3", "glm-5.3-flash", "glm-5.3-flash[1m]",
+            "glm-5.2", "GLM-5.2[1M]",
             "glm-4.5-air",
         ):
             with self.subTest(model=model):
@@ -2144,6 +2164,8 @@ class ZaiBackendTests(unittest.TestCase):
     def test_documented_glms_stream_tool_call_arguments(self) -> None:
         backend = ZaiBackend()
         expected_models = {
+            "glm-5.3[1m]",
+            "glm-5.3-flash[1m]",
             "glm-5.3",
             "glm-5.3-flash",
             "glm-5.2",

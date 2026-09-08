@@ -71,7 +71,9 @@ _ONE_MILLION_CONTEXT_MODELS = frozenset({
     # current CLI exposes [1m] variants for Sonnet, Opus, Fable, and the
     # opusplan hybrid. Keep the capacity attached only to the explicit
     # selection: an ordinary alias can resolve through a provider or account
-    # tier with a smaller window.
+    # tier with a smaller window. ``claude-sonnet-5[1m]`` is the CLI's
+    # documented 1M shorthand for Sonnet 5; Fable 5/5.1 already include 1M
+    # natively, so their full ``[1m]`` IDs are not catalogued here.
     "sonnet[1m]",
     "opus[1m]",
     "fable[1m]",
@@ -80,6 +82,7 @@ _ONE_MILLION_CONTEXT_MODELS = frozenset({
     "claude-opus-5[1m]",
     "claude-opus-4-8[1m]",
     "claude-opus-4-6[1m]",
+    "claude-sonnet-5[1m]",
     "claude-sonnet-4-6[1m]",
 })
 
@@ -553,8 +556,10 @@ class ClaudeCodeBackend(Backend):
     #   - ``[1m]`` is only valid on aliases/models whose registry exposes a
     #     long-context variant. The current aliases are ``sonnet[1m]``,
     #     ``opus[1m]``, ``fable[1m]``, and ``opusplan[1m]``. Sonnet 4.5
-    #     remains a 200K model. Keep full Fable/Sonnet suffixes out of this
-    #     curated picker unless the CLI exposes them as picker entries.
+    #     remains a 200K model. The CLI documents ``claude-sonnet-5[1m]`` as
+    #     Sonnet 5's 1M shorthand; keep full Fable ``[1m]`` IDs out because
+    #     Fable 5/5.1 already include 1M and the CLI migrates
+    #     ``claude-fable-5[1m]`` to ``fable[1m]``.
     #   - Fast mode is a session toggle (``/fast``) on Opus 5/4.8/4.7, not a
     #     model ID. The ``claude-opus-4-*-fast`` strings are retired API IDs:
     #     4.6-fast silently degrades to standard Opus 4.6, and 4.7-fast errors
@@ -589,6 +594,7 @@ class ClaudeCodeBackend(Backend):
         "claude-opus-5[1m]",
         "claude-opus-4-8[1m]",
         "claude-opus-4-6[1m]",
+        "claude-sonnet-5[1m]",
         "claude-sonnet-4-6[1m]",
     )
     default_model = "default"

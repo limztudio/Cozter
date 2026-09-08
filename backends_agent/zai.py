@@ -80,10 +80,14 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
 )
 # Extra IDs that the GLM Coding Plan endpoint accepts but the general Open
-# Platform endpoint rejects. Empty now that GLM-5.3-Flash is a public general
-# chat-completions model; keep the split so a later Coding Plan-only ID cannot
-# leak into the default fallback.
-_CODING_PLAN_FALLBACK_MODEL_SPECS: tuple[_FallbackModelSpec, ...] = ()
+# Platform endpoint rejects. GLM-5.3 and GLM-5.3-Flash are public general
+# chat-completions models; the ``[1m]`` spelling is the Coding Plan's
+# documented Claude Code long-context pin and must not leak into the
+# default fallback.
+_CODING_PLAN_FALLBACK_MODEL_SPECS = (
+    _FallbackModelSpec("glm-5.3[1m]", 1_000_000, True, True),
+    _FallbackModelSpec("glm-5.3-flash[1m]", 1_000_000, True, True),
+)
 _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _CODING_PLAN_FALLBACK_MODELS = tuple(
     spec.name for spec in (
@@ -146,8 +150,9 @@ def _capability_model_id(model: str | None) -> str:
     """Normalize Z.ai's model suffixes for local capability lookups.
 
     The request must keep the exact selected ID -- notably the Coding Plan's
-    ``glm-5.2[1m]`` long-context spelling -- while effort, tool-streaming,
-    context, and preserved-thinking support are shared with its base model.
+    ``glm-5.3[1m]`` / ``glm-5.3-flash[1m]`` long-context spelling -- while
+    effort, tool-streaming, context, and preserved-thinking support are
+    shared with its base model.
     """
     return (model or "").strip().casefold().removesuffix("[1m]")
 
