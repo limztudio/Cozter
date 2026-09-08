@@ -28,7 +28,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import threading
 
 from .base import (
     CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
@@ -36,14 +35,15 @@ from .base import (
     Backend,
     CachedModelCatalog,
     ChatEvent,
-    append_text_result,
+    ProcessResourceMap,
+    apply_messages_assistant_content,
     apply_terminal_result_event,
     create_captured_subprocess,
     executable_command,
+    extract_messages_style_agent_text,
     fallback_model_tables,
-    messages_content_texts,
     record_backend_error,
-    terminal_result_text,
+    summarize_cli_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,8 +162,7 @@ class GrokBackend(CachedModelCatalog, Backend):
 
     def __init__(self) -> None:
         super().__init__()
-        self._prompt_files: dict[int, str] = {}
-        self._prompt_files_lock = threading.Lock()
+        self._prompt_files = ProcessResourceMap()
 
     # ---- model discovery -----------------------------------------------
 
@@ -252,16 +251,14 @@ class GrokBackend(CachedModelCatalog, Backend):
             raise
         # Key by the Process object, not PID: concurrent turns on this
         # singleton can otherwise clobber each other after PID reuse.
-        with self._prompt_files_lock:
-            self._prompt_files[id(proc)] = prompt_path
+        self._prompt_files.remember(proc, prompt_path)
         return proc
 
     async def cleanup_process(
         self, proc: asyncio.subprocess.Process,
     ) -> None:
         """Remove this launch's prompt file after the process exits."""
-        with self._prompt_files_lock:
-            path = self._prompt_files.pop(id(proc), None)
+        path = self._prompt_files.pop(proc)
         if path is not None:
             _remove_prompt_file(path)
 
@@ -281,7 +278,16 @@ class GrokBackend(CachedModelCatalog, Backend):
         etype = event.get("type", "")
 
         if etype == "assistant":
-            self._handle_assistant_message(event, result)
+            message = event.get("message") or {}
+            if not isinstance(message, dict):
+                return
+            apply_messages_assistant_content(
+                message.get("content"),
+                result,
+                on_tool_use=lambda block: self._append_tool_event(
+                    block, result,
+                ),
+            )
             return
 
         if etype == "result":
@@ -317,40 +323,7 @@ class GrokBackend(CachedModelCatalog, Backend):
 
     def extract_agent_text(self, event: dict) -> str | None:
         """Return Grok's terminal reply for internal summary calls."""
-        if event.get("type") == "result":
-            return terminal_result_text(event)
-        if event.get("type") != "assistant":
-            return None
-        message = event.get("message") or {}
-        if not isinstance(message, dict):
-            return None
-        return self._message_text(message)
-
-    def _handle_assistant_message(
-        self,
-        event: dict,
-        result: AgentResult,
-    ) -> None:
-        message = event.get("message") or {}
-        if not isinstance(message, dict):
-            return
-        content = message.get("content")
-        if isinstance(content, str):
-            if content:
-                append_text_result(result, content)
-            return
-        if not isinstance(content, list):
-            return
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            block_type = block.get("type")
-            if block_type == "text":
-                text = block.get("text")
-                if isinstance(text, str) and text:
-                    append_text_result(result, text)
-            elif block_type == "tool_use":
-                self._append_tool_event(block, result)
+        return extract_messages_style_agent_text(event)
 
     @staticmethod
     def _error_message(event: dict) -> str:
@@ -381,19 +354,14 @@ class GrokBackend(CachedModelCatalog, Backend):
         tool_input = block.get("input")
         if not isinstance(tool_input, dict):
             tool_input = {}
-        command = tool_input.get("command") or tool_input.get("cmd")
         path = (
             tool_input.get("path")
             or tool_input.get("file_path")
             or tool_input.get("file")
         )
-        if isinstance(command, str) and command:
-            summary = f"$ {command}"
-        elif isinstance(path, str) and path:
-            summary = f"{name}: {path}"
-        else:
-            summary = name
-        result.events.append(ChatEvent(kind="tool", content=summary))
+        result.events.append(ChatEvent(
+            kind="tool", content=summarize_cli_tool(name, tool_input),
+        ))
 
         if name in self._FILE_TOOL_NAMES and isinstance(path, str) and path:
             result.events.append(
@@ -402,11 +370,3 @@ class GrokBackend(CachedModelCatalog, Backend):
                     content=f"📄 changed: {path}",
                 )
             )
-
-    @staticmethod
-    def _message_text(message: dict) -> str | None:
-        """Flatten a complete Messages-style assistant text response."""
-        texts = messages_content_texts(message.get("content"))
-        if texts is None:
-            return None
-        return "\n".join(texts) or None

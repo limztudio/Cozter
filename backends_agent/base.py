@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..utils import (
@@ -139,6 +140,26 @@ class CachedModelCatalog:
                 time.monotonic() + self._model_catalog_ttl_sec
             )
             return models
+
+
+class ProcessResourceMap:
+    """Map a live subprocess object to one per-launch resource path.
+
+    Key by ``id(proc)``, not PID: concurrent turns on a singleton backend
+    can otherwise clobber each other after PID reuse.
+    """
+
+    def __init__(self) -> None:
+        self._items: dict[int, str] = {}
+        self._lock = threading.Lock()
+
+    def remember(self, proc: object, path: str) -> None:
+        with self._lock:
+            self._items[id(proc)] = path
+
+    def pop(self, proc: object) -> str | None:
+        with self._lock:
+            return self._items.pop(id(proc), None)
 
 
 @dataclass
@@ -325,6 +346,57 @@ def messages_content_texts(content: object) -> list[str] | None:
     return texts
 
 
+def extract_messages_style_agent_text(event: dict) -> str | None:
+    """Return Messages-style terminal or assistant text from *event*.
+
+    Claude Code and Grok share this envelope: a terminal ``result`` string
+    is preferred for internal summary calls, with streamed assistant
+    ``content`` as the fallback when the turn has not finished.
+    """
+    if event.get("type") == "result":
+        return terminal_result_text(event)
+    if event.get("type") != "assistant":
+        return None
+    message = event.get("message") or {}
+    if not isinstance(message, dict):
+        return None
+    texts = messages_content_texts(message.get("content"))
+    if not texts:
+        return None
+    return "\n".join(texts)
+
+
+def apply_messages_assistant_content(
+    content: object,
+    result: AgentResult,
+    *,
+    on_tool_use: Callable[[dict], None] | None = None,
+) -> None:
+    """Record Messages-style assistant text and dispatch ``tool_use`` blocks.
+
+    Anthropic and Grok allow ``content`` to be a bare string or a list of
+    typed blocks. Non-dict list entries are skipped so a malformed envelope
+    cannot crash the turn. Provider-specific tool handling stays with the
+    caller.
+    """
+    if isinstance(content, str):
+        if content:
+            append_text_result(result, content)
+        return
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            text = block.get("text")
+            if isinstance(text, str) and text:
+                append_text_result(result, text)
+        elif block_type == "tool_use" and on_tool_use is not None:
+            on_tool_use(block)
+
+
 def apply_terminal_result_event(
     event: dict,
     result: AgentResult,
@@ -362,6 +434,25 @@ def truncate_status_text(text: object, *, limit: int = 200) -> str:
     """Return a clipped preview for status events."""
     value = text if isinstance(text, str) else str(text)
     return value if len(value) <= limit else value[:limit] + "..."
+
+
+def summarize_cli_tool(name: object, tool_input: object) -> str:
+    """Return a compact status line for a provider CLI tool call."""
+    label = name if isinstance(name, str) and name else "tool"
+    if not isinstance(tool_input, dict):
+        return label
+    command = tool_input.get("command") or tool_input.get("cmd")
+    if isinstance(command, str) and command:
+        return f"$ {command}"
+    path = (
+        tool_input.get("path")
+        or tool_input.get("file_path")
+        or tool_input.get("file")
+        or tool_input.get("filename")
+    )
+    if isinstance(path, str) and path:
+        return f"{label}: {path}"
+    return label
 
 
 async def create_prompt_subprocess(

@@ -387,16 +387,12 @@ def _copy_generated_image_into_workspace(
         return src_real
 
     try:
-        dest_dir = workspace_mod.workspace_state_path(
-            workspace_path, "generated_images",
-        )
-        os.makedirs(dest_dir, exist_ok=True)
         # ``.cozter`` is workspace state, but a writable workspace can still
-        # contain a symlink at this path.  Resolve after creating the
-        # directory and reject an escape *before* copying: otherwise an
-        # explicitly allowed external image could be written through that
-        # symlink somewhere outside the workspace.
-        dest_dir = workspace_mod.workspace_state_path(
+        # contain a symlink at this path.  Create, then re-resolve, and
+        # reject an escape *before* copying: otherwise an explicitly allowed
+        # external image could be written through that symlink somewhere
+        # outside the workspace.
+        dest_dir = workspace_mod.ensure_workspace_state_dir(
             workspace_path, "generated_images",
         )
         if not is_path_within(dest_dir, ws_real):

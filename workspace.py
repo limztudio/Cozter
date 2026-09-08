@@ -84,6 +84,20 @@ def workspace_state_path(workspace_path: str, *parts: str) -> str:
     return candidate
 
 
+def ensure_workspace_state_dir(workspace_path: str, *parts: str) -> str:
+    """Create a nested workspace-state directory, then re-check containment.
+
+    ``workspace_state_path`` validates existing components. Creating a new
+    nested directory can follow a pre-existing symlink, so the path is
+    resolved again after ``makedirs``.
+    """
+    if not parts:
+        raise ValueError("invalid workspace state path component")
+    path = workspace_state_path(workspace_path, *parts)
+    os.makedirs(path, exist_ok=True)
+    return workspace_state_path(workspace_path, *parts)
+
+
 def _load_all() -> dict:
     """Load workspace state.
 

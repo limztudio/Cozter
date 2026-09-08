@@ -417,8 +417,9 @@ def summarize_arg(
     key: str,
     *,
     max_chars: int = 200,
+    default: str = "",
 ) -> str:
-    value = args.get(key, "")
+    value = args.get(key, default)
     if not isinstance(value, str):
         value = str(value)
     return f"{action}: {value[:max_chars]}" + (
@@ -900,11 +901,6 @@ def _move_symlink_no_clobber(source_path: str, target_path: str) -> bool:
     return True
 
 
-def _remove_owned_target(target_path: str, expected: os.stat_result) -> None:
-    """Remove the target only when it still names the file we just created."""
-    _unlink_if_same_file(target_path, expected)
-
-
 def _complete_no_clobber_move(
     source_path: str,
     target_path: str,
@@ -915,12 +911,12 @@ def _complete_no_clobber_move(
     try:
         current_source = os.stat(source_path, follow_symlinks=False)
     except OSError as exc:
-        _remove_owned_target(target_path, target_stat)
+        _unlink_if_same_file(target_path, target_stat)
         raise OSError("source changed while move was in progress") from exc
     if (current_source.st_dev, current_source.st_ino) != (
         source_stat.st_dev, source_stat.st_ino,
     ):
-        _remove_owned_target(target_path, target_stat)
+        _unlink_if_same_file(target_path, target_stat)
         raise OSError("source changed while move was in progress")
     try:
         os.unlink(source_path)
@@ -928,7 +924,7 @@ def _complete_no_clobber_move(
         # Preserve all-or-nothing behavior when the target was ours.  If a
         # different actor replaced it, _unlink_if_same_file leaves that newer
         # destination untouched.
-        _remove_owned_target(target_path, target_stat)
+        _unlink_if_same_file(target_path, target_stat)
         raise
 
 

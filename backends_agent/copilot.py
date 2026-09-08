@@ -37,9 +37,10 @@ import threading
 import time
 
 from .base import (
-    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
+    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, ProcessResourceMap,
+    append_text_result,
     create_captured_subprocess, executable_command, fresh_model_catalog,
-    record_backend_error, truncate_status_text,
+    record_backend_error, summarize_cli_tool, truncate_status_text,
 )
 from ..utils import terminate_windows_process_tree
 
@@ -213,8 +214,7 @@ class CopilotBackend(Backend):
         ] = {}
         self._workspace_fallback_expires_at: dict[str, float] = {}
         self._models_lock = threading.Lock()
-        self._process_homes: dict[int, str] = {}
-        self._process_homes_lock = threading.Lock()
+        self._process_homes = ProcessResourceMap()
 
     def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
         """Return the effort vocabulary supported by a selected model.
@@ -531,16 +531,14 @@ class CopilotBackend(Backend):
         # Key by the Process object, not PID: concurrent turns on this
         # singleton can otherwise delete another run's private home after
         # PID reuse.
-        with self._process_homes_lock:
-            self._process_homes[id(proc)] = isolated_home
+        self._process_homes.remember(proc, isolated_home)
         return proc
 
     async def cleanup_process(
         self, proc: asyncio.subprocess.Process,
     ) -> None:
         """Remove this launch's private Copilot home after it exits."""
-        with self._process_homes_lock:
-            home = self._process_homes.pop(id(proc), None)
+        home = self._process_homes.pop(proc)
         if home is not None:
             await asyncio.to_thread(_remove_isolated_copilot_home, home)
 
@@ -570,7 +568,7 @@ class CopilotBackend(Backend):
             )
             inp = event.get("input") or event.get("args") or {}
             result.events.append(ChatEvent(
-                kind="tool", content=self._summarize_tool(tool, inp),
+                kind="tool", content=summarize_cli_tool(tool, inp),
             ))
             return
 
@@ -664,19 +662,6 @@ class CopilotBackend(Backend):
                     if isinstance(inner, str) and inner.strip():
                         return inner
         return None
-
-    @staticmethod
-    def _summarize_tool(tool: str, inp: dict) -> str:
-        if not isinstance(inp, dict):
-            return tool
-        # Common patterns: {command, cmd} for shells; {path, file} for edits
-        cmd = inp.get("command") or inp.get("cmd")
-        if cmd:
-            return f"$ {cmd}"
-        path = inp.get("path") or inp.get("file") or inp.get("filename")
-        if path:
-            return f"{tool}: {path}"
-        return tool
 
 
 def _parse_acp_model_options(payload: object) -> tuple[str, ...]:

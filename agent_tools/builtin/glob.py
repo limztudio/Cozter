@@ -11,6 +11,7 @@ from ..base import (
     iter_workspace_files,
     object_parameters,
     require_nonempty_string_arg,
+    summarize_arg,
 )
 
 
@@ -85,4 +86,4 @@ class GlobTool(AgentTool):
         return matches
 
     def summarize(self, args: dict) -> str:
-        return f"glob: {args.get('pattern', '?')}"
+        return summarize_arg("glob", args, "pattern", default="?")

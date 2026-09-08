@@ -23,12 +23,16 @@ from Cozter.backends_agent.base import (
     Backend,
     CachedModelCatalog,
     ChatEvent,
+    ProcessResourceMap,
+    apply_messages_assistant_content,
     apply_terminal_result_event,
+    extract_messages_style_agent_text,
     fallback_model_tables,
     fresh_model_catalog,
     messages_content_texts,
     record_backend_error,
     record_error_event,
+    summarize_cli_tool,
     terminal_result_text,
 )
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
@@ -139,6 +143,76 @@ class BackendSharedHelperTests(unittest.TestCase):
             ]),
             ["first", "second"],
         )
+
+    def test_extract_messages_style_agent_text_prefers_result(self) -> None:
+        self.assertEqual(
+            extract_messages_style_agent_text({
+                "type": "result", "result": "done",
+            }),
+            "done",
+        )
+        self.assertEqual(
+            extract_messages_style_agent_text({
+                "type": "assistant",
+                "message": {"content": [
+                    {"type": "text", "text": "first"},
+                    {"type": "text", "text": "second"},
+                ]},
+            }),
+            "first\nsecond",
+        )
+        self.assertIsNone(extract_messages_style_agent_text({
+            "type": "assistant", "message": "nope",
+        }))
+        self.assertIsNone(extract_messages_style_agent_text({
+            "type": "user", "result": "done",
+        }))
+
+    def test_apply_messages_assistant_content_records_text_and_tools(self) -> None:
+        result = AgentResult()
+        tools: list[str] = []
+        apply_messages_assistant_content(
+            [
+                {"type": "text", "text": "hello"},
+                "raw",
+                {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+                {"type": "text", "text": "world"},
+            ],
+            result,
+            on_tool_use=lambda block: tools.append(str(block.get("name"))),
+        )
+        self.assertEqual(result.text, "world")
+        self.assertEqual(
+            [event.content for event in result.events if event.kind == "text"],
+            ["hello", "world"],
+        )
+        self.assertEqual(tools, ["Bash"])
+
+        string_result = AgentResult()
+        apply_messages_assistant_content("plain", string_result)
+        self.assertEqual(string_result.text, "plain")
+
+    def test_summarize_cli_tool_prefers_command_then_path(self) -> None:
+        self.assertEqual(
+            summarize_cli_tool("Bash", {"command": "ls"}),
+            "$ ls",
+        )
+        self.assertEqual(
+            summarize_cli_tool("Write", {"file_path": "a.py"}),
+            "Write: a.py",
+        )
+        self.assertEqual(summarize_cli_tool("", None), "tool")
+        self.assertEqual(summarize_cli_tool("Read", {"path": 3}), "Read")
+
+    def test_process_resource_map_keys_by_object_identity(self) -> None:
+        resources = ProcessResourceMap()
+        first = object()
+        second = object()
+        resources.remember(first, "/tmp/a")
+        resources.remember(second, "/tmp/b")
+        self.assertEqual(resources.pop(first), "/tmp/a")
+        self.assertIsNone(resources.pop(first))
+        self.assertEqual(resources.pop(second), "/tmp/b")
 
     def test_terminal_result_helpers_cover_usage_error_and_fallback(self) -> None:
         self.assertEqual(

@@ -91,11 +91,7 @@ def _record_with_required_string_fields(
 
 def ensure_upload_dir(workspace_path: str) -> str:
     """Return the workspace upload directory, creating it if needed."""
-    upload_dir = workspace.workspace_state_path(workspace_path, UPLOADS_DIR)
-    os.makedirs(upload_dir, exist_ok=True)
-    # Validate once more after creation: a pre-existing nested symlink can
-    # otherwise redirect an attachment write outside the selected workspace.
-    return workspace.workspace_state_path(workspace_path, UPLOADS_DIR)
+    return workspace.ensure_workspace_state_dir(workspace_path, UPLOADS_DIR)
 
 
 @contextmanager

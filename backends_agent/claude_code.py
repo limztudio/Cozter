@@ -27,11 +27,12 @@ from dataclasses import dataclass, field
 
 from .base import (
     AgentResult, Backend, ChatEvent, DetachedTaskStatus,
-    append_detached_task, append_text_result, apply_terminal_result_event,
+    append_detached_task, apply_messages_assistant_content,
+    apply_terminal_result_event,
     create_captured_subprocess,
     create_prompt_subprocess, executable_command,
-    messages_content_texts,
-    record_error_event, terminal_result_text, truncate_status_text,
+    extract_messages_style_agent_text,
+    record_error_event, truncate_status_text,
 )
 from ..utils import (
     close_subprocess_pipe, is_path_within, wait_for_process_exit,
@@ -809,15 +810,11 @@ class ClaudeCodeBackend(Backend):
             msg = event.get("message", {}) or {}
             if not isinstance(msg, dict):
                 return
-            content = msg.get("content")
-            if isinstance(content, str):
-                if content:
-                    append_text_result(result, content)
-                return
-            if not isinstance(content, list):
-                return
-            for block in content:
-                self._handle_assistant_block(block, result)
+            apply_messages_assistant_content(
+                msg.get("content"),
+                result,
+                on_tool_use=lambda block: self._emit_tool_event(block, result),
+            )
             return
 
         if etype == "result":
@@ -852,37 +849,9 @@ class ClaudeCodeBackend(Backend):
         # Compaction prefers the terminal result.result field since it's
         # the aggregated, fully-rendered final reply. Streaming assistant
         # text blocks are partials and may not include the full answer.
-        if event.get("type") == "result":
-            return terminal_result_text(event)
-        if event.get("type") != "assistant":
-            return None
-        msg = event.get("message") or {}
-        if not isinstance(msg, dict):
-            return None
-        texts = messages_content_texts(msg.get("content"))
-        if not texts:
-            return None
-        return "\n".join(texts)
+        return extract_messages_style_agent_text(event)
 
     # -- helpers ----------------------------------------------------------
-
-    def _handle_assistant_block(
-        self, block: object, result: AgentResult,
-    ) -> None:
-        # Anthropic allows ``content`` to be either a list of typed blocks
-        # or, for plain-text messages, a bare string. Iterating yields
-        # dicts normally, but a non-dict entry must not raise here and
-        # crash the turn.
-        if not isinstance(block, dict):
-            return
-        btype = block.get("type")
-        if btype == "text":
-            text = block.get("text", "")
-            if isinstance(text, str) and text:
-                append_text_result(result, text)
-            return
-        if btype == "tool_use":
-            self._emit_tool_event(block, result)
 
     def _handle_user_tool_results(
         self, event: dict, result: AgentResult,

@@ -21,6 +21,7 @@ from Cozter.agent_tools.base import (
     path_replacement_parameters,
     read_bounded_text,
     replacement_properties,
+    summarize_arg,
     validate_replacement_strings,
     write_text_after_edit,
 )
@@ -59,6 +60,16 @@ class AgentToolHelperTests(unittest.TestCase):
         self.assertEqual(
             coerce_int_arg(float("inf"), default=10, minimum=1, maximum=20),
             10,
+        )
+
+    def test_summarize_arg_uses_default_and_truncates(self) -> None:
+        self.assertEqual(
+            summarize_arg("glob", {}, "pattern", default="?"),
+            "glob: ?",
+        )
+        self.assertEqual(
+            summarize_arg("grep", {"pattern": "a" * 201}, "pattern"),
+            "grep: " + ("a" * 200) + "...",
         )
 
     def test_read_file_rejects_non_finite_range_values(self) -> None:

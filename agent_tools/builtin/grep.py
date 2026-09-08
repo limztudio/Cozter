@@ -17,6 +17,7 @@ from ..base import (
     object_parameters,
     require_nonempty_string_arg,
     resolve_inside_workspace,
+    summarize_arg,
 )
 
 # Skip grep on files bigger than this - usually binary or generated.
@@ -168,7 +169,7 @@ class GrepTool(AgentTool):
         return results
 
     def summarize(self, args: dict) -> str:
-        return f"grep: {args.get('pattern', '?')}"
+        return summarize_arg("grep", args, "pattern", default="?")
 
 
 def _grep_scan_timeout() -> float:
