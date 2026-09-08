@@ -48,9 +48,12 @@ are trusted in-process code, not sandboxed extensions.
   from a conservative estimate of the active model's context capacity when
   that capacity is known, otherwise from the configured stored-message
   fallback. It writes a scratch summary and rewrites its long-term-memory
-  list while retaining the latest five raw messages. Colony, long-term
-  memory, summaries, and recent messages are prepended subject to the
-  configured character budget; the new user message stays intact
+  list while retaining the latest five raw messages. If a pass covers
+  fewer than five ordinary messages (a handful of large ones), it keeps
+  one fewer than it covered so history still shrinks instead of retrying
+  the same prefix. Colony, long-term memory, summaries, and recent
+  messages are prepended subject to the configured character budget; the
+  new user message stays intact
 - **Persistent turn queues on Telegram, Slack, and Signal**: if a user sends
   more work while an agent turn is running, or while an update restart is
   pending, the messages are queued on disk and restored after restart
@@ -486,6 +489,9 @@ Cozter also keeps its runtime state physically inside that canonical
 workspace. When opening or using a workspace, it refuses a `.cozter`
 directory—or an existing state component such as `sessions/`, `uploads/`, or
 `generated_images/`—that resolves through a symlink outside the workspace.
+Creating a nested state directory such as `uploads/` or `generated_images/`
+goes through `ensure_workspace_state_dir()`, which re-resolves the path after
+`makedirs` so a symlink planted during creation cannot escape.
 Symlinks whose resolved targets remain inside the workspace continue to work.
 
 Foreground agent turns for one workspace are serialized, including turns from
@@ -533,14 +539,15 @@ summary and sends a contiguous oldest prefix of raw history; even when its
 first raw message alone is too large, it sends a marked prefix so a later pass
 can advance the history without skipping to a newer message. After a successful
 partial compaction, Cozter atomically retains that first raw message's unseen
-suffix, so text that was not sent to the summarizer is never discarded. A
-failed or stale compaction leaves the original message unchanged. Colony
-consolidation caps its aggregate input at 100,000 characters, reserves at most
-25,000 for the previous colony list, and keeps every included session block
-complete when
-it trims a long title or memory item. These limits affect only the internal
-maintenance prompt; compaction and colony state are rewritten only after a
-successful response.
+suffix, so text that was not sent to the summarizer is never discarded. When a
+successful pass covers five or fewer ordinary messages, it keeps one fewer
+than that cover count instead of the usual five, so a prefix of large messages
+cannot stall compaction forever. A failed or stale compaction leaves the
+original message unchanged. Colony consolidation caps its aggregate input at
+100,000 characters, reserves at most 25,000 for the previous colony list, and
+keeps every included session block complete when it trims a long title or
+memory item. These limits affect only the internal maintenance prompt;
+compaction and colony state are rewritten only after a successful response.
 
 For a direct agent turn, automatic compaction follows that selected model's
 known input window. For a flexible turn, it follows the smallest known window
@@ -616,7 +623,8 @@ An accepted `/inject` is either folded into a restarted turn or rejected once
 the final reply has closed its injection window. This applies to every
 `flexible` phase—including planning and merge calls as well as workers—so
 context sent while the meta-agent is working cannot be silently lost between
-phases.
+phases. A failed planner still keeps a pending `/inject` for the fallback
+high-tier turn rather than dropping it.
 
 `/bg` (or `/background`) currently uses Claude Code, so choose `claude_code`
 with `/agent` first. Cozter persists the external task ID, polls independently, and sends
@@ -787,6 +795,8 @@ model, keeping accidental huge outputs from consuming the whole context.
 `read_file` reads at most 128 KiB per call; its line-offset scan is also
 bounded at 16 MiB so a pathological offset cannot leave a worker thread
 walking an enormous file.
+`list_dir` and `tree` skip an entry whose `is_dir()` raises (a dangling
+symlink, ELOOP, or vanished file) instead of aborting the rest of the listing.
 `grep` only opens regular files up to 1 MB and runs its regex scan in a
 killable worker process. It stops and reaps that worker after the smaller of
 `tool_timeout` and 30 seconds, so an expensive pattern cannot keep consuming
@@ -907,7 +917,8 @@ session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama
 and Z.ai discover models live from their configured HTTP endpoints.
 `llama` and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
-and points at Z.ai's endpoint. Its text chat-completion models from GLM-4.6
+and points at Z.ai's endpoint. That loop reuses one HTTP session for the
+turn's tool calls and retries. Z.ai's text chat-completion models from GLM-4.6
 onward, plus multimodal `glm-5.3-flash`, opt into Z.ai's incremental
 tool-call argument stream; older vision models use their standard streamed
 function-call deltas because that vision request schema does not accept
@@ -988,7 +999,9 @@ history or get exported to GitHub web and mobile; Cozter's workspace session
 remains the durable conversation record. The private home copies `config.json`
 and `settings.json` from `$COPILOT_HOME` when it is set, otherwise from
 `~/.copilot`; set `COPILOT_HOME` before launch when the source profile lives
-elsewhere.
+elsewhere. That home is remembered by process-object identity
+(`ProcessResourceMap` in `backends_agent/base.py`), not PID, so concurrent
+Copilot turns cannot clobber each other after PID reuse.
 
 Codex uses discovered effort and context-window metadata only while its
 60-second catalog cache is fresh. Until `/model` refreshes an expired cache,
@@ -1002,16 +1015,22 @@ ChatGPT sign-in. Grok's published `grok-4.6` and `grok-4.5` IDs use a 500K-token
 window for that same trigger; custom or private Grok models stay unknown
 until an operator sets `model_context_windows`. Grok delivers its prompt
 through `--prompt-file` rather than `-p`, so Cozter's history budget is not
-truncated by the platform argv limit.
+truncated by the platform argv limit. The prompt file is a private temp path
+keyed the same way as Copilot's CLI home, so concurrent Grok turns cannot
+reuse or delete each other's files.
 
 Provider event envelopes are treated as untrusted input. A missing, blank, or
 non-text backend error message is normalized to `Unknown error` before it is
 stored or shown, rather than exposing a provider object or breaking the turn
 parser. Claude Code and Grok apply the same Messages-style terminal `result`
-helper, so usage, cost, fallback text, and late errors stay consistent
-across those two CLIs. They also share `messages_content_texts()` to flatten
-a Messages-style assistant `content` value — a bare string or a list of
-typed text blocks — into reply text. If a backend has
+helper (`apply_terminal_result_event`), so usage, cost, fallback text, and
+late errors stay consistent across those two CLIs. They also share
+`messages_content_texts()` to flatten a Messages-style assistant `content`
+value — a bare string or a list of typed text blocks — into reply text.
+`apply_messages_assistant_content()` walks that envelope for live turns, and
+`extract_messages_style_agent_text()` prefers the terminal result for
+internal summary calls. Grok and Copilot share `summarize_cli_tool()` for
+compact tool-status lines (command, then path). If a backend has
 already streamed an assistant reply, a late stream or terminal error is
 retained on the turn without replacing that reply.
 
@@ -1074,7 +1093,7 @@ Cozter/
 ├── titling.py            auto-titles new sessions from their first turn
 ├── schedules.py          /reserve cron-style scheduled prompts
 ├── flexible.py           flexible meta-agent prompt construction + plan/merge parsing
-├── workspace.py          per-workspace settings (model, permission, effort, ...)
+├── workspace.py          per-workspace settings; containment-checked nested .cozter dirs
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
 ├── utils.py              shared state, queue, lock, marker-block, and backend-process helpers
@@ -1083,19 +1102,21 @@ Cozter/
 │
 ├── backends_agent/       agent backends (one file per agent)
 │   ├── base.py             abstract Backend; convert_effort, supports_typed_plugins;
-│   │                       shared catalog TTL cache, fallback tables, and
+│   │                       shared catalog TTL cache, fallback tables,
+│   │                       ProcessResourceMap, CLI tool summaries, and
 │   │                       Messages-style result and content helpers
 │   ├── codex.py            wraps `codex exec`
 │   ├── claude_code.py      wraps `claude --print`
 │   ├── claude_background_guard.py
 │   │                       session-only Claude Bash hook that blocks
 │   │                       untracked background launches
-│   ├── copilot.py          wraps `copilot`
-│   ├── grok.py             wraps `grok --prompt-file`; uses CachedModelCatalog
+│   ├── copilot.py          wraps `copilot`; ProcessResourceMap for private CLI homes
+│   ├── grok.py             wraps `grok --prompt-file`; CachedModelCatalog and
+│   │                       ProcessResourceMap for prompt files
 │   ├── flexible.py         flexible meta-agent backend (no CLI of its own)
 │   ├── _http_proc.py       process-like adapter and error handling for HTTP backends
 │   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop;
-│   │                       HTTP backends inherit the shared catalog cache
+│   │                       one HTTP session per turn; shared catalog cache
 │   ├── llama.py            local /v1/chat/completions backend hooks
 │   └── zai.py              Z.ai /api/paas/v4/chat/completions backend hooks
 │
@@ -1112,7 +1133,9 @@ turns drain stderr concurrently with streamed JSON events, and every exit
 path — normal completion, cancellation, an injected restart, event-parse
 failure, or chat-delivery failure — reaps the child process and its drain
 tasks. This prevents a failed callback or `/stop` from leaving an agent CLI
-running in the background.
+running in the background. Backends that stage a per-launch file (Grok's
+prompt file, Copilot's private home) remember that path by process-object
+identity and delete it in `cleanup_process` after the child is reaped.
 
 Internal LLM jobs (routing, session titling, compaction, and colony
 consolidation) all go through `utils.run_internal_backend()`. The shared
@@ -1177,8 +1200,8 @@ contains CRLF is normalized before restoration, so an edit cannot introduce
 duplicate carriage returns. Non-UTF-8 files are refused rather than rewritten
 with replacement characters.
 Regression coverage for these paths lives in
-`tests/test_agent_process_cleanup.py`, `tests/test_utils.py`, and
-`tests/test_agent_tools.py`.
+`tests/test_agent_process_cleanup.py`, `tests/test_utils.py`,
+`tests/test_agent_tools.py`, and `tests/test_discovery_tools_async.py`.
 
 CLI JSONL and OpenAI-compatible HTTP SSE use the same bounded line reader in
 `utils.iter_bounded_lines()`. Each transport retains at most 4 MiB for one
@@ -1240,14 +1263,17 @@ ignored for local secrets and runtime queues.
 - Tests: `tests/conftest.py`, shared `tests/helpers.py`, plus focused
   `unittest` modules covering agent attachments, prompts, process cleanup,
   and post-turn behavior;
-  backend model defaults, shared catalog/result/content helpers, event
-  parsing, and llama retry; bot and Slack commands; compaction; the flexible
-  meta-agent; inject; import binding; run locks, session picking, and
-  auto-titling; platform, Slack, and Signal rich-text formatting; durable
-  reply delivery; detached tasks and Claude's background-launch guard;
-  runtime diagnostics; state fallbacks; status latency and thinking-status
-  display; updater behavior; utilities including the shared lock helper;
-  upload limits; and the built-in/plugin tool surface
+  backend model defaults, shared catalog/result/content helpers, CLI tool
+  summaries, process-resource maps, event parsing, and llama retry; bot and
+  Slack commands; compaction; the flexible meta-agent; inject; import
+  binding; run locks, session picking, and auto-titling; platform, Slack,
+  and Signal rich-text formatting; durable reply delivery; detached tasks
+  and Claude's background-launch guard; runtime diagnostics; state
+  fallbacks including containment-checked nested workspace dirs; status
+  latency and thinking-status display; updater behavior; utilities
+  including the shared lock helper; upload limits; and the built-in/plugin
+  tool surface, including discovery scans that continue after a failed
+  `is_dir()`
 
 The normal working checkout may also contain ignored runtime state such as
 `.venv/`, `.cozter/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
@@ -1267,7 +1293,8 @@ that owns them:
 - Backend names, model defaults, effort bands, and health checks:
   `backends_agent/__init__.py` plus the concrete backend modules.
   Shared catalog TTL, fallback tables, Messages-style terminal result
-  handling, and assistant content flattening live in
+  handling, assistant content walking and summary-text extraction,
+  `ProcessResourceMap`, and CLI tool-status summaries live in
   `backends_agent/base.py`. Shared lock and `[TAG]` marker-block helpers
   live in `utils.py`
 - Flexible's tiers, grading rubric, planner/merge prompts, and plan
@@ -1278,8 +1305,8 @@ that owns them:
   validation, workspace-boundary checks, no-clobber file publication, HTTP
   request setup, and bounded response reading live in `agent_tools/base.py`
 - Workspace, session, queue, schedule, compaction, and colony state:
-  `workspace.py`, `session.py`, `schedules.py`, `compaction.py`, and
-  `colony.py`
+  `workspace.py` (including `ensure_workspace_state_dir()`), `session.py`,
+  `schedules.py`, `compaction.py`, and `colony.py`
 - CI and local quality gates: `.gitlab-ci.yml`, `.github/workflows/ci.yml`,
   `mypy.ini`, `pyproject.toml`, and `tests/`
 
@@ -1358,7 +1385,9 @@ upstream; if any of those are unavailable, it safely skips the auto-pull.
 
 Only when an update is available does Cozter pause new AI turns, wait for
 active turns to finish, fast-forward-pull, install any changed
-`requirements.txt`, and broadcast a "restarting" message. On POSIX, the
+`requirements.txt`, and broadcast a "restarting" message. If a timed-out
+`git pull` still moved HEAD, Cozter restarts for that new commit rather than
+keeping the running process on the old one. On POSIX, the
 daemon then re-execs itself in place. On Windows, it exits for the bootstrap
 or `run_cozter.ps1` supervisor to relaunch it. Manual pulls and local commits
 while the bot is running also trigger this safe restart path. A service
@@ -1409,14 +1438,14 @@ Run the current unit tests from the parent directory, or set
 `PYTHONPATH` to the parent when running inside the repository. Discovery
 covers malformed state/config fallbacks, persistent queue restoration,
 schedule parsing, backend model defaults, shared catalog/result/content
-helpers, event parsing, llama retry behavior, the flexible meta-agent's
-planning/merge, post-turn and inject flow, subprocess draining and
-exceptional-path cleanup, prompt construction, attachment handling,
-run-lock cancellation, session picking, auto-titling, compaction,
-platform/Slack/Signal rich-text formatting, status-latency and
-thinking-status display, runtime diagnostics, updater behavior,
-detached tasks, agent-tool helpers, and built-in discovery/edit/patch
-safety.
+helpers, CLI tool summaries, process-resource maps, event parsing, llama
+retry behavior, the flexible meta-agent's planning/merge, post-turn and
+inject flow, subprocess draining and exceptional-path cleanup, prompt
+construction, attachment handling, run-lock cancellation, session
+picking, auto-titling, compaction, platform/Slack/Signal rich-text
+formatting, status-latency and thinking-status display, runtime
+diagnostics, updater behavior, detached tasks, agent-tool helpers, and
+built-in discovery/edit/patch safety.
 
 If `codex` is on `PATH`, one catalog-consistency test also invokes
 `codex debug models` with a 15-second timeout; it skips when that command
