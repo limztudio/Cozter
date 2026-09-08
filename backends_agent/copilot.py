@@ -68,6 +68,9 @@ _MAX_ACP_MODEL_OPTIONS = 4_096
 # cannot monopolize the synchronous picker path.
 _MAX_ACP_OPTION_NODES = _MAX_ACP_MODEL_OPTIONS * 4
 _MAX_ACP_OPTION_GROUP_DEPTH = 16
+# ACP stdout is line-delimited JSON-RPC. Bound one physical line so a
+# verbose or malformed CLI cannot grow the picker thread until timeout.
+_MAX_ACP_LINE_CHARS = 1 * 1024 * 1024
 _COPILOT_HOME_FILES = ("config.json", "settings.json")
 # Copilot policies are workspace-scoped, but a long-running bot can visit an
 # unbounded number of workspaces. These are short-lived discovery caches, not
@@ -525,21 +528,19 @@ class CopilotBackend(Backend):
 
         # The shared drain paths call ``cleanup_process`` after reaping this
         # process, including cancellation and injected-message restarts.
-        if isinstance(proc.pid, int):
-            with self._process_homes_lock:
-                self._process_homes[proc.pid] = isolated_home
-        else:  # Defensive fallback for a nonstandard Process implementation.
-            _remove_isolated_copilot_home(isolated_home)
+        # Key by the Process object, not PID: concurrent turns on this
+        # singleton can otherwise delete another run's private home after
+        # PID reuse.
+        with self._process_homes_lock:
+            self._process_homes[id(proc)] = isolated_home
         return proc
 
     async def cleanup_process(
         self, proc: asyncio.subprocess.Process,
     ) -> None:
         """Remove this launch's private Copilot home after it exits."""
-        home: str | None = None
-        if isinstance(proc.pid, int):
-            with self._process_homes_lock:
-                home = self._process_homes.pop(proc.pid, None)
+        with self._process_homes_lock:
+            home = self._process_homes.pop(id(proc), None)
         if home is not None:
             await asyncio.to_thread(_remove_isolated_copilot_home, home)
 
@@ -810,6 +811,12 @@ def _read_acp_stdout(
             if not line:
                 return
             if isinstance(line, str):
+                if len(line) > _MAX_ACP_LINE_CHARS:
+                    logger.debug(
+                        "copilot ACP stdout line exceeded %d characters",
+                        _MAX_ACP_LINE_CHARS,
+                    )
+                    return
                 messages.put(line)
     finally:
         # EOF lets the requester fail immediately instead of waiting out the

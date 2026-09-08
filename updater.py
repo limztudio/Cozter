@@ -233,7 +233,7 @@ def fetch_and_pull() -> bool:
                 logger.warning("git pull failed: %s", pull.stderr.strip())
     except (OSError, subprocess.TimeoutExpired):
         logger.error("git not available or timed out, skipping update check")
-        return False
+        return _head_changed()
 
     return _head_changed()
 

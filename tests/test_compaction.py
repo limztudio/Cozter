@@ -57,6 +57,42 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             assert latest is not None
             self.assertEqual(latest["name"], "Manual Session Name")
 
+    async def test_short_cover_still_trims_at_least_one_message(self) -> None:
+        async def short_cover(*_args, **_kwargs):
+            return ("x" * 100, [], None, 3)
+
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Manual")
+            messages = [
+                {"role": "user", "content": f"message-{i}"}
+                for i in range(8)
+            ]
+            session.append_messages(workspace_path, data["id"], messages)
+            with (
+                mock.patch.object(
+                    compaction.workspace_mod, "get_compact_interval",
+                    return_value=1,
+                ),
+                mock.patch.object(
+                    compaction, "compact_session", side_effect=short_cover,
+                ),
+                mock.patch.object(
+                    compaction.colony, "bump_compact_count", return_value=1,
+                ),
+                mock.patch.object(compaction.colony, "maybe_trigger"),
+            ):
+                await compaction.maybe_compact(
+                    workspace_path, data["id"], "model", backend_name="backend",
+                )
+
+            saved = session.load_session(workspace_path, data["id"])
+            assert saved is not None
+            self.assertEqual(
+                [entry["content"] for entry in saved["messages"]],
+                [entry["content"] for entry in messages[1:]],
+            )
+            self.assertEqual(saved["compacted_count"], 1)
+
     async def test_same_session_compacts_only_once_at_a_time(self) -> None:
         started = asyncio.Event()
         release = asyncio.Event()

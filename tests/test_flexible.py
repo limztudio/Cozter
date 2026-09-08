@@ -573,6 +573,32 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(restarting)
         self.assertEqual(injected, ["include the new requirement"])
 
+    async def test_late_inject_after_internal_failure_still_restarts(
+        self,
+    ) -> None:
+        """An inject that arrives after a failed call must not be dropped."""
+        inject_q: asyncio.Queue[str] = asyncio.Queue()
+        injected: list[str] = []
+        original_take = agent._take_pending_injections
+
+        def take_after_putting(q, collected):
+            q.put_nowait("include the new requirement")
+            return original_take(q, collected)
+
+        async def failing_call() -> str:
+            raise RuntimeError("planner connection dropped")
+
+        with mock.patch.object(
+            agent, "_take_pending_injections", take_after_putting,
+        ):
+            text, restarting = await agent._run_with_inject_watch(
+                failing_call(), inject_q, injected,
+            )
+
+        self.assertIsNone(text)
+        self.assertTrue(restarting)
+        self.assertEqual(injected, ["include the new requirement"])
+
     async def test_final_merge_closes_a_bot_inject_window(self) -> None:
         class ClosingQueue(asyncio.Queue[str]):
             def __init__(self) -> None:

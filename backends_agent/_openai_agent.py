@@ -78,6 +78,10 @@ _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
 # values rather than carrying attacker-controlled megabyte strings around.
 _MAX_MODEL_ID_CHARS = 512
 _MAX_MODEL_IDS = 4_096
+# Generation can run for a long time, so the request has no total timeout.
+# Connect still needs a bound: a black-holed llama/Z.ai URL otherwise waits
+# on TCP until the OS gives up, and /stop cannot interrupt that wait.
+_SOCK_CONNECT_TIMEOUT_SEC = 30
 # Error responses never reach the model in full (their messages are trimmed
 # below), so do not let a misconfigured or hostile endpoint make the bot
 # buffer an arbitrarily large HTML/JSON error document first.
@@ -370,6 +374,8 @@ class OpenAIChatBackend(Backend):
             return
         tool_repeat_counts: dict[str, int] = {}
         has_preserved_reasoning = False
+        # One HTTP session per turn: tool loops (and their retries) reuse
+        # the connector/SSL context instead of opening a new one per POST.
 
         def completion_payload(
             tools_schema: list[dict] | None,
@@ -393,160 +399,169 @@ class OpenAIChatBackend(Backend):
                 payload.update(self._tool_request_fields(request_model))
             return payload
 
-        segment = 1
-        while True:
-            for _ in range(max_agent_turns):
-                payload = completion_payload(tools_schema)
-
-                assistant_text, reasoning_content, tool_calls = (
-                    await _stream_completion(
-                        endpoint, payload, headers, sock_read, max_retries,
-                        self.name, timeout_setting,
-                    )
+        async with aiohttp.ClientSession() as http_session:
+            async def stream_completion(payload: dict[str, Any]) -> tuple[
+                str, str, list[dict],
+            ]:
+                return await _stream_completion(
+                    endpoint, payload, headers, sock_read, max_retries,
+                    self.name, timeout_setting, session=http_session,
                 )
 
-                # OpenAI spec: when ``tool_calls`` is present, ``content``
-                # should be null (not ""). Some strict servers reject
-                # empty-string content alongside tool_calls.
-                assistant_msg: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": assistant_text if assistant_text else None,
-                }
-                if tool_calls:
-                    assistant_msg["tool_calls"] = tool_calls
-                    if preserve_reasoning and reasoning_content:
-                        # Z.ai validates the exact, ordered block from its
-                        # preceding assistant response before accepting a
-                        # tool result. This is opaque provider state, never
-                        # user-facing assistant text.
-                        assistant_msg["reasoning_content"] = reasoning_content
-                        has_preserved_reasoning = True
-                # Surface this turn's commentary even if more tool calls
-                # follow; otherwise the user would only see whatever the
-                # model says in the FINAL turn, losing "Let me check that
-                # file" narration.
-                if assistant_text:
-                    proc.emit({
-                        "type": "assistant_text",
-                        "text": assistant_text,
-                    })
+            segment = 1
+            while True:
+                for _ in range(max_agent_turns):
+                    payload = completion_payload(tools_schema)
 
-                if not tool_calls:
-                    return
-
-                # This response will be sent back to the model alongside the
-                # next tool result.  Refuse before running a requested tool
-                # if retaining it would already exceed the run-wide bound.
-                if not append_message(assistant_msg):
-                    emit_message_limit_error()
-                    return
-
-                # Execute each requested tool and append the result.
-                # ``approval`` is passed through to execute_tool, which
-                # re-enforces the permission gate as a backstop even if
-                # the model asks for a tool it was not offered.
-                for call in tool_calls:
-                    name, args = tools.parse_openai_call(call)
-                    sig = tools.tool_signature(name, args)
-                    tool_repeat_counts[sig] = (
-                        tool_repeat_counts.get(sig, 0) + 1
+                    assistant_text, reasoning_content, tool_calls = (
+                        await stream_completion(payload)
                     )
 
-                    if tool_repeat_counts[sig] > tool_repeat_limit:
-                        result = (
-                            f"Skipped repeated tool call: {name}. "
-                            f"The same tool call was requested more than "
-                            f"{tool_repeat_limit} times. Stop repeating this "
-                            "call and produce the final answer using the "
-                            "information already available."
-                        )
-                        proc.emit({
-                            "type": "tool_result",
-                            "name": name,
-                            "output": result,
-                        })
-                    else:
-                        # execute_tool owns permission checks, status events,
-                        # result truncation, and the per-tool timeout.
-                        result = await tools.execute_tool(
-                            name, args, workspace_path, approval, proc.emit,
-                        )
-
-                    # Include ``name`` alongside tool_call_id; strict
-                    # servers reject tool messages without it.
-                    tool_message = {
-                        "role": "tool",
-                        "tool_call_id": call.get("id", ""),
-                        "name": name,
-                        "content": result,
+                    # OpenAI spec: when ``tool_calls`` is present, ``content``
+                    # should be null (not ""). Some strict servers reject
+                    # empty-string content alongside tool_calls.
+                    assistant_msg: dict[str, Any] = {
+                        "role": "assistant",
+                        "content": assistant_text if assistant_text else None,
                     }
-                    if not append_message(tool_message):
+                    if tool_calls:
+                        assistant_msg["tool_calls"] = tool_calls
+                        if preserve_reasoning and reasoning_content:
+                            # Z.ai validates the exact, ordered block from its
+                            # preceding assistant response before accepting a
+                            # tool result. This is opaque provider state, never
+                            # user-facing assistant text.
+                            assistant_msg["reasoning_content"] = (
+                                reasoning_content
+                            )
+                            has_preserved_reasoning = True
+                    # Surface this turn's commentary even if more tool calls
+                    # follow; otherwise the user would only see whatever the
+                    # model says in the FINAL turn, losing "Let me check that
+                    # file" narration.
+                    if assistant_text:
+                        proc.emit({
+                            "type": "assistant_text",
+                            "text": assistant_text,
+                        })
+
+                    if not tool_calls:
+                        return
+
+                    # This response will be sent back to the model alongside
+                    # the next tool result.  Refuse before running a requested
+                    # tool if retaining it would already exceed the run-wide
+                    # bound.
+                    if not append_message(assistant_msg):
                         emit_message_limit_error()
                         return
 
-            if not self._auto_continue_after_tool_limit():
-                break
-            if segment >= max_segments:
-                # Auto-continue is on but we've hit the ceiling: stop looping
-                # and fall through to force a final no-tools answer, rather
-                # than re-planning segments (and billing) without end.
-                logger.warning(
-                    "%s hit the %d-segment cap (%d tool turns each);"
-                    " forcing a final answer",
-                    self.name, max_segments, max_agent_turns,
-                )
-                break
+                    # Execute each requested tool and append the result.
+                    # ``approval`` is passed through to execute_tool, which
+                    # re-enforces the permission gate as a backstop even if
+                    # the model asks for a tool it was not offered.
+                    for call in tool_calls:
+                        name, args = tools.parse_openai_call(call)
+                        sig = tools.tool_signature(name, args)
+                        tool_repeat_counts[sig] = (
+                            tool_repeat_counts.get(sig, 0) + 1
+                        )
 
-            segment += 1
-            logger.info(
-                "%s reached %d tool-call turns; continuing segment %d",
-                self.name, max_agent_turns, segment,
-            )
-            continuation_message = {
+                        if tool_repeat_counts[sig] > tool_repeat_limit:
+                            result = (
+                                f"Skipped repeated tool call: {name}. "
+                                f"The same tool call was requested more than "
+                                f"{tool_repeat_limit} times. Stop repeating "
+                                "this call and produce the final answer using "
+                                "the information already available."
+                            )
+                            proc.emit({
+                                "type": "tool_result",
+                                "name": name,
+                                "output": result,
+                            })
+                        else:
+                            # execute_tool owns permission checks, status
+                            # events, result truncation, and the per-tool
+                            # timeout.
+                            result = await tools.execute_tool(
+                                name, args, workspace_path, approval,
+                                proc.emit,
+                            )
+
+                        # Include ``name`` alongside tool_call_id; strict
+                        # servers reject tool messages without it.
+                        tool_message = {
+                            "role": "tool",
+                            "tool_call_id": call.get("id", ""),
+                            "name": name,
+                            "content": result,
+                        }
+                        if not append_message(tool_message):
+                            emit_message_limit_error()
+                            return
+
+                if not self._auto_continue_after_tool_limit():
+                    break
+                if segment >= max_segments:
+                    # Auto-continue is on but we've hit the ceiling: stop
+                    # looping and fall through to force a final no-tools
+                    # answer, rather than re-planning segments (and billing)
+                    # without end.
+                    logger.warning(
+                        "%s hit the %d-segment cap (%d tool turns each);"
+                        " forcing a final answer",
+                        self.name, max_segments, max_agent_turns,
+                    )
+                    break
+
+                segment += 1
+                logger.info(
+                    "%s reached %d tool-call turns; continuing segment %d",
+                    self.name, max_agent_turns, segment,
+                )
+                continuation_message = {
+                    "role": "user",
+                    "content": (
+                        "You reached Cozter's internal tool-call segment "
+                        "limit. Continue the same task automatically without "
+                        "asking the user. Use more tools if needed, but do not "
+                        "repeat completed tool calls unless the inputs or "
+                        "workspace state have changed."
+                    ),
+                }
+                if not append_message(continuation_message):
+                    emit_message_limit_error()
+                    return
+
+            # If we fall out of the loop, force one final no-tools response
+            # instead of returning only an error.
+            final_request_message = {
                 "role": "user",
                 "content": (
-                    "You reached Cozter's internal tool-call segment "
-                    "limit. Continue the same task automatically without "
-                    "asking the user. Use more tools if needed, but do not "
-                    "repeat completed tool calls unless the inputs or "
-                    "workspace state have changed."
+                    "You have reached the tool-call limit. Do not call any "
+                    "more tools. Based only on the information already "
+                    "collected, provide the final answer now. If something is "
+                    "incomplete, clearly say what is missing."
                 ),
             }
-            if not append_message(continuation_message):
+            if not append_message(final_request_message):
                 emit_message_limit_error()
                 return
 
-        # If we fall out of the loop, force one final no-tools response
-        # instead of returning only an error.
-        final_request_message = {
-            "role": "user",
-            "content": (
-                "You have reached the tool-call limit. Do not call any more"
-                " tools. Based only on the information already collected,"
-                " provide the final answer now. If something is incomplete,"
-                " clearly say what is missing."
-            ),
-        }
-        if not append_message(final_request_message):
-            emit_message_limit_error()
-            return
+            payload = completion_payload(None)
+            assistant_text, _, _ = await stream_completion(payload)
 
-        payload = completion_payload(None)
-        assistant_text, _, _ = await _stream_completion(
-            endpoint, payload, headers, sock_read, max_retries, self.name,
-            timeout_setting,
-        )
-
-        if assistant_text:
-            proc.emit({"type": "assistant_text", "text": assistant_text})
-        else:
-            proc.emit({
-                "type": "error",
-                "message": (
-                    f"{self.name} agent exceeded {max_agent_turns} tool-call"
-                    " turns and failed to produce a final answer."
-                ),
-            })
+            if assistant_text:
+                proc.emit({"type": "assistant_text", "text": assistant_text})
+            else:
+                proc.emit({
+                    "type": "error",
+                    "message": (
+                        f"{self.name} agent exceeded {max_agent_turns} "
+                        "tool-call turns and failed to produce a final answer."
+                    ),
+                })
 
     # ---- event parsing --------------------------------------------------
 
@@ -692,6 +707,7 @@ async def _stream_completion(
     max_retries: int,
     label: str,
     timeout_setting: str = "the configured socket timeout",
+    session: aiohttp.ClientSession | None = None,
 ) -> tuple[str, str, list[dict]]:
     """POST the chat/completions endpoint (streaming); retry transient fails.
 
@@ -708,6 +724,7 @@ async def _stream_completion(
             try:
                 return await _stream_once(
                     endpoint, payload, headers, sock_read, label,
+                    session=session,
                 )
             except _RetryableError as exc:
                 attempt += 1
@@ -728,12 +745,38 @@ async def _stream_once(
     headers: dict[str, str],
     sock_read: int,
     label: str,
+    session: aiohttp.ClientSession | None = None,
 ) -> tuple[str, str, list[dict]]:
     """One streaming attempt; raise _RetryableError for transient failures.
 
     Parses Server-Sent Events. ``data:`` lines carry JSON deltas;
     ``data: [DONE]`` terminates the stream.
     """
+    timeout = aiohttp.ClientTimeout(
+        total=None,
+        sock_connect=_SOCK_CONNECT_TIMEOUT_SEC,
+        sock_read=sock_read,
+    )
+    if session is None:
+        async with aiohttp.ClientSession() as owned_session:
+            return await _stream_once(
+                endpoint, payload, headers, sock_read, label,
+                session=owned_session,
+            )
+    return await _post_completion_stream(
+        session, endpoint, payload, headers, timeout, label,
+    )
+
+
+async def _post_completion_stream(
+    session: aiohttp.ClientSession,
+    endpoint: str,
+    payload: dict,
+    headers: dict[str, str],
+    timeout: aiohttp.ClientTimeout,
+    label: str,
+) -> tuple[str, str, list[dict]]:
+    """Read one streaming completion from an existing HTTP session."""
     text_parts: list[str] = []
     text_bytes = 0
     reasoning_parts: list[str] = []
@@ -750,13 +793,10 @@ async def _stream_once(
     terminal_finish_reason: str | None = None
 
     try:
-        async with (
-            aiohttp.ClientSession() as session,
-            session.post(
-                endpoint, json=payload, headers=headers or None,
-                timeout=aiohttp.ClientTimeout(total=None, sock_read=sock_read),
-            ) as resp,
-        ):
+        async with session.post(
+            endpoint, json=payload, headers=headers or None,
+            timeout=timeout,
+        ) as resp:
             if resp.status == 429 or resp.status >= 500:
                 body = await _read_error_body(resp)
                 raise _RetryableError(

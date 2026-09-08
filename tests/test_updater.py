@@ -182,6 +182,18 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
             self.assertFalse(updater.check_for_update())
             self.assertFalse(updater.fetch_and_pull())
 
+    def test_pull_timeout_still_restarts_if_head_moved(self) -> None:
+        with (
+            mock.patch.object(updater, "_fetch_origin", return_value=True),
+            mock.patch.object(updater, "_skip_pull_reason", return_value=None),
+            mock.patch.object(
+                updater, "_git",
+                side_effect=subprocess.TimeoutExpired("git", 1),
+            ),
+            mock.patch.object(updater, "_head_changed", return_value=True),
+        ):
+            self.assertTrue(updater.fetch_and_pull())
+
 
 class UpdaterRequirementsTests(unittest.TestCase):
     def test_unchanged_requirements_skip_install(self) -> None:

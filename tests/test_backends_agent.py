@@ -3,6 +3,7 @@ import glob
 import io
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -636,6 +637,45 @@ warning: ignored after the catalog
         )))
         self.assertEqual(after, before)
 
+    def test_grok_prompt_cleanup_is_keyed_by_process_object(self) -> None:
+        """Concurrent launches must not share a PID slot on the singleton."""
+
+        async def run() -> None:
+            backend = GrokBackend()
+            first = mock.Mock()
+            first.pid = 100
+            second = mock.Mock()
+            second.pid = 100
+            launched: list[str] = []
+
+            async def fake_create(cmd, **_kwargs):
+                launched.append(cmd[cmd.index("--prompt-file") + 1])
+                return first if len(launched) == 1 else second
+
+            with (
+                mock.patch.object(
+                    grok_mod, "executable_command", return_value=["grok"],
+                ),
+                mock.patch.object(
+                    grok_mod,
+                    "create_captured_subprocess",
+                    new=mock.AsyncMock(side_effect=fake_create),
+                ),
+            ):
+                await backend.launch("/work-a", "prompt-a", "grok-4.6", "auto")
+                await backend.launch("/work-b", "prompt-b", "grok-4.6", "auto")
+
+            first_path, second_path = launched
+            self.assertTrue(os.path.isfile(first_path))
+            self.assertTrue(os.path.isfile(second_path))
+            await backend.cleanup_process(first)
+            self.assertFalse(os.path.exists(first_path))
+            self.assertTrue(os.path.isfile(second_path))
+            await backend.cleanup_process(second)
+            self.assertFalse(os.path.exists(second_path))
+
+        asyncio.run(run())
+
     def test_codex_fallback_models_are_current_and_selectable(self) -> None:
         models = codex_mod._FALLBACK_MODELS
         self.assertEqual(models, (
@@ -965,6 +1005,22 @@ warning: ignored after the catalog
             for name in ("config.json", "settings.json"):
                 self.assertTrue(os.path.isfile(os.path.join(isolated_home, name)))
             self.assertFalse(os.path.exists(os.path.join(isolated_home, "session-state")))
+
+    def test_copilot_acp_reader_drops_an_overlong_stdout_line(self) -> None:
+        class FakeStdout:
+            def __init__(self) -> None:
+                self._lines = [
+                    "x" * (copilot_mod._MAX_ACP_LINE_CHARS + 1) + "\n",
+                    '{"id": 1}\n',
+                ]
+
+            def readline(self) -> str:
+                return self._lines.pop(0) if self._lines else ""
+
+        messages: queue.Queue[str | None] = queue.Queue()
+        copilot_mod._read_acp_stdout(FakeStdout(), messages)
+        self.assertIsNone(messages.get_nowait())
+        self.assertTrue(messages.empty())
 
     def test_copilot_acp_parser_extracts_account_model_values(self) -> None:
         payload = {

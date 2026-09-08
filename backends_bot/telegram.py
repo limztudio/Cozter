@@ -51,6 +51,23 @@ _TELEGRAM_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 _TELEGRAM_TEXT_LIMIT = 4096
 
 
+def _rich_telegram_chunks(text: str) -> list[str]:
+    """Convert Markdown to HTML without splitting tags or entities.
+
+    Convert-then-split can bisect ``<pre>``/``<b>`` tags and ``&lt;``. Split
+    the Markdown first; only fall back to an HTML split when conversion
+    itself expanded past Telegram's cap.
+    """
+    chunks: list[str] = []
+    for markdown_chunk in split_text_chunks(text, _TELEGRAM_TEXT_LIMIT):
+        html = _md_to_html(markdown_chunk)
+        if len(html) <= _TELEGRAM_TEXT_LIMIT:
+            chunks.append(html)
+        else:
+            chunks.extend(split_text_chunks(html, _TELEGRAM_TEXT_LIMIT))
+    return chunks
+
+
 # ---------------------------------------------------------------------------
 # Markdown -> Telegram HTML
 # ---------------------------------------------------------------------------
@@ -135,10 +152,9 @@ class TelegramBot(BotPlatform):
                 )
             return last
 
-        # Rich path: convert markdown → HTML and split for Telegram limits.
-        html = _md_to_html(text)
+        # Rich path: convert markdown → HTML in Telegram-sized pieces.
         last: MessageHandle | None = None
-        for chunk in split_text_chunks(html, _TELEGRAM_TEXT_LIMIT):
+        for chunk in _rich_telegram_chunks(text):
             if not chunk.strip():
                 continue
             try:

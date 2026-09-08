@@ -862,7 +862,7 @@ class ClaudeCodeBackend(Backend):
         texts = messages_content_texts(msg.get("content"))
         if not texts:
             return None
-        return texts[0]
+        return "\n".join(texts)
 
     # -- helpers ----------------------------------------------------------
 
@@ -936,6 +936,8 @@ class ClaudeCodeBackend(Backend):
         # the bot's "Thinking..." status renders them under the file UX.
         if tool in ClaudeCodeBackend._FILE_TOOLS:
             path = inp.get("file_path") or inp.get("notebook_path") or "?"
+            if not isinstance(path, str) or not path:
+                path = "?"
             action = "write" if tool == "Write" else "edit"
             result.events.append(ChatEvent(
                 kind="file",

@@ -250,21 +250,18 @@ class GrokBackend(CachedModelCatalog, Backend):
         except BaseException:
             _remove_prompt_file(prompt_path)
             raise
-        if isinstance(proc.pid, int):
-            with self._prompt_files_lock:
-                self._prompt_files[proc.pid] = prompt_path
-        else:
-            _remove_prompt_file(prompt_path)
+        # Key by the Process object, not PID: concurrent turns on this
+        # singleton can otherwise clobber each other after PID reuse.
+        with self._prompt_files_lock:
+            self._prompt_files[id(proc)] = prompt_path
         return proc
 
     async def cleanup_process(
         self, proc: asyncio.subprocess.Process,
     ) -> None:
         """Remove this launch's prompt file after the process exits."""
-        path: str | None = None
-        if isinstance(proc.pid, int):
-            with self._prompt_files_lock:
-                path = self._prompt_files.pop(proc.pid, None)
+        with self._prompt_files_lock:
+            path = self._prompt_files.pop(id(proc), None)
         if path is not None:
             _remove_prompt_file(path)
 

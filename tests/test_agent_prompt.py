@@ -299,6 +299,28 @@ class SessionResponseTests(unittest.TestCase):
             )
         self.assertEqual(saved, "Done.")
 
+    def test_a_marker_only_reply_is_not_logged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            saved = agent._format_session_response(
+                self._result("[[await]]"), tmp,
+            )
+        self.assertEqual(saved, "")
+
+    def test_cross_drive_attachment_paths_do_not_drop_the_turn(self) -> None:
+        result = self._result("saved")
+        result.events.append(agent.ChatEvent(
+            kind="attachment", content="report.png",
+        ))
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(
+                agent.os.path, "relpath", side_effect=ValueError("cross-drive"),
+            ),
+        ):
+            saved = agent._format_session_response(result, tmp)
+        self.assertIn("saved", saved)
+        self.assertIn("[Attachment: report.png]", saved)
+
 
 class FormatUsageTests(unittest.TestCase):
     def test_none_and_empty_return_none(self) -> None:

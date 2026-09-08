@@ -111,6 +111,28 @@ class CodexParseTests(unittest.TestCase):
             any(e.kind == "text" and "boom" in e.content for e in r.events)
         )
 
+    def test_late_turn_failed_never_overwrites_the_answer(self) -> None:
+        r = _run(self.backend, [
+            {"type": "item.completed",
+             "item": {"type": "agent_message", "text": "hello world"}},
+            {"type": "turn.failed", "error": {"message": "boom"}},
+        ])
+        self.assertEqual(r.text, "hello world")
+        self.assertEqual(r.error, "boom")
+
+    def test_extract_agent_text_ignores_non_string_payloads(self) -> None:
+        self.assertIsNone(self.backend.extract_agent_text({
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": {"detail": "nope"}},
+        }))
+        self.assertEqual(
+            self.backend.extract_agent_text({
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "hello"},
+            }),
+            "hello",
+        )
+
     def test_stream_error_sets_error(self) -> None:
         """Codex can emit this and still exit 0, so nothing else catches it."""
         r = _run(self.backend, [
@@ -280,6 +302,26 @@ class ClaudeCodeParseTests(unittest.TestCase):
         ])
         self.assertIn("file", _kinds(r))
         self.assertIn("x.py", r.events[0].content)
+
+    def test_assistant_file_tool_non_string_path_does_not_crash(self) -> None:
+        r = _run(self.backend, [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Write",
+                 "input": {"file_path": ["/ws/x.py"]}},
+            ]}},
+        ])
+        self.assertEqual(_kinds(r), ["file"])
+        self.assertIn("?", r.events[0].content)
+
+    def test_extract_agent_text_joins_multiple_text_blocks(self) -> None:
+        event = {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second"},
+        ]}}
+        self.assertEqual(
+            self.backend.extract_agent_text(event),
+            "first\nsecond",
+        )
 
     def test_result_terminal_text_fallback(self) -> None:
         r = _run(self.backend, [

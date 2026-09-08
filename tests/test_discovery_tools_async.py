@@ -57,6 +57,51 @@ class DiscoveryToolAsyncTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_list_dir_continues_after_one_entry_stat_error(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as workspace:
+                os.mkdir(os.path.join(workspace, "directory"))
+                with open(
+                    os.path.join(workspace, "file.txt"), "w", encoding="utf-8",
+                ):
+                    pass
+
+                real_scandir = os.scandir
+
+                class FlakyEntry:
+                    def __init__(self, entry: os.DirEntry) -> None:
+                        self.name = entry.name
+                        self._entry = entry
+
+                    def is_dir(self, *args, **kwargs):
+                        if self.name == "directory":
+                            raise OSError("vanished")
+                        return self._entry.is_dir(*args, **kwargs)
+
+                class FlakyScan:
+                    def __init__(self, path: str) -> None:
+                        self._scan = real_scandir(path)
+
+                    def __enter__(self):
+                        return (
+                            FlakyEntry(entry) for entry in self._scan.__enter__()
+                        )
+
+                    def __exit__(self, *args):
+                        return self._scan.__exit__(*args)
+
+                with mock.patch(
+                    "Cozter.agent_tools.builtin.list_dir.os.scandir",
+                    FlakyScan,
+                ):
+                    result = await ListDirTool().run(workspace, {})
+
+                self.assertIn("file.txt", result)
+                self.assertIn("directory", result)
+                self.assertNotIn("directory/", result)
+
+        asyncio.run(run())
+
     def test_glob_scan_runs_off_the_event_loop(self) -> None:
         async def run() -> None:
             started = threading.Event()

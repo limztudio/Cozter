@@ -79,7 +79,10 @@ class TreeTool(AgentTool):
             def entries():
                 with os.scandir(path) as scan:
                     for entry in scan:
-                        is_dir = entry.is_dir(follow_symlinks=False)
+                        try:
+                            is_dir = entry.is_dir(follow_symlinks=False)
+                        except OSError:
+                            is_dir = False
                         if is_dir and entry.name in DISCOVERY_SKIP_DIRS:
                             continue
                         yield is_dir, entry.name, entry.path

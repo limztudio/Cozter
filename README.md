@@ -61,10 +61,11 @@ are trusted in-process code, not sandboxed extensions.
   best-effort so a retry cannot duplicate a file
 - **Platform-safe text delivery**: long replies are split at chat-surface API
   boundaries. Telegram applies its 4,096-character limit to both rich agent
-  replies and plain command/status output; Signal preserves rich-text styling
-  as it splits messages at 4,000 characters; and Slack keeps plain chunks
-  below 39,000 characters and rich Markdown blocks below 12,000 while
-  balancing fenced code blocks
+  replies and plain command/status output, splitting rich Markdown before
+  converting each piece to HTML so tags and entities stay intact; Signal
+  preserves rich-text styling as it splits messages at 4,000 characters; and
+  Slack keeps plain chunks below 39,000 characters and rich Markdown blocks
+  below 12,000 while balancing fenced code blocks
 - **File flow in both directions**: chat uploads are saved into the
   workspace and text-like files are inlined into the next prompt; agent
   replies can upload workspace files or generated images back to chat, while
@@ -308,6 +309,8 @@ The llama safety settings are read at the start of every llama turn:
 forces a final answer, `llama_tool_repeat_limit` (default 3) skips an
 identical call after that many executions, and `llama_socket_timeout`
 (default 1800 seconds) is the per-read timeout for a slow local server.
+Connecting to that server is separately capped at 30 seconds so a
+black-holed URL cannot stall a turn until the OS TCP timeout.
 
 Agent turns do not have a wall-clock timeout; long-running work is
 allowed to finish. `tool_timeout` (default 120s) still caps each
@@ -370,7 +373,8 @@ GLM Coding Plan users can instead set it to
 includes `glm-5.3` and multimodal `glm-5.3-flash`; the Coding Plan fallback
 also offers the documented `glm-5.3[1m]` and `glm-5.3-flash[1m]` pins.
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
-mirror the llama knobs and retry behavior for the cloud call. Select `zai`
+mirror the llama knobs and retry behavior for the cloud call. The same
+30-second connect cap applies so a misconfigured endpoint fails promptly. Select `zai`
 with `/agent`, pick a model with `/model` (default `glm-5.3`), and add private
 or regional GLM ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai
 coding turns automatically continue into another tool-enabled segment when

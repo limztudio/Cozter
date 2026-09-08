@@ -64,6 +64,7 @@ async def maybe_auto_title(
     )
     if key in _in_flight:
         return
+    _in_flight.add(key)
     try:
         data = session.load_session(workspace_path, session_id)
         if data is None:
@@ -74,7 +75,6 @@ async def maybe_auto_title(
         msgs = data.get("messages", [])
         if not any(m.get("role") == "assistant" for m in msgs):
             return
-        _in_flight.add(key)
         title = await generate(
             workspace_path, session_id, summary_model,
             backend_name=backend_name, _preloaded_data=data,

@@ -1072,8 +1072,18 @@ async def _run_with_inject_watch(
     # letting an acknowledged /inject fall through a phase boundary.
     if _take_pending_injections(inject_queue, injected):
         # Retrieve the completed result so an exception is not left
-        # unobserved; propagate it normally if the call itself failed.
-        call_task.result()
+        # unobserved. An inject that arrived after the call finished still
+        # wins: the user was told "Injected." and the failed planner/merge
+        # belongs to the abandoned attempt.
+        try:
+            call_task.result()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug(
+                "Discarding internal backend failure after an inject",
+                exc_info=True,
+            )
         return None, True
     if close_inject_on_completion:
         # This is the terminal planner/merge phase.  Closing happens before
@@ -1866,10 +1876,10 @@ def _format_session_response(
             )
             if is_path_within(path, ws_real):
                 path = os.path.relpath(path, workspace_path)
-        except OSError:
+        except (OSError, ValueError):
             path = ev.content
         attachment_parts.append(f"[Attachment: {path}]")
     if text_parts or attachment_parts:
         return "\n\n".join([*text_parts, *attachment_parts])
     cleaned, _ = extract_await(result.text)
-    return cleaned.strip() or result.text
+    return cleaned.strip()

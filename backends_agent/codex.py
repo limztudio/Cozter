@@ -13,7 +13,6 @@ from .base import (
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
     create_prompt_subprocess, executable_command, fallback_model_tables,
     record_backend_error,
-    set_error_result,
     truncate_status_text,
 )
 
@@ -407,7 +406,9 @@ class CodexBackend(Backend):
                 err = err_obj
             else:
                 err = "Unknown error"
-            set_error_result(result, err)
+            # Keep a streamed agent_message. A late turn.failed is still
+            # recorded, but must not replace the reply the user is owed.
+            record_backend_error(result, err)
 
         elif etype == "error":
             # A stream-level failure (expired auth, usage limit, dropped
@@ -428,4 +429,5 @@ class CodexBackend(Backend):
         item = event.get("item") or {}
         if not isinstance(item, dict) or item.get("type") != "agent_message":
             return None
-        return item.get("text") or None
+        text = item.get("text")
+        return text if isinstance(text, str) and text else None

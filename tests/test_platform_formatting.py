@@ -6,7 +6,7 @@ from Cozter.backends_bot.base import MessageHandle, attachment_kind_from_mime
 from Cozter.backends_bot.formatting import strip_html_markup
 from Cozter.backends_bot.slack import _md_to_mrkdwn
 from Cozter.backends_bot.telegram import (
-    TelegramBot, _TELEGRAM_TEXT_LIMIT, _md_to_html,
+    TelegramBot, _TELEGRAM_TEXT_LIMIT, _md_to_html, _rich_telegram_chunks,
 )
 
 
@@ -87,6 +87,43 @@ class TelegramSendTextTests(unittest.TestCase):
         ))
         self.assertTrue(all("parse_mode" not in message for message in api.messages))
         self.assertEqual(handle, MessageHandle("42", "2"))
+
+    def test_rich_text_is_split_as_markdown_before_html_conversion(self) -> None:
+        class CapturingApi:
+            def __init__(self) -> None:
+                self.messages: list[dict] = []
+
+            async def send_message(self, **kwargs):
+                self.messages.append(kwargs)
+                return SimpleNamespace(message_id=len(self.messages))
+
+        async def run() -> CapturingApi:
+            api = CapturingApi()
+            bot = TelegramBot("token", ["1"])
+            bot.app = SimpleNamespace(bot=api)
+            text = "a" * (_TELEGRAM_TEXT_LIMIT - 1) + "\n" + "b"
+            await bot.send_text("42", text, rich=True)
+            return api
+
+        api = asyncio.run(run())
+        self.assertGreaterEqual(len(api.messages), 2)
+        self.assertTrue(all(
+            len(message["text"]) <= _TELEGRAM_TEXT_LIMIT
+            for message in api.messages
+        ))
+        self.assertTrue(all(
+            message.get("parse_mode") == "HTML" for message in api.messages
+        ))
+        self.assertEqual(
+            "".join(message["text"] for message in api.messages),
+            "a" * (_TELEGRAM_TEXT_LIMIT - 1) + "\n" + "b",
+        )
+
+    def test_rich_chunks_do_not_split_html_tags(self) -> None:
+        html = _md_to_html("**bold** and `code`")
+        self.assertEqual(_rich_telegram_chunks("**bold** and `code`"), [html])
+        self.assertIn("<b>bold</b>", html)
+        self.assertIn("<code>code</code>", html)
 
 
 if __name__ == "__main__":

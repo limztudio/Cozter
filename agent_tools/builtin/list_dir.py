@@ -84,7 +84,13 @@ class ListDirTool(AgentTool):
             with os.scandir(target) as scan:
                 for entry in scan:
                     entry_count += 1
-                    yield entry.name, entry.is_dir()
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                    except OSError:
+                        # A dangling symlink, ELOOP, or vanished entry must
+                        # not abort the rest of the listing.
+                        is_dir = False
+                    yield entry.name, is_dir
 
         selected = heapq.nsmallest(
             max_results, entries(), key=lambda entry: entry[0],

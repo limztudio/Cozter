@@ -412,6 +412,7 @@ async def _maybe_compact_under_maintenance_lock(
             session_id, covered_count, KEEP_RECENT_AFTER_COMPACT,
         )
         return
+    keep_recent = KEEP_RECENT_AFTER_COMPACT
     if oversized_first is not None:
         # The prompt includes only a persisted prefix of the original first
         # message. Save its summary, then retain the exact unseen suffix in
@@ -425,12 +426,23 @@ async def _maybe_compact_under_maintenance_lock(
             )
             return
     elif covered_count <= KEEP_RECENT_AFTER_COMPACT:
-        logger.error(
-            "Compaction did not cover enough messages for session %s "
-            "(covered=%d, keep_recent=%d)",
-            session_id, covered_count, KEEP_RECENT_AFTER_COMPACT,
+        # A handful of large messages can each fit the prompt while still
+        # covering too few to trim against the usual keep-recent floor.
+        # Keep one fewer than we covered so this pass still shrinks history
+        # instead of retrying the same prefix forever.
+        if covered_count < 1:
+            logger.error(
+                "Compaction did not cover enough messages for session %s "
+                "(covered=%d, keep_recent=%d)",
+                session_id, covered_count, KEEP_RECENT_AFTER_COMPACT,
+            )
+            return
+        keep_recent = covered_count - 1
+        logger.warning(
+            "Compaction for session %s covered only %d messages; "
+            "keeping %d so history can still shrink",
+            session_id, covered_count, keep_recent,
         )
-        return
     # Reject summaries that are suspiciously short compared to the existing
     # one - a sign of a truncated or failed backend response.
     # An oversized stored summary is explicitly truncated before the next
@@ -467,7 +479,7 @@ async def _maybe_compact_under_maintenance_lock(
         if oversized_first is None:
             session.set_summary(
                 workspace_path, session_id, new_summary,
-                keep_recent=KEEP_RECENT_AFTER_COMPACT,
+                keep_recent=keep_recent,
                 long_term_rewrite=new_long_term,
                 title=title_to_save,
                 # Only trim the contiguous prefix actually sent to the summary

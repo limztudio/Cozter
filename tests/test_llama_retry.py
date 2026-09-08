@@ -185,6 +185,30 @@ class OpenAIStreamShapeTests(unittest.TestCase):
 
         self.assertEqual(asyncio.run(collect()), ["valid"])
 
+    def test_stream_once_bounds_connect_timeout(self) -> None:
+        captured: list[object] = []
+
+        class RecordingSession(_SSESession):
+            def post(self, *args, **kwargs):
+                captured.append(kwargs.get("timeout"))
+                return super().post(*args, **kwargs)
+
+        response = _SSEResponse([
+            b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
+            b'data: [DONE]\n\n',
+        ])
+        with mock.patch.object(
+            oa.aiohttp, "ClientSession", return_value=RecordingSession(response),
+        ):
+            text, _, _ = asyncio.run(oa._stream_once(
+                "http://x/chat/completions", {}, {}, 30, "test",
+            ))
+        self.assertEqual(text, "ok")
+        timeout = captured[0]
+        self.assertEqual(timeout.sock_connect, oa._SOCK_CONNECT_TIMEOUT_SEC)
+        self.assertEqual(timeout.sock_read, 30)
+        self.assertIsNone(timeout.total)
+
     def _stream(
         self, events: list[object], *, include_done: bool = True,
     ) -> tuple[str, str, list[dict]]:
