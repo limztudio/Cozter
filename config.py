@@ -35,7 +35,7 @@ _DEFAULT_CONFIG = {
     "zai_socket_timeout": 300,
     "zai_max_retries": 2,
     "meta_api_key": "",
-    "meta_base_url": "https://api.llama.com/compat/v1",
+    "meta_base_url": "https://api.meta.ai/v1",
     "meta_socket_timeout": 300,
     "meta_max_retries": 2,
     # Hard backstop on a single tool call, so a wedged plugin/custom tool

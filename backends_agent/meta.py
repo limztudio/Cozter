@@ -3,12 +3,12 @@
 Meta's Model API serves the Muse families (Muse Spark text/reasoning chat
 models) through an OpenAI-compatible endpoint with Bearer auth. It reuses
 the shared :class:`OpenAIChatBackend` loop; this module supplies only Meta's
-specifics - the compat endpoint, the Authorization header built from the
-configured API key, the model, and the Muse chat-model fallback list.
+specifics - the Model API endpoint, the Authorization header built from
+the configured API key, the model, and the Muse chat-model fallback list.
 
 Config: ``config.json``'s ``meta_api_key`` (required to use it),
-``meta_base_url`` (default ``https://api.llama.com/compat/v1``, already
-includes the version so only ``/chat/completions`` is appended),
+``meta_base_url`` (default ``https://api.meta.ai/v1``, already includes
+the version so only ``/chat/completions`` is appended),
 ``meta_socket_timeout``, and ``meta_max_retries``. Pick the model with
 ``/model`` (or set the workspace default); add private or preview model ids
 via ``extra_models`` in config without editing source.
@@ -41,14 +41,14 @@ class _FallbackModelSpec(NamedTuple):
 #
 # Muse Spark is Meta Superintelligence Labs' multimodal reasoning model for
 # agentic tasks (tool calling, coding, computer use) with a documented
-# 1-million-token context window that the model actively manages. Only
+# 1,048,576-token context window that the model actively manages. Only
 # chat-completion model IDs belong here: Muse Image (image generation) and
 # Muse Voice Transcribe (speech-to-text) are invoked through other endpoints.
 _FALLBACK_MODEL_SPECS = (
     # Muse Spark 1.3 is the current flagship on the Model API.
-    _FallbackModelSpec("muse-spark-1.3", 1_000_000),
-    _FallbackModelSpec("muse-spark-1.2", 1_000_000),
-    _FallbackModelSpec("muse-spark-1.1", 1_000_000),
+    _FallbackModelSpec("muse-spark-1.3", 1_048_576),
+    _FallbackModelSpec("muse-spark-1.2", 1_048_576),
+    _FallbackModelSpec("muse-spark-1.1", 1_048_576),
 )
 _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _MODEL_CONTEXT_WINDOWS = {
@@ -96,9 +96,10 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
 
     default_model = "muse-spark-1.3"
     default_summary_model = "muse-spark-1.2"
-    # The contributor pricing tier's exact API ID is not published yet, so
-    # the verified previous generation (1.2) anchors the cheap tier; once
-    # discovery works the account's real catalog supersedes this table.
+    # Contributor pricing variants (``muse-spark-1.3-contributor``) sit
+    # alongside the canonical IDs on every account; tiers keep the
+    # canonical IDs, and authenticated discovery supersedes this table
+    # with the account's real catalog.
     tier_models = {
         "low": "muse-spark-1.2",
         "mid": "muse-spark-1.3",
@@ -147,8 +148,8 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
     # ---- OpenAIChatBackend hooks ---------------------------------------
 
     def _chat_endpoint(self) -> str:
-        # base_url already carries the /compat/v1 version segment, so we
-        # append /chat/completions directly (NOT /v1/chat/completions).
+        # base_url already carries the /v1 version segment, so we append
+        # /chat/completions directly (NOT /v1/chat/completions).
         return cfg.get_meta_base_url().rstrip("/") + "/chat/completions"
 
     def _auth_headers(self) -> dict[str, str]:

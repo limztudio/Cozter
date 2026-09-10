@@ -2438,7 +2438,7 @@ class MetaBackendTests(unittest.TestCase):
         ):
             with self.subTest(model=model):
                 self.assertEqual(
-                    backend.context_window_tokens(model), 1_000_000,
+                    backend.context_window_tokens(model), 1_048_576,
                 )
         self.assertIsNone(backend.context_window_tokens("private-muse"))
 
@@ -2465,25 +2465,33 @@ class MetaBackendTests(unittest.TestCase):
             mock.patch.object(
                 meta_mod.cfg,
                 "get_meta_base_url",
-                return_value="https://api.llama.com/compat/v1",
+                return_value="https://api.meta.ai/v1",
             ),
             mock.patch.object(
                 meta_mod,
                 "fetch_model_ids",
                 return_value=(
+                    "muse-spark-1.3-contributor",
+                    "muse-voice-transcribe-1.0",
                     "muse-spark-1.3",
-                    "muse-image",
-                    "muse-voice-transcribe",
+                    "muse-image-1.0",
+                    "muse-spark-1.2-contributor",
                 ),
             ) as fetch,
         ):
+            # Order is preserved; contributor pricing variants stay
+            # selectable because they are valid chat-completion models.
             self.assertEqual(
                 MetaModelApiBackend().available_models,
-                ("muse-spark-1.3",),
+                (
+                    "muse-spark-1.3-contributor",
+                    "muse-spark-1.3",
+                    "muse-spark-1.2-contributor",
+                ),
             )
         self.assertEqual(fetch.call_count, 1)
         url = fetch.call_args.args[0]
-        self.assertEqual(url, "https://api.llama.com/compat/v1/models")
+        self.assertEqual(url, "https://api.meta.ai/v1/models")
         self.assertEqual(
             fetch.call_args.kwargs["headers"],
             {"Authorization": "Bearer key"},
@@ -2497,7 +2505,7 @@ class MetaBackendTests(unittest.TestCase):
             mock.patch.object(
                 meta_mod.cfg,
                 "get_meta_base_url",
-                return_value="https://api.llama.com/compat/v1",
+                return_value="https://api.meta.ai/v1",
             ),
             mock.patch.object(
                 meta_mod,
@@ -2518,7 +2526,7 @@ class MetaBackendTests(unittest.TestCase):
             mock.patch.object(
                 meta_mod.cfg,
                 "get_meta_base_url",
-                return_value="https://api.llama.com/compat/v1",
+                return_value="https://api.meta.ai/v1",
             ),
             mock.patch.object(
                 meta_mod,
@@ -2532,10 +2540,10 @@ class MetaBackendTests(unittest.TestCase):
             )
 
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
-        # Meta's base already carries /compat/v1, so no extra /v1.
+        # Meta's base already carries /v1, so no extra version segment.
         endpoint = MetaModelApiBackend()._chat_endpoint()
         self.assertEqual(
-            endpoint, "https://api.llama.com/compat/v1/chat/completions",
+            endpoint, "https://api.meta.ai/v1/chat/completions",
         )
 
     def test_auth_headers_reflect_key(self) -> None:
@@ -2578,7 +2586,7 @@ class MetaBackendTests(unittest.TestCase):
     def test_config_defaults_are_registered(self) -> None:
         self.assertEqual(
             config._DEFAULT_CONFIG["meta_base_url"],
-            "https://api.llama.com/compat/v1",
+            "https://api.meta.ai/v1",
         )
         self.assertEqual(config._DEFAULT_CONFIG["meta_socket_timeout"], 300)
         self.assertEqual(config._DEFAULT_CONFIG["meta_max_retries"], 2)
