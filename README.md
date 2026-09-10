@@ -1,7 +1,7 @@
 # Cozter
 
 A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot, grok)
-and OpenAI-compatible HTTP backends (local llama-server and Z.ai), exposing
+and OpenAI-compatible HTTP backends (local llama-server, Z.ai, and Meta Model API), exposing
 them through Telegram, Slack, Signal, or a plain terminal. One Cozter
 process hosts either the local terminal or one configured daemon surface—with
 one Telegram bot instance per configured token—across multiple workspaces,
@@ -17,7 +17,7 @@ are trusted in-process code, not sandboxed extensions.
 
 ## What it gives you
 
-- **A default meta-agent plus six direct agent backends**, picked per
+- **A default meta-agent plus seven direct agent backends**, picked per
   workspace:
   - `flexible` (default) — a meta-agent that sizes the work with a cheap
     summary-model call, splits it into up to 12 sub-tasks, routes each to
@@ -277,7 +277,7 @@ example layout lives in `.config/config.example.json`):
   "zai_max_retries": 2,
 
   "meta_api_key": "",
-  "meta_base_url": "https://api.llama.com/compat/v1",
+  "meta_base_url": "https://api.meta.ai/v1",
   "meta_socket_timeout": 300,
   "meta_max_retries": 2,
 
@@ -392,7 +392,7 @@ also offers the documented `glm-5.3[1m]` and `glm-5.3-flash[1m]` pins.
 `meta_api_key` enables the `meta` backend (Meta Model API — Muse Spark).
 Get one from the Meta Model API developer console and paste it here (the
 docs also expose it as a `MODEL_API_KEY` environment variable). The backend
-talks to Meta's OpenAI-compatible endpoint at `https://api.llama.com/compat/v1`;
+talks to Meta's OpenAI-compatible endpoint at `https://api.meta.ai/v1`;
 `meta_base_url` overrides it if Meta publishes a new path — it must include
 the version segment, because only `/chat/completions` is appended, and it
 must be HTTPS so the API key is never sent over cleartext HTTP.
@@ -956,7 +956,7 @@ its own, only the three tiers above.
 | `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
 | `grok` | `grok --prompt-file … --output-format streaming-messages-json` | `grok-4.6` | `grok-4.6` |
 | `llama` | Unauthenticated OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
-| `meta` | Meta Model API `…/compat/v1/chat/completions` (Bearer) | `muse-spark-1.3` | `muse-spark-1.2` |
+| `meta` | Meta Model API `…/v1/chat/completions` (Bearer) | `muse-spark-1.3` | `muse-spark-1.2` |
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.3` | `glm-4.5-air` |
 
 When a caller does not explicitly select a summary model, Cozter uses the
@@ -1185,7 +1185,8 @@ Cozter/
 │   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop;
 │   │                       one HTTP session per turn; shared catalog cache
 │   ├── llama.py            local /v1/chat/completions backend hooks
-│   └── zai.py              Z.ai /api/paas/v4/chat/completions backend hooks
+│   ├── zai.py              Z.ai /api/paas/v4/chat/completions backend hooks
+│   └── meta.py             Meta Model API /v1/chat/completions backend hooks
 │
 └── agent_tools/          tool surface for HTTP backends + plugin registry
     ├── base.py             AgentTool ABC; path/argument validation and shared HTTP helpers
