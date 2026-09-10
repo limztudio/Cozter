@@ -15,8 +15,7 @@ from ..base import (
 class MakeDirTool(AgentTool):
     name = "make_dir"
     description = (
-        "Create a directory incl. parents. Idempotent unless a file"
-        " blocks the path."
+        "Create a directory incl. parents. Idempotent unless blocked."
     )
     parameters = path_parameters()
 

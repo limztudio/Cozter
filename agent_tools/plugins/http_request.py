@@ -153,8 +153,8 @@ async def _request_following_redirects(
 class HttpRequestTool(AgentTool):
     name = "http_request"
     description = (
-        "HTTP API calls (any method, headers, body); bounded body incl."
-        " 4xx/5xx. web_fetch reads pages."
+        "HTTP API calls (any method/headers/body); bounded reply."
+        " web_fetch reads pages."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
@@ -165,20 +165,19 @@ class HttpRequestTool(AgentTool):
             "method": {
                 "type": "string",
                 "enum": list(_METHODS),
-                "description": "HTTP method (default GET).",
+                "description": "Default GET.",
             },
             "headers": {
                 "type": "object",
                 "additionalProperties": {"type": "string"},
-                "description": "Headers object.",
             },
             "body": {
                 "type": "string",
-                "description": "Body; JSON if parseable, else text.",
+                "description": "Body; JSON if parseable.",
             },
             "max_chars": {
                 "type": "integer",
-                "description": "Response char cap (default 3500).",
+                "description": "Default 3500.",
             },
         },
         ["url"],

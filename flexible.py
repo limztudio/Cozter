@@ -48,10 +48,9 @@ MERGE_TIMEOUT = 180  # seconds; on timeout the worker reports are concatenated
 
 # The user-facing rubric the planner grades each sub-task against.
 _RUBRIC = (
-    "low  - straightforward, well-scoped work with clear intent.\n"
-    "mid  - some reasoning is required, but the problem stays bounded.\n"
-    "high - ONLY for ambiguity, complex logic, or deeper system "
-    "understanding."
+    "low  - straightforward, well-scoped work.\n"
+    "mid  - some reasoning, but bounded.\n"
+    "high - ONLY ambiguity, complex logic, or deep system needs."
 )
 
 _PLANNER_RULES = (
@@ -60,14 +59,14 @@ _PLANNER_RULES = (
     " routes to a right-sized model:\n\n"
     f"{_RUBRIC}\n\n"
     "Rules:\n"
-    "- Simple request = ONE sub-task; no busywork.\n"
+    "- Simple request = ONE sub-task.\n"
     f"- At most {MAX_SUBTASKS} sub-tasks, ordered (each needs only earlier"
     " results; they run in order).\n"
     "- Grade honestly: over-grading wastes the strong model, under-grading"
     " strands hard work on a weak one.\n"
-    "- Each sub-task self-contained: the worker sees only the user message,"
-    " this plan, and earlier reports — never full history.\n"
-    "- No tools/file reads; plan from the text below.\n"
+    "- Self-contained: the worker sees only the user message, the plan,"
+    " and earlier reports — never full history.\n"
+    "- No tools; plan from the text.\n"
 )
 
 _PLANNER_FORMAT = (
@@ -82,8 +81,8 @@ _PLANNER_FORMAT = (
 )
 
 _PLANNER_QUESTION_RULE = (
-    "Too ambiguous to plan (guessing wastes real work)? Skip the plan,"
-    " ask one short question instead:\n\n"
+    "Too ambiguous (guessing wastes real work)? Skip the plan, ask one"
+    " short question instead:\n\n"
     "[QUESTION]\n"
     "your one question\n"
     "[/QUESTION]\n\n"
@@ -95,8 +94,7 @@ _MERGE_RULES = (
     "Rules:\n"
     "- Answer directly, outcome first, as the assistant who did the work"
     " (never mention plans/workers/tiers).\n"
-    "- Keep concrete results (code, paths, commands, numbers, errors);"
-    " report failures plainly.\n"
+    "- Keep concrete results (code, paths, commands, numbers, errors).\n"
     "- User's language. No tool calls; work is done.\n"
 )
 
@@ -106,15 +104,15 @@ _MERGE_RULES = (
 # the queue drain straight past it, leaving the user's answer to land as
 # an unrelated new turn.
 _MERGE_QUESTION_RULE = (
-    "- \"[[await]]\" on its own line only for a blocking question (next"
-    " message = the answer). Optional offers: no marker.\n"
+    "- \"[[await]]\" on its own line only for a blocking question."
+    " Optional offers: no marker.\n"
 )
 
 # Workers run under the autonomy policy, so one that stops to ask has
 # already established the turn cannot finish without the user. Tell the
 # merge outright instead of leaving it to infer that from the report text.
 _MERGE_BLOCKED_RULE = (
-    "- A BLOCKED-marked report needs a user answer: end with its question"
+    "- A BLOCKED report needs a user answer: end with its question"
     " plus \"[[await]]\" on its own line.\n"
 )
 
@@ -225,7 +223,7 @@ def build_plan_prompt(context: str, *, collaborative: bool) -> str:
     if collaborative:
         parts.append(_PLANNER_QUESTION_RULE)
     parts.append(_PLANNER_FORMAT)
-    parts.append("--- conversation ---")
+    parts.append("--- input ---")
     parts.append(context)
     return "\n".join(parts)
 
@@ -252,30 +250,26 @@ def build_subtask_prompt(
     parts = [context, ""]
     parts.append(
         f"[Sub-task {index + 1}/{len(plan.subtasks)}: {task.tier}]"
-    )
-    parts.append(
-        "One worker in a pipeline answering the message above; sub-tasks"
-        " run in order."
+        " — do ONLY this one; others have their own workers."
     )
     if plan.understanding:
-        parts.append(f"\nGoal: {plan.understanding}")
+        parts.append(f"Goal: {plan.understanding}")
     parts.append("\nPlan:")
     parts.append(_render_plan(plan, current=index))
 
     if results:
-        parts.append("\nEarlier workers reported:")
+        parts.append("\nEarlier reports:")
         for i, text in enumerate(results):
             parts.append(
-                f"\n--- sub-task {i + 1} result ---\n"
+                f"\n--- report {i + 1} ---\n"
                 f"{_truncate_report(text)}"
             )
 
     parts.append(
-        f"\nDo ONLY sub-task {index + 1}: {task.instruction}\n"
-        "Others have their own workers; duplicated work is discarded."
-        " Use tools to do it, not describe it. Report concisely for the"
-        " agent writing the final reply: what you did/found, what the"
-        " next worker needs (paths, commands, results, no pleasantries)."
+        f"\nYour task: {task.instruction}\n"
+        "Use tools, not description. Report for the"
+        " final-reply writer: what you did/found, what the"
+        " next worker needs (paths, commands, results)."
     )
     return "\n".join(parts)
 
@@ -294,20 +288,20 @@ def build_merge_prompt(
         rules += _MERGE_QUESTION_RULE
         if blocked:
             rules += _MERGE_BLOCKED_RULE
-    parts = [rules, "--- conversation ---", context, ""]
+    parts = [rules, "--- input ---", context, ""]
     if plan.understanding:
         parts.append(f"Goal: {plan.understanding}")
-    parts.append("\nPlan carried out:")
+    parts.append("\nPlan:")
     parts.append(_render_plan(plan))
-    parts.append("\n--- worker reports ---")
+    parts.append("\n--- reports ---")
     for i, (task, text) in enumerate(zip(plan.subtasks, results)):
-        tag = " — BLOCKED, needs a user answer" if i in blocked else ""
+        tag = " [BLOCKED: needs user answer]" if i in blocked else ""
         parts.append(
-            f"\n--- sub-task {i + 1} [{task.tier}]:"
+            f"\n--- {i + 1} [{task.tier}]:"
             f" {task.instruction}{tag} ---\n"
             f"{_truncate_report(text) if text else '(no report)'}"
         )
-    parts.append("\n--- end of reports ---\n\nWrite the user's reply.")
+    parts.append("\n--- end ---\n\nWrite the user's reply.")
     return "\n".join(parts)
 
 

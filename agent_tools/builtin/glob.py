@@ -18,8 +18,7 @@ from ..base import (
 class GlobTool(AgentTool):
     name = "glob"
     description = (
-        "Find files by glob pattern (`**` recurses, e.g. '**/*.py')."
-        " Sorted relative paths."
+        "Find files by glob (`**` recurses). Sorted relative paths."
     )
     parameters = object_parameters(
         {
@@ -29,7 +28,7 @@ class GlobTool(AgentTool):
             },
             "max_results": {
                 "type": "integer",
-                "description": "Cap (default 100, max 500).",
+                "description": "Default 100, max 500.",
             },
         },
         ["pattern"],

@@ -36,15 +36,13 @@ class GitInfoTool(AgentTool):
     name = "git_info"
     order = 20  # utility tools group
     description = (
-        "Read-only Git: status, log, or diff (patch=true for full"
-        " patch). Never modifies."
+        "Git status/log/diff (patch=true: full patch). Read-only."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "action": {
                 "type": "string",
                 "enum": list(_ACTIONS),
-                "description": "status, log, or diff.",
             },
             "path": {
                 "type": "string",
@@ -56,7 +54,7 @@ class GitInfoTool(AgentTool):
             },
             "limit": {
                 "type": "integer",
-                "description": "Commits (default 10, max 50).",
+                "description": "Default 10, max 50.",
             },
         },
         ["action"],

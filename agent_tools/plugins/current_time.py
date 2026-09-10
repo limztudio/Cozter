@@ -11,14 +11,14 @@ from ..base import AgentTool
 class CurrentTimeTool(AgentTool):
     name = "current_time"
     description = (
-        "Current date/time as ISO 8601. Optional IANA timezone."
+        "Current date/time (ISO 8601). Optional IANA timezone."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "timezone": {
                 "type": "string",
-                "description": "IANA zone, e.g. 'UTC'. Default: local.",
+                "description": "IANA zone. Default: local.",
             },
         },
     }

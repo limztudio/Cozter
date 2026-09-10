@@ -55,7 +55,7 @@ class WebSearchTool(AgentTool):
             "query": {"type": "string"},
             "max_results": {
                 "type": "integer",
-                "description": "Cap (default 5, max 10).",
+                "description": "Default 5, max 10.",
             },
         },
         ["query"],

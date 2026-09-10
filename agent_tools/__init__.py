@@ -384,7 +384,7 @@ def cli_plugin_prelude() -> str:
     if not plugins:
         return ""
 
-    lines = ["Plugins (via bash):", ""]
+    lines = ["Plugins (bash):", ""]
     for tool in plugins:
         props = tool.parameters.get("properties", {})
         required = set(tool.parameters.get("required", []))
@@ -400,7 +400,7 @@ def cli_plugin_prelude() -> str:
         # attribute (e.g. weather_lookup.py defining GetWeatherTool).
         module_path = tool.__class__.__module__
         lines.append(f"- {tool.name}: {tool.description}")
-        lines.append(f"  {args_summary} / python -m {module_path} '<JSON>'")
+        lines.append(f"  {args_summary} | python -m {module_path} '<JSON>'")
         lines.append("")
     return "\n".join(lines).rstrip()
 

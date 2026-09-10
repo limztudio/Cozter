@@ -17,10 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 TITLE_PROMPT = (
-    "Title this chat for a list view: 3-7 words, Title Case, no trailing"
-    " punctuation/quotes/commentary. Dominant topic, not the latest line."
-    " Output only the title.\n\n"
-    "No tools/file reads; the input below is everything."
+    "Title this chat: 3-7 words, Title Case, no trailing"
+    " punctuation/quotes. Dominant topic. Output only the title.\n\n"
+    "No tools; the input below is everything."
 )
 TITLE_TIMEOUT = 60  # seconds; generous headroom for an occasional slow API call
 TITLE_MAX_CHARS = 60

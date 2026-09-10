@@ -470,8 +470,8 @@ class OpenAIChatBackend(Backend):
                         if tool_repeat_counts[sig] > tool_repeat_limit:
                             result = (
                                 f"Skipped: {name} repeated"
-                                f" >{tool_repeat_limit}x. Final-answer"
-                                " from available info."
+                                f" >{tool_repeat_limit}x. Answer"
+                                " from info so far."
                             )
                             proc.emit({
                                 "type": "tool_result",
@@ -521,9 +521,8 @@ class OpenAIChatBackend(Backend):
                 continuation_message = {
                     "role": "user",
                     "content": (
-                        "Tool-call segment limit reached. Continue the task"
-                        " with more tools if needed; do not repeat completed"
-                        " calls unless inputs or files changed."
+                        "Segment limit reached. Continue with more tools if"
+                        " needed; don't repeat completed calls."
                     ),
                 }
                 if not append_message(continuation_message):
@@ -535,8 +534,8 @@ class OpenAIChatBackend(Backend):
             final_request_message = {
                 "role": "user",
                 "content": (
-                    "Tool-call limit reached. No more tools: answer now from"
-                    " collected info; say what is missing if incomplete."
+                    "Tool limit reached. No more tools: answer from"
+                    " collected info; say what's missing if incomplete."
                 ),
             }
             if not append_message(final_request_message):
@@ -1168,7 +1167,7 @@ def _system_prompt(
     ]
     if tool_names:
         parts.append(
-            f"Tools: {', '.join(tool_names)} (workspace paths)."
+            f"Tools: {', '.join(tool_names)}."
             " One pass; don't repeat calls."
         )
     else:

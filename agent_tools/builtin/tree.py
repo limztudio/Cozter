@@ -20,8 +20,7 @@ class TreeTool(AgentTool):
     name = "tree"
     order = 30  # group with the discovery tools (list_dir/glob/grep)
     description = (
-        "Directory tree (dirs first). Skips noise dirs (.git,"
-        " node_modules, ...), no symlink follows, read-only."
+        "Directory tree (dirs first). Skips noise dirs, no symlinks."
     )
     parameters = object_parameters(
         {

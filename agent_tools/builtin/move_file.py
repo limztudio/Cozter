@@ -18,8 +18,7 @@ from ...utils import is_path_within
 class MoveFileTool(AgentTool):
     name = "move_file"
     description = (
-        "Move/rename a file or directory. No clobbering; parent dirs"
-        " are created."
+        "Move/rename a file or directory. No clobbering."
     )
     parameters = source_destination_parameters()
 

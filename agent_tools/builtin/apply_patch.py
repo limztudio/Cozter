@@ -124,17 +124,12 @@ class ApplyPatchTool(AgentTool):
     file_action = "edit"
     order = 20  # group with the editing tools
     description = (
-        "Apply a unified diff (`git diff`/`diff -u`); prefer for"
-        " multi-hunk or multi-file edits. Context lines fuzz-match, so"
-        " exact line numbers aren't needed. `--- /dev/null` creates,"
-        " `+++ /dev/null` deletes. Per-file outcome; unmatched hunks are"
-        " reported, not skipped."
+        "Apply a unified diff; prefer for multi-hunk/multi-file edits."
+        " Context fuzz-matches. `--- /dev/null` creates,"
+        " `+++ /dev/null` deletes. Per-file outcome."
     )
     parameters = object_parameters(
-        {"patch": {
-            "type": "string",
-            "description": "The unified diff text.",
-        }},
+        {"patch": {"type": "string"}},
         ["patch"],
     )
 

@@ -15,8 +15,7 @@ from ..base import (
 class CopyFileTool(AgentTool):
     name = "copy_file"
     description = (
-        "Copy a file, preserving metadata. No directories (bash `cp -r`),"
-        " no clobbering; parent dirs are created."
+        "Copy a file, preserving metadata. No dirs, no clobbering."
     )
     parameters = source_destination_parameters()
 

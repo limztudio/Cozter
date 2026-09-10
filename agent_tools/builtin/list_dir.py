@@ -25,11 +25,11 @@ class ListDirTool(AgentTool):
         "type": "object",
         "properties": {
             "path": path_property(
-                "Dir path. Default: workspace root.",
+                "Default: workspace root.",
             ),
             "max_results": {
                 "type": "integer",
-                "description": "Cap (default 200, max 1000).",
+                "description": "Default 200, max 1000.",
             },
         },
     }

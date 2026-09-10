@@ -23,8 +23,7 @@ class MultiEditTool(AgentTool):
     name = "multi_edit"
     file_action = "edit"
     description = (
-        "Apply several string replacements to one file atomically: any"
-        " failed edit aborts the whole write."
+        "Apply several string replacements to one file atomically."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
@@ -32,7 +31,7 @@ class MultiEditTool(AgentTool):
             "path": path_property(),
             "edits": {
                 "type": "array",
-                "description": "Edits in order.",
+                "description": "Ordered edits.",
                 "items": object_parameters(
                     replacement_properties(), ["old_string", "new_string"],
                 ),

@@ -11,14 +11,12 @@ logger = logging.getLogger(__name__)
 
 
 ROUTER_PROMPT = (
-    "Session router for a multi-session chat assistant. The user is about"
-    " to send a message: pick the existing session whose topic best fits"
-    " — or output NEW if none match.\n\n"
+    "Session router: pick the existing session whose topic best fits the"
+    " message below — or NEW if none match.\n\n"
     "Rules:\n"
-    "- Continue an existing session on clear topical match.\n"
-    "- NEW for genuinely new topics, not minor digressions.\n"
-    "- Exactly one line: bare session id, or NEW.\n"
-    "- No tools/file reads; decide from the input below.\n"
+    "- Continue on clear topical match; NEW for new topics.\n"
+    "- One line: bare session id, or NEW.\n"
+    "- No tools; decide from the input.\n"
 )
 ROUTER_TIMEOUT = 60  # seconds; on timeout the router falls back to NEW
 ROUTER_MAX_SESSIONS = 12  # cap input size; sessions are listed newest-first
@@ -84,7 +82,7 @@ def _build_router_prompt(prompt: str, sessions_data: list[dict]) -> str:
         parts.append(_build_session_block(s))
         parts.append("")
     parts.append(
-        "Output exactly one line: a session id from the list above, or NEW."
+        "One line: a session id above, or NEW."
     )
     return "\n".join(parts)
 
