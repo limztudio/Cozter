@@ -47,7 +47,6 @@ class GrepTool(AgentTool):
         {
             "pattern": {
                 "type": "string",
-                "description": "Regex.",
             },
             "path": {
                 "type": "string",

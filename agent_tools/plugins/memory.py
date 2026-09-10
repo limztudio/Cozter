@@ -189,11 +189,9 @@ class MemoryTool(AgentTool):
             "action": {
                 "type": "string",
                 "enum": list(_ACTIONS),
-                "description": "search, list, or read.",
             },
             "query": {
                 "type": "string",
-                "description": "Search text.",
             },
             "session": {
                 "type": "string",

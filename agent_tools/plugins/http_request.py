@@ -159,12 +159,10 @@ class HttpRequestTool(AgentTool):
         {
             "url": {
                 "type": "string",
-                "description": "Public http(s) URL.",
             },
             "method": {
                 "type": "string",
                 "enum": list(_METHODS),
-                "description": "Default GET.",
             },
             "headers": {
                 "type": "object",
