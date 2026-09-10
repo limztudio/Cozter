@@ -336,9 +336,8 @@ async def execute_tool(
         except asyncio.TimeoutError:
             logger.error("Tool %s exceeded tool_timeout=%ss", name, timeout)
             result = (
-                f"Tool {name} timed out after {timeout:g}s and was aborted."
-                " It may be stuck on blocking I/O or an infinite loop. Try a"
-                " narrower request or a different approach."
+                f"Tool {name} timed out after {timeout:g}s. Try a narrower"
+                " request or a different approach."
             )
         except Exception as exc:
             result = f"Tool {name} failed: {exc}"
@@ -346,7 +345,7 @@ async def execute_tool(
     if len(result) > _TOOL_RESULT_MAX:
         result = (
             result[:_TOOL_RESULT_MAX]
-            + f"\n... [truncated, {len(result)} chars total]"
+            + f"\n... [{len(result)} chars total]"
         )
 
     return _emit_tool_result(emit, name, result)
