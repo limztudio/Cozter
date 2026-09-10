@@ -423,6 +423,18 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("low report", result.text)
         self.assertIn("high report", result.text)
 
+    async def test_single_subtask_skips_the_merge_call(self) -> None:
+        """One sub-task returns the worker report with no merge model call."""
+        self.plan_output = "[PLAN]\n1. [low] tweak the check\n[/PLAN]"
+        self.worker_texts = ["solo report"]
+        with tempfile.TemporaryDirectory() as ws:
+            workspace.ensure_cozter_dir(ws)
+            result, restarting = await self._run(ws)
+
+        self.assertFalse(restarting)
+        self.assertEqual(result.text, "solo report")
+        self.assertEqual(self.internal, ["Flexible planner"])
+
     async def test_long_worker_reports_are_truncated_downstream(self) -> None:
         """Unbounded reports are capped before later workers/the merge."""
         long_report = "x" * (flexible._REPORT_MAX_CHARS + 500)
@@ -581,7 +593,10 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             _backend, _workspace_path, _prompt, _model, **kwargs,
         ):
             if kwargs["label"] == "Flexible planner":
-                return "[PLAN]\n1. [low] inspect the request\n[/PLAN]"
+                return (
+                    "[PLAN]\n1. [low] inspect the request\n"
+                    "2. [low] confirm the fix\n[/PLAN]"
+                )
             merge_started.set()
             await asyncio.Event().wait()
 

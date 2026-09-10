@@ -624,6 +624,43 @@ def _context_quotas(lengths: list[int], budget: int) -> list[int]:
     return quotas
 
 
+_KEYWORD_RE = re.compile(r"[a-z0-9]{3,}")
+
+_PLANNER_CONTEXT_CAP = 12_000
+
+
+def _request_keywords(text: str, limit: int = 64) -> set[str]:
+    words = _KEYWORD_RE.findall(text.lower())
+    seen: set[str] = set()
+    for word in words:
+        seen.add(word)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def _relevance_last(items: list, keywords: set[str]) -> list:
+    scored = []
+    for index, item in enumerate(items):
+        text = item if isinstance(item, str) else session.format_msg_line(item)
+        words = set(_KEYWORD_RE.findall(text.lower()))
+        scored.append((len(words & keywords), index, item))
+    scored.sort(key=lambda entry: (entry[0], entry[1]))
+    return [entry[2] for entry in scored]
+
+
+def _planner_context(contextual_prompt: str, request: str) -> str:
+    if len(contextual_prompt) <= _PLANNER_CONTEXT_CAP:
+        return contextual_prompt
+    tail_reserve = min(len(request) + 200, _PLANNER_CONTEXT_CAP // 2)
+    head_budget = _PLANNER_CONTEXT_CAP - tail_reserve - 3
+    head = contextual_prompt[:max(0, head_budget)]
+    tail = contextual_prompt[len(contextual_prompt) - tail_reserve:]
+    if request and request not in tail:
+        return head + "\n…\n" + request
+    return head + "\n…\n" + tail
+
+
 def _build_contextual_prompt(
     prompt: str,
     session_data: dict | None,
@@ -660,6 +697,9 @@ def _build_contextual_prompt(
     # persisted memory item must not turn the configured history budget into
     # an unbounded prompt.
     if len(full) > budget:
+        keywords = _request_keywords(prompt)
+        colony_list = _relevance_last(list(colony_list), keywords)
+        long_term = _relevance_last(list(long_term), keywords)
         descriptors = [
             (
                 lambda limit: _bounded_context_list_block(
@@ -1144,7 +1184,8 @@ async def _run_flexible(
             summary_backend,
             workspace_path,
             flexible.build_plan_prompt(
-                contextual_prompt, collaborative=collaborative,
+                _planner_context(contextual_prompt, request),
+                collaborative=collaborative,
             ),
             summary_model,
             timeout=flexible.PLAN_TIMEOUT,
@@ -1269,6 +1310,26 @@ async def _run_flexible(
         if worker_awaiting:
             blocked.append(i)
 
+    if total == 1:
+        if _take_pending_injections(inject_queue, injected):
+            return AgentResult(), True
+        _close_inject_queue(inject_queue)
+        final = reports[0].strip()
+        if not final:
+            final = (
+                "The worker produced no output for this turn. Check the agent"
+                " and model bound to each difficulty tier with"
+                " /agent_flexible_low, _mid, and _high."
+            )
+        for marker in attach_markers:
+            if marker not in final:
+                final += f"\n\n{marker}"
+        if collaborative and blocked:
+            final += "\n\n[[await]]"
+        append_text_result(result, final)
+        result.usage = usage_totals or None
+        return result, False
+
     # 3. Merge the reports into the single reply the user sees.
     await status(
         f"flexible: merging with {summary_backend.name}/{summary_model}"
@@ -1278,7 +1339,7 @@ async def _run_flexible(
             summary_backend,
             workspace_path,
             flexible.build_merge_prompt(
-                contextual_prompt, plan, reports,
+                request, plan, reports,
                 collaborative=collaborative, blocked=blocked,
             ),
             summary_model,

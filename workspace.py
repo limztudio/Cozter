@@ -876,7 +876,7 @@ def set_compact_interval(workspace_path: str, interval: int) -> None:
 # there is no single tokenizer across the codex/claude/copilot/grok/llama
 # backends - so raise it for large-context models and lower it for small
 # local ones. agent.py drops the oldest recent messages first to fit.
-DEFAULT_HISTORY_BUDGET = 50_000
+DEFAULT_HISTORY_BUDGET = 20_000
 MIN_HISTORY_BUDGET = 2_000
 
 

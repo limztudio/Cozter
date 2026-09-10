@@ -103,6 +103,28 @@ class ContextBudgetTests(unittest.TestCase):
 
 
 class PromptPolicyTests(unittest.TestCase):
+    def test_relevant_memory_survives_a_tight_budget(self) -> None:
+        data = {
+            "summary": "",
+            "long_term": [
+                "unrelated hobby note",
+                "TARGETWORD deployment facts",
+            ],
+            "messages": [],
+        }
+        out = agent._build_contextual_prompt(
+            "TARGETWORD question", data, ["unrelated shared"],
+            budget=2_000,
+        )
+        self.assertIn("TARGETWORD deployment facts", out)
+
+    def test_planner_context_keeps_the_request_under_a_cap(self) -> None:
+        big = "history line\n" * 2_000
+        request = "the actual user request"
+        out = agent._planner_context(big + request, request)
+        self.assertLessEqual(len(out), agent._PLANNER_CONTEXT_CAP)
+        self.assertIn(request, out)
+
     def test_explicit_session_turn_is_autonomous(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace.set_interaction_style(tmp, "collaborative")
