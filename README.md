@@ -57,6 +57,11 @@ are trusted in-process code, not sandboxed extensions.
   the same prefix. Colony, long-term memory, summaries, and recent
   messages are prepended subject to the configured character budget; the
   new user message stays intact
+- **Interrupted turns stay in memory**: `/stop`, shutdown, or a mid-turn
+  restart appends the stopped prompt plus its partial output (or last tool
+  activity) to the session before cancelling, so "resume where you left
+  off" works against a real record of the stopped attempt instead of a
+  history that ends at the previous completed turn
 - **Persistent turn queues on Telegram, Slack, and Signal**: if a user sends
   more work while an agent turn is running, or while an update restart is
   pending, the messages are queued on disk and restored after restart

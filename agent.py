@@ -10,6 +10,8 @@ import os
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+import dataclasses
+from datetime import datetime
 
 from . import (
     agent_tools, backends_agent, colony, compaction, flexible, router,
@@ -1583,6 +1585,102 @@ async def _run_post_turn_maintenance(
     )
 
 
+# Bounds for the partial-output digest persisted with an interrupted turn:
+# enough to show what the stopped attempt reached without ballooning the
+# context block that later turns receive.
+INTERRUPTED_TURN_MAX_CHARS = 1200
+INTERRUPTED_TURN_ACTIVITY_CHARS = 300
+# Events retained for that digest; the digest keeps the newest material.
+INTERRUPTED_TURN_EVENT_KEEP = 100
+
+
+@dataclass
+class _InterruptedTurn:
+    """Durable-trace accumulator for one agent run.
+
+    :func:`_run_turn` fills this in as the turn progresses. If the turn is
+    cancelled (/stop, shutdown, or a restart mid-turn), whatever was
+    accumulated is appended to the session, so a later "resume" prompt sees
+    the stopped attempt instead of a history that ends silently at the
+    previous completed turn.
+    """
+
+    workspace_path: str
+    prompt: str
+    session_id: str | None = None
+    events: list[ChatEvent] = dataclasses.field(default_factory=list)
+    logged_normally: bool = False
+
+
+def _interrupted_turn_note(turn: _InterruptedTurn) -> str:
+    """Build the assistant-side session entry for a cancelled turn."""
+    lines = [
+        "[Interrupted turn — stopped before completion at {stamp}. Work it "
+        "already did in this workspace may be incomplete or "
+        "half-applied.]".format(
+            stamp=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        ),
+    ]
+    digest = _format_session_response(
+        AgentResult(events=list(turn.events)), turn.workspace_path,
+    )
+    if digest:
+        if len(digest) > INTERRUPTED_TURN_MAX_CHARS:
+            marker = "… [earlier partial output dropped]\n"
+            digest = marker + digest[
+                -(INTERRUPTED_TURN_MAX_CHARS - len(marker)):
+            ]
+        lines.append("Partial output before the stop:")
+        lines.append(digest)
+    else:
+        activity = next(
+            (
+                ev.content for ev in reversed(turn.events)
+                if ev.kind in ("tool", "file") and ev.content.strip()
+            ),
+            None,
+        )
+        if activity:
+            lines.append("Last activity before the stop:")
+            lines.append(_truncate_context_text(
+                " ".join(activity.split()), INTERRUPTED_TURN_ACTIVITY_CHARS,
+            ))
+    return "\n\n".join(lines)
+
+
+def _log_interrupted_turn(turn: _InterruptedTurn) -> None:
+    """Persist a cancelled turn's prompt and partial output to its session.
+
+    Runs as a detached background task: the cancelling turn must re-raise
+    immediately, and a second /stop must not be able to abort the write.
+    Skipped when the turn already completed its normal session log, or was
+    cancelled before it had a session to log into.
+    """
+    if turn.logged_normally or not turn.session_id:
+        return
+    note = _interrupted_turn_note(turn)
+    session_id = turn.session_id
+
+    async def _append() -> None:
+        try:
+            async with workspace_mod.get_lock(turn.workspace_path):
+                session.append_messages(turn.workspace_path, session_id, [
+                    {"role": "user", "content": turn.prompt},
+                    {"role": "assistant", "content": note},
+                ])
+        except Exception:
+            logger.error("Failed to log interrupted turn", exc_info=True)
+
+    try:
+        create_background_task(
+            _append(),
+            name=f"log-interrupted-turn:{session_id}",
+            log=logger,
+        )
+    except Exception:
+        logger.error("Failed to schedule interrupted-turn log", exc_info=True)
+
+
 async def _run_turn(
     prompt: str,
     workspace_path: str,
@@ -1610,6 +1708,51 @@ async def _run_turn(
     on_event  - called for each parsed event as it arrives (streaming).
     inject_queue - when a message is put, the running subprocess is killed
                    and restarted with the injected context appended.
+
+    Cancellation (/stop, shutdown, or a mid-turn restart) still persists the
+    prompt and any partial output to the session before propagating, so a
+    later resume has real memory of the stopped attempt.
+    """
+    turn = _InterruptedTurn(workspace_path=workspace_path, prompt=prompt)
+    try:
+        return await _run_turn_impl(
+            turn, prompt, workspace_path, user_id,
+            model=model,
+            summary_model=summary_model,
+            approval=approval,
+            on_event=on_event,
+            inject_queue=inject_queue,
+            backend_name=backend_name,
+            summary_backend_name=summary_backend_name,
+            session_id=session_id,
+        )
+    except asyncio.CancelledError:
+        # /stop, shutdown, or a mid-turn process replacement: leave a
+        # durable trace of the stopped attempt so a later resume has real
+        # memory of it. Never swallow the cancellation.
+        _log_interrupted_turn(turn)
+        raise
+
+
+async def _run_turn_impl(
+    turn: _InterruptedTurn,
+    prompt: str,
+    workspace_path: str,
+    user_id: int,
+    model: str | None = None,
+    summary_model: str | None = None,
+    approval: str = "auto",
+    on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
+    inject_queue: asyncio.Queue[str] | None = None,
+    backend_name: str | None = None,
+    summary_backend_name: str | None = None,
+    session_id: str | None = None,
+) -> AgentResult:
+    """Drive the backend phases of one turn, updating *turn* as it goes.
+
+    Session routing, context prepending, streaming, the normal session log,
+    and post-turn maintenance live here; interruption logging and the public
+    contract live on :func:`_run_turn`.
     """
     backend = backends_agent.get_backend(backend_name)
     is_flexible = backend.name == flexible.BACKEND_NAME
@@ -1667,6 +1810,7 @@ async def _run_turn(
 
     # session_id is set by both resolution branches by this point.
     assert session_id is not None
+    turn.session_id = session_id
     # Workspace-shared memory is loaded once and reused on every inject
     # restart, just like session_data.
     colony_items = colony.get_items(workspace_path)
@@ -1685,6 +1829,18 @@ async def _run_turn(
 
     injected: list[str] = []
     effort = workspace_mod.get_reasoning_effort(workspace_path)
+
+    async def _stream_event(event: ChatEvent) -> None:
+        """Forward backend events, retaining recent ones for /stop recovery."""
+        turn.events.append(event)
+        if len(turn.events) > INTERRUPTED_TURN_EVENT_KEEP:
+            del turn.events[:len(turn.events) - INTERRUPTED_TURN_EVENT_KEEP]
+        if on_event is not None:
+            await on_event(event)
+
+    # Backend phases stream through this tee instead of the caller's
+    # callback directly, so a cancelled turn still knows what the stopped
+    # attempt had reached.
 
     while True:  # restart loop for inject
         effective_prompt = prompt
@@ -1715,7 +1871,7 @@ async def _run_turn(
                     collaborative=collaborative,
                     summary_backend_name=summary_backend,
                     summary_model=summary_model,
-                    on_event=on_event,
+                    on_event=_stream_event,
                     inject_queue=inject_queue,
                     injected=injected,
                 )
@@ -1733,7 +1889,7 @@ async def _run_turn(
                     ),
                     model, approval,
                     effort=effort,
-                    on_event=on_event,
+                    on_event=_stream_event,
                     inject_queue=inject_queue,
                     injected=injected,
                     close_inject_on_completion=True,
@@ -1754,11 +1910,10 @@ async def _run_turn(
                 "Restarting %s with %d injected message(s)",
                 backend.name, len(injected),
             )
-            if on_event:
-                await on_event(ChatEvent(
-                    kind="tool",
-                    content="Restarting with injected context...",
-                ))
+            await _stream_event(ChatEvent(
+                kind="tool",
+                content="Restarting with injected context...",
+            ))
             continue  # restart loop
 
         explicit_attachment_sources = _explicit_attachment_sources(
@@ -1791,6 +1946,8 @@ async def _run_turn(
     # Log the original prompt (including injected context) to session.
     async with workspace_mod.get_lock(workspace_path):
         _log_to_session(workspace_path, session_id, effective_prompt, result)
+        # Only a completed write suppresses the interrupted-turn fallback.
+        turn.logged_normally = True
 
     # Compaction may take another model round-trip. The answer is already
     # complete, so keep it out of the foreground turn; Slack can post the
