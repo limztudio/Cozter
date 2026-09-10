@@ -65,6 +65,11 @@ _PLANNER_RULES = (
     " strands hard work on a weak one.\n"
     "- Self-contained: the worker sees only the user message, the plan,"
     " and earlier reports.\n"
+    "- Cover everything: when the request says all/entire/every/whole, the"
+    " plan must cover every item with no gaps; prefer concrete enumerated"
+    " targets over one vague 'handle all' task.\n"
+    "- Each instruction states its done-criteria and requires the worker to"
+    " verify no leftovers remain.\n"
     "- No tools; plan from the text.\n"
 )
 
@@ -94,6 +99,10 @@ _MERGE_RULES = (
     "- Answer directly, outcome first, as the assistant who did the work"
     " (never mention plans/workers/tiers).\n"
     "- Keep concrete results (code, paths, commands, numbers, errors).\n"
+    "- For all/entire/every requests, check every plan item is covered by"
+    " the reports before claiming done.\n"
+    "- Never claim full completion when any report is partial, missing, or"
+    " failed: say what finished, what did not, and what remains.\n"
     "- User's language. No tool calls; work is done.\n"
 )
 
@@ -266,8 +275,14 @@ def build_subtask_prompt(
 
     parts.append(
         f"\nYour task: {task.instruction}\n"
-        "Use tools, not description. Report: what you did/found, what the"
-        " next worker needs (paths, commands, results)."
+        "Finish ALL of it - never a sample. If it says all/entire/every,"
+        " find every item first (glob/grep/list), handle each one, then"
+        " re-check for leftovers.\n"
+        "Use tools, not description. Report per-item: what you did/found,"
+        " what you skipped or could not do, what the next worker needs"
+        " (paths, commands, results).\n"
+        "Be honest: say PARTIAL and list what remains if anything is"
+        " unfinished; never report done when work remains."
     )
     return "\n".join(parts)
 
