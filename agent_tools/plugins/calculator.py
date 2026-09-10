@@ -179,9 +179,7 @@ def _format(value: Any) -> str:
 class CalculatorTool(AgentTool):
     name = "calculator"
     order = 20  # utility tools group
-    description = (
-        "Exact math. Use over mental arithmetic."
-    )
+    description = "Exact math."
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {

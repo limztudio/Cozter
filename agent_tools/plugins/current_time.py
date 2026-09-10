@@ -10,9 +10,7 @@ from ..base import AgentTool
 
 class CurrentTimeTool(AgentTool):
     name = "current_time"
-    description = (
-        "Current date/time (ISO 8601). Optional IANA timezone."
-    )
+    description = "Current date/time (ISO 8601)."
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {

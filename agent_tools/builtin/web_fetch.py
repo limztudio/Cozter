@@ -95,9 +95,7 @@ async def _fetch_following_redirects(
 
 class WebFetchTool(AgentTool):
     name = "web_fetch"
-    description = (
-        "Fetch a public URL as text (after web_search)."
-    )
+    description = "Fetch a public URL as text."
     parameters = object_parameters(
         {
             "url": {"type": "string"},

@@ -17,9 +17,7 @@ from ...utils import is_path_within
 
 class MoveFileTool(AgentTool):
     name = "move_file"
-    description = (
-        "Move/rename a file or directory. No clobbering."
-    )
+    description = "Move/rename a file or directory."
     parameters = source_destination_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:

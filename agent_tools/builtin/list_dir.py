@@ -18,9 +18,7 @@ from ..base import (
 
 class ListDirTool(AgentTool):
     name = "list_dir"
-    description = (
-        "List a directory (trailing slash marks subdirectories)."
-    )
+    description = "List a directory."
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {

@@ -47,9 +47,7 @@ _DDG_HOST_SUFFIX = "duckduckgo.com"
 
 class WebSearchTool(AgentTool):
     name = "web_search"
-    description = (
-        "Web search for current info; web_fetch reads a result."
-    )
+    description = "Web search for current info."
     parameters = object_parameters(
         {
             "query": {"type": "string"},

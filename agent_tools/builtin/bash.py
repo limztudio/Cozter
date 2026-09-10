@@ -34,7 +34,7 @@ class BashTool(AgentTool):
     # child processes. Keep it out of HTTP agents' default ``auto`` mode.
     requires_full_permission = True
     description = (
-        "Run a shell command (cwd = workspace). Prefer file tools."
+        "Run a shell command (cwd = workspace)."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

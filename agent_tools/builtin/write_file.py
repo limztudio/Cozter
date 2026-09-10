@@ -17,9 +17,7 @@ from ..base import (
 class WriteFileTool(AgentTool):
     name = "write_file"
     file_action = "write"
-    description = (
-        "Write content to *path* (creates parents)."
-    )
+    description = "Write content to *path*."
     parameters = object_parameters(
         {
             "path": {"type": "string"},
