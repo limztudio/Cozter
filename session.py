@@ -240,25 +240,21 @@ def format_context_blocks(
     if colony_items:
         parts.append("[Colony]")
         parts.extend(f"- {item}" for item in colony_items)
-        parts.append("[End of Colony]\n")
 
     long_term = data.get("long_term") or []
     if long_term:
         parts.append("[Long-term Memory]")
         parts.extend(f"- {item}" for item in long_term)
-        parts.append("[End of Long-term Memory]\n")
 
     summary = data.get("summary")
     if isinstance(summary, str) and summary:
         parts.append("[Session Summary]")
         parts.append(summary)
-        parts.append("[End of Session Summary]\n")
 
     messages = data.get("messages") or []
     if messages:
         parts.append("[Recent Messages]")
         parts.extend(format_msg_line(message) for message in messages)
-        parts.append("[End of Recent Messages]\n")
 
     return parts
 

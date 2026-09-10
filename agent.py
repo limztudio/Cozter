@@ -64,26 +64,25 @@ class DetachedTaskLaunch:
 # (see workspace.get_interaction_style); scheduled / ephemeral turns run
 # unattended and cannot pause on [[await]], so they are always autonomous.
 _ATTACH_HINT = (
-    "Send files via \"[[attach: PATH]]\" on its own line; always attach"
-    " what you create."
+    "Send created files via \"[[attach: PATH]]\" on its own line."
 )
 
 _COLLABORATION_POLICY = (
-    "Live chat. Ambiguous, large-scope, destructive, or irreversible:"
-    " ask ONE short question ending in \"[[await]]\" (next message"
-    " answers). Small reversible calls: decide, note in one line, go."
+    "Live chat. Ambiguous/large/destructive/irreversible:"
+    " ask ONE short question ending [[await]] (next msg"
+    " answers). Small reversible: decide, note in one line, go."
 )
 
 _AUTONOMY_POLICY = (
-    "Unattended run: no mid-task answers. Decide scoped, finish; if"
+    "Unattended: no mid-task answers. Decide, finish; if"
     " blocked, state what's missing."
 )
 
 
 _DETACHED_TASK_POLICY = (
-    "Background work: no shell backgrounding, no callbacks. End reply"
-    " with one self-contained `[[background: <task>]]` line; Cozter"
-    " launches it and posts the result. No-input work only."
+    "No shell backgrounding/callbacks. End with one self-contained"
+    " `[[background: <task>]]` line; Cozter runs it, posts result."
+    " No-input work only."
 )
 
 
@@ -565,7 +564,7 @@ def _bounded_context_block(
     if not body:
         return ""
     header = f"[{label}]\n"
-    footer = f"\n[End of {label}]\n"
+    footer = ""
     if limit is None:
         return header + body + footer
     body_limit = limit - len(header) - len(footer)
@@ -585,7 +584,7 @@ def _bounded_context_list_block(
     if not items:
         return ""
     header = f"[{label}]\n"
-    footer = f"\n[End of {label}]\n"
+    footer = ""
     if limit is None:
         return header + "\n".join(formatter(item) for item in items) + footer
     body_limit = limit - len(header) - len(footer)
@@ -650,7 +649,7 @@ def _build_contextual_prompt(
     parts = session.format_context_blocks(data, colony_list)
 
     parts.append(
-        "New message follows.\n"
+        "New message:"
     )
     parts.append(prompt)
 
@@ -698,7 +697,7 @@ def _build_contextual_prompt(
             (render, natural) for render, natural in descriptors if natural
         ]
         continuation = (
-            "New message follows.\n"
+            "New message:"
         )
         # Preserve the user's request intact even under a tight history
         # setting. If the required continuation wrapper itself would push an

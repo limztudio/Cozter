@@ -1168,11 +1168,9 @@ def _system_prompt(
     ]
     if tool_names:
         parts.append(
-            f"Tools: {', '.join(tool_names)} (workspace paths, rel or abs)."
-            " Explore via list_dir/glob/grep; read_file takes"
-            " offset/limit. web_search finds, web_fetch reads."
+            f"Tools: {', '.join(tool_names)} (workspace paths)."
             " One pass; don't repeat calls."
         )
     else:
-        parts.append("No tools this turn - plain-text reply.")
+        parts.append("No tools this turn.")
     return "\n".join(parts)
