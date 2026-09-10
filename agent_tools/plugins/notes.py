@@ -44,11 +44,9 @@ class NotesTool(AgentTool):
     name = "notes"
     order = 20  # pair with read_file in the model-facing ordering
     description = (
-        "Read or append your persistent workspace notes"
-        " (.cozter/notes.md). Notes survive compaction, stops, and"
-        " restarts, so use them to record task progress, key findings,"
-        " and next steps before ending a turn - then read them to"
-        " resume later."
+        "Persistent workspace notes (.cozter/notes.md) surviving"
+        " compaction and restarts. append needs text; read shows the"
+        " newest; clear deletes all. Record progress/next steps here."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
@@ -56,16 +54,13 @@ class NotesTool(AgentTool):
                 "type": "string",
                 "enum": ["append", "read", "clear"],
                 "description": (
-                    "append: add a timestamped entry (requires *text*)."
-                    " read: show the newest notes. clear: delete all"
-                    " notes."
+                    "append (needs text), read, or clear."
                 ),
             },
             "text": {
                 "type": "string",
                 "description": (
-                    "Entry text to append. Plain text or short markdown"
-                    " lines; multiple lines are preserved."
+                    "Entry text (plain text or short markdown)."
                 ),
             },
         },

@@ -180,11 +180,9 @@ class CalculatorTool(AgentTool):
     name = "calculator"
     order = 20  # utility tools group
     description = (
-        "Evaluate a math expression exactly: arithmetic (+ - * / // % **),"
-        " parentheses, functions (sqrt, exp, log, log2, log10, sin, cos,"
-        " tan, floor, ceil, round, abs, min, max, factorial, ...), and"
-        " constants (pi, e, tau, phi). Use it instead of doing"
-        " multi-step arithmetic mentally."
+        "Evaluate a math expression exactly: arithmetic, parentheses,"
+        " functions (sqrt, log, round, ...), constants (pi, e). Use"
+        " it instead of mental arithmetic."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
@@ -192,9 +190,7 @@ class CalculatorTool(AgentTool):
             "expression": {
                 "type": "string",
                 "description": (
-                    "Plain math expression, e.g."
-                    " '(1 + 0.07) ** 10 * 1500' or"
-                    " 'round(log(2) / log(1.05), 4)'."
+                    "Expression, e.g. '(1 + 0.07) ** 10 * 1500'."
                 ),
             },
         },

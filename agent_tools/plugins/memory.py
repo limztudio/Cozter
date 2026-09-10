@@ -181,12 +181,10 @@ class MemoryTool(AgentTool):
     name = "memory"
     order = 20  # utility tools group, next to notes/git_info
     description = (
-        "Search and read this workspace's durable chat memory: past"
-        " session transcripts, their summaries and long-term notes, and"
-        " the shared colony notes. action=search full-text searches all"
-        " of it, action=list lists sessions, action=read prints a"
-        " session's recent messages. Use this to recall decisions or"
-        " context from earlier sessions."
+        "Search/read this workspace's chat memory: past sessions,"
+        " summaries, long-term notes, colony notes. search needs"
+        " *query*; read needs *session* (name, id, prefix, or"
+        " 'last'). Use it to recall earlier decisions."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
@@ -194,30 +192,25 @@ class MemoryTool(AgentTool):
                 "type": "string",
                 "enum": list(_ACTIONS),
                 "description": (
-                    "search: full-text query (requires *query*)."
-                    " list: show sessions. read: print a session's"
-                    " recent messages (requires *session*)."
+                    "search (needs query), list, or read"
+                    " (needs session)."
                 ),
             },
             "query": {
                 "type": "string",
-                "description": (
-                    "Case-insensitive text to search for (search)."
-                ),
+                "description": "Text to search for (search).",
             },
             "session": {
                 "type": "string",
                 "description": (
-                    "Session to read, by name, id (or unique prefix),"
-                    " or 'last' (read)."
+                    "Session name, id, prefix, or 'last' (read)."
                 ),
             },
             "limit": {
                 "type": "integer",
                 "description": (
-                    "search: max matches (default 8, max 20)."
-                    " read: how many recent messages (default 20,"
-                    " max 100)."
+                    "Max matches/messages (defaults 8/20,"
+                    " max 20/100)."
                 ),
             },
         },

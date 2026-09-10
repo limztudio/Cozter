@@ -1175,18 +1175,11 @@ def _system_prompt(
     if tool_names:
         parts.append(
             f"Available tools: {', '.join(tool_names)}."
-            " File, shell, and discovery tools run inside this"
-            " workspace. Paths may be relative to the workspace root"
-            " or absolute inside it. Use list_dir/glob/grep to explore"
-            " the workspace before reading or editing files; prefer"
-            " specific patterns like '**/*.py' over '**/*' to avoid"
-            " noise from .git, node_modules, etc. For large files,"
-            " pass *offset* and *limit* to read_file. Web tools use"
-            " this client's internet connection - web_search to find"
-            " pages, then web_fetch to read specific URLs. Do not"
-            " repeat the same tool call. Once you have enough"
-            " information, stop using tools and provide the final"
-            " answer."
+            " Tools run in this workspace (paths relative or absolute"
+            " inside it). Explore with list_dir/glob/grep before"
+            " reading; pass offset/limit to read_file for large files."
+            " Web: web_search to find pages, web_fetch to read them."
+            " Do not repeat calls; answer once you have enough."
         )
     else:
         parts.append(

@@ -423,6 +423,56 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("low report", result.text)
         self.assertIn("high report", result.text)
 
+    async def test_long_worker_reports_are_truncated_downstream(self) -> None:
+        """Unbounded reports are capped before later workers/the merge."""
+        long_report = "x" * (flexible._REPORT_MAX_CHARS + 500)
+        plan = flexible.Plan(
+            understanding="",
+            subtasks=(
+                flexible.Subtask(tier="low", instruction="first"),
+                flexible.Subtask(tier="mid", instruction="second"),
+            ),
+        )
+        worker_prompt = flexible.build_subtask_prompt(
+            "request", plan, 1, [long_report],
+        )
+        self.assertNotIn(long_report, worker_prompt)
+        self.assertIn(flexible._REPORT_TRUNCATION_MARKER, worker_prompt)
+        merge_prompt = flexible.build_merge_prompt(
+            "context", plan, [long_report, "short"],
+            collaborative=False,
+        )
+        self.assertNotIn(long_report, merge_prompt)
+        self.assertIn("short", merge_prompt)
+
+    async def test_workers_get_the_request_not_the_full_history(self) -> None:
+        """Workers are driven with the bare user request as context."""
+        seen: list[str] = []
+
+        async def capture_drive(
+            backend, _ws, prompt, _model, _approval, **kwargs,
+        ):
+            seen.append(prompt)
+            return _worker("done", usage={}), False
+
+        with tempfile.TemporaryDirectory() as ws:
+            workspace.ensure_cozter_dir(ws)
+            with mock.patch.object(
+                agent, "run_internal_backend", self._fake_internal,
+            ), mock.patch.object(agent, "_drive_backend", capture_drive):
+                await agent._run_flexible(
+                    "FULL HISTORY + user message", "user message", ws,
+                    approval="auto", effort=0, collaborative=False,
+                    summary_backend_name="codex",
+                    summary_model="gpt-5.6-luna",
+                    on_event=None, inject_queue=None, injected=[],
+                )
+
+        self.assertEqual(len(seen), 2)
+        for prompt in seen:
+            self.assertNotIn("FULL HISTORY", prompt)
+            self.assertIn("user message", prompt)
+
     async def test_textless_workers_never_reply_with_a_placeholder(
         self,
     ) -> None:

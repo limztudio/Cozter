@@ -26,9 +26,9 @@ ROUTER_PROMPT = (
     "input below.\n"
 )
 ROUTER_TIMEOUT = 60  # seconds; on timeout the router falls back to NEW
-ROUTER_MAX_SESSIONS = 20  # cap input size; sessions are listed newest-first
-ROUTER_PER_SESSION_CHARS = 600
-ROUTER_PROMPT_PREVIEW_CHARS = 1_000
+ROUTER_MAX_SESSIONS = 12  # cap input size; sessions are listed newest-first
+ROUTER_PER_SESSION_CHARS = 400
+ROUTER_PROMPT_PREVIEW_CHARS = 600
 
 
 def _truncate_router_text(text: str, limit: int) -> str:

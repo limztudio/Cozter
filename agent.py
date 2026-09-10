@@ -64,44 +64,32 @@ class DetachedTaskLaunch:
 # (see workspace.get_interaction_style); scheduled / ephemeral turns run
 # unattended and cannot pause on [[await]], so they are always autonomous.
 _ATTACH_HINT = (
-    "To attach a file in your reply, include \"[[attach: PATH]]\" on its "
-    "own line. PATH is relative to the workspace root, or absolute. If "
-    "you create or generate an image or file for the user to view, make "
-    "sure it is attached."
+    "To send a file, put \"[[attach: PATH]]\" on its own line "
+    "(workspace-relative or absolute). Always attach images/files you "
+    "create."
 )
 
 _COLLABORATION_POLICY = (
-    "Work collaboratively — this is a live conversation, not an "
-    "unattended batch job. When the request is ambiguous, underspecified, "
-    "or open to more than one reasonable interpretation, or before any "
-    "large-scope, destructive, or hard-to-reverse action, ask the user "
-    "one short, specific question instead of guessing, and end that reply "
-    "with \"[[await]]\". The bot will pause normal queued chat work until "
-    "the user's next message, which you should treat as the answer. "
-    "Scheduled /reserve tasks are autonomous and may still run while the "
-    "chat queue is paused. For small, reversible, clearly-scoped choices, "
-    "pick a sensible option, state it in one line, and keep going; don't "
-    "ask about things that wouldn't change what the user does next."
+    "This is a live conversation. If the request is ambiguous, or the "
+    "action is large-scope, destructive, or hard to reverse, ask one "
+    "short, specific question and end with \"[[await]]\"; the user's next "
+    "message is the answer. For small, reversible choices, decide "
+    "yourself, say so in one line, and keep going."
 )
 
 _AUTONOMY_POLICY = (
-    "You are running unattended on a scheduled task — nobody is watching "
-    "in real time to answer questions mid-run. Do not ask for "
-    "confirmation; make reasonable, well-scoped decisions and finish the "
-    "task. If you are genuinely blocked, state plainly in your reply what "
-    "is missing."
+    "Unattended run — nobody can answer mid-task. Do not ask for "
+    "confirmation; make reasonable scoped decisions and finish. If "
+    "blocked, state what is missing."
 )
 
 
 _DETACHED_TASK_POLICY = (
-    "For durable background work, do not start a shell background process "
-    "(`&`, `nohup`, Bash run_in_background, or a nested `claude --bg`) and "
-    "do not say that work has started or promise a later callback yourself. "
-    "Instead, finish your visible reply and place one self-contained task "
-    "request on its own line as `[[background: <task>]]`. Cozter will only "
-    "announce the task after it has launched and persisted it, then later "
-    "post the provider task's final result. Use this only when the remaining "
-    "work can continue without user input."
+    "For background work, do not use shell backgrounding (`&`, `nohup`, "
+    "`claude --bg`) or promise a callback. Finish your reply and put one "
+    "self-contained `[[background: <task>]]` request on its own line; "
+    "Cozter launches it and posts the result later. Only for work needing "
+    "no user input."
 )
 
 
@@ -1222,7 +1210,11 @@ async def _run_flexible(
             _build_backend_prompt(
                 tier_backend,
                 flexible.build_subtask_prompt(
-                    contextual_prompt, plan, i, reports,
+                    # Workers get the bare user request, not the full
+                    # history: the planner already saw the context and
+                    # wrote self-contained instructions, so resending up
+                    # to history_budget chars per worker is pure cost.
+                    request, plan, i, reports,
                 ),
                 collaborative=False,
                 allow_detached_requests=False,

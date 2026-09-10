@@ -27,7 +27,7 @@ TITLE_PROMPT = (
 )
 TITLE_TIMEOUT = 60  # seconds; generous headroom for an occasional slow API call
 TITLE_MAX_CHARS = 60
-TITLE_CONTEXT_CHARS = 8_000
+TITLE_CONTEXT_CHARS = 4_000
 
 # Per-session guard so two concurrent run() calls (in theory) on the
 # same session don't both spawn a title pass. The bot's per-user lock

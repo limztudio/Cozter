@@ -49,34 +49,24 @@ MERGE_TIMEOUT = 180  # seconds; on timeout the worker reports are concatenated
 # The user-facing rubric the planner grades each sub-task against.
 _RUBRIC = (
     "low  - straightforward, well-scoped work with clear intent.\n"
-    "       Example: add a small validation check, or extend an existing\n"
-    "       function with clearly defined behavior.\n"
     "mid  - some reasoning is required, but the problem stays bounded.\n"
-    "       Example: write unit tests for an existing method with known\n"
-    "       inputs and outputs.\n"
-    "high - ONLY when the task involves ambiguity, complex logic, or\n"
-    "       deeper system understanding.\n"
-    "       Example: refactor a system with unclear dependencies, or debug\n"
-    "       a non-obvious issue."
+    "high - ONLY for ambiguity, complex logic, or deeper system "
+    "understanding."
 )
 
 _PLANNER_RULES = (
-    "You are the planner for a multi-agent assistant.\n\n"
-    "Read the conversation below, understand what the user is asking for, "
-    "and split it into the smallest set of sub-tasks that fully covers the "
-    "request. Grade each sub-task by difficulty so it can be routed to an "
-    "appropriately sized model:\n\n"
+    "You are the planner for a multi-agent assistant. Split the request "
+    "below into the smallest set of sub-tasks covering it; grade each "
+    "low/mid/high so it routes to a right-sized model:\n\n"
     f"{_RUBRIC}\n\n"
     "Rules:\n"
-    "- Split only where it helps. A simple request is ONE sub-task; do not "
-    "invent busywork.\n"
+    "- A simple request is ONE sub-task; do not invent busywork.\n"
     f"- At most {MAX_SUBTASKS} sub-tasks.\n"
-    "- Order them so that each can be done with only the previous ones' "
-    "results in hand. They run one at a time, in order.\n"
-    "- Grade honestly. Over-grading burns the expensive model; under-grading "
-    "sends a hard problem to a weak one.\n"
-    "- Each sub-task must be a self-contained instruction to an agent that "
-    "can read and edit files, run commands, and search the web.\n"
+    "- Order them so each needs only earlier results; they run in order.\n"
+    "- Grade honestly: over-grading wastes the strong model, under-grading "
+    "strands hard work on a weak one.\n"
+    "- Each sub-task must be self-contained: the worker sees only the user "
+    "message, this plan, and earlier reports — never the full history.\n"
     "- Do NOT call any tools or read any files yourself; plan from the text "
     "below.\n"
 )
@@ -93,29 +83,23 @@ _PLANNER_FORMAT = (
 )
 
 _PLANNER_QUESTION_RULE = (
-    "If — and only if — the request is too ambiguous to plan against and "
-    "guessing wrong would waste real work, skip the plan and ask the user "
-    "one short, specific question instead, in this format:\n\n"
+    "If the request is too ambiguous to plan and guessing wastes real "
+    "work, skip the plan and ask one short question instead:\n\n"
     "[QUESTION]\n"
     "your one question\n"
     "[/QUESTION]\n\n"
-    "Prefer planning. Only ask when you genuinely cannot proceed.\n"
+    "Prefer planning; ask only when stuck.\n"
 )
 
 _MERGE_RULES = (
-    "You are the voice of a multi-agent assistant. Several worker agents "
-    "just carried out the plan below, each reporting back what it did or "
-    "found. Write the single reply the user sees.\n\n"
+    "Merge the worker reports below into the single reply the user sees.\n\n"
     "Rules:\n"
-    "- Answer the user's request directly. Lead with the outcome.\n"
-    "- Write as one assistant who did the work, not as an editor stitching "
-    "reports together. Never mention the plan, the workers, the sub-tasks, "
-    "or their difficulty tiers.\n"
-    "- Keep every concrete result the workers produced: code, file paths, "
-    "commands, numbers, and errors. Do not re-summarize them into vagueness.\n"
-    "- If a worker reported a failure or a blocker, say so plainly.\n"
-    "- Reply in the language the user wrote in.\n"
-    "- Do NOT call any tools or read any files; the work is already done.\n"
+    "- Answer directly; lead with the outcome. Write as the assistant who "
+    "did the work — never mention plans, workers, or tiers.\n"
+    "- Keep concrete results (code, paths, commands, numbers, errors); do "
+    "not vaguen them up. Report failures plainly.\n"
+    "- Reply in the user's language.\n"
+    "- Do NOT call any tools; the work is done.\n"
 )
 
 # The merge step writes the reply the user actually reads, so it is the
@@ -124,22 +108,32 @@ _MERGE_RULES = (
 # the queue drain straight past it, leaving the user's answer to land as
 # an unrelated new turn.
 _MERGE_QUESTION_RULE = (
-    "- If your reply ends by asking the user something you genuinely need "
-    "answered before the work can continue, end it with \"[[await]]\" on its "
-    "own line. The bot then pauses the chat queue and treats the user's next "
-    "message as the answer. Use it only for questions that actually block "
-    "progress — not for optional offers or suggested next steps, which should "
-    "just be stated without the marker.\n"
+    "- End with \"[[await]]\" on its own line only if you ask something "
+    "blocking progress (the next message is treated as the answer). "
+    "Optional offers get no marker.\n"
 )
 
 # Workers run under the autonomy policy, so one that stops to ask has
 # already established the turn cannot finish without the user. Tell the
 # merge outright instead of leaving it to infer that from the report text.
 _MERGE_BLOCKED_RULE = (
-    "- A worker stopped because it needs an answer from the user before the "
-    "work can continue; its report is marked BLOCKED below. End your reply "
-    "with its question, followed by \"[[await]]\" on its own line.\n"
+    "- A report marked BLOCKED needs a user answer: end your reply with "
+    "its question plus \"[[await]]\" on its own line.\n"
 )
+
+
+# Worker reports are unbounded model output, and each one is re-sent to
+# every later worker plus the merge step. Cap each so N workers cost at
+# most N * cap instead of N * anything.
+_REPORT_MAX_CHARS = 6_000
+_REPORT_TRUNCATION_MARKER = "\n… [report truncated]"
+
+
+def _truncate_report(text: str) -> str:
+    """Bound one worker report for re-prompting downstream."""
+    if len(text) <= _REPORT_MAX_CHARS:
+        return text
+    return text[:_REPORT_MAX_CHARS] + _REPORT_TRUNCATION_MARKER
 
 
 @dataclass(frozen=True)
@@ -252,7 +246,11 @@ def _render_plan(plan: Plan, *, current: int | None = None) -> str:
 def build_subtask_prompt(
     context: str, plan: Plan, index: int, results: list[str],
 ) -> str:
-    """Prompt for the worker running sub-task *index* of *plan*."""
+    """Prompt for the worker running sub-task *index* of *plan*.
+
+    *context* is the bare user request, not the full history — the
+    planner saw the history and wrote self-contained instructions.
+    """
     task = plan.subtasks[index]
     parts = [context, ""]
     parts.append(
@@ -272,7 +270,10 @@ def build_subtask_prompt(
     if results:
         parts.append("\nWhat the earlier workers reported:")
         for i, text in enumerate(results):
-            parts.append(f"\n--- sub-task {i + 1} result ---\n{text}")
+            parts.append(
+                f"\n--- sub-task {i + 1} result ---\n"
+                f"{_truncate_report(text)}"
+            )
 
     parts.append(
         f"\nDo ONLY sub-task {index + 1}: {task.instruction}\n"
@@ -313,7 +314,7 @@ def build_merge_prompt(
         parts.append(
             f"\n--- sub-task {i + 1} [{task.tier}]:"
             f" {task.instruction}{tag} ---\n"
-            f"{text or '(no report)'}"
+            f"{_truncate_report(text) if text else '(no report)'}"
         )
     parts.append(
         "\n--- end of reports ---\n\n"

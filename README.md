@@ -564,8 +564,8 @@ sessions left, a colony pass clears its shared memory rather than carrying
 deleted-session facts into later conversations.
 
 Maintenance prompts treat persisted model output as recovery data, not as an
-unbounded source of context. The session router sends at most 20 sessions and
-caps each description at 600 characters. Compaction clips an oversized prior
+unbounded source of context. The session router sends at most 12 sessions and
+caps each description at 400 characters. Compaction clips an oversized prior
 summary and sends a contiguous oldest prefix of raw history; even when its
 first raw message alone is too large, it sends a marked prefix so a later pass
 can advance the history without skipping to a newer message. After a successful
@@ -597,7 +597,7 @@ overwritten by a late background title request.
 Likewise, a compaction title derived from an older snapshot is discarded if
 the session was renamed while compaction ran, so it cannot overwrite the
 manual name.
-The complete auto-title request is capped at 8,000 characters, with half of
+The complete auto-title request is capped at 4,000 characters, with half of
 its remaining context budget reserved for recent messages. An oversized stored
 summary therefore cannot crowd the current exchange out of the title prompt.
 
