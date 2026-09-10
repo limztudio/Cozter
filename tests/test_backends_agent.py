@@ -16,6 +16,7 @@ from Cozter import config
 from Cozter.backends_agent import claude_code as claude_code_mod
 from Cozter.backends_agent import codex as codex_mod
 from Cozter.backends_agent import copilot as copilot_mod
+from Cozter.backends_agent import get_backend
 from Cozter.backends_agent import grok as grok_mod
 from Cozter.backends_agent.base import (
     CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
@@ -43,6 +44,8 @@ from Cozter.backends_agent.llama import LlamaBackend
 from Cozter.backends_agent import _openai_agent as openai_agent_mod
 from Cozter.backends_agent._openai_agent import extract_model_ids
 from Cozter.backends_agent import zai as zai_mod
+from Cozter.backends_agent import meta as meta_mod
+from Cozter.backends_agent.meta import MetaModelApiBackend
 from Cozter.backends_agent.zai import ZaiBackend
 
 
@@ -2381,6 +2384,214 @@ class ZaiBackendTests(unittest.TestCase):
                     backend._effort_fields(50, model),
                     {"thinking": {"type": "enabled"}},
                 )
+
+
+class MetaBackendTests(unittest.TestCase):
+    """Meta Model API backend: curated catalog, endpoint, and auth."""
+
+    def test_fallback_models_are_current_and_selectable(self) -> None:
+        models = meta_mod._FALLBACK_MODELS
+        self.assertEqual(len(models), len(set(models)))
+        self.assertEqual(MetaModelApiBackend.default_model, "muse-spark-1.3")
+        self.assertEqual(
+            MetaModelApiBackend.default_summary_model, "muse-spark-1.2",
+        )
+        self.assertEqual(
+            MetaModelApiBackend.tier_models,
+            {
+                "low": "muse-spark-1.2",
+                "mid": "muse-spark-1.3",
+                "high": "muse-spark-1.3",
+            },
+        )
+        self.assertIn(MetaModelApiBackend.default_model, models)
+        self.assertIn(MetaModelApiBackend.default_summary_model, models)
+
+    def test_fallback_metadata_is_projected_from_curated_catalog(
+        self,
+    ) -> None:
+        specs = meta_mod._FALLBACK_MODEL_SPECS
+        self.assertEqual(
+            tuple(spec.name for spec in specs),
+            meta_mod._FALLBACK_MODELS,
+        )
+        self.assertEqual(
+            {spec.name: spec.context_window for spec in specs},
+            meta_mod._MODEL_CONTEXT_WINDOWS,
+        )
+
+    def test_fallback_picker_includes_current_agent_models(self) -> None:
+        self.assertEqual(meta_mod._FALLBACK_MODELS, (
+            "muse-spark-1.3",
+            "muse-spark-1.2",
+            "muse-spark-1.1",
+        ))
+
+    def test_context_windows_cover_only_published_curated_ids(self) -> None:
+        backend = MetaModelApiBackend()
+        for model in (
+            "muse-spark-1.3",
+            "muse-spark-1.2",
+            "muse-spark-1.1",
+            "MUSE-SPARK-1.3",
+            "muse-spark-1.3-contributor",
+        ):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    backend.context_window_tokens(model), 1_000_000,
+                )
+        self.assertIsNone(backend.context_window_tokens("private-muse"))
+
+    def test_unconfigured_key_uses_fallback_without_probe(self) -> None:
+        with (
+            mock.patch.object(
+                meta_mod.cfg, "get_meta_api_key", return_value="",
+            ),
+            mock.patch.object(
+                meta_mod, "fetch_model_ids",
+            ) as fetch,
+        ):
+            self.assertEqual(
+                MetaModelApiBackend().available_models,
+                meta_mod._FALLBACK_MODELS,
+            )
+        fetch.assert_not_called()
+
+    def test_authenticated_discovery_filters_non_chat_models(self) -> None:
+        with (
+            mock.patch.object(
+                meta_mod.cfg, "get_meta_api_key", return_value="key",
+            ),
+            mock.patch.object(
+                meta_mod.cfg,
+                "get_meta_base_url",
+                return_value="https://api.llama.com/compat/v1",
+            ),
+            mock.patch.object(
+                meta_mod,
+                "fetch_model_ids",
+                return_value=(
+                    "muse-spark-1.3",
+                    "muse-image",
+                    "muse-voice-transcribe",
+                ),
+            ) as fetch,
+        ):
+            self.assertEqual(
+                MetaModelApiBackend().available_models,
+                ("muse-spark-1.3",),
+            )
+        self.assertEqual(fetch.call_count, 1)
+        url = fetch.call_args.args[0]
+        self.assertEqual(url, "https://api.llama.com/compat/v1/models")
+        self.assertEqual(
+            fetch.call_args.kwargs["headers"],
+            {"Authorization": "Bearer key"},
+        )
+
+    def test_non_chat_only_catalog_falls_back_to_agent_models(self) -> None:
+        with (
+            mock.patch.object(
+                meta_mod.cfg, "get_meta_api_key", return_value="key",
+            ),
+            mock.patch.object(
+                meta_mod.cfg,
+                "get_meta_base_url",
+                return_value="https://api.llama.com/compat/v1",
+            ),
+            mock.patch.object(
+                meta_mod,
+                "fetch_model_ids",
+                return_value=("muse-image", "muse-voice-transcribe"),
+            ),
+        ):
+            self.assertEqual(
+                MetaModelApiBackend().available_models,
+                meta_mod._FALLBACK_MODELS,
+            )
+
+    def test_discovery_failure_falls_back_to_curated_models(self) -> None:
+        with (
+            mock.patch.object(
+                meta_mod.cfg, "get_meta_api_key", return_value="key",
+            ),
+            mock.patch.object(
+                meta_mod.cfg,
+                "get_meta_base_url",
+                return_value="https://api.llama.com/compat/v1",
+            ),
+            mock.patch.object(
+                meta_mod,
+                "fetch_model_ids",
+                side_effect=OSError("boom"),
+            ),
+        ):
+            self.assertEqual(
+                MetaModelApiBackend().available_models,
+                meta_mod._FALLBACK_MODELS,
+            )
+
+    def test_chat_endpoint_appends_only_chat_completions(self) -> None:
+        # Meta's base already carries /compat/v1, so no extra /v1.
+        endpoint = MetaModelApiBackend()._chat_endpoint()
+        self.assertEqual(
+            endpoint, "https://api.llama.com/compat/v1/chat/completions",
+        )
+
+    def test_auth_headers_reflect_key(self) -> None:
+        with mock.patch.object(
+            meta_mod.cfg, "get_meta_api_key", return_value="secret-key",
+        ):
+            self.assertEqual(
+                MetaModelApiBackend()._auth_headers(),
+                {"Authorization": "Bearer secret-key"},
+            )
+        with mock.patch.object(
+            meta_mod.cfg, "get_meta_api_key", return_value="",
+        ):
+            self.assertEqual(MetaModelApiBackend()._auth_headers(), {})
+
+    def test_health_check_reflects_key(self) -> None:
+        with mock.patch.object(
+            meta_mod.cfg, "get_meta_api_key", return_value="",
+        ):
+            ok, detail = MetaModelApiBackend().health_check()
+        self.assertFalse(ok)
+        self.assertIn("meta_api_key", detail)
+
+        with mock.patch.object(
+            meta_mod.cfg, "get_meta_api_key", return_value="k",
+        ):
+            ok, detail = MetaModelApiBackend().health_check()
+        self.assertTrue(ok)
+        self.assertIn("muse-spark-1.3", detail)
+
+    def test_request_model_falls_back_to_default(self) -> None:
+        self.assertEqual(
+            MetaModelApiBackend()._request_model(None), "muse-spark-1.3",
+        )
+        self.assertEqual(
+            MetaModelApiBackend()._request_model("muse-spark-1.2"),
+            "muse-spark-1.2",
+        )
+
+    def test_config_defaults_are_registered(self) -> None:
+        self.assertEqual(
+            config._DEFAULT_CONFIG["meta_base_url"],
+            "https://api.llama.com/compat/v1",
+        )
+        self.assertEqual(config._DEFAULT_CONFIG["meta_socket_timeout"], 300)
+        self.assertEqual(config._DEFAULT_CONFIG["meta_max_retries"], 2)
+        self.assertEqual(config._DEFAULT_CONFIG["meta_api_key"], "")
+
+    def test_registered_in_backend_catalog(self) -> None:
+        from Cozter.backends_agent import AVAILABLE_BACKENDS, DIRECT_BACKENDS
+
+        self.assertIn("meta", DIRECT_BACKENDS)
+        self.assertIn("meta", AVAILABLE_BACKENDS)
+        self.assertIsInstance(
+            get_backend("meta"), MetaModelApiBackend,
+        )
 
 
 if __name__ == "__main__":

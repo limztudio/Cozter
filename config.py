@@ -34,6 +34,10 @@ _DEFAULT_CONFIG = {
     "zai_base_url": "https://api.z.ai/api/paas/v4",
     "zai_socket_timeout": 300,
     "zai_max_retries": 2,
+    "meta_api_key": "",
+    "meta_base_url": "https://api.llama.com/compat/v1",
+    "meta_socket_timeout": 300,
+    "meta_max_retries": 2,
     # Hard backstop on a single tool call, so a wedged plugin/custom tool
     # cannot block the whole turn indefinitely. Agent turns themselves are
     # not wall-clock limited; long-running work is allowed to finish.
@@ -257,6 +261,27 @@ def get_zai_socket_timeout() -> int:
 def get_zai_max_retries() -> int:
     """Retry attempts for transient zai HTTP failures (>= 0; 0 disables)."""
     return _get_int_at_least("zai_max_retries", 0)
+
+
+def get_meta_api_key() -> str:
+    """Meta Model API key for the ``meta`` backend; "" if unset."""
+    val = _read_config_value("meta_api_key")
+    return val.strip() if isinstance(val, str) else ""
+
+
+def get_meta_base_url() -> str:
+    """HTTPS base URL for Meta's OpenAI-compatible bearer-token endpoint."""
+    return _get_https_url("meta_base_url")
+
+
+def get_meta_socket_timeout() -> int:
+    """Per-socket-read timeout (seconds) for Meta Model API HTTP calls."""
+    return _get_int_at_least("meta_socket_timeout", 1)
+
+
+def get_meta_max_retries() -> int:
+    """Retry attempts for transient Meta Model API failures (>= 0)."""
+    return _get_int_at_least("meta_max_retries", 0)
 
 
 def get_tool_timeout() -> int:

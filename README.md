@@ -33,6 +33,9 @@ are trusted in-process code, not sandboxed extensions.
   - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.3`, `glm-5.3-flash`,
     `glm-5.2`, `glm-5v-turbo`, `glm-4.6v`, `glm-5.1`, …); OpenAI-compatible,
     so it shares the in-process loop — set `zai_api_key` in config
+  - `meta` — Meta's Model API (Muse Spark models: `muse-spark-1.3`,
+    `muse-spark-1.2`, `muse-spark-1.1`, …); OpenAI-compatible, so it shares
+    the in-process loop — set `meta_api_key` in config
 - **Four chat surfaces**, selected at launch:
   - Telegram (`python -m Cozter`)
   - Slack (Socket Mode; native Markdown rendering for AI replies; same
@@ -207,8 +210,8 @@ limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
 - One agent backend CLI, server, or API key:
   `codex`, `claude`, `copilot`, `grok`, an unauthenticated OpenAI-compatible HTTP
   server for the `llama` backend that supports streaming
-  `/v1/chat/completions` and function tools, or Z.ai credentials for the
-  `zai` backend
+  `/v1/chat/completions` and function tools, Z.ai credentials for the
+  `zai` backend, or Meta Model API credentials for the `meta` backend
 - Python package dependencies from `requirements.txt`:
   `python-telegram-bot`, `slack-bolt`, and `aiohttp`. The
   launcher bootstraps them into the project-local `.venv` when required
@@ -267,6 +270,11 @@ example layout lives in `.config/config.example.json`):
   "zai_base_url": "https://api.z.ai/api/paas/v4",
   "zai_socket_timeout": 300,
   "zai_max_retries": 2,
+
+  "meta_api_key": "",
+  "meta_base_url": "https://api.llama.com/compat/v1",
+  "meta_socket_timeout": 300,
+  "meta_max_retries": 2,
 
   "tool_timeout": 120,
   "update_idle_timeout": 1200,
@@ -345,7 +353,8 @@ operator override keyed first by backend and then by model ID; an optional
 {
   "model_context_windows": {
     "llama": {"qwen3-coder": 32768, "*": 16384},
-    "zai": {"private-glm": 128000}
+    "zai": {"private-glm": 128000},
+    "meta": {"*": 1000000}
   }
 }
 ```
@@ -375,6 +384,23 @@ GLM Coding Plan users can instead set it to
 `https://api.z.ai/api/coding/paas/v4`. The normal endpoint's fallback already
 includes `glm-5.3` and multimodal `glm-5.3-flash`; the Coding Plan fallback
 also offers the documented `glm-5.3[1m]` and `glm-5.3-flash[1m]` pins.
+`meta_api_key` enables the `meta` backend (Meta Model API — Muse Spark).
+Get one from the Meta Model API developer console and paste it here (the
+docs also expose it as a `MODEL_API_KEY` environment variable). The backend
+talks to Meta's OpenAI-compatible endpoint at `https://api.llama.com/compat/v1`;
+`meta_base_url` overrides it if Meta publishes a new path — it must include
+the version segment, because only `/chat/completions` is appended, and it
+must be HTTPS so the API key is never sent over cleartext HTTP.
+Muse Image and Muse Voice Transcribe need other endpoints and are never
+offered as agent models. Model discovery queries the account's `/models`
+catalog live; the offline fallback lists the published chat models
+(`muse-spark-1.3`, default, with `muse-spark-1.2` anchoring the cheap
+summary/low tier). Private or preview IDs can be added via `extra_models`
+(`{"meta": ["muse-spark-…"]}`); published Muse Spark context is 1M tokens,
+overridable per model via `model_context_windows`. `meta_socket_timeout`
+(default 300s) and `meta_max_retries` (default 2) mirror the other cloud
+knobs, including the 30-second connect cap.
+
 `zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
 mirror the llama knobs and retry behavior for the cloud call. The same
 30-second connect cap applies so a misconfigured endpoint fails promptly. Select `zai`
@@ -583,7 +609,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 |---|---|
 | `/new` | Prompt for a new workspace directory, create it, and select it |
 | `/open [path-or-number]` | Switch to an existing workspace |
-| `/agent` | Pick the agent backend (flexible / codex / claude_code / copilot / grok / llama / zai) |
+| `/agent` | Pick the agent backend (flexible / codex / claude_code / copilot / grok / llama / meta / zai) |
 | `/model` | Pick the chat model for the current backend |
 | `/agent_flexible_{low,mid,high}` | Pick the agent the flexible tier routes to |
 | `/model_flexible_{low,mid,high}` | Pick the model the flexible tier routes to |
@@ -730,7 +756,7 @@ event-loop blocking; it does not sandbox plugin code. CLI-backend plugins run
 through that CLI's own shell/tool policy and are not governed by Cozter's
 `tool_timeout`.
 
-- **HTTP backends** (`llama`, `zai`, and any future API backend) see plugins
+- **HTTP backends** (`llama`, `meta`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
   the 16 built-in tools in `agent_tools/builtin/`
 - **CLI backends** (`codex`, `claude_code`, `copilot`, `grok`) can't have
@@ -857,8 +883,9 @@ Defaults put all three tiers on `codex` (`gpt-5.6-luna` / `gpt-5.6-terra` /
 than Astra, which is still rolling out in some live catalogs. Pointing a
 tier at another agent picks that agent's cheap/mid/strong models
 automatically (its `tier_models` table) — for `zai` that is
-`glm-5.3-flash` / `glm-4.7` / `glm-5.3`. `/model` and `/doctor` print the
-current wiring. A tier can only point at a *direct* backend — never at
+`glm-5.3-flash` / `glm-4.7` / `glm-5.3`, and for `meta`
+`muse-spark-1.2` / `muse-spark-1.3` / `muse-spark-1.3`. `/model` and
+`/doctor` print the current wiring. A tier can only point at a *direct* backend — never at
 `flexible` itself, which would plan forever.
 
 A flexible turn can make one planner call, up to 12 worker calls, and one
@@ -892,6 +919,7 @@ its own, only the three tiers above.
 | `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
 | `grok` | `grok --prompt-file … --output-format streaming-messages-json` | `grok-4.6` | `grok-4.6` |
 | `llama` | Unauthenticated OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
+| `meta` | Meta Model API `…/compat/v1/chat/completions` (Bearer) | `muse-spark-1.3` | `muse-spark-1.2` |
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.3` | `glm-4.5-air` |
 
 When a caller does not explicitly select a summary model, Cozter uses the
@@ -913,11 +941,13 @@ Fable 5.1, Fable 5, Sonnet 5, Opus 5, `claude-sonnet-5[1m]`, and explicit
 Only the explicit `[1m]` selections receive Cozter's 1M-token context metadata;
 aliases and bare version pins remain capacity-unknown because their active
 window can vary by account and provider. Claude Code's own `/fast` is a
-session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama
-and Z.ai discover models live from their configured HTTP endpoints.
-`llama` and `zai` share one in-process OpenAI-compatible agent loop
+session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama,
+Z.ai, and Meta Model API discover models live from their configured HTTP
+endpoints.
+`llama`, `meta`, and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
-and points at Z.ai's endpoint. That loop reuses one HTTP session for the
+and points at Z.ai's endpoint; `meta` adds Meta's Bearer header and compat
+endpoint. That loop reuses one HTTP session for the
 turn's tool calls and retries. Z.ai's text chat-completion models from GLM-4.6
 onward, plus multimodal `glm-5.3-flash`, opt into Z.ai's incremental
 tool-call argument stream; older vision models use their standard streamed
@@ -928,7 +958,7 @@ either shape before executing a requested tool.
 Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its
 workspace-write sandbox for `auto`, and a read-only sandbox for `confirm`
-and `deny`. `llama` and `zai` run in-process: `deny` exposes no tools and
+and `deny`. `llama`, `meta`, and `zai` run in-process: `deny` exposes no tools and
 `confirm` exposes only read-only tools. `auto` permits Cozter's
 workspace-bounded built-ins plus plugins that do not declare themselves
 full-only with `requires_full_permission`; both it and `confirm` block the

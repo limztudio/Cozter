@@ -22,6 +22,7 @@ from .copilot import CopilotBackend
 from .flexible import FlexibleBackend
 from .grok import GrokBackend
 from .llama import LlamaBackend
+from .meta import MetaModelApiBackend
 from .zai import ZaiBackend
 
 _DIRECT: dict[str, Backend] = {
@@ -30,6 +31,7 @@ _DIRECT: dict[str, Backend] = {
     "claude_code": ClaudeCodeBackend(),
     "grok": GrokBackend(),
     "llama": LlamaBackend(),
+    "meta": MetaModelApiBackend(),
     "zai": ZaiBackend(),
 }
 
@@ -81,6 +83,7 @@ __all__ = [
     "FlexibleBackend",
     "GrokBackend",
     "LlamaBackend",
+    "MetaModelApiBackend",
     "ZaiBackend",
     "get_backend",
 ]
