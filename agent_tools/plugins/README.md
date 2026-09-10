@@ -25,6 +25,10 @@ the plugin's `os.getcwd()` returns the right path.
   replaces an earlier tool with the same name, including a built-in.
 - File names starting with `_` are skipped by the loader, which is useful
   for disabled examples or local scratch plugins.
+- Shipped live plugins: `current_time.py`, `calculator.py`,
+  `notes.py` (persistent workspace notes at `.cozter/notes.md`), and
+  `git_info.py` (read-only `status`/`log`/`diff` snapshot with a fixed,
+  non-mutating argv).
 - The shipped `current_time.py` plugin is live and can be invoked through
   the same module path pattern as any other plugin.
 

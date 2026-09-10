@@ -812,10 +812,24 @@ if __name__ == "__main__":
 The `__main__` block at the bottom is what makes the same file work
 as both a Python module (loaded by the bot for typed-tool use) and a
 standalone script (invoked by CLI backends via `bash`). See
-`agent_tools/plugins/README.md` and the shipped `current_time.py`
-plugin.
+`agent_tools/plugins/README.md` and the shipped plugins.
 
-The current plugin can also be run directly from the parent directory:
+Shipped plugins:
+
+- `current_time` - current date/time, optional IANA timezone.
+- `calculator` - exact arithmetic through a whitelisted AST evaluator
+  (`+ - * / // % **`, sqrt/log/trig, factorial, pi/e/tau/phi), with
+  magnitude guards so `9**9**9` is refused instead of wedging the host.
+- `notes` - persistent workspace notes at `.cozter/notes.md`
+  (`append`/`read`/`clear`). Notes survive compaction, `/stop`, and
+  restarts, so an agent can record progress and resume cleanly; the
+  newest entries win when the 64 KiB ceiling forces a trim.
+- `git_info` - read-only `status`/`log`/`diff` snapshot of the
+  workspace repository, so HTTP backends without a shell can still see
+  repo state; the argv is fixed and read-only, and `path` arguments
+  must stay inside the workspace.
+
+A plugin can also be run directly from the parent directory:
 
 ```bash
 Cozter/.venv/bin/python -m Cozter.agent_tools.plugins.current_time '{"timezone":"Asia/Seoul"}'
@@ -834,9 +848,16 @@ killable worker process. It stops and reaps that worker after the smaller of
 CPU after a timeout; narrow the pattern or search path if that happens.
 The `web_search` and `web_fetch` tools also cap downloaded response bodies
 at 5 MiB and share the bounded `read_bounded_text()` reader in
-`agent_tools/base.py`. `web_search` uses the common request setup;
+`agent_tools/base.py`. `web_search` tries DuckDuckGo's `html` and `lite`
+frontends in order - two attempts each, with a short delay between tries -
+so a transient failure of one frontend no longer fails the call, and
+sponsored (`ad_*`) and DuckDuckGo-internal links never become results.
 `web_fetch` instead uses a public-network-only client with redirect targets
-validated individually, preventing redirects into private addresses. It
+validated individually, preventing redirects into private addresses.
+Transient transport failures (connection reset, resolver hiccup, timeout)
+are retried once with a short delay; HTTP error statuses, refused content
+types, and redirect-loop or non-public redirect targets are final and are
+never retried. It
 classifies `text/*`, HTML, JSON, and XML media types case-insensitively, so
 servers that capitalize labels such as `Text/Plain` or `APPLICATION/JSON`
 still return readable content. The reader consumes chunked or slow responses
@@ -1158,7 +1179,7 @@ Cozter/
 └── agent_tools/          tool surface for HTTP backends + plugin registry
     ├── base.py             AgentTool ABC; path/argument validation and shared HTTP helpers
     ├── builtin/            16 built-in tools (read_file, edit_file, glob, grep, bash, web_search, ...)
-    └── plugins/            user drop-in zone (current_time.py shipped as a live plugin)
+    └── plugins/            user drop-in zone (current_time, calculator, notes, git_info shipped live)
 ```
 
 ## Process and tool safety
