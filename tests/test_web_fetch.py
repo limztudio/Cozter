@@ -5,13 +5,13 @@ from contextlib import asynccontextmanager
 import unittest
 from unittest import mock
 
-from Cozter.agent_tools.base import html_to_text
-from Cozter.agent_tools.builtin.web_fetch import (
-    WebFetchTool,
-    _NonPublicAddressError,
-    _PublicResolver,
-    _validate_public_url,
+from Cozter.agent_tools.base import (
+    NonPublicAddressError as _NonPublicAddressError,
+    PublicResolver as _PublicResolver,
+    html_to_text,
+    validate_public_url as _validate_public_url,
 )
+from Cozter.agent_tools.builtin.web_fetch import WebFetchTool
 
 
 class _StaticResolver:
@@ -113,7 +113,7 @@ class WebFetchSecurityTests(unittest.TestCase):
                 {"host": "10.0.0.1"},
             ])
             with mock.patch(
-                "Cozter.agent_tools.builtin.web_fetch.DefaultResolver",
+                "Cozter.agent_tools.base.DefaultResolver",
                 return_value=delegate,
             ):
                 resolver = _PublicResolver()
@@ -131,7 +131,7 @@ class WebFetchSecurityTests(unittest.TestCase):
         async def run() -> None:
             delegate = _StaticResolver([{"host": "8.8.8.8"}])
             with mock.patch(
-                "Cozter.agent_tools.builtin.web_fetch.DefaultResolver",
+                "Cozter.agent_tools.base.DefaultResolver",
                 return_value=delegate,
             ):
                 resolver = _PublicResolver()

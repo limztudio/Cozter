@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
+from Cozter.agent_tools.plugins import http_request as http_request_module
 from Cozter.agent_tools.plugins.calculator import CalculatorTool
 from Cozter.agent_tools.plugins.git_info import GitInfoTool
+from Cozter.agent_tools.plugins.http_request import HttpRequestTool
+from Cozter.agent_tools.plugins.memory import MemoryTool
 from Cozter.agent_tools.plugins.notes import NotesTool
 
 
@@ -241,5 +248,470 @@ class GitInfoToolTests(unittest.TestCase):
         )
 
 
+class MemoryToolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tool = MemoryTool()
+        self.ws = tempfile.mkdtemp()
+        self.addCleanup(
+            shutil.rmtree, self.ws, ignore_errors=True,
+        )
+
+    def invoke(self, **args: object) -> str:
+        return _run(self.tool.run(self.ws, dict(args)))
+
+    def write_session(
+        self,
+        session_id: str,
+        *,
+        name: str,
+        created: str,
+        messages: list[dict] | None = None,
+        summary: str | None = None,
+        long_term: list[str] | None = None,
+    ) -> None:
+        data: dict = {
+            "id": session_id,
+            "name": name,
+            "created": created,
+            "messages": messages or [],
+            "long_term": long_term or [],
+        }
+        if summary:
+            data["summary"] = summary
+        sessions = os.path.join(self.ws, ".cozter", "sessions")
+        os.makedirs(sessions, exist_ok=True)
+        with open(
+            os.path.join(sessions, f"{session_id}.json"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump(data, f)
+
+    def write_colony(self, items: list[str]) -> None:
+        cozter = os.path.join(self.ws, ".cozter")
+        os.makedirs(cozter, exist_ok=True)
+        with open(
+            os.path.join(cozter, "colony.json"), "w", encoding="utf-8",
+        ) as f:
+            json.dump({"items": items, "compact_count": 0}, f)
+
+    def test_list_orders_sessions_newest_first(self) -> None:
+        self.write_session(
+            "aaaaaaaa-1111", name="Old work", created="2025-05-01T09:00:00",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        self.write_session(
+            "bbbbbbbb-2222", name="Meta fix", created="2025-06-01T10:00:00",
+            messages=[{"role": "user", "content": "a"}, {"role": "assistant",
+                      "content": "b"}],
+            summary="Fixed the host.", long_term=["Key lives on meta.ai"],
+        )
+        self.write_colony(["Deploys are Tuesdays."])
+        result = self.invoke(action="list")
+        self.assertIn("Sessions (newest first):", result)
+        self.assertLess(result.index("Meta fix"), result.index("Old work"))
+        self.assertIn("2 messages", result)
+        self.assertIn("summary", result)
+        self.assertIn("1 long-term", result)
+        self.assertIn("Colony: 1 items", result)
+
+    def test_list_empty_workspace(self) -> None:
+        self.assertEqual(
+            self.invoke(action="list"),
+            "No sessions recorded in this workspace yet.",
+        )
+
+    def test_search_finds_message_summary_longterm_and_colony(self) -> None:
+        self.write_session(
+            "cccccccc-3333", name="Release", created="2025-06-02T08:00:00",
+            messages=[{"role": "assistant",
+                       "content": "The deploy window is Tuesday 09:00 UTC."}],
+        )
+        self.write_session(
+            "dddddddd-4444", name="Ops", created="2025-06-01T08:00:00",
+            summary="Agreed on the DEPLOY WINDOW change.",
+            long_term=["deploy window owns the calendar"],
+        )
+        self.write_colony(["Deploy window: Tue 09:00 UTC."])
+        result = self.invoke(action="search", query="deploy window")
+        self.assertIn("Found 4 match(es)", result)
+        self.assertIn("[Release · 2025-06-02] Assistant:", result)
+        self.assertIn("[Ops · 2025-06-01] Summary:", result)
+        self.assertIn("[Ops · 2025-06-01] Long-term:", result)
+        self.assertIn("[Colony]", result)
+
+    def test_search_is_case_insensitive_and_excerpts_match(self) -> None:
+        self.write_session(
+            "eeeeeeee-5555", name="Notes", created="2025-06-03T08:00:00",
+            messages=[{"role": "user",
+                       "content": "x" * 200 + " RedisCache lives on port 6379"}],
+        )
+        result = self.invoke(action="search", query="redis")
+        self.assertIn("Found 1 match(es)", result)
+        self.assertIn("…", result)  # long content is excerpted
+        self.assertIn("port 6379", result)
+
+    def test_search_limit_and_omission_hint(self) -> None:
+        for offset in range(3):
+            self.write_session(
+                f"ffff000{offset}-6666",
+                name=f"S{offset}",
+                created=f"2025-06-0{offset + 1}T08:00:00",
+                messages=[{"role": "user",
+                           "content": "quetzal migration notes"}],
+            )
+        result = self.invoke(action="search", query="quetzal", limit=2)
+        self.assertIn("Found 3 match(es)", result)
+        self.assertEqual(result.count("quetzal migration notes"), 2)
+        self.assertIn("showing the 2 newest", result)
+
+    def test_search_requires_query(self) -> None:
+        self.assertTrue(
+            self.invoke(action="search").startswith("Error:"),
+        )
+
+    def test_search_no_matches(self) -> None:
+        self.write_session(
+            "aaaa7777-8888", name="Empty", created="2025-06-01T08:00:00",
+        )
+        self.assertIn(
+            "No matches", self.invoke(action="search", query="zzz"),
+        )
+
+    def test_read_by_name_prefix_and_last(self) -> None:
+        self.write_session(
+            "11111111-9999", name="Alpha", created="2025-05-01T08:00:00",
+            messages=[{"role": "user", "content": "alpha says hi"}],
+        )
+        self.write_session(
+            "22222222-0000", name="Beta", created="2025-06-01T08:00:00",
+            messages=[
+                {"role": "user", "content": "beta q"},
+                {"role": "assistant", "content": "beta a"},
+            ],
+        )
+        by_name = self.invoke(action="read", session="Beta")
+        self.assertIn("Session: Beta (id 22222222", by_name)
+        self.assertIn("2. Assistant: beta a", by_name)
+        by_prefix = self.invoke(action="read", session="11111111")
+        self.assertIn("alpha says hi", by_prefix)
+        by_last = self.invoke(action="read", session="last")
+        self.assertIn("Session: Beta", by_last)
+
+    def test_read_message_limit_and_line_cap(self) -> None:
+        self.write_session(
+            "33333333-1111",
+            name="Long",
+            created="2025-06-01T08:00:00",
+            messages=[
+                {"role": "user", "content": f"msg {i} " + "y" * 400}
+                for i in range(30)
+            ],
+        )
+        result = self.invoke(action="read", session="Long", limit=3)
+        self.assertIn("30 message(s), showing last 3", result)
+        self.assertIn("28.", result)
+        self.assertNotIn("1. User:", result)
+        self.assertIn("…", result)  # per-line cap applied
+
+    def test_read_missing_and_ambiguous_targets(self) -> None:
+        self.write_session(
+            "44444444-2222", name="One", created="2025-06-01T08:00:00",
+        )
+        self.write_session(
+            "44445555-3333", name="Two", created="2025-06-02T08:00:00",
+        )
+        self.assertTrue(
+            self.invoke(action="read", session="nope").startswith(
+                "Error: no session named",
+            ),
+        )
+        ambiguous = self.invoke(action="read", session="4444")
+        self.assertIn("matches 2 sessions", ambiguous)
+
+    def test_read_requires_session_arg(self) -> None:
+        self.assertTrue(
+            self.invoke(action="read").startswith("Error:"),
+        )
+
+    def test_invalid_action_rejected(self) -> None:
+        self.assertTrue(
+            self.invoke(action="write").startswith("Error:"),
+        )
+
+    def test_corrupt_session_file_is_skipped(self) -> None:
+        sessions = os.path.join(self.ws, ".cozter", "sessions")
+        os.makedirs(sessions, exist_ok=True)
+        with open(
+            os.path.join(sessions, "badfile.json"), "w", encoding="utf-8",
+        ) as f:
+            f.write("{not json")
+        self.write_session(
+            "55555555-4444", name="Good", created="2025-06-01T08:00:00",
+            messages=[{"role": "user", "content": "survivor"}],
+        )
+        result = self.invoke(action="list")
+        self.assertIn("Good", result)
+        self.assertNotIn("badfile", result)
+
+
+class _FakeContent:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    async def read(self, limit: int) -> bytes:
+        chunk, self.body = self.body[:limit], self.body[limit:]
+        return chunk
+
+
+class _FakeResponse:
+    charset = "utf-8"
+
+    def __init__(
+        self,
+        *,
+        status: int,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: bytes = b"",
+        reason: str = "",
+    ) -> None:
+        self.status = status
+        self.url = url
+        # aiohttp headers are case-insensitive (CIMultiDict); emulate that.
+        self.headers = {
+            key.lower(): value for key, value in (headers or {}).items()
+        }
+        self.reason = reason
+        self.content = _FakeContent(body)
+
+    async def __aenter__(self) -> _FakeResponse:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+class _FakeSession:
+    def __init__(self, responses: list[_FakeResponse]) -> None:
+        self.responses = list(responses)
+        self.calls: list[dict] = []
+
+    def request(self, method: str, url: str, **kwargs: object):
+        self.calls.append({"method": method, "url": url, **kwargs})
+        return self.responses.pop(0)
+
+
+class HttpRequestToolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tool = HttpRequestTool()
+
+    def run_with(self, responses: list[_FakeResponse], **args: object):
+        session = _FakeSession(responses)
+
+        @asynccontextmanager
+        async def fake_open():
+            yield session
+
+        with mock.patch.object(
+            http_request_module, "open_public_http_session", fake_open,
+        ):
+            result = _run(self.tool.run(".", dict(args)))
+        return result, session
+
+    def test_get_returns_status_and_json_body(self) -> None:
+        result, session = self.run_with(
+            [
+                _FakeResponse(
+                    status=200,
+                    url="https://api.example.com/v1/things",
+                    headers={"Content-Type": "application/json"},
+                    body=b'{"ok": true}',
+                    reason="OK",
+                ),
+            ],
+            url="https://api.example.com/v1/things",
+        )
+        self.assertIn("HTTP 200", result)
+        self.assertIn("GET https://api.example.com/v1/things", result)
+        self.assertIn('{"ok": true}', result)
+        self.assertEqual(len(session.calls), 1)
+        self.assertTrue(session.calls[0]["allow_redirects"] is False)
+
+    def test_error_status_body_is_shown(self) -> None:
+        result, _ = self.run_with(
+            [
+                _FakeResponse(
+                    status=404,
+                    url="https://api.example.com/v1/missing",
+                    headers={"Content-Type": "application/json"},
+                    body=b'{"error": "not found"}',
+                    reason="Not Found",
+                ),
+            ],
+            url="https://api.example.com/v1/missing",
+        )
+        self.assertIn("HTTP 404", result)
+        self.assertIn('{"error": "not found"}', result)
+
+    def test_private_host_refused_without_request(self) -> None:
+        result, session = self.run_with(
+            [], url="http://127.0.0.1:8080/admin",
+        )
+        self.assertIn("publicly routable", result)
+        self.assertEqual(session.calls, [])
+
+    def test_post_sniffs_json_content_type(self) -> None:
+        result, session = self.run_with(
+            [
+                _FakeResponse(
+                    status=201,
+                    url="https://api.example.com/v1/things",
+                    headers={"Content-Type": "application/json"},
+                    body=b'{"id": 7}',
+                ),
+            ],
+            url="https://api.example.com/v1/things",
+            method="POST",
+            body='{"name": "x"}',
+        )
+        self.assertIn("HTTP 201", result)
+        call = session.calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(call["data"], '{"name": "x"}')
+        headers = call["headers"]
+        self.assertEqual(
+            headers.get("Content-Type"), "application/json",
+        )
+
+    def test_custom_headers_pass_hop_by_hop_filtered(self) -> None:
+        _, session = self.run_with(
+            [
+                _FakeResponse(
+                    status=200,
+                    url="https://api.example.com/",
+                    headers={"Content-Type": "text/plain"},
+                    body=b"ok",
+                ),
+            ],
+            url="https://api.example.com/",
+            headers={
+                "Authorization": "Bearer tok",
+                "Host": "evil.example",
+                "Connection": "close",
+                "X-Trace": "1",
+            },
+        )
+        headers = session.calls[0]["headers"]
+        self.assertEqual(headers.get("Authorization"), "Bearer tok")
+        self.assertEqual(headers.get("X-Trace"), "1")
+        self.assertNotIn("Host", headers)
+        self.assertNotIn("Connection", headers)
+
+    def test_redirect_downgrades_post_to_get(self) -> None:
+        result, session = self.run_with(
+            [
+                _FakeResponse(
+                    status=303,
+                    url="https://api.example.com/old",
+                    headers={"Location": "https://api.example.com/new"},
+                ),
+                _FakeResponse(
+                    status=200,
+                    url="https://api.example.com/new",
+                    headers={"Content-Type": "application/json"},
+                    body=b'{"moved": true}',
+                ),
+            ],
+            url="https://api.example.com/old",
+            method="POST",
+            body='{"a": 1}',
+        )
+        self.assertIn('{"moved": true}', result)
+        self.assertEqual(session.calls[0]["method"], "POST")
+        self.assertEqual(session.calls[1]["method"], "GET")
+        self.assertNotIn("data", session.calls[1])
+        self.assertEqual(session.calls[1]["url"], "https://api.example.com/new")
+
+    def test_redirect_to_private_host_refused(self) -> None:
+        result, session = self.run_with(
+            [
+                _FakeResponse(
+                    status=302,
+                    url="https://api.example.com/old",
+                    headers={"Location": "http://10.0.0.5/steal"},
+                ),
+            ],
+            url="https://api.example.com/old",
+        )
+        self.assertIn("publicly routable", result)
+        self.assertEqual(len(session.calls), 1)  # redirect was not followed
+
+    def test_too_many_redirects_refused(self) -> None:
+        responses = [
+            _FakeResponse(
+                status=302,
+                url=f"https://api.example.com/hop{i}",
+                headers={
+                    "Location": f"https://api.example.com/hop{i + 1}",
+                },
+            )
+            for i in range(6)
+        ]
+        result, _ = self.run_with(
+            responses, url="https://api.example.com/hop0",
+        )
+        self.assertIn("too many redirects", result)
+
+    def test_binary_content_type_hidden(self) -> None:
+        result, _ = self.run_with(
+            [
+                _FakeResponse(
+                    status=200,
+                    url="https://api.example.com/image.png",
+                    headers={"Content-Type": "image/png"},
+                    body=b"\x89PNG...",
+                ),
+            ],
+            url="https://api.example.com/image.png",
+        )
+        self.assertIn("HTTP 200", result)
+        self.assertIn("binary response body", result)
+        self.assertNotIn("PNG", result)
+
+    def test_transport_failure_reported(self) -> None:
+        @asynccontextmanager
+        async def failing_open():
+            raise asyncio.TimeoutError()
+            yield  # pragma: no cover - makes this an async generator
+
+        with mock.patch.object(
+            http_request_module, "open_public_http_session", failing_open,
+        ):
+            result = _run(
+                self.tool.run(".", {"url": "https://api.example.com/"}),
+            )
+        self.assertTrue(result.startswith("Request failed:"))
+
+    def test_argument_validation(self) -> None:
+        result, _ = self.run_with([], url="ftp://api.example.com/x")
+        self.assertIn("only http:// and https://", result)
+        result, _ = self.run_with(
+            [], url="https://api.example.com/", method="TRACE",
+        )
+        self.assertIn("'method' must be one of", result)
+        result, _ = self.run_with(
+            [], url="https://api.example.com/", headers="nope",
+        )
+        self.assertIn("'headers' must be an object", result)
+        result, _ = self.run_with(
+            [], url="https://api.example.com/", body="",
+        )
+        self.assertIn("'body' must be a non-empty string", result)
+        result, _ = self.run_with([], url="")
+        self.assertTrue(result.startswith("Error:"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

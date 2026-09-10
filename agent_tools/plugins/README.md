@@ -26,9 +26,13 @@ the plugin's `os.getcwd()` returns the right path.
 - File names starting with `_` are skipped by the loader, which is useful
   for disabled examples or local scratch plugins.
 - Shipped live plugins: `current_time.py`, `calculator.py`,
-  `notes.py` (persistent workspace notes at `.cozter/notes.md`), and
+  `notes.py` (persistent workspace notes at `.cozter/notes.md`),
   `git_info.py` (read-only `status`/`log`/`diff` snapshot with a fixed,
-  non-mutating argv).
+  non-mutating argv), `memory.py` (search/read past session
+  transcripts, summaries, long-term notes, and colony items under
+  `.cozter/`), and `http_request.py` (GET/POST/PUT/PATCH/DELETE against
+  public hosts with web_fetch's public-address safety model; shows
+  4xx/5xx bodies).
 - The shipped `current_time.py` plugin is live and can be invoked through
   the same module path pattern as any other plugin.
 

@@ -828,6 +828,17 @@ Shipped plugins:
   workspace repository, so HTTP backends without a shell can still see
   repo state; the argv is fixed and read-only, and `path` arguments
   must stay inside the workspace.
+- `memory` - search/read the workspace's durable chat memory: past
+  session transcripts, per-session summaries and long-term notes, and
+  the shared colony notes (all under `.cozter/`). `search` is
+  case-insensitive full-text with bounded excerpts, `list` shows
+  sessions newest-first, `read` prints a session's recent messages by
+  name, id prefix, or `last`. Read-only and self-contained.
+- `http_request` - call HTTP APIs on public hosts with any
+  GET/POST/PUT/PATCH/DELETE, optional headers and body (Content-Type
+  auto-sniffed for JSON). Reuses `web_fetch`'s public-network-only
+  client and re-validates every redirect hop, and unlike `web_fetch`
+  it shows 4xx/5xx bodies, where APIs explain their errors.
 
 A plugin can also be run directly from the parent directory:
 
@@ -1179,7 +1190,7 @@ Cozter/
 └── agent_tools/          tool surface for HTTP backends + plugin registry
     ├── base.py             AgentTool ABC; path/argument validation and shared HTTP helpers
     ├── builtin/            16 built-in tools (read_file, edit_file, glob, grep, bash, web_search, ...)
-    └── plugins/            user drop-in zone (current_time, calculator, notes, git_info shipped live)
+    └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, memory, http_request shipped live)
 ```
 
 ## Process and tool safety
