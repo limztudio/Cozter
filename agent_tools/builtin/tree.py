@@ -19,9 +19,7 @@ from ..base import (
 class TreeTool(AgentTool):
     name = "tree"
     order = 30  # group with the discovery tools (list_dir/glob/grep)
-    description = (
-        "Directory tree (dirs first). Skips noise dirs, no symlinks."
-    )
+    description = "Directory tree (dirs first)."
     parameters = object_parameters(
         {
             "path": {

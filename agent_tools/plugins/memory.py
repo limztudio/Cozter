@@ -180,9 +180,7 @@ def _fit_output(lines: list[str], header: str) -> str:
 class MemoryTool(AgentTool):
     name = "memory"
     order = 20  # utility tools group, next to notes/git_info
-    description = (
-        "Chat memory (sessions, summaries, long-term, colony)."
-    )
+    description = "Chat memory (sessions, summaries, colony)."
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "action": {

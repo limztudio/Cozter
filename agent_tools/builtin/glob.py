@@ -17,9 +17,7 @@ from ..base import (
 
 class GlobTool(AgentTool):
     name = "glob"
-    description = (
-        "Find files by glob (`**` recurses). Sorted relative paths."
-    )
+    description = "Find files by glob (`**` recurses)."
     parameters = object_parameters(
         {
             "pattern": {

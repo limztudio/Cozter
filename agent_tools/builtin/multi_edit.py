@@ -22,9 +22,7 @@ from ..base import (
 class MultiEditTool(AgentTool):
     name = "multi_edit"
     file_action = "edit"
-    description = (
-        "Atomic multi-replacement of one file."
-    )
+    description = "Atomic multi-replacement in one file."
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {

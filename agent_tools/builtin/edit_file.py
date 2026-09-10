@@ -21,8 +21,7 @@ class EditFileTool(AgentTool):
     name = "edit_file"
     file_action = "edit"
     description = (
-        "Replace old_string with new_string in *path* (unique match"
-        " default)."
+        "Replace old_string with new_string in *path*."
     )
     parameters: ClassVar[dict[str, Any]] = path_replacement_parameters()
 

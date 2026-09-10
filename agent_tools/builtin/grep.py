@@ -39,9 +39,7 @@ class _GrepScanTimeout(RuntimeError):
 
 class GrepTool(AgentTool):
     name = "grep"
-    description = (
-        "Regex-search files; `path:lineno: line` hits."
-    )
+    description = "Regex-search files (`path:lineno: line`)."
     parameters = object_parameters(
         {
             "pattern": {

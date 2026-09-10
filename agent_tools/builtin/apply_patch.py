@@ -124,9 +124,7 @@ class ApplyPatchTool(AgentTool):
     file_action = "edit"
     order = 20  # group with the editing tools
     description = (
-        "Apply a unified diff; prefer for multi-hunk/multi-file edits."
-        " Context fuzz-matches. `--- /dev/null` creates,"
-        " `+++ /dev/null` deletes. Per-file outcome."
+        "Apply a unified diff; prefer for multi-file edits."
     )
     parameters = object_parameters(
         {"patch": {"type": "string"}},

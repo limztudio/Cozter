@@ -152,9 +152,7 @@ async def _request_following_redirects(
 
 class HttpRequestTool(AgentTool):
     name = "http_request"
-    description = (
-        "HTTP API calls; bounded reply. web_fetch reads pages."
-    )
+    description = "HTTP API calls; bounded reply."
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "url": {

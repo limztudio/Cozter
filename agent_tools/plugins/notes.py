@@ -43,9 +43,7 @@ _READ_TAIL_CHARS = 3_500
 class NotesTool(AgentTool):
     name = "notes"
     order = 20  # pair with read_file in the model-facing ordering
-    description = (
-        "Workspace notes, kept across compaction/restarts."
-    )
+    description = "Workspace notes (survive compaction)."
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "action": {
