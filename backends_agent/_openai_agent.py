@@ -363,9 +363,9 @@ class OpenAIChatBackend(Backend):
             proc.emit({
                 "type": "error",
                 "message": (
-                    f"{self.name} agent conversation exceeded the "
+                    f"{self.name} conversation exceeded the "
                     f"{_MAX_AGENT_MESSAGE_BYTES // (1024 * 1024)} MiB "
-                    "safety limit; narrow the task or reduce tool output."
+                    "limit; narrow the task or cut tool output."
                 ),
             })
 
@@ -1162,7 +1162,7 @@ def _system_prompt(
     workspace switch is automatically reflected.
     """
     parts = [
-        "Cozter coding assistant.",
+        "Cozter assistant.",
         f"Workspace: {workspace_path}",
     ]
     if tool_names:

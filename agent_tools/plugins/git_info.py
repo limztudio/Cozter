@@ -46,11 +46,11 @@ class GitInfoTool(AgentTool):
             },
             "path": {
                 "type": "string",
-                "description": "Path scope (diff only).",
+                "description": "Diff path scope.",
             },
             "patch": {
                 "type": "boolean",
-                "description": "Full patch, not summary (diff only).",
+                "description": "Full patch (diff only).",
             },
             "limit": {
                 "type": "integer",

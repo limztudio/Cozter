@@ -43,8 +43,8 @@ class BashTool(AgentTool):
             "timeout": {
                 "type": "integer",
                 "description": (
-                    f"Seconds (default {_BASH_DEFAULT_TIMEOUT},"
-                    f" max {_BASH_MAX_TIMEOUT})."
+                    f"Default {_BASH_DEFAULT_TIMEOUT},"
+                    f" max {_BASH_MAX_TIMEOUT}."
                 ),
             },
         },

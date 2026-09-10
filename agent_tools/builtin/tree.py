@@ -26,15 +26,15 @@ class TreeTool(AgentTool):
         {
             "path": {
                 "type": "string",
-                "description": "Subdir root. Default: workspace root.",
+                "description": "Default: workspace root.",
             },
             "depth": {
                 "type": "integer",
-                "description": "Depth cap. Default 3.",
+                "description": "Default 3.",
             },
             "max_entries": {
                 "type": "integer",
-                "description": "Entry cap. Default 200.",
+                "description": "Default 200.",
             },
         },
         [],

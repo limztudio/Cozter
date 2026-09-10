@@ -356,7 +356,7 @@ def replacement_properties() -> dict[str, Any]:
         "new_string": {"type": "string"},
         "replace_all": {
             "type": "boolean",
-            "description": "True = all occurrences; default: unique only.",
+            "description": "true = all, else unique.",
         },
     }
 

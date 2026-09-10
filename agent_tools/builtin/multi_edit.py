@@ -23,7 +23,7 @@ class MultiEditTool(AgentTool):
     name = "multi_edit"
     file_action = "edit"
     description = (
-        "Apply several string replacements to one file atomically."
+        "Atomic multi-replacement of one file."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

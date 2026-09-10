@@ -18,7 +18,7 @@ class CurrentTimeTool(AgentTool):
         "properties": {
             "timezone": {
                 "type": "string",
-                "description": "IANA zone. Default: local.",
+                "description": "Default: local.",
             },
         },
     }

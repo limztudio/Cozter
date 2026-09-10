@@ -47,17 +47,15 @@ class GrepTool(AgentTool):
         {
             "pattern": {
                 "type": "string",
-                "description": "Python regex.",
+                "description": "Regex.",
             },
             "path": {
                 "type": "string",
-                "description": "Search dir. Default: workspace root.",
+                "description": "Default: workspace root.",
             },
             "glob": {
                 "type": "string",
-                "description": (
-                    "File filter, e.g. '**/*.py'. Default '**/*'."
-                ),
+                "description": "Filter, default '**/*'.",
             },
             "max_results": {
                 "type": "integer",
