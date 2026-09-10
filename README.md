@@ -55,7 +55,10 @@ are trusted in-process code, not sandboxed extensions.
   fewer than five ordinary messages (a handful of large ones), it keeps
   one fewer than it covered so history still shrinks instead of retrying
   the same prefix. Colony, long-term memory, summaries, and recent
-  messages are prepended subject to the configured character budget; the
+  messages are prepended subject to the configured character budget
+  (20,000 characters by default, per-workspace via `/context`); when that
+  budget overflows, colony and long-term items most relevant to the
+  current request are kept instead of newest-only. The
   new user message stays intact
 - **Interrupted turns stay in memory**: `/stop`, shutdown, or a mid-turn
   restart appends the stopped prompt plus its partial output (or last tool
@@ -624,7 +627,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/style` | collaborative / autonomous — whether the agent asks before big/ambiguous actions or runs full-auto |
 | `/effort` | 0–100 reasoning effort; each backend maps to its native scale |
 | `/compact [number]` | Show compaction state, or set the fallback message interval for unknown-capacity models |
-| `/context [number]` | Show or set the per-turn context budget (characters of prepended history) |
+| `/context [number]` | Show or set the per-turn context budget (characters of prepended history, default 20000) |
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
 | `/sessions [number\|name]` | List this workspace's sessions, or switch to one |
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
@@ -925,8 +928,11 @@ automatically (its `tier_models` table) — for `zai` that is
 `/doctor` print the current wiring. A tier can only point at a *direct* backend — never at
 `flexible` itself, which would plan forever.
 
-A flexible turn can make one planner call, up to 12 worker calls, and one
-merge call. Because tiers may use different backends, a single request can
+A flexible turn can make one planner call (input capped at 12,000
+characters with the request preserved), up to 12 worker calls, and one
+merge call over the bare request. A single-subtask plan skips the merge
+and returns the worker report directly. Because tiers may use different
+backends, a single request can
 also be sent to multiple configured providers. Select a direct backend when a
 single-provider path or more predictable request cost is important.
 
