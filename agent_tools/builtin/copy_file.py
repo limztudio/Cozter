@@ -14,9 +14,7 @@ from ..base import (
 
 class CopyFileTool(AgentTool):
     name = "copy_file"
-    description = (
-        "Copy a file, preserving metadata. No dirs, no clobbering."
-    )
+    description = "Copy a file. No dirs, no clobbering."
     parameters = source_destination_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:

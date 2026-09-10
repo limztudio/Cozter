@@ -45,7 +45,6 @@ class NotesTool(AgentTool):
     order = 20  # pair with read_file in the model-facing ordering
     description = (
         "Workspace notes, kept across compaction/restarts."
-        " append needs text; read shows newest; clear wipes."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {

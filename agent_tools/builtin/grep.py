@@ -40,8 +40,7 @@ class _GrepScanTimeout(RuntimeError):
 class GrepTool(AgentTool):
     name = "grep"
     description = (
-        "Regex-search files; `path:lineno: line` hits. Skips"
-        " binaries and files >1 MB."
+        "Regex-search files; `path:lineno: line` hits."
     )
     parameters = object_parameters(
         {

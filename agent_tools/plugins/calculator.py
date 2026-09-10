@@ -180,8 +180,7 @@ class CalculatorTool(AgentTool):
     name = "calculator"
     order = 20  # utility tools group
     description = (
-        "Exact math (arithmetic, functions, constants). Use over"
-        " mental arithmetic."
+        "Exact math. Use over mental arithmetic."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

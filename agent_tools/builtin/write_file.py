@@ -18,7 +18,7 @@ class WriteFileTool(AgentTool):
     name = "write_file"
     file_action = "write"
     description = (
-        "Write content to *path* (creates parents, overwrites)."
+        "Write content to *path* (creates parents)."
     )
     parameters = object_parameters(
         {

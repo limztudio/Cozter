@@ -182,7 +182,6 @@ class MemoryTool(AgentTool):
     order = 20  # utility tools group, next to notes/git_info
     description = (
         "Chat memory (sessions, summaries, long-term, colony)."
-        " search needs query, read needs session."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
