@@ -266,8 +266,7 @@ def build_subtask_prompt(
 
     parts.append(
         f"\nYour task: {task.instruction}\n"
-        "Use tools, not description. Report for the"
-        " final reply: what you did/found, what the"
+        "Use tools, not description. Report: what you did/found, what the"
         " next worker needs (paths, commands, results)."
     )
     return "\n".join(parts)
@@ -294,7 +293,7 @@ def build_merge_prompt(
     parts.append(_render_plan(plan))
     parts.append("\n--- reports ---")
     for i, (task, text) in enumerate(zip(plan.subtasks, results)):
-        tag = " [BLOCKED: needs user answer]" if i in blocked else ""
+        tag = " [BLOCKED]" if i in blocked else ""
         parts.append(
             f"\n--- {i + 1} [{task.tier}]:"
             f" {task.instruction}{tag} ---\n"
