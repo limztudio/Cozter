@@ -35,9 +35,7 @@ class _GitFailed(Exception):
 class GitInfoTool(AgentTool):
     name = "git_info"
     order = 20  # utility tools group
-    description = (
-        "Git status/log/diff (patch=true: full patch). Read-only."
-    )
+    description = "Git status/log/diff. Read-only."
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "action": {
