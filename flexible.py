@@ -55,17 +55,16 @@ _RUBRIC = (
 
 _PLANNER_RULES = (
     "Planner for a multi-agent assistant. Split the request below into"
-    " the fewest sub-tasks covering it; grade each low/mid/high so it"
-    " routes to a right-sized model:\n\n"
+    " the fewest sub-tasks covering it; grade each low/mid/high:\n\n"
     f"{_RUBRIC}\n\n"
     "Rules:\n"
     "- Simple request = ONE sub-task.\n"
     f"- At most {MAX_SUBTASKS} sub-tasks, ordered (each needs only earlier"
-    " results; they run in order).\n"
+    " results).\n"
     "- Grade honestly: over-grading wastes the strong model, under-grading"
     " strands hard work on a weak one.\n"
     "- Self-contained: the worker sees only the user message, the plan,"
-    " and earlier reports — never full history.\n"
+    " and earlier reports.\n"
     "- No tools; plan from the text.\n"
 )
 
@@ -268,7 +267,7 @@ def build_subtask_prompt(
     parts.append(
         f"\nYour task: {task.instruction}\n"
         "Use tools, not description. Report for the"
-        " final-reply writer: what you did/found, what the"
+        " final reply: what you did/found, what the"
         " next worker needs (paths, commands, results)."
     )
     return "\n".join(parts)
