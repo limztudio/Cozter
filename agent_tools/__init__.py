@@ -390,7 +390,7 @@ def cli_plugin_prelude() -> str:
         args_summary = (
             ", ".join(
                 f"{k}{'' if k in required else '?'}"
-                for k, v in props.items()
+                for k in props
             )
             or "no args"
         )
