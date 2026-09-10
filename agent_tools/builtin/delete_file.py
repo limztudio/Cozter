@@ -15,10 +15,7 @@ from ..base import (
 class DeleteFileTool(AgentTool):
     name = "delete_file"
     file_action = "delete"
-    description = (
-        "Delete a file in the workspace. Refuses to delete directories;"
-        " use bash 'rm -r' if that's intended."
-    )
+    description = "Delete a file (not directories; bash `rm -r`)."
     parameters = path_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:

@@ -181,37 +181,28 @@ class MemoryTool(AgentTool):
     name = "memory"
     order = 20  # utility tools group, next to notes/git_info
     description = (
-        "Search/read this workspace's chat memory: past sessions,"
-        " summaries, long-term notes, colony notes. search needs"
-        " *query*; read needs *session* (name, id, prefix, or"
-        " 'last'). Use it to recall earlier decisions."
+        "Search/read chat memory (sessions, summaries, long-term and"
+        " colony notes). search needs query, read needs session"
+        " (name/id/prefix/'last')."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "action": {
                 "type": "string",
                 "enum": list(_ACTIONS),
-                "description": (
-                    "search (needs query), list, or read"
-                    " (needs session)."
-                ),
+                "description": "search (query), list, or read (session).",
             },
             "query": {
                 "type": "string",
-                "description": "Text to search for (search).",
+                "description": "Search text (search).",
             },
             "session": {
                 "type": "string",
-                "description": (
-                    "Session name, id, prefix, or 'last' (read)."
-                ),
+                "description": "Name/id/prefix/'last' (read).",
             },
             "limit": {
                 "type": "integer",
-                "description": (
-                    "Max matches/messages (defaults 8/20,"
-                    " max 20/100)."
-                ),
+                "description": "Cap (default 8/20, max 20/100).",
             },
         },
         ["action"],

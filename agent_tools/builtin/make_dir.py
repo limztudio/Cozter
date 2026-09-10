@@ -15,10 +15,8 @@ from ..base import (
 class MakeDirTool(AgentTool):
     name = "make_dir"
     description = (
-        "Create an empty directory in the workspace, including any"
-        " missing parent directories. Idempotent: succeeds even if the"
-        " directory already exists. Fails if the path already exists"
-        " as a file."
+        "Create a directory incl. parents. Idempotent unless a file"
+        " blocks the path."
     )
     parameters = path_parameters()
 

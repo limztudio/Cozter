@@ -40,34 +40,28 @@ class _GrepScanTimeout(RuntimeError):
 class GrepTool(AgentTool):
     name = "grep"
     description = (
-        "Search file contents in the workspace for a regex pattern."
-        " Returns matching lines as 'path:lineno: line'. Binary files"
-        " and files larger than 1 MB are skipped."
+        "Regex-search file contents; `path:lineno: line` hits. Skips"
+        " binaries and files >1 MB."
     )
     parameters = object_parameters(
         {
             "pattern": {
                 "type": "string",
-                "description": "Python regex to search for.",
+                "description": "Python regex.",
             },
             "path": {
                 "type": "string",
-                "description": (
-                    "Directory to search in. Defaults to workspace root."
-                ),
+                "description": "Search dir. Default: workspace root.",
             },
             "glob": {
                 "type": "string",
                 "description": (
-                    "Glob restricting which files to search, e.g."
-                    " '**/*.py'. Defaults to '**/*'."
+                    "File filter, e.g. '**/*.py'. Default '**/*'."
                 ),
             },
             "max_results": {
                 "type": "integer",
-                "description": (
-                    "Maximum matching lines, default 50, max 200."
-                ),
+                "description": "Cap (default 50, max 200).",
             },
         },
         ["pattern"],

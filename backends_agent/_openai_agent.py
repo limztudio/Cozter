@@ -469,11 +469,9 @@ class OpenAIChatBackend(Backend):
 
                         if tool_repeat_counts[sig] > tool_repeat_limit:
                             result = (
-                                f"Skipped repeated tool call: {name}. "
-                                f"The same tool call was requested more than "
-                                f"{tool_repeat_limit} times. Stop repeating "
-                                "this call and produce the final answer using "
-                                "the information already available."
+                                f"Skipped: {name} repeated"
+                                f" >{tool_repeat_limit}x. Final-answer"
+                                " from available info."
                             )
                             proc.emit({
                                 "type": "tool_result",
@@ -523,11 +521,9 @@ class OpenAIChatBackend(Backend):
                 continuation_message = {
                     "role": "user",
                     "content": (
-                        "You reached Cozter's internal tool-call segment "
-                        "limit. Continue the same task automatically without "
-                        "asking the user. Use more tools if needed, but do not "
-                        "repeat completed tool calls unless the inputs or "
-                        "workspace state have changed."
+                        "Tool-call segment limit reached. Continue the task"
+                        " with more tools if needed; do not repeat completed"
+                        " calls unless inputs or files changed."
                     ),
                 }
                 if not append_message(continuation_message):
@@ -539,10 +535,8 @@ class OpenAIChatBackend(Backend):
             final_request_message = {
                 "role": "user",
                 "content": (
-                    "You have reached the tool-call limit. Do not call any "
-                    "more tools. Based only on the information already "
-                    "collected, provide the final answer now. If something is "
-                    "incomplete, clearly say what is missing."
+                    "Tool-call limit reached. No more tools: answer now from"
+                    " collected info; say what is missing if incomplete."
                 ),
             }
             if not append_message(final_request_message):
@@ -1169,20 +1163,16 @@ def _system_prompt(
     workspace switch is automatically reflected.
     """
     parts = [
-        "You are a coding assistant running inside Cozter.",
-        f"Current workspace: {workspace_path}",
+        "Cozter coding assistant.",
+        f"Workspace: {workspace_path}",
     ]
     if tool_names:
         parts.append(
-            f"Available tools: {', '.join(tool_names)}."
-            " Tools run in this workspace (paths relative or absolute"
-            " inside it). Explore with list_dir/glob/grep before"
-            " reading; pass offset/limit to read_file for large files."
-            " Web: web_search to find pages, web_fetch to read them."
-            " Do not repeat calls; answer once you have enough."
+            f"Tools: {', '.join(tool_names)} (workspace paths, rel or abs)."
+            " Explore via list_dir/glob/grep; read_file takes"
+            " offset/limit. web_search finds, web_fetch reads."
+            " One pass; don't repeat calls."
         )
     else:
-        parts.append(
-            "No tools are available this turn - respond in plain text."
-        )
+        parts.append("No tools this turn - plain-text reply.")
     return "\n".join(parts)

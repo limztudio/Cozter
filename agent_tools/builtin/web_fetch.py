@@ -96,17 +96,14 @@ async def _fetch_following_redirects(
 class WebFetchTool(AgentTool):
     name = "web_fetch"
     description = (
-        "Fetch a public HTTP/HTTPS URL and return readable text. Use"
-        " this after web_search to inspect a page."
+        "Fetch a public URL as readable text (after web_search)."
     )
     parameters = object_parameters(
         {
             "url": {"type": "string"},
             "max_chars": {
                 "type": "integer",
-                "description": (
-                    "Maximum characters to return, default 12000."
-                ),
+                "description": "Char cap (default 12000).",
             },
         },
         ["url"],

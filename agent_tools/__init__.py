@@ -385,8 +385,7 @@ def cli_plugin_prelude() -> str:
         return ""
 
     lines = [
-        "PLUGINS (extra tools available in this workspace, invoked via"
-        " the bash/shell tool):",
+        "PLUGINS (via bash/shell tool):",
         "",
     ]
     for tool in plugins:
@@ -404,8 +403,8 @@ def cli_plugin_prelude() -> str:
         # attribute (e.g. weather_lookup.py defining GetWeatherTool).
         module_path = tool.__class__.__module__
         lines.append(f"- {tool.name}: {tool.description}")
-        lines.append(f"  Args: {{{args_summary}}}")
-        lines.append(f"  Invoke: python -m {module_path} '<JSON args>'")
+        lines.append(f"  Args: {args_summary}")
+        lines.append(f"  Run: python -m {module_path} '<JSON>'")
         lines.append("")
     return "\n".join(lines).rstrip()
 

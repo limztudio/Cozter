@@ -17,13 +17,10 @@ logger = logging.getLogger(__name__)
 
 
 TITLE_PROMPT = (
-    "You are titling a chat session for a list view. Read the recent "
-    "messages and produce a short descriptive name: 3-7 words, "
-    "Title Case, no trailing punctuation, no quotes, no commentary. "
-    "Pick the dominant topic, not the most recent line. Output only "
-    "the title.\n\n"
-    "IMPORTANT: Do NOT call any tools or read any files. The input "
-    "below is everything you need."
+    "Title this chat for a list view: 3-7 words, Title Case, no trailing"
+    " punctuation/quotes/commentary. Dominant topic, not the latest line."
+    " Output only the title.\n\n"
+    "No tools/file reads; the input below is everything."
 )
 TITLE_TIMEOUT = 60  # seconds; generous headroom for an occasional slow API call
 TITLE_MAX_CHARS = 60

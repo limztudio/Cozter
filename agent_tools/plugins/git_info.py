@@ -36,35 +36,27 @@ class GitInfoTool(AgentTool):
     name = "git_info"
     order = 20  # utility tools group
     description = (
-        "Read-only Git info: status (branch + changed files), log"
-        " (recent subjects), diff (uncommitted patch; patch=true for"
-        " full patch). Cannot modify anything."
+        "Read-only Git: status, log, or diff (patch=true for full"
+        " patch). Never modifies."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "action": {
                 "type": "string",
                 "enum": list(_ACTIONS),
-                "description": "Which read-only snapshot to show.",
+                "description": "status, log, or diff.",
             },
             "path": {
                 "type": "string",
-                "description": (
-                    "Restrict to this workspace path (diff only)."
-                ),
+                "description": "Path scope (diff only).",
             },
             "patch": {
                 "type": "boolean",
-                "description": (
-                    "Show the full patch, not the summary"
-                    " (diff only)."
-                ),
+                "description": "Full patch, not summary (diff only).",
             },
             "limit": {
                 "type": "integer",
-                "description": (
-                    "Commits to show (default 10, max 50)."
-                ),
+                "description": "Commits (default 10, max 50).",
             },
         },
         ["action"],

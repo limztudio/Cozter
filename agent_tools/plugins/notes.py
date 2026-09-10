@@ -44,24 +44,19 @@ class NotesTool(AgentTool):
     name = "notes"
     order = 20  # pair with read_file in the model-facing ordering
     description = (
-        "Persistent workspace notes (.cozter/notes.md) surviving"
-        " compaction and restarts. append needs text; read shows the"
-        " newest; clear deletes all. Record progress/next steps here."
+        "Workspace notes (.cozter/notes.md), kept across compaction and"
+        " restarts. append needs text; read shows newest; clear wipes."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "action": {
                 "type": "string",
                 "enum": ["append", "read", "clear"],
-                "description": (
-                    "append (needs text), read, or clear."
-                ),
+                "description": "append(text), read, or clear.",
             },
             "text": {
                 "type": "string",
-                "description": (
-                    "Entry text (plain text or short markdown)."
-                ),
+                "description": "Entry text (append).",
             },
         },
         ["action"],

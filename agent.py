@@ -64,32 +64,26 @@ class DetachedTaskLaunch:
 # (see workspace.get_interaction_style); scheduled / ephemeral turns run
 # unattended and cannot pause on [[await]], so they are always autonomous.
 _ATTACH_HINT = (
-    "To send a file, put \"[[attach: PATH]]\" on its own line "
-    "(workspace-relative or absolute). Always attach images/files you "
-    "create."
+    "Send files via \"[[attach: PATH]]\" on its own line; always attach"
+    " what you create."
 )
 
 _COLLABORATION_POLICY = (
-    "This is a live conversation. If the request is ambiguous, or the "
-    "action is large-scope, destructive, or hard to reverse, ask one "
-    "short, specific question and end with \"[[await]]\"; the user's next "
-    "message is the answer. For small, reversible choices, decide "
-    "yourself, say so in one line, and keep going."
+    "Live chat. Ambiguous, large-scope, destructive, or irreversible:"
+    " ask ONE short question ending in \"[[await]]\" (next message"
+    " answers). Small reversible calls: decide, note in one line, go."
 )
 
 _AUTONOMY_POLICY = (
-    "Unattended run — nobody can answer mid-task. Do not ask for "
-    "confirmation; make reasonable scoped decisions and finish. If "
-    "blocked, state what is missing."
+    "Unattended run: no mid-task answers. Decide scoped, finish; if"
+    " blocked, state what's missing."
 )
 
 
 _DETACHED_TASK_POLICY = (
-    "For background work, do not use shell backgrounding (`&`, `nohup`, "
-    "`claude --bg`) or promise a callback. Finish your reply and put one "
-    "self-contained `[[background: <task>]]` request on its own line; "
-    "Cozter launches it and posts the result later. Only for work needing "
-    "no user input."
+    "Background work: no shell backgrounding, no callbacks. End reply"
+    " with one self-contained `[[background: <task>]]` line; Cozter"
+    " launches it and posts the result. No-input work only."
 )
 
 
@@ -656,7 +650,7 @@ def _build_contextual_prompt(
     parts = session.format_context_blocks(data, colony_list)
 
     parts.append(
-        "Continue the conversation. The user's new message follows.\n"
+        "New message follows.\n"
     )
     parts.append(prompt)
 
@@ -704,7 +698,7 @@ def _build_contextual_prompt(
             (render, natural) for render, natural in descriptors if natural
         ]
         continuation = (
-            "Continue the conversation. The user's new message follows.\n"
+            "New message follows.\n"
         )
         # Preserve the user's request intact even under a tight history
         # setting. If the required continuation wrapper itself would push an
@@ -1838,7 +1832,7 @@ async def _run_turn_impl(
         effective_prompt = prompt
         if injected:
             effective_prompt += (
-                "\n\n[Additional context from user while you were thinking]:\n"
+                "\n\n[Added while you were thinking]:\n"
                 + "\n".join(injected)
             )
 

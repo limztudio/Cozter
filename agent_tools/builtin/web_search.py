@@ -48,18 +48,14 @@ _DDG_HOST_SUFFIX = "duckduckgo.com"
 class WebSearchTool(AgentTool):
     name = "web_search"
     description = (
-        "Search the public internet for current information. Use this"
-        " to find relevant pages, then use web_fetch to read a"
-        " specific result."
+        "Web search for current info; web_fetch reads a result."
     )
     parameters = object_parameters(
         {
             "query": {"type": "string"},
             "max_results": {
                 "type": "integer",
-                "description": (
-                    "Maximum results to return, default 5, max 10."
-                ),
+                "description": "Cap (default 5, max 10).",
             },
         },
         ["query"],

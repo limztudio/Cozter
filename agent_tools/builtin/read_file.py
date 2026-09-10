@@ -38,26 +38,21 @@ class _OffsetScanLimitExceeded(Exception):
 class ReadFileTool(AgentTool):
     name = "read_file"
     description = (
-        "Read a UTF-8 text file from the workspace (up to 128 KiB per"
-        " call). Pass *offset* and *limit* to read only a line range,"
-        " which is useful for large files."
+        "Read a UTF-8 text file (128 KiB/call). offset/limit read a"
+        " line range for large files."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "path": path_property(
-                "Path relative to the workspace root, or an absolute path"
-                " inside the workspace.",
+                "Workspace-rel or absolute path.",
             ),
             "offset": {
                 "type": "integer",
-                "description": "0-based line index to start at. Default 0.",
+                "description": "Start line (0-based). Default 0.",
             },
             "limit": {
                 "type": "integer",
-                "description": (
-                    "Maximum number of lines to return. Omit for the rest"
-                    " of the file."
-                ),
+                "description": "Line cap. Omit = rest of file.",
             },
         },
         ["path"],

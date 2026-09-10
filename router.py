@@ -11,19 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 ROUTER_PROMPT = (
-    "You are a session router for a multi-session chat assistant.\n"
-    "The user is about to send a new message. Pick the existing "
-    "session whose ongoing topic best fits the message — or output "
-    "NEW if the user has switched to a topic none of the sessions "
-    "match.\n\n"
+    "Session router for a multi-session chat assistant. The user is about"
+    " to send a message: pick the existing session whose topic best fits"
+    " — or output NEW if none match.\n\n"
     "Rules:\n"
-    "- Prefer to continue an existing session when there is a clear "
-    "topical match.\n"
-    "- Choose NEW for genuinely new topics, not minor digressions.\n"
-    "- Output exactly one line: either the bare session id "
-    "(no quotes, no commentary), or the literal word NEW.\n"
-    "- Do NOT call any tools or read any files; decide from the "
-    "input below.\n"
+    "- Continue an existing session on clear topical match.\n"
+    "- NEW for genuinely new topics, not minor digressions.\n"
+    "- Exactly one line: bare session id, or NEW.\n"
+    "- No tools/file reads; decide from the input below.\n"
 )
 ROUTER_TIMEOUT = 60  # seconds; on timeout the router falls back to NEW
 ROUTER_MAX_SESSIONS = 12  # cap input size; sessions are listed newest-first

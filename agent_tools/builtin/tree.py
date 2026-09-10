@@ -20,28 +20,22 @@ class TreeTool(AgentTool):
     name = "tree"
     order = 30  # group with the discovery tools (list_dir/glob/grep)
     description = (
-        "Show the workspace's directory structure as an indented tree"
-        " (directories first, then files), for quickly orienting in a"
-        " codebase. Noise dirs (.git, node_modules, __pycache__, ...) are"
-        " skipped and symlinks are not followed. Bounded by *depth* and"
-        " *max_entries*; read-only."
+        "Directory tree (dirs first). Skips noise dirs (.git,"
+        " node_modules, ...), no symlink follows, read-only."
     )
     parameters = object_parameters(
         {
             "path": {
                 "type": "string",
-                "description": (
-                    "Subdirectory to root the tree at. Default: the"
-                    " workspace root."
-                ),
+                "description": "Subdir root. Default: workspace root.",
             },
             "depth": {
                 "type": "integer",
-                "description": "Maximum directory depth to descend. Default 3.",
+                "description": "Depth cap. Default 3.",
             },
             "max_entries": {
                 "type": "integer",
-                "description": "Maximum entries to list. Default 200.",
+                "description": "Entry cap. Default 200.",
             },
         },
         [],

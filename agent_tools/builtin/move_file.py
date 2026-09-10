@@ -18,9 +18,8 @@ from ...utils import is_path_within
 class MoveFileTool(AgentTool):
     name = "move_file"
     description = (
-        "Move or rename a file or directory within the workspace."
-        " Fails if the destination already exists; parent directories"
-        " of the destination are created automatically."
+        "Move/rename a file or directory. No clobbering; parent dirs"
+        " are created."
     )
     parameters = source_destination_parameters()
 

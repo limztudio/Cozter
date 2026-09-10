@@ -55,26 +55,25 @@ _RUBRIC = (
 )
 
 _PLANNER_RULES = (
-    "You are the planner for a multi-agent assistant. Split the request "
-    "below into the smallest set of sub-tasks covering it; grade each "
-    "low/mid/high so it routes to a right-sized model:\n\n"
+    "Planner for a multi-agent assistant. Split the request below into"
+    " the fewest sub-tasks covering it; grade each low/mid/high so it"
+    " routes to a right-sized model:\n\n"
     f"{_RUBRIC}\n\n"
     "Rules:\n"
-    "- A simple request is ONE sub-task; do not invent busywork.\n"
-    f"- At most {MAX_SUBTASKS} sub-tasks.\n"
-    "- Order them so each needs only earlier results; they run in order.\n"
-    "- Grade honestly: over-grading wastes the strong model, under-grading "
-    "strands hard work on a weak one.\n"
-    "- Each sub-task must be self-contained: the worker sees only the user "
-    "message, this plan, and earlier reports — never the full history.\n"
-    "- Do NOT call any tools or read any files yourself; plan from the text "
-    "below.\n"
+    "- Simple request = ONE sub-task; no busywork.\n"
+    f"- At most {MAX_SUBTASKS} sub-tasks, ordered (each needs only earlier"
+    " results; they run in order).\n"
+    "- Grade honestly: over-grading wastes the strong model, under-grading"
+    " strands hard work on a weak one.\n"
+    "- Each sub-task self-contained: the worker sees only the user message,"
+    " this plan, and earlier reports — never full history.\n"
+    "- No tools/file reads; plan from the text below.\n"
 )
 
 _PLANNER_FORMAT = (
-    "Reply in exactly this format and nothing else:\n\n"
+    "Reply in exactly this format, nothing else:\n\n"
     "[UNDERSTANDING]\n"
-    "One or two sentences restating what the user actually wants.\n"
+    "1-2 sentences: what the user wants.\n"
     "[/UNDERSTANDING]\n"
     "[PLAN]\n"
     "1. [low|mid|high] first sub-task instruction\n"
@@ -83,8 +82,8 @@ _PLANNER_FORMAT = (
 )
 
 _PLANNER_QUESTION_RULE = (
-    "If the request is too ambiguous to plan and guessing wastes real "
-    "work, skip the plan and ask one short question instead:\n\n"
+    "Too ambiguous to plan (guessing wastes real work)? Skip the plan,"
+    " ask one short question instead:\n\n"
     "[QUESTION]\n"
     "your one question\n"
     "[/QUESTION]\n\n"
@@ -94,12 +93,11 @@ _PLANNER_QUESTION_RULE = (
 _MERGE_RULES = (
     "Merge the worker reports below into the single reply the user sees.\n\n"
     "Rules:\n"
-    "- Answer directly; lead with the outcome. Write as the assistant who "
-    "did the work — never mention plans, workers, or tiers.\n"
-    "- Keep concrete results (code, paths, commands, numbers, errors); do "
-    "not vaguen them up. Report failures plainly.\n"
-    "- Reply in the user's language.\n"
-    "- Do NOT call any tools; the work is done.\n"
+    "- Answer directly, outcome first, as the assistant who did the work"
+    " (never mention plans/workers/tiers).\n"
+    "- Keep concrete results (code, paths, commands, numbers, errors);"
+    " report failures plainly.\n"
+    "- User's language. No tool calls; work is done.\n"
 )
 
 # The merge step writes the reply the user actually reads, so it is the
@@ -108,17 +106,16 @@ _MERGE_RULES = (
 # the queue drain straight past it, leaving the user's answer to land as
 # an unrelated new turn.
 _MERGE_QUESTION_RULE = (
-    "- End with \"[[await]]\" on its own line only if you ask something "
-    "blocking progress (the next message is treated as the answer). "
-    "Optional offers get no marker.\n"
+    "- \"[[await]]\" on its own line only for a blocking question (next"
+    " message = the answer). Optional offers: no marker.\n"
 )
 
 # Workers run under the autonomy policy, so one that stops to ask has
 # already established the turn cannot finish without the user. Tell the
 # merge outright instead of leaving it to infer that from the report text.
 _MERGE_BLOCKED_RULE = (
-    "- A report marked BLOCKED needs a user answer: end your reply with "
-    "its question plus \"[[await]]\" on its own line.\n"
+    "- A BLOCKED-marked report needs a user answer: end with its question"
+    " plus \"[[await]]\" on its own line.\n"
 )
 
 
@@ -254,21 +251,19 @@ def build_subtask_prompt(
     task = plan.subtasks[index]
     parts = [context, ""]
     parts.append(
-        f"[Sub-task {index + 1} of {len(plan.subtasks)}"
-        f" — difficulty: {task.tier}]"
+        f"[Sub-task {index + 1}/{len(plan.subtasks)}: {task.tier}]"
     )
     parts.append(
-        "You are one worker in a multi-agent pipeline answering the user's"
-        " message above. The request was split into the sub-tasks below and"
-        " they run one at a time, in order."
+        "One worker in a pipeline answering the message above; sub-tasks"
+        " run in order."
     )
     if plan.understanding:
-        parts.append(f"\nWhat the user wants: {plan.understanding}")
-    parts.append("\nThe full plan:")
+        parts.append(f"\nGoal: {plan.understanding}")
+    parts.append("\nPlan:")
     parts.append(_render_plan(plan, current=index))
 
     if results:
-        parts.append("\nWhat the earlier workers reported:")
+        parts.append("\nEarlier workers reported:")
         for i, text in enumerate(results):
             parts.append(
                 f"\n--- sub-task {i + 1} result ---\n"
@@ -277,14 +272,10 @@ def build_subtask_prompt(
 
     parts.append(
         f"\nDo ONLY sub-task {index + 1}: {task.instruction}\n"
-        "Leave the other sub-tasks to their own workers — another agent"
-        " handles each one, and duplicated work gets thrown away. Use your"
-        " tools to actually carry it out; do not merely describe what you"
-        " would do. Then report back concisely: what you did, what you"
-        " found, and anything the next worker needs to know. Your report is"
-        " read by the agent that writes the user's final reply, not by the"
-        " user, so include concrete details (paths, commands, results) and"
-        " skip the pleasantries."
+        "Others have their own workers; duplicated work is discarded."
+        " Use tools to do it, not describe it. Report concisely for the"
+        " agent writing the final reply: what you did/found, what the"
+        " next worker needs (paths, commands, results, no pleasantries)."
     )
     return "\n".join(parts)
 
@@ -305,8 +296,8 @@ def build_merge_prompt(
             rules += _MERGE_BLOCKED_RULE
     parts = [rules, "--- conversation ---", context, ""]
     if plan.understanding:
-        parts.append(f"What the user wants: {plan.understanding}")
-    parts.append("\nThe plan the workers carried out:")
+        parts.append(f"Goal: {plan.understanding}")
+    parts.append("\nPlan carried out:")
     parts.append(_render_plan(plan))
     parts.append("\n--- worker reports ---")
     for i, (task, text) in enumerate(zip(plan.subtasks, results)):
@@ -316,10 +307,7 @@ def build_merge_prompt(
             f" {task.instruction}{tag} ---\n"
             f"{_truncate_report(text) if text else '(no report)'}"
         )
-    parts.append(
-        "\n--- end of reports ---\n\n"
-        "Now write the user's reply."
-    )
+    parts.append("\n--- end of reports ---\n\nWrite the user's reply.")
     return "\n".join(parts)
 
 

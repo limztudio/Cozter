@@ -757,7 +757,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertTrue(all("tools" in payload for payload in calls))
         self.assertIn(
-            "internal tool-call segment limit",
+            "Tool-call segment limit reached",
             calls[1]["messages"][-1]["content"],
         )
         self.assertEqual(

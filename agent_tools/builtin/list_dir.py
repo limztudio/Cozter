@@ -19,20 +19,17 @@ from ..base import (
 class ListDirTool(AgentTool):
     name = "list_dir"
     description = (
-        "List the entries of a directory in the workspace. Directories"
-        " are shown with a trailing slash."
+        "List a directory (trailing slash marks subdirectories)."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
             "path": path_property(
-                "Directory path. Defaults to the workspace root if omitted.",
+                "Dir path. Default: workspace root.",
             ),
             "max_results": {
                 "type": "integer",
-                "description": (
-                    "Maximum entries to return, default 200, max 1000."
-                ),
+                "description": "Cap (default 200, max 1000).",
             },
         },
     }

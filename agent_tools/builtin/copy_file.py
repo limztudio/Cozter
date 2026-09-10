@@ -15,10 +15,8 @@ from ..base import (
 class CopyFileTool(AgentTool):
     name = "copy_file"
     description = (
-        "Copy a file within the workspace, preserving its bytes and"
-        " metadata. Refuses to copy directories (use bash 'cp -r' for"
-        " those). Fails if the destination already exists; parent"
-        " directories of the destination are created automatically."
+        "Copy a file, preserving metadata. No directories (bash `cp -r`),"
+        " no clobbering; parent dirs are created."
     )
     parameters = source_destination_parameters()
 

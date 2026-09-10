@@ -21,9 +21,8 @@ class EditFileTool(AgentTool):
     name = "edit_file"
     file_action = "edit"
     description = (
-        "In-place string replacement: replace *old_string* with"
-        " *new_string* in *path*. By default requires a unique match;"
-        " pass *replace_all*=true to replace every occurrence."
+        "Replace old_string with new_string in *path*. Unique match by"
+        " default; replace_all=true replaces all."
     )
     parameters: ClassVar[dict[str, Any]] = path_replacement_parameters()
 

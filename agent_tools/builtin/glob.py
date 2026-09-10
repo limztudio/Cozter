@@ -18,23 +18,18 @@ from ..base import (
 class GlobTool(AgentTool):
     name = "glob"
     description = (
-        "Find files in the workspace matching a glob pattern. Supports"
-        " ** for recursive matching (e.g. '**/*.py'). Returns sorted"
-        " relative paths."
+        "Find files by glob pattern (`**` recurses, e.g. '**/*.py')."
+        " Sorted relative paths."
     )
     parameters = object_parameters(
         {
             "pattern": {
                 "type": "string",
-                "description": (
-                    "Glob pattern, e.g. '**/*.py' or 'src/*.ts'."
-                ),
+                "description": "Glob, e.g. '**/*.py'.",
             },
             "max_results": {
                 "type": "integer",
-                "description": (
-                    "Maximum paths to return, default 100, max 500."
-                ),
+                "description": "Cap (default 100, max 500).",
             },
         },
         ["pattern"],

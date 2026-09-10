@@ -62,7 +62,7 @@ class PlanParsingTests(unittest.TestCase):
     def test_planner_prompt_advertises_the_expanded_subtask_limit(self) -> None:
         prompt = flexible.build_plan_prompt("context", collaborative=False)
         self.assertIn(
-            f"At most {flexible.MAX_SUBTASKS} sub-tasks.",
+            f"At most {flexible.MAX_SUBTASKS} sub-tasks,",
             prompt,
         )
 
