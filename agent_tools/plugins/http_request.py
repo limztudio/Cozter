@@ -166,13 +166,10 @@ class HttpRequestTool(AgentTool):
                 "type": "object",
                 "additionalProperties": {"type": "string"},
             },
-            "body": {
-                "type": "string",
-                "description": "Body; JSON if parseable.",
-            },
+            "body": {"type": "string"},
             "max_chars": {
                 "type": "integer",
-                "description": "Default 3500.",
+                "description": "max 3500.",
             },
         },
         ["url"],

@@ -183,12 +183,7 @@ class CalculatorTool(AgentTool):
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
-            "expression": {
-                "type": "string",
-                "description": (
-                    "Expression, e.g. '(1 + 0.07) ** 10 * 1500'."
-                ),
-            },
+            "expression": {"type": "string"},
         },
         "required": ["expression"],
     }

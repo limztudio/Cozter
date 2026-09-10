@@ -49,12 +49,8 @@ class NotesTool(AgentTool):
             "action": {
                 "type": "string",
                 "enum": ["append", "read", "clear"],
-                "description": "append needs text.",
             },
-            "text": {
-                "type": "string",
-                "description": "Entry text (append).",
-            },
+            "text": {"type": "string"},
         },
         ["action"],
     )

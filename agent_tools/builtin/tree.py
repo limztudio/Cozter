@@ -22,17 +22,11 @@ class TreeTool(AgentTool):
     description = "Directory tree (dirs first)."
     parameters = object_parameters(
         {
-            "path": {
-                "type": "string",
-                "description": "Default: workspace root.",
-            },
-            "depth": {
-                "type": "integer",
-                "description": "Default 3.",
-            },
+            "path": {"type": "string"},
+            "depth": {"type": "integer"},
             "max_entries": {
                 "type": "integer",
-                "description": "Default 200.",
+                "description": "max 200.",
             },
         },
         [],

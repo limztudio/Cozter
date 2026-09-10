@@ -14,10 +14,7 @@ class CurrentTimeTool(AgentTool):
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
-            "timezone": {
-                "type": "string",
-                "description": "Default: local.",
-            },
+            "timezone": {"type": "string"},
         },
     }
 

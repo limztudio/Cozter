@@ -20,13 +20,10 @@ class GlobTool(AgentTool):
     description = "Find files by glob (`**` recurses)."
     parameters = object_parameters(
         {
-            "pattern": {
-                "type": "string",
-                "description": "Glob, e.g. '**/*.py'.",
-            },
+            "pattern": {"type": "string"},
             "max_results": {
                 "type": "integer",
-                "description": "Default 100, max 500.",
+                "description": "max 500.",
             },
         },
         ["pattern"],

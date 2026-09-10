@@ -45,17 +45,11 @@ class GrepTool(AgentTool):
             "pattern": {
                 "type": "string",
             },
-            "path": {
-                "type": "string",
-                "description": "Default: workspace root.",
-            },
-            "glob": {
-                "type": "string",
-                "description": "Filter, default '**/*'.",
-            },
+            "path": {"type": "string"},
+            "glob": {"type": "string"},
             "max_results": {
                 "type": "integer",
-                "description": "Default 50, max 200.",
+                "description": "max 200.",
             },
         },
         ["pattern"],

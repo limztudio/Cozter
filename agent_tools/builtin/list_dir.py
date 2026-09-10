@@ -22,12 +22,10 @@ class ListDirTool(AgentTool):
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
-            "path": path_property(
-                "Default: workspace root.",
-            ),
+            "path": path_property(),
             "max_results": {
                 "type": "integer",
-                "description": "Default 200, max 1000.",
+                "description": "max 1000.",
             },
         },
     }

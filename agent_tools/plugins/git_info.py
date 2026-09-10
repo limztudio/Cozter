@@ -44,17 +44,14 @@ class GitInfoTool(AgentTool):
                 "type": "string",
                 "enum": list(_ACTIONS),
             },
-            "path": {
-                "type": "string",
-                "description": "Diff path scope.",
-            },
+            "path": {"type": "string"},
             "patch": {
                 "type": "boolean",
-                "description": "Full patch (diff only).",
+                "description": "Full patch.",
             },
             "limit": {
                 "type": "integer",
-                "description": "Default 10, max 50.",
+                "description": "max 50.",
             },
         },
         ["action"],

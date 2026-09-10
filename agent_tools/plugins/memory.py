@@ -190,13 +190,10 @@ class MemoryTool(AgentTool):
             "query": {
                 "type": "string",
             },
-            "session": {
-                "type": "string",
-                "description": "Name/id/prefix/'last'.",
-            },
+            "session": {"type": "string"},
             "limit": {
                 "type": "integer",
-                "description": "Default 8/20, max 20/100.",
+                "description": "max 20/100.",
             },
         },
         ["action"],

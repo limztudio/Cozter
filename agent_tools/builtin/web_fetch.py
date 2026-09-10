@@ -101,7 +101,7 @@ class WebFetchTool(AgentTool):
             "url": {"type": "string"},
             "max_chars": {
                 "type": "integer",
-                "description": "Default 12000.",
+                "description": "max 12000.",
             },
         },
         ["url"],
