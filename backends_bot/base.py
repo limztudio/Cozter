@@ -3415,7 +3415,7 @@ class BotPlatform(ABC):
         text = latest_text.strip()
         if text:
             if len(text) > 600:
-                text = "…" + text[-600:]
+                text = "… [preview] " + text[-600:]
             parts.append(text)
         return "\n\n".join(parts)
 
@@ -3639,7 +3639,7 @@ class BotPlatform(ABC):
         # name keeps the auto-title task from racing the delete.
         label = text.strip().splitlines()[0] if text.strip() else "scheduled"
         if len(label) > 40:
-            label = label[:40] + "…"
+            label = label[:40] + "… [clipped]"
         sess_data = session.create_session(ws, name=f"⏰ {label}")
         sid = sess_data["id"]
         try:

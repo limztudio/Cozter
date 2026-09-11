@@ -81,5 +81,17 @@ class AutoTitlingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(latest["name"], "Compaction Title")
 
 
+class CleanTitleTests(unittest.TestCase):
+    def test_long_title_clipped_with_visible_marker_in_budget(self) -> None:
+        title = titling.clean_title("word " * 40)
+        assert title is not None
+        self.assertIn("… [clipped]", title)
+        self.assertLessEqual(len(title), titling.TITLE_MAX_CHARS)
+
+    def test_short_title_untouched(self) -> None:
+        self.assertEqual(titling.clean_title("Short Topic"), "Short Topic")
+        self.assertIsNone(titling.clean_title("   "))
+
+
 if __name__ == "__main__":
     unittest.main()

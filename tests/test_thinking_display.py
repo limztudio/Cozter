@@ -30,7 +30,18 @@ class ThinkingDisplayTests(unittest.TestCase):
         out = BotPlatform._compose_thinking_display([], long)
         self.assertIn("TAIL", out)
         self.assertNotIn("HEAD", out)  # head dropped, tail kept
-        self.assertLessEqual(len(out), 700)
+        self.assertIn("… [preview]", out)  # visible cut marker, not bare "…"
+        self.assertLessEqual(len(out), 720)
+
+    def test_ephemeral_label_clip_has_visible_marker(self) -> None:
+        label = "x" * 60
+        clipped = label[:40] + "… [clipped]"
+        self.assertIn("[clipped]", clipped)
+
+    def test_short_id_clip_has_visible_marker(self) -> None:
+        from Cozter.backends_bot.signal import _short_id
+        self.assertIn("[clipped]", _short_id("x" * 40))
+        self.assertEqual(_short_id("short"), "short")
 
     def test_empty_is_just_thinking(self) -> None:
         self.assertEqual(BotPlatform._compose_thinking_display([], ""), "Thinking...")

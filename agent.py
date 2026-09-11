@@ -1260,7 +1260,11 @@ async def _run_flexible(
 
     logger.info(
         "Flexible plan: %s",
-        ", ".join(f"[{t.tier}] {t.instruction[:60]}" for t in plan.subtasks),
+        ", ".join(
+            f"[{t.tier}] {t.instruction[:60]}… [clipped]"
+            if len(t.instruction) > 60 else f"[{t.tier}] {t.instruction}"
+            for t in plan.subtasks
+        ),
     )
 
     # 2. Route each sub-task to the agent+model bound to its tier.

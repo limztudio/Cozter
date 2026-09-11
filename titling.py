@@ -32,7 +32,11 @@ _in_flight: set[tuple[str, str]] = set()
 
 
 def clean_title(raw: str) -> str | None:
-    """Trim a model-emitted title to a single short line."""
+    """Trim a model-emitted title to a single short line.
+
+    Longer titles are clipped with a visible marker rather than a bare
+    cut, so a stored title is never mistaken for the model's full text.
+    """
     stripped = raw.strip()
     if not stripped:
         return None
@@ -40,7 +44,8 @@ def clean_title(raw: str) -> str | None:
     if not line:
         return None
     if len(line) > TITLE_MAX_CHARS:
-        line = line[:TITLE_MAX_CHARS].rstrip()
+        marker = "… [clipped]"
+        line = line[:TITLE_MAX_CHARS - len(marker)].rstrip() + marker
     return line or None
 
 

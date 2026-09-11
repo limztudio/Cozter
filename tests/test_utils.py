@@ -101,6 +101,26 @@ class ProcessDrainTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_drain_text_stream_truncation_marks_partial(self) -> None:
+        async def run() -> None:
+            reader = asyncio.StreamReader()
+            reader.feed_data(b"y" * 100)
+            reader.feed_eof()
+            text = await utils.drain_text_stream(reader, limit=10)
+            self.assertIn("preview only", text)
+            self.assertIn("PARTIAL + remainder", text)
+
+        asyncio.run(run())
+
+    def test_drain_text_stream_short_output_unmarked(self) -> None:
+        async def run() -> None:
+            reader = asyncio.StreamReader()
+            reader.feed_data(b"ok")
+            reader.feed_eof()
+            self.assertEqual(await utils.drain_text_stream(reader), "ok")
+
+        asyncio.run(run())
+
     def test_drain_llm_subprocess_consumes_stderr_concurrently(self) -> None:
         async def run() -> None:
             script = (
