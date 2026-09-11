@@ -242,10 +242,14 @@ def _build_bounded_session_block(
         return ""
     # A session title helps the model retain topic context, but it cannot be
     # allowed to consume the space needed for the actual memory block.
+    # The name is only a display hint; mark a clip so the consolidation
+    # prompt never reads it as the full title.
     rendered_name = name[:min(name_space, 2_000)]
     if len(name) > len(rendered_name):
         rendered_name = (
-            rendered_name[:-1] + "…" if len(rendered_name) > 1 else "…"
+            rendered_name[:-1] + "… [name clipped]"
+            if len(rendered_name) > 1
+            else "… [name clipped]"
         )
     prefix = f"Session: {rendered_name}{header_suffix}"
     item_budget = budget - len(prefix) - len(closing)
@@ -265,7 +269,15 @@ def _build_bounded_session_block(
         if item_lines:
             body = "\n".join(item_lines) + "\n" + note
         else:
-            body = note[:max(0, item_budget)]
+            # No room for even one item line: keep a marked prefix of the
+            # truncation note (never a bare cut) so the prompt still shows
+            # that session input was omitted for budget.
+            clipped_note = note[:max(0, item_budget)]
+            body = (
+                clipped_note + "… [preview]"
+                if 0 < len(clipped_note) < len(note)
+                else clipped_note
+            )
     return prefix + (body + "\n" if body else "") + closing
 
 

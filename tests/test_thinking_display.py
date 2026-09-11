@@ -24,6 +24,7 @@ class ThinkingDisplayTests(unittest.TestCase):
         out = BotPlatform._compose_thinking_display(lines, "")
         self.assertIn("» step 7", out)
         self.assertNotIn("» step 0", out)  # oldest dropped
+        self.assertIn("… [3 older update(s) omitted — preview only]", out)
 
     def test_truncates_long_text_keeping_tail(self) -> None:
         long = "HEAD" + "b" * 1000 + "TAIL"

@@ -3411,6 +3411,11 @@ class BotPlatform(ABC):
         """
         parts = ["Thinking..."]
         if status_lines:
+            if len(status_lines) > 5:
+                parts.append(
+                    f"… [{len(status_lines) - 5} older update(s) omitted"
+                    " — preview only]",
+                )
             parts.append("\n".join(status_lines[-5:]))
         text = latest_text.strip()
         if text:
