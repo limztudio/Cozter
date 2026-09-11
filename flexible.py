@@ -106,6 +106,11 @@ _MERGE_RULES = (
     " the reports before claiming done.\n"
     "- Never claim full completion when any report is partial, missing, or"
     " failed: say what finished, what did not, and what remains.\n"
+    "- Doc/standard requests: check every rule/section in the plan is"
+    " covered by the reports; never accept first/last-few as full — say"
+    " PARTIAL + remainder when coverage is unclear.\n"
+    "- A report ending in [report truncated] is a preview, not full content;"
+    " never claim done from it.\n"
     "- User's language. No tool calls; work is done.\n"
 )
 
@@ -132,7 +137,10 @@ _MERGE_BLOCKED_RULE = (
 # every later worker plus the merge step. Cap each so N workers cost at
 # most N * cap instead of N * anything.
 _REPORT_MAX_CHARS = 6_000
-_REPORT_TRUNCATION_MARKER = "\n… [report truncated]"
+_REPORT_TRUNCATION_MARKER = (
+    "\n… [report truncated: remainder omitted — never treat this preview"
+    " as full content; say PARTIAL + remainder when coverage is unclear]"
+)
 
 
 def _truncate_report(text: str) -> str:

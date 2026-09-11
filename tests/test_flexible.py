@@ -691,5 +691,33 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(inject_q.closed)
 
 
+class CoveragePromptTests(unittest.TestCase):
+    def test_merge_checks_doc_rules_and_truncated_previews(self) -> None:
+        self.assertIn("every rule/section", flexible._MERGE_RULES)
+        self.assertIn("PARTIAL + remainder", flexible._MERGE_RULES)
+        self.assertIn("[report truncated]", flexible._MERGE_RULES)
+
+    def test_report_marker_warns_preview_not_full(self) -> None:
+        self.assertIn("never treat this preview", flexible._REPORT_TRUNCATION_MARKER)
+        self.assertIn("PARTIAL + remainder", flexible._REPORT_TRUNCATION_MARKER)
+
+    def test_discovery_tools_point_at_paging(self) -> None:
+        from Cozter.agent_tools.builtin import glob as glob_mod
+        from Cozter.agent_tools.builtin import grep as grep_mod
+        from Cozter.agent_tools.builtin import list_dir as list_dir_mod
+        from Cozter.agent_tools.builtin import read_file as read_file_mod
+        from Cozter.agent_tools.builtin import tree as tree_mod
+
+        for mod, name in (
+            (glob_mod, "GlobTool"), (grep_mod, "GrepTool"),
+            (tree_mod, "TreeTool"), (list_dir_mod, "ListDirTool"),
+            (read_file_mod, "ReadFileTool"),
+        ):
+            tool_cls = getattr(mod, name, None) or getattr(
+                mod, next(k for k in dir(mod) if k.endswith("Tool")),
+            )
+            self.assertIn("page", tool_cls.description.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

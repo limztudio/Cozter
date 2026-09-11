@@ -18,7 +18,7 @@ from ..base import (
 
 class ListDirTool(AgentTool):
     name = "list_dir"
-    description = "List a directory."
+    description = "List a directory (page remainder when truncated)."
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
@@ -56,7 +56,11 @@ class ListDirTool(AgentTool):
             return f"Directory is empty: {raw_path}"
 
         if entry_count > max_results:
-            lines.append(f"... ({entry_count - max_results} more entries)")
+            lines.append(
+                f"... ({entry_count - max_results} more entries;"
+                " remainder omitted — raise max_results to fetch the rest;"
+                " never treat this preview as full coverage)"
+            )
 
         return "\n".join(lines)
 

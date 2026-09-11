@@ -143,6 +143,45 @@ def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     return prompt[lower:]
 
 
+# Marker inserted when the argv cap forces middle context out. It keeps the
+# completeness rule visible so the model never mistakes a clipped preview
+# for full coverage.
+_ARGV_MIDDLE_DROPPED_MARKER = (
+    "\n… [Copilot argv cap: middle context dropped to fit; "
+    "head preamble kept — never treat this preview as full content; "
+    "re-check leftovers via tools, say PARTIAL + remainder]\n"
+)
+
+
+def _truncate_prompt_preserving_head(prompt: str, limit: int) -> str:
+    """Truncate *prompt* for argv while keeping the leading preamble.
+
+    The composed prompt is ``[System: preamble]\\n\\n<context+request>``. A
+    plain tail-slice drops the whole-scope/doc-following rule at the head,
+    so keep the first ``\\n\\n``-delimited block intact and take the tail
+    for the rest. Falls back to the plain tail-slice when there is no head
+    block or even head+marker+minimal tail cannot fit.
+    """
+    if _prompt_argv_units(prompt) <= limit:
+        return prompt
+    sep = "\n\n"
+    head, found, _rest = prompt.partition(sep)
+    if not found or not head.startswith("[System:"):
+        return _truncate_prompt_for_argv(prompt, limit)
+    head_with_sep = head + sep
+    if _prompt_argv_units(head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER) >= limit:
+        return _truncate_prompt_for_argv(prompt, limit)
+    lower, upper = 0, len(prompt)
+    while lower < upper:
+        middle = (lower + upper) // 2
+        candidate = head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[middle:]
+        if _prompt_argv_units(candidate) <= limit:
+            upper = middle
+        else:
+            lower = middle + 1
+    return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[lower:]
+
+
 def _create_isolated_copilot_home() -> str:
     """Create a short-lived Copilot home with just account metadata.
 
@@ -494,7 +533,7 @@ class CopilotBackend(Backend):
                 "dropping oldest context",
                 prompt_units, max_prompt_chars,
             )
-            prompt = _truncate_prompt_for_argv(prompt, max_prompt_chars)
+            prompt = _truncate_prompt_preserving_head(prompt, max_prompt_chars)
 
         prefix = executable_command(self.executable)
         cmd: list[str] = [

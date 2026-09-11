@@ -19,7 +19,7 @@ from ..base import (
 class TreeTool(AgentTool):
     name = "tree"
     order = 30  # group with the discovery tools (list_dir/glob/grep)
-    description = "Directory tree (dirs first)."
+    description = "Directory tree (dirs first; page remainder when truncated)."
     parameters = object_parameters(
         {
             "path": {"type": "string"},
@@ -50,7 +50,11 @@ class TreeTool(AgentTool):
         if not lines:
             return "(empty)"
         if truncated:
-            lines.append(f"... (truncated at {max_entries} entries)")
+            lines.append(
+                f"... (truncated at {max_entries} entries;"
+                " remainder omitted — raise max_entries to fetch the rest;"
+                " never treat this preview as full coverage)"
+            )
         return "\n".join(lines)
 
     def _walk(

@@ -548,7 +548,15 @@ def _collect_new_attachment_images(
 # Contextual prompt building
 # ------------------------------------------------------------------
 
-_CONTEXT_TRUNCATION_MARKER = "\n… [truncated]"
+_CONTEXT_TRUNCATION_MARKER = (
+    "\n… [truncated to fit budget; older context omitted — never treat"
+    " this preview as full content; re-check leftovers via tools]"
+)
+
+_PLANNER_OMISSION_MARKER = (
+    "\n… [middle context omitted for 12k planner cap; plan must still cover"
+    " every item/rule — prefer enumerated targets]\n"
+)
 
 
 def _truncate_context_text(text: str, limit: int) -> str:
@@ -662,12 +670,12 @@ def _planner_context(contextual_prompt: str, request: str) -> str:
     if len(contextual_prompt) <= _PLANNER_CONTEXT_CAP:
         return contextual_prompt
     tail_reserve = min(len(request) + 200, _PLANNER_CONTEXT_CAP // 2)
-    head_budget = _PLANNER_CONTEXT_CAP - tail_reserve - 3
+    head_budget = _PLANNER_CONTEXT_CAP - tail_reserve - len(_PLANNER_OMISSION_MARKER)
     head = contextual_prompt[:max(0, head_budget)]
     tail = contextual_prompt[len(contextual_prompt) - tail_reserve:]
     if request and request not in tail:
-        return head + "\n…\n" + request
-    return head + "\n…\n" + tail
+        return head + _PLANNER_OMISSION_MARKER + request
+    return head + _PLANNER_OMISSION_MARKER + tail
 
 
 def _build_contextual_prompt(

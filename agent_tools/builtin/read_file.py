@@ -37,7 +37,7 @@ class _OffsetScanLimitExceeded(Exception):
 
 class ReadFileTool(AgentTool):
     name = "read_file"
-    description = "Read a UTF-8 text file (128 KiB/call)."
+    description = "Read a UTF-8 text file (128 KiB/call; page remainder via offset/limit)."
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "path": path_property(),

@@ -87,7 +87,7 @@ class ContextBudgetTests(unittest.TestCase):
         self.assertIn("[Colony]", out)
         self.assertIn("[Long-term Memory]", out)
         self.assertIn("[Session Summary]", out)
-        self.assertIn("… [truncated]", out)
+        self.assertIn("… [truncated to fit budget;", out)
 
     def test_continuation_overhead_does_not_exceed_history_budget(self) -> None:
         """Drop saved context when its wrapper would overflow a fitting prompt."""
@@ -375,6 +375,36 @@ class FormatUsageTests(unittest.TestCase):
         assert footer is not None
         self.assertIn("500 in", footer)
         self.assertNotIn("$", footer)
+
+
+class TruncationHonestyTests(unittest.TestCase):
+    def test_context_marker_warns_preview_not_full_content(self) -> None:
+        self.assertIn("never treat", agent._CONTEXT_TRUNCATION_MARKER)
+        self.assertIn("re-check leftovers", agent._CONTEXT_TRUNCATION_MARKER)
+
+    def test_tool_result_cap_points_at_paging(self) -> None:
+        from Cozter import agent_tools
+
+        async def run() -> str:
+            return await agent_tools.execute_tool(
+                "read_file", {"path": "nope.txt"}, "auto", "/tmp",
+                emit=None,
+            )
+
+        _ = run  # schema-level check below instead of live execution
+        import inspect
+
+        src = inspect.getsource(agent_tools.execute_tool)
+        self.assertIn("page until no truncation marker remains", src)
+        self.assertIn("PARTIAL + remainder", src)
+
+    def test_planner_omission_marker_forces_coverage(self) -> None:
+        big = "history line\n" * 2_000
+        request = "the actual user request"
+        out = agent._planner_context(big + request, request)
+        self.assertLessEqual(len(out), agent._PLANNER_CONTEXT_CAP)
+        self.assertIn(request, out)
+        self.assertIn("every item/rule", out)
 
 
 if __name__ == "__main__":

@@ -1718,6 +1718,20 @@ class CopilotPromptCapTests(unittest.TestCase):
                 len(quoted.encode("utf-16-le")) // 2,
             )
 
+    def test_argv_truncation_preserves_head_preamble(self) -> None:
+        head = "[System: Whole-scope rule]\n\n"
+        body = "ctx\n" * 20_000 + "FINAL REQUEST"
+        out = copilot_mod._truncate_prompt_preserving_head(
+            head + body, copilot_mod._WINDOWS_PROMPT_CHARS,
+        )
+        self.assertTrue(out.startswith(head))
+        self.assertIn("FINAL REQUEST", out)
+        self.assertIn("never treat this preview as full content", out)
+        self.assertLessEqual(
+            copilot_mod._prompt_argv_units(out),
+            copilot_mod._WINDOWS_PROMPT_CHARS,
+        )
+
 
 class BackendHealthCheckTests(unittest.TestCase):
     def _dummy(self, executable: str) -> _DummyBackend:

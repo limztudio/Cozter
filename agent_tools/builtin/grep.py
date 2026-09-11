@@ -39,7 +39,7 @@ class _GrepScanTimeout(RuntimeError):
 
 class GrepTool(AgentTool):
     name = "grep"
-    description = "Regex-search files (`path:lineno: line`)."
+    description = "Regex-search files (`path:lineno: line`; page remainder when truncated)."
     parameters = object_parameters(
         {
             "pattern": {
@@ -107,7 +107,12 @@ class GrepTool(AgentTool):
 
         summary = "\n".join(results)
         if len(results) >= max_results:
-            summary += f"\n(stopped at {max_results} matches)"
+            summary += (
+                f"\n(stopped at {max_results} matches;"
+                " remainder omitted — raise max_results / narrow path/glob"
+                " to fetch the rest; never treat this preview as full"
+                " coverage)"
+            )
         return summary
 
     @staticmethod

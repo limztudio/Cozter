@@ -17,7 +17,7 @@ from ..base import (
 
 class GlobTool(AgentTool):
     name = "glob"
-    description = "Find files by glob (`**` recurses)."
+    description = "Find files by glob (`**` recurses; page remainder when truncated)."
     parameters = object_parameters(
         {
             "pattern": {"type": "string"},
@@ -57,7 +57,12 @@ class GlobTool(AgentTool):
         matches.sort()
         summary = "\n".join(matches)
         if len(matches) >= max_results:
-            summary += f"\n(stopped at {max_results} matches)"
+            summary += (
+                f"\n(stopped at {max_results} matches;"
+                " remainder omitted — raise max_results / narrow pattern"
+                " to fetch the rest; never treat this preview as full"
+                " coverage)"
+            )
         return summary
 
     @staticmethod
