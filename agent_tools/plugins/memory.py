@@ -351,7 +351,7 @@ class MemoryTool(AgentTool):
         )
         lines = [
             f"{shown_from + offset}. {msg['role'].capitalize()}:"
-            f" {msg['content'][:_LINE_CAP]}"
+            f" {msg['content'][:_LINE_CAP - len('… [line clipped]')]}"
             + ("… [line clipped]" if len(msg["content"]) > _LINE_CAP else "")
             for offset, msg in enumerate(window)
         ]

@@ -153,6 +153,30 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(flexible_mod._REPORT_TRUNCATION_MARKER, out)
         self.assertEqual(flexible_mod._truncate_report("hi"), "hi")
 
+    def test_status_clips_reserve_marker_inside_budget(self) -> None:
+        from Cozter.agent_tools import base as tools_base
+        from Cozter.agent_tools.plugins import git_info as git_info_mod
+        from Cozter.backends_agent import base as agent_base
+
+        for clip in (
+            tools_base._clip_status_value,
+            agent_base._clip_status_value,
+        ):
+            out = clip("x" * 300)
+            self.assertLessEqual(len(out), 200)
+            self.assertIn("… [clipped]", out)
+        arg_out = tools_base.summarize_arg(
+            "grep", {"pattern": "a" * 300}, "pattern",
+        )
+        arg_val = arg_out.split("grep: ", 1)[1]
+        self.assertLessEqual(len(arg_val), 200)
+        self.assertIn("… [clipped]", arg_val)
+        self.assertLessEqual(
+            len(git_info_mod._bounded("y" * 13_000)),
+            git_info_mod._MAX_OUTPUT_CHARS,
+        )
+        self.assertIn("… [truncated", git_info_mod._bounded("y" * 13_000))
+
     def test_router_preview_never_exceeds_preview_chars(self) -> None:
         from Cozter import router as router_mod
 

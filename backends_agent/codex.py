@@ -127,7 +127,7 @@ def _stderr_preview(value: str | bytes | None) -> str:
         value = value.decode("utf-8", errors="replace")
     cleaned = (value or "").strip()
     if len(cleaned) > 200:
-        return cleaned[:200] + "… [clipped]"
+        return cleaned[:200 - len("… [clipped]")] + "… [clipped]"
     return cleaned
 
 

@@ -108,7 +108,7 @@ class GitInfoTool(AgentTool):
             clipped_err = stderr.strip()
             if len(clipped_err) > _MAX_GIT_ERROR_CHARS:
                 clipped_err = (
-                    clipped_err[:_MAX_GIT_ERROR_CHARS]
+                    clipped_err[:_MAX_GIT_ERROR_CHARS - len("… [stderr clipped]")]
                     + "… [stderr clipped]"
                 )
             text += f"\n\ngit said:\n{clipped_err}"
@@ -160,7 +160,8 @@ class GitInfoTool(AgentTool):
             raw_detail = first_line[0] if first_line else "?"
             if len(raw_detail) > _MAX_GIT_ERROR_CHARS:
                 raw_detail = (
-                    raw_detail[:_MAX_GIT_ERROR_CHARS] + "… [clipped]"
+                    raw_detail[:_MAX_GIT_ERROR_CHARS - len("… [clipped]")]
+                    + "… [clipped]"
                 )
             detail = raw_detail
             raise _GitFailed(detail or "?")
@@ -212,12 +213,14 @@ async def _git_once(
 def _bounded(text: str) -> str:
     if len(text) <= _MAX_OUTPUT_CHARS:
         return text
-    return (
-        text[:_MAX_OUTPUT_CHARS]
-        + f"\n… [truncated, {len(text)} chars total;"
+    _suffix = (
+        f"\n… [truncated, {len(text)} chars total;"
         " never treat this preview as full content;"
         " say PARTIAL + remainder when coverage is unclear]"
     )
+    if _MAX_OUTPUT_CHARS <= len(_suffix):
+        return text[:max(0, _MAX_OUTPUT_CHARS - 1)] + "…" if _MAX_OUTPUT_CHARS > 1 else "…"[:_MAX_OUTPUT_CHARS]
+    return text[:_MAX_OUTPUT_CHARS - len(_suffix)] + _suffix
 
 
 if __name__ == "__main__":

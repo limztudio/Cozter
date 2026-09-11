@@ -1261,7 +1261,7 @@ async def _run_flexible(
     logger.info(
         "Flexible plan: %s",
         ", ".join(
-            f"[{t.tier}] {t.instruction[:60]}… [clipped]"
+            f"[{t.tier}] {t.instruction[:60 - len('… [clipped]')]}… [clipped]"
             if len(t.instruction) > 60 else f"[{t.tier}] {t.instruction}"
             for t in plan.subtasks
         ),

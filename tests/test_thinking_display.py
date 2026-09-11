@@ -41,7 +41,9 @@ class ThinkingDisplayTests(unittest.TestCase):
 
     def test_short_id_clip_has_visible_marker(self) -> None:
         from Cozter.backends_bot.signal import _short_id
-        self.assertIn("[clipped]", _short_id("x" * 40))
+        clipped = _short_id("x" * 40)
+        self.assertIn("…", clipped)
+        self.assertLessEqual(len(clipped), 12)
         self.assertEqual(_short_id("short"), "short")
 
     def test_empty_is_just_thinking(self) -> None:

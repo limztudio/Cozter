@@ -743,7 +743,7 @@ class ClaudeCodeBackend(Backend):
         try:
             sessions = json.loads(stdout)
         except json.JSONDecodeError:
-            preview = stdout[:200]
+            preview = stdout[:200 - len("… [clipped]")]
             if len(stdout) > 200:
                 preview += "… [clipped]"
             logger.warning(

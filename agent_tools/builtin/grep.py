@@ -151,8 +151,9 @@ class GrepTool(AgentTool):
                     display_line = line
                     if len(line) > _GREP_MAX_LINE_CHARS:
                         display_line = (
-                            line[:_GREP_MAX_LINE_CHARS] + "… [line clipped]"
-                        )
+                        line[:_GREP_MAX_LINE_CHARS - len("… [line clipped]")]
+                        + "… [line clipped]"
+                    )
                     results.append(f"{rel}:{lineno}: {display_line}")
                     if len(results) >= max_results:
                         return results

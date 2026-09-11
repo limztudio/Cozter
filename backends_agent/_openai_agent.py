@@ -794,7 +794,7 @@ async def _post_completion_stream(
         ) as resp:
             if resp.status == 429 or resp.status >= 500:
                 body = await _read_error_body(resp)
-                clipped = body[:200] + (
+                clipped = body[:200 - len("… [clipped]")] + (
                     "… [clipped]" if len(body) > 200 else ""
                 )
                 raise _RetryableError(
@@ -805,7 +805,7 @@ async def _post_completion_stream(
                 )
             if resp.status != 200:
                 body = await _read_error_body(resp)
-                clipped = body[:500] + (
+                clipped = body[:500 - len("… [clipped]")] + (
                     "… [clipped]" if len(body) > 500 else ""
                 )
                 raise RuntimeError(
@@ -834,7 +834,7 @@ async def _post_completion_stream(
                     )
                     if not isinstance(message, str) or not message.strip():
                         message = str(error)
-                    clipped_message = message.strip()[:500] + (
+                    clipped_message = message.strip()[:500 - len("… [clipped]")] + (
                         "… [clipped]"
                         if len(message.strip()) > 500 else ""
                     )

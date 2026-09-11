@@ -406,9 +406,12 @@ def prepare_source_destination(
 def _clip_status_value(value: object, max_chars: int = 200) -> str:
     """Return a status-line preview with a visible cut marker when clipped."""
     text = value if isinstance(value, str) else str(value)
-    return text[:max_chars] + (
-        "… [clipped]" if len(text) > max_chars else ""
-    )
+    if len(text) <= max_chars:
+        return text
+    _marker = "… [clipped]"
+    if max_chars <= len(_marker):
+        return text[:max(0, max_chars - 1)] + "…" if max_chars > 1 else "…"[:max_chars]
+    return text[:max_chars - len(_marker)] + _marker
 
 
 def summarize_path(action: str, args: dict, default: str = "?") -> str:
@@ -433,9 +436,12 @@ def summarize_arg(
     value = args.get(key, default)
     if not isinstance(value, str):
         value = str(value)
-    return f"{action}: {value[:max_chars]}" + (
-        "… [clipped]" if len(value) > max_chars else ""
-    )
+    if len(value) <= max_chars:
+        return f"{action}: {value}"
+    _marker = "… [clipped]"
+    if max_chars <= len(_marker):
+        return f"{action}: {value[:max(0, max_chars - 1)]}…" if max_chars > 1 else f"{action}: {'…'[:max_chars]}"
+    return f"{action}: {value[:max_chars - len(_marker)]}{_marker}"
 
 
 def iter_workspace_files(

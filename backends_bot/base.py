@@ -3420,7 +3420,8 @@ class BotPlatform(ABC):
         text = latest_text.strip()
         if text:
             if len(text) > 600:
-                text = "… [preview] " + text[-600:]
+                _marker = "… [preview] "
+                text = _marker + text[-(600 - len(_marker)):]
             parts.append(text)
         return "\n\n".join(parts)
 
@@ -3486,13 +3487,13 @@ class BotPlatform(ABC):
             elif ev.kind == "tool":
                 first_line = ev.content.split(chr(10))[0]
                 clipped = (
-                    first_line[:80] + "… [clipped]"
+                    first_line[:80 - len("… [clipped]")] + "… [clipped]"
                     if len(first_line) > 80 else first_line
                 )
                 status_lines.append(f"» {clipped}")
             elif ev.kind == "file":
                 clipped = (
-                    ev.content[:80] + "… [clipped]"
+                    ev.content[:80 - len("… [clipped]")] + "… [clipped]"
                     if len(ev.content) > 80 else ev.content
                 )
                 status_lines.append(f"» {clipped}")
@@ -3644,7 +3645,7 @@ class BotPlatform(ABC):
         # name keeps the auto-title task from racing the delete.
         label = text.strip().splitlines()[0] if text.strip() else "scheduled"
         if len(label) > 40:
-            label = label[:40] + "… [clipped]"
+            label = label[:40 - len("… [clipped]")] + "… [clipped]"
         sess_data = session.create_session(ws, name=f"⏰ {label}")
         sid = sess_data["id"]
         try:

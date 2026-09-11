@@ -1416,7 +1416,7 @@ def _incoming_dedupe_key(
 
 
 def _short_id(value: str) -> str:
-    return value if len(value) <= 12 else f"{value[:8]}… [clipped]"
+    return value if len(value) <= 12 else value[:11] + "…"
 
 
 def _dedupe_group_urls(group_urls: list[str]) -> list[str]:

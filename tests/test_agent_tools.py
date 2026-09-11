@@ -72,25 +72,27 @@ class AgentToolHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             summarize_arg("grep", {"pattern": "a" * 201}, "pattern"),
-            "grep: " + ("a" * 200) + "… [clipped]",
+            "grep: " + ("a" * (200 - len("… [clipped]"))) + "… [clipped]",
         )
 
     def test_status_summaries_bound_paths_and_values(self) -> None:
+        _marker = "… [clipped]"
+        _keep = 200 - len(_marker)
         self.assertEqual(
             summarize_path("read_file", {"path": "p" * 300}),
-            "read_file: " + "p" * 200 + "… [clipped]",
+            "read_file: " + "p" * _keep + _marker,
         )
         self.assertEqual(
             summarize_path_pair(
                 "copy_file",
                 {"source": "s" * 300, "destination": "d" * 300},
             ),
-            "copy_file: " + "s" * 200 + "… [clipped]"
-            + " -> " + "d" * 200 + "… [clipped]",
+            "copy_file: " + "s" * _keep + _marker
+            + " -> " + "d" * _keep + _marker,
         )
         self.assertEqual(_clip_status_value("ok"), "ok")
         self.assertEqual(
-            _clip_status_value("x" * 201), "x" * 200 + "… [clipped]",
+            _clip_status_value("x" * 201), "x" * _keep + _marker,
         )
 
     def test_read_file_rejects_non_finite_range_values(self) -> None:

@@ -159,12 +159,15 @@ class WebFetchTool(AgentTool):
         text = text.strip()
 
         if len(text) > max_chars:
-            text = (
-                text[:max_chars]
-                + f"\n… [truncated, {len(text)} chars total;"
+            _suffix = (
+                f"\n… [truncated, {len(text)} chars total;"
                 " never treat this preview as full content; say PARTIAL"
                 " + remainder when coverage is unclear]"
             )
+            if max_chars <= len(_suffix):
+                text = text[:max(0, max_chars - 1)] + "…" if max_chars > 1 else "…"[:max_chars]
+            else:
+                text = text[:max_chars - len(_suffix)] + _suffix
 
         header = f"URL: {final_url}"
         if title:

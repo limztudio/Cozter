@@ -343,14 +343,20 @@ async def execute_tool(
             result = f"Tool {name} failed: {exc}"
 
     if len(result) > _TOOL_RESULT_MAX:
-        result = (
-            result[:_TOOL_RESULT_MAX]
-            + f"\n… [{len(result)} chars total; truncated —"
-              " use read_file offset/limit or grep to fetch remainder"
-              " (page until no truncation marker remains);"
-              " never treat this preview as full content;"
-              " say PARTIAL + remainder when work is left]"
+        _suffix = (
+            f"\n… [{len(result)} chars total; truncated —"
+            " use read_file offset/limit or grep to fetch remainder"
+            " (page until no truncation marker remains);"
+            " never treat this preview as full content;"
+            " say PARTIAL + remainder when work is left]"
         )
+        if _TOOL_RESULT_MAX <= len(_suffix):
+            result = (
+                "…"[:_TOOL_RESULT_MAX] if _TOOL_RESULT_MAX <= 1
+                else result[:_TOOL_RESULT_MAX - 1] + "…"
+            )
+        else:
+            result = result[:_TOOL_RESULT_MAX - len(_suffix)] + _suffix
 
     return _emit_tool_result(emit, name, result)
 
