@@ -156,14 +156,16 @@ def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     # context are at the head. Dropping them is a preview, never full
     # coverage — mark it so the model says PARTIAL + remainder.
     marker = "… [older prompt context dropped to fit argv cap — preview only]"
-    if limit <= len(marker):
+    if _prompt_argv_units(marker) >= limit:
         # Too tight for the full marker: keep a visible cut indicator
         # so the preview is never mistaken for full content.
         if limit <= 1:
             return "…"[:limit]
-        tail, _ = _truncate_utf8_tail(prompt, limit - 1)
+        tail, _ = _truncate_utf8_tail(prompt, limit - _prompt_argv_units("…"))
         return tail + "…"
-    tail, truncated = _truncate_utf8_tail(prompt, limit - len(marker))
+    tail, truncated = _truncate_utf8_tail(
+        prompt, limit - _prompt_argv_units(marker),
+    )
     return tail + marker if truncated else tail
 
 
