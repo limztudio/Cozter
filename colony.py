@@ -246,11 +246,16 @@ def _build_bounded_session_block(
     # prompt never reads it as the full title.
     rendered_name = name[:min(name_space, 2_000)]
     if len(name) > len(rendered_name):
-        rendered_name = (
-            rendered_name[:-1] + "… [name clipped]"
-            if len(rendered_name) > 1
-            else "… [name clipped]"
-        )
+        marker = "… [name clipped]"
+        if len(rendered_name) <= len(marker):
+            rendered_name = (
+                rendered_name[:max(0, len(rendered_name) - 1)] + "…"
+                if rendered_name else "…"
+            )
+        else:
+            rendered_name = (
+                rendered_name[:len(rendered_name) - len(marker)] + marker
+            )
     prefix = f"Session: {rendered_name}{header_suffix}"
     item_budget = budget - len(prefix) - len(closing)
     if item_budget < 0:
@@ -272,12 +277,19 @@ def _build_bounded_session_block(
             # No room for even one item line: keep a marked prefix of the
             # truncation note (never a bare cut) so the prompt still shows
             # that session input was omitted for budget.
-            clipped_note = note[:max(0, item_budget)]
-            body = (
-                clipped_note + "… [preview]"
-                if 0 < len(clipped_note) < len(note)
-                else clipped_note
-            )
+            suffix = "… [preview]"
+            if item_budget <= 0:
+                body = ""
+            elif item_budget <= len(suffix):
+                body = (
+                    note[:item_budget - 1] + "…"
+                    if item_budget > 1
+                    else "…"[:item_budget]
+                )
+            elif item_budget < len(note):
+                body = note[:item_budget - len(suffix)] + suffix
+            else:
+                body = note
     return prefix + (body + "\n" if body else "") + closing
 
 

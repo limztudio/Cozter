@@ -87,10 +87,14 @@ def _build_router_prompt(
     parts: list[str] = ["User message:"]
     preview = prompt.strip()
     if len(preview) > ROUTER_PROMPT_PREVIEW_CHARS:
-        preview = (
-            preview[:ROUTER_PROMPT_PREVIEW_CHARS]
-            + "… [message preview truncated]"
-        )
+        marker = "… [message preview truncated]"
+        if ROUTER_PROMPT_PREVIEW_CHARS <= len(marker):
+            preview = preview[:max(0, ROUTER_PROMPT_PREVIEW_CHARS - 1)] + "…"
+        else:
+            preview = (
+                preview[:ROUTER_PROMPT_PREVIEW_CHARS - len(marker)]
+                + marker
+            )
     parts.append(preview)
     parts.append("")
     shown_total = total_sessions if total_sessions is not None else len(sessions_data)

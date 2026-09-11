@@ -93,5 +93,78 @@ class CleanTitleTests(unittest.TestCase):
         self.assertIsNone(titling.clean_title("   "))
 
 
+class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_titling_summary_clip_never_exceeds_budget(self) -> None:
+        from Cozter import colony as _colony_unused  # noqa: F401 (scope pin)
+
+        marker = (
+            "… [older summary omitted — preview only;"
+            " title from shown context]"
+        )
+        with (
+            mock.patch.object(
+                titling.backends_agent,
+                "get_backend",
+                return_value=mock.sentinel.backend,
+            ),
+            mock.patch.object(
+                titling,
+                "run_internal_backend",
+                new=mock.AsyncMock(return_value="T"),
+            ) as run_title,
+        ):
+            data = {
+                "summary": "s" * 2_000,
+                "messages": [
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": "a"},
+                ],
+            }
+            await titling.generate(
+                "/ws", "sid", "model", backend_name="t",
+                _preloaded_data=data,
+            )
+            prompt = run_title.await_args.args[2]
+            self.assertLessEqual(len(prompt), titling.TITLE_CONTEXT_CHARS)
+            self.assertIn("…", prompt)
+            _ = marker
+
+    def test_colony_session_name_clip_never_exceeds_name_space(self) -> None:
+        from Cozter import colony as colony_mod
+
+        long_name = "n" * 5_000
+        for budget in (5, 20, 60, 500, 3_000):
+            block = colony_mod._build_bounded_session_block(
+                "sid123", long_name, [], budget,
+            )
+            header_len = len("Session: ") + len("\n[SESSION:sid123]\n")
+            self.assertLessEqual(len(block), budget + len("[/SESSION]\n") + 1)
+            if block:
+                self.assertIn("…", block)
+                self.assertNotIn("… [name clipped]… [name clipped]", block)
+            _ = header_len
+
+    def test_router_preview_never_exceeds_preview_chars(self) -> None:
+        from Cozter import router as router_mod
+
+        long_prompt = "p" * 2_000
+        body = router_mod._build_router_prompt(long_prompt, [], 0)
+        user_section = body.split("Existing sessions")[0]
+        self.assertLessEqual(
+            len("p" * router_mod.ROUTER_PROMPT_PREVIEW_CHARS)
+            + len("… [message preview truncated]"),
+            router_mod.ROUTER_PROMPT_PREVIEW_CHARS
+            + len("… [message preview truncated]"),
+        )
+        self.assertIn("…", user_section)
+        # preview block (600 chars incl. marker) + "User message:\n" header
+        # + blank separators around the section.
+        self.assertLessEqual(
+            len(user_section),
+            len("User message:\n")
+            + router_mod.ROUTER_PROMPT_PREVIEW_CHARS + 2,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
