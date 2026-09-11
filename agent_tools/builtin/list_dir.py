@@ -57,7 +57,7 @@ class ListDirTool(AgentTool):
 
         if entry_count > max_results:
             lines.append(
-                f"... ({entry_count - max_results} more entries;"
+                f"… ({entry_count - max_results} more entries;"
                 " remainder omitted — raise max_results to fetch the rest;"
                 " never treat this preview as full coverage; say PARTIAL"
                 " + remainder when coverage is unclear)"
