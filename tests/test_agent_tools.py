@@ -672,7 +672,9 @@ class ReadFileToolTests(unittest.TestCase):
                 self.assertEqual(
                     result,
                     "abcdefgh\n... [truncated at 8 characters; use offset"
-                    " and limit to read another range]",
+                    " and limit to read another range; never treat"
+                    " this preview as full content; say PARTIAL + remainder"
+                    " when work is left]",
                 )
 
         asyncio.run(run())

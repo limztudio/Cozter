@@ -550,7 +550,8 @@ def _collect_new_attachment_images(
 
 _CONTEXT_TRUNCATION_MARKER = (
     "\n… [truncated to fit budget; older context omitted — never treat"
-    " this preview as full content; re-check leftovers via tools]"
+    " this preview as full content; re-check leftovers via tools;"
+    " say PARTIAL + remainder when coverage is unclear]"
 )
 
 _PLANNER_OMISSION_MARKER = (

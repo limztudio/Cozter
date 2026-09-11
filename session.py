@@ -222,7 +222,11 @@ def format_msg_line(msg: dict, cap: int | None = MSG_CONTENT_MAX) -> str:
     role = role.capitalize()
     content = _safe_text(msg.get("content"))
     if cap is not None and len(content) > cap:
-        content = content[:cap] + f"… [truncated {len(content)} chars total]"
+        content = content[:cap] + (
+            f"… [truncated {len(content)} chars total;"
+            " never treat this preview as full content; say PARTIAL"
+            " + remainder when coverage is unclear]"
+        )
     return f"{role}: {content}"
 
 

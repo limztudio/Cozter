@@ -61,7 +61,8 @@ class GlobTool(AgentTool):
                 f"\n(stopped at {max_results} matches;"
                 " remainder omitted — raise max_results / narrow pattern"
                 " to fetch the rest; never treat this preview as full"
-                " coverage)"
+                " coverage; say PARTIAL + remainder when coverage is"
+                " unclear)"
             )
         return summary
 

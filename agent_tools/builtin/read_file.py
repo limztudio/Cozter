@@ -85,7 +85,9 @@ class ReadFileTool(AgentTool):
         if truncated:
             text += (
                 f"\n... [truncated at {_READ_FILE_MAX_CHARS} characters;"
-                " use offset and limit to read another range]"
+                " use offset and limit to read another range; never treat"
+                " this preview as full content; say PARTIAL + remainder"
+                " when work is left]"
             )
         return text
 

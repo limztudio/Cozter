@@ -109,7 +109,8 @@ class BashTool(AgentTool):
         if truncated:
             note = (
                 f"\n... [output truncated at {_BASH_MAX_OUTPUT_BYTES} bytes;"
-                " command killed]"
+                " command killed; never treat this preview as full content;"
+                " say PARTIAL + remainder when work is left]"
             )
             return (output + note) if output else note.lstrip()
         rc = proc.returncode

@@ -53,7 +53,8 @@ class TreeTool(AgentTool):
             lines.append(
                 f"... (truncated at {max_entries} entries;"
                 " remainder omitted — raise max_entries to fetch the rest;"
-                " never treat this preview as full coverage)"
+                " never treat this preview as full coverage; say PARTIAL"
+                " + remainder when coverage is unclear)"
             )
         return "\n".join(lines)
 
