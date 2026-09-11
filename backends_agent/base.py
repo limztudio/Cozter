@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..utils import (
+    clip_status_value,
     close_subprocess_pipe,
     has_managed_process_group,
     kill_and_wait,
@@ -435,13 +436,7 @@ _TRUNCATED_PREVIEW_SUFFIX = "… [truncated preview — say PARTIAL + remainder]
 
 def _clip_status_value(value: object, max_chars: int = 200) -> str:
     """Return a status-line preview with a visible cut marker when clipped."""
-    text = value if isinstance(value, str) else str(value)
-    if len(text) <= max_chars:
-        return text
-    _marker = "… [clipped]"
-    if max_chars <= len(_marker):
-        return text[:max(0, max_chars - 1)] + "…" if max_chars > 1 else "…"[:max_chars]
-    return text[:max_chars - len(_marker)] + _marker
+    return clip_status_value(value, max_chars)
 
 
 def truncate_status_text(text: object, *, limit: int = 200) -> str:

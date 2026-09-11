@@ -87,6 +87,17 @@ def parse_decimal_int(value: object) -> int | None:
     return try_parse_int(value)
 
 
+def clip_status_value(value: object, max_chars: int = 200) -> str:
+    """Return a status-line preview with a visible cut marker when clipped."""
+    text = value if isinstance(value, str) else str(value)
+    if len(text) <= max_chars:
+        return text
+    _marker = "… [clipped]"
+    if max_chars <= len(_marker):
+        return text[:max(0, max_chars - 1)] + "…" if max_chars > 1 else "…"[:max_chars]
+    return text[:max_chars - len(_marker)] + _marker
+
+
 def drain_queue(
     q: asyncio.Queue | None, collect: list | None = None,
 ) -> None:
