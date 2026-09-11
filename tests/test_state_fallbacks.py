@@ -619,6 +619,23 @@ class ColonyStateFallbackTests(unittest.TestCase):
             self.assertEqual(colony.get_compact_count(tmp), 0)
             self.assertEqual(colony.bump_compact_count(tmp), 1)
 
+    def test_colony_load_caps_like_set_items_newest_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            with open(
+                os.path.join(tmp, ".cozter", "colony.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({
+                    "items": [f"i{i}" for i in range(150)],
+                    "compact_count": 0,
+                }, f)
+            got = colony.get_items(tmp)
+            self.assertEqual(len(got), colony.COLONY_CAP)
+            self.assertEqual(got[0], "i50")
+            self.assertEqual(got[-1], "i149")
+
 
 class ConfigFallbackTests(unittest.TestCase):
     def test_boolean_config_values_do_not_count_as_positive_ints(self) -> None:

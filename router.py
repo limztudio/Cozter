@@ -34,7 +34,9 @@ def _truncate_router_text(text: str, limit: int) -> str:
         return "…"[:limit]
     marker = "… [truncated preview]"
     if limit <= len(marker):
-        return text[:limit]
+        # Too tight for the full marker: keep a visible cut
+        # indicator rather than a silent prefix.
+        return text[:limit - 1] + "…" if limit > 1 else "…"[:limit]
     return text[:limit - len(marker)] + marker
 
 
@@ -63,13 +65,18 @@ def _build_session_block(data: dict) -> str:
         )
     long_term = data.get("long_term")
     if isinstance(long_term, list):
+        str_items = [i for i in long_term if isinstance(i, str) and i]
         items = [
             _truncate_router_text(item, ROUTER_PER_SESSION_CHARS)
-            for item in long_term[:5]
-            if isinstance(item, str) and item
+            for item in str_items[:5]
         ]
         if items:
             block.append("long-term: " + "; ".join(items))
+            if len(str_items) > 5:
+                block.append(
+                    f"… [{len(str_items) - 5} more long-term item(s)"
+                    " omitted — preview only]"
+                )
     return _truncate_router_text("\n".join(block), ROUTER_PER_SESSION_CHARS)
 
 

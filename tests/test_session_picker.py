@@ -72,6 +72,22 @@ class SessionPickerTests(unittest.TestCase):
         self.assertIn("[truncated preview]", block)
         self.assertIn("truncated previews", router.ROUTER_PROMPT)
 
+    def test_router_tiny_budget_keeps_visible_cut(self) -> None:
+        out = router._truncate_router_text("N" * 5_000, 10)
+        self.assertLessEqual(len(out), 10)
+        self.assertIn("…", out)
+
+    def test_router_long_term_overflow_is_marked(self) -> None:
+        block = router._build_session_block({
+            "id": "sid",
+            "name": "n",
+            "summary": "",
+            "long_term": [f"L{i}" for i in range(8)],
+        })
+        self.assertLessEqual(len(block), router.ROUTER_PER_SESSION_CHARS)
+        self.assertIn("more long-term item(s)", block)
+        self.assertIn("preview only", block)
+
 
 if __name__ == "__main__":
     unittest.main()

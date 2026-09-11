@@ -51,7 +51,17 @@ def _path(workspace: str) -> str:
 def _load(workspace: str) -> dict:
     data = load_json_object(_path(workspace), "colony file", logger)
     items = data.get("items")
-    data["items"] = normalize_string_list(items)[:COLONY_CAP]
+    cleaned = normalize_string_list(items)
+    if len(cleaned) > COLONY_CAP:
+        # Match set_items: keep the newest entries and log the drop
+        # rather than silently keeping the oldest.
+        dropped = len(cleaned) - COLONY_CAP
+        logger.warning(
+            "Colony exceeds cap (%d); dropping %d oldest item(s)",
+            COLONY_CAP, dropped,
+        )
+        cleaned = cleaned[-COLONY_CAP:]
+    data["items"] = cleaned
     compact_count = data.get("compact_count", 0)
     if not isinstance(compact_count, int) or isinstance(compact_count, bool):
         compact_count = 0

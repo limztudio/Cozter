@@ -3481,13 +3481,13 @@ class BotPlatform(ABC):
             elif ev.kind == "tool":
                 first_line = ev.content.split(chr(10))[0]
                 clipped = (
-                    first_line[:80] + "…"
+                    first_line[:80] + "… [clipped]"
                     if len(first_line) > 80 else first_line
                 )
                 status_lines.append(f"» {clipped}")
             elif ev.kind == "file":
                 clipped = (
-                    ev.content[:80] + "…"
+                    ev.content[:80] + "… [clipped]"
                     if len(ev.content) > 80 else ev.content
                 )
                 status_lines.append(f"» {clipped}")
