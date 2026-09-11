@@ -144,6 +144,15 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("… [name clipped]… [name clipped]", block)
             _ = header_len
 
+    def test_flexible_report_clip_never_exceeds_cap(self) -> None:
+        from Cozter import flexible as flexible_mod
+
+        long_report = "x" * (flexible_mod._REPORT_MAX_CHARS + 500)
+        out = flexible_mod._truncate_report(long_report)
+        self.assertLessEqual(len(out), flexible_mod._REPORT_MAX_CHARS)
+        self.assertIn(flexible_mod._REPORT_TRUNCATION_MARKER, out)
+        self.assertEqual(flexible_mod._truncate_report("hi"), "hi")
+
     def test_router_preview_never_exceeds_preview_chars(self) -> None:
         from Cozter import router as router_mod
 

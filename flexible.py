@@ -148,7 +148,10 @@ def _truncate_report(text: str) -> str:
     """Bound one worker report for re-prompting downstream."""
     if len(text) <= _REPORT_MAX_CHARS:
         return text
-    return text[:_REPORT_MAX_CHARS] + _REPORT_TRUNCATION_MARKER
+    return (
+        text[:_REPORT_MAX_CHARS - len(_REPORT_TRUNCATION_MARKER)]
+        + _REPORT_TRUNCATION_MARKER
+    )
 
 
 @dataclass(frozen=True)
