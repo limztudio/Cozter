@@ -79,18 +79,31 @@ class NotesTool(AgentTool):
         text = args.get("text")
         if not isinstance(text, str) or not text.strip():
             return "Error: 'text' must be a non-empty string for append"
-        text = text.strip()[:_MAX_ENTRY_CHARS]
+        raw_text = text.strip()
+        clipped = len(raw_text) > _MAX_ENTRY_CHARS
+        text = raw_text[:_MAX_ENTRY_CHARS]
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         entry = f"## {stamp}\n{text}\n\n"
 
         existing = _read_notes_text(target)
+        pre_fit = (existing + entry) if existing else entry
+        trimmed = len(pre_fit.encode("utf-8")) > _NOTES_MAX_BYTES
         combined = _fit_entries([existing, entry] if existing else [entry])
         ensure_parent_dir(target)
         try:
             write_text_after_edit(target, combined, uses_crlf=False)
         except OSError as exc:
             return f"Error: could not write notes: {exc}"
-        return f"Noted ({len(text)} chars). Total notes: {len(combined)} chars."
+        note = f"Noted ({len(text)} chars). Total notes: {len(combined)} chars."
+        if clipped:
+            note += (
+                f" Entry clipped to {_MAX_ENTRY_CHARS} chars;"
+                " remainder omitted — never treat this preview as full"
+                " content; say PARTIAL + remainder when coverage is unclear."
+            )
+        if trimmed:
+            note += " Oldest entries were trimmed to fit the budget."
+        return note
 
     def _read(self, target: str) -> str:
         text = _read_notes_text(target)
@@ -102,8 +115,10 @@ class NotesTool(AgentTool):
         if len(text) > _READ_TAIL_CHARS:
             omitted = len(text) - _READ_TAIL_CHARS
             text = (
-                f"[{omitted} older characters omitted;"
-                " use action=clear once stale]\n" + text[-_READ_TAIL_CHARS:]
+                f"[{omitted} older characters omitted — newest-tail"
+                " preview only, not full coverage; say PARTIAL +"
+                " remainder when coverage is unclear]\n"
+                + text[-_READ_TAIL_CHARS:]
             )
         return text.rstrip() + "\n(End of notes.)"
 
@@ -122,7 +137,7 @@ class NotesTool(AgentTool):
         if action == "append" and isinstance(text, str) and text:
             preview = text.strip()[:80]
             return f"notes append: {preview}" + (
-                "..." if len(text.strip()) > 80 else ""
+                "... [clipped]" if len(text.strip()) > 80 else ""
             )
         return f"notes {action or '?'}"
 

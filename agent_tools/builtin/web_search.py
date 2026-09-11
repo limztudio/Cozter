@@ -95,6 +95,21 @@ class WebSearchTool(AgentTool):
                             saw_page = True
                             results = _parse_results(body, max_results)
                             if results:
+                                if len(results) < max_results + (
+                                    1 if results[-1].startswith("(…parser") else 0
+                                ) and results[-1].startswith("(…parser"):
+                                    pass  # scan-cap footnote already appended
+                                elif len(
+                                    [r for r in results if r[:1].isdigit()]
+                                ) >= max_results:
+                                    results.append(
+                                        "(showing first"
+                                        f" {max_results} result(s); raise"
+                                        " max_results up to 10 for more;"
+                                        " never treat this preview as full"
+                                        " coverage; say PARTIAL + remainder"
+                                        " when coverage is unclear)"
+                                    )
                                 return "\n".join(results)
                             failures.append(f"{host}: no results parsed")
                 except Exception as exc:
@@ -122,8 +137,10 @@ def _parse_results(body: str, max_results: int) -> list[str]:
     """
     results: list[str] = []
     seen: set[str] = set()
+    scan_capped = False
     for index, match in enumerate(_ANCHOR_RE.finditer(body)):
         if index >= _MAX_ANCHORS_SCANNED:
+            scan_capped = True
             break
         raw_href = html.unescape(match.group(1))
         if _is_ad_or_internal(raw_href):
@@ -138,6 +155,12 @@ def _parse_results(body: str, max_results: int) -> list[str]:
         results.append(f"{len(results) + 1}. {title}\n   {url}")
         if len(results) >= max_results:
             break
+    if scan_capped and len(results) < max_results:
+        results.append(
+            "(…parser scan capped at 200 anchors — further page links"
+            " omitted; narrow the query; never treat this preview as full"
+            " coverage; say PARTIAL + remainder when coverage is unclear)"
+        )
     return results
 
 

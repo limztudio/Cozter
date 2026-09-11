@@ -194,7 +194,10 @@ def _bounded_colony_lines(items: list[str], budget: int) -> tuple[list[str], boo
             return lines, True
         line = f"- {item}"
         if len(line) > remaining:
-            marker = "… [item truncated for budget — preview only]"
+            marker = (
+                "… [item truncated for budget — preview only;"
+                " say PARTIAL + remainder when coverage is unclear]"
+            )
             if remaining == 1:
                 lines.append("…")
             elif remaining <= len(marker):

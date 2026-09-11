@@ -141,6 +141,16 @@ class NotesToolTests(unittest.TestCase):
         self.assertLessEqual(size, 64 * 1024 + 16 * 1024)
         self.assertIn("entry 399", notes)  # newest entry always kept
 
+    def test_tail_read_and_clipped_entry_mark_preview_and_partial(self) -> None:
+        for index in range(60):
+            self.invoke("append", f"tail entry {index} " + "z" * 200)
+        notes = self.invoke("read")
+        self.assertIn("older characters omitted", notes)
+        self.assertIn("PARTIAL + remainder", notes)
+        clipped = self.invoke("append", "q" * 3_000)
+        self.assertIn("clipped", clipped)
+        self.assertIn("PARTIAL + remainder", clipped)
+
     def test_oversized_legacy_file_keeps_newest_entries(self) -> None:
         # A pre-existing oversized notes file must not push the newest
         # entries out of the window a later append reads.
@@ -239,6 +249,15 @@ class GitInfoToolTests(unittest.TestCase):
         self.assertTrue(
             self.invoke(action="push").startswith("Error:"),
         )
+
+    def test_diff_truncation_marks_preview_and_partial(self) -> None:
+        self._commit("big.txt", "y" * 20_000 + "\n", "big commit")
+        with open(os.path.join(self.workspace, "big.txt"), "a") as f:
+            f.write("z" * 20_000 + "\n")
+        result = self.invoke(action="diff", patch=True)
+        self.assertIn("truncated", result)
+        self.assertIn("never treat this preview as full content", result)
+        self.assertIn("PARTIAL + remainder", result)
 
     def test_path_escaping_rejected(self) -> None:
         self.assertTrue(
@@ -364,6 +383,8 @@ class MemoryToolTests(unittest.TestCase):
         self.assertIn("Found 3 match(es)", result)
         self.assertEqual(result.count("quetzal migration notes"), 2)
         self.assertIn("showing the 2 newest", result)
+        self.assertIn("PARTIAL + remainder", result)
+        self.assertIn("never treat this preview", result)
 
     def test_search_requires_query(self) -> None:
         self.assertTrue(
@@ -413,6 +434,13 @@ class MemoryToolTests(unittest.TestCase):
         self.assertIn("28.", result)
         self.assertNotIn("1. User:", result)
         self.assertIn("…", result)  # per-line cap applied
+        self.assertIn("[line clipped]", result)
+
+    def test_colony_cap_marks_preview_and_partial(self) -> None:
+        self.write_colony([f"item {i}" for i in range(120)])
+        result = self.invoke(action="search", query="older colony", limit=20)
+        self.assertIn("older colony item(s)", result)
+        self.assertIn("PARTIAL + remainder", result)
 
     def test_read_missing_and_ambiguous_targets(self) -> None:
         self.write_session(
@@ -710,6 +738,24 @@ class HttpRequestToolTests(unittest.TestCase):
         self.assertIn("'body' must be a non-empty string", result)
         result, _ = self.run_with([], url="")
         self.assertTrue(result.startswith("Error:"))
+
+    def test_body_truncation_marks_preview_and_partial(self) -> None:
+        result, _ = self.run_with(
+            [
+                _FakeResponse(
+                    status=200,
+                    url="https://api.example.com/big",
+                    headers={"Content-Type": "application/json"},
+                    body=("x" * 5_000).encode(),
+                ),
+            ],
+            url="https://api.example.com/big",
+            max_chars=500,
+        )
+        self.assertIn("truncated", result)
+        self.assertIn("never treat this preview as full content", result)
+        self.assertIn("PARTIAL + remainder", result)
+        self.assertIn("raise max_chars", result)
 
 
 if __name__ == "__main__":

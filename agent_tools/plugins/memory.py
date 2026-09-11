@@ -127,9 +127,16 @@ def _colony_items(workspace: str) -> list[str]:
     items = raw.get("items") if isinstance(raw, dict) else None
     if not isinstance(items, list):
         return []
-    return [
+    kept = [
         item for item in items if isinstance(item, str) and item.strip()
-    ][:_COLONY_ITEMS_CAP]
+    ]
+    if len(kept) > _COLONY_ITEMS_CAP:
+        kept = kept[:_COLONY_ITEMS_CAP] + [
+            f"… [{len(kept) - _COLONY_ITEMS_CAP} older colony item(s)"
+            " omitted — preview only; say PARTIAL + remainder"
+            " when coverage is unclear]"
+        ]
+    return kept
 
 
 def _sessions_dir(workspace: str) -> str | None:
@@ -173,7 +180,12 @@ def _fit_output(lines: list[str], header: str) -> str:
         lines.pop()
         dropped += 1
     if dropped:
-        lines.append(f"(…{dropped} more result(s) omitted to fit the limit)")
+        lines.append(
+            f"(…{dropped} more result(s) omitted to fit the limit;"
+            " raise *limit* to see more; never treat this preview"
+            " as full coverage; say PARTIAL + remainder"
+            " when coverage is unclear)"
+        )
     return "\n".join([header, *lines])
 
 
@@ -262,7 +274,9 @@ class MemoryTool(AgentTool):
         if total > len(matches):
             header += (
                 f" — showing the {len(matches)} newest"
-                " (raise *limit* to see more):"
+                " (raise *limit* to see more; never treat this preview"
+                " as full coverage; say PARTIAL + remainder"
+                " when coverage is unclear):"
             )
         else:
             header += ":"
@@ -286,7 +300,12 @@ class MemoryTool(AgentTool):
         header = "Sessions (newest first):"
         omitted = len(sessions) - min(len(sessions), _LIST_SESSIONS_CAP)
         if omitted > 0:
-            lines.append(f"(…and {omitted} older session(s))")
+            lines.append(
+                f"(…and {omitted} older session(s) omitted — this list"
+                " is a preview, not full coverage; raise the limit"
+                " / page further; say PARTIAL + remainder"
+                " when coverage is unclear)"
+            )
         lines.append(
             f"Colony: {len(_colony_items(workspace))}"
             " items in .cozter/colony.json"
@@ -323,7 +342,7 @@ class MemoryTool(AgentTool):
         lines = [
             f"{shown_from + offset}. {msg['role'].capitalize()}:"
             f" {msg['content'][:_LINE_CAP]}"
-            + ("…" if len(msg["content"]) > _LINE_CAP else "")
+            + ("… [line clipped]" if len(msg["content"]) > _LINE_CAP else "")
             for offset, msg in enumerate(window)
         ]
         return _fit_output(lines, header)

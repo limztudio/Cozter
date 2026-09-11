@@ -104,7 +104,13 @@ class GitInfoTool(AgentTool):
                 return "No changes."
             return "(no output)"
         if stderr.strip():
-            text += f"\n\ngit said:\n{stderr.strip()[:_MAX_GIT_ERROR_CHARS]}"
+            clipped_err = stderr.strip()
+            if len(clipped_err) > _MAX_GIT_ERROR_CHARS:
+                clipped_err = (
+                    clipped_err[:_MAX_GIT_ERROR_CHARS]
+                    + "… [stderr clipped]"
+                )
+            text += f"\n\ngit said:\n{clipped_err}"
         return _bounded(text)
 
     @staticmethod
@@ -199,7 +205,9 @@ def _bounded(text: str) -> str:
         return text
     return (
         text[:_MAX_OUTPUT_CHARS]
-        + f"\n... [truncated, {len(text)} chars total]"
+        + f"\n... [truncated, {len(text)} chars total;"
+        " never treat this preview as full content;"
+        " say PARTIAL + remainder when coverage is unclear]"
     )
 
 

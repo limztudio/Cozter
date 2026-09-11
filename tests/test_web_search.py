@@ -160,6 +160,18 @@ class WebSearchToolTests(unittest.TestCase):
         result = _run_search(net, query="anything", max_results="2")
         self.assertIn("2. ", result)
         self.assertNotIn("3. ", result)
+        self.assertIn("showing first 2 result(s)", result)
+        self.assertIn("PARTIAL + remainder", result)
+        self.assertIn("never treat this preview", result)
+
+    def test_scan_cap_footnote_marks_preview_and_partial(self) -> None:
+        anchors = "".join(
+            f'<a href="//duckduckgo.com/nope{i}">x</a>' for i in range(250)
+        )
+        net = _FakeNet((200, anchors.encode()))
+        result = _run_search(net, query="anything")
+        self.assertIn("parser scan capped", result)
+        self.assertIn("PARTIAL + remainder", result)
 
     def test_invalid_args(self) -> None:
         self.assertTrue(
