@@ -403,14 +403,22 @@ def prepare_source_destination(
     return raw_src, raw_dst, src, dst
 
 
+def _clip_status_value(value: object, max_chars: int = 200) -> str:
+    """Return a status-line preview with a visible cut marker when clipped."""
+    text = value if isinstance(value, str) else str(value)
+    return text[:max_chars] + (
+        "… [clipped]" if len(text) > max_chars else ""
+    )
+
+
 def summarize_path(action: str, args: dict, default: str = "?") -> str:
-    return f"{action}: {args.get('path', default)}"
+    return f"{action}: {_clip_status_value(args.get('path', default))}"
 
 
 def summarize_path_pair(action: str, args: dict) -> str:
     return (
-        f"{action}: {args.get('source', '?')}"
-        f" -> {args.get('destination', '?')}"
+        f"{action}: {_clip_status_value(args.get('source', '?'))}"
+        f" -> {_clip_status_value(args.get('destination', '?'))}"
     )
 
 

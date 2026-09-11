@@ -13,6 +13,7 @@ from unittest import mock
 
 from Cozter import agent_tools
 from Cozter.agent_tools.base import (
+    _clip_status_value,
     _path_matches_glob,
     apply_string_replacement,
     coerce_int_arg,
@@ -22,6 +23,8 @@ from Cozter.agent_tools.base import (
     read_bounded_text,
     replacement_properties,
     summarize_arg,
+    summarize_path,
+    summarize_path_pair,
     validate_replacement_strings,
     write_text_after_edit,
 )
@@ -70,6 +73,24 @@ class AgentToolHelperTests(unittest.TestCase):
         self.assertEqual(
             summarize_arg("grep", {"pattern": "a" * 201}, "pattern"),
             "grep: " + ("a" * 200) + "… [clipped]",
+        )
+
+    def test_status_summaries_bound_paths_and_values(self) -> None:
+        self.assertEqual(
+            summarize_path("read_file", {"path": "p" * 300}),
+            "read_file: " + "p" * 200 + "… [clipped]",
+        )
+        self.assertEqual(
+            summarize_path_pair(
+                "copy_file",
+                {"source": "s" * 300, "destination": "d" * 300},
+            ),
+            "copy_file: " + "s" * 200 + "… [clipped]"
+            + " -> " + "d" * 200 + "… [clipped]",
+        )
+        self.assertEqual(_clip_status_value("ok"), "ok")
+        self.assertEqual(
+            _clip_status_value("x" * 201), "x" * 200 + "… [clipped]",
         )
 
     def test_read_file_rejects_non_finite_range_values(self) -> None:

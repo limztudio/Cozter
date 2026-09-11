@@ -433,6 +433,14 @@ def apply_terminal_result_event(
 _TRUNCATED_PREVIEW_SUFFIX = "… [truncated preview — say PARTIAL + remainder]"
 
 
+def _clip_status_value(value: object, max_chars: int = 200) -> str:
+    """Return a status-line preview with a visible cut marker when clipped."""
+    text = value if isinstance(value, str) else str(value)
+    return text[:max_chars] + (
+        "… [clipped]" if len(text) > max_chars else ""
+    )
+
+
 def truncate_status_text(text: object, *, limit: int = 200) -> str:
     """Return a clipped preview for status events."""
     value = text if isinstance(text, str) else str(text)
@@ -456,9 +464,7 @@ def summarize_cli_tool(name: object, tool_input: object) -> str:
         return label
     command = tool_input.get("command") or tool_input.get("cmd")
     if isinstance(command, str) and command:
-        if len(command) > 200:
-            return f"$ {command[:200]}… [clipped]"
-        return f"$ {command}"
+        return f"$ {_clip_status_value(command)}"
     path = (
         tool_input.get("path")
         or tool_input.get("file_path")
@@ -466,10 +472,8 @@ def summarize_cli_tool(name: object, tool_input: object) -> str:
         or tool_input.get("filename")
     )
     if isinstance(path, str) and path:
-        if len(path) > 200:
-            return f"{label}: {path[:200]}… [clipped]"
-        return f"{label}: {path}"
-    return label
+        return f"{_clip_status_value(label, 40)}: {_clip_status_value(path)}"
+    return _clip_status_value(label, 40)
 
 
 async def create_prompt_subprocess(

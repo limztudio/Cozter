@@ -15,7 +15,7 @@ import math
 import operator as op
 from typing import Any, Callable, ClassVar
 
-from ..base import AgentTool, require_nonempty_string_arg
+from ..base import AgentTool, _clip_status_value, require_nonempty_string_arg
 
 _MAX_EXPRESSION_CHARS = 1_000
 _MAX_EXPONENT = 10_000
@@ -229,9 +229,7 @@ class CalculatorTool(AgentTool):
         )
         if not isinstance(expression, str):
             expression = str(expression)
-        return f"calc: {expression[:120]}" + (
-            "… [clipped]" if len(expression) > 120 else ""
-        )
+        return f"calc: {_clip_status_value(expression, 120)}"
 
 
 if __name__ == "__main__":

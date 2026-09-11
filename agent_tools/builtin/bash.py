@@ -7,7 +7,7 @@ import os
 import shutil
 from typing import Any, ClassVar
 
-from ..base import AgentTool, coerce_int_arg
+from ..base import AgentTool, _clip_status_value, coerce_int_arg
 from ...utils import (
     has_managed_process_group,
     kill_and_wait,
@@ -120,7 +120,9 @@ class BashTool(AgentTool):
 
     def summarize(self, args: dict) -> str:
         cmd = args.get("command", "")
-        return f"$ {cmd[:200]}" + ("… [clipped]" if len(cmd) > 200 else "")
+        if not isinstance(cmd, str):
+            cmd = str(cmd)
+        return f"$ {_clip_status_value(cmd)}"
 
 
 def _find_shell() -> list[str] | None:

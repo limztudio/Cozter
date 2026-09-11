@@ -17,6 +17,7 @@ from typing import Any, ClassVar
 
 from ..base import (
     AgentTool,
+    _clip_status_value,
     coerce_int_arg,
     object_parameters,
     resolve_inside_workspace,
@@ -168,8 +169,11 @@ class GitInfoTool(AgentTool):
     def summarize(self, args: dict) -> str:
         action = args.get("action") if isinstance(args, dict) else None
         path = args.get("path") if isinstance(args, dict) else None
-        suffix = f" ({path})" if isinstance(path, str) and path else ""
-        return f"git {action or '?'}{suffix}"
+        suffix = (
+            f" ({_clip_status_value(path)})"
+            if isinstance(path, str) and path else ""
+        )
+        return f"git {_clip_status_value(action or '?', 40)}{suffix}"
 
 
 async def _git_once(

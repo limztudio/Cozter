@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 
 from ..base import (
     AgentTool,
+    _clip_status_value,
     ensure_parent_dir,
     object_parameters,
     resolve_inside_workspace,
@@ -135,11 +136,8 @@ class NotesTool(AgentTool):
         action = args.get("action") if isinstance(args, dict) else None
         text = args.get("text") if isinstance(args, dict) else None
         if action == "append" and isinstance(text, str) and text:
-            preview = text.strip()[:80]
-            return f"notes append: {preview}" + (
-                "… [clipped]" if len(text.strip()) > 80 else ""
-            )
-        return f"notes {action or '?'}"
+            return f"notes append: {_clip_status_value(text.strip(), 80)}"
+        return f"notes {_clip_status_value(action or '?', 40)}"
 
 
 def _read_notes_text(target: str) -> str:
