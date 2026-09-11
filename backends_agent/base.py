@@ -442,7 +442,7 @@ def truncate_status_text(text: object, *, limit: int = 200) -> str:
         # Too tight for the full honesty marker: keep a visible cut
         # indicator so the preview is never mistaken for full content.
         if limit <= 1:
-            return value[:limit]
+            return "…"[:limit]
         return value[:limit - 1] + "…"
     return value[:limit - len(_TRUNCATED_PREVIEW_SUFFIX)] + (
         _TRUNCATED_PREVIEW_SUFFIX

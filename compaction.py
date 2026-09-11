@@ -148,7 +148,7 @@ def _bounded_previous_summary(summary: str) -> str:
         # Too tight for the full honesty marker: keep a visible cut
         # indicator so the preview is never mistaken for full content.
         if budget <= 1:
-            return summary[:budget]
+            return "…"[:budget]
         return summary[:budget - 1] + "…"
     keep = (budget - len(marker)) // 2
     return summary[:keep] + marker + summary[-(budget - len(marker) - keep):]

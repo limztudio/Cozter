@@ -218,7 +218,7 @@ class BackendSharedHelperTests(unittest.TestCase):
         )
 
     def test_truncate_status_text_tiny_limit_keeps_visible_cut(self) -> None:
-        self.assertEqual(truncate_status_text("abcdef", limit=1), "a")
+        self.assertEqual(truncate_status_text("abcdef", limit=1), "…")
         self.assertEqual(truncate_status_text("abcdef", limit=2), "a…")
 
     def test_process_resource_map_keys_by_object_identity(self) -> None:

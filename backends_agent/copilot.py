@@ -160,8 +160,7 @@ def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
         # Too tight for the full marker: keep a visible cut indicator
         # so the preview is never mistaken for full content.
         if limit <= 1:
-            tail, _ = _truncate_utf8_tail(prompt, limit)
-            return tail
+            return "…"[:limit]
         tail, _ = _truncate_utf8_tail(prompt, limit - 1)
         return tail + "…"
     tail, truncated = _truncate_utf8_tail(prompt, limit - len(marker))
