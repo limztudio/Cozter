@@ -210,7 +210,7 @@ def _bounded(text: str) -> str:
         return text
     return (
         text[:_MAX_OUTPUT_CHARS]
-        + f"\n... [truncated, {len(text)} chars total;"
+        + f"\n… [truncated, {len(text)} chars total;"
         " never treat this preview as full content;"
         " say PARTIAL + remainder when coverage is unclear]"
     )

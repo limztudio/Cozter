@@ -230,7 +230,7 @@ class CalculatorTool(AgentTool):
         if not isinstance(expression, str):
             expression = str(expression)
         return f"calc: {expression[:120]}" + (
-            "... [clipped]" if len(expression) > 120 else ""
+            "… [clipped]" if len(expression) > 120 else ""
         )
 
 

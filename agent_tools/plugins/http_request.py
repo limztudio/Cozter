@@ -251,7 +251,7 @@ class HttpRequestTool(AgentTool):
         if len(text) > max_chars:
             text = (
                 text[:max_chars]
-                + f"\n... [truncated, {len(text)} chars total;"
+                + f"\n… [truncated, {len(text)} chars total;"
                 " raise max_chars to fetch the rest;"
                 " never treat this preview as full content;"
                 " say PARTIAL + remainder when coverage is unclear]"

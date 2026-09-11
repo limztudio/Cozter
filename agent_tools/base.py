@@ -426,7 +426,7 @@ def summarize_arg(
     if not isinstance(value, str):
         value = str(value)
     return f"{action}: {value[:max_chars]}" + (
-        "... [clipped]" if len(value) > max_chars else ""
+        "… [clipped]" if len(value) > max_chars else ""
     )
 
 

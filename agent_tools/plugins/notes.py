@@ -137,7 +137,7 @@ class NotesTool(AgentTool):
         if action == "append" and isinstance(text, str) and text:
             preview = text.strip()[:80]
             return f"notes append: {preview}" + (
-                "... [clipped]" if len(text.strip()) > 80 else ""
+                "… [clipped]" if len(text.strip()) > 80 else ""
             )
         return f"notes {action or '?'}"
 

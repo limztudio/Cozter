@@ -69,7 +69,7 @@ class AgentToolHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             summarize_arg("grep", {"pattern": "a" * 201}, "pattern"),
-            "grep: " + ("a" * 200) + "... [clipped]",
+            "grep: " + ("a" * 200) + "… [clipped]",
         )
 
     def test_read_file_rejects_non_finite_range_values(self) -> None:
@@ -671,7 +671,7 @@ class ReadFileToolTests(unittest.TestCase):
 
                 self.assertEqual(
                     result,
-                    "abcdefgh\n... [truncated at 8 characters; use offset"
+                    "abcdefgh\n… [truncated at 8 characters; use offset"
                     " and limit to read another range; never treat"
                     " this preview as full content; say PARTIAL + remainder"
                     " when work is left]",
