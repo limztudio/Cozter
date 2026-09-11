@@ -298,8 +298,11 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             ):
                 output = await backend.get_detached_task_output("/work", task_id)
 
-        # The separator is part of the retained output budget too.
-        self.assertEqual(output, "first\n\ns")
+        # The separator is part of the retained output budget too, and a
+        # budget too tight for the full marker keeps a visible cut
+        # indicator rather than a silent bare prefix.
+        self.assertEqual(output, "first…")
+        self.assertIn("…", output)
         self.assertLessEqual(len(output.encode("utf-8")), 8)
 
     async def test_output_skips_oversized_transcript_line_and_keeps_parsing(

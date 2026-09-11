@@ -170,8 +170,8 @@ def _truncate_utf8_text(
 
     When it fits, *marker* makes a clipped detached result unambiguous while
     staying inside the same cap.  Extremely small test/configured limits may
-    be too short even for the marker; in that case the bounded prefix is the
-    only possible safe result.
+    be too short even for the marker; in that case keep a visible ``…`` cut
+    indicator within the byte budget rather than a silent bare prefix.
     """
     limit = max(0, limit)
     encoded = value.encode("utf-8", errors="replace")
@@ -181,6 +181,17 @@ def _truncate_utf8_text(
     prefix_limit = limit
     if marker_bytes and len(marker_bytes) <= limit:
         prefix_limit -= len(marker_bytes)
+    elif marker_bytes:
+        # Too tight for the full marker: keep a visible cut indicator so
+        # the preview is never mistaken for full content.
+        ellipsis = "…".encode("utf-8", errors="replace")
+        if limit < len(ellipsis):
+            return ellipsis[:limit].decode("utf-8", errors="ignore"), True
+        prefix_limit = limit - len(ellipsis)
+        return (
+            encoded[:prefix_limit].decode("utf-8", errors="ignore") + "…",
+            True,
+        )
     # ``value`` can contain lone surrogates.  Encode with replacement above,
     # then decode only a complete UTF-8 prefix so the resulting text remains
     # safe for JSON/state delivery and fits the byte budget.
