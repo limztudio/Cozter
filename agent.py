@@ -555,8 +555,10 @@ _CONTEXT_TRUNCATION_MARKER = (
 )
 
 _PLANNER_OMISSION_MARKER = (
-    "\n… [middle context omitted for 12k planner cap; plan must still cover"
-    " every item/rule — prefer enumerated targets]\n"
+    "\n… [middle context omitted for 12k planner cap — preview only, not"
+    " full coverage; plan must still cover every item/rule — prefer"
+    " enumerated targets; say PARTIAL + remainder when coverage is"
+    " unclear]\n"
 )
 
 
@@ -567,7 +569,11 @@ def _truncate_context_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     if limit <= len(_CONTEXT_TRUNCATION_MARKER):
-        return text[:limit]
+        # Too tight for the full honesty marker: keep a visible cut
+        # indicator so the preview is never mistaken for full content.
+        if limit <= 1:
+            return text[:limit]
+        return text[:limit - 1] + "…"
     return text[:limit - len(_CONTEXT_TRUNCATION_MARKER)] + (
         _CONTEXT_TRUNCATION_MARKER
     )
@@ -1706,7 +1712,10 @@ def _interrupted_turn_note(turn: _InterruptedTurn) -> str:
     )
     if digest:
         if len(digest) > INTERRUPTED_TURN_MAX_CHARS:
-            marker = "… [earlier partial output dropped]\n"
+            marker = (
+                "… [earlier partial output dropped for budget — preview"
+                " of newest only; say PARTIAL + remainder]\n"
+            )
             digest = marker + digest[
                 -(INTERRUPTED_TURN_MAX_CHARS - len(marker)):
             ]

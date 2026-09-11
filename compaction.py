@@ -53,7 +53,10 @@ _PREVIOUS_SUMMARY_TRUNCATION_MARKER = (
 # Marker appended when an oversized first message is represented by a
 # bounded prefix. Shared with _oversized_first_message_prefix so the
 # consumed-character accounting always matches the rendered line.
-_OVERSIZED_MESSAGE_MARKER = "… [message truncated for budget — preview only]"
+_OVERSIZED_MESSAGE_MARKER = (
+    "… [message truncated for budget — preview only;"
+    " summarize only shown prefix; say PARTIAL + remainder]"
+)
 
 SUMMARY_PROMPT = (
     "Compact this conversation into SCRATCH summary (rewritten each time)"
@@ -142,7 +145,11 @@ def _bounded_previous_summary(summary: str) -> str:
         return summary
     marker = _PREVIOUS_SUMMARY_TRUNCATION_MARKER
     if budget <= len(marker):
-        return summary[:budget]
+        # Too tight for the full honesty marker: keep a visible cut
+        # indicator so the preview is never mistaken for full content.
+        if budget <= 1:
+            return summary[:budget]
+        return summary[:budget - 1] + "…"
     keep = (budget - len(marker)) // 2
     return summary[:keep] + marker + summary[-(budget - len(marker) - keep):]
 
@@ -163,8 +170,10 @@ def _compaction_prompt_parts(
         if lt_lines:
             if len(lt_lines) < len(existing_long_term):
                 lt_lines = [
-                    "… [older long-term items omitted — rewrite only the"
-                    " items shown and carry the rest forward unchanged]",
+                    "… [older long-term items omitted — preview only;"
+                    " rewrite only the"
+                    " items shown and carry the rest forward unchanged;"
+                    " say PARTIAL + remainder when coverage is unclear]",
                     *lt_lines,
                 ]
                 # Keep the fixed prefix inside the same fraction: drop the
@@ -567,7 +576,9 @@ def _take_oldest_message_lines(messages: list[dict], budget: int) -> list[str]:
                 if budget == 1:
                     lines.append("…")
                 elif budget <= len(marker):
-                    lines.append(line[:budget])
+                    # No room for the full marker: keep a visible cut
+                    # indicator rather than a silent prefix.
+                    lines.append(line[:budget - 1] + "…" if budget > 1 else "…")
                 else:
                     lines.append(line[:budget - len(marker)] + marker)
             break

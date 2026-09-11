@@ -201,7 +201,11 @@ def _bounded_colony_lines(items: list[str], budget: int) -> tuple[list[str], boo
             if remaining == 1:
                 lines.append("…")
             elif remaining <= len(marker):
-                lines.append(line[:remaining])
+                # No room for the full marker: keep a visible cut
+                # indicator rather than a silent prefix.
+                lines.append(
+                    line[:remaining - 1] + "…" if remaining > 1 else "…"
+                )
             else:
                 lines.append(line[:remaining - len(marker)] + marker)
             return lines, True

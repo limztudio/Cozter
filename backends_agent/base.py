@@ -430,10 +430,19 @@ def apply_terminal_result_event(
         append_text_result(result, text)
 
 
+_TRUNCATED_PREVIEW_SUFFIX = "… [truncated preview — say PARTIAL + remainder]"
+
+
 def truncate_status_text(text: object, *, limit: int = 200) -> str:
     """Return a clipped preview for status events."""
     value = text if isinstance(text, str) else str(text)
-    return value if len(value) <= limit else value[:limit] + "..."
+    if len(value) <= limit:
+        return value
+    if limit <= len(_TRUNCATED_PREVIEW_SUFFIX):
+        return value[:limit]
+    return value[:limit - len(_TRUNCATED_PREVIEW_SUFFIX)] + (
+        _TRUNCATED_PREVIEW_SUFFIX
+    )
 
 
 def summarize_cli_tool(name: object, tool_input: object) -> str:

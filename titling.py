@@ -136,7 +136,10 @@ async def generate(
         if summary_budget:
             clipped = summary_text[:summary_budget]
             if len(clipped) < len(summary_text):
-                clipped = clipped + "… [older summary omitted]"
+                clipped = clipped + (
+                    "… [older summary omitted — preview only;"
+                    " title from shown context]"
+                )
             parts.append(f"{summary_prefix}{clipped}\n")
     parts.append("Recent messages:")
 

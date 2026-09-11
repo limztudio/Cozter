@@ -695,11 +695,28 @@ class CoveragePromptTests(unittest.TestCase):
     def test_merge_checks_doc_rules_and_truncated_previews(self) -> None:
         self.assertIn("every rule/section", flexible._MERGE_RULES)
         self.assertIn("PARTIAL + remainder", flexible._MERGE_RULES)
-        self.assertIn("[report truncated]", flexible._MERGE_RULES)
+        self.assertIn("[report truncated: remainder omitted]", flexible._MERGE_RULES)
 
     def test_report_marker_warns_preview_not_full(self) -> None:
         self.assertIn("never treat this preview", flexible._REPORT_TRUNCATION_MARKER)
         self.assertIn("PARTIAL + remainder", flexible._REPORT_TRUNCATION_MARKER)
+
+    def test_plan_cap_surfaces_partial_remainder(self) -> None:
+        lines = [
+            f"{i + 1}. [{['low', 'mid', 'high'][i % 3]}] task {i + 1}"
+            for i in range(1, flexible.MAX_SUBTASKS + 5)
+        ]
+        plan = flexible.parse_plan(
+            "[UNDERSTANDING]\nbig\n[/UNDERSTANDING]\n"
+            "[PLAN]\n" + "\n".join(lines) + "\n[/PLAN]",
+            "big request",
+        )
+        self.assertEqual(len(plan.subtasks), flexible.MAX_SUBTASKS)
+        self.assertIn("PARTIAL", plan.understanding)
+        self.assertIn("remainder", plan.understanding)
+
+    def test_planner_rules_mention_cap_remainder(self) -> None:
+        self.assertIn("PARTIAL + remainder", flexible._PLANNER_RULES)
 
     def test_discovery_tools_point_at_paging(self) -> None:
         from Cozter.agent_tools.builtin import glob as glob_mod

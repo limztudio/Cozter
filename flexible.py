@@ -60,7 +60,8 @@ _PLANNER_RULES = (
     "Rules:\n"
     "- Simple request = ONE sub-task.\n"
     f"- At most {MAX_SUBTASKS} sub-tasks, ordered (each needs only earlier"
-    " results).\n"
+    " results). If more scope remains, the plan still lists it as an"
+    " explicit PARTIAL + remainder note after the numbered tasks.\n"
     "- Grade honestly: over-grading wastes the strong model, under-grading"
     " strands hard work on a weak one.\n"
     "- Self-contained: the worker sees only the user message, the plan,"
@@ -109,8 +110,8 @@ _MERGE_RULES = (
     "- Doc/standard requests: check every rule/section in the plan is"
     " covered by the reports; never accept first/last-few as full — say"
     " PARTIAL + remainder when coverage is unclear.\n"
-    "- A report ending in [report truncated] is a preview, not full content;"
-    " never claim done from it.\n"
+    "- A report containing [report truncated: remainder omitted] is a preview,"
+    " not full content; never claim done from it — say PARTIAL + remainder.\n"
     "- User's language. No tool calls; work is done.\n"
 )
 
@@ -216,6 +217,7 @@ def parse_plan(raw: str, request: str) -> Plan:
     # numbered "[tier] instruction" lines are distinctive enough.
     block = extract_marker_block(raw, "PLAN") or raw
     subtasks: list[Subtask] = []
+    capped = False
     for line in block.splitlines():
         match = _PLAN_LINE_RE.match(line)
         if match is None:
@@ -226,12 +228,20 @@ def parse_plan(raw: str, request: str) -> Plan:
             continue
         subtasks.append(Subtask(tier=tier, instruction=instruction))
         if len(subtasks) == MAX_SUBTASKS:
+            capped = True
             break
 
     if not subtasks:
         return fallback_plan(request)
+    understanding = extract_marker_block(raw, "UNDERSTANDING") or ""
+    if capped and "PARTIAL" not in understanding:
+        note = (
+            f"PARTIAL: plan capped at {MAX_SUBTASKS} sub-tasks;"
+            " remainder beyond the cap is still uncovered."
+        )
+        understanding = f"{understanding}\n{note}".strip() if understanding else note
     return Plan(
-        understanding=extract_marker_block(raw, "UNDERSTANDING") or "",
+        understanding=understanding,
         subtasks=tuple(subtasks),
     )
 

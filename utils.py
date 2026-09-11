@@ -755,7 +755,9 @@ async def drain_text_stream(
 
     text = b"".join(chunks).decode("utf-8", errors="replace").strip()
     if total > limit:
-        suffix = f"... [stderr truncated, {total} bytes total]"
+        suffix = (
+            f"... [stderr truncated, {total} bytes total — preview only]"
+        )
         text = f"{text}\n{suffix}" if text else suffix
     return text
 
