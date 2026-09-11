@@ -78,6 +78,12 @@ _AUTONOMY_POLICY = (
     " blocked, state what's missing."
 )
 
+_COMPLETENESS_RULE = (
+    "Whole-scope: all/entire/every/whole = list every target first,"
+    " do each, re-check leftovers; never sample; never claim done"
+    " with work left — say PARTIAL + remainder."
+)
+
 
 _DETACHED_TASK_POLICY = (
     "No shell backgrounding/callbacks. End with one self-contained"
@@ -91,7 +97,7 @@ def _capability_hint(
 ) -> str:
     """Build the per-turn preamble (collaboration vs autonomy policy)."""
     policy = _COLLABORATION_POLICY if collaborative else _AUTONOMY_POLICY
-    parts = [_ATTACH_HINT, policy]
+    parts = [_ATTACH_HINT, policy, _COMPLETENESS_RULE]
     if allow_detached_requests:
         parts.append(_DETACHED_TASK_POLICY)
     return "[System: " + "\n\n".join(parts) + "]"

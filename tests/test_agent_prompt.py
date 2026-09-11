@@ -140,6 +140,14 @@ class PromptPolicyTests(unittest.TestCase):
                 ),
             )
 
+    def test_capability_hint_enforces_whole_scope_coverage(self) -> None:
+        for collaborative in (True, False):
+            hint = agent._capability_hint(
+                collaborative, allow_detached_requests=False,
+            )
+            self.assertIn("Whole-scope", hint)
+            self.assertIn("PARTIAL", hint)
+
 
 class CompactionTargetTests(unittest.TestCase):
     def test_flexible_targets_include_summary_and_every_tier(self) -> None:
