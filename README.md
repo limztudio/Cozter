@@ -22,7 +22,12 @@ are trusted in-process code, not sandboxed extensions.
   - `flexible` (default) — a meta-agent that sizes the work with a cheap
     summary-model call, splits it into up to 12 sub-tasks, routes each to
     the agent+model bound to its difficulty tier (`low` / `mid` / `high`),
-    then merges the reports into one reply. Tiers can straddle backends
+    then merges the reports into one reply. Tiers can straddle backends.
+    Whole-scope (`all`/`entire`/`every`/`whole`) and doc-following requests
+    are split so every item/rule is covered with verifiable done-criteria;
+    a plan that hits the 12-task cap carries an explicit PARTIAL + remainder
+    note, and truncated worker reports are marked as previews so the merge
+    never claims done from them
   - `codex` — OpenAI's CLI (`codex exec`)
   - `claude_code` — Anthropic's CLI (`claude --print`)
   - `copilot` — GitHub's CLI
@@ -31,7 +36,10 @@ are trusted in-process code, not sandboxed extensions.
     llama-server or LM Studio); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
   - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.3`, `glm-5.3-flash`,
-    `glm-5.2`, `glm-5v-turbo`, `glm-4.6v`, `glm-5.1`, …); OpenAI-compatible,
+    `glm-5.2`, `glm-5v-turbo`, `glm-5.1`, `glm-5`, `glm-4.7` family,
+    `glm-4.6`/`glm-4.6v`/`glm-4.5` variants including `glm-4.5-air`
+    (the default summary model), plus documented Coding Plan `[1m]` pins);
+    OpenAI-compatible,
     so it shares the in-process loop — set `zai_api_key` in config
   - `meta` — Meta's Model API (Muse Spark models: `muse-spark-1.3`,
     `muse-spark-1.2`, `muse-spark-1.1`, …); OpenAI-compatible, so it shares
@@ -567,8 +575,11 @@ sessions left, a colony pass clears its shared memory rather than carrying
 deleted-session facts into later conversations.
 
 Maintenance prompts treat persisted model output as recovery data, not as an
-unbounded source of context. The session router sends at most 12 sessions and
-caps each description at 400 characters. Compaction clips an oversized prior
+unbounded source of context, and every budget reserves its truncation marker
+inside the cap so a clipped maintenance prompt always reads as a PARTIAL
+preview rather than full coverage. The session router sends at most 12 sessions and
+caps each description at 400 characters, marking truncated session blocks as
+previews to route on without inventing unseen content. Compaction clips an oversized prior
 summary and sends a contiguous oldest prefix of raw history; even when its
 first raw message alone is too large, it sends a marked prefix so a later pass
 can advance the history without skipping to a newer message. After a successful
@@ -580,7 +591,12 @@ cannot stall compaction forever. A failed or stale compaction leaves the
 original message unchanged. Colony consolidation caps its aggregate input at
 100,000 characters, reserves at most 25,000 for the previous colony list, and
 keeps every included session block complete when it trims a long title or
-memory item. These limits affect only the internal maintenance prompt;
+memory item. Truncated colony items, clipped session names, and capped input
+carry explicit PARTIAL/remainder markers, and the consolidation prompt
+consolidates only the sessions/items shown. Over-cap colony loads keep the
+newest entries with a warning rather than silently keeping the oldest. Session
+auto-titles likewise reserve their clip markers inside the 4,000-character
+request and mark tight-budget cuts with a visible ellipsis. These limits affect only the internal maintenance prompt;
 compaction and colony state are rewritten only after a successful response.
 
 For a direct agent turn, automatic compaction follows that selected model's
@@ -826,12 +842,16 @@ Shipped plugins:
 - `notes` - persistent workspace notes at `.cozter/notes.md`
   (`append`/`read`/`clear`). Notes survive compaction, `/stop`, and
   restarts, so an agent can record progress and resume cleanly; the
-  newest entries win when the 64 KiB ceiling forces a trim.
+  newest entries win when the 64 KiB ceiling forces a trim, and both
+  over-long entries and tail-only reads are explicitly marked as
+  clipped/preview output with PARTIAL + remainder pointers.
 - `git_info` - read-only `status`/`log`/`diff` snapshot of the
   workspace repository, so HTTP backends without a shell can still see
   repo state; the argv is fixed and read-only, and `path` arguments
   must stay inside the workspace.
-- `memory` - search/read the workspace's durable chat memory: past
+- `memory` - search/read the workspace's durable chat memory (capped colony
+  lists, excerpts, result counts, and session lists carry explicit
+  PARTIAL/remainder pointers instead of silent cuts): past
   session transcripts, per-session summaries and long-term notes, and
   the shared colony notes (all under `.cozter/`). `search` is
   case-insensitive full-text with bounded excerpts, `list` shows
@@ -849,12 +869,22 @@ A plugin can also be run directly from the parent directory:
 Cozter/.venv/bin/python -m Cozter.agent_tools.plugins.current_time '{"timezone":"Asia/Seoul"}'
 ```
 
-HTTP-backend tool results are capped before they are fed back into the
+HTTP error/status previews are clipped with the same visible marker
+(`… [clipped]` reserved inside the budget), and transcript-retention-limit
+notices state the retained transcript is a truncated preview. HTTP-backend tool results are capped before they are fed back into the
 model, keeping accidental huge outputs from consuming the whole context.
-`read_file` reads at most 128 KiB per call; its line-offset scan is also
+Every cap reserves its truncation marker inside the advertised budget, so a
+clipped result always arrives visibly marked as a PARTIAL preview with a
+remainder pointer (for example `read_file` offset/limit or `grep` to page
+further) instead of a silent bare cut — and budgets too tight for the full
+marker keep a visible ellipsis. `read_file` reads at most 128 KiB per call;
+its line-offset scan is also
 bounded at 16 MiB so a pathological offset cannot leave a worker thread
 walking an enormous file.
-`list_dir` and `tree` skip an entry whose `is_dir()` raises (a dangling
+Session transcript lines (`session.format_msg_line`) carry the same honesty
+contract: capped content keeps a `… [truncated N chars total … PARTIAL +
+remainder]` marker with the suffix reserved inside the cap, and tight caps
+keep a visible ellipsis. `list_dir` and `tree` skip an entry whose `is_dir()` raises (a dangling
 symlink, ELOOP, or vanished file) instead of aborting the rest of the listing.
 `grep` only opens regular files up to 1 MB and runs its regex scan in a
 killable worker process. It stops and reaps that worker after the smaller of
@@ -862,7 +892,10 @@ killable worker process. It stops and reaps that worker after the smaller of
 CPU after a timeout; narrow the pattern or search path if that happens.
 The `web_search` and `web_fetch` tools also cap downloaded response bodies
 at 5 MiB and share the bounded `read_bounded_text()` reader in
-`agent_tools/base.py`. `web_search` tries DuckDuckGo's `html` and `lite`
+`agent_tools/base.py`, which reports whether the cap was hit so the model
+sees an explicit PARTIAL preview marker instead of a silent cut
+(`web_fetch` appends a fetch-capped note; `web_search` marks the capped page
+and notes when only the first N results are shown). `web_search` tries DuckDuckGo's `html` and `lite`
 frontends in order - two attempts each, with a short delay between tries -
 so a transient failure of one frontend no longer fails the call, and
 sponsored (`ad_*`) and DuckDuckGo-internal links never become results.
@@ -929,12 +962,23 @@ automatically (its `tier_models` table) — for `zai` that is
 `flexible` itself, which would plan forever.
 
 A flexible turn can make one planner call (input capped at 12,000
-characters with the request preserved), up to 12 worker calls, and one
-merge call over the bare request. A single-subtask plan skips the merge
-and returns the worker report directly. Because tiers may use different
+characters with the request preserved; a middle-context omission marker is
+reserved inside that cap so the planner still sees it must cover every
+item/rule), up to 12 worker calls, and one
+merge call over the bare request. Each worker report is capped at 6,000
+characters with its truncation marker reserved inside the cap, so a clipped
+report always arrives marked `[report truncated: remainder omitted]` as a
+preview rather than a silent cut. A single-subtask plan skips the merge
+and returns the worker report directly. When the planner hits the 12-task
+cap, the parsed plan carries an explicit PARTIAL + remainder note unless the
+planner already wrote one. Because tiers may use different
 backends, a single request can
 also be sent to multiple configured providers. Select a direct backend when a
 single-provider path or more predictable request cost is important.
+The merge step checks every plan item against the reports before claiming
+done: partial, missing, failed, or truncated reports force a PARTIAL +
+remainder answer instead of a full-completion claim, and doc/standard
+requests are never accepted from first/last-few coverage alone.
 
 Two behaviors are worth knowing. Under `/style collaborative`, the turn can
 stop and wait for you (`[[await]]`) at either end of the pipeline: the
@@ -944,7 +988,12 @@ before the work can continue. The workers in between never stop to ask,
 since nobody is reading them mid-pipeline. Under `/style autonomous` — and
 on scheduled `/reserve` runs, which are always autonomous — nothing pauses:
 a question the merge model emits anyway is stripped rather than left to
-strand a run nobody is watching. And when planning fails outright (summary
+strand a run nobody is watching. Every agent turn preamble now also carries the whole-scope /
+doc-following completeness rule (list every target first, do each,
+re-check leftovers; enumerate every rule/section when told to follow a
+doc; never claim done with work left — say PARTIAL + remainder), and
+composed context trims carry matching omission markers within budget so
+the model cannot mistake a trimmed preview for full coverage. And when planning fails outright (summary
 CLI missing, unparseable output), the turn degrades to a single `high`-tier
 sub-task carrying the original request, so a botched split never quietly
 downgrades hard work to a weak model.
@@ -1060,6 +1109,11 @@ workspaces, evicting expired and least-fresh entries; an evicted workspace is
 simply rediscovered when it is opened again. The ACP probe runs from the
 selected workspace so project policy, including `.github/allowed_models.txt`,
 applies to the picker and stored-model check.
+Its prompt keeps the leading system preamble (including the whole-scope /
+doc-following coverage rule) when the platform argv cap forces middle
+context out, marking the omission explicitly; a tail-only cut likewise keeps
+a visible marker and never splits a UTF-8 character, so a clipped Copilot
+prompt always reads as a PARTIAL preview with a remainder obligation.
 Its picker also accepts ACP's provider-grouped model selectors and both legacy
 session metadata forms (`models.availableModels` and top-level
 `availableModels`), so account-approved models stay visible without a
@@ -1207,7 +1261,13 @@ turns drain stderr concurrently with streamed JSON events, and every exit
 path — normal completion, cancellation, an injected restart, event-parse
 failure, or chat-delivery failure — reaps the child process and its drain
 tasks. This prevents a failed callback or `/stop` from leaving an agent CLI
-running in the background. Backends that stage a per-launch file (Grok's
+running in the background. Live chat status streams mark their own trims too: only the newest few
+status lines are kept (older updates flagged omitted), over-long reply
+previews carry a `… [preview]` marker, and long tool-content lines and
+labels use the shared clipped marker rather than a bare cut.
+Tool status lines share `utils.clip_status_value()`, so compact
+summaries (paths, args, stderr previews, calculator/git/notes/http plugin
+statuses) clip with a visible marker instead of a silent cut. Backends that stage a per-launch file (Grok's
 prompt file, Copilot's private home) remember that path by process-object
 identity and delete it in `cleanup_process` after the child is reaped.
 
