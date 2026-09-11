@@ -159,7 +159,17 @@ def _excerpt(text: str, index: int, needle_len: int) -> str:
     prefix = "…" if start else ""
     suffix = "…" if end < len(text) else ""
     snippet = " ".join(text[start:end].split())
-    return f"{prefix}{snippet}{suffix}"[:_EXCERPT_CHARS + 2]
+    cap = _EXCERPT_CHARS + 2
+    full = f"{prefix}{snippet}{suffix}"
+    if len(full) <= cap:
+        return full
+    # The outer cap would otherwise silently drop the tail (possibly the
+    # suffix marker itself). Keep the edge markers honest instead.
+    if suffix:
+        budget = max(0, cap - len(prefix) - len(suffix))
+        return f"{prefix}{snippet[:budget]}{suffix}"
+    budget = max(0, cap - len(prefix) - 1)
+    return f"{prefix}{snippet[:budget]}…"
 
 
 def _iter_search_texts(data: dict):

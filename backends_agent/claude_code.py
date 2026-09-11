@@ -732,10 +732,13 @@ class ClaudeCodeBackend(Backend):
         try:
             sessions = json.loads(stdout)
         except json.JSONDecodeError:
+            preview = stdout[:200]
+            if len(stdout) > 200:
+                preview += "… [clipped]"
             logger.warning(
                 "Claude Code background task listing was not JSON"
-                " (preview): %s… [clipped]",
-                stdout[:200],
+                " (preview): %s",
+                preview,
             )
             return DetachedTaskStatus("unknown")
         if not isinstance(sessions, list):
