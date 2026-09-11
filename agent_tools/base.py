@@ -1003,10 +1003,18 @@ def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
     raise OSError(error, os.strerror(error), target_path)
 
 
-async def read_bounded_text(resp: aiohttp.ClientResponse) -> str:
-    """Read up to MAX_FETCH_BYTES from *resp* and decode with its charset."""
+async def read_bounded_text(
+    resp: aiohttp.ClientResponse,
+) -> tuple[str, bool]:
+    """Read up to MAX_FETCH_BYTES from *resp* and decode with its charset.
+
+    Returns ``(text, truncated)``: *truncated* is True when the body hit
+    the byte cap, so callers can mark the preview PARTIAL + remainder
+    instead of passing a silent bare cut to the model.
+    """
     chunks: list[bytes] = []
     remaining = _MAX_FETCH_BYTES
+    truncated = False
     while remaining:
         # StreamReader.read(n) may return fewer than n bytes before EOF, so a
         # single large read can silently truncate a chunked/slow response.
@@ -1015,10 +1023,17 @@ async def read_bounded_text(resp: aiohttp.ClientResponse) -> str:
             break
         chunks.append(chunk)
         remaining -= len(chunk)
+        if remaining <= 0:
+            # Cap reached: one more read tells whether more bytes remain
+            # without buffering the whole firehose body.
+            extra = await resp.content.read(1)
+            if extra:
+                truncated = True
+            break
 
     body_bytes = b"".join(chunks)
     encoding = resp.charset or "utf-8"
-    return body_bytes.decode(encoding, errors="replace")
+    return body_bytes.decode(encoding, errors="replace"), truncated
 
 
 @asynccontextmanager

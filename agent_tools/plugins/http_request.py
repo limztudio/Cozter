@@ -146,7 +146,13 @@ async def _request_following_redirects(
             content_type = response.headers.get("content-type", "")
             if not _is_textual_content_type(content_type):
                 return status, str(response.url), content_type, None
-            text = await read_bounded_text(response)
+            text, _http_capped = await read_bounded_text(response)
+            if _http_capped:
+                text += (
+                    "\n… [fetch capped at 5 MB — preview only, not full"
+                    " coverage; narrow the request; say PARTIAL + remainder"
+                    " when coverage is unclear]"
+                )
             return status, str(response.url), content_type, text
 
 

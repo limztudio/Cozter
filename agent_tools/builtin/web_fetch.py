@@ -89,7 +89,13 @@ async def _fetch_following_redirects(
                     f"'{content_type}', not readable text.",
                 )
 
-            body = await read_bounded_text(response)
+            body, _fetch_capped = await read_bounded_text(response)
+            if _fetch_capped:
+                body += (
+                    "\n… [fetch capped at 5 MB — preview only, not full"
+                    " coverage; narrow the request; say PARTIAL + remainder"
+                    " when coverage is unclear]"
+                )
             return final_url, content_type, body
 
 

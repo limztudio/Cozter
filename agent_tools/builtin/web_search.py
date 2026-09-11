@@ -91,7 +91,11 @@ class WebSearchTool(AgentTool):
                                 f"{host}: HTTP {response.status}",
                             )
                         else:
-                            body = await read_bounded_text(response)
+                            body, _search_capped = await read_bounded_text(
+                                response,
+                            )
+                            if _search_capped:
+                                body += "<!-- … [fetch capped at 5 MB — preview only] -->"
                             saw_page = True
                             results = _parse_results(body, max_results)
                             if results:

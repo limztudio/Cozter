@@ -188,7 +188,7 @@ class AgentToolHelperTests(unittest.TestCase):
             response = Response([b"first-", b"second-", b"third"])
             self.assertEqual(
                 await read_bounded_text(response),  # type: ignore[arg-type]
-                "first-second-third",
+                ("first-second-third", False),
             )
 
         asyncio.run(run())
@@ -206,7 +206,7 @@ class AgentToolHelperTests(unittest.TestCase):
             with mock.patch("Cozter.agent_tools.base._MAX_FETCH_BYTES", 5):
                 self.assertEqual(
                     await read_bounded_text(Response()),  # type: ignore[arg-type]
-                    "abcde",
+                    ("abcde", True),
                 )
 
         asyncio.run(run())
