@@ -439,7 +439,11 @@ def truncate_status_text(text: object, *, limit: int = 200) -> str:
     if len(value) <= limit:
         return value
     if limit <= len(_TRUNCATED_PREVIEW_SUFFIX):
-        return value[:limit]
+        # Too tight for the full honesty marker: keep a visible cut
+        # indicator so the preview is never mistaken for full content.
+        if limit <= 1:
+            return value[:limit]
+        return value[:limit - 1] + "…"
     return value[:limit - len(_TRUNCATED_PREVIEW_SUFFIX)] + (
         _TRUNCATED_PREVIEW_SUFFIX
     )
@@ -452,6 +456,8 @@ def summarize_cli_tool(name: object, tool_input: object) -> str:
         return label
     command = tool_input.get("command") or tool_input.get("cmd")
     if isinstance(command, str) and command:
+        if len(command) > 200:
+            return f"$ {command[:200]}… [clipped]"
         return f"$ {command}"
     path = (
         tool_input.get("path")
@@ -460,6 +466,8 @@ def summarize_cli_tool(name: object, tool_input: object) -> str:
         or tool_input.get("filename")
     )
     if isinstance(path, str) and path:
+        if len(path) > 200:
+            return f"{label}: {path[:200]}… [clipped]"
         return f"{label}: {path}"
     return label
 

@@ -123,24 +123,49 @@ def _prompt_argv_units(prompt: str) -> int:
     return len(prompt.encode("utf-8", errors="replace"))
 
 
+def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
+    """Return the newest *budget* argv units without splitting a character.
+
+    Binary-searching a character boundary avoids splitting an emoji or
+    UTF-8 sequence while keeping the operation small even for a large
+    configured history budget. The flag reports whether any head context
+    was dropped.
+    """
+    if budget <= 0:
+        return "", True
+    if _prompt_argv_units(text) <= budget:
+        return text, False
+    lower, upper = 0, len(text)
+    while lower < upper:
+        middle = (lower + upper) // 2
+        if _prompt_argv_units(text[middle:]) <= budget:
+            upper = middle
+        else:
+            lower = middle + 1
+    return text[lower:], True
+
+
 def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     """Keep the newest complete characters that fit in an argv unit budget."""
     if _prompt_argv_units(prompt) <= limit:
         return prompt
+    if limit <= 0:
+        return ""
 
     # The tail contains the current user request; the preamble and older
-    # context are at the head. Binary-searching a character boundary avoids
-    # splitting an emoji or UTF-8 sequence while keeping the operation small
-    # even for a large configured history budget.
-    lower = 0
-    upper = len(prompt)
-    while lower < upper:
-        middle = (lower + upper) // 2
-        if _prompt_argv_units(prompt[middle:]) <= limit:
-            upper = middle
-        else:
-            lower = middle + 1
-    return prompt[lower:]
+    # context are at the head. Dropping them is a preview, never full
+    # coverage — mark it so the model says PARTIAL + remainder.
+    marker = "… [older prompt context dropped to fit argv cap — preview only]"
+    if limit <= len(marker):
+        # Too tight for the full marker: keep a visible cut indicator
+        # so the preview is never mistaken for full content.
+        if limit <= 1:
+            tail, _ = _truncate_utf8_tail(prompt, limit)
+            return tail
+        tail, _ = _truncate_utf8_tail(prompt, limit - 1)
+        return tail + "…"
+    tail, truncated = _truncate_utf8_tail(prompt, limit - len(marker))
+    return tail + marker if truncated else tail
 
 
 # Marker inserted when the argv cap forces middle context out. It keeps the

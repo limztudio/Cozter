@@ -35,6 +35,7 @@ from Cozter.backends_agent.base import (
     record_error_event,
     summarize_cli_tool,
     terminal_result_text,
+    truncate_status_text,
 )
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent.codex import CodexBackend
@@ -206,6 +207,19 @@ class BackendSharedHelperTests(unittest.TestCase):
         )
         self.assertEqual(summarize_cli_tool("", None), "tool")
         self.assertEqual(summarize_cli_tool("Read", {"path": 3}), "Read")
+        long_cmd = "x" * 300
+        self.assertEqual(
+            summarize_cli_tool("Bash", {"command": long_cmd}),
+            "$ " + "x" * 200 + "… [clipped]",
+        )
+        self.assertEqual(
+            summarize_cli_tool("Read", {"path": "p" * 300}),
+            "Read: " + "p" * 200 + "… [clipped]",
+        )
+
+    def test_truncate_status_text_tiny_limit_keeps_visible_cut(self) -> None:
+        self.assertEqual(truncate_status_text("abcdef", limit=1), "a")
+        self.assertEqual(truncate_status_text("abcdef", limit=2), "a…")
 
     def test_process_resource_map_keys_by_object_identity(self) -> None:
         resources = ProcessResourceMap()
@@ -1707,10 +1721,8 @@ class CopilotPromptCapTests(unittest.TestCase):
         # character-count cap could otherwise exceed Windows' command-line
         # limit despite appearing to be below it.
         with mock.patch.object(copilot_mod.sys, "platform", "win32"):
-            self.assertEqual(
-                copilot_mod._truncate_prompt_for_argv("x😀😀😀", 4),
-                "😀😀",
-            )
+            out = copilot_mod._truncate_prompt_for_argv("x😀😀😀", 4)
+            self.assertEqual(out, "😀…")
             self.assertEqual(copilot_mod._prompt_argv_units("😀😀"), 4)
             quoted = 'say "hello" to Copilot'
             self.assertGreater(
