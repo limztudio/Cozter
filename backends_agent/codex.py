@@ -28,10 +28,12 @@ _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 # These values preserve useful token-aware compaction before a user opens the
 # picker or on hosts where the catalog probe is unavailable.  They are active
 # CLI windows, not the larger maximum capability a model may advertise.
-# Verified 2026-09-10: live ``codex debug models`` (codex-cli 0.147.0)
-# lists gpt-5.6-sol/terra/luna, gpt-5.5, and gpt-5.3-codex-spark; codex
-# 0.154.0 release notes (2026-09-09) add GPT-6-Astra to the picker, so it
-# stays first in this fallback ahead of older installs.
+# Verified 2026-09-11: live ``codex debug models`` (codex-cli 0.147.0)
+# lists gpt-5.6-sol/terra/luna, gpt-5.5, and gpt-5.3-codex-spark as
+# visibility=list (plus hide-only gpt-reserve and codex-auto-review, which
+# the parser skips); codex 0.154.0 release notes (2026-09-09) add
+# GPT-6-Astra to the picker, so it stays first in this fallback ahead of
+# older installs.
 _FALLBACK_MODEL_SPECS = (
     ("gpt-6-astra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
