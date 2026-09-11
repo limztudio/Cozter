@@ -15,6 +15,8 @@ ROUTER_PROMPT = (
     " message below — or NEW if none match.\n\n"
     "Rules:\n"
     "- Continue on clear topical match; NEW for new topics.\n"
+    "- Session blocks marked … are truncated previews, not full coverage:"
+    " route on what is shown; never invent unseen content.\n"
     "- One line: bare session id, or NEW.\n"
     "- No tools; decide from the input.\n"
 )
@@ -30,7 +32,10 @@ def _truncate_router_text(text: str, limit: int) -> str:
         return text
     if limit <= 1:
         return "…"[:limit]
-    return text[:limit - 1] + "…"
+    marker = "… [truncated preview]"
+    if limit <= len(marker):
+        return text[:limit]
+    return text[:limit - len(marker)] + marker
 
 
 def _build_session_block(data: dict) -> str:
@@ -73,7 +78,10 @@ def _build_router_prompt(prompt: str, sessions_data: list[dict]) -> str:
     parts: list[str] = ["User message:"]
     preview = prompt.strip()
     if len(preview) > ROUTER_PROMPT_PREVIEW_CHARS:
-        preview = preview[:ROUTER_PROMPT_PREVIEW_CHARS] + "…"
+        preview = (
+            preview[:ROUTER_PROMPT_PREVIEW_CHARS]
+            + "… [message preview truncated]"
+        )
     parts.append(preview)
     parts.append("")
     parts.append(f"Existing sessions ({len(sessions_data)}, newest first):")

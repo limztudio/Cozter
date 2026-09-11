@@ -89,6 +89,22 @@ class ContextBudgetTests(unittest.TestCase):
         self.assertIn("[Session Summary]", out)
         self.assertIn("… [truncated to fit budget;", out)
 
+    def test_dropped_list_items_say_partial_not_silent(self) -> None:
+        """take_recent_lines drops are marked; the model must not see full coverage."""
+        data = {
+            "summary": "",
+            "long_term": [f"item-{i} " + ("x" * 200) for i in range(20)],
+            "messages": [],
+        }
+        out = agent._build_contextual_prompt(
+            "NEW MESSAGE", data, [], budget=1_500,
+        )
+        self.assertLessEqual(len(out), 1_500)
+        self.assertIn("NEW MESSAGE", out)
+        self.assertIn("[Long-term Memory]", out)
+        self.assertIn("older items omitted", out)
+        self.assertIn("PARTIAL + remainder", out)
+
     def test_continuation_overhead_does_not_exceed_history_budget(self) -> None:
         """Drop saved context when its wrapper would overflow a fitting prompt."""
         prompt = "p" * 1_993

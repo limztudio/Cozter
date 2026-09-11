@@ -365,7 +365,9 @@ class OpenAIChatBackend(Backend):
                 "message": (
                     f"{self.name} conversation exceeded the "
                     f"{_MAX_AGENT_MESSAGE_BYTES // (1024 * 1024)} MiB "
-                    "limit; narrow the task or cut tool output."
+                    "limit; the retained transcript is a truncated preview —"
+                    " narrow the task or cut tool output, and say PARTIAL +"
+                    " remainder when work is left."
                 ),
             })
 

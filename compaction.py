@@ -46,12 +46,22 @@ _HISTORY_BUDGET_COMPACT_FRACTION = 0.75
 # oversized old summary can leave no room for even a single message and block
 # every later compaction attempt.
 _PREVIOUS_SUMMARY_FRACTION = 4
-_PREVIOUS_SUMMARY_TRUNCATION_MARKER = "\n… [previous summary truncated]\n"
+_PREVIOUS_SUMMARY_TRUNCATION_MARKER = (
+    "\n… [previous summary truncated: remainder omitted — this is a preview,"
+    " not full coverage; say PARTIAL + remainder when coverage is unclear]\n"
+)
+# Marker appended when an oversized first message is represented by a
+# bounded prefix. Shared with _oversized_first_message_prefix so the
+# consumed-character accounting always matches the rendered line.
+_OVERSIZED_MESSAGE_MARKER = "… [message truncated for budget — preview only]"
 
 SUMMARY_PROMPT = (
     "Compact this conversation into SCRATCH summary (rewritten each time)"
     " + LONG-TERM memory (durable facts) + TITLE.\n\n"
     "Text-only: no tools, shell, or fetches. Work from the text below.\n\n"
+    "Inputs marked …/PARTIAL are truncated previews, not full coverage:"
+    " summarize only what is shown, carry everything else forward"
+    " unchanged, and never claim full coverage from a preview.\n\n"
     "=== SCRATCH SUMMARY ===\n"
     "Abstract REPLACING raw history — enough to continue seamlessly.\n"
     "The reader always sees [Long-term Memory] too, so never repeat it."
@@ -151,6 +161,19 @@ def _compaction_prompt_parts(
             existing_long_term, lt_max, lambda x: f"- {x}",
         )
         if lt_lines:
+            if len(lt_lines) < len(existing_long_term):
+                lt_lines = [
+                    "… [older long-term items omitted — rewrite only the"
+                    " items shown and carry the rest forward unchanged]",
+                    *lt_lines,
+                ]
+                # Keep the fixed prefix inside the same fraction: drop the
+                # oldest retained lines (newest retained last) to fit.
+                while (
+                    len(lt_lines) > 1
+                    and sum(len(line) + 1 for line in lt_lines) > lt_max
+                ):
+                    lt_lines.pop(1)
             parts.append(
                 "Existing long-term items (rewrite this list per the "
                 "instructions above):"
@@ -208,9 +231,18 @@ def _oversized_first_message_prefix(
     prefix = session.format_msg_line(
         {"role": first.get("role"), "content": ""}, cap=None,
     )
-    # The partial line consumes one character for the ellipsis inserted by
-    # _take_oldest_message_lines, so leave that slot out of the raw prefix.
-    content_chars = budget - len(prefix) - 1
+    # The partial line carries the oversized-message marker inserted by
+    # _take_oldest_message_lines, so leave that many slots out of the raw
+    # prefix. Mirrors the renderer's tiny-budget fallback: budget 1 keeps a
+    # bare ellipsis, and budgets that cannot fit the full marker keep a
+    # plain clipped prefix with no marker.
+    if budget - len(prefix) == 1:
+        marker_len = 1
+    elif budget - len(prefix) <= len(_OVERSIZED_MESSAGE_MARKER):
+        marker_len = 0
+    else:
+        marker_len = len(_OVERSIZED_MESSAGE_MARKER)
+    content_chars = budget - len(prefix) - marker_len
     if content_chars <= 0:
         return None
     return content, content_chars
@@ -531,10 +563,13 @@ def _take_oldest_message_lines(messages: list[dict], budget: int) -> list[str]:
                 # removed, so skipping it means every later pass chooses the
                 # same zero-message prefix.  Give the summary model a marked
                 # prefix and let successful compaction advance the history.
+                marker = _OVERSIZED_MESSAGE_MARKER
                 if budget == 1:
                     lines.append("…")
+                elif budget <= len(marker):
+                    lines.append(line[:budget])
                 else:
-                    lines.append(line[:budget - 1] + "…")
+                    lines.append(line[:budget - len(marker)] + marker)
             break
         lines.append(line)
         # Match utils.take_recent_lines' conservative accounting for the

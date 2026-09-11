@@ -524,8 +524,10 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 first_prompt = run_summary.await_args_list[0].args[2]
                 first_prefix = first_prompt.split(
                     "Conversation to summarize:\nUser: ", 1,
-                )[1][:-1]
-                self.assertTrue(first_prompt.endswith("…"))
+                )[1][:-len(compaction._OVERSIZED_MESSAGE_MARKER)]
+                self.assertTrue(
+                    first_prompt.endswith(compaction._OVERSIZED_MESSAGE_MARKER)
+                )
                 self.assertTrue(original.startswith(first_prefix))
 
                 saved = session.load_session(workspace_path, data["id"])
@@ -547,8 +549,12 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 second_prompt = run_summary.await_args_list[1].args[2]
                 second_prefix = second_prompt.split(
                     "Conversation to summarize:\nUser: ", 1,
-                )[1][:-1]
-                self.assertTrue(second_prompt.endswith("…"))
+                )[1][:-len(compaction._OVERSIZED_MESSAGE_MARKER)]
+                self.assertTrue(
+                    second_prompt.endswith(
+                        compaction._OVERSIZED_MESSAGE_MARKER
+                    )
+                )
 
             saved = session.load_session(workspace_path, data["id"])
             assert saved is not None
@@ -655,7 +661,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 )
 
             prompt = run_summary.await_args.args[2]
-            self.assertIn("[previous summary truncated]", prompt)
+            self.assertIn("previous summary truncated", prompt)
+            self.assertIn("PARTIAL + remainder", prompt)
             self.assertLess(len(prompt), compaction.MAX_SUMMARY_CHARS)
             compacted = session.load_session(workspace_path, data["id"])
             assert compacted is not None
@@ -732,6 +739,45 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(applied)
             run_consolidate.assert_not_awaited()
             self.assertEqual(colony.get_items(workspace_path), [])
+
+    async def test_colony_truncation_marks_preview_and_partial(self) -> None:
+        """Budget-clipped colony input must read as a preview, not full coverage."""
+        with tempfile.TemporaryDirectory() as workspace_path:
+            data = session.create_session(workspace_path, name="Topic")
+            loaded = session.load_session(workspace_path, data["id"])
+            assert loaded is not None
+            loaded["long_term"] = ["kept evidence " + ("y" * 200)] * 30
+            session.save_session(workspace_path, data["id"], loaded)
+            colony.set_items(
+                workspace_path, ["x" * (colony.CONSOLIDATE_MAX_INPUT_CHARS * 2)],
+            )
+            output = (
+                "[COLONY]\n- Rewritten.\n[/COLONY]\n\n"
+                f"[SESSION:{data['id']}]\n- kept.\n[/SESSION]"
+            )
+            with mock.patch.object(
+                colony, "run_internal_backend", new=mock.AsyncMock(
+                    return_value=output,
+                ),
+            ) as run_consolidate:
+                applied = await colony.consolidate(
+                    workspace_path, "model", backend_name="codex",
+                )
+            self.assertTrue(applied)
+            prompt = run_consolidate.await_args.args[2]
+            self.assertIn("PARTIAL + remainder", prompt)
+            self.assertIn("preview, not full coverage", prompt)
+
+    async def test_compaction_long_term_clipping_keeps_partial_honesty(
+        self,
+    ) -> None:
+        """Clipped rewrite lists tell the model to carry the rest forward."""
+        parts = compaction._compaction_prompt_parts(
+            None, [f"item-{i} " + ("z" * 1_000) for i in range(30)],
+        )
+        joined = "\n".join(parts)
+        self.assertIn("older long-term items omitted", joined)
+        self.assertIn("carry the rest forward unchanged", joined)
 
 
 if __name__ == "__main__":

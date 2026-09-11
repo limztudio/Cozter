@@ -360,7 +360,7 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
                     "cwd": "/work",
                     "state": "done",
                     "sessionId": "048e1065-aaaa-bbbb-cccc-0123456789ab",
-                    "output": {"result": "x" * 32},
+                    "output": {"result": "x" * 200},
                 }, f)
 
             with (
@@ -368,16 +368,29 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
                     claude_code_mod, "_claude_home", return_value=claude_home,
                 ),
                 mock.patch.object(
-                    claude_code_mod, "_MAX_DETACHED_OUTPUT_TEXT_BYTES", 20,
+                    claude_code_mod, "_MAX_DETACHED_OUTPUT_TEXT_BYTES",
+                    len(
+                        claude_code_mod._DETACHED_OUTPUT_TRUNCATION_MARKER.encode(
+                            "utf-8"
+                        )
+                    )
+                    + 8,
                 ),
             ):
                 output = await backend.get_detached_task_output("/work", task_id)
 
+        marker = claude_code_mod._DETACHED_OUTPUT_TRUNCATION_MARKER
+        marker_bytes = len(marker.encode("utf-8"))
+        cap = marker_bytes + 8
         self.assertEqual(
             output,
-            "x" * 8 + claude_code_mod._DETACHED_OUTPUT_TRUNCATION_MARKER,
+            "x" * 8 + marker,
         )
-        self.assertLessEqual(len(output.encode("utf-8")), 20)
+        self.assertLessEqual(
+            len(output.encode("utf-8")),
+            cap,
+        )
+        self.assertIn("PARTIAL + remainder", output)
 
     async def test_control_command_rejects_oversized_streams_after_draining(
         self,

@@ -114,6 +114,10 @@ CONSOLIDATE_PROMPT = (
     "=== TASK ===\n"
     "PROMOTE to colony: an item in 2+ sessions, or a colony item whose"
     " topic still appears in >=1 session.\n\n"
+    "Input may be truncated for budget (marked …). Treat marked input as"
+    " a preview, not full coverage: consolidate only the sessions/items"
+    " shown, keep all other stored memory unchanged, and say PARTIAL +"
+    " remainder when coverage is unclear.\n\n"
     "KEEP session-local: items specific to one session.\n\n"
     "MERGE near-duplicates into one sentence.\n\n"
     "PRUNE colony items no session represents, plus wrong items.\n\n"
@@ -138,6 +142,13 @@ CONSOLIDATE_COLONY_CHARS = CONSOLIDATE_MAX_INPUT_CHARS // 4
 
 _SESSION_BLOCK_RE = re.compile(
     r"\[SESSION:([^\]\s]+)\](.*?)\[/SESSION\]", re.DOTALL,
+)
+
+_CONSOLIDATE_TRUNCATION_NOTE = (
+    "… [input truncated for budget — this is a preview, not full coverage;"
+    " consolidate only the sessions/items shown and never claim"
+    " full-workspace coverage; say PARTIAL + remainder when coverage"
+    " is unclear]"
 )
 
 # Per-workspace guard so two compactions hitting the same interval mark
@@ -183,10 +194,13 @@ def _bounded_colony_lines(items: list[str], budget: int) -> tuple[list[str], boo
             return lines, True
         line = f"- {item}"
         if len(line) > remaining:
+            marker = "… [item truncated for budget — preview only]"
             if remaining == 1:
                 lines.append("…")
+            elif remaining <= len(marker):
+                lines.append(line[:remaining])
             else:
-                lines.append(line[:remaining - 1] + "…")
+                lines.append(line[:remaining - len(marker)] + marker)
             return lines, True
         lines.append(line)
         used += separator + len(line)
@@ -222,8 +236,19 @@ def _build_bounded_session_block(
         return ""
     raw_items = long_term if isinstance(long_term, list) else []
     items = [item for item in raw_items if isinstance(item, str) and item]
-    item_lines, _truncated = _bounded_colony_lines(items, item_budget)
+    item_lines, truncated = _bounded_colony_lines(items, item_budget)
     body = "\n".join(item_lines)
+    if truncated and item_lines:
+        note = _CONSOLIDATE_TRUNCATION_NOTE
+        while (
+            item_lines
+            and len("\n".join(item_lines)) + len(note) + 1 > item_budget
+        ):
+            item_lines.pop()
+        if item_lines:
+            body = "\n".join(item_lines) + "\n" + note
+        else:
+            body = note[:max(0, item_budget)]
     return prefix + (body + "\n" if body else "") + closing
 
 
@@ -334,6 +359,7 @@ async def _consolidate_inner(
                 "Colony input exceeded %d chars; truncating existing colony context",
                 CONSOLIDATE_COLONY_CHARS,
             )
+            parts.append(_CONSOLIDATE_TRUNCATION_NOTE)
     else:
         parts.append("(empty)")
     parts.append("")

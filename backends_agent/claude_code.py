@@ -123,7 +123,10 @@ _MAX_DETACHED_OUTPUT_TEXT_BYTES = 4 * 1024 * 1024
 # ``json.load`` would otherwise materialize an arbitrarily large provider
 # file before the result-text cap below can take effect.
 _MAX_DETACHED_STATE_BYTES = 8 * 1024 * 1024
-_DETACHED_OUTPUT_TRUNCATION_MARKER = "\n[truncated]"
+_DETACHED_OUTPUT_TRUNCATION_MARKER = (
+    "\n… [truncated: remainder omitted — never treat this preview as full"
+    " content; say PARTIAL + remainder when coverage is unclear]"
+)
 
 def _background_guard_settings() -> str:
     """Return the session-only Claude hook that blocks orphaned Bash jobs."""

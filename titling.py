@@ -134,7 +134,10 @@ async def generate(
             0, context_budget - recent_reserve - summary_overhead,
         )
         if summary_budget:
-            parts.append(f"{summary_prefix}{summary_text[:summary_budget]}\n")
+            clipped = summary_text[:summary_budget]
+            if len(clipped) < len(summary_text):
+                clipped = clipped + "… [older summary omitted]"
+            parts.append(f"{summary_prefix}{clipped}\n")
     parts.append("Recent messages:")
 
     # Newest-first under the remaining budget; the title only needs the

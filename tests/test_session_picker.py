@@ -61,6 +61,17 @@ class SessionPickerTests(unittest.TestCase):
             router._parse_router_output(session_id, {session_id}), session_id,
         )
 
+    def test_router_truncation_is_an_explicit_preview(self) -> None:
+        block = router._build_session_block({
+            "id": "sid",
+            "name": "N" * 5_000,
+            "summary": "S" * 5_000,
+            "long_term": ["L" * 5_000] * 5,
+        })
+        self.assertLessEqual(len(block), router.ROUTER_PER_SESSION_CHARS)
+        self.assertIn("[truncated preview]", block)
+        self.assertIn("truncated previews", router.ROUTER_PROMPT)
+
 
 if __name__ == "__main__":
     unittest.main()

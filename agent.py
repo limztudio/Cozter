@@ -609,6 +609,22 @@ def _bounded_context_list_block(
     if body_limit <= 0:
         return ""
     lines = take_recent_lines(items, body_limit, formatter)
+    if len(lines) < len(items):
+        omission = (
+            "… [older items omitted — never treat this preview as full"
+            " coverage; say PARTIAL + remainder when coverage is unclear]"
+        )
+        # Make room for the omission marker within the same body budget
+        # by dropping oldest retained lines first (newest retained last).
+        while lines and len("\n".join(lines)) + len(omission) + 1 > body_limit:
+            lines.pop(0)
+        if lines:
+            body = omission + "\n" + "\n".join(lines)
+        else:
+            body = _truncate_context_text(omission, body_limit)
+        if not body:
+            return ""
+        return header + body + footer
     if lines:
         body = "\n".join(lines)
     else:
