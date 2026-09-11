@@ -120,7 +120,7 @@ class BashTool(AgentTool):
 
     def summarize(self, args: dict) -> str:
         cmd = args.get("command", "")
-        return f"$ {cmd[:200]}" + ("..." if len(cmd) > 200 else "")
+        return f"$ {cmd[:200]}" + ("... [clipped]" if len(cmd) > 200 else "")
 
 
 def _find_shell() -> list[str] | None:

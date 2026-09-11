@@ -156,7 +156,12 @@ class GitInfoTool(AgentTool):
             # Keep the diagnostic to git's first stderr line; later lines
             # are usually usage text that would flood the tool result.
             first_line = stderr.strip().splitlines()
-            detail = first_line[0][:_MAX_GIT_ERROR_CHARS] if first_line else "?"
+            raw_detail = first_line[0] if first_line else "?"
+            if len(raw_detail) > _MAX_GIT_ERROR_CHARS:
+                raw_detail = (
+                    raw_detail[:_MAX_GIT_ERROR_CHARS] + "… [clipped]"
+                )
+            detail = raw_detail
             raise _GitFailed(detail or "?")
         return stdout, stderr
 

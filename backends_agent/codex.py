@@ -125,7 +125,10 @@ def _stderr_preview(value: str | bytes | None) -> str:
     """Return a safe short stderr preview without platform decoding errors."""
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="replace")
-    return (value or "").strip()[:200]
+    cleaned = (value or "").strip()
+    if len(cleaned) > 200:
+        return cleaned[:200] + "… [clipped]"
+    return cleaned
 
 
 class CodexBackend(Backend):

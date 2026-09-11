@@ -371,9 +371,11 @@ def _find_session(
     if len(prefix) == 1:
         return prefix[0], None
     if len(prefix) > 1:
-        names = ", ".join(s["name"] for s in prefix[:5])
+        shown = ", ".join(s["name"] for s in prefix[:5])
+        if len(prefix) > 5:
+            shown += f", … [{len(prefix) - 5} more match(es) omitted]"
         return None, (
-            f"Error: '{target}' matches {len(prefix)} sessions ({names});"
+            f"Error: '{target}' matches {len(prefix)} sessions ({shown});"
             " use a longer prefix or the full id"
         )
     return None, (

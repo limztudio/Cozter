@@ -69,7 +69,7 @@ class AgentToolHelperTests(unittest.TestCase):
         )
         self.assertEqual(
             summarize_arg("grep", {"pattern": "a" * 201}, "pattern"),
-            "grep: " + ("a" * 200) + "...",
+            "grep: " + ("a" * 200) + "... [clipped]",
         )
 
     def test_read_file_rejects_non_finite_range_values(self) -> None:

@@ -457,6 +457,16 @@ class MemoryToolTests(unittest.TestCase):
         ambiguous = self.invoke(action="read", session="4444")
         self.assertIn("matches 2 sessions", ambiguous)
 
+    def test_read_ambiguous_many_matches_marks_remainder(self) -> None:
+        for i in range(7):
+            self.write_session(
+                f"5555{i:04d}-7777", name=f"Amb{i}",
+                created=f"2025-06-0{(i % 9) + 1}T08:00:00",
+            )
+        ambiguous = self.invoke(action="read", session="5555")
+        self.assertIn("matches 7 sessions", ambiguous)
+        self.assertIn("more match(es) omitted", ambiguous)
+
     def test_read_requires_session_arg(self) -> None:
         self.assertTrue(
             self.invoke(action="read").startswith("Error:"),

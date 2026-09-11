@@ -332,7 +332,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as raised:
             self._stream([{"error": "x" * 2_000}])
 
-        self.assertLessEqual(len(str(raised.exception)), 520)
+        self.assertLessEqual(len(str(raised.exception)), 535)
 
     def test_http_error_body_read_is_bounded(self) -> None:
         async def stream() -> None:

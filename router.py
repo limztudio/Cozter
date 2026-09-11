@@ -73,7 +73,9 @@ def _build_session_block(data: dict) -> str:
     return _truncate_router_text("\n".join(block), ROUTER_PER_SESSION_CHARS)
 
 
-def _build_router_prompt(prompt: str, sessions_data: list[dict]) -> str:
+def _build_router_prompt(
+    prompt: str, sessions_data: list[dict], total_sessions: int | None = None,
+) -> str:
     """Assemble the router prompt body. Caller prepends ROUTER_PROMPT."""
     parts: list[str] = ["User message:"]
     preview = prompt.strip()
@@ -84,7 +86,15 @@ def _build_router_prompt(prompt: str, sessions_data: list[dict]) -> str:
         )
     parts.append(preview)
     parts.append("")
-    parts.append(f"Existing sessions ({len(sessions_data)}, newest first):")
+    shown_total = total_sessions if total_sessions is not None else len(sessions_data)
+    if shown_total > len(sessions_data):
+        parts.append(
+            f"Existing sessions ({shown_total} total,"
+            f" newest {len(sessions_data)} shown, remainder omitted —"
+            " preview only, not full coverage):"
+        )
+    else:
+        parts.append(f"Existing sessions ({len(sessions_data)}, newest first):")
     parts.append("")
     for s in sessions_data:
         parts.append(_build_session_block(s))
@@ -133,7 +143,13 @@ async def select_or_create_session(
     backend = backends_agent.get_backend(backend_name)
 
     sessions_data = session.list_sessions_with_data(workspace_path)
+    total_sessions = len(sessions_data)
     sessions_data = sessions_data[:ROUTER_MAX_SESSIONS]
+    if total_sessions > ROUTER_MAX_SESSIONS:
+        logger.info(
+            "Router: %d session(s) total, routing over newest %d",
+            total_sessions, ROUTER_MAX_SESSIONS,
+        )
 
     if not sessions_data:
         data = session.create_session(workspace_path)
@@ -142,7 +158,7 @@ async def select_or_create_session(
         )
         return (data["id"], data)
 
-    body = _build_router_prompt(prompt, sessions_data)
+    body = _build_router_prompt(prompt, sessions_data, total_sessions)
     full_prompt = f"{ROUTER_PROMPT}\n\n{body}"
 
     raw = await run_internal_backend(

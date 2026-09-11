@@ -794,16 +794,22 @@ async def _post_completion_stream(
         ) as resp:
             if resp.status == 429 or resp.status >= 500:
                 body = await _read_error_body(resp)
+                clipped = body[:200] + (
+                    "… [clipped]" if len(body) > 200 else ""
+                )
                 raise _RetryableError(
-                    f"{label} returned HTTP {resp.status}: {body[:200]}",
+                    f"{label} returned HTTP {resp.status}: {clipped}",
                     retry_after=_parse_retry_after(
                         resp.headers.get("Retry-After"),
                     ),
                 )
             if resp.status != 200:
                 body = await _read_error_body(resp)
+                clipped = body[:500] + (
+                    "… [clipped]" if len(body) > 500 else ""
+                )
                 raise RuntimeError(
-                    f"{label} returned HTTP {resp.status}: {body[:500]}"
+                    f"{label} returned HTTP {resp.status}: {clipped}"
                 )
             async for data in _iter_sse_events(resp.content):
                 data = data.strip()
@@ -828,8 +834,12 @@ async def _post_completion_stream(
                     )
                     if not isinstance(message, str) or not message.strip():
                         message = str(error)
+                    clipped_message = message.strip()[:500] + (
+                        "… [clipped]"
+                        if len(message.strip()) > 500 else ""
+                    )
                     raise RuntimeError(
-                        f"{label} stream error: {message.strip()[:500]}"
+                        f"{label} stream error: {clipped_message}"
                     )
                 choices = obj.get("choices")
                 if not isinstance(choices, list) or not choices:
