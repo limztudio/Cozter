@@ -345,7 +345,9 @@ async def execute_tool(
     if len(result) > _TOOL_RESULT_MAX:
         result = (
             result[:_TOOL_RESULT_MAX]
-            + f"\n... [{len(result)} chars total]"
+            + f"\n... [{len(result)} chars total; truncated —"
+              " use read_file offset/limit or grep to fetch remainder;"
+              " never treat this preview as full content]"
         )
 
     return _emit_tool_result(emit, name, result)

@@ -82,6 +82,9 @@ _COMPLETENESS_RULE = (
     "Whole-scope: all/entire/every/whole = list every target first,"
     " do each, re-check leftovers; never sample; never claim done"
     " with work left — say PARTIAL + remainder."
+    " Doc-following: told to follow a file/doc/standard = enumerate"
+    " every rule/section first (read fully via offset+grep), apply each,"
+    " never stop after first/last few."
 )
 
 
