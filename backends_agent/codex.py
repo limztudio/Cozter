@@ -28,12 +28,13 @@ _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 # These values preserve useful token-aware compaction before a user opens the
 # picker or on hosts where the catalog probe is unavailable.  They are active
 # CLI windows, not the larger maximum capability a model may advertise.
-# Verified 2026-09-11: live ``codex debug models`` (codex-cli 0.147.0)
+# Verified 2026-09-12: live ``codex debug models`` (codex-cli 0.147.0)
 # lists gpt-5.6-sol/terra/luna, gpt-5.5, and gpt-5.3-codex-spark as
 # visibility=list (plus hide-only gpt-reserve and codex-auto-review, which
-# the parser skips); codex 0.154.0 release notes (2026-09-09) add
-# GPT-6-Astra to the picker, so it stays first in this fallback ahead of
-# older installs.
+# the parser skips). gpt-6-astra shipped on the OpenAI API on 2026-09-04
+# (1.05M max context; Codex sessions use the 272K active window like the
+# gpt-5.6 family) but this CLI build does not list it yet, so it stays
+# first in this fallback as forward cover ahead of the CLI rollout.
 _FALLBACK_MODEL_SPECS = (
     ("gpt-6-astra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
