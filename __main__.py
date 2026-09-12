@@ -5,7 +5,7 @@ import time
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
 from importlib.util import find_spec
-from typing import Any
+from typing import Any, TextIO
 
 
 _MINIMUM_PYTHON = (3, 11)
@@ -323,10 +323,10 @@ logger = logging.getLogger(__name__)
 # lazily so tests can import this module without a writable .log/ dir,
 # and so the path reflects the configured LOG_DIR even if it is created
 # after import time.
-_dump_file = None
+_dump_file: TextIO | None = None
 
 
-def _get_dump_file():
+def _get_dump_file() -> TextIO:
     """Open (once) and return the diagnostics dump file handle.
 
     Writes diagnostics into ``.log/diagnostics.log`` so a SIGUSR1 dump
