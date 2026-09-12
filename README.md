@@ -952,8 +952,11 @@ the hard ones:
 ```
 
 Defaults put all three tiers on `codex` (`gpt-5.6-luna` / `gpt-5.6-terra` /
-`gpt-5.6-sol`). Codex keeps the high tier and chat default on Sol rather
-than Astra, which is still rolling out in some live catalogs. Pointing a
+`gpt-5.6-sol`). Codex keeps the high tier and chat default on Sol:
+Astra shipped on the OpenAI API on 2026-09-04 but is still rolling out in
+live CLI catalogs (verified 2026-09-12 against codex-cli 0.147.0, which
+does not list it yet), so a pinned `gpt-6-astra` default would fail closed
+on those accounts. Pointing a
 tier at another agent picks that agent's cheap/mid/strong models
 automatically (its `tier_models` table) — for `zai` that is
 `glm-5.3-flash` / `glm-4.7` / `glm-5.3`, and for `meta`
@@ -1135,10 +1138,13 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. That built-in Codex fallback is `gpt-6-astra`, the GPT-5.6
-Sol/Terra/Luna family, `gpt-5.5`, and `gpt-5.3-codex-spark` (the remaining
-sub-272K window); `gpt-5.4` and `gpt-5.4-mini` were retired from Codex
-ChatGPT sign-in. Grok's published `grok-4.6` and `grok-4.5` IDs use a 500K-token
+authoritative. That built-in Codex fallback (verified 2026-09-12 against
+codex-cli 0.147.0) lists `gpt-6-astra` first as forward cover — it shipped
+on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
+the GPT-5.6 family, but that CLI build does not list it yet — followed by
+the GPT-5.6 Sol/Terra/Luna family, `gpt-5.5`, and `gpt-5.3-codex-spark`
+(the remaining sub-272K window); `gpt-5.4` and `gpt-5.4-mini` were retired
+from Codex ChatGPT sign-in. Grok's published `grok-4.6` and `grok-4.5` IDs use a 500K-token
 window for that same trigger; custom or private Grok models stay unknown
 until an operator sets `model_context_windows`. Grok delivers its prompt
 through `--prompt-file` rather than `-p`, so Cozter's history budget is not
@@ -1385,7 +1391,7 @@ ignored for local secrets and runtime queues.
 - Agent adapters: `backends_agent/base.py`, `_http_proc.py`,
   `_openai_agent.py`, `codex.py`, `claude_code.py`,
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
-  `llama.py`, and `zai.py`
+  `llama.py`, `zai.py`, and `meta.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
   the 16 files under `agent_tools/builtin/`, and user plugins plus their
   README under `agent_tools/plugins/`
@@ -1556,8 +1562,8 @@ are:
 2. `agent.py:run()` to see the orchestrator
 3. `backends_agent/_openai_agent.py` for the full HTTP agent loop and
    tool dispatcher
-4. `backends_agent/llama.py` and `backends_agent/zai.py` for concrete
-   HTTP backend hooks
+4. `backends_agent/llama.py`, `backends_agent/zai.py`, and
+   `backends_agent/meta.py` for concrete HTTP backend hooks
 5. `agent_tools/__init__.py` for the auto-discovery and plugin
    bridging
 
