@@ -25,6 +25,9 @@ are trusted in-process code, not sandboxed extensions.
     then merges the reports into one reply. Tiers can straddle backends.
     Whole-scope (`all`/`entire`/`every`/`whole`) and doc-following requests
     are split so every item/rule is covered with verifiable done-criteria;
+    build/verify requests are split into enumerate-targets plus canonical
+    build/test steps with full-log evidence (commands + exit codes +
+    error/warning counts);
     a plan that hits the 12-task cap carries an explicit PARTIAL + remainder
     note, and truncated worker reports are marked as previews so the merge
     never claims done from them
@@ -765,6 +768,10 @@ The built-in HTTP-toolkit includes filesystem, shell, search, and fetch
 tools: `bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`,
 `apply_patch`, `delete_file`, `copy_file`, `move_file`, `make_dir`,
 `list_dir`, `tree`, `glob`, `grep`, `web_search`, and `web_fetch`.
+For build/test/verify work the `bash` tool description directs the model
+to use an adequate timeout (up to 120s per call), capture output to a file,
+grep the full log for error/warning/exception/traceback, and never claim
+clean from a truncated tail-only preview.
 
 Drop a `.py` file into `agent_tools/plugins/` and every agent discovers it
 on next restart. Whether a backend can invoke it still follows its selected
@@ -954,7 +961,7 @@ the hard ones:
 Defaults put all three tiers on `codex` (`gpt-5.6-luna` / `gpt-5.6-terra` /
 `gpt-5.6-sol`). Codex keeps the high tier and chat default on Sol:
 Astra shipped on the OpenAI API on 2026-09-04 but is still rolling out in
-live CLI catalogs (verified 2026-09-12 against codex-cli 0.147.0, which
+live CLI catalogs (verified 2026-09-13 against codex-cli 0.147.0, which
 does not list it yet), so a pinned `gpt-6-astra` default would fail closed
 on those accounts. Pointing a
 tier at another agent picks that agent's cheap/mid/strong models
@@ -982,6 +989,9 @@ The merge step checks every plan item against the reports before claiming
 done: partial, missing, failed, or truncated reports force a PARTIAL +
 remainder answer instead of a full-completion claim, and doc/standard
 requests are never accepted from first/last-few coverage alone.
+Build/verify requests are claimed clean only when every report lists its
+commands + exit codes + error/warning counts from full (not preview) logs
+with zero remaining; missing evidence means PARTIAL + remainder.
 
 Two behaviors are worth knowing. Under `/style collaborative`, the turn can
 stop and wait for you (`[[await]]`) at either end of the pipeline: the
@@ -992,9 +1002,14 @@ since nobody is reading them mid-pipeline. Under `/style autonomous` — and
 on scheduled `/reserve` runs, which are always autonomous — nothing pauses:
 a question the merge model emits anyway is stripped rather than left to
 strand a run nobody is watching. Every agent turn preamble now also carries the whole-scope /
-doc-following completeness rule (list every target first, do each,
+doc-following / verify-with-evidence completeness rule (list every target first, do each,
 re-check leftovers; enumerate every rule/section when told to follow a
-doc; never claim done with work left — say PARTIAL + remainder), and
+doc; build/test/verify means enumerate targets, run canonical commands
+with adequate timeout up to 120s per call captured to a file, grep the
+full logs for error/warning/exception, fix each hit, re-run until zero,
+exercise runtime paths and check logs, and report commands + exit codes +
+counts; never claim done with work left or clean from a truncated preview
+or unrun steps — say PARTIAL + remainder), and
 composed context trims carry matching omission markers within budget so
 the model cannot mistake a trimmed preview for full coverage. And when planning fails outright (summary
 CLI missing, unparseable output), the turn degrades to a single `high`-tier
@@ -1113,7 +1128,7 @@ simply rediscovered when it is opened again. The ACP probe runs from the
 selected workspace so project policy, including `.github/allowed_models.txt`,
 applies to the picker and stored-model check.
 Its prompt keeps the leading system preamble (including the whole-scope /
-doc-following coverage rule) when the platform argv cap forces middle
+doc-following / verify-with-evidence coverage rule) when the platform argv cap forces middle
 context out, marking the omission explicitly; a tail-only cut likewise keeps
 a visible marker and never splits a UTF-8 character, so a clipped Copilot
 prompt always reads as a PARTIAL preview with a remainder obligation.
@@ -1138,7 +1153,7 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. That built-in Codex fallback (verified 2026-09-12 against
+authoritative. That built-in Codex fallback (verified 2026-09-13 against
 codex-cli 0.147.0) lists `gpt-6-astra` first as forward cover — it shipped
 on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
 the GPT-5.6 family, but that CLI build does not list it yet — followed by
