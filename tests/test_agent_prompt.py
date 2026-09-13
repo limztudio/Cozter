@@ -165,6 +165,47 @@ class PromptPolicyTests(unittest.TestCase):
             self.assertIn("PARTIAL", hint)
 
 
+class VerifyEvidenceReachesEveryAgentTests(unittest.TestCase):
+    def test_every_selectable_agent_gets_verify_with_evidence(self) -> None:
+        from Cozter.backends_agent import AVAILABLE_BACKENDS, get_backend
+
+        # Every chat-selectable agent: flexible + all 7 direct backends.
+        self.assertEqual(
+            sorted(AVAILABLE_BACKENDS),
+            sorted([
+                "flexible", "codex", "copilot", "claude_code",
+                "grok", "llama", "meta", "zai",
+            ]),
+        )
+        for name in AVAILABLE_BACKENDS:
+            backend = get_backend(name)
+            for collaborative in (True, False):
+                prompt = agent._build_backend_prompt(
+                    backend, "make sure the project builds clean",
+                    collaborative=collaborative,
+                    allow_detached_requests=False,
+                )
+                self.assertIn(
+                    "Verify-with-evidence", prompt, msg=f"agent={name}",
+                )
+                self.assertIn("exit codes", prompt, msg=f"agent={name}")
+                self.assertIn(
+                    "PARTIAL + remainder", prompt, msg=f"agent={name}",
+                )
+
+    def test_every_direct_agent_gets_verify_with_evidence(self) -> None:
+        from Cozter.backends_agent import DIRECT_BACKENDS, get_backend
+
+        self.assertEqual(len(DIRECT_BACKENDS), 7)
+        for name in DIRECT_BACKENDS:
+            backend = get_backend(name)
+            prompt = agent._build_backend_prompt(
+                backend, "verify build", collaborative=False,
+                allow_detached_requests=False,
+            )
+            self.assertIn("Verify-with-evidence", prompt, msg=f"agent={name}")
+
+
 class CompactionTargetTests(unittest.TestCase):
     def test_flexible_targets_include_summary_and_every_tier(self) -> None:
         backend = SimpleNamespace(name=agent.flexible.BACKEND_NAME)

@@ -34,7 +34,11 @@ class BashTool(AgentTool):
     # child processes. Keep it out of HTTP agents' default ``auto`` mode.
     requires_full_permission = True
     description = (
-        "Run a shell command (cwd = workspace)."
+        "Run a shell command (cwd = workspace). For build/test/verify:"
+        " use adequate timeout (up to 120), capture output to a file"
+        " (`... 2>&1 | tee /tmp/build.log`), then grep the FULL file for"
+        " error/warning/exception/traceback — never eyeball tail only;"
+        " a truncated preview is not proof of clean."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

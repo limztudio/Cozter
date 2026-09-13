@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from Cozter import agent, flexible, workspace
+from Cozter.agent_tools.builtin.bash import BashTool
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import BotPlatform
 
@@ -717,6 +718,33 @@ class CoveragePromptTests(unittest.TestCase):
 
     def test_planner_rules_mention_cap_remainder(self) -> None:
         self.assertIn("PARTIAL + remainder", flexible._PLANNER_RULES)
+
+    def test_build_verify_requires_evidence_across_prompts(self) -> None:
+        """Build checks must demand full-log evidence, never eyeball-only."""
+        # Planner must split build/verify into enumerated evidence tasks.
+        self.assertIn("Build/verify", flexible._PLANNER_RULES)
+        self.assertIn("exit codes", flexible._PLANNER_RULES)
+        # Merge must refuse clean claims without per-report evidence.
+        self.assertIn("exit codes", flexible._MERGE_RULES)
+        self.assertIn("PARTIAL + remainder", flexible._MERGE_RULES)
+        # Worker prompt must demand full-log grep + runtime exercise.
+        plan = flexible.Plan(
+            understanding="",
+            subtasks=(flexible.Subtask(tier="high", instruction="verify"),),
+        )
+        worker = flexible.build_subtask_prompt("verify build", plan, 0, [])
+        self.assertIn("FULL logs", worker)
+        self.assertIn("exit codes", worker)
+        # Per-turn preamble must carry the same rule to direct turns.
+        for collaborative in (True, False):
+            hint = agent._capability_hint(
+                collaborative, allow_detached_requests=False,
+            )
+            self.assertIn("Verify-with-evidence", hint)
+            self.assertIn("exit codes", hint)
+        # Bash hint must steer builds to capture + grep full logs.
+        self.assertIn("FULL", BashTool.description)
+        self.assertIn("grep", BashTool.description.lower())
 
     def test_discovery_tools_point_at_paging(self) -> None:
         from Cozter.agent_tools.builtin import glob as glob_mod

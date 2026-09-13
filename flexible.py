@@ -72,8 +72,14 @@ _PLANNER_RULES = (
     "- Doc-following: request pointing at a file/doc/standard = split so"
     " every rule/section is covered; never one vague 'follow the doc' task"
     " hiding dozens of rules.\n"
+    "- Build/verify requests (buildable, no error/warning, no runtime"
+    " warning): split into enumerate-targets + canonical build/test with"
+    " adequate timeout (up to 120s/call, capture to file) + grep full logs"
+    " for error/warning/exception + fix + re-run until zero + runtime"
+    " launch/exercise/log-check; each task states evidence required"
+    " (commands + exit codes + counts), never one vague 'check build' task.\n"
     "- Each instruction states its done-criteria and requires the worker to"
-    " verify no leftovers remain.\n"
+    " verify no leftovers remain with evidence.\n"
     "- No tools; plan from the text.\n"
 )
 
@@ -112,6 +118,9 @@ _MERGE_RULES = (
     " PARTIAL + remainder when coverage is unclear.\n"
     "- A report containing [report truncated: remainder omitted] is a preview,"
     " not full content; never claim done from it — say PARTIAL + remainder.\n"
+    "- Build/verify requests: claim clean only when every report lists its"
+    " commands + exit codes + error/warning counts from full (not preview)"
+    " logs with zero remaining; missing evidence = PARTIAL + remainder.\n"
     "- User's language. No tool calls; work is done.\n"
 )
 
@@ -305,11 +314,18 @@ def build_subtask_prompt(
         "If it points at a doc/standard, enumerate every rule/section first"
         " (read fully via offset chunks + grep), apply each, never stop"
         " after first/last few.\n"
+        "Build/verify (buildable, no error/warning, no runtime warning):"
+        " enumerate targets, run canonical build/test with adequate timeout"
+        " (up to 120s/call, capture output to file), grep FULL logs for"
+        " error/warning/exception/traceback (never eyeball tail only), fix"
+        " each hit, re-run until zero remain; runtime means launch +"
+        " exercise paths + check logs, not just compile.\n"
         "Use tools, not description. Report per-item: what you did/found,"
         " what you skipped or could not do, what the next worker needs"
-        " (paths, commands, results).\n"
+        " (paths, commands, exit codes, error/warning counts).\n"
         "Be honest: say PARTIAL and list what remains if anything is"
-        " unfinished; never report done when work remains."
+        " unfinished or unverified; never report done when work remains"
+        " or evidence is missing."
     )
     return "\n".join(parts)
 

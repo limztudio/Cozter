@@ -85,6 +85,12 @@ _COMPLETENESS_RULE = (
     " Doc-following: told to follow a file/doc/standard = enumerate"
     " every rule/section first (read fully via offset+grep), apply each,"
     " never stop after first/last few."
+    " Verify-with-evidence: build/test/verify = enumerate targets, run"
+    " canonical commands with adequate timeout (up to 120s/call, capture"
+    " to file), grep full logs for error/warning/exception, fix each,"
+    " re-run until zero; runtime = launch + exercise paths + check logs;"
+    " report commands + exit codes + counts; never claim clean from"
+    " truncated preview or unrun steps — say PARTIAL + remainder."
 )
 
 
