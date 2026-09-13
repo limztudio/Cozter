@@ -28,7 +28,7 @@ _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 # These values preserve useful token-aware compaction before a user opens the
 # picker or on hosts where the catalog probe is unavailable.  They are active
 # CLI windows, not the larger maximum capability a model may advertise.
-# Verified 2026-09-12: live ``codex debug models`` (codex-cli 0.147.0)
+# Verified 2026-09-13: live ``codex debug models`` (codex-cli 0.147.0)
 # lists gpt-5.6-sol/terra/luna, gpt-5.5, and gpt-5.3-codex-spark as
 # visibility=list (plus hide-only gpt-reserve and codex-auto-review, which
 # the parser skips). gpt-6-astra shipped on the OpenAI API on 2026-09-04
