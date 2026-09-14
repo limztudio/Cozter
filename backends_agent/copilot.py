@@ -150,19 +150,17 @@ def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
             else:
                 lower = middle + 1
         return text[lower:], True
-    total = 0
-    cut = len(text)
-    for index in range(len(text) - 1, -1, -1):
-        total += len(text[index].encode("utf-8", errors="replace"))
-        if total > budget:
-            cut = index + 1
-            break
-        cut = index
-    else:
+    # Encode once and walk back to a UTF-8 char boundary: the old form
+    # re-encoded one character per step (one encode call per char).
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) <= budget:
         return text, False
-    if cut >= len(text):
-        return text, False
-    return text[cut:], True
+    cut = len(encoded) - budget
+    while cut < len(encoded) and (encoded[cut] & 0xC0) == 0x80:
+        cut += 1
+    if cut >= len(encoded):
+        return "", True
+    return encoded[cut:].decode("utf-8", errors="replace"), True
 
 
 def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
@@ -234,19 +232,21 @@ def _truncate_prompt_preserving_head(prompt: str, limit: int) -> str:
                 lower = middle + 1
         return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[lower:]
     tail_budget = limit - prefix_units
-    total = 0
-    cut = len(prompt)
-    for index in range(len(prompt) - 1, -1, -1):
-        total += len(prompt[index].encode("utf-8", errors="replace"))
-        if total > tail_budget:
-            cut = index + 1
-            break
-        cut = index
-    else:
+    # Encode once and walk back to a UTF-8 char boundary (single pass;
+    # the old form re-encoded one character per step).
+    tail_encoded = prompt.encode("utf-8", errors="replace")
+    if len(tail_encoded) <= tail_budget:
         return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt
-    if cut >= len(prompt):
+    cut = len(tail_encoded) - tail_budget
+    while cut < len(tail_encoded) and (tail_encoded[cut] & 0xC0) == 0x80:
+        cut += 1
+    tail = (
+        "" if cut >= len(tail_encoded)
+        else tail_encoded[cut:].decode("utf-8", errors="replace")
+    )
+    if not tail:
         return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt
-    return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[cut:]
+    return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + tail
 
 
 def _create_isolated_copilot_home() -> str:
