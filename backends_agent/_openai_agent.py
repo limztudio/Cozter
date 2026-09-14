@@ -337,6 +337,19 @@ class OpenAIChatBackend(Backend):
         effort_fields = self._effort_fields(effort, request_model)
         preserve_reasoning = self._preserve_reasoning_content(request_model)
 
+        # Photo uploads arrive as "[Photo attachment saved to: <rel>]"
+        # text. On vision-capable backends, also attach the referenced
+        # workspace image bytes as a native OpenAI-style image_url part so
+        # the model sees pixels instead of only a path. Text-only backends
+        # keep the path + verified dimensions/format/size text from _ai_file.
+        user_content: str | list[dict[str, Any]] = prompt
+        if getattr(self, "supports_vision", False):
+            vision_parts = _vision_parts_for_prompt(
+                prompt, workspace_path,
+            )
+            if vision_parts is not None:
+                user_content = vision_parts
+
         # The endpoint is stateless, so the model has no idea what cwd it is
         # operating against unless we tell it. CLI backends learn the
         # workspace via their --add-dir / -C / cwd flag; here it goes in the
@@ -346,7 +359,7 @@ class OpenAIChatBackend(Backend):
                 "role": "system",
                 "content": _system_prompt(workspace_path, enabled_tool_names),
             },
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": user_content},
         ]
         message_bytes = sum(_message_payload_bytes(message) for message in messages)
 
@@ -1167,6 +1180,90 @@ def _merge_tool_call(
 
 
 # ---------------------------------------------------------------------------
+# Vision attachments
+# ---------------------------------------------------------------------------
+
+# Cap inline image bytes per turn: uploads are already bounded by
+# max_upload_bytes, but base64 inflates by ~4/3 and the retained message
+# transcript is capped — keep one photo affordable inside that budget.
+_VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+_VISION_MIME_BY_EXT = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+}
+# Matches the "[Photo attachment saved to: <rel>]" / "[... attachment
+# saved to: <rel>]" line _ai_file emits for inbound uploads.
+_ATTACHMENT_SAVED_RE = None  # compiled lazily (see _attachment_saved_re())
+
+
+def _attachment_saved_re():  # type: ignore[no-untyped-def]
+    global _ATTACHMENT_SAVED_RE
+    if _ATTACHMENT_SAVED_RE is None:
+        import re as _re
+        _ATTACHMENT_SAVED_RE = _re.compile(
+            r"\[[^\]\n]*attachment saved to:\s*([^\]\n]+?)\s*\]",
+            _re.IGNORECASE,
+        )
+    return _ATTACHMENT_SAVED_RE
+
+
+def _vision_parts_for_prompt(
+    prompt: str, workspace_path: str,
+) -> list[dict[str, Any]] | None:
+    """Build multimodal user content for *prompt*, or None to stay text-only.
+
+    Scans for "[... attachment saved to: <rel>]" markers pointing at image
+    files inside the workspace and appends each as a base64 image_url part.
+    Returns None when no in-workspace image is referenced (normal text turn)
+    so the text-only message shape is preserved byte-for-byte.
+    """
+    import base64
+    import os as _os
+
+    if not isinstance(prompt, str) or "attachment saved to:" not in prompt:
+        return None
+    seen: set[str] = set()
+    images: list[dict[str, Any]] = []
+    for match in _attachment_saved_re().finditer(prompt):
+        rel = match.group(1).strip()
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        ext = _os.path.splitext(rel)[1].lower()
+        mime = _VISION_MIME_BY_EXT.get(ext)
+        if mime is None:
+            continue
+        # Resolve inside the workspace without following an escaping link.
+        candidate = _os.path.realpath(_os.path.join(workspace_path, rel))
+        try:
+            root = _os.path.realpath(workspace_path)
+            if _os.path.commonpath([candidate, root]) != root:
+                continue
+            if not _os.path.isfile(candidate):
+                continue
+            if _os.path.getsize(candidate) > _VISION_MAX_IMAGE_BYTES:
+                continue
+            with open(candidate, "rb") as f:
+                raw = f.read(_VISION_MAX_IMAGE_BYTES + 1)
+            if len(raw) > _VISION_MAX_IMAGE_BYTES:
+                continue
+        except OSError:
+            continue
+        b64 = base64.b64encode(raw).decode("ascii")
+        images.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"},
+        })
+    if not images:
+        return None
+    return [{"type": "text", "text": prompt}, *images]
+
+
+# ---------------------------------------------------------------------------
 # Tool exposure + system prompt
 # ---------------------------------------------------------------------------
 
@@ -1218,6 +1315,12 @@ def _system_prompt(
         " never stop after first/last few."
         " Progress is tool status (Thinking... preview, done/total may grow);"
         " notify DONE only when everything is done.",
+        "Photo uploads: the prompt carries the saved path plus verified"
+        " dimensions/format/size. On vision backends the image pixels also"
+        " ride as a native image part — look at them and answer what is in"
+        " the picture. On text-only backends there are no pixels: say what"
+        " tools verified and ask the user to describe the content instead"
+        " of guessing.",
     ]
     if tool_names:
         parts.append(

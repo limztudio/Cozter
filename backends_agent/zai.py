@@ -174,6 +174,10 @@ class ZaiBackend(CachedOpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
+    # GLM-5.3-flash / GLM-5V are documented multimodal (native vision +
+    # image_url input), so photo uploads can ride as real image parts.
+    supports_vision = True
+
     default_model = "glm-5.3"
     default_summary_model = "glm-4.5-air"
     # Flash is the current cheap general-endpoint model. Keep mid on GLM-4.7

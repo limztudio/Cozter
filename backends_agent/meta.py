@@ -101,6 +101,10 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
     name = "meta"
     executable = "meta"  # HTTP backend; never spawns a subprocess
 
+    # Muse Spark is documented multimodal (agentic tool calling + computer
+    # use), so photo uploads can ride as real image parts.
+    supports_vision = True
+
     default_model = "muse-spark-1.3"
     default_summary_model = "muse-spark-1.2"
     # Contributor pricing variants (``muse-spark-1.3-contributor``) sit

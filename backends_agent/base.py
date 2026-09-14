@@ -660,6 +660,14 @@ class Backend(ABC):
     # has no way to actually call.
     supports_plugin_prelude: bool = True
 
+    # Whether this backend can natively see image pixels. Pure text-only
+    # chat pipelines leave this False: photo uploads stay on the honest
+    # "I can only verify dimensions/format/size" path instead of being
+    # sent where they'd be silently dropped. A vision-capable backend
+    # (OpenAI-style image_url content, or a CLI with image input) sets
+    # this True so the photo handoff can attach the actual bytes.
+    supports_vision: bool = False
+
     # A detached task is a provider-owned job that can be queried after the
     # foreground Cozter subprocess has exited (for example Claude Code's
     # ``claude --bg`` sessions). Most adapters only support foreground turns;

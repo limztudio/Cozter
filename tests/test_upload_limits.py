@@ -133,6 +133,80 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("over 50,000 chars", prompt)
         self.assertNotIn("[File contents", prompt)
 
+    async def test_photo_attachment_reports_verified_dimensions(self) -> None:
+        bot = SignalBot(
+            ["https://signal.group/#test"], jsonrpc_socket="/tmp/signal.sock",
+        )
+        with tempfile.TemporaryDirectory() as ws:
+            # Minimal 1x1 PNG (signature + IHDR + IEND).
+            png = (
+                base64.b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE"
+                    "QVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                )
+            )
+            upload_dir = os.path.join(ws, ".cozter", "uploads")
+            os.makedirs(upload_dir)
+            local_path = os.path.join(upload_dir, "photo.png")
+            with open(local_path, "wb") as f:
+                f.write(png)
+            bot._require_ws = mock.AsyncMock(return_value=ws)
+            bot._dispatch_ai = mock.AsyncMock()
+            attachment = AttachmentInfo(
+                local_path=local_path,
+                filename="photo.png",
+                kind="photo",
+                caption="What is this",
+            )
+            ctx = BotContext(
+                user_id="u1",
+                chat_id="chat",
+                text="",
+                command=None,
+                args="",
+                attachment=attachment,
+                platform=bot,
+            )
+            await bot._ai_file(ctx)
+            prompt = bot._dispatch_ai.await_args.args[1]
+            self.assertIn("What is this", prompt)
+            self.assertIn("[Photo attachment saved to:", prompt)
+            self.assertIn("1x1 PNG", prompt)
+
+    def test_vision_parts_attach_image_bytes(self) -> None:
+        from Cozter.backends_agent._openai_agent import (
+            _vision_parts_for_prompt,
+        )
+        with tempfile.TemporaryDirectory() as ws:
+            png = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE"
+                "QVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+            )
+            rel = os.path.join(".cozter", "uploads", "photo.png")
+            local_path = os.path.join(ws, rel)
+            os.makedirs(os.path.dirname(local_path))
+            with open(local_path, "wb") as f:
+                f.write(png)
+            prompt = f"What is this\n[Photo attachment saved to: {rel}]"
+            parts = _vision_parts_for_prompt(prompt, ws)
+            assert parts is not None
+            self.assertEqual(parts[0], {"type": "text", "text": prompt})
+            self.assertEqual(parts[1]["type"], "image_url")
+            url = parts[1]["image_url"]["url"]
+            self.assertTrue(url.startswith("data:image/png;base64,"))
+            self.assertEqual(
+                base64.b64decode(url.split(",", 1)[1]), png,
+            )
+
+    def test_vision_parts_escape_stays_text_only(self) -> None:
+        from Cozter.backends_agent._openai_agent import (
+            _vision_parts_for_prompt,
+        )
+        with tempfile.TemporaryDirectory() as ws:
+            prompt = "x\n[Photo attachment saved to: ../../etc/passwd]"
+            self.assertIsNone(_vision_parts_for_prompt(prompt, ws))
+            self.assertIsNone(_vision_parts_for_prompt("hello", ws))
+
     async def test_telegram_rejects_metadata_before_requesting_file(self) -> None:
         bot = TelegramBot("token", ["1"], max_upload_bytes=3)
         bot.app = SimpleNamespace(bot=SimpleNamespace(id=99))

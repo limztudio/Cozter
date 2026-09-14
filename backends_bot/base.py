@@ -57,6 +57,9 @@ _TEXT_EXTENSIONS = frozenset({
     ".dockerfile", ".gitignore", ".env",
     ".log", ".diff", ".patch",
 })
+_IMAGE_EXTENSIONS = frozenset({
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+})
 _INLINE_SIZE_LIMIT = 50_000
 
 
@@ -64,6 +67,73 @@ def _read_inline_text_attachment(path: str) -> str:
     """Read only enough text to decide whether an attachment can be inlined."""
     with open(path, encoding="utf-8", errors="replace") as f:
         return f.read(_INLINE_SIZE_LIMIT + 1)
+
+
+def _probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
+    """Return (width, height, format) for common image files, else None.
+
+    Pure-stdlib header probe (PNG/JPEG/GIF/BMP) so photo uploads can be
+    described without adding a Pillow dependency. Reads only headers.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64 * 1024)
+    except OSError:
+        return None
+    if len(head) < 16:
+        return None
+    # PNG: 8-byte signature + IHDR chunk with big-endian w/h.
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+        import struct
+        try:
+            w, h = struct.unpack(">II", head[16:24])
+            if 0 < w <= 100000 and 0 < h <= 100000:
+                return (w, h, "PNG")
+        except Exception:
+            pass
+    # GIF: "GIF87a"/"GIF89a" + little-endian w/h.
+    if head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
+        import struct
+        try:
+            w, h = struct.unpack("<HH", head[6:10])
+            if w and h:
+                return (w, h, "GIF")
+        except Exception:
+            pass
+    # JPEG: scan for SOF0-SOF3 markers carrying big-endian h/w.
+    if head[:2] == b"\xff\xd8":
+        try:
+            i = 2
+            while i + 9 < len(head):
+                if head[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = head[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+                    h = (head[i + 5] << 8) | head[i + 6]
+                    w = (head[i + 7] << 8) | head[i + 8]
+                    if w and h:
+                        return (w, h, "JPEG")
+                    return None
+                if marker in (0xD8, 0xD9, 0x00, 0x01) or 0xD0 <= marker <= 0xD7:
+                    i += 2
+                    continue
+                seg_len = (head[i + 2] << 8) | head[i + 3]
+                if seg_len < 2:
+                    return None
+                i += 2 + seg_len
+        except Exception:
+            pass
+    # BMP: "BM" + little-endian w/h at offset 18.
+    if head[:2] == b"BM" and len(head) >= 26:
+        import struct
+        try:
+            w, h = struct.unpack("<ii", head[18:26])
+            if w and h:
+                return (abs(w), abs(h), "BMP")
+        except Exception:
+            pass
+    return None
 
 
 UPLOADS_DIR = "uploads"
@@ -3236,6 +3306,39 @@ class BotPlatform(ABC):
         )
 
         ext = os.path.splitext(att.filename)[1].lower()
+        if (
+            ext in _IMAGE_EXTENSIONS or att.kind in ("photo", "video")
+        ) and ext not in _TEXT_EXTENSIONS:
+            try:
+                dims = await asyncio.to_thread(
+                    _probe_image_dimensions, att.local_path,
+                )
+                size = 0
+                try:
+                    size = os.path.getsize(att.local_path)
+                except OSError:
+                    size = 0
+                if dims is not None:
+                    w, h, fmt = dims
+                    parts.append(
+                        f"[Image: {att.filename} is a {w}x{h} {fmt}"
+                        f" ({size:,} bytes) at {rel_path}."
+                        f" To inspect it, call read_file on {rel_path}"
+                        " — binary bytes are decoded as text and will look"
+                        " like noise, so describe only what tools confirm"
+                        " (dimensions, format, size) and ask the user what"
+                        " is in it if you cannot verify the content.]"
+                    )
+                elif size:
+                    parts.append(
+                        f"[Image: {att.filename} ({size:,} bytes) at"
+                        f" {rel_path}. This chat pipeline is text-only:"
+                        " read_file will not show its pixels, so say what"
+                        " you verified and ask the user to describe the"
+                        " content if needed.]"
+                    )
+            except OSError:
+                pass
         if ext in _TEXT_EXTENSIONS:
             try:
                 # Uploads can be far larger than the 50k-character prompt
