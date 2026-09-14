@@ -624,6 +624,20 @@ class NonDictEventTests(unittest.TestCase):
                 )
                 self.assertEqual(result.events, [])
 
+    def test_truncate_status_text_rejects_junk_limits(self) -> None:
+        from Cozter.backends_agent.base import truncate_status_text
+        self.assertEqual(truncate_status_text("hello", limit=200), "hello")
+        self.assertEqual(truncate_status_text("hello world", limit=5), "hell…")
+        self.assertEqual(truncate_status_text("hello world", limit=0), "")
+        for junk in ("5", None, 1.9, 4.5):
+            with self.subTest(junk=junk):
+                out = truncate_status_text("hello world", limit=junk)  # type: ignore[arg-type]
+                self.assertIsInstance(out, str)
+        self.assertEqual(
+            truncate_status_text("hello world", limit=4.0),  # type: ignore[arg-type]
+            "hel…",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

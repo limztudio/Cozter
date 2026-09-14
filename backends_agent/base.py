@@ -447,9 +447,27 @@ def _clip_status_value(value: object, max_chars: int = 200) -> str:
     return clip_status_value(value, max_chars)
 
 
+def _validated_status_limit(limit: object) -> int:
+    """Validate a status-preview limit as an int, mapping junk to 0.
+
+    Rejects bools, non-integral floats, and non-int types (all would
+    raise TypeError in slicing/comparison); integral floats convert
+    cleanly. Negative values pass through to the existing tight-budget
+    path below, which renders them as an empty cut marker.
+    """
+    if isinstance(limit, bool):
+        return 0
+    if isinstance(limit, float):
+        return int(limit) if limit.is_integer() else 0
+    if isinstance(limit, int):
+        return limit
+    return 0
+
+
 def truncate_status_text(text: object, *, limit: int = 200) -> str:
     """Return a clipped preview for status events."""
     value = text if isinstance(text, str) else str(text)
+    limit = _validated_status_limit(limit)
     if len(value) <= limit:
         return value
     if limit <= len(_TRUNCATED_PREVIEW_SUFFIX):
