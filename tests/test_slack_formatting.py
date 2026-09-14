@@ -7,6 +7,7 @@ from Cozter.backends_bot.base import MessageHandle
 from Cozter.backends_bot.slack import (
     SlackBot,
     _SLACK_MARKDOWN_LIMIT,
+    _slack_retry_delay,
     _split_slack_markdown,
 )
 from slack_sdk.errors import SlackApiError
@@ -162,6 +163,44 @@ class SlackFormattingTests(unittest.IsolatedAsyncioTestCase):
         chunks = _split_slack_markdown(source, limit=100)
 
         self.assertTrue(all(len(chunk) <= 100 for chunk in chunks))
+
+
+class SlackRetryDelayTests(unittest.TestCase):
+    def _throttled(self, headers: dict) -> float | None:
+        response = SimpleNamespace(
+            data={"error": "ratelimited"}, headers=headers,
+        )
+        return _slack_retry_delay(SlackApiError("ratelimited", response))
+
+    def test_bool_retry_after_is_rejected(self) -> None:
+        self.assertIsNone(self._throttled({"Retry-After": True}))
+        self.assertIsNone(self._throttled({"Retry-After": False}))
+
+    def test_numeric_retry_after_is_honored(self) -> None:
+        self.assertEqual(
+            self._throttled({"Retry-After": "2"}), 2.5,
+        )
+
+
+class TelegramRetryDelayTests(unittest.TestCase):
+    def test_bool_retry_after_is_rejected(self) -> None:
+        from Cozter.backends_bot.telegram import _telegram_retry_delay
+
+        class _Exc(Exception):
+            def __init__(self, value: object) -> None:
+                super().__init__("throttled")
+                self.retry_after = value
+
+        self.assertIsNone(_telegram_retry_delay(_Exc(True)))
+        self.assertIsNone(_telegram_retry_delay(_Exc(False)))
+        self.assertEqual(_telegram_retry_delay(_Exc(3)), 3.5)
+
+    def test_openai_retry_after_rejects_bool(self) -> None:
+        from Cozter.backends_agent._openai_agent import _parse_retry_after
+
+        self.assertIsNone(_parse_retry_after(True))  # type: ignore[arg-type]
+        self.assertIsNone(_parse_retry_after(False))  # type: ignore[arg-type]
+        self.assertEqual(_parse_retry_after("2"), 2.0)
 
 
 if __name__ == "__main__":

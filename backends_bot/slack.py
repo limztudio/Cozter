@@ -140,6 +140,8 @@ def _slack_retry_delay(error: SlackApiError) -> float | None:
             return None
     headers = getattr(response, "headers", None) or {}
     raw = headers.get("Retry-After", headers.get("retry-after", "1"))
+    if isinstance(raw, bool):
+        return None
     try:
         delay = float(raw)
     except (TypeError, ValueError):

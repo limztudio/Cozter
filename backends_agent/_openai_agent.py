@@ -693,7 +693,9 @@ def _backoff_delay(
 
 def _parse_retry_after(value: str | None) -> float | None:
     """Parse a Retry-After header (delta-seconds form); ignore HTTP dates."""
-    if not value:
+    if not value or isinstance(value, bool):
+        # A bool is not a duration (float(True) == 1.0 would sleep a
+        # full second on junk); fail fast instead of throttling on it.
         return None
     try:
         parsed = float(value)

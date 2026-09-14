@@ -91,7 +91,11 @@ def _telegram_retry_delay(exc: BaseException) -> float | None:
     get a short 1s backoff. Anything else returns None (fail, don't retry).
     """
     retry_after = getattr(exc, "retry_after", None)
-    if retry_after is not None:
+    if isinstance(retry_after, bool) or retry_after is None:
+        # A bool is not a duration (float(True) == 1.0 would sleep 1.5s
+        # on junk); fall through to the NetworkError check below.
+        pass
+    else:
         try:
             seconds = retry_after.total_seconds() if hasattr(
                 retry_after, "total_seconds",
