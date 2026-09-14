@@ -23,7 +23,10 @@ class DeleteFileTool(AgentTool):
         # Keep the final pathname intact: unlinking a symlink must remove the
         # link rather than its in-workspace target. The resolver still checks
         # that an existing link cannot point outside the workspace.
-        target = resolve_workspace_entry(workspace_path, raw_path)
+        try:
+            target = resolve_workspace_entry(workspace_path, raw_path)
+        except ValueError as exc:
+            return f"Error: {exc}"
         if not os.path.lexists(target):
             return f"File not found: {raw_path}"
         if not (os.path.isfile(target) or os.path.islink(target)):

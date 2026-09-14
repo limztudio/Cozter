@@ -34,7 +34,10 @@ class ListDirTool(AgentTool):
         raw_path = args.get("path") or "."
         if not isinstance(raw_path, str):
             return "Error: 'path' must be a string"
-        target = resolve_inside_workspace(workspace_path, raw_path)
+        try:
+            target = resolve_inside_workspace(workspace_path, raw_path)
+        except ValueError as exc:
+            return f"Error: {exc}"
         if not os.path.isdir(target):
             return f"Not a directory: {raw_path}"
 

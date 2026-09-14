@@ -27,7 +27,12 @@ class WriteFileTool(AgentTool):
     )
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        target = resolve_inside_workspace(workspace_path, args.get("path", ""))
+        try:
+            target = resolve_inside_workspace(
+                workspace_path, args.get("path", ""),
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         content = args.get("content")
         if not isinstance(content, str):
             return "Error: 'content' must be a string"

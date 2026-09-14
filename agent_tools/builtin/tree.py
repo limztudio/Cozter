@@ -33,7 +33,12 @@ class TreeTool(AgentTool):
     )
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        root = resolve_inside_workspace(workspace_path, args.get("path") or ".")
+        try:
+            root = resolve_inside_workspace(
+                workspace_path, args.get("path") or ".",
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         if not os.path.isdir(root):
             return f"Not a directory: {args.get('path') or '.'}"
         depth = coerce_int_arg(

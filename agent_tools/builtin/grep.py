@@ -68,7 +68,10 @@ class GrepTool(AgentTool):
         raw_path = args.get("path") or "."
         if not isinstance(raw_path, str):
             raw_path = "."
-        search_root = resolve_inside_workspace(workspace_path, raw_path)
+        try:
+            search_root = resolve_inside_workspace(workspace_path, raw_path)
+        except ValueError as exc:
+            return f"Error: {exc}"
         if not os.path.isdir(search_root):
             return f"Not a directory: {raw_path}"
 

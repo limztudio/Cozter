@@ -26,7 +26,12 @@ class EditFileTool(AgentTool):
     parameters: ClassVar[dict[str, Any]] = path_replacement_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        target = resolve_inside_workspace(workspace_path, args.get("path", ""))
+        try:
+            target = resolve_inside_workspace(
+                workspace_path, args.get("path", ""),
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         replacement = validate_replacement_strings(
             args.get("old_string"), args.get("new_string"),
         )

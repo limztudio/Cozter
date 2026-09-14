@@ -40,7 +40,10 @@ class MultiEditTool(AgentTool):
 
     async def run(self, workspace_path: str, args: dict) -> str:
         raw_path = args.get("path", "")
-        target = resolve_inside_workspace(workspace_path, raw_path)
+        try:
+            target = resolve_inside_workspace(workspace_path, raw_path)
+        except ValueError as exc:
+            return f"Error: {exc}"
         edits = args.get("edits")
         if not isinstance(edits, list) or not edits:
             return "Error: 'edits' must be a non-empty list"

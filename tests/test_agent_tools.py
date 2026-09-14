@@ -583,8 +583,10 @@ class DeleteFileToolTests(unittest.TestCase):
                 except (NotImplementedError, OSError) as exc:
                     self.skipTest(f"symlinks unavailable: {exc}")
 
-                with self.assertRaisesRegex(ValueError, "escapes workspace"):
-                    await DeleteFileTool().run(workspace_path, {"path": "escape"})
+                result = await DeleteFileTool().run(
+                    workspace_path, {"path": "escape"},
+                )
+                self.assertIn("escapes workspace", result)
 
                 self.assertTrue(os.path.lexists(link))
                 with open(outside_file, encoding="utf-8") as f:

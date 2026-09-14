@@ -78,7 +78,12 @@ class ReadFileTool(AgentTool):
     )
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        target = resolve_inside_workspace(workspace_path, args.get("path", ""))
+        try:
+            target = resolve_inside_workspace(
+                workspace_path, args.get("path", ""),
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         if not os.path.isfile(target):
             return f"File not found: {args.get('path')}"
 
