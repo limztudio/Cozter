@@ -144,7 +144,7 @@ def _slack_retry_delay(error: SlackApiError) -> float | None:
         return None
     try:
         delay = float(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         delay = 1.0
     # A non-finite header value must not reach asyncio.sleep: nan raises
     # ValueError and inf would sleep effectively forever. Cap +inf at the

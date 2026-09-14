@@ -719,7 +719,7 @@ def _parse_retry_after(value: str | None) -> float | None:
         return None
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     # Reject nan/-inf (fail fast on a meaningless throttle); callers cap
     # +inf via _backoff_delay.
@@ -1215,7 +1215,9 @@ def _system_prompt(
         " with work left — say PARTIAL + remainder."
         " Doc-following: told to follow a file/doc/standard = enumerate"
         " every rule/section first (read fully via offset+grep), apply each,"
-        " never stop after first/last few.",
+        " never stop after first/last few."
+        " Progress is tool status (Thinking... preview, done/total may grow);"
+        " notify DONE only when everything is done.",
     ]
     if tool_names:
         parts.append(

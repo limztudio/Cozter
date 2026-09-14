@@ -163,6 +163,8 @@ class PromptPolicyTests(unittest.TestCase):
             )
             self.assertIn("Whole-scope", hint)
             self.assertIn("PARTIAL", hint)
+            self.assertIn("Thinking...", hint)
+            self.assertIn("DONE", hint)
 
 
 class VerifyEvidenceReachesEveryAgentTests(unittest.TestCase):

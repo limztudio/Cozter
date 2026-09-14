@@ -355,6 +355,13 @@ class SignalIdCoercionTests(unittest.TestCase):
         self.assertEqual(
             _extract_timestamp_from_value({"timestamp": " 42 "}), "42",
         )
+        self.assertIsNone(_extract_timestamp_from_value({"timestamp": -1}))
+        self.assertIsNone(_extract_timestamp_from_value({"timestamp": "nan"}))
+        self.assertIsNone(_extract_timestamp_from_value({"timestamp": "inf"}))
+        self.assertIsNone(_extract_timestamp_from_value({"timestamp": "abc"}))
+        self.assertEqual(
+            _extract_timestamp_from_value({"timestamp": 42.0}), "42",
+        )
 
     def test_sender_and_account_reject_bool_and_junk(self) -> None:
         self.assertEqual(_extract_sender_id({"source": True}), "")

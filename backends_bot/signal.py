@@ -80,7 +80,7 @@ def _signal_rate_limit_delay(exc: BaseException) -> float | None:
         return None
     try:
         delay = float(match.group(1))
-    except ValueError:
+    except (TypeError, ValueError, OverflowError):
         return None
     if not math.isfinite(delay) or delay < 0:
         return None
@@ -1688,10 +1688,23 @@ def _extract_timestamp_from_value(value: Any) -> str | None:
     if timestamp is None or isinstance(timestamp, bool):
         return None
     if isinstance(timestamp, int):
-        return str(timestamp)
+        return str(timestamp) if timestamp >= 0 else None
+    if isinstance(timestamp, float):
+        if not math.isfinite(timestamp) or timestamp < 0:
+            return None
+        as_int = int(timestamp)
+        return str(as_int if float(as_int) == timestamp else timestamp)
     if isinstance(timestamp, str):
         text = timestamp.strip()
-        return text or None
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(number) or number < 0:
+            return None
+        return text
     return None
 
 

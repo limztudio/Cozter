@@ -1479,7 +1479,12 @@ OpenAI-compatible HTTP session; `agent.py:_drive_backend()` reads JSONL
 events from stdout, translates them via `Backend.parse_event()` into
 `ChatEvent`s, and streams a "Thinking..." status message that updates in
 place with the latest few tool actions and a live preview of the answer
-text as it arrives. On chat surfaces without editable messages (the CLI),
+text as it arrives. Interim progress is Thinking... status only, never a
+chat reply: flexible worker progress reads `done/total` with a growing
+total as `[followup:<tier>]` leftovers join live (e.g. `3/12` then
+`3/13`), PARTIAL + remainder appears only in the final reply when work
+truly remains, and the user is notified DONE only when everything is
+done. On chat surfaces without editable messages (the CLI),
 tool progress is emitted as separate status lines and the full answer
 arrives at the end. `flexible` is the one agent that never reaches
 `Backend.launch()` itself: `agent.py:_run_flexible()` intercepts it and

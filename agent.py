@@ -91,6 +91,9 @@ _COMPLETENESS_RULE = (
     " re-run until zero; runtime = launch + exercise paths + check logs;"
     " report commands + exit codes + counts; never claim clean from"
     " truncated preview or unrun steps — say PARTIAL + remainder."
+    " Progress is tool status (Thinking... preview, done/total may grow"
+    " as follow-ups join); interim progress is never a chat reply."
+    " Notify DONE only when everything is done."
 )
 
 

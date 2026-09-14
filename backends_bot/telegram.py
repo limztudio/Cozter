@@ -100,7 +100,7 @@ def _telegram_retry_delay(exc: BaseException) -> float | None:
             seconds = retry_after.total_seconds() if hasattr(
                 retry_after, "total_seconds",
             ) else float(retry_after)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         # A non-finite server value must not reach asyncio.sleep: nan raises
         # ValueError ("Sleep length must be a non-negative number") and inf
