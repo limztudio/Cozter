@@ -61,6 +61,11 @@ _SIGNAL_SEND_MIN_INTERVAL_SEC = 1.2
 _SIGNAL_RETRY_AFTER_RE = re.compile(
     r"retry after (\d+(?:\.\d+)?)\s*seconds?", re.IGNORECASE,
 )
+_SIGNAL_GROUP_URL_RE = re.compile(r"https://signal\.group/#[^\s]+")
+_SIGNAL_GROUP_SCHEME_RE = re.compile(r"sgnl://[^\s]+")
+_SIGNAL_ATTACH_WHITESPACE_RE = re.compile(r"\s+")
+_SIGNAL_MD_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
+_SIGNAL_WORD_CHAR_RE = re.compile(r"\w")
 
 
 def _signal_rate_limit_delay(exc: BaseException) -> float | None:
@@ -742,7 +747,7 @@ class SignalBot(BotPlatform):
                 result = await self._rpc_request(
                     "getAttachment", {"id": attachment_id, "groupId": group_id},
                 )
-                payload = re.sub(r"\s+", "", _attachment_payload(result))
+                payload = _SIGNAL_ATTACH_WHITESPACE_RE.sub("", _attachment_payload(result))
                 data = _decode_attachment_payload(payload, self.max_upload_bytes)
                 write_bytes_atomically(local_path, data)
 
@@ -1239,8 +1244,8 @@ class SignalBot(BotPlatform):
 
 def _safe_error_message(exc: BaseException) -> str:
     text = str(exc).strip() or exc.__class__.__name__
-    text = re.sub(r"https://signal\.group/#[^\s]+", "<signal-group-url>", text)
-    return re.sub(r"sgnl://[^\s]+", "<signal-group-url>", text)
+    text = _SIGNAL_GROUP_URL_RE.sub("<signal-group-url>", text)
+    return _SIGNAL_GROUP_SCHEME_RE.sub("<signal-group-url>", text)
 
 
 def _is_jsonrpc_transport_error(exc: BaseException) -> bool:
@@ -1351,7 +1356,7 @@ def _md_to_signal_body_and_spans(
             continue
 
         line = lines[0]
-        header = re.match(r"^#{1,6}\s+(.+)$", line)
+        header = _SIGNAL_MD_HEADING_RE.match(line)
         if header:
             append_line(header.group(1), _SIGNAL_STYLE_BOLD)
         else:
@@ -1410,7 +1415,7 @@ def _single_marker_can_close(text: str, index: int) -> bool:
 
 
 def _is_word_char(value: str) -> bool:
-    return bool(value and re.match(r"\w", value))
+    return bool(value and _SIGNAL_WORD_CHAR_RE.match(value))
 
 
 def _signal_style_strings_for_chunk(

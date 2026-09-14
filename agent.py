@@ -132,6 +132,7 @@ _DETACHED_TASK_REQUEST_RE = re.compile(
     r"[ \t]*(?:\r?\n|$)",
 )
 _EXTRA_BLANK_LINES_RE = re.compile(r"\n{3,}")
+_SAFE_IMAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _MAX_DETACHED_TASK_REQUESTS = 3
 _MAX_DETACHED_TASK_PROMPT_CHARS = 12_000
 
@@ -348,7 +349,7 @@ def _safe_generated_image_name(src: str, ext: str) -> str:
     parent = os.path.basename(os.path.dirname(src))
     stem = os.path.splitext(os.path.basename(src))[0]
     raw = f"{parent}-{stem}" if parent else stem
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip(".-")
+    safe = _SAFE_IMAGE_NAME_RE.sub("-", raw).strip(".-")
     return f"{safe or 'generated-image'}{ext}"
 
 

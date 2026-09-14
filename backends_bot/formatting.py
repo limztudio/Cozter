@@ -6,6 +6,9 @@ import re
 from collections.abc import Callable, Iterator
 
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
 LineRenderer = Callable[[str], str]
 CodeBlockRenderer = Callable[[list[str]], list[str]]
 
@@ -81,7 +84,7 @@ def strip_html_markup(text: str) -> str:
     """Drop simple HTML tags and unescape the entities we emit."""
     if not isinstance(text, str):
         return ""
-    plain = re.sub(r"<[^>]+>", "", text)
+    plain = _HTML_TAG_RE.sub("", text)
     return (
         plain.replace("&lt;", "<")
         .replace("&gt;", ">")
