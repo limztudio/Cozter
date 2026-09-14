@@ -97,7 +97,7 @@ def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
             if not line.strip() or not line.startswith((" ", "\t")):
                 break
             continue
-        model = match.group(1).strip()
+        model = match.group(1).strip().strip("`'\".,;:")
         if model and model not in seen:
             seen.add(model)
             models.append(model)
