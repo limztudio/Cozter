@@ -606,6 +606,14 @@ class NonDictEventTests(unittest.TestCase):
                 for bad in ("junk", None, 123, ["x"]):
                     self.assertIsNone(helper(bad))  # type: ignore[arg-type]
 
+    def test_non_dict_error_event_returns_false(self) -> None:
+        from Cozter.backends_agent.base import record_error_event
+        for bad in ("junk", None, 123, ["x"], True):
+            with self.subTest(bad=bad):
+                self.assertFalse(
+                    record_error_event(bad, AgentResult()),  # type: ignore[arg-type]
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

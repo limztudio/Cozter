@@ -311,6 +311,8 @@ def record_error_event(event: dict, result: AgentResult) -> bool:
     useful user-facing failure instead of leaking a non-string value into the
     result state. Returns whether *event* was handled.
     """
+    if not isinstance(event, dict):
+        return False
     if event.get("type") != "error":
         return False
     record_backend_error(result, event.get("message"))
