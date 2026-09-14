@@ -2142,11 +2142,12 @@ async def _run_turn_impl(
         log=logger,
     )
 
-    if (
-        not any(e.kind == "text" for e in result.events)
-        and not any(e.kind == "attachment" for e in result.events)
-        and not result.detached_task_requests
-    ):
+    has_output = False
+    for event in result.events:
+        if event.kind == "text" or event.kind == "attachment":
+            has_output = True
+            break
+    if not has_output and not result.detached_task_requests:
         append_text_result(result, result.text or NO_RESPONSE_TEXT)
 
     result.session_id = session_id

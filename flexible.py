@@ -214,6 +214,7 @@ def normalize_tier(value: str) -> str | None:
 def parse_followups(report: str) -> list[Subtask]:
     """Parse worker-reported ``[followup:<tier>] <instruction>`` lines."""
     found: list[Subtask] = []
+    seen: set[Subtask] = set()
     if not isinstance(report, str) or not report:
         return found
     for line in report.splitlines():
@@ -225,7 +226,8 @@ def parse_followups(report: str) -> list[Subtask]:
         if tier is None or not instruction:
             continue
         entry = Subtask(tier=tier, instruction=instruction)
-        if entry not in found:
+        if entry not in seen:
+            seen.add(entry)
             found.append(entry)
         if len(found) >= MAX_SUBTASKS:
             break
