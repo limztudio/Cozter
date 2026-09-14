@@ -639,8 +639,14 @@ def _bounded_context_list_block(
         )
         # Make room for the omission marker within the same body budget
         # by dropping oldest retained lines first (newest retained last).
-        while lines and len("\n".join(lines)) + len(omission) + 1 > body_limit:
-            lines.pop(0)
+        # Join once per check would be O(n^2); track lengths incrementally.
+        line_lengths = [len(line) for line in lines]
+        total = sum(line_lengths) + max(0, len(lines) - 1)
+        start = 0
+        while start < len(lines) and total + len(omission) + 1 > body_limit:
+            total -= line_lengths[start] + (1 if start < len(lines) - 1 else 0)
+            start += 1
+        lines = lines[start:]
         if lines:
             body = omission + "\n" + "\n".join(lines)
         else:

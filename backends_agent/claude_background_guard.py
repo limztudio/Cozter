@@ -11,6 +11,7 @@ import json
 import re
 import shlex
 import sys
+from collections import deque
 
 
 _BACKGROUND_HELP = (
@@ -114,7 +115,7 @@ def _heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
 
 def _without_heredoc_bodies(command: str) -> str:
     """Replace here-document bodies with newlines before scanning operators."""
-    pending: list[tuple[str, bool]] = []
+    pending: deque[tuple[str, bool]] = deque()
     kept: list[str] = []
     for line in command.splitlines(keepends=True):
         if pending:
@@ -126,7 +127,7 @@ def _without_heredoc_bodies(command: str) -> str:
             # like a control operator to the simple scanner below.
             kept.append("\n" if line.endswith("\n") else "")
             if body_line == delimiter:
-                pending.pop(0)
+                pending.popleft()
             continue
         kept.append(line)
         pending.extend(_heredoc_delimiters(line))
