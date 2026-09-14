@@ -83,16 +83,24 @@ def _mrkdwn_line(line: str) -> str:
     # Bold first, into placeholders, so the single-asterisk italic
     # regex below can't mis-match the `*bold*` we're about to emit.
     # Headers -> bold (Slack has no heading syntax).
-    line = _SLACK_HEADING_RE.sub(_bold_sub, line)
-    line = _SLACK_BOLD_STAR_RE.sub(_bold_sub, line)
-    line = _SLACK_BOLD_UNDER_RE.sub(_bold_sub, line)
+    # Cheap substring guards skip the regex engine for plain lines.
+    if line[:1] == "#":
+        line = _SLACK_HEADING_RE.sub(_bold_sub, line)
+    if "**" in line:
+        line = _SLACK_BOLD_STAR_RE.sub(_bold_sub, line)
+    if "__" in line:
+        line = _SLACK_BOLD_UNDER_RE.sub(_bold_sub, line)
     # Italic: single `*text*` -> `_text_`; leave `_text_` as-is since
     # that's already valid mrkdwn.
-    line = _SLACK_ITALIC_STAR_RE.sub(r"_\1_", line)
+    if "*" in line:
+        line = _SLACK_ITALIC_STAR_RE.sub(r"_\1_", line)
     # Strikethrough: `~~text~~` -> `~text~`.
-    line = _SLACK_STRIKE_RE.sub(r"~\1~", line)
+    if "~~" in line:
+        line = _SLACK_STRIKE_RE.sub(r"~\1~", line)
     # Swap bold placeholders back to Slack's single-asterisk bold.
-    return line.replace(_BOLD_OPEN, "*").replace(_BOLD_CLOSE, "*")
+    if _BOLD_OPEN in line:
+        line = line.replace(_BOLD_OPEN, "*").replace(_BOLD_CLOSE, "*")
+    return line
 
 
 def _mrkdwn_code_block(lines: list[str]) -> list[str]:
@@ -192,6 +200,11 @@ async def _call_slack_with_retry(description: str, method, **kwargs):
 
 def _fence_open(line: str) -> tuple[str, str] | None:
     """Return the original opener and marker for a fenced code block."""
+    # Hot path: most reply lines are not fences — a plain prefix scan
+    # rejects them before the regex engine runs.
+    stripped = line.lstrip()
+    if not stripped or stripped[0] not in ("`", "~"):
+        return None
     match = _FENCE_OPEN_RE.match(line)
     if match is None:
         return None
@@ -200,10 +213,15 @@ def _fence_open(line: str) -> tuple[str, str] | None:
 
 def _fence_closes(line: str, marker: str) -> bool:
     """Whether *line* is a valid close for the active fenced block."""
-    character = re.escape(marker[0])
-    return re.fullmatch(
-        rf"\s*{character}{{{len(marker)},}}\s*", line,
-    ) is not None
+    if not marker:
+        return False
+    # A close is only whitespace plus a run of the marker character at
+    # least as long as the opener — no regex needed on this hot path.
+    stripped = line.strip()
+    return (
+        len(stripped) >= len(marker)
+        and stripped.strip(marker[0]) == ""
+    )
 
 
 def _split_slack_markdown(
@@ -229,13 +247,18 @@ def _split_slack_markdown(
     # long-opener fence and a long-marker fence interleave across a boundary.
     max_opener = 0
     max_marker = 0
+    # Single pre-scan for the reserve sizes; the chunk loop below replays
+    # fence state with the same cheap helpers (plain prefix check in
+    # _fence_open, string ops in _fence_closes — no per-line regex).
     for line in text.splitlines():
         fence = _fence_open(line)
         if fence is None:
             continue
         opener, marker = fence
-        max_opener = max(max_opener, len(opener))
-        max_marker = max(max_marker, len(marker))
+        if len(opener) > max_opener:
+            max_opener = len(opener)
+        if len(marker) > max_marker:
+            max_marker = len(marker)
     fence_wrap_reserve = (
         max_opener + max_marker + 2 if (max_opener or max_marker) else 0
     )

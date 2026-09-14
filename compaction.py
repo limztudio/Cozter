@@ -278,7 +278,7 @@ def _estimate_context_tokens(text: str) -> int:
     several bytes per token. This biases compaction early rather than risking
     an input-window overflow for non-ASCII text, code, or unknown models.
     """
-    return len(text.encode("utf-8"))
+    return len(text.encode("utf-8")) if not text.isascii() else len(text)
 
 
 def _context_window_tokens(

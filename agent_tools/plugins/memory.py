@@ -183,15 +183,13 @@ def _iter_search_texts(data: dict):
 
 def _fit_output(lines: list[str], header: str) -> str:
     """Join *lines* under the result budget, dropping from the end."""
+    # Track the joined size incrementally: the previous form re-summed
+    # every remaining line after each pop (quadratic in the match count).
+    total = len(header) + sum(len(line) + 1 for line in lines)
+    omitted_len = len("(…more omitted)")
     dropped = 0
-    while (
-        lines
-        and len(header)
-        + sum(len(line) + 1 for line in lines)
-        + len("(…more omitted)")
-        > _OUTPUT_BUDGET
-    ):
-        lines.pop()
+    while lines and total + omitted_len > _OUTPUT_BUDGET:
+        total -= len(lines.pop()) + 1
         dropped += 1
     if dropped:
         lines.append(
@@ -262,6 +260,15 @@ class MemoryTool(AgentTool):
         for data in _load_sessions(sessions_dir):
             label = _session_label(data)
             for kind, text in _iter_search_texts(data):
+                if not isinstance(text, str) or not text:
+                    continue
+                # Cheap pre-check before casefolding: a case-insensitive
+                # hit needs at least one needle char (either case) in
+                # the text. Non-matching texts skip the temp lowered
+                # copy entirely.
+                first = needle[0]
+                if first not in text and first.swapcase() not in text:
+                    continue
                 index = text.casefold().find(needle)
                 if index < 0:
                     continue
@@ -272,6 +279,11 @@ class MemoryTool(AgentTool):
                     )
 
         for item in _colony_items(workspace):
+            if not isinstance(item, str) or not item:
+                continue
+            first = needle[0]
+            if first not in item and first.swapcase() not in item:
+                continue
             index = item.casefold().find(needle)
             if index < 0:
                 continue

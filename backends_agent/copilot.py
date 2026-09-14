@@ -128,25 +128,41 @@ def _prompt_argv_units(prompt: str) -> int:
 def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
     """Return the newest *budget* argv units without splitting a character.
 
-    Binary-searching a character boundary avoids splitting an emoji or
-    UTF-8 sequence while keeping the operation small even for a large
-    configured history budget. The flag reports whether any head context
-    was dropped.
+    A single backward scan accumulates per-character widths, so truncation
+    is linear in the prompt size instead of re-encoding a shrinking tail
+    on every binary-search probe. The flag reports whether any head
+    context was dropped.
     """
     if not isinstance(text, str):
         return "", True
     if budget <= 0:
         return "", True
-    if _prompt_argv_units(text) <= budget:
+    if sys.platform == "win32":
+        # Quoted command-line length has no cheap per-character model;
+        # keep the bounded binary search for that platform only.
+        if _prompt_argv_units(text) <= budget:
+            return text, False
+        lower, upper = 0, len(text)
+        while lower < upper:
+            middle = (lower + upper) // 2
+            if _prompt_argv_units(text[middle:]) <= budget:
+                upper = middle
+            else:
+                lower = middle + 1
+        return text[lower:], True
+    total = 0
+    cut = len(text)
+    for index in range(len(text) - 1, -1, -1):
+        total += len(text[index].encode("utf-8", errors="replace"))
+        if total > budget:
+            cut = index + 1
+            break
+        cut = index
+    else:
         return text, False
-    lower, upper = 0, len(text)
-    while lower < upper:
-        middle = (lower + upper) // 2
-        if _prompt_argv_units(text[middle:]) <= budget:
-            upper = middle
-        else:
-            lower = middle + 1
-    return text[lower:], True
+    if cut >= len(text):
+        return text, False
+    return text[cut:], True
 
 
 def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
@@ -201,17 +217,36 @@ def _truncate_prompt_preserving_head(prompt: str, limit: int) -> str:
     if not found or not head.startswith("[System:"):
         return _truncate_prompt_for_argv(prompt, limit)
     head_with_sep = head + sep
-    if _prompt_argv_units(head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER) >= limit:
+    # Measure the fixed prefix once: the old binary search re-encoded
+    # head+marker plus a shrinking tail slice on every probe (quadratic
+    # in prompt size). A single backward scan over the tail is linear.
+    prefix_units = _prompt_argv_units(head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER)
+    if prefix_units >= limit:
         return _truncate_prompt_for_argv(prompt, limit)
-    lower, upper = 0, len(prompt)
-    while lower < upper:
-        middle = (lower + upper) // 2
-        candidate = head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[middle:]
-        if _prompt_argv_units(candidate) <= limit:
-            upper = middle
-        else:
-            lower = middle + 1
-    return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[lower:]
+    if sys.platform == "win32":
+        lower, upper = 0, len(prompt)
+        while lower < upper:
+            middle = (lower + upper) // 2
+            candidate = head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[middle:]
+            if _prompt_argv_units(candidate) <= limit:
+                upper = middle
+            else:
+                lower = middle + 1
+        return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[lower:]
+    tail_budget = limit - prefix_units
+    total = 0
+    cut = len(prompt)
+    for index in range(len(prompt) - 1, -1, -1):
+        total += len(prompt[index].encode("utf-8", errors="replace"))
+        if total > tail_budget:
+            cut = index + 1
+            break
+        cut = index
+    else:
+        return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt
+    if cut >= len(prompt):
+        return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt
+    return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[cut:]
 
 
 def _create_isolated_copilot_home() -> str:

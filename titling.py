@@ -130,6 +130,7 @@ async def generate(
     recent_reserve = context_budget // 2
 
     parts: list[str] = []
+    parts_len = 0  # joined length of parts (newline between items)
     summary = data.get("summary")
     if summary:
         # Session files can be hand-edited or come from older versions; keep
@@ -161,14 +162,17 @@ async def generate(
                     )
             else:
                 clipped = summary_text
-            parts.append(f"{summary_prefix}{clipped}\n")
+            summary_block = f"{summary_prefix}{clipped}\n"
+            parts.append(summary_block)
+            parts_len += (1 if parts_len else 0) + len(summary_block)
     parts.append("Recent messages:")
+    parts_len += (1 if parts_len else 0) + len("Recent messages:")
 
     # Newest-first under the remaining budget; the title only needs the
     # gist, so we don't pull the whole history. ``take_recent_messages``
     # counts a newline after each returned line, while joining it below adds
     # one before each line, hence the one-character reserve.
-    message_budget = max(0, context_budget - len("\n".join(parts)) - 1)
+    message_budget = max(0, context_budget - parts_len - 1)
     msg_lines = session.take_recent_messages(
         data.get("messages", []), message_budget,
     )

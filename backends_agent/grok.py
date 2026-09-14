@@ -85,7 +85,14 @@ def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
     seen: set[str] = set()
     reading_models = False
     for line in output.splitlines():
-        if line.strip().casefold() == "available models:":
+        stripped = line.strip()
+        # Cheap identity check first: the heading is a fixed string, so
+        # only casefold lines that already match it modulo case/space.
+        # This skips a temp lowered copy for every banner/diagnostic line.
+        if (
+            len(stripped) == len("Available models:")
+            and stripped.casefold() == "available models:"
+        ):
             reading_models = True
             continue
         if not reading_models:

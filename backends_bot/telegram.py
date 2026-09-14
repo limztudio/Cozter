@@ -150,13 +150,23 @@ def _md_to_html(text: str) -> str:
 
 def _html_line(line: str) -> str:
     line = escape_html_entities(line)
-    line = _TELEGRAM_HEADING_RE.sub(r"<b>\1</b>", line)
-    line = _TELEGRAM_BOLD_STAR_RE.sub(r"<b>\1</b>", line)
-    line = _TELEGRAM_BOLD_UNDER_RE.sub(r"<b>\1</b>", line)
-    line = _TELEGRAM_ITALIC_STAR_RE.sub(r"<i>\1</i>", line)
-    line = _TELEGRAM_ITALIC_UNDER_RE.sub(r"<i>\1</i>", line)
-    line = _TELEGRAM_CODE_RE.sub(r"<code>\1</code>", line)
-    return _TELEGRAM_STRIKE_RE.sub(r"<s>\1</s>", line)
+    # Cheap substring guards: most chat lines carry no Markdown, so skip
+    # the regex engine unless the marker characters are present.
+    if line[:1] == "#":
+        line = _TELEGRAM_HEADING_RE.sub(r"<b>\1</b>", line)
+    if "**" in line:
+        line = _TELEGRAM_BOLD_STAR_RE.sub(r"<b>\1</b>", line)
+    if "__" in line:
+        line = _TELEGRAM_BOLD_UNDER_RE.sub(r"<b>\1</b>", line)
+    if "*" in line:
+        line = _TELEGRAM_ITALIC_STAR_RE.sub(r"<i>\1</i>", line)
+    if "_" in line:
+        line = _TELEGRAM_ITALIC_UNDER_RE.sub(r"<i>\1</i>", line)
+    if "`" in line:
+        line = _TELEGRAM_CODE_RE.sub(r"<code>\1</code>", line)
+    if "~~" in line:
+        line = _TELEGRAM_STRIKE_RE.sub(r"<s>\1</s>", line)
+    return line
 
 
 def _html_code_block(lines: list[str]) -> list[str]:

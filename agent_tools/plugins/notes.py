@@ -88,8 +88,8 @@ class NotesTool(AgentTool):
 
         existing = _read_notes_text(target)
         pre_fit = (existing + entry) if existing else entry
-        trimmed = len(pre_fit.encode("utf-8")) > _NOTES_MAX_BYTES
         combined = _fit_entries([existing, entry] if existing else [entry])
+        trimmed = combined != pre_fit
         ensure_parent_dir(target)
         try:
             write_text_after_edit(target, combined, uses_crlf=False)
@@ -164,29 +164,43 @@ def _fit_entries(parts: list[str]) -> str:
     Entries are ``## <timestamp>`` headed blocks. Trimming walks the
     entries from newest to oldest and keeps as many whole entries as the
     keep budget allows, so a trim never severs an entry mid-line.
+    Byte sizes are accumulated once while splitting (entries are
+    substrings of *combined*, so each already-known size is reused in
+    the keep pass instead of re-encoding every entry).
     """
     combined = "".join(parts)
-    if len(combined.encode("utf-8")) <= _NOTES_MAX_BYTES:
+    combined_bytes = combined.encode("utf-8")
+    if len(combined_bytes) <= _NOTES_MAX_BYTES:
         return combined
 
-    entries: list[str] = []
-    current: list[str] = []
-    for line in combined.split("\n"):
-        if line.startswith("## ") and current:
-            entries.append("\n".join(current))
-            current = [line]
-        else:
-            current.append(line)
-    if current:
-        entries.append("\n".join(current))
+    # Split on raw bytes so per-entry sizes come from one encode.
+    entries: list[tuple[str, int]] = []
+    current_lines: list[bytes] = []
+    current_size = 0
+    for raw_line in combined_bytes.split(b"\n"):
+        is_header = raw_line.startswith(b"## ")
+        if is_header and current_lines:
+            text = b"\n".join(current_lines).decode(
+                "utf-8", errors="replace",
+            )
+            entries.append((text, current_size))
+            current_lines = []
+            current_size = 0
+        current_lines.append(raw_line)
+        # +1 accounts for the "\n" that join() will re-insert.
+        current_size += len(raw_line) + 1
+    if current_lines:
+        text = b"\n".join(current_lines).decode(
+            "utf-8", errors="replace",
+        )
+        entries.append((text, current_size))
 
     kept: list[str] = []
     used = 0
-    for entry in reversed(entries):
-        size = len(entry.encode("utf-8", errors="replace")) + 1
+    for text, size in reversed(entries):
         if kept and used + size > _NOTES_KEEP_BYTES:
             break
-        kept.append(entry)
+        kept.append(text)
         used += size
     kept.reverse()
     # Entries already carry their trailing blank line, so plain

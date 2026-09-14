@@ -712,9 +712,19 @@ def _request_keywords(text: str, limit: int = 64) -> set[str]:
 
 
 def _relevance_last(items: list, keywords: set[str]) -> list:
+    if not keywords:
+        return items
+    # Probe characters first: an item can only score if it contains at
+    # least one keyword's first character (either case). Non-matching
+    # items skip the lowercase copy + regex scan entirely.
+    firsts = {kw[0] for kw in keywords if kw}
+    firsts |= {c.swapcase() for c in firsts}
     scored = []
     for index, item in enumerate(items):
         text = item if isinstance(item, str) else session.format_msg_line(item)
+        if not any(c in text for c in firsts):
+            scored.append((0, index, item))
+            continue
         words = set(_KEYWORD_RE.findall(text.lower()))
         scored.append((len(words & keywords), index, item))
     scored.sort(key=lambda entry: (entry[0], entry[1]))

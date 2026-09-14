@@ -115,6 +115,11 @@ _CONSTANTS: dict[str, float] = {
     "phi": (1 + math.sqrt(5)) / 2,
 }
 
+# Pre-sorted name lists for error messages; sorting on every rejected
+# expression would redo the same work per call.
+_SORTED_CONSTANT_NAMES = ", ".join(sorted(_CONSTANTS))
+_SORTED_FUNCTION_NAMES = ", ".join(sorted(_FUNCTIONS))
+
 
 def _evaluate(node: ast.AST) -> Any:
     if isinstance(node, ast.Expression):
@@ -153,7 +158,7 @@ def _evaluate(node: ast.AST) -> Any:
             return _CONSTANTS[node.id]
         raise _CalcError(
             f"unknown name '{node.id}'; constants: "
-            + ", ".join(sorted(_CONSTANTS)),
+            + _SORTED_CONSTANT_NAMES,
         )
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name):
@@ -165,7 +170,7 @@ def _evaluate(node: ast.AST) -> Any:
         if function is None:
             raise _CalcError(
                 f"unknown function '{name}'; supported: "
-                + ", ".join(sorted(_FUNCTIONS)),
+                + _SORTED_FUNCTION_NAMES,
             )
         if node.keywords:
             raise _CalcError("keyword arguments are not supported")

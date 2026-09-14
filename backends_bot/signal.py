@@ -1424,15 +1424,28 @@ def _signal_style_strings_for_chunk(
     chunk_start: int,
     chunk_end: int,
 ) -> list[str]:
+    relevant = [
+        (max(start, chunk_start), min(start + length, chunk_end), style)
+        for start, length, style in spans
+        if max(start, chunk_start) < min(start + length, chunk_end)
+    ]
+    if not relevant:
+        return []
+    # One UTF-16 prefix sum over the chunk: the old form sliced and
+    # re-encoded a body prefix per span (quadratic on styled replies).
+    # Astral chars count 2 units, everything else 1 — no encode needed.
+    need = max(end for _, end, _ in relevant)
+    prefix: list[int] = [0] * (need - chunk_start + 1)
+    total = 0
+    for i in range(chunk_start, need):
+        total += 2 if ord(body[i]) > 0xFFFF else 1
+        prefix[i - chunk_start + 1] = total
     styles: list[str] = []
-    for start, length, style in spans:
-        end = start + length
-        overlap_start = max(start, chunk_start)
-        overlap_end = min(end, chunk_end)
-        if overlap_start >= overlap_end:
-            continue
-        utf16_start = _utf16_code_units(body[chunk_start:overlap_start])
-        utf16_length = _utf16_code_units(body[overlap_start:overlap_end])
+    for overlap_start, overlap_end, style in relevant:
+        utf16_start = prefix[overlap_start - chunk_start]
+        utf16_length = (
+            prefix[overlap_end - chunk_start] - prefix[overlap_start - chunk_start]
+        )
         if utf16_length > 0:
             styles.append(f"{utf16_start}:{utf16_length}:{style}")
     return styles

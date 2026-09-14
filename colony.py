@@ -48,24 +48,36 @@ def _path(workspace: str) -> str:
     return workspace_mod.workspace_state_path(workspace, COLONY_FILE)
 
 
+def _cap_to_newest(items: list[str]) -> tuple[list[str], int]:
+    """Cap *items* to the newest COLONY_CAP entries, returning (kept, dropped)."""
+    if len(items) > COLONY_CAP:
+        return items[-COLONY_CAP:], len(items) - COLONY_CAP
+    return items, 0
+
+
+def _normalize_compact_count(value: object) -> int:
+    """Coerce a loaded compact_count to a non-negative int."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
 def _load(workspace: str) -> dict:
     data = load_json_object(_path(workspace), "colony file", logger)
     items = data.get("items")
     cleaned = normalize_string_list(items)
-    if len(cleaned) > COLONY_CAP:
+    cleaned, dropped = _cap_to_newest(cleaned)
+    if dropped:
         # Match set_items: keep the newest entries and log the drop
         # rather than silently keeping the oldest.
-        dropped = len(cleaned) - COLONY_CAP
         logger.warning(
             "Colony exceeds cap (%d); dropping %d oldest item(s)",
             COLONY_CAP, dropped,
         )
-        cleaned = cleaned[-COLONY_CAP:]
     data["items"] = cleaned
-    compact_count = data.get("compact_count", 0)
-    if not isinstance(compact_count, int) or isinstance(compact_count, bool):
-        compact_count = 0
-    data["compact_count"] = max(0, compact_count)
+    data["compact_count"] = _normalize_compact_count(
+        data.get("compact_count", 0)
+    )
     return data
 
 
@@ -75,14 +87,12 @@ def get_items(workspace: str) -> list[str]:
 
 def set_items(workspace: str, items: list[str]) -> None:
     data = _load(workspace)
-    cleaned = normalize_string_list(items)
-    if len(cleaned) > COLONY_CAP:
-        dropped = len(cleaned) - COLONY_CAP
+    cleaned, dropped = _cap_to_newest(normalize_string_list(items))
+    if dropped:
         logger.warning(
             "Colony rewrite exceeded cap (%d); dropping %d oldest item(s)",
             COLONY_CAP, dropped,
         )
-        cleaned = cleaned[-COLONY_CAP:]
     data["items"] = cleaned
     save_json_object(_path(workspace), data)
 
@@ -98,10 +108,9 @@ def bump_compact_count(workspace: str) -> int:
     compactions don't both observe the same count.
     """
     data = _load(workspace)
-    compact_count = data.get("compact_count", 0)
-    if not isinstance(compact_count, int) or isinstance(compact_count, bool):
-        compact_count = 0
-    data["compact_count"] = max(0, compact_count) + 1
+    data["compact_count"] = _normalize_compact_count(
+        data.get("compact_count", 0)
+    ) + 1
     save_json_object(_path(workspace), data)
     return data["compact_count"]
 

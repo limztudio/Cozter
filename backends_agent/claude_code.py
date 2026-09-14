@@ -169,18 +169,20 @@ def _truncate_utf8_text(
     limit: int,
     *,
     marker: str = "",
-) -> tuple[str, bool]:
-    """Return at most *limit* UTF-8 bytes without splitting a character.
+) -> tuple[str, bool, int]:
+    """Return (text, truncated, utf8_bytes) within *limit* UTF-8 bytes.
 
-    When it fits, *marker* makes a clipped detached result unambiguous while
-    staying inside the same cap.  Extremely small test/configured limits may
-    be too short even for the marker; in that case keep a visible ``…`` cut
-    indicator within the byte budget rather than a silent bare prefix.
+    The byte length rides along so callers accumulating a budget don't
+    re-encode the retained string a second time. When it fits, *marker*
+    makes a clipped detached result unambiguous while staying inside the
+    same cap. Extremely small test/configured limits may be too short
+    even for the marker; in that case keep a visible ``…`` cut indicator
+    within the byte budget rather than a silent bare prefix.
     """
     limit = max(0, limit)
     encoded = value.encode("utf-8", errors="replace")
     if len(encoded) <= limit:
-        return value, False
+        return value, False, len(encoded)
     marker_bytes = marker.encode("utf-8", errors="replace")
     prefix_limit = limit
     if marker_bytes and len(marker_bytes) <= limit:
@@ -190,20 +192,19 @@ def _truncate_utf8_text(
         # the preview is never mistaken for full content.
         ellipsis = "…".encode("utf-8", errors="replace")
         if limit < len(ellipsis):
-            return ellipsis[:limit].decode("utf-8", errors="ignore"), True
+            text = ellipsis[:limit].decode("utf-8", errors="ignore")
+            return text, True, len(text.encode("utf-8", errors="replace"))
         prefix_limit = limit - len(ellipsis)
-        return (
-            encoded[:prefix_limit].decode("utf-8", errors="ignore") + "…",
-            True,
-        )
+        text = encoded[:prefix_limit].decode("utf-8", errors="ignore") + "…"
+        return text, True, len(text.encode("utf-8", errors="replace"))
     # ``value`` can contain lone surrogates.  Encode with replacement above,
     # then decode only a complete UTF-8 prefix so the resulting text remains
     # safe for JSON/state delivery and fits the byte budget.
-    return (
+    text = (
         encoded[:prefix_limit].decode("utf-8", errors="ignore")
-        + (marker if prefix_limit != limit else ""),
-        True,
+        + (marker if prefix_limit != limit else "")
     )
+    return text, True, len(text.encode("utf-8", errors="replace"))
 
 
 def _append_bounded_transcript_text(
@@ -218,14 +219,14 @@ def _append_bounded_transcript_text(
     output reached its limit and the caller can stop parsing the transcript.
     """
     value = text if not parts else "\n\n" + text
-    retained, truncated = _truncate_utf8_text(
+    retained, truncated, retained_bytes = _truncate_utf8_text(
         value,
         _MAX_DETACHED_OUTPUT_TEXT_BYTES - used_bytes,
         marker=_DETACHED_OUTPUT_TRUNCATION_MARKER,
     )
     if retained:
         parts.append(retained)
-        used_bytes += len(retained.encode("utf-8", errors="replace"))
+        used_bytes += retained_bytes
     return used_bytes, truncated
 
 
@@ -312,14 +313,14 @@ def _transcript_text_from_content(content: object) -> str:
             value = text.strip()
             if parts:
                 value = "\n" + value
-            retained, truncated = _truncate_utf8_text(
+            retained, truncated, retained_bytes = _truncate_utf8_text(
                 value,
                 _MAX_DETACHED_OUTPUT_TEXT_BYTES - used_bytes,
                 marker=_DETACHED_OUTPUT_TRUNCATION_MARKER,
             )
             if retained:
                 parts.append(retained)
-                used_bytes += len(retained.encode("utf-8", errors="replace"))
+                used_bytes += retained_bytes
             if truncated:
                 break
     return "".join(parts)
