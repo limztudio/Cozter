@@ -67,6 +67,7 @@ def _read_inline_text_attachment(path: str) -> str:
 
 
 UPLOADS_DIR = "uploads"
+_ATTACHMENT_SEND_GAP_SEC = 0.6
 # Status previews are useful, but they must never hold up the model stream or
 # the final answer when a platform API call is slow or a Socket Mode
 # connection is being refreshed.
@@ -3711,6 +3712,13 @@ class BotPlatform(ABC):
                 return
             sent_sources.add(source_path)
             try:
+                # Small gap between back-to-back uploads: every chat
+                # platform throttles rapid-fire file sends (Signal's
+                # attachment CDN answers with "Retry after N seconds",
+                # Telegram with flood-control waits, Slack with
+                # ``ratelimited``), so pacing here avoids most throttles
+                # before the per-platform retries even engage.
+                await asyncio.sleep(_ATTACHMENT_SEND_GAP_SEC)
                 await self.send_file(chat_id, abs_path)
             except Exception as e:
                 logger.warning(

@@ -49,6 +49,31 @@ logger = logging.getLogger(__name__)
 
 _TELEGRAM_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 _TELEGRAM_TEXT_LIMIT = 4096
+_TELEGRAM_SEND_MAX_ATTEMPTS = 5
+_TELEGRAM_SEND_MAX_DELAY_SEC = 60.0
+
+
+def _telegram_retry_delay(exc: BaseException) -> float | None:
+    """Return the wait Telegram requests before a flood-control retry.
+
+    python-telegram-bot raises ``RetryAfter`` (with ``retry_after`` seconds)
+    when we hit flood control. Network blips (``TimedOut``/``NetworkError``)
+    get a short 1s backoff. Anything else returns None (fail, don't retry).
+    """
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after is not None:
+        try:
+            seconds = retry_after.total_seconds() if hasattr(
+                retry_after, "total_seconds",
+            ) else float(retry_after)
+        except (TypeError, ValueError):
+            return None
+        if seconds < 0:
+            return None
+        return min(seconds + 0.5, _TELEGRAM_SEND_MAX_DELAY_SEC)
+    if isinstance(exc, NetworkError):
+        return 1.0
+    return None
 
 
 def _rich_telegram_chunks(text: str) -> list[str]:
@@ -212,10 +237,13 @@ class TelegramBot(BotPlatform):
         ext = os.path.splitext(name)[1].lower()
         if ext in _TELEGRAM_PHOTO_EXTENSIONS:
             try:
-                with open(path, "rb") as f:
-                    await self.app.bot.send_photo(
+                await self._send_file_with_retry(
+                    chat_id,
+                    lambda f: self.app.bot.send_photo(
                         chat_id=chat_id, photo=f, filename=name,
-                    )
+                    ),
+                    path,
+                )
                 return
             except Exception:
                 logger.warning(
@@ -223,10 +251,52 @@ class TelegramBot(BotPlatform):
                     path,
                     exc_info=True,
                 )
-        with open(path, "rb") as f:
-            await self.app.bot.send_document(
+        await self._send_file_with_retry(
+            chat_id,
+            lambda f: self.app.bot.send_document(
                 chat_id=chat_id, document=f, filename=name,
-            )
+            ),
+            path,
+        )
+
+    async def _send_file_with_retry(
+        self, chat_id: str, sender, path: str,
+    ) -> None:
+        """Upload one file, honoring Telegram flood-control waits.
+
+        Many attachments in one reply trip Telegram's per-chat flood
+        control (``RetryAfter``). Each attempt reopens the file (the
+        previous file object is consumed/closed by the failed call), then
+        sleeps the server-requested ``retry_after`` before retrying.
+        Non-rate-limit errors still fail fast after the photo fallback.
+        """
+        last_exc: BaseException | None = None
+        delay = 0.0
+        for attempt in range(1, _TELEGRAM_SEND_MAX_ATTEMPTS + 1):
+            try:
+                with open(path, "rb") as f:
+                    await sender(f)
+                return
+            except Exception as exc:
+                last_exc = exc
+                parsed = _telegram_retry_delay(exc)
+                if parsed is None:
+                    raise
+                if attempt >= _TELEGRAM_SEND_MAX_ATTEMPTS:
+                    break
+                delay = parsed
+                logger.warning(
+                    "Telegram throttled upload of %s (attempt %d/%d); "
+                    "retrying in %.1fs: %s",
+                    os.path.basename(path),
+                    attempt,
+                    _TELEGRAM_SEND_MAX_ATTEMPTS,
+                    delay,
+                    exc,
+                )
+            await asyncio.sleep(delay)
+        assert last_exc is not None
+        raise last_exc
 
     # ----- lifecycle ------------------------------------------------------
 

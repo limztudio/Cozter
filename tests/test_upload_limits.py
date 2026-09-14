@@ -526,5 +526,179 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(f.read(), b"second")
 
 
+class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
+    """Outbound throttles wait-and-retry instead of failing the attach."""
+
+    async def test_signal_retry_after_sleeps_then_succeeds(self) -> None:
+        from Cozter.backends_bot.signal import SignalBot, SignalCliError
+
+        bot = SignalBot(
+            ["https://signal.group/#test"],
+            jsonrpc_socket="/tmp/signal.sock",
+        )
+        bot._group_ids = {"group"}
+        bot._rpc_request = mock.AsyncMock(side_effect=[
+            SignalCliError(
+                "Failed to send message: RetryLaterException: "
+                "Retry after 4 seconds (AttachmentInvalidException)",
+            ),
+            {"timestamp": "123"},
+        ])
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        with mock.patch(
+            "Cozter.backends_bot.signal.asyncio.sleep",
+            side_effect=fake_sleep,
+        ):
+            await bot.send_file("group", __file__)
+        self.assertEqual(bot._rpc_request.await_count, 2)
+        self.assertEqual(len(sleeps), 2)
+        # sleeps[0] honors the server's "Retry after 4 seconds"; sleeps[1]
+        # is the 1.2s inter-send pacing before the retry.
+        self.assertGreaterEqual(sleeps[0], 4.0)
+
+    async def test_signal_non_throttle_error_fails_fast(self) -> None:
+        from Cozter.backends_bot.signal import SignalBot, SignalCliError
+
+        bot = SignalBot(
+            ["https://signal.group/#test"],
+            jsonrpc_socket="/tmp/signal.sock",
+        )
+        bot._group_ids = {"group"}
+        bot._rpc_request = mock.AsyncMock(
+            side_effect=SignalCliError("socket is not ready"),
+        )
+        with mock.patch(
+            "Cozter.backends_bot.signal.asyncio.sleep",
+            new=mock.AsyncMock(),
+        ) as sleep_mock:
+            with self.assertRaises(SignalCliError):
+                await bot.send_file("group", __file__)
+        self.assertEqual(bot._rpc_request.await_count, 1)
+        sleep_mock.assert_not_awaited()
+
+    async def test_signal_sends_are_serialized_with_pacing(self) -> None:
+        from Cozter.backends_bot.signal import SignalBot
+
+        bot = SignalBot(
+            ["https://signal.group/#test"],
+            jsonrpc_socket="/tmp/signal.sock",
+        )
+        bot._group_ids = {"group"}
+        bot._rpc_request = mock.AsyncMock(return_value={"timestamp": "1"})
+        with mock.patch(
+            "Cozter.backends_bot.signal.asyncio.sleep",
+            new=mock.AsyncMock(),
+        ) as sleep_mock:
+            await bot.send_file("group", __file__)
+            await bot.send_file("group", __file__)
+        self.assertEqual(bot._rpc_request.await_count, 2)
+        self.assertGreaterEqual(sleep_mock.await_count, 1)
+
+    async def test_telegram_retry_after_sleeps_then_succeeds(self) -> None:
+        from telegram.error import RetryAfter
+
+        from Cozter.backends_bot.telegram import TelegramBot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "photo.png")
+            with open(path, "wb") as f:
+                f.write(b"fake-png-bytes")
+            bot = TelegramBot("token", ["user"])
+            sent: list[str] = []
+
+            async def fake_photo(*, chat_id: str, photo, filename: str):
+                sent.append(filename)
+                if len(sent) == 1:
+                    raise RetryAfter(4)
+                return SimpleNamespace(message_id=7)
+
+            bot.app = SimpleNamespace(bot=SimpleNamespace(send_photo=fake_photo))
+            sleeps: list[float] = []
+
+            async def fake_sleep(delay: float) -> None:
+                sleeps.append(delay)
+
+            with mock.patch(
+                "Cozter.backends_bot.telegram.asyncio.sleep",
+                side_effect=fake_sleep,
+            ):
+                await bot.send_file("chat", path)
+        self.assertEqual(sent, ["photo.png", "photo.png"])
+        self.assertEqual(len(sleeps), 1)
+        self.assertGreaterEqual(sleeps[0], 4.0)
+
+    async def test_slack_ratelimited_sleeps_then_succeeds(self) -> None:
+        from slack_sdk.errors import SlackApiError
+
+        from Cozter.backends_bot.slack import SlackBot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "report.txt")
+            with open(path, "wb") as f:
+                f.write(b"data")
+            bot = SlackBot("bot-token", "app-token", ["C1"])
+            response = SimpleNamespace(
+                data={"ok": True},
+                headers={"Retry-After": "3"},
+            )
+            calls: list[str] = []
+
+            async def fake_upload(**kwargs):
+                calls.append(kwargs["filename"])
+                if len(calls) == 1:
+                    raise SlackApiError("ratelimited", response)
+                return {"ts": "123.456"}
+
+            bot.app = SimpleNamespace(
+                client=SimpleNamespace(files_upload_v2=fake_upload),
+            )
+            sleeps: list[float] = []
+
+            async def fake_sleep(delay: float) -> None:
+                sleeps.append(delay)
+
+            with mock.patch(
+                "Cozter.backends_bot.slack.asyncio.sleep",
+                side_effect=fake_sleep,
+            ):
+                await bot.send_file("C1", path)
+        self.assertEqual(calls, ["report.txt", "report.txt"])
+        self.assertEqual(len(sleeps), 1)
+        self.assertGreaterEqual(sleeps[0], 3.0)
+
+    async def test_slack_non_throttle_error_fails_fast(self) -> None:
+        from slack_sdk.errors import SlackApiError
+
+        from Cozter.backends_bot.slack import SlackBot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "report.txt")
+            with open(path, "wb") as f:
+                f.write(b"data")
+            bot = SlackBot("bot-token", "app-token", ["C1"])
+            response = SimpleNamespace(
+                data={"error": "channel_not_found"},
+                headers={},
+            )
+
+            async def fake_upload(**kwargs):
+                raise SlackApiError("channel_not_found", response)
+
+            bot.app = SimpleNamespace(
+                client=SimpleNamespace(files_upload_v2=fake_upload),
+            )
+            with mock.patch(
+                "Cozter.backends_bot.slack.asyncio.sleep",
+                new=mock.AsyncMock(),
+            ) as sleep_mock:
+                with self.assertRaises(SlackApiError):
+                    await bot.send_file("C1", path)
+        sleep_mock.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()

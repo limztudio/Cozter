@@ -53,6 +53,32 @@ _SIGNAL_STYLE_ITALIC = "ITALIC"
 _SIGNAL_STYLE_MONOSPACE = "MONOSPACE"
 _SIGNAL_STYLE_STRIKETHROUGH = "STRIKETHROUGH"
 _SIGNAL_STYLE_SPOILER = "SPOILER"
+_SIGNAL_ATTACH_RETRY_MAX_ATTEMPTS = 4
+_SIGNAL_ATTACH_RETRY_BASE_DELAY_SEC = 1.0
+_SIGNAL_ATTACH_RETRY_MAX_DELAY_SEC = 30.0
+_SIGNAL_SEND_MIN_INTERVAL_SEC = 1.2
+_SIGNAL_RETRY_AFTER_RE = re.compile(
+    r"retry after (\d+(?:\.\d+)?)\s*seconds?", re.IGNORECASE,
+)
+
+
+def _signal_rate_limit_delay(exc: BaseException) -> float | None:
+    """Return the server-requested wait when signal-cli reports a throttle.
+
+    Matches ``RetryLaterException: Retry after N seconds`` (and any other
+    ``Retry after N seconds`` wording). Returns None when the error is not
+    a rate-limit so callers only sleep-and-retry on real throttles.
+    """
+    match = _SIGNAL_RETRY_AFTER_RE.search(str(exc))
+    if match is None:
+        return None
+    try:
+        delay = float(match.group(1))
+    except ValueError:
+        return None
+    if delay < 0:
+        return None
+    return min(delay, _SIGNAL_ATTACH_RETRY_MAX_DELAY_SEC)
 
 # JSON-RPC methods that make signal-cli dispatch a Signal message. If the
 # socket drops after signal-cli acted but before its response returns, an
@@ -108,6 +134,8 @@ class SignalBot(BotPlatform):
         self._recent_outgoing_texts: deque[tuple[float, str, str]] = deque()
         self._recent_incoming_keys: set[str] = set()
         self._recent_incoming_key_order: deque[tuple[float, str]] = deque()
+        self._send_lock = asyncio.Lock()
+        self._last_send_monotonic = 0.0
 
     @property
     def platform_id(self) -> str:
@@ -1087,11 +1115,63 @@ class SignalBot(BotPlatform):
         timestamp, which later lets Cozter recognise its own echoed
         messages and avoid processing them again.
         """
-        result = await self._rpc_request(method, params)
+        result = await self._paced_rpc_request(method, params)
         timestamp = _extract_timestamp_from_value(result)
         if timestamp:
             self._remember_own_sent_timestamp(timestamp)
         return result
+
+    async def _paced_rpc_request(
+        self, method: str, params: dict[str, Any],
+    ) -> Any:
+        """Serialize sends, pace attachments, and honor Retry-After throttles.
+
+        Signal's attachment CDN throttles rapid-fire uploads with
+        ``RetryLaterException: Retry after N seconds``. Without pacing and
+        a wait-and-retry, attaching many files fails most of them. The
+        lock keeps back-to-back ``send`` calls (text chunks + attachments
+        from one agent reply) at least ``_SIGNAL_SEND_MIN_INTERVAL_SEC``
+        apart, and a server-requested ``Retry after N seconds`` delay is
+        honored with a bounded retry instead of surfacing an error.
+        """
+        last_exc: BaseException | None = None
+        delay = 0.0
+        for attempt in range(1, _SIGNAL_ATTACH_RETRY_MAX_ATTEMPTS + 1):
+            async with self._send_lock:
+                now = time.monotonic()
+                wait = (
+                    self._last_send_monotonic
+                    + _SIGNAL_SEND_MIN_INTERVAL_SEC
+                    - now
+                )
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                try:
+                    return await self._rpc_request(method, params)
+                except Exception as exc:
+                    last_exc = exc
+                    parsed = _signal_rate_limit_delay(exc)
+                    if parsed is None:
+                        raise
+                    if attempt >= _SIGNAL_ATTACH_RETRY_MAX_ATTEMPTS:
+                        break
+                    delay = max(
+                        parsed,
+                        _SIGNAL_ATTACH_RETRY_BASE_DELAY_SEC * (2 ** (attempt - 1)),
+                    )
+                    logger.warning(
+                        "Signal throttled send (attempt %d/%d); "
+                        "retrying in %.1fs: %s",
+                        attempt,
+                        _SIGNAL_ATTACH_RETRY_MAX_ATTEMPTS,
+                        delay,
+                        _safe_error_message(exc),
+                    )
+                finally:
+                    self._last_send_monotonic = time.monotonic()
+            await asyncio.sleep(delay)
+        assert last_exc is not None
+        raise last_exc
 
     def _is_own_sent_echo(
         self,

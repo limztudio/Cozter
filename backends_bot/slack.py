@@ -11,6 +11,7 @@ Slack's non-interactive flows differ from Telegram in several ways:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -100,7 +101,76 @@ def _mrkdwn_code_block(lines: list[str]) -> list[str]:
 
 _SLACK_MAX_CHARS = 39_000  # Slack hard-caps around 40K; stay under.
 _SLACK_MARKDOWN_LIMIT = 12_000  # Cumulative Markdown-block text per payload.
+_SLACK_SEND_MAX_ATTEMPTS = 5
+_SLACK_SEND_MAX_DELAY_SEC = 60.0
 _FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,}).*$")
+
+
+def _slack_retry_delay(error: SlackApiError) -> float | None:
+    """Return the wait Slack requests before a ``ratelimited`` retry.
+
+    Slack answers throttled calls with ``error=ratelimited`` and a
+    ``Retry-After`` response header (seconds). Returns None for any other
+    API error so real failures still fail fast.
+    """
+    response = getattr(error, "response", None)
+    if response is None:
+        return None
+    data = response.data if hasattr(response, "data") else None
+    if isinstance(data, dict):
+        code = data.get("error")
+        # Slack answers throttles with error=ratelimited; a missing error
+        # key (unit-test doubles, bare Retry-After headers) is treated as
+        # a throttle when a Retry-After header is present.
+        headers = getattr(response, "headers", None) or {}
+        has_retry_after = (
+            "Retry-After" in headers or "retry-after" in headers
+        )
+        if code is not None and code != "ratelimited":
+            return None
+        if code is None and not has_retry_after:
+            return None
+    headers = getattr(response, "headers", None) or {}
+    raw = headers.get("Retry-After", headers.get("retry-after", "1"))
+    try:
+        delay = float(raw)
+    except (TypeError, ValueError):
+        delay = 1.0
+    if delay < 0:
+        return None
+    return min(delay + 0.5, _SLACK_SEND_MAX_DELAY_SEC)
+
+
+async def _call_slack_with_retry(description: str, method, **kwargs):
+    """Call one Slack API method, honoring ``ratelimited`` waits.
+
+    Many attachments in one reply trip Slack's tier-2/3 rate limits. The
+    server-requested ``Retry-After`` is slept before retrying (bounded
+    attempts); any other API error is re-raised immediately.
+    """
+    last_exc: SlackApiError | None = None
+    delay = 0.0
+    for attempt in range(1, _SLACK_SEND_MAX_ATTEMPTS + 1):
+        try:
+            return await method(**kwargs)
+        except SlackApiError as exc:
+            last_exc = exc
+            parsed = _slack_retry_delay(exc)
+            if parsed is None:
+                raise
+            if attempt >= _SLACK_SEND_MAX_ATTEMPTS:
+                break
+            delay = parsed
+            logger.warning(
+                "Slack throttled %s (attempt %d/%d); retrying in %.1fs",
+                description,
+                attempt,
+                _SLACK_SEND_MAX_ATTEMPTS,
+                delay,
+            )
+        await asyncio.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 def _fence_open(line: str) -> tuple[str, str] | None:
@@ -337,8 +407,12 @@ class SlackBot(BotPlatform):
         self._check_upload_path(path)
         assert self.app is not None
         name = os.path.basename(path)
-        await self.app.client.files_upload_v2(
-            channel=chat_id, file=path, filename=name,
+        await _call_slack_with_retry(
+            f"upload of {name}",
+            self.app.client.files_upload_v2,
+            channel=chat_id,
+            file=path,
+            filename=name,
         )
 
     # ----- lifecycle ------------------------------------------------------
