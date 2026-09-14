@@ -180,10 +180,11 @@ def _compaction_prompt_parts(
                 ]
                 # Keep the fixed prefix inside the same fraction: drop the
                 # oldest retained lines (newest retained last) to fit.
-                while (
-                    len(lt_lines) > 1
-                    and sum(len(line) + 1 for line in lt_lines) > lt_max
-                ):
+                # Track the joined length incrementally instead of
+                # re-joining on every check (O(n^2)).
+                lt_total = sum(len(line) + 1 for line in lt_lines)
+                while len(lt_lines) > 1 and lt_total > lt_max:
+                    lt_total -= len(lt_lines[1]) + 1
                     lt_lines.pop(1)
             parts.append(
                 "Existing long-term items (rewrite this list per the "
