@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import urllib.parse
 from typing import Any, ClassVar
 
@@ -50,6 +51,10 @@ _HOP_BY_HOP_HEADERS = frozenset({
 })
 _TEXTUAL_TYPE_MARKERS = (
     "json", "xml", "html", "csv", "yaml", "javascript", "text", "x-www-form",
+)
+# One alternation scan instead of a per-marker substring probe loop.
+_TEXTUAL_TYPE_RE = re.compile(
+    "|".join(re.escape(marker) for marker in _TEXTUAL_TYPE_MARKERS),
 )
 
 
@@ -88,7 +93,7 @@ def _is_textual_content_type(content_type: str) -> bool:
         return True
     return (
         normalized.startswith("text/")
-        or any(marker in normalized for marker in _TEXTUAL_TYPE_MARKERS)
+        or _TEXTUAL_TYPE_RE.search(normalized) is not None
     )
 
 

@@ -483,13 +483,14 @@ def load_config() -> dict:
     ):
         raw_user_ids = [raw_user_ids]
     if isinstance(raw_user_ids, list):
-        cfg["user_ids"] = [
-            str(uid).strip()
-            for uid in raw_user_ids
-            if isinstance(uid, (str, int))
-            and not isinstance(uid, bool)
-            and str(uid).strip()
-        ]
+        normalized_ids: list[str] = []
+        for uid in raw_user_ids:
+            if not isinstance(uid, (str, int)) or isinstance(uid, bool):
+                continue
+            text = str(uid).strip()
+            if text:
+                normalized_ids.append(text)
+        cfg["user_ids"] = normalized_ids
     else:
         cfg["user_ids"] = []
 
