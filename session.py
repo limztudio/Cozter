@@ -441,7 +441,7 @@ def is_default_name(name: str | None) -> bool:
 def set_session_name(
     workspace: str, session_id: str, name: str,
 ) -> None:
-    name = name.strip()
+    name = name.strip() if isinstance(name, str) else ""
     if not name:
         return
     data = load_session(workspace, session_id)
@@ -509,10 +509,21 @@ def set_summary(
     if data is None:
         return
     msgs = data.get("messages", [])
+    if not isinstance(msgs, list):
+        msgs = []
+        data["messages"] = msgs
     # keep_recent is an internal retain-count, but hand-edited callers and
     # future refactors must not turn a negative into "drop everything and
     # inflate the compacted tally".
+    if isinstance(keep_recent, bool) or not isinstance(keep_recent, int):
+        keep_recent = 0
     keep_recent = max(0, keep_recent)
+    if (
+        summarized_count is not None
+        and (isinstance(summarized_count, bool)
+             or not isinstance(summarized_count, int))
+    ):
+        summarized_count = None
     basis = len(msgs) if summarized_count is None else min(
         summarized_count, len(msgs),
     )
