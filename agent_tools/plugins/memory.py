@@ -184,8 +184,12 @@ def _iter_search_texts(data: dict):
 def _fit_output(lines: list[str], header: str) -> str:
     """Join *lines* under the result budget, dropping from the end."""
     dropped = 0
-    while lines and len(header) + sum(len(line) + 1 for line in lines) > (
-        _OUTPUT_BUDGET
+    while (
+        lines
+        and len(header)
+        + sum(len(line) + 1 for line in lines)
+        + len("(…more omitted)")
+        > _OUTPUT_BUDGET
     ):
         lines.pop()
         dropped += 1
