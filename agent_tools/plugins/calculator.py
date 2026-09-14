@@ -28,7 +28,13 @@ class _CalcError(Exception):
 
 def _guarded_pow(base: Any, exponent: Any) -> Any:
     """``**`` with magnitude guards so ``9**9**9`` cannot wedge the host."""
-    if isinstance(base, (int, float)) and isinstance(exponent, (int, float)):
+    if (
+        isinstance(base, (int, float)) and not isinstance(base, bool)
+        and isinstance(exponent, (int, float))
+        and not isinstance(exponent, bool)
+    ):
+        if not math.isfinite(exponent) or not math.isfinite(base):
+            raise _CalcError("result is not finite (overflow or domain error)")
         if abs(exponent) > _MAX_EXPONENT:
             raise _CalcError(
                 f"exponent magnitude is capped at {_MAX_EXPONENT:,}",
@@ -127,14 +133,21 @@ def _evaluate(node: ast.AST) -> Any:
             raise _CalcError(
                 f"operator '{type(node.op).__name__}' is not supported",
             )
-        return operation(_evaluate(node.left), _evaluate(node.right))
+        left = _evaluate(node.left)
+        right = _evaluate(node.right)
+        if isinstance(left, bool) or isinstance(right, bool):
+            raise _CalcError("boolean operands are not allowed")
+        return operation(left, right)
     if isinstance(node, ast.UnaryOp):
         unary_operation = _UNARY_OPS.get(type(node.op))
         if unary_operation is None:
             raise _CalcError(
                 f"unary operator '{type(node.op).__name__}' is not supported",
             )
-        return unary_operation(_evaluate(node.operand))
+        operand = _evaluate(node.operand)
+        if isinstance(operand, bool):
+            raise _CalcError("boolean operands are not allowed")
+        return unary_operation(operand)
     if isinstance(node, ast.Name):
         if node.id in _CONSTANTS:
             return _CONSTANTS[node.id]
