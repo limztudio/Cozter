@@ -529,10 +529,17 @@ def _with_extra_models(
     account-authoritative backend can disable unverified extras so a policy
     restricted picker never shows an unavailable model.
     """
-    models = list(base)
+    seen: set[str] = set()
+    models: list[str] = []
+    for entry in base:
+        if not isinstance(entry, str) or not entry:
+            continue
+        if entry in seen:
+            continue
+        seen.add(entry)
+        models.append(entry)
     if not allow_unverified_extras:
         return models
-    seen = set(models)
     for model in config.get_extra_models(backend_name):
         if model not in seen:
             seen.add(model)
