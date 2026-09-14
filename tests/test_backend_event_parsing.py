@@ -564,5 +564,23 @@ class LlamaParseTests(unittest.TestCase):
         self.assertEqual(r.error, "explode")
 
 
+class NonDictEventTests(unittest.TestCase):
+    def test_non_dict_events_are_dropped_without_raising(self) -> None:
+        backends = [
+            ClaudeCodeBackend(),
+            CodexBackend(),
+            CopilotBackend(),
+            GrokBackend(),
+            LlamaBackend(),
+        ]
+        for backend in backends:
+            with self.subTest(backend=backend.name):
+                for bad in ("junk", None, 123, ["x"], True):
+                    result = AgentResult()
+                    backend.parse_event(bad, result)  # type: ignore[arg-type]
+                    self.assertEqual(result.events, [])
+                    self.assertEqual(result.text, "")
+
+
 if __name__ == "__main__":
     unittest.main()

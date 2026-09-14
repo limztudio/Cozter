@@ -626,6 +626,8 @@ class CopilotBackend(Backend):
     )
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
+        if not isinstance(event, dict):
+            return
         etype = event.get("type") or event.get("event") or ""
 
         # Typed branches first so a tool event with an "output"/"content"

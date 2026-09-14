@@ -828,6 +828,8 @@ class ClaudeCodeBackend(Backend):
         return True
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
+        if not isinstance(event, dict):
+            return
         etype = event.get("type", "")
 
         if etype == "assistant":

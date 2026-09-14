@@ -366,6 +366,8 @@ class CodexBackend(Backend):
         return await create_prompt_subprocess(cmd, prompt)
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
+        if not isinstance(event, dict):
+            return
         etype = event.get("type", "")
         # ``or {}`` guards a malformed ``"item": null`` the way the
         # default alone can't: ``.get("item", {})`` returns {} only when
