@@ -140,9 +140,12 @@ _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
 def _chat_completion_model_ids(model_ids: tuple[str, ...]) -> tuple[str, ...]:
     """Drop known Z.ai IDs that require an endpoint other than chat."""
+    if not isinstance(model_ids, tuple):
+        return ()
     return tuple(
         model_id for model_id in model_ids
-        if model_id.casefold() not in _NON_CHAT_COMPLETION_MODEL_IDS
+        if isinstance(model_id, str) and model_id.strip()
+        and model_id.casefold() not in _NON_CHAT_COMPLETION_MODEL_IDS
     )
 
 
