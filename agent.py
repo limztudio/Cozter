@@ -299,7 +299,13 @@ def format_usage(usage: dict | None) -> str | None:
         and not isinstance(cost, bool)
         and cost > 0
     ):
-        cost_str = f"{cost:.4f}".rstrip("0").rstrip(".")
+        if cost < 0.0001:
+            # Sub-cent costs would round to "$0" at 4dp, implying free.
+            # Keep fixed-point (never scientific notation) so a billed
+            # turn never displays as zero.
+            cost_str = f"{cost:.6f}".rstrip("0").rstrip(".")
+        else:
+            cost_str = f"{cost:.4f}".rstrip("0").rstrip(".")
         parts.append(f"${cost_str}")
     if not parts:
         return None
