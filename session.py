@@ -245,14 +245,25 @@ def format_context_blocks(
     formats from drifting apart.
     """
     parts: list[str] = []
-    if colony_items:
+    if isinstance(colony_items, list) and colony_items:
         parts.append("[Colony]")
-        parts.extend(f"- {item}" for item in colony_items)
+        valid_colony = [
+            item for item in colony_items
+            if isinstance(item, str) and item
+        ]
+        parts.extend(f"- {item}" for item in valid_colony)
+        if not valid_colony:
+            parts.pop()  # no header for an all-junk list
 
     long_term = data.get("long_term") or []
-    if long_term:
-        parts.append("[Long-term Memory]")
-        parts.extend(f"- {item}" for item in long_term)
+    if isinstance(long_term, list) and long_term:
+        valid_long_term = [
+            item for item in long_term
+            if isinstance(item, str) and item
+        ]
+        if valid_long_term:
+            parts.append("[Long-term Memory]")
+            parts.extend(f"- {item}" for item in valid_long_term)
 
     summary = data.get("summary")
     if isinstance(summary, str) and summary:
@@ -260,9 +271,11 @@ def format_context_blocks(
         parts.append(summary)
 
     messages = data.get("messages") or []
-    if messages:
-        parts.append("[Recent Messages]")
-        parts.extend(format_msg_line(message) for message in messages)
+    if isinstance(messages, list) and messages:
+        valid_messages = [m for m in messages if isinstance(m, dict)]
+        if valid_messages:
+            parts.append("[Recent Messages]")
+            parts.extend(format_msg_line(message) for message in valid_messages)
 
     return parts
 

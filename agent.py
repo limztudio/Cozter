@@ -271,6 +271,8 @@ def _consume_detached_task_requests(result: AgentResult) -> None:
 
 
 def _compact_tokens(n: int) -> str:
+    if isinstance(n, bool) or n < 0:
+        return "0"
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
@@ -285,10 +287,10 @@ def format_usage(usage: dict | None) -> str | None:
         return None
     parts: list[str] = []
     inp = usage.get("input_tokens")
-    if isinstance(inp, int) and not isinstance(inp, bool):
+    if isinstance(inp, int) and not isinstance(inp, bool) and inp >= 0:
         parts.append(f"{_compact_tokens(inp)} in")
     out = usage.get("output_tokens")
-    if isinstance(out, int) and not isinstance(out, bool):
+    if isinstance(out, int) and not isinstance(out, bool) and out >= 0:
         parts.append(f"{_compact_tokens(out)} out")
     cost = usage.get("total_cost_usd")
     if (
@@ -730,9 +732,23 @@ def _build_contextual_prompt(
     if data is None:
         data = {}
     summary: str | None = data.get("summary")
-    long_term: list[str] = data.get("long_term") or []
-    messages: list[dict] = data.get("messages", [])
-    colony_list: list[str] = colony_items or []
+    if not isinstance(summary, str):
+        summary = None
+    raw_long_term = data.get("long_term") or []
+    long_term: list[str] = (
+        [i for i in raw_long_term if isinstance(i, str) and i]
+        if isinstance(raw_long_term, list) else []
+    )
+    raw_messages = data.get("messages", [])
+    messages: list[dict] = (
+        [m for m in raw_messages if isinstance(m, dict)]
+        if isinstance(raw_messages, list) else []
+    )
+    raw_colony = colony_items or []
+    colony_list: list[str] = (
+        [i for i in raw_colony if isinstance(i, str) and i]
+        if isinstance(raw_colony, list) else []
+    )
 
     if not summary and not messages and not long_term and not colony_list:
         return prompt
@@ -1180,7 +1196,11 @@ def _accumulate_usage(totals: dict, usage: dict | None) -> None:
         return
     for field in _USAGE_TOTAL_FIELDS:
         value = usage.get(field)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value >= 0
+        ):
             totals[field] = totals.get(field, 0) + value
 
 
