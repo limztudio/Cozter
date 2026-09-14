@@ -399,8 +399,11 @@ def prepare_source_destination(
         resolve_workspace_entry
         if preserve_final_symlinks else resolve_inside_workspace
     )
-    src = resolver(workspace, raw_src)
-    dst = resolver(workspace, raw_dst)
+    try:
+        src = resolver(workspace, raw_src)
+        dst = resolver(workspace, raw_dst)
+    except (ValueError, OSError) as exc:
+        return f"Error: {exc}"
     exists = os.path.lexists if preserve_final_symlinks else os.path.exists
     if not exists(src):
         return f"Source not found: {raw_src}"
