@@ -557,6 +557,63 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("429 usage limit reached", result.text)
 
+    async def test_followup_lines_grow_the_total_mid_run(self) -> None:
+        """Workers discovering leftovers grow done/total live."""
+        self.plan_output = "[PLAN]\n1. [low] first\n[/PLAN]"
+        calls: list[str] = []
+        statuses: list[str] = []
+
+        async def followup_worker(
+            _backend, _ws, _prompt, _model, _approval, **kwargs,
+        ):
+            idx = len(calls)
+            calls.append(_model)
+            if idx == 0:
+                return _worker(
+                    "first done\n[followup:mid] handle leftover",
+                    usage={},
+                ), False
+            return _worker("leftover done", usage={}), False
+
+        async def on_event(ev: ChatEvent) -> None:
+            if ev.kind == "tool":
+                statuses.append(ev.content)
+
+        with tempfile.TemporaryDirectory() as ws:
+            workspace.ensure_cozter_dir(ws)
+            with mock.patch.object(
+                agent, "run_internal_backend", self._fake_internal,
+            ), mock.patch.object(agent, "_drive_backend", followup_worker):
+                result, restarting = await agent._run_flexible(
+                    "context", "user message", ws,
+                    approval="auto", effort=0, collaborative=False,
+                    summary_backend_name="codex",
+                    summary_model="gpt-5.6-luna", on_event=on_event,
+                    inject_queue=None, injected=[],
+                )
+        self.assertFalse(restarting)
+        # Both the planned task and the discovered follow-up ran.
+        self.assertEqual(len(calls), 2)
+        # Progress shows the growing total, never a stuck denominator.
+        self.assertTrue(any("[1/1]" in s for s in statuses))
+        self.assertTrue(any("[2/2]" in s for s in statuses))
+        self.assertIn("plan grew to 2 sub-tasks", " ".join(statuses))
+        self.assertIn("merged answer", result.text)
+
+    def test_followup_parser_accepts_tiers_and_skips_noise(self) -> None:
+        found = flexible.parse_followups(
+            "done\n[followup:low] fix leftover\nnoise\n"
+            "[followup:high] handle edge",
+        )
+        self.assertEqual(
+            [(s.tier, s.instruction) for s in found],
+            [("low", "fix leftover"), ("high", "handle edge")],
+        )
+        self.assertEqual(flexible.parse_followups("nothing new"), [])
+        self.assertEqual(
+            flexible.parse_followups("[followup:urgent] nope"), [],
+        )
+
     async def test_inject_during_planning_restarts_the_whole_turn(self) -> None:
         """Planner calls are watched just like worker subprocesses are."""
         planner_started = asyncio.Event()

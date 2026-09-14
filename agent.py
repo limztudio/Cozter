@@ -1322,13 +1322,18 @@ async def _run_flexible(
     attach_markers: list[str] = []
     usage_totals: dict = {}
     blocked: list[int] = []
-    total = len(plan.subtasks)
+    queue: list[flexible.Subtask] = list(plan.subtasks)
+    done = 0
+    total = len(queue)
+    i = -1
 
-    for i, task in enumerate(plan.subtasks):
+    while done < len(queue):
+        i += 1
+        task = queue[i]
         tier_backend_name, tier_model = tiers[task.tier]
         tier_backend = backends_agent.get_backend(tier_backend_name)
         await status(
-            f"flexible [{i + 1}/{total}] {task.tier} ·"
+            f"flexible [{done + 1}/{total}] {task.tier} ·"
             f" {tier_backend_name}/{tier_model}: {task.instruction}"
         )
         sub_result, restarting = await _drive_backend(
@@ -1341,7 +1346,7 @@ async def _run_flexible(
                     # history: the planner already saw the context and
                     # wrote self-contained instructions, so resending up
                     # to history_budget chars per worker is pure cost.
-                    request, plan, i, reports,
+                    request, plan, done, reports,
                 ),
                 collaborative=False,
                 allow_detached_requests=False,
@@ -1368,7 +1373,7 @@ async def _run_flexible(
         if sub_result.error:
             logger.warning(
                 "Flexible sub-task %d/%d (%s/%s) failed: %s",
-                i + 1, total, tier_backend_name, tier_model, sub_result.error,
+                done + 1, total, tier_backend_name, tier_model, sub_result.error,
             )
 
         report, worker_awaiting = extract_await(sub_result.text)
@@ -1401,9 +1406,26 @@ async def _run_flexible(
         # the turn on that question *and* pause the queue, or the user's
         # answer lands as an unrelated new turn.
         if worker_awaiting:
-            blocked.append(i)
+            blocked.append(done)
 
-    if total == 1:
+        # Workers may discover genuine leftover work inside their own task.
+        # They report it as [followup:<tier>] lines; append unseen items to
+        # the queue so the progress total grows live (done/total) instead of
+        # silently dropping leftovers or claiming done with work left.
+        for extra in flexible.parse_followups(report):
+            if extra not in queue and len(queue) < flexible.MAX_SUBTASKS * 2:
+                queue.append(extra)
+        if len(queue) != total:
+            total = len(queue)
+            plan = flexible.Plan(
+                understanding=plan.understanding,
+                subtasks=tuple(queue),
+                question=None,
+            )
+            await status(f"flexible: plan grew to {total} sub-tasks")
+        done += 1
+
+    if len(queue) == 1:
         if _take_pending_injections(inject_queue, injected):
             return AgentResult(), True
         _close_inject_queue(inject_queue)

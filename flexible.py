@@ -182,6 +182,13 @@ class Plan:
     question: str | None = None
 
 
+_FOLLOWUP_LINE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?"
+    r"\[\s*followup\s*:\s*(?P<tier>[A-Za-z]+)\s*\]"
+    r"\s*(?P<instruction>.+?)\s*$",
+    re.IGNORECASE,
+)
+
 _TIER_ALIASES = {"medium": "mid", "med": "mid", "middle": "mid"}
 
 _PLAN_LINE_RE = re.compile(
@@ -199,6 +206,27 @@ def normalize_tier(value: str) -> str | None:
     tier = value.strip().lower()
     tier = _TIER_ALIASES.get(tier, tier)
     return tier if tier in TIERS else None
+
+
+def parse_followups(report: str) -> list[Subtask]:
+    """Parse worker-reported ``[followup:<tier>] <instruction>`` lines."""
+    found: list[Subtask] = []
+    if not isinstance(report, str) or not report:
+        return found
+    for line in report.splitlines():
+        match = _FOLLOWUP_LINE_RE.match(line)
+        if match is None:
+            continue
+        tier = normalize_tier(match.group("tier"))
+        instruction = match.group("instruction").strip()
+        if tier is None or not instruction:
+            continue
+        entry = Subtask(tier=tier, instruction=instruction)
+        if entry not in found:
+            found.append(entry)
+        if len(found) >= MAX_SUBTASKS:
+            break
+    return found
 
 
 def fallback_plan(request: str) -> Plan:
@@ -333,7 +361,11 @@ def build_subtask_prompt(
         " (paths, commands, exit codes, error/warning counts).\n"
         "Be honest: say PARTIAL and list what remains if anything is"
         " unfinished or unverified; never report done when work remains"
-        " or evidence is missing."
+        " or evidence is missing.\n"
+        "New work discovered while doing this task: list each item on its own"
+        " line as [followup:<low|mid|high>] <instruction> (self-contained, one"
+        " line each). Only genuine leftovers found inside this task - never"
+        " restate the plan."
     )
     return "\n".join(parts)
 

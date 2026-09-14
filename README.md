@@ -979,7 +979,10 @@ automatically (its `tier_models` table) — for `zai` that is
 A flexible turn can make one planner call (input capped at 12,000
 characters with the request preserved; a middle-context omission marker is
 reserved inside that cap so the planner still sees it must cover every
-item/rule), up to 12 worker calls, and one
+item/rule), up to 12 planned worker calls plus worker-discovered follow-ups
+(each worker may report genuine leftovers as `[followup:<tier>]` lines,
+which join the queue live so progress reads `done/total` with a growing
+total, e.g. `3/12` then `3/13`), and one
 merge call over the bare request. Each worker report is capped at 6,000
 characters with its truncation marker reserved inside the cap, so a clipped
 report always arrives marked `[report truncated: remainder omitted]` as a
