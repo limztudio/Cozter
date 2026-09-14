@@ -19,7 +19,12 @@ class MakeDirTool(AgentTool):
 
     async def run(self, workspace_path: str, args: dict) -> str:
         raw_path = args.get("path", "")
-        target = resolve_inside_workspace(workspace_path, raw_path)
+        if not isinstance(raw_path, str):
+            return "Error: 'path' must be a string"
+        try:
+            target = resolve_inside_workspace(workspace_path, raw_path)
+        except ValueError as exc:
+            return f"Error: {exc}"
         if os.path.exists(target) and not os.path.isdir(target):
             return f"Path already exists as a file: {raw_path}"
         try:
