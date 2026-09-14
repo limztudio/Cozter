@@ -221,6 +221,10 @@ def format_msg_line(msg: dict, cap: int | None = MSG_CONTENT_MAX) -> str:
         role = "?"
     role = role.capitalize()
     content = _safe_text(msg.get("content"))
+    if cap is not None and cap <= 0:
+        # A non-positive cap affords no content characters; return the
+        # role label alone rather than a trailing-space line.
+        return f"{role}:"
     if cap is not None and len(content) > cap:
         _suffix = (
             f"… [truncated {len(content)} chars total;"
