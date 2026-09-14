@@ -722,6 +722,21 @@ them with its normal tools. Cozter reads at most 50,001 characters when
 making that decision, so a large accepted text upload is not decoded in full
 just to determine that it should be referenced by path.
 
+Photo uploads carry the saved path plus verified dimensions, format, and
+size, and every direct backend can see the pixels natively: `llama`,
+`meta`, and `zai` receive them as OpenAI-style `image_url` parts,
+`codex` via repeatable `--image` flags, `copilot` via repeatable
+`--attachment` flags, `grok` via `--prompt-json` image blocks (falling
+back to `--prompt-file` text when no image is referenced), and
+`claude_code` via a prompt hint telling the model to open the saved path
+with its own Read tool. The shared helper keeps only in-workspace images
+referenced by `[… attachment saved to: …]` markers (up to 4 per turn,
+4 MiB each) and never raises, so an ordinary text turn is unchanged. The
+`read_file` tool likewise returns verified dimensions/format/size for
+image files (`png`/`jpg`/`gif`/`webp`/`bmp`) instead of binary noise, so
+the model answers from what is actually in the picture rather than
+guessing.
+
 `max_upload_bytes` is enforced before an outbound transfer and throughout an
 inbound copy or download. Incoming files are staged beside their final path
 and atomically renamed only after a complete, in-limit transfer succeeds, so
