@@ -141,7 +141,7 @@ class GitInfoTool(AgentTool):
         if returncode != 0 and "HEAD" in argv:
             head_failure = any(
                 marker in stderr.casefold()
-                for marker in ("head", "unknown revision")
+                for marker in ("unknown revision", "ambiguous argument 'head'")
             )
             if head_failure:
                 # A repository with zero commits has no HEAD revision; fall
