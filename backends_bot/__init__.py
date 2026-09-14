@@ -28,9 +28,23 @@ def create_platforms(config: dict) -> list[BotPlatform]:
     pure dispatcher, not a validator.
     """
     tg_tokens = config.get("telegram_bot_tokens") or []
+    if isinstance(tg_tokens, str):
+        tg_tokens = [tg_tokens]
+    if not isinstance(tg_tokens, list):
+        tg_tokens = []
+    tg_tokens = [t for t in tg_tokens if isinstance(t, str) and t.strip()]
     slack_bot = config.get("slack_bot_token") or ""
+    if not isinstance(slack_bot, str):
+        slack_bot = ""
     signal_groups = config.get("signal_group_urls") or []
+    if isinstance(signal_groups, str):
+        signal_groups = [signal_groups]
+    if not isinstance(signal_groups, list):
+        signal_groups = []
+    signal_groups = [g for g in signal_groups if isinstance(g, str) and g.strip()]
     signal_socket = config.get("signal_jsonrpc_socket") or ""
+    if not isinstance(signal_socket, str):
+        signal_socket = ""
     recent_limit = config.get(
         "recent_workspace_limit", DEFAULT_RECENT_WORKSPACE_LIMIT,
     )
@@ -45,9 +59,18 @@ def create_platforms(config: dict) -> list[BotPlatform]:
         # Deferred import to avoid requiring slack_bolt at telegram-only
         # deploys (and vice versa).
         from .telegram import TelegramBot
+        raw_ids = config.get("user_ids") or []
+        if isinstance(raw_ids, (str, int)) and not isinstance(raw_ids, bool):
+            raw_ids = [raw_ids]
+        if not isinstance(raw_ids, list):
+            raw_ids = []
+        user_ids = [
+            str(t) for t in raw_ids
+            if isinstance(t, (str, int)) and not isinstance(t, bool)
+        ]
         bots.extend(
             TelegramBot(
-                token, config.get("user_ids") or [],
+                token, user_ids,
                 recent_limit=recent_limit,
                 max_queue_size=queue_size,
                 max_upload_bytes=max_upload_bytes,
@@ -55,13 +78,21 @@ def create_platforms(config: dict) -> list[BotPlatform]:
             for token in tg_tokens
         )
 
-    if slack_bot:
+    if slack_bot.strip():
         from .slack import SlackBot
+        raw_channels = config.get("slack_channel_ids") or []
+        if isinstance(raw_channels, str):
+            raw_channels = [raw_channels]
+        if not isinstance(raw_channels, list):
+            raw_channels = []
+        channel_ids = [
+            c for c in raw_channels if isinstance(c, str) and c.strip()
+        ]
         bots.append(
             SlackBot(
                 slack_bot,
                 config.get("slack_app_token") or "",
-                config.get("slack_channel_ids") or [],
+                channel_ids,
                 recent_limit=recent_limit,
                 max_queue_size=queue_size,
                 max_upload_bytes=max_upload_bytes,
