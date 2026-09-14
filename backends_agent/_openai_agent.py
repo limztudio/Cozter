@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import random
 import urllib.request
 import uuid
@@ -679,7 +680,13 @@ def _backoff_delay(
 ) -> float:
     """Seconds to wait before retry *attempt* (1-based); honors Retry-After."""
     if retry_after is not None:
-        return min(max(retry_after, 0.0), cap)
+        # A non-finite header value must not reach asyncio.sleep: nan raises
+        # ValueError and inf would sleep effectively forever. Cap +inf at the
+        # cap and fall through to normal backoff on nan/-inf.
+        if math.isfinite(retry_after):
+            return min(max(retry_after, 0.0), cap)
+        if retry_after == float("inf"):
+            return cap
     delay = min(base * (2 ** (attempt - 1)), cap)
     return delay + random.uniform(0.0, delay * 0.25)
 
@@ -689,9 +696,14 @@ def _parse_retry_after(value: str | None) -> float | None:
     if not value:
         return None
     try:
-        return max(float(value), 0.0)
+        parsed = float(value)
     except (TypeError, ValueError):
         return None
+    # Reject nan/-inf (fail fast on a meaningless throttle); callers cap
+    # +inf via _backoff_delay.
+    if not math.isfinite(parsed) and parsed != float("inf"):
+        return None
+    return max(parsed, 0.0)
 
 
 async def _stream_completion(

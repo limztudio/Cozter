@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import re
 
@@ -82,14 +83,14 @@ def _mrkdwn_line(line: str) -> str:
     # Bold first, into placeholders, so the single-asterisk italic
     # regex below can't mis-match the `*bold*` we're about to emit.
     # Headers -> bold (Slack has no heading syntax).
-    line = re.sub(r"^#{1,6}\s+(.+)$", _bold_sub, line)
-    line = re.sub(r"\*\*(.+?)\*\*", _bold_sub, line)
-    line = re.sub(r"__(.+?)__", _bold_sub, line)
+    line = _SLACK_HEADING_RE.sub(_bold_sub, line)
+    line = _SLACK_BOLD_STAR_RE.sub(_bold_sub, line)
+    line = _SLACK_BOLD_UNDER_RE.sub(_bold_sub, line)
     # Italic: single `*text*` -> `_text_`; leave `_text_` as-is since
     # that's already valid mrkdwn.
-    line = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"_\1_", line)
+    line = _SLACK_ITALIC_STAR_RE.sub(r"_\1_", line)
     # Strikethrough: `~~text~~` -> `~text~`.
-    line = re.sub(r"~~(.+?)~~", r"~\1~", line)
+    line = _SLACK_STRIKE_RE.sub(r"~\1~", line)
     # Swap bold placeholders back to Slack's single-asterisk bold.
     return line.replace(_BOLD_OPEN, "*").replace(_BOLD_CLOSE, "*")
 
@@ -104,6 +105,13 @@ _SLACK_MARKDOWN_LIMIT = 12_000  # Cumulative Markdown-block text per payload.
 _SLACK_SEND_MAX_ATTEMPTS = 5
 _SLACK_SEND_MAX_DELAY_SEC = 60.0
 _FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,}).*$")
+
+# Precompiled mrkdwn line patterns (hot path: one call per reply line).
+_SLACK_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
+_SLACK_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
+_SLACK_BOLD_UNDER_RE = re.compile(r"__(.+?)__")
+_SLACK_ITALIC_STAR_RE = re.compile(r"(?<!\w)\*([^*]+?)\*(?!\w)")
+_SLACK_STRIKE_RE = re.compile(r"~~(.+?)~~")
 
 
 def _slack_retry_delay(error: SlackApiError) -> float | None:
@@ -136,6 +144,13 @@ def _slack_retry_delay(error: SlackApiError) -> float | None:
         delay = float(raw)
     except (TypeError, ValueError):
         delay = 1.0
+    # A non-finite header value must not reach asyncio.sleep: nan raises
+    # ValueError and inf would sleep effectively forever. Cap +inf at the
+    # max delay and fail fast on nan/-inf.
+    if not math.isfinite(delay):
+        if delay == float("inf"):
+            return _SLACK_SEND_MAX_DELAY_SEC
+        return None
     if delay < 0:
         return None
     return min(delay + 0.5, _SLACK_SEND_MAX_DELAY_SEC)

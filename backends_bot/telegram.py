@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import re
 
@@ -52,6 +53,17 @@ _TELEGRAM_TEXT_LIMIT = 4096
 _TELEGRAM_SEND_MAX_ATTEMPTS = 5
 _TELEGRAM_SEND_MAX_DELAY_SEC = 60.0
 
+# Precompiled Markdown->HTML line patterns (hot path: one call per reply
+# line). Module-level compilation avoids re-parsing the same patterns on
+# every line via re.sub's internal cache.
+_TELEGRAM_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
+_TELEGRAM_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
+_TELEGRAM_BOLD_UNDER_RE = re.compile(r"__(.+?)__")
+_TELEGRAM_ITALIC_STAR_RE = re.compile(r"(?<!\w)\*([^*]+?)\*(?!\w)")
+_TELEGRAM_ITALIC_UNDER_RE = re.compile(r"(?<!\w)_([^_]+?)_(?!\w)")
+_TELEGRAM_CODE_RE = re.compile(r"`([^`]+?)`")
+_TELEGRAM_STRIKE_RE = re.compile(r"~~(.+?)~~")
+
 
 def _telegram_retry_delay(exc: BaseException) -> float | None:
     """Return the wait Telegram requests before a flood-control retry.
@@ -67,6 +79,14 @@ def _telegram_retry_delay(exc: BaseException) -> float | None:
                 retry_after, "total_seconds",
             ) else float(retry_after)
         except (TypeError, ValueError):
+            return None
+        # A non-finite server value must not reach asyncio.sleep: nan raises
+        # ValueError ("Sleep length must be a non-negative number") and inf
+        # would sleep effectively forever. Cap +inf at the max delay and
+        # reject nan/-inf (fail fast on a meaningless throttle).
+        if not math.isfinite(seconds):
+            if seconds == float("inf"):
+                return _TELEGRAM_SEND_MAX_DELAY_SEC
             return None
         if seconds < 0:
             return None
@@ -108,13 +128,13 @@ def _md_to_html(text: str) -> str:
 
 def _html_line(line: str) -> str:
     line = escape_html_entities(line)
-    line = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", line)
-    line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
-    line = re.sub(r"__(.+?)__", r"<b>\1</b>", line)
-    line = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", line)
-    line = re.sub(r"(?<!\w)_([^_]+?)_(?!\w)", r"<i>\1</i>", line)
-    line = re.sub(r"`([^`]+?)`", r"<code>\1</code>", line)
-    return re.sub(r"~~(.+?)~~", r"<s>\1</s>", line)
+    line = _TELEGRAM_HEADING_RE.sub(r"<b>\1</b>", line)
+    line = _TELEGRAM_BOLD_STAR_RE.sub(r"<b>\1</b>", line)
+    line = _TELEGRAM_BOLD_UNDER_RE.sub(r"<b>\1</b>", line)
+    line = _TELEGRAM_ITALIC_STAR_RE.sub(r"<i>\1</i>", line)
+    line = _TELEGRAM_ITALIC_UNDER_RE.sub(r"<i>\1</i>", line)
+    line = _TELEGRAM_CODE_RE.sub(r"<code>\1</code>", line)
+    return _TELEGRAM_STRIKE_RE.sub(r"<s>\1</s>", line)
 
 
 def _html_code_block(lines: list[str]) -> list[str]:
