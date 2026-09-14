@@ -12,6 +12,7 @@ from unittest import mock
 
 from Cozter.agent_tools.plugins import http_request as http_request_module
 from Cozter.agent_tools.plugins.calculator import CalculatorTool
+from Cozter.agent_tools.plugins.current_time import CurrentTimeTool
 from Cozter.agent_tools.plugins.git_info import GitInfoTool
 from Cozter.agent_tools.plugins.http_request import HttpRequestTool
 from Cozter.agent_tools.plugins.memory import MemoryTool
@@ -87,6 +88,27 @@ class CalculatorToolTests(unittest.TestCase):
     def test_missing_expression_arg(self) -> None:
         result = _run(self.tool.run(".", {}))
         self.assertTrue(result.startswith("Error:"))
+
+
+class CurrentTimeToolTests(unittest.TestCase):
+    def test_non_string_timezone_is_rejected_cleanly(self) -> None:
+        tool = CurrentTimeTool()
+        for bad in (123, True, ["UTC"]):
+            with self.subTest(bad=bad):
+                result = _run(tool.run(".", {"timezone": bad}))
+                self.assertTrue(
+                    result.startswith(f"Invalid timezone {bad!r}:"),
+                    result,
+                )
+                self.assertNotIn("has no attribute", result)
+
+    def test_unknown_and_valid_timezones(self) -> None:
+        tool = CurrentTimeTool()
+        self.assertIn(
+            "Invalid timezone", _run(tool.run(".", {"timezone": "Mars/Olympus"})),
+        )
+        self.assertIn("T", _run(tool.run(".", {"timezone": "UTC"})))
+        self.assertIn("T", _run(tool.run(".", {})))
 
 
 class NotesToolTests(unittest.TestCase):

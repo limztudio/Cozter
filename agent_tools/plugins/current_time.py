@@ -22,6 +22,8 @@ class CurrentTimeTool(AgentTool):
         del workspace_path  # not needed for this plugin
         tz_name = args.get("timezone")
         if tz_name:
+            if not isinstance(tz_name, str):
+                return f"Invalid timezone {tz_name!r}: must be a string"
             try:
                 # UTC is built into Python and must work even on minimal
                 # Windows hosts without the optional IANA tzdata package.
