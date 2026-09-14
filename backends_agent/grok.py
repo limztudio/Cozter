@@ -121,6 +121,8 @@ def _write_prompt_file(prompt: str) -> str:
 
 def _remove_prompt_file(path: str) -> None:
     """Delete a prompt file, ignoring a race with an already-reaped path."""
+    if not isinstance(path, str) or not path:
+        return
     try:
         os.unlink(path)
     except OSError:

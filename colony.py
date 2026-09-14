@@ -174,6 +174,8 @@ def _parse_consolidate_output(
     colony is None when the [COLONY] markers are absent; sessions absent
     from the output are simply not in the dict (caller leaves them as-is).
     """
+    if not isinstance(text, str):
+        return None, {}
     colony_block = extract_marker_block(text, "COLONY")
     new_colony: list[str] | None = (
         parse_bullets(colony_block) if colony_block is not None else None

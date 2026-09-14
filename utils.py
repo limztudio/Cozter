@@ -776,6 +776,8 @@ async def drain_text_stream(
 
 def _marker_block_slices(text: str, tag: str) -> tuple[slice, slice] | None:
     """Return whole-block and body slices for the first ``[TAG]`` block."""
+    if not isinstance(text, str) or not isinstance(tag, str) or not tag:
+        return None
     open_tag = f"[{tag}]"
     close_tag = f"[/{tag}]"
     i = text.find(open_tag)
@@ -790,6 +792,8 @@ def _marker_block_slices(text: str, tag: str) -> tuple[slice, slice] | None:
 
 def extract_marker_block(text: str, tag: str) -> str | None:
     """Return the body of ``[TAG]...[/TAG]`` (stripped), or None if absent."""
+    if not isinstance(text, str):
+        return None
     slices = _marker_block_slices(text, tag)
     if slices is None:
         return None
@@ -799,6 +803,8 @@ def extract_marker_block(text: str, tag: str) -> str | None:
 
 def strip_marker_block(text: str, tag: str) -> str:
     """Return *text* with the first ``[TAG]...[/TAG]`` block removed."""
+    if not isinstance(text, str):
+        return "" if text is None else text  # type: ignore[return-value]
     slices = _marker_block_slices(text, tag)
     if slices is None:
         return text
@@ -818,10 +824,21 @@ def take_recent_lines(
     reverses back into chronological order. Newlines that join the
     output count toward the budget.
     """
+    if not isinstance(items, list) or not callable(formatter):
+        return []
+    try:
+        budget = int(budget)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return []
     used = 0
     out: list[str] = []
     for item in reversed(items):
-        line = formatter(item)
+        try:
+            line = formatter(item)
+        except Exception:
+            continue
+        if not isinstance(line, str):
+            continue
         if used + len(line) > budget:
             break
         out.append(line)
@@ -834,7 +851,7 @@ def parse_bullets(block: str | None) -> list[str]:
     """Parse a block into list items. Accepts ``- `` or ``* `` bullet prefixes
     and skips blank lines. Returns ``[]`` for an empty/None block.
     """
-    if not block:
+    if not isinstance(block, str) or not block:
         return []
     items: list[str] = []
     for raw in block.splitlines():
@@ -856,6 +873,8 @@ def text_chunk_ranges(text: str, limit: int) -> list[tuple[int, int]]:
     silently discarded with any adjacent blank lines. Keeping offsets also
     lets rich-text senders preserve style ranges after splitting.
     """
+    if not isinstance(text, str):
+        return []
     if limit < 1:
         raise ValueError("limit must be >= 1")
     if len(text) <= limit:

@@ -87,7 +87,9 @@ def _capability_model_id(model: str | None) -> str:
     ``muse-spark-1.3-contributor`` shares the base model's published context
     window and streaming behavior, so capability lookups use the base name.
     """
-    return (model or "").strip().casefold().removesuffix("-contributor")
+    if not isinstance(model, str):
+        return ""
+    return model.strip().casefold().removesuffix("-contributor")
 
 
 class MetaModelApiBackend(CachedOpenAIChatBackend):

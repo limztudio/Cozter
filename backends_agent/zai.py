@@ -154,7 +154,9 @@ def _capability_model_id(model: str | None) -> str:
     effort, tool-streaming, context, and preserved-thinking support are
     shared with its base model.
     """
-    return (model or "").strip().casefold().removesuffix("[1m]")
+    if not isinstance(model, str):
+        return ""
+    return model.strip().casefold().removesuffix("[1m]")
 
 
 def _coding_plan_fallback_models(base_url: str) -> tuple[str, ...]:

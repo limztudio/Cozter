@@ -111,6 +111,8 @@ def _parse_output(
     Falls back to treating the entire text as the summary if [SUMMARY]
     markers are absent, so misbehaving models still produce a usable result.
     """
+    if not isinstance(text, str):
+        return "", None, None
     summary = extract_marker_block(text, "SUMMARY")
     lt_block = extract_marker_block(text, "LONG_TERM")
     long_term: list[str] | None = (

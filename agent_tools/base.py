@@ -1141,6 +1141,8 @@ def _is_valid_host(host: str) -> bool:
 
 def validate_public_url(url: str) -> str | None:
     """Return a model-facing error unless *url* is a safe public target."""
+    if not isinstance(url, str):
+        return "Error: only http:// and https:// URLs are allowed"
     try:
         parsed = urllib.parse.urlsplit(url)
         host = parsed.hostname
@@ -1324,6 +1326,8 @@ def _skip_html_raw_text(value: str, index: int, tag: str) -> int:
 
 def html_to_text(value: str) -> str:
     """Convert HTML to readable text with a single-pass, non-regex scanner."""
+    if not isinstance(value, str):
+        return ""
     parts: list[str] = []
     index = 0
     length = len(value)

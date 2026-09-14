@@ -661,6 +661,8 @@ def get_model(workspace_path: str) -> str:
 
 
 def set_model(workspace_path: str, model: str) -> None:
+    if not isinstance(model, str) or not model:
+        raise ValueError("model must be a non-empty string")
     backend_name = get_backend_name(workspace_path)
     _set_setting(workspace_path, _model_key(backend_name), model)
 
@@ -679,6 +681,8 @@ def get_summary_model(workspace_path: str) -> str:
 
 def set_summary_model(workspace_path: str, model: str) -> None:
     """Store the summary model under the summary backend's key."""
+    if not isinstance(model, str) or not model:
+        raise ValueError("model must be a non-empty string")
     summary_backend = get_summary_backend_name(workspace_path)
     _set_setting(
         workspace_path, _model_key(summary_backend, SUMMARY_SCOPE), model,
@@ -739,6 +743,8 @@ def get_flexible_model(workspace_path: str, tier: str) -> str:
 
 
 def set_flexible_model(workspace_path: str, tier: str, model: str) -> None:
+    if not isinstance(model, str) or not model:
+        raise ValueError("model must be a non-empty string")
     backend_name = get_flexible_backend_name(workspace_path, tier)
     _set_setting(
         workspace_path,
@@ -817,7 +823,13 @@ def get_reasoning_effort(workspace_path: str) -> int:
 
 def set_reasoning_effort(workspace_path: str, effort: int) -> None:
     """Clamp to 0-100 and persist."""
-    clamped = max(0, min(int(effort), 100))
+    try:
+        numeric = int(effort)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("reasoning effort must be an integer 0-100")
+    if isinstance(effort, bool):
+        raise ValueError("reasoning effort must be an integer 0-100")
+    clamped = max(0, min(numeric, 100))
     _set_setting(workspace_path, "reasoning_effort", clamped)
 
 
@@ -834,6 +846,8 @@ def _set_minimum_int_setting(
     workspace_path: str, key: str, value: int, minimum: int = 1,
 ) -> None:
     """Persist *value* after enforcing a public setting's lower bound."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} must be an integer >= {minimum}")
     if value < minimum:
         raise ValueError(f"{key} must be >= {minimum}")
     _set_setting(workspace_path, key, value)

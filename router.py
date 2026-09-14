@@ -124,6 +124,8 @@ def _parse_router_output(raw: str, valid_ids: set[str]) -> str | None:
     text. We scan lines and take the first that's either "NEW" or a
     known session id.
     """
+    if not isinstance(raw, str):
+        return None
     for line in raw.splitlines():
         token = line.strip().strip("`'\"., ")
         if not token:

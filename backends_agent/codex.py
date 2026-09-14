@@ -128,7 +128,9 @@ def _stderr_preview(value: str | bytes | None) -> str:
     """Return a safe short stderr preview without platform decoding errors."""
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="replace")
-    cleaned = (value or "").strip()
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()
     if len(cleaned) > 200:
         return cleaned[:200 - len("… [clipped]")] + "… [clipped]"
     return cleaned

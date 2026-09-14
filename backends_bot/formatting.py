@@ -22,6 +22,8 @@ def iter_fenced_markdown(
     in_code_block = False
     code_buf: list[str] = []
 
+    if not isinstance(text, str):
+        return
     for source_line in text.split("\n"):
         if source_line.strip().startswith("```"):
             if in_code_block:
@@ -48,6 +50,8 @@ def render_fenced_markdown(
     render_code_block: CodeBlockRenderer,
 ) -> str:
     """Render Markdown lines while preserving fenced code block grouping."""
+    if not isinstance(text, str):
+        return ""
     result: list[str] = []
     for is_code, lines in iter_fenced_markdown(text):
         if is_code:
@@ -64,6 +68,8 @@ def escape_html_entities(text: str) -> str:
     Shared by Telegram (HTML) and Slack (mrkdwn uses the same escapes).
     Pairs with :func:`strip_html_markup`, which reverses it.
     """
+    if not isinstance(text, str):
+        return ""
     return (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -73,6 +79,8 @@ def escape_html_entities(text: str) -> str:
 
 def strip_html_markup(text: str) -> str:
     """Drop simple HTML tags and unescape the entities we emit."""
+    if not isinstance(text, str):
+        return ""
     plain = re.sub(r"<[^>]+>", "", text)
     return (
         plain.replace("&lt;", "<")

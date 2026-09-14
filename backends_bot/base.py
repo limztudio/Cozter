@@ -162,6 +162,11 @@ def upload_size_exceeds_limit(size: object, max_upload_bytes: int) -> bool:
     be rejected here. Download/copy code still measures streamed data where
     a transport does not provide a usable size upfront.
     """
+    if (
+        not isinstance(max_upload_bytes, int)
+        or isinstance(max_upload_bytes, bool)
+    ):
+        return False
     return (
         isinstance(size, int)
         and not isinstance(size, bool)
@@ -171,6 +176,11 @@ def upload_size_exceeds_limit(size: object, max_upload_bytes: int) -> bool:
 
 def upload_limit_message(max_upload_bytes: int) -> str:
     """Short user-facing explanation for a rejected attachment."""
+    if (
+        not isinstance(max_upload_bytes, int)
+        or isinstance(max_upload_bytes, bool)
+    ):
+        return "File is too large."
     return (
         "File is too large "
         f"(maximum upload size: {max_upload_bytes:,} bytes)."
@@ -1728,18 +1738,26 @@ class BotPlatform(ABC):
     @staticmethod
     def _pick_session(choice: str, sessions: list[dict]) -> dict | None:
         """Resolve a /sessions selection: 1-based number, exact, or substring."""
+        if not isinstance(choice, str) or not isinstance(sessions, list):
+            return None
         choice = choice.strip()
         if choice.isdecimal():
             number = parse_decimal_int(choice)
             if number is None:
                 return None
             idx = number - 1
-            return sessions[idx] if 0 <= idx < len(sessions) else None
+            if 0 <= idx < len(sessions) and isinstance(sessions[idx], dict):
+                return sessions[idx]
+            return None
         low = choice.lower()
-        for s in sessions:
+        named = [
+            s for s in sessions
+            if isinstance(s, dict) and isinstance(s.get("name"), str)
+        ]
+        for s in named:
             if s["name"].lower() == low:
                 return s
-        for s in sessions:
+        for s in named:
             if low and low in s["name"].lower():
                 return s
         return None
@@ -3875,13 +3893,18 @@ class BotPlatform(ABC):
     def _pick_option(
         text: str, options: list[str], *, first_number: int = 1,
     ) -> str | None:
+        if not isinstance(text, str) or not isinstance(options, list):
+            return None
         text = text.strip()
         if text.isdecimal():
             number = parse_decimal_int(text)
             if number is None:
                 return None
             idx = number - first_number
-            if 0 <= idx < len(options):
+            if (
+                0 <= idx < len(options)
+                and isinstance(options[idx], str)
+            ):
                 return options[idx]
             return None
         if text in options:

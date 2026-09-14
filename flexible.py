@@ -194,6 +194,8 @@ _PLAN_LINE_RE = re.compile(
 
 def normalize_tier(value: str) -> str | None:
     """Return the canonical tier name for *value*, or None if unknown."""
+    if not isinstance(value, str):
+        return None
     tier = value.strip().lower()
     tier = _TIER_ALIASES.get(tier, tier)
     return tier if tier in TIERS else None
@@ -201,9 +203,10 @@ def normalize_tier(value: str) -> str | None:
 
 def fallback_plan(request: str) -> Plan:
     """The whole request as one sub-task on the strongest tier."""
+    instruction = request.strip() if isinstance(request, str) else str(request)
     return Plan(
         understanding="",
-        subtasks=(Subtask(tier=FALLBACK_TIER, instruction=request.strip()),),
+        subtasks=(Subtask(tier=FALLBACK_TIER, instruction=instruction),),
     )
 
 
@@ -214,6 +217,8 @@ def parse_plan(raw: str, request: str) -> Plan:
     ``[PLAN]`` wrapper, stray prose, or a ``[medium]`` tier should not
     cost the user their turn.
     """
+    if not isinstance(raw, str):
+        return fallback_plan(request)
     if not raw or not raw.strip():
         return fallback_plan(request)
 

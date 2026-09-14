@@ -1496,13 +1496,21 @@ def _incoming_dedupe_key(
 
 
 def _short_id(value: str) -> str:
+    if not isinstance(value, str):
+        return ""
     return value if len(value) <= 12 else value[:11] + "…"
 
 
 def _dedupe_group_urls(group_urls: list[str]) -> list[str]:
+    if isinstance(group_urls, str):
+        group_urls = [group_urls]
+    if not isinstance(group_urls, list):
+        return []
     urls: list[str] = []
     seen: set[str] = set()
     for value in group_urls:
+        if not isinstance(value, str):
+            continue
         url = value.strip()
         if not url:
             continue
@@ -1595,6 +1603,8 @@ def _group_invite_urls(group: dict[str, Any]) -> list[str]:
 
 
 def _normalize_group_url(value: str) -> str:
+    if not isinstance(value, str):
+        return ""
     return value.strip().rstrip("/")
 
 
@@ -1650,7 +1660,12 @@ def _extract_timestamp_from_value(value: Any) -> str | None:
 
 
 def _timestamp_rpc_param(value: str) -> int:
-    return int(value)
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError, OverflowError):
+        raise SignalCliError(
+            f"signal-cli returned a non-numeric timestamp: {value!r}",
+        )
 
 
 def _attachment_payload(value: Any) -> str:

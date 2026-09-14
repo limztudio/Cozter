@@ -113,6 +113,8 @@ def _max_prompt_chars() -> int:
 
 def _prompt_argv_units(prompt: str) -> int:
     """Return the platform unit count consumed by one prompt argv value."""
+    if not isinstance(prompt, str):
+        return 0
     if sys.platform == "win32":
         # CreateProcessW receives the fully quoted command line, not raw argv
         # values. ``list2cmdline`` is the same quoting routine subprocess
@@ -131,6 +133,8 @@ def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
     configured history budget. The flag reports whether any head context
     was dropped.
     """
+    if not isinstance(text, str):
+        return "", True
     if budget <= 0:
         return "", True
     if _prompt_argv_units(text) <= budget:
@@ -147,6 +151,8 @@ def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
 
 def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     """Keep the newest complete characters that fit in an argv unit budget."""
+    if not isinstance(prompt, str):
+        return ""
     if _prompt_argv_units(prompt) <= limit:
         return prompt
     if limit <= 0:

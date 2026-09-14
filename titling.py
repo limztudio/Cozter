@@ -37,6 +37,8 @@ def clean_title(raw: str) -> str | None:
     Longer titles are clipped with a visible marker rather than a bare
     cut, so a stored title is never mistaken for the model's full text.
     """
+    if not isinstance(raw, str):
+        return None
     stripped = raw.strip()
     if not stripped:
         return None

@@ -157,7 +157,11 @@ def _background_guard_settings() -> str:
 
 def _decode_cli_output(value: bytes | None) -> str:
     """Decode one short Claude CLI command stream defensively."""
-    return (value or b"").decode("utf-8", errors="replace").strip()
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace").strip()
+    if isinstance(value, str):
+        return value.strip()
+    return ""
 
 
 def _truncate_utf8_text(
@@ -227,6 +231,8 @@ def _append_bounded_transcript_text(
 
 def _background_task_ids(text: str) -> list[str]:
     """Extract only Claude's dedicated background-launch output lines."""
+    if not isinstance(text, str):
+        return []
     normalized = _ANSI_ESCAPE_RE.sub("", text).replace("\r\n", "\n")
     ids: list[str] = []
     for match in _BACKGROUND_ID_RE.finditer(normalized):

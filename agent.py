@@ -158,11 +158,15 @@ def _workspace_candidate_path(path: str, workspace_path: str) -> str:
 
 def _collapse_extra_blank_lines(text: str) -> str:
     """Normalize leftover blank lines after stripping control markers."""
+    if not isinstance(text, str):
+        return ""
     return _EXTRA_BLANK_LINES_RE.sub("\n\n", text).strip()
 
 
 def extract_attachment_sources(text: str, ws: str) -> tuple[str, list[str]]:
     """Parse attachment markers without copying external generated images."""
+    if not isinstance(text, str):
+        return "", []
     paths: list[str] = []
     seen_sources: set[str] = set()
 
@@ -210,6 +214,8 @@ def extract_await(text: str) -> tuple[str, bool]:
     decision before continuing).
     Returns ``(cleaned_text, awaiting)``.
     """
+    if not isinstance(text, str):
+        return "", False
     if not _AWAIT_RE.search(text):
         return text, False
     cleaned = _AWAIT_RE.sub("", text)
@@ -224,6 +230,8 @@ def extract_detached_task_requests(text: str) -> tuple[str, list[str]]:
     persist the provider task id before it acknowledges the request, and can
     still deliver completion after a restart.
     """
+    if not isinstance(text, str):
+        return "", []
     prompts: list[str] = []
 
     def _take(match: re.Match) -> str:
@@ -1183,6 +1191,8 @@ def _split_attach_markers(text: str) -> tuple[str, list[str]]:
     so their attachment markers have to be carried over by hand or the
     files they meant to send would be dropped along with the text.
     """
+    if not isinstance(text, str):
+        return "", []
     markers = [m.group(0) for m in _ATTACH_RE.finditer(text)]
     if not markers:
         return text, []
