@@ -3,8 +3,10 @@
 A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot, grok)
 and OpenAI-compatible HTTP backends (local llama-server, Z.ai, and Meta Model API), exposing
 them through Telegram, Slack, Signal, or a plain terminal. One Cozter
-process hosts either the local terminal or one configured daemon surface—with
-one Telegram bot instance per configured token—across multiple workspaces,
+process hosts either the local terminal or every configured daemon surface
+together—with one Telegram bot instance per configured token—across
+multiple workspaces, so the same workspaces stay reachable on all platforms
+at once,
 with per-workspace settings, durable sessions with automatic compaction,
 persistent turn queues, file attachments, and a drop-in plugin system that
 works across every backend.
@@ -47,7 +49,7 @@ are trusted in-process code, not sandboxed extensions.
   - `meta` — Meta's Model API (Muse Spark models: `muse-spark-1.3`,
     `muse-spark-1.2`, `muse-spark-1.1`, …); OpenAI-compatible, so it shares
     the in-process loop — set `meta_api_key` in config
-- **Four chat surfaces**, selected at launch:
+- **Four chat surfaces**, all runnable at once (configure any combination):
   - Telegram (`python -m Cozter`)
   - Slack (Socket Mode; native Markdown rendering for AI replies; same
     launcher, set `slack_bot_token` in config)
@@ -313,9 +315,12 @@ example layout lives in `.config/config.example.json`):
 Treat `config.json` as a local secret: it can contain bot and API tokens, so
 do not commit it or share it.
 
-Exactly one daemon chat surface must be populated: `telegram_bot_tokens`
+Populate any combination of daemon chat surfaces: `telegram_bot_tokens`
 + `user_ids`, `slack_bot_token` + `slack_app_token` +
-`slack_channel_ids`, or `signal_group_urls` + `signal_jsonrpc_socket`.
+`slack_channel_ids`, and/or `signal_group_urls` + `signal_jsonrpc_socket`.
+Every configured surface starts side by side and shares the same workspaces
+(each platform keeps its own current-workspace pointer, queues, and delivery
+ledger; workspace files, sessions, and recent lists are shared).
 The CLI surface needs neither.
 
 The shipped `config.example.json` has a non-empty placeholder Telegram token.

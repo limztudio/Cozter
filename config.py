@@ -389,9 +389,9 @@ def load_config() -> dict:
         else:
             print(f"Config file created at: {CONFIG_PATH}")
             print(
-                "Fill in either 'telegram_bot_tokens' + 'user_ids'"
-                " or 'slack_bot_token' + 'slack_app_token' +"
-                " 'slack_channel_ids', or 'signal_group_urls' +"
+                "Fill in any combination of 'telegram_bot_tokens' +"
+                " 'user_ids', 'slack_bot_token' + 'slack_app_token' +"
+                " 'slack_channel_ids', and/or 'signal_group_urls' +"
                 " 'signal_jsonrpc_socket', then restart."
             )
             sys.exit(0)
@@ -498,15 +498,6 @@ def load_config() -> dict:
     has_signal = bool(cfg["signal_group_urls"] or cfg["signal_jsonrpc_socket"])
 
     configured = sum(bool(x) for x in (has_telegram, has_slack, has_signal))
-    if configured > 1:
-        print(
-            f"ERROR: {CONFIG_PATH} has more than one chat platform set."
-        )
-        print(
-            "Pick one of Telegram, Slack, or Signal - sessions and"
-            " workspace state aren't shared across platforms."
-        )
-        sys.exit(1)
     if configured == 0:
         print(
             f"ERROR: {CONFIG_PATH} must set either 'telegram_bot_tokens'"
