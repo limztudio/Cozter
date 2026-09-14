@@ -101,7 +101,7 @@ def bump_compact_count(workspace: str) -> int:
     compact_count = data.get("compact_count", 0)
     if not isinstance(compact_count, int) or isinstance(compact_count, bool):
         compact_count = 0
-    data["compact_count"] = compact_count + 1
+    data["compact_count"] = max(0, compact_count) + 1
     save_json_object(_path(workspace), data)
     return data["compact_count"]
 

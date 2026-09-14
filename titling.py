@@ -76,7 +76,11 @@ async def maybe_auto_title(
             return
         # Need at least one assistant reply before titling makes sense.
         msgs = data.get("messages", [])
-        if not any(m.get("role") == "assistant" for m in msgs):
+        if not isinstance(msgs, list):
+            return
+        if not any(
+            isinstance(m, dict) and m.get("role") == "assistant" for m in msgs
+        ):
             return
         title = await generate(
             workspace_path, session_id, summary_model,

@@ -774,12 +774,20 @@ class BotPlatform(ABC):
         if q is None:
             q = asyncio.Queue(maxsize=maxsize)
             self._message_queues[uid] = q
-        elif q.maxsize and q.maxsize < maxsize:
+        elif maxsize and q.maxsize != maxsize:
+            # Grow (or shrink) the bound by replacing the queue object.
+            # Callers always re-fetch via this helper, and Queue internals
+            # are just a deque + counters, so migrating entries here is
+            # race-free under the caller's lock (drain holds the per-user
+            # task lock; restore runs before any drain starts).
             replacement: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
             while not q.empty():
-                replacement.put_nowait(q.get_nowait())
-            q = replacement
-            self._message_queues[uid] = q
+                try:
+                    replacement.put_nowait(q.get_nowait())
+                except asyncio.QueueFull:
+                    break
+            self._message_queues[uid] = replacement
+            return replacement
         return q
 
     @staticmethod
@@ -798,7 +806,7 @@ class BotPlatform(ABC):
             if (
                 isinstance(entry, tuple)
                 and len(entry) == 4
-                and not entry[3]
+                and entry[3] is False
             ):
                 return True
         return False
@@ -850,7 +858,7 @@ class BotPlatform(ABC):
             lambda entry: (
                 isinstance(entry, tuple)
                 and len(entry) == 4
-                and bool(entry[3])
+                and entry[3] is True
             ),
         )
 
@@ -864,6 +872,7 @@ class BotPlatform(ABC):
             lambda entry: (
                 isinstance(entry, tuple)
                 and len(entry) == 4
+                and isinstance(entry[2], str)
                 and entry[2] == entry_id
             ),
             requeue_selected=True,
@@ -3271,7 +3280,14 @@ class BotPlatform(ABC):
         it was suspended waiting on the queue-file lock.
         """
         if q is not None:
-            self._select_queue_entry(q, lambda entry: entry[2] == entry_id)
+            self._select_queue_entry(
+                q,
+                lambda entry: (
+                    isinstance(entry, tuple)
+                    and len(entry) == 4
+                    and entry[2] == entry_id
+                ),
+            )
         try:
             await self._persist_complete(uid, entry_id)
         except Exception:

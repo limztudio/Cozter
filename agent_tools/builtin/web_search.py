@@ -179,7 +179,10 @@ def _is_ad_or_internal(raw_href: str) -> bool:
         return True
     if parsed.scheme == "" and parsed.netloc == "" and parsed.path == "":
         return True
-    target = query.get("uddg", [""])[0] or raw_href
+    uddg = query.get("uddg")
+    target = uddg[0] if uddg else ""
+    if not isinstance(target, str) or not target:
+        target = raw_href
     try:
         target_host = urllib.parse.urlsplit(target).hostname or ""
     except ValueError:
@@ -190,6 +193,8 @@ def _is_ad_or_internal(raw_href: str) -> bool:
 def _ddg_unwrap_url(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
     qs = urllib.parse.parse_qs(parsed.query)
-    if qs.get("uddg"):
-        return qs["uddg"][0]
+    unwrapped = qs.get("uddg")
+    if unwrapped:
+        first = unwrapped[0]
+        return first if isinstance(first, str) and first else url
     return url

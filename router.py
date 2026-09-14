@@ -49,7 +49,9 @@ def _build_session_block(data: dict) -> str:
     malformed or unusually verbose.  The id remains first, allowing a useful
     choice whenever it fits in normal session-id bounds.
     """
-    sid = data["id"]
+    sid = data["id"] if isinstance(data.get("id"), str) else ""
+    if not sid:
+        return ""
     raw_name = data.get("name")
     name = raw_name if isinstance(raw_name, str) and raw_name else sid[:8]
     block = [
@@ -189,7 +191,7 @@ async def select_or_create_session(
         data = session.create_session(workspace_path)
         return (data["id"], data)
 
-    valid_ids = {s["id"] for s in sessions_data}
+    valid_ids = {s["id"] for s in sessions_data if isinstance(s.get("id"), str)}
     decision = _parse_router_output(raw, valid_ids) if raw else None
     if decision and decision != "NEW":
         loaded = session.load_session(workspace_path, decision)

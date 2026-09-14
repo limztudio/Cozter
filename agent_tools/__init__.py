@@ -112,7 +112,7 @@ _load_subpackage("builtin", mark_as_plugin=False)
 # Eagerly importing plugins in that narrow path preloads the target module and
 # makes runpy warn that execution may be unpredictable. Normal bot startup and
 # ordinary imports still discover plugins immediately.
-if sys.argv[0] != "-m":
+if not sys.argv or sys.argv[0] != "-m":
     _load_subpackage("plugins", mark_as_plugin=True)
 
 # Sort registered tools deterministically: explicit ``order`` then name.

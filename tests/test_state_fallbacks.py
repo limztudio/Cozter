@@ -10,8 +10,11 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
-from Cozter import agent, colony, config, schedules, session, workspace
+from Cozter import agent, colony, config, router, schedules, session, workspace
+from Cozter import titling
+from Cozter.agent_tools.builtin import web_search as web_search_mod
 from Cozter.backends_agent.base import ChatEvent
+from Cozter.backends_bot import slack as slack_mod
 from Cozter.backends_bot.base import BotContext, BotPlatform, ensure_upload_dir
 from Cozter.tests.helpers import TestBot, temporary_config
 
@@ -1726,6 +1729,93 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
                     workspace.CONFIG_DIR = old_config_dir
 
         self._run(run())
+
+
+class RemainderBatchRegressionTests(unittest.TestCase):
+    def test_queue_predicates_require_strict_bool_flags(self) -> None:
+        q: asyncio.Queue = asyncio.Queue()
+        q.put_nowait(("t", "c", "id-1", 1))
+        q.put_nowait(("t", "c", "id-2", 0))
+        self.assertFalse(BotPlatform._has_pending_normal_entries(q))
+        self.assertIsNone(
+            BotPlatform._pop_next_queue_entry(q, ephemeral_only=True),
+        )
+        # Both junk-flag entries stay queued; nothing matched.
+        self.assertEqual(q.qsize(), 2)
+
+    def test_discard_cancelled_entry_ignores_malformed_shapes(self) -> None:
+        async def run() -> None:
+            bot = QueueRestoreBot(["u1"])
+            q: asyncio.Queue = asyncio.Queue()
+            q.put_nowait(("short",))
+            q.put_nowait(("t", "c", "keep-id", False))
+            with mock.patch.object(
+                BotPlatform, "_persist_complete", return_value=None,
+            ):
+                await bot._discard_cancelled_dispatch_entry(
+                    "u1", "keep-id", q,
+                )
+            # The malformed shape survives; only the matching id is gone.
+            rest = []
+            while not q.empty():
+                rest.append(q.get_nowait())
+            self.assertEqual(rest, [("short",)])
+
+        asyncio.run(run())
+
+    def test_slack_markdown_block_check_ignores_non_dict_response(self) -> None:
+        err = SimpleNamespace(response=["not-a-dict"])
+        self.assertFalse(
+            slack_mod._markdown_block_rejected(err),  # type: ignore[arg-type]
+        )
+
+    def test_router_session_block_rejects_junk_id(self) -> None:
+        self.assertEqual(router._build_session_block({"id": 123}), "")
+
+    def test_router_valid_ids_skip_non_string(self) -> None:
+        sessions_data = [
+            {"id": "good-id", "created": "2024-01-01"},
+            {"id": 7, "created": "2024-01-02"},
+        ]
+        valid = {s["id"] for s in sessions_data if isinstance(s.get("id"), str)}
+        self.assertEqual(valid, {"good-id"})
+
+    def test_colony_bump_never_goes_negative(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"))
+            with open(
+                os.path.join(tmp, ".cozter", "colony.json"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                json.dump({"items": [], "compact_count": -5}, f)
+            self.assertEqual(colony.bump_compact_count(tmp), 1)
+
+    def test_ddg_unwrap_rejects_non_string_values(self) -> None:
+        self.assertEqual(
+            web_search_mod._ddg_unwrap_url("https://example.com/?uddg="),
+            "https://example.com/?uddg=",
+        )
+        self.assertEqual(
+            web_search_mod._is_ad_or_internal("https://html.duckduckgo.com/html/?q=x"),
+            True,
+        )
+
+    def test_titling_guard_skips_non_list_messages(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                data = session.create_session(tmp)
+                data["messages"] = "not-a-list"  # type: ignore[assignment]
+                session.save_session(tmp, data["id"], data)
+                with mock.patch.object(
+                    titling, "generate", return_value="Some Title",
+                ) as gen:
+                    await titling.maybe_auto_title(
+                        tmp, data["id"], None, backend_name=None,
+                    )
+                    gen.assert_not_called()
+
+        asyncio.run(run())
 
 
 if __name__ == "__main__":
