@@ -268,10 +268,13 @@ def _build_bounded_session_block(
     body = "\n".join(item_lines)
     if truncated and item_lines:
         note = _CONSOLIDATE_TRUNCATION_NOTE
+        line_lengths = [len(line) for line in item_lines]
+        total = sum(line_lengths) + max(0, len(item_lines) - 1)
         while (
             item_lines
-            and len("\n".join(item_lines)) + len(note) + 1 > item_budget
+            and total + len(note) + 1 > item_budget
         ):
+            total -= line_lengths.pop() + (1 if item_lines[1:] else 0)
             item_lines.pop()
         if item_lines:
             body = "\n".join(item_lines) + "\n" + note
