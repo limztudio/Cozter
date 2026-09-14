@@ -232,6 +232,8 @@ class JsonHelperTests(unittest.TestCase):
         )
         self.assertIsNone(utils.extract_marker_block("[TAG]open", "TAG"))
         self.assertEqual(utils.strip_marker_block("[TAG]open", "TAG"), "[TAG]open")
+        self.assertEqual(utils.strip_marker_block(None, "TAG"), "")  # type: ignore[arg-type]
+        self.assertEqual(utils.strip_marker_block(123, "TAG"), "")  # type: ignore[arg-type]
 
     def test_save_json_object_creates_parent_and_writes_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

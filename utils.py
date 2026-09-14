@@ -815,7 +815,7 @@ def extract_marker_block(text: str, tag: str) -> str | None:
 def strip_marker_block(text: str, tag: str) -> str:
     """Return *text* with the first ``[TAG]...[/TAG]`` block removed."""
     if not isinstance(text, str):
-        return "" if text is None else text  # type: ignore[return-value]
+        return ""
     slices = _marker_block_slices(text, tag)
     if slices is None:
         return text
