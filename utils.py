@@ -97,6 +97,10 @@ def parse_decimal_int(value: object) -> int | None:
 def clip_status_value(value: object, max_chars: int = 200) -> str:
     """Return a status-line preview with a visible cut marker when clipped."""
     text = value if isinstance(value, str) else str(value)
+    validated = _validated_line_budget(max_chars)
+    if validated is None:
+        validated = 0
+    max_chars = validated
     if len(text) <= max_chars:
         return text
     _marker = "… [clipped]"

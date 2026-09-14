@@ -330,6 +330,16 @@ class IntegerParsingTests(unittest.TestCase):
         self.assertEqual(utils.take_recent_lines(["a", "b"], -1, str), [])
         self.assertEqual(utils.take_recent_lines(["a", "b"], "5", str), [])  # type: ignore[arg-type]
 
+    def test_clip_status_value_rejects_junk_max_chars(self) -> None:
+        self.assertEqual(utils.clip_status_value("hello", 200), "hello")
+        self.assertEqual(utils.clip_status_value("hello world", 5), "hell…")
+        self.assertEqual(utils.clip_status_value("hello world", 0), "")
+        self.assertEqual(utils.clip_status_value("hello world", 1), "…")
+        for junk in (True, False, 1.9, "5", None, -3):
+            with self.subTest(junk=junk):
+                out = utils.clip_status_value("hello world", junk)  # type: ignore[arg-type]
+                self.assertIsInstance(out, str)
+
 
 class TextChunkTests(unittest.TestCase):
     def test_text_chunk_ranges_preserve_boundaries(self) -> None:
