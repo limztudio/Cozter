@@ -64,6 +64,25 @@ class AgentToolHelperTests(unittest.TestCase):
             coerce_int_arg(float("inf"), default=10, minimum=1, maximum=20),
             10,
         )
+        # Bools and non-integral floats must not silently coerce: True
+        # would become 1 and 3.9 would truncate to 3. Integral floats
+        # (3.0) still coerce for JSON-number tolerance.
+        self.assertEqual(
+            coerce_int_arg(True, default=10, minimum=1, maximum=20),
+            10,
+        )
+        self.assertEqual(
+            coerce_int_arg(False, default=10, minimum=1, maximum=20),
+            10,
+        )
+        self.assertEqual(
+            coerce_int_arg(3.9, default=10, minimum=1, maximum=20),
+            10,
+        )
+        self.assertEqual(
+            coerce_int_arg(3.0, default=10, minimum=1, maximum=20),
+            3,
+        )
 
     def test_summarize_arg_uses_default_and_truncates(self) -> None:
         self.assertEqual(

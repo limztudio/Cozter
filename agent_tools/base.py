@@ -234,6 +234,14 @@ def coerce_int_arg(
     """Return an int argument clamped to the provided bounds."""
     try:
         # value is an arbitrary tool arg; the except handles non-numerics.
+        # Reject bools (True would silently become 1) and non-integral
+        # floats (3.9 would silently truncate to 3): a model passing a
+        # wrong-typed arg should get the documented default, not a
+        # quietly different number.
+        if isinstance(value, bool):
+            raise TypeError("bool is not an int arg")
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError("non-integral float is not an int arg")
         number = int(value)  # type: ignore[arg-type, call-overload]
     except (TypeError, ValueError, OverflowError):
         number = default
