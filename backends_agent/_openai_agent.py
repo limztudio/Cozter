@@ -651,7 +651,14 @@ class _RetryableError(RuntimeError):
         self, message: str, *, retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
-        self.retry_after = retry_after
+        if (
+            retry_after is None or isinstance(retry_after, bool)
+            or not isinstance(retry_after, (int, float))
+        ):
+            retry_after = None
+        self.retry_after: float | None = (
+            None if retry_after is None else float(retry_after)
+        )
 
 
 class _SSEEventTooLargeError(RuntimeError):
@@ -684,13 +691,22 @@ def _backoff_delay(
 ) -> float:
     """Seconds to wait before retry *attempt* (1-based); honors Retry-After."""
     if retry_after is not None:
-        # A non-finite header value must not reach asyncio.sleep: nan raises
-        # ValueError and inf would sleep effectively forever. Cap +inf at the
-        # cap and fall through to normal backoff on nan/-inf.
-        if math.isfinite(retry_after):
-            return min(max(retry_after, 0.0), cap)
-        if retry_after == float("inf"):
-            return cap
+        if isinstance(retry_after, bool):
+            retry_after = None
+        elif not isinstance(retry_after, (int, float)):
+            retry_after = None
+        elif not math.isfinite(retry_after):
+            # A non-finite header value must not reach asyncio.sleep: nan
+            # raises ValueError and inf would sleep effectively forever.
+            # Cap +inf at the cap and fall through on nan/-inf.
+            retry_after = cap if retry_after == float("inf") else None
+        elif retry_after < 0:
+            retry_after = None
+        if retry_after is not None:
+            return min(max(float(retry_after), 0.0), cap)
+    if isinstance(attempt, bool) or not isinstance(attempt, int):
+        attempt = 1
+    attempt = max(1, attempt)
     delay = min(base * (2 ** (attempt - 1)), cap)
     return delay + random.uniform(0.0, delay * 0.25)
 

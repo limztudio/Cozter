@@ -424,7 +424,8 @@ class CopilotBackend(Backend):
             return self.default_model
         models, expires_at = catalog
         if (
-            time.monotonic() < expires_at
+            isinstance(model, str)
+            and time.monotonic() < expires_at
             and model in models
         ):
             return model
