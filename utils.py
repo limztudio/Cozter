@@ -72,8 +72,15 @@ def try_parse_int(value: str) -> int | None:
     Python limits conversion of exceptionally long decimal strings to avoid
     denial-of-service inputs.  User-facing parsers should turn that
     ``ValueError`` into an ordinary invalid value rather than let it escape a
-    command or scheduler loop.
+    command or scheduler loop. Bools and non-string numerics are rejected:
+    ``int(True) == 1`` and ``int(1.9) == 1`` would silently turn junk into
+    a different number (callers pass stripped text, so this only fires on
+    direct misuse).
     """
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, str):
+        return None
     try:
         return int(value)
     except (TypeError, ValueError, OverflowError):
@@ -812,6 +819,25 @@ def strip_marker_block(text: str, tag: str) -> str:
     return text[:block.start] + text[block.stop:]
 
 
+def _validated_line_budget(budget: object) -> int | None:
+    """Validate a char budget as a real non-negative int, else None.
+
+    Rejects bools (True would silently become 1) and non-integral
+    floats, and accepts integral floats by truncation-free conversion.
+    """
+    if isinstance(budget, bool):
+        return None
+    if isinstance(budget, float):
+        if not budget.is_integer():
+            return None
+        candidate = int(budget)
+    elif isinstance(budget, int):
+        candidate = budget
+    else:
+        return None
+    return candidate if candidate >= 0 else None
+
+
 def take_recent_lines(
     items: list,
     budget: int,
@@ -826,10 +852,10 @@ def take_recent_lines(
     """
     if not isinstance(items, list) or not callable(formatter):
         return []
-    try:
-        budget = int(budget)  # type: ignore[arg-type]
-    except (TypeError, ValueError, OverflowError):
+    validated = _validated_line_budget(budget)
+    if validated is None:
         return []
+    budget = validated
     used = 0
     out: list[str] = []
     for item in reversed(items):

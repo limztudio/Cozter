@@ -313,6 +313,23 @@ class IntegerParsingTests(unittest.TestCase):
         self.assertIsNone(utils.parse_decimal_int("+42"))
         self.assertIsNone(utils.parse_decimal_int(oversized))
 
+    def test_integer_parsers_reject_bool_and_non_string(self) -> None:
+        self.assertIsNone(utils.try_parse_int(True))  # type: ignore[arg-type]
+        self.assertIsNone(utils.try_parse_int(False))  # type: ignore[arg-type]
+        self.assertIsNone(utils.try_parse_int(1.9))  # type: ignore[arg-type]
+        self.assertIsNone(utils.try_parse_int(None))  # type: ignore[arg-type]
+        self.assertIsNone(utils.parse_decimal_int(True))
+        self.assertEqual(
+            utils.take_recent_lines(["a", "b"], 5, str), ["a", "b"],
+        )
+        self.assertEqual(utils.take_recent_lines(["a", "b"], True, str), [])  # type: ignore[arg-type]
+        self.assertEqual(utils.take_recent_lines(["a", "b"], 1.9, str), [])  # type: ignore[arg-type]
+        self.assertEqual(
+            utils.take_recent_lines(["a", "b"], 4.0, str), ["a", "b"],
+        )
+        self.assertEqual(utils.take_recent_lines(["a", "b"], -1, str), [])
+        self.assertEqual(utils.take_recent_lines(["a", "b"], "5", str), [])  # type: ignore[arg-type]
+
 
 class TextChunkTests(unittest.TestCase):
     def test_text_chunk_ranges_preserve_boundaries(self) -> None:
