@@ -692,6 +692,8 @@ class CopilotBackend(Backend):
                      etype, list(event.keys()))
 
     def extract_agent_text(self, event: dict) -> str | None:
+        if not isinstance(event, dict):
+            return None
         etype = event.get("type") or event.get("event") or ""
         # Typed tool/file/error events never carry the agent's final reply.
         if etype in self._NON_AGENT_TYPES:

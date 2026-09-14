@@ -438,6 +438,8 @@ class CodexBackend(Backend):
             record_backend_error(result, msg)
 
     def extract_agent_text(self, event: dict) -> str | None:
+        if not isinstance(event, dict):
+            return None
         if event.get("type") != "item.completed":
             return None
         item = event.get("item") or {}

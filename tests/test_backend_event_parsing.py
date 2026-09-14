@@ -581,6 +581,31 @@ class NonDictEventTests(unittest.TestCase):
                     self.assertEqual(result.events, [])
                     self.assertEqual(result.text, "")
 
+    def test_non_dict_extract_returns_none_without_raising(self) -> None:
+        from Cozter.backends_agent.base import (
+            extract_messages_style_agent_text,
+            terminal_result_text,
+        )
+        backends = [
+            ClaudeCodeBackend(),
+            CodexBackend(),
+            CopilotBackend(),
+            GrokBackend(),
+            LlamaBackend(),
+        ]
+        for backend in backends:
+            with self.subTest(backend=backend.name):
+                for bad in ("junk", None, 123, ["x"], True):
+                    self.assertIsNone(
+                        backend.extract_agent_text(bad),  # type: ignore[arg-type]
+                    )
+        for helper in (
+            extract_messages_style_agent_text, terminal_result_text,
+        ):
+            with self.subTest(helper=helper.__name__):
+                for bad in ("junk", None, 123, ["x"]):
+                    self.assertIsNone(helper(bad))  # type: ignore[arg-type]
+
 
 if __name__ == "__main__":
     unittest.main()

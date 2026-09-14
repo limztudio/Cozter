@@ -319,6 +319,8 @@ def record_error_event(event: dict, result: AgentResult) -> bool:
 
 def terminal_result_text(event: dict) -> str | None:
     """Return Messages-style terminal ``result`` text when it is usable."""
+    if not isinstance(event, dict):
+        return None
     if event.get("type") != "result" or event.get("is_error"):
         return None
     text = event.get("result")
@@ -354,6 +356,8 @@ def extract_messages_style_agent_text(event: dict) -> str | None:
     is preferred for internal summary calls, with streamed assistant
     ``content`` as the fallback when the turn has not finished.
     """
+    if not isinstance(event, dict):
+        return None
     if event.get("type") == "result":
         return terminal_result_text(event)
     if event.get("type") != "assistant":

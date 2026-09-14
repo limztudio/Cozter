@@ -599,6 +599,8 @@ class OpenAIChatBackend(Backend):
         logger.debug("%s: unhandled event %r", self.name, event)
 
     def extract_agent_text(self, event: dict) -> str | None:
+        if not isinstance(event, dict):
+            return None
         if event.get("type") == "assistant_text":
             text = event.get("text")
             if isinstance(text, str) and text:
