@@ -443,11 +443,15 @@ class SignalBot(BotPlatform):
 
     async def _subscribe_receive(self) -> int | None:
         result = await self._rpc_request("subscribeReceive", timeout=30)
-        return int(result) if isinstance(result, int) else None
+        if isinstance(result, bool) or not isinstance(result, int):
+            return None
+        return result
 
     async def _subscribe_receive_once(self) -> int | None:
         result = await self._rpc_request_once("subscribeReceive", timeout=30)
-        return int(result) if isinstance(result, int) else None
+        if isinstance(result, bool) or not isinstance(result, int):
+            return None
+        return result
 
     async def _start_receive_subscription(self) -> None:
         """Subscribe during startup without losing an immediate socket EOF.
@@ -1621,7 +1625,13 @@ def _extract_message_group_id(data: dict[str, Any]) -> str:
 def _normalize_group_id(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
-    if isinstance(value, list) and all(isinstance(x, int) for x in value):
+    if (
+        isinstance(value, list)
+        and value
+        and all(
+            isinstance(x, int) and not isinstance(x, bool) for x in value
+        )
+    ):
         try:
             return base64.b64encode(bytes(value)).decode("ascii")
         except ValueError:
@@ -1629,25 +1639,38 @@ def _normalize_group_id(value: Any) -> str:
     return ""
 
 
+def _signal_id_text(value: Any) -> str:
+    """Stringify a Signal identifier without coercing junk types.
+
+    Booleans, dicts, lists, floats, and None must not become "True" or
+    "{...}" sender/account ids. Only non-empty strings (stripped) and
+    plain ints (excluding bool) are usable ids.
+    """
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, int):
+        return str(value)
+    return ""
+
+
 def _extract_sender_id(envelope: dict[str, Any]) -> str:
     for key in ("sourceNumber", "source", "sourceUuid", "sourceName"):
-        value = envelope.get(key)
-        if value and not isinstance(value, (dict, list)):
-            return str(value)
+        text = _signal_id_text(envelope.get(key))
+        if text:
+            return text
     source = envelope.get("sourceAddress")
     if isinstance(source, dict):
         for key in ("number", "uuid", "name"):
-            value = source.get(key)
-            if value:
-                return str(value)
+            text = _signal_id_text(source.get(key))
+            if text:
+                return text
     return ""
 
 
 def _extract_account_id(item: dict[str, Any]) -> str:
-    value = item.get("account")
-    if value and not isinstance(value, (dict, list)):
-        return str(value)
-    return ""
+    return _signal_id_text(item.get("account"))
 
 
 def _same_signal_id(left: str, right: str) -> bool:
@@ -1656,7 +1679,14 @@ def _same_signal_id(left: str, right: str) -> bool:
 
 def _extract_timestamp_from_value(value: Any) -> str | None:
     timestamp = _find_key(value, "timestamp")
-    return str(timestamp) if timestamp is not None else None
+    if timestamp is None or isinstance(timestamp, bool):
+        return None
+    if isinstance(timestamp, int):
+        return str(timestamp)
+    if isinstance(timestamp, str):
+        text = timestamp.strip()
+        return text or None
+    return None
 
 
 def _timestamp_rpc_param(value: str) -> int:
@@ -1739,12 +1769,11 @@ def _attachment_filename(att: dict[str, Any]) -> str:
 
 def _attachment_id(att: dict[str, Any]) -> str:
     for key in ("id", "attachmentId", "attachmentPointerId", "storedFilename"):
-        value = att.get(key)
-        if value:
-            value = str(value)
+        text = _signal_id_text(att.get(key))
+        if text:
             if key == "storedFilename":
-                value = os.path.basename(value)
-            return value
+                text = os.path.basename(text)
+            return text
     return ""
 
 

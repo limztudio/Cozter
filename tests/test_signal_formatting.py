@@ -7,9 +7,15 @@ from Cozter.backends_bot.base import MessageHandle
 from Cozter.backends_bot.signal import (
     SignalCliError,
     SignalBot,
+    _attachment_id,
+    _extract_account_id,
+    _extract_sender_id,
+    _extract_timestamp_from_value,
     _md_to_signal_body_and_spans,
+    _normalize_group_id,
     _signal_rich_text_chunks,
 )
+from Cozter.backends_bot.telegram import _telegram_message_id
 
 
 SIGNAL_GROUP_URL = "https://signal.group/#test"
@@ -335,6 +341,52 @@ class SignalJsonRpcRequestTests(unittest.TestCase):
             self.assertEqual(bot._jsonrpc_pending, {})
 
         asyncio.run(run())
+
+
+class SignalIdCoercionTests(unittest.TestCase):
+    def test_timestamp_rejects_bool_and_junk(self) -> None:
+        self.assertIsNone(_extract_timestamp_from_value({"timestamp": True}))
+        self.assertIsNone(_extract_timestamp_from_value({"timestamp": False}))
+        self.assertIsNone(_extract_timestamp_from_value({"timestamp": None}))
+        self.assertIsNone(_extract_timestamp_from_value({"timestamp": {"x": 1}}))
+        self.assertIsNone(_extract_timestamp_from_value({"timestamp": "  "}))
+        self.assertEqual(_extract_timestamp_from_value({"timestamp": 0}), "0")
+        self.assertEqual(_extract_timestamp_from_value({"timestamp": 123}), "123")
+        self.assertEqual(
+            _extract_timestamp_from_value({"timestamp": " 42 "}), "42",
+        )
+
+    def test_sender_and_account_reject_bool_and_junk(self) -> None:
+        self.assertEqual(_extract_sender_id({"source": True}), "")
+        self.assertEqual(_extract_sender_id({"source": {"n": 1}}), "")
+        self.assertEqual(_extract_sender_id({"source": 7}), "7")
+        self.assertEqual(_extract_sender_id({"source": " +123 "}), "+123")
+        self.assertEqual(
+            _extract_sender_id({"sourceAddress": {"number": True}}), "",
+        )
+        self.assertEqual(_extract_account_id({"account": False}), "")
+        self.assertEqual(_extract_account_id({"account": 9}), "9")
+        self.assertEqual(_extract_account_id({"account": {"a": 1}}), "")
+
+    def test_group_id_and_attachment_id_reject_bool_lists(self) -> None:
+        self.assertEqual(_normalize_group_id([True, False]), "")
+        self.assertEqual(_normalize_group_id([]), "")
+        self.assertEqual(_attachment_id({"id": True}), "")
+        self.assertEqual(_attachment_id({"id": 5}), "5")
+
+    def test_telegram_message_id_rejects_junk(self) -> None:
+        self.assertEqual(
+            _telegram_message_id(
+                MessageHandle(chat_id="c", message_id="42"),
+            ),
+            42,
+        )
+        for bad in ("abc", "", "  ", True):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    _telegram_message_id(
+                        MessageHandle(chat_id="c", message_id=bad),  # type: ignore[arg-type]
+                    )
 
 
 if __name__ == "__main__":

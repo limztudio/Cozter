@@ -53,6 +53,24 @@ _TELEGRAM_TEXT_LIMIT = 4096
 _TELEGRAM_SEND_MAX_ATTEMPTS = 5
 _TELEGRAM_SEND_MAX_DELAY_SEC = 60.0
 
+
+def _telegram_message_id(handle: MessageHandle) -> int:
+    """Parse a Telegram message id, rejecting junk instead of ValueError.
+
+    Callers pass ``MessageHandle.message_id`` (a string). A bool, float,
+    or non-numeric string surfaces ``TelegramApiError``-style context via
+    ValueError with a clear message rather than a bare ``int()`` stack.
+    """
+    raw = handle.message_id
+    if isinstance(raw, bool):
+        raise ValueError(f"invalid Telegram message id: {raw!r}")
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"invalid Telegram message id: {raw!r}",
+        ) from exc
+
 # Precompiled Markdown->HTML line patterns (hot path: one call per reply
 # line). Module-level compilation avoids re-parsing the same patterns on
 # every line via re.sub's internal cache.
@@ -224,7 +242,7 @@ class TelegramBot(BotPlatform):
         if not rich:
             await self.app.bot.edit_message_text(
                 chat_id=handle.chat_id,
-                message_id=int(handle.message_id),
+                message_id=_telegram_message_id(handle),
                 text=text,
             )
             return
@@ -233,7 +251,7 @@ class TelegramBot(BotPlatform):
         try:
             await self.app.bot.edit_message_text(
                 chat_id=handle.chat_id,
-                message_id=int(handle.message_id),
+                message_id=_telegram_message_id(handle),
                 text=html,
                 parse_mode="HTML",
             )
@@ -241,14 +259,14 @@ class TelegramBot(BotPlatform):
             plain = strip_html_markup(html)
             await self.app.bot.edit_message_text(
                 chat_id=handle.chat_id,
-                message_id=int(handle.message_id),
+                message_id=_telegram_message_id(handle),
                 text=plain,
             )
 
     async def delete_message(self, handle: MessageHandle) -> None:
         await self.app.bot.delete_message(
             chat_id=handle.chat_id,
-            message_id=int(handle.message_id),
+            message_id=_telegram_message_id(handle),
         )
 
     async def send_file(self, chat_id: str, path: str) -> None:
