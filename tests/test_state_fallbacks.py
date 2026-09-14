@@ -1055,8 +1055,11 @@ class SessionStateFallbackTests(unittest.TestCase):
             # A corrupted pointer must not traverse out of sessions/.
             session.set_last_session(tmp, "user", "safe-id")
             session.set_last_session(tmp, "user", "../../outside")
+            session.set_last_session(tmp, "user", "   ")
             self.assertEqual(session.get_last_session(tmp, "user"), "safe-id")
             self.assertIsNone(session.load_session(tmp, "../../outside"))
+            self.assertFalse(session._is_safe_session_id("   "))
+            self.assertFalse(session._is_safe_session_id(""))
 
             # Listing must preserve the file-name/id invariant used by
             # subsequent load/save operations.

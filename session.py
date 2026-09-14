@@ -43,7 +43,7 @@ def _is_safe_session_id(session_id: object) -> bool:
     """
     return (
         isinstance(session_id, str)
-        and bool(session_id)
+        and bool(session_id.strip())
         and "\x00" not in session_id
         and "/" not in session_id
         and "\\" not in session_id
