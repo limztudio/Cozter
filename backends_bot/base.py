@@ -3710,7 +3710,8 @@ class BotPlatform(ABC):
         # Distinguishable name — the auto-router keys off session
         # names/topics and the "⏰" prefix together with the non-default
         # name keeps the auto-title task from racing the delete.
-        label = text.strip().splitlines()[0] if text.strip() else "scheduled"
+        stripped = text.strip()
+        label = stripped.splitlines()[0] if stripped else "scheduled"
         if len(label) > 40:
             label = label[:40 - len("… [clipped]")] + "… [clipped]"
         sess_data = session.create_session(ws, name=f"⏰ {label}")
