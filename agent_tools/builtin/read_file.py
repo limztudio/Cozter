@@ -35,6 +35,32 @@ class _OffsetScanLimitExceeded(Exception):
     """The requested line offset needs an excessive sequential scan."""
 
 
+def _validated_read_bound(
+    value: Any, name: str, *, default: int | None,
+) -> int | None:
+    """Validate an offset/limit tool arg as a real integer bound.
+
+    Tool args arrive as loosely-typed JSON: ``int(True) == 1`` and
+    ``int(1.9) == 1`` would silently turn junk into a different read
+    range, and a raw float reaching ``range()`` raises ``TypeError``
+    instead of the documented error string. Reject bools, non-integral
+    floats, and non-numeric types with a ValueError the caller renders.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"'{name}' must be an integer")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"'{name}' must be an integer")
+        value = int(value)
+    elif isinstance(value, int):
+        pass
+    else:
+        raise ValueError(f"'{name}' must be an integer")
+    return max(0, value) if name == "offset" else value
+
+
 class ReadFileTool(AgentTool):
     name = "read_file"
     description = "Read a UTF-8 text file (128 KiB/call; page remainder via offset/limit)."
@@ -59,13 +85,14 @@ class ReadFileTool(AgentTool):
         offset = args.get("offset")
         limit = args.get("limit")
         try:
-            start = max(0, int(offset)) if offset is not None else 0
-        except (TypeError, ValueError, OverflowError):
-            return "Error: 'offset' must be an integer"
+            start = _validated_read_bound(offset, "offset", default=0)
+            assert start is not None  # offset default is 0, never None
+        except ValueError as exc:
+            return f"Error: {exc}"
         try:
-            count = int(limit) if limit is not None else None
-        except (TypeError, ValueError, OverflowError):
-            return "Error: 'limit' must be an integer"
+            count = _validated_read_bound(limit, "limit", default=None)
+        except ValueError as exc:
+            return f"Error: {exc}"
         if count is not None and count < 0:
             return "Error: 'limit' must be >= 0"
 

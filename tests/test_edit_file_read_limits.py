@@ -104,3 +104,64 @@ class EditFileReadLimitTests(unittest.TestCase):
                     self.assertEqual(f.read(), original)
 
         asyncio.run(run())
+
+
+class ReadFileBoundValidationTests(unittest.TestCase):
+    def test_bool_and_non_integral_bounds_are_rejected(self) -> None:
+        from Cozter.agent_tools.builtin.read_file import (
+            _validated_read_bound,
+        )
+
+        self.assertEqual(
+            _validated_read_bound(None, "offset", default=0), 0,
+        )
+        self.assertIsNone(
+            _validated_read_bound(None, "limit", default=None),
+        )
+        self.assertEqual(
+            _validated_read_bound(2.0, "limit", default=None), 2,
+        )
+        self.assertEqual(
+            _validated_read_bound(-5, "offset", default=0), 0,
+        )
+        for bad in (True, False, 1.9, "1", [1], {"x": 1}):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    _validated_read_bound(bad, "offset", default=0)
+
+    def test_tool_returns_error_string_for_junk_bounds(self) -> None:
+        from Cozter.agent_tools.builtin.read_file import ReadFileTool
+
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "f.txt")
+                with open(path, "w") as f:
+                    f.write("a\nb\nc\n")
+                tool = ReadFileTool()
+                self.assertEqual(
+                    await tool.run(
+                        tmp, {"path": "f.txt", "offset": 1.9},
+                    ),
+                    "Error: 'offset' must be an integer",
+                )
+                self.assertEqual(
+                    await tool.run(
+                        tmp, {"path": "f.txt", "offset": True},
+                    ),
+                    "Error: 'offset' must be an integer",
+                )
+                self.assertEqual(
+                    await tool.run(
+                        tmp, {"path": "f.txt", "limit": "5"},
+                    ),
+                    "Error: 'limit' must be an integer",
+                )
+                self.assertEqual(
+                    await tool.run(
+                        tmp,
+                        {"path": "f.txt", "offset": 1, "limit": 1},
+                    ),
+                    "b\n",
+                )
+
+        asyncio.run(run())
