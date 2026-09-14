@@ -3565,13 +3565,25 @@ class BotPlatform(ABC):
                         action="sending a progress status",
                     )
                 return
-            now = asyncio.get_running_loop().time()
-            if now - last_edit < 1.5:
-                return
-            last_edit = now
+            # Single Thinking message, edited in place: never send a new
+            # status message when an editable handle exists. Always refresh
+            # the pending display so throttled updates are not lost; the
+            # flush task below coalesces rapid events into one edit.
             pending_status = self._compose_thinking_display(
                 status_lines, latest_text,
             )
+            now = asyncio.get_running_loop().time()
+            if now - last_edit < 1.5:
+                # Throttled: ensure a flush task is scheduled so this
+                # update still reaches the single Thinking message.
+                if status_edit_task is None or status_edit_task.done():
+                    status_edit_task = create_background_task(
+                        flush_status_edits(),
+                        name=f"{self.platform_id}:status-edit:{uid}",
+                        log=logger,
+                    )
+                return
+            last_edit = now
             if status_edit_task is None or status_edit_task.done():
                 status_edit_task = create_background_task(
                     flush_status_edits(),
