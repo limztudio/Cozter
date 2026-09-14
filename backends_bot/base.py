@@ -792,7 +792,14 @@ class BotPlatform(ABC):
         turn, which would strand that backlog forever.
         """
         for entry in q._queue:  # type: ignore[attr-defined]
-            if isinstance(entry, tuple) and not entry[3]:
+            # In-memory entries are built by our own dispatch paths, but a
+            # malformed shape must not crash the await-arm check and strand
+            # the turn. Only a well-formed non-ephemeral entry counts.
+            if (
+                isinstance(entry, tuple)
+                and len(entry) == 4
+                and not entry[3]
+            ):
                 return True
         return False
 
@@ -836,7 +843,16 @@ class BotPlatform(ABC):
         """
         if not ephemeral_only:
             return q.get_nowait()
-        return BotPlatform._select_queue_entry(q, lambda entry: entry[3])
+        # Guard the shape: a malformed entry must be skipped, not crash
+        # the drain loop with an IndexError.
+        return BotPlatform._select_queue_entry(
+            q,
+            lambda entry: (
+                isinstance(entry, tuple)
+                and len(entry) == 4
+                and bool(entry[3])
+            ),
+        )
 
     @staticmethod
     def _promote_queue_entry(
@@ -845,7 +861,11 @@ class BotPlatform(ABC):
         """Move a queued entry to the front, preserving all others."""
         BotPlatform._select_queue_entry(
             q,
-            lambda entry: entry[2] == entry_id,
+            lambda entry: (
+                isinstance(entry, tuple)
+                and len(entry) == 4
+                and entry[2] == entry_id
+            ),
             requeue_selected=True,
         )
 

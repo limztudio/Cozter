@@ -1108,6 +1108,24 @@ class QueueStateFallbackTests(unittest.TestCase):
         self.assertEqual(q.get_nowait(), last)
         self.assertEqual(q.get_nowait(), first)
 
+    def test_queue_predicates_skip_malformed_entries(self) -> None:
+        q: asyncio.Queue = asyncio.Queue()
+        q.put_nowait(("normal", "chat", "normal-id", False))
+        q.put_nowait(("short",))
+        q.put_nowait(("sched", "chat", "sched-id", True))
+        # Well-formed entries still resolve; the malformed shape neither
+        # matches nor crashes the drain predicates.
+        self.assertTrue(BotPlatform._has_pending_normal_entries(q))
+        self.assertEqual(
+            BotPlatform._pop_next_queue_entry(q, ephemeral_only=True),
+            ("sched", "chat", "sched-id", True),
+        )
+        self.assertEqual(q.qsize(), 2)
+        BotPlatform._promote_queue_entry(q, "normal-id")
+        self.assertEqual(
+            q.get_nowait(), ("normal", "chat", "normal-id", False),
+        )
+
     def test_platform_state_paths_share_safe_platform_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             old_config_dir = workspace.CONFIG_DIR
