@@ -203,7 +203,10 @@ def normalize_tier(value: str) -> str | None:
 
 def fallback_plan(request: str) -> Plan:
     """The whole request as one sub-task on the strongest tier."""
-    instruction = request.strip() if isinstance(request, str) else str(request)
+    if isinstance(request, str):
+        instruction = request.strip() or "(empty request)"
+    else:
+        instruction = str(request) or "(empty request)"
     return Plan(
         understanding="",
         subtasks=(Subtask(tier=FALLBACK_TIER, instruction=instruction),),
