@@ -177,6 +177,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
     # GLM-5.3-flash / GLM-5V are documented multimodal (native vision +
     # image_url input), so photo uploads can ride as real image parts.
     supports_vision = True
+    vision_mode = "openai_parts"
 
     default_model = "glm-5.3"
     default_summary_model = "glm-4.5-air"

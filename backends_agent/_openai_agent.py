@@ -177,6 +177,8 @@ class OpenAIChatBackend(Backend):
     # OpenAI-shape tools list is consumed directly, so plugins become typed
     # tool entries in TOOL_SCHEMA the same way the built-ins do.
     supports_typed_plugins = True
+    supports_vision = True
+    vision_mode = "openai_parts"
     # OpenAI Chat Completions supports the standard 4-level effort words.
     effort_levels: tuple[str, ...] = ("minimal", "low", "medium", "high")
 
@@ -1216,48 +1218,16 @@ def _vision_parts_for_prompt(
 ) -> list[dict[str, Any]] | None:
     """Build multimodal user content for *prompt*, or None to stay text-only.
 
-    Scans for "[... attachment saved to: <rel>]" markers pointing at image
-    files inside the workspace and appends each as a base64 image_url part.
-    Returns None when no in-workspace image is referenced (normal text turn)
-    so the text-only message shape is preserved byte-for-byte.
+    Delegates marker scanning + workspace checks to the shared
+    ``backends_agent.base`` helpers so every vision backend resolves the
+    same image set. Returns None when no in-workspace image is referenced
+    (normal text turn) so the text-only message shape is preserved.
     """
-    import base64
-    import os as _os
+    from .base import attachment_image_paths, vision_image_url_parts
 
-    if not isinstance(prompt, str) or "attachment saved to:" not in prompt:
-        return None
-    seen: set[str] = set()
-    images: list[dict[str, Any]] = []
-    for match in _attachment_saved_re().finditer(prompt):
-        rel = match.group(1).strip()
-        if not rel or rel in seen:
-            continue
-        seen.add(rel)
-        ext = _os.path.splitext(rel)[1].lower()
-        mime = _VISION_MIME_BY_EXT.get(ext)
-        if mime is None:
-            continue
-        # Resolve inside the workspace without following an escaping link.
-        candidate = _os.path.realpath(_os.path.join(workspace_path, rel))
-        try:
-            root = _os.path.realpath(workspace_path)
-            if _os.path.commonpath([candidate, root]) != root:
-                continue
-            if not _os.path.isfile(candidate):
-                continue
-            if _os.path.getsize(candidate) > _VISION_MAX_IMAGE_BYTES:
-                continue
-            with open(candidate, "rb") as f:
-                raw = f.read(_VISION_MAX_IMAGE_BYTES + 1)
-            if len(raw) > _VISION_MAX_IMAGE_BYTES:
-                continue
-        except OSError:
-            continue
-        b64 = base64.b64encode(raw).decode("ascii")
-        images.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{b64}"},
-        })
+    images = vision_image_url_parts(
+        attachment_image_paths(prompt, workspace_path),
+    )
     if not images:
         return None
     return [{"type": "text", "text": prompt}, *images]

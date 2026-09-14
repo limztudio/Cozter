@@ -3323,18 +3323,18 @@ class BotPlatform(ABC):
                     parts.append(
                         f"[Image: {att.filename} is a {w}x{h} {fmt}"
                         f" ({size:,} bytes) at {rel_path}."
-                        f" To inspect it, call read_file on {rel_path}"
-                        " — binary bytes are decoded as text and will look"
-                        " like noise, so describe only what tools confirm"
-                        " (dimensions, format, size) and ask the user what"
-                        " is in it if you cannot verify the content.]"
+                        " Vision-capable backends receive these pixels"
+                        " natively: describe what is actually in the image."
+                        " If your backend cannot see pixels, say what you"
+                        " verified (dimensions, format, size) and ask the"
+                        " user to describe the content.]"
                     )
                 elif size:
                     parts.append(
                         f"[Image: {att.filename} ({size:,} bytes) at"
-                        f" {rel_path}. This chat pipeline is text-only:"
-                        " read_file will not show its pixels, so say what"
-                        " you verified and ask the user to describe the"
+                        f" {rel_path}. Vision-capable backends receive its"
+                        " pixels natively; otherwise say what you verified"
+                        " and ask the user to describe the"
                         " content if needed.]"
                     )
             except OSError:

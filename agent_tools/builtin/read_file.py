@@ -63,7 +63,12 @@ def _validated_read_bound(
 
 class ReadFileTool(AgentTool):
     name = "read_file"
-    description = "Read a UTF-8 text file (128 KiB/call; page remainder via offset/limit)."
+    description = (
+        "Read a UTF-8 text file (128 KiB/call; page remainder via"
+        " offset/limit). For image files (png/jpg/gif/webp/bmp), returns"
+        " verified dimensions/format/size instead of binary noise —"
+        " vision-capable backends already receive the pixels natively."
+    )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "path": path_property(),
@@ -86,6 +91,17 @@ class ReadFileTool(AgentTool):
             return f"Error: {exc}"
         if not os.path.isfile(target):
             return f"File not found: {args.get('path')}"
+
+        # Images are binary: decoding them as text yields noise. Return
+        # verified metadata instead so the model stops guessing from
+        # garbage bytes; vision-capable backends see the pixels natively.
+        if os.path.splitext(target)[1].lower() in {
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
+        }:
+            describe = await asyncio.to_thread(
+                _describe_image_file, target, args.get("path"),
+            )
+            return describe
 
         offset = args.get("offset")
         limit = args.get("limit")
@@ -125,6 +141,60 @@ class ReadFileTool(AgentTool):
 
     def summarize(self, args: dict) -> str:
         return summarize_path("read_file", args)
+
+
+def _describe_image_file(target: str, shown_path: object) -> str:
+    """Return verified metadata for an image instead of binary noise."""
+    import struct
+
+    shown = shown_path if isinstance(shown_path, str) else target
+    try:
+        size = os.path.getsize(target)
+    except OSError as exc:
+        return f"Read failed: {exc}"
+    dims: tuple[int, int, str] | None = None
+    try:
+        with open(target, "rb") as handle:
+            head = handle.read(64 * 1024)
+        if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+            w, h = struct.unpack(">II", head[16:24])
+            if 0 < w <= 100000 and 0 < h <= 100000:
+                dims = (w, h, "PNG")
+        elif head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
+            w, h = struct.unpack("<HH", head[6:10])
+            if w and h:
+                dims = (w, h, "GIF")
+        elif head[:2] == b"\xff\xd8":
+            i = 2
+            while i + 9 < len(head):
+                if head[i] != 0xFF:
+                    i += 1
+                    continue
+                if head[i + 1] in (0xC0, 0xC1, 0xC2, 0xC3):
+                    h = (head[i + 5] << 8) | head[i + 6]
+                    w = (head[i + 7] << 8) | head[i + 8]
+                    if w and h:
+                        dims = (w, h, "JPEG")
+                    break
+                seg = (head[i + 2] << 8) | head[i + 3]
+                if seg < 2:
+                    break
+                i += 2 + seg
+    except (OSError, struct.error):
+        dims = None
+    if dims is not None:
+        w, h, fmt = dims
+        return (
+            f"[Image: {shown} is a {w}x{h} {fmt} ({size:,} bytes)."
+            " Vision-capable backends receive these pixels natively —"
+            " describe what is actually in the image.]"
+        )
+    return (
+        f"[Image: {shown} ({size:,} bytes)."
+        " Binary pixels are not text — vision-capable backends see"
+        " them natively; otherwise say what you verified and ask the"
+        " user to describe the content.]"
+    )
 
 
 def _read_text_range(

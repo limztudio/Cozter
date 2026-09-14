@@ -549,6 +549,8 @@ async def _run_claude_command(
 class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
+    supports_vision = True
+    vision_mode = "stdin_text"
     # ``acceptEdits`` preserves normal checks outside workspace edits; plan
     # permits inspection while blocking edits, the safest non-interactive
     # fallback for confirm and deny.
@@ -678,6 +680,21 @@ class ClaudeCodeBackend(Backend):
             "--settings", _background_guard_settings(),
         ]
         self.append_launch_options(cmd, model, effort, approval)
+
+        # Native vision: claude --print reads the prompt from stdin and
+        # the model opens workspace images through its own Read tool, so
+        # no extra CLI flag is needed — the attachment marker plus the
+        # vision hint in the prompt are the delivery mechanism.
+        if self.supports_vision and not compaction:
+            from .base import attachment_image_paths as _vision_paths
+            _vision_hint_paths = _vision_paths(prompt, workspace_path)
+            if _vision_hint_paths:
+                prompt = (
+                    prompt
+                    + "\n\n[Vision: the image(s) above are attached to this"
+                    " turn. Open each path with your Read tool to see the"
+                    " pixels before answering about image content.]"
+                )
 
         return await create_prompt_subprocess(cmd, prompt, cwd=workspace_path)
 

@@ -139,6 +139,8 @@ def _remove_prompt_file(path: str) -> None:
 class GrokBackend(CachedModelCatalog, Backend):
     name = "grok"
     executable = "grok"
+    supports_vision = True
+    vision_mode = "prompt_file"
     default_model = "grok-4.6"
     default_summary_model = "grok-4.6"
     # Default-model vocabulary. ``effort_levels_for_model`` narrows this for
@@ -233,7 +235,7 @@ class GrokBackend(CachedModelCatalog, Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
-        prompt_path = _write_prompt_file(prompt)
+        prompt_path = ""
         cmd: list[str] = [
             *executable_command(self.executable),
             "--cwd",
@@ -242,11 +244,28 @@ class GrokBackend(CachedModelCatalog, Backend):
             "streaming-messages-json",
         ]
         self.append_launch_options(cmd, model, effort, approval)
-        # Keep the prompt argument last so model/permission flags cannot be
-        # parsed as prompt text. ``--prompt-file`` avoids the platform argv
-        # cap that ``-p`` inherits; Cozter's default history budget already
-        # exceeds Windows' CreateProcess limit.
-        cmd += ["--prompt-file", prompt_path]
+        # Native vision: when images are referenced, send JSON content
+        # blocks via --prompt-json (text + image parts) instead of the
+        # plain-text --prompt-file. Falls back to --prompt-file otherwise.
+        prompt_json: str | None = None
+        if self.supports_vision and not compaction:
+            from .base import (
+                attachment_image_paths as _vision_paths,
+                grok_prompt_json as _prompt_json,
+            )
+            _image_paths = _vision_paths(prompt, workspace_path)
+            if _image_paths:
+                prompt_json = _prompt_json(prompt, _image_paths)
+        if prompt_json is not None:
+            cmd += ["--prompt-json", prompt_json]
+            prompt_path = ""
+        else:
+            # Keep the prompt argument last so model/permission flags cannot be
+            # parsed as prompt text. ``--prompt-file`` avoids the platform argv
+            # cap that ``-p`` inherits; Cozter's default history budget already
+            # exceeds Windows' CreateProcess limit.
+            prompt_path = _write_prompt_file(prompt)
+            cmd += ["--prompt-file", prompt_path]
         try:
             proc = await create_captured_subprocess(
                 cmd,
@@ -256,10 +275,14 @@ class GrokBackend(CachedModelCatalog, Backend):
                 start_new_session=os.name != "nt",
             )
         except BaseException:
-            _remove_prompt_file(prompt_path)
+            if prompt_path:
+                _remove_prompt_file(prompt_path)
             raise
         # Key by the Process object, not PID: concurrent turns on this
         # singleton can otherwise clobber each other after PID reuse.
+        # A --prompt-json turn has no temp file (empty path): remember it
+        # anyway so cleanup pops symmetrically, and _remove_prompt_file
+        # no-ops on the empty value.
         self._prompt_files.remember(proc, prompt_path)
         return proc
 

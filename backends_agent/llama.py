@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 class LlamaBackend(CachedOpenAIChatBackend):
     name = "llama"
     executable = "llama-server"  # only used in "not found" error text
+    # Vision-capable local models (e.g. Qwen-VL, LLaVA via llama-server)
+    # consume the same OpenAI-style image_url parts as zai/meta.
+    supports_vision = True
+    vision_mode = "openai_parts"
 
     # The model list is populated dynamically from /v1/models and cached
     # briefly. Stored as a tuple per the Backend contract.

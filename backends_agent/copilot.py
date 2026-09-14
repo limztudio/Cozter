@@ -281,6 +281,8 @@ def _remove_isolated_copilot_home(home: str) -> None:
 class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
+    supports_vision = True
+    vision_mode = "cli_file_flag"
     # Auto retains Copilot's normal path/URL checks; restricted modes expose
     # no tools, so they cannot inherit a permissive session setting.
     permission_arg_sets = {
@@ -614,6 +616,18 @@ class CopilotBackend(Backend):
             "--no-remote-export",
         ]
         self.append_launch_options(cmd, model, effort, approval)
+
+        # Native vision: copilot takes repeatable --attachment flags for
+        # images/native documents in non-interactive mode. Resolve paths
+        # before argv truncation: the tail cut keeps the request (and its
+        # markers) at the end, so paths found here still match the text
+        # the model receives via -p.
+        _vision_image_paths: list[str] = []
+        if self.supports_vision and not compaction:
+            from .base import attachment_image_paths as _vision_paths
+            _vision_image_paths = _vision_paths(prompt, workspace_path)
+        for _image_path in _vision_image_paths:
+            cmd += ["--attachment", _image_path]
 
         cmd += ["-p", prompt]
         isolated_home = _create_isolated_copilot_home()

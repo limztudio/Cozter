@@ -769,6 +769,194 @@ warning: ignored after the catalog
 
         asyncio.run(run())
 
+    def test_vision_flags_cover_every_backend(self) -> None:
+        from Cozter.backends_agent import get_backend
+        expected = {
+            "codex": "cli_file_flag",
+            "copilot": "cli_file_flag",
+            "claude_code": "stdin_text",
+            "grok": "prompt_file",
+            "llama": "openai_parts",
+            "meta": "openai_parts",
+            "zai": "openai_parts",
+        }
+        for name, mode in expected.items():
+            with self.subTest(backend=name):
+                backend = get_backend(name)
+                self.assertTrue(backend.supports_vision)
+                self.assertEqual(backend.vision_mode, mode)
+        self.assertFalse(get_backend("flexible").supports_vision)
+
+    def test_shared_vision_helpers_resolve_and_cap(self) -> None:
+        from Cozter.backends_agent.base import (
+            attachment_image_paths,
+            grok_prompt_json,
+            vision_image_url_parts,
+        )
+        import json as _json
+        with tempfile.TemporaryDirectory() as ws:
+            rel = os.path.join(".cozter", "uploads", "photo.png")
+            local_path = os.path.join(ws, rel)
+            os.makedirs(os.path.dirname(local_path))
+            with open(local_path, "wb") as handle:
+                handle.write(bytes.fromhex(
+                    "89504e470d0a1a0a0000000d4948445200000001"
+                    "0000000108060000001f15c4890000000d49444154"
+                    "789c626001000000ffff0300000600055c01db0000"
+                    "000049454e44ae426082"
+                ))
+            prompt = f"see\n[Photo attachment saved to: {rel}]"
+            paths = attachment_image_paths(prompt, ws)
+            self.assertEqual(paths, [os.path.realpath(local_path)])
+            parts = vision_image_url_parts(paths)
+            self.assertEqual(len(parts), 1)
+            self.assertTrue(
+                parts[0]["image_url"]["url"].startswith(
+                    "data:image/png;base64,",
+                )
+            )
+            payload = _json.loads(grok_prompt_json(prompt, paths))
+            self.assertEqual(payload[0]["role"], "user")
+            kinds = [b["type"] for b in payload[0]["content"]]
+            self.assertIn("text", kinds)
+            self.assertIn("image", kinds)
+            self.assertEqual(
+                attachment_image_paths(
+                    "x\n[Photo attachment saved to: ../../etc/passwd]", ws,
+                ),
+                [],
+            )
+            self.assertEqual(attachment_image_paths("hello", ws), [])
+
+    def test_grok_vision_uses_prompt_json_without_temp_file(self) -> None:
+        async def run() -> None:
+            backend = GrokBackend()
+            with tempfile.TemporaryDirectory() as ws:
+                rel = os.path.join(".cozter", "uploads", "photo.png")
+                local_path = os.path.join(ws, rel)
+                os.makedirs(os.path.dirname(local_path))
+                with open(local_path, "wb") as handle:
+                    handle.write(bytes.fromhex(
+                        "89504e470d0a1a0a0000000d4948445200000001"
+                        "0000000108060000001f15c4890000000d49444154"
+                        "789c626001000000ffff0300000600055c01db0000"
+                        "000049454e44ae426082"
+                    ))
+                prompt = f"see\n[Photo attachment saved to: {rel}]"
+                with (
+                    mock.patch.object(
+                        grok_mod, "executable_command",
+                        return_value=["grok"],
+                    ),
+                    mock.patch.object(
+                        grok_mod,
+                        "create_captured_subprocess",
+                        new=mock.AsyncMock(
+                            return_value=mock.Mock(),
+                        ),
+                    ) as create_process,
+                ):
+                    proc = await backend.launch(
+                        ws, prompt, "grok-4.6", "auto",
+                    )
+                    command = tuple(create_process.await_args.args[0])
+                    self.assertIn("--prompt-json", command)
+                    self.assertNotIn("--prompt-file", command)
+                await backend.cleanup_process(proc)
+        asyncio.run(run())
+
+    def test_codex_launch_attaches_vision_images(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as ws:
+                rel = os.path.join(".cozter", "uploads", "photo.png")
+                local_path = os.path.join(ws, rel)
+                os.makedirs(os.path.dirname(local_path))
+                with open(local_path, "wb") as handle:
+                    handle.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+                prompt = f"see\n[Photo attachment saved to: {rel}]"
+                with (
+                    mock.patch.object(
+                        codex_mod, "executable_command",
+                        return_value=["codex"],
+                    ),
+                    mock.patch.object(
+                        codex_mod,
+                        "create_prompt_subprocess",
+                        new=mock.AsyncMock(
+                            return_value=mock.Mock(),
+                        ),
+                    ) as create_process,
+                ):
+                    await CodexBackend().launch(ws, prompt, None, "auto")
+                    command = tuple(create_process.await_args.args[0])
+                    self.assertIn("--image", command)
+                    self.assertIn(
+                        os.path.realpath(local_path), command,
+                    )
+        asyncio.run(run())
+
+    def test_copilot_launch_attaches_vision_images(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as ws:
+                rel = os.path.join(".cozter", "uploads", "photo.png")
+                local_path = os.path.join(ws, rel)
+                os.makedirs(os.path.dirname(local_path))
+                with open(local_path, "wb") as handle:
+                    handle.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+                prompt = f"see\n[Photo attachment saved to: {rel}]"
+                with (
+                    mock.patch.object(
+                        copilot_mod, "executable_command",
+                        return_value=["copilot"],
+                    ),
+                    mock.patch.object(
+                        copilot_mod,
+                        "create_captured_subprocess",
+                        new=mock.AsyncMock(
+                            return_value=mock.Mock(),
+                        ),
+                    ) as create_process,
+                    mock.patch.object(
+                        copilot_mod,
+                        "_create_isolated_copilot_home",
+                        return_value="/tmp/copilot-home",
+                    ),
+                ):
+                    await CopilotBackend().launch(ws, prompt, None, "auto")
+                    command = tuple(create_process.await_args.args[0])
+                    self.assertIn("--attachment", command)
+                    self.assertIn(
+                        os.path.realpath(local_path), command,
+                    )
+        asyncio.run(run())
+
+    def test_claude_launch_adds_vision_hint(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as ws:
+                rel = os.path.join(".cozter", "uploads", "photo.png")
+                local_path = os.path.join(ws, rel)
+                os.makedirs(os.path.dirname(local_path))
+                with open(local_path, "wb") as handle:
+                    handle.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+                prompt = f"see\n[Photo attachment saved to: {rel}]"
+                with (
+                    mock.patch.object(
+                        claude_code_mod, "executable_command",
+                        return_value=["claude"],
+                    ),
+                    mock.patch.object(
+                        claude_code_mod,
+                        "create_prompt_subprocess",
+                        new=mock.AsyncMock(
+                            return_value=mock.Mock(),
+                        ),
+                    ) as create_process,
+                ):
+                    await ClaudeCodeBackend().launch(ws, prompt, None, "auto")
+                    sent = create_process.await_args.args[1]
+                    self.assertIn("[Vision:", sent)
+        asyncio.run(run())
+
     def test_codex_fallback_models_are_current_and_selectable(self) -> None:
         models = codex_mod._FALLBACK_MODELS
         self.assertEqual(models, (

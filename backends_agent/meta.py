@@ -104,6 +104,7 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
     # Muse Spark is documented multimodal (agentic tool calling + computer
     # use), so photo uploads can ride as real image parts.
     supports_vision = True
+    vision_mode = "openai_parts"
 
     default_model = "muse-spark-1.3"
     default_summary_model = "muse-spark-1.2"

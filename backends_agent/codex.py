@@ -139,6 +139,8 @@ def _stderr_preview(value: str | bytes | None) -> str:
 class CodexBackend(Backend):
     name = "codex"
     executable = "codex"
+    supports_vision = True
+    vision_mode = "cli_file_flag"
     # Codex has no non-interactive "no tools" mode. Read-only sandboxing is
     # therefore the strongest restriction for confirm and deny. ``--full-auto``
     # remains deprecated; auto explicitly uses the writable normal sandbox.
@@ -362,6 +364,13 @@ class CodexBackend(Backend):
             effort_template="model_reasoning_effort={effort}",
         )
         cmd.append("-")  # read prompt from stdin
+
+        # Native vision: codex exec takes repeatable -i/--image flags.
+        # Images ride as real pixels alongside the stdin text prompt.
+        if self.supports_vision and not compaction:
+            from .base import attachment_image_paths as _vision_paths
+            for _image_path in _vision_paths(prompt, workspace_path):
+                cmd += ["--image", _image_path]
 
         return await create_prompt_subprocess(cmd, prompt)
 

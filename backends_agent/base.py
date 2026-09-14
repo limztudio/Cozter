@@ -1,6 +1,7 @@
 """Backend abstract base class and shared data types."""
 
 import asyncio
+import base64
 import os
 import shutil
 import sys
@@ -161,6 +162,117 @@ class ProcessResourceMap:
     def pop(self, proc: object) -> str | None:
         with self._lock:
             return self._items.pop(id(proc), None)
+
+
+# ---------------------------------------------------------------------------
+# Shared native-vision plumbing
+# ---------------------------------------------------------------------------
+
+# Cap inline image bytes per vision turn: uploads are already bounded by
+# max_upload_bytes, but base64 inflates by ~4/3 and the retained message
+# transcript is capped — keep one photo affordable inside that budget.
+VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+VISION_MIME_BY_EXT = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+}
+VISION_MAX_IMAGES_PER_TURN = 4
+_ATTACHMENT_SAVED_PATTERN = (
+    r"\[[^\]\n]*attachment saved to:\s*([^\]\n]+?)\s*\]"
+)
+
+
+def attachment_image_paths(
+    prompt: str, workspace_path: str,
+) -> list[str]:
+    """Return in-workspace image paths referenced by *prompt*, else [].
+
+    Scans for "[... attachment saved to: <rel>]" markers (emitted by
+    ``BotPlatform._ai_file`` for inbound uploads) and keeps only paths
+    that resolve inside *workspace_path*, exist, look like images by
+    extension, and fit the per-turn byte cap. Never raises: unreadable
+    or escaping paths are skipped so a text-only turn proceeds.
+    """
+    import re as _re
+
+    if not isinstance(prompt, str) or "attachment saved to:" not in prompt:
+        return []
+    try:
+        pattern = _re.compile(_ATTACHMENT_SAVED_PATTERN, _re.IGNORECASE)
+    except _re.error:
+        return []
+    seen: set[str] = set()
+    found: list[str] = []
+    try:
+        root = os.path.realpath(workspace_path)
+    except OSError:
+        return []
+    for match in pattern.finditer(prompt):
+        rel = match.group(1).strip()
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        if os.path.splitext(rel)[1].lower() not in VISION_MIME_BY_EXT:
+            continue
+        try:
+            candidate = os.path.realpath(os.path.join(workspace_path, rel))
+            if os.path.commonpath([candidate, root]) != root:
+                continue
+            if not os.path.isfile(candidate):
+                continue
+            if os.path.getsize(candidate) > VISION_MAX_IMAGE_BYTES:
+                continue
+        except (OSError, ValueError):
+            continue
+        found.append(candidate)
+        if len(found) >= VISION_MAX_IMAGES_PER_TURN:
+            break
+    return found
+
+
+def vision_image_url_parts(image_paths: list[str]) -> list[dict]:
+    """Build OpenAI-style image_url parts for *image_paths*, skipping junk."""
+    parts: list[dict] = []
+    for path in image_paths:
+        if not isinstance(path, str) or not path:
+            continue
+        mime = VISION_MIME_BY_EXT.get(os.path.splitext(path)[1].lower())
+        if mime is None:
+            continue
+        try:
+            if os.path.getsize(path) > VISION_MAX_IMAGE_BYTES:
+                continue
+            with open(path, "rb") as handle:
+                raw = handle.read(VISION_MAX_IMAGE_BYTES + 1)
+            if len(raw) > VISION_MAX_IMAGE_BYTES:
+                continue
+        except OSError:
+            continue
+        encoded = base64.b64encode(raw).decode("ascii")
+        parts.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{encoded}"},
+        })
+    return parts
+
+
+def grok_prompt_json(prompt: str, image_paths: list[str]) -> str:
+    """Build a grok --prompt-json payload carrying text + image parts."""
+    import json as _json
+
+    content: list[dict] = [{"type": "text", "text": prompt}]
+    for part in vision_image_url_parts(image_paths):
+        url = part.get("image_url", {}).get("url", "")
+        if url:
+            content.append({"type": "image", "source": {"url": url}})
+    return _json.dumps([{
+        "role": "user",
+        "content": content,
+    }])
 
 
 @dataclass
@@ -667,6 +779,16 @@ class Backend(ABC):
     # (OpenAI-style image_url content, or a CLI with image input) sets
     # this True so the photo handoff can attach the actual bytes.
     supports_vision: bool = False
+
+    # How this backend wants vision images delivered when supports_vision
+    # is True. "openai_parts" = OpenAI-style image_url content (HTTP
+    # backends, handled in _openai_agent). "cli_file_flag" = repeatable
+    # CLI file flag (codex --image, copilot --attachment). "prompt_file" =
+    # prompt delivered via temp file so JSON content blocks can carry
+    # images (grok --prompt-json). "stdin_text" = stdin text prompt; the
+    # model reads pixels via its own Read tool (claude --print). Plain
+    # text-only backends keep "none".
+    vision_mode: str = "none"
 
     # A detached task is a provider-owned job that can be queried after the
     # foreground Cozter subprocess has exited (for example Claude Code's

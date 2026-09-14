@@ -327,6 +327,9 @@ def build_subtask_prompt(
 
     *context* is the bare user request, not the full history — the
     planner saw the history and wrote self-contained instructions.
+    When the request carries "[... attachment saved to: ...]" markers
+    they ride along verbatim so a vision-capable tier backend still
+    resolves the image bytes natively.
     """
     task = plan.subtasks[index]
     parts = [context, ""]
