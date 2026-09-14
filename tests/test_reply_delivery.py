@@ -182,6 +182,38 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 await bot._list_reply_delivery_records(), [],
             )
 
+    async def test_drain_drops_malformed_entry_and_continues(self) -> None:
+        """A malformed in-memory entry must not wedge the drain loop."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old_config_dir = workspace.CONFIG_DIR
+            workspace.CONFIG_DIR = tmp
+            self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
+            bot = _ReplyDeliveryBot(tmp, fail_final=False)
+            result = AgentResult(events=[
+                ChatEvent(kind="text", content="final response"),
+            ])
+            entry_id = await bot._persist_enqueue("u1", "prompt", "chat")
+            queue = bot._ensure_message_queue("u1")
+            queue.put_nowait(("short",))
+            queue.put_nowait(("prompt", "chat", entry_id, False))
+
+            with (
+                mock.patch.object(
+                    agent, "run", new=mock.AsyncMock(return_value=result),
+                ) as run_agent,
+                mock.patch.object(
+                    workspace,
+                    "get_run_config",
+                    return_value=("flexible", "", "", "auto", "codex"),
+                ),
+            ):
+                with self.assertLogs(
+                    "Cozter.backends_bot.base", level="WARNING",
+                ):
+                    await bot._drain_message_queue("u1")
+                run_agent.assert_awaited_once()
+            self.assertIn("final response", bot.sent)
+
 
 if __name__ == "__main__":
     unittest.main()

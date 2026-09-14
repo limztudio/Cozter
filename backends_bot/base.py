@@ -3850,6 +3850,23 @@ class BotPlatform(ABC):
                 # still drain while the queue is in that state.
                 lock.release()
                 break
+            # In-memory entries come from our own dispatch paths, but a
+            # malformed shape must be dropped (not crash the drain loop
+            # with an unpack error, wedging every later entry forever).
+            if (
+                not isinstance(entry, tuple)
+                or len(entry) != 4
+                or not isinstance(entry[0], str)
+                or not isinstance(entry[1], str)
+                or not isinstance(entry[2], str)
+                or not isinstance(entry[3], bool)
+            ):
+                logger.warning(
+                    "Dropping malformed queue entry for user=%s: %r",
+                    uid, entry,
+                )
+                lock.release()
+                continue
             text, msg_chat_id, entry_id, ephemeral = entry
 
             # Entries survive across restarts, which means a user may
