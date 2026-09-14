@@ -423,7 +423,11 @@ def apply_terminal_result_event(
     if isinstance(usage, dict):
         result.usage = dict(usage)
         cost = event.get("total_cost_usd")
-        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        if (
+            isinstance(cost, (int, float))
+            and not isinstance(cost, bool)
+            and cost >= 0
+        ):
             result.usage["total_cost_usd"] = cost
     if event.get("is_error"):
         if error_message is None:
