@@ -165,7 +165,11 @@ def _evaluate(node: ast.AST) -> Any:
 
 
 def _format(value: Any) -> str:
-    if isinstance(value, int) and not isinstance(value, bool):
+    if isinstance(value, bool):
+        raise _CalcError("result is not a real number")
+    if isinstance(value, complex):
+        raise _CalcError("result is not a real number (complex)")
+    if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
         if not math.isfinite(value):

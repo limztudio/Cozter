@@ -224,7 +224,7 @@ class HttpRequestTool(AgentTool):
                 )
 
         max_chars = coerce_int_arg(
-            args.get("max_chars") or _DEFAULT_MAX_CHARS,
+            args.get("max_chars", _DEFAULT_MAX_CHARS),
             default=_DEFAULT_MAX_CHARS,
             minimum=500,
             maximum=12_000,

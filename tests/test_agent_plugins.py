@@ -80,6 +80,10 @@ class CalculatorToolTests(unittest.TestCase):
         self.assertIn("Error", self.eval("(2+"))
         self.assertIn("Error", self.eval("sqrt(1, 2, 3)"))
 
+    def test_complex_results_are_rejected(self) -> None:
+        self.assertIn("complex", self.eval("(-1) ** 0.5"))
+        self.assertEqual(self.eval("2 + 3"), "5")
+
     def test_missing_expression_arg(self) -> None:
         result = _run(self.tool.run(".", {}))
         self.assertTrue(result.startswith("Error:"))
