@@ -842,6 +842,28 @@ def _validated_line_budget(budget: object) -> int | None:
     return candidate if candidate >= 0 else None
 
 
+def _validated_split_limit(limit: object) -> int:
+    """Validate a chunk-split limit as a positive int, else raise.
+
+    Rejects bools (True would silently split per-character) and
+    non-integral floats, and accepts integral floats by conversion.
+    Non-int types raise TypeError; non-positive ints raise ValueError.
+    """
+    if isinstance(limit, bool):
+        raise ValueError("limit must be >= 1")
+    if isinstance(limit, float):
+        if not limit.is_integer():
+            raise ValueError("limit must be >= 1")
+        candidate = int(limit)
+    elif isinstance(limit, int):
+        candidate = limit
+    else:
+        raise TypeError("limit must be an integer")
+    if candidate < 1:
+        raise ValueError("limit must be >= 1")
+    return candidate
+
+
 def take_recent_lines(
     items: list,
     budget: int,
@@ -905,8 +927,7 @@ def text_chunk_ranges(text: str, limit: int) -> list[tuple[int, int]]:
     """
     if not isinstance(text, str):
         return []
-    if limit < 1:
-        raise ValueError("limit must be >= 1")
+    limit = _validated_split_limit(limit)
     if len(text) <= limit:
         return [(0, len(text))]
     ranges: list[tuple[int, int]] = []

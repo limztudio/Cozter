@@ -374,6 +374,19 @@ class TextChunkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             utils.split_text_chunks("text", 0)
 
+    def test_split_text_chunks_rejects_junk_limit_types(self) -> None:
+        for bad in (True, False, 1.9, 0, -1):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    utils.split_text_chunks("hello world", bad)
+        for bad in ("5", None):
+            with self.subTest(bad=bad):
+                with self.assertRaises(TypeError):
+                    utils.split_text_chunks("hello world", bad)  # type: ignore[arg-type]
+        self.assertEqual(
+            utils.split_text_chunks("hello", 4.0), ["hell", "o"],  # type: ignore[arg-type]
+        )
+
 
 class PathBoundaryTests(unittest.TestCase):
     def test_is_path_within_rejects_sibling_and_symlink_escapes(self) -> None:
