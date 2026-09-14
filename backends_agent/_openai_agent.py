@@ -1185,33 +1185,6 @@ def _merge_tool_call(
 # Vision attachments
 # ---------------------------------------------------------------------------
 
-# Cap inline image bytes per turn: uploads are already bounded by
-# max_upload_bytes, but base64 inflates by ~4/3 and the retained message
-# transcript is capped — keep one photo affordable inside that budget.
-_VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
-_VISION_MIME_BY_EXT = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".bmp": "image/bmp",
-}
-# Matches the "[Photo attachment saved to: <rel>]" / "[... attachment
-# saved to: <rel>]" line _ai_file emits for inbound uploads.
-_ATTACHMENT_SAVED_RE = None  # compiled lazily (see _attachment_saved_re())
-
-
-def _attachment_saved_re():  # type: ignore[no-untyped-def]
-    global _ATTACHMENT_SAVED_RE
-    if _ATTACHMENT_SAVED_RE is None:
-        import re as _re
-        _ATTACHMENT_SAVED_RE = _re.compile(
-            r"\[[^\]\n]*attachment saved to:\s*([^\]\n]+?)\s*\]",
-            _re.IGNORECASE,
-        )
-    return _ATTACHMENT_SAVED_RE
-
 
 def _vision_parts_for_prompt(
     prompt: str, workspace_path: str,

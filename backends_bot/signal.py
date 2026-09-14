@@ -1451,10 +1451,6 @@ def _signal_style_strings_for_chunk(
     return styles
 
 
-def _utf16_code_units(text: str) -> int:
-    return len(text.encode("utf-16-le")) // 2
-
-
 def _add_signal_text_styles(
     params: dict[str, Any],
     styles: list[str],
