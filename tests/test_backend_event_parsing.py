@@ -614,6 +614,16 @@ class NonDictEventTests(unittest.TestCase):
                     record_error_event(bad, AgentResult()),  # type: ignore[arg-type]
                 )
 
+    def test_non_dict_terminal_event_is_dropped(self) -> None:
+        from Cozter.backends_agent.base import apply_terminal_result_event
+        for bad in ("junk", None, 123, ["x"], True):
+            with self.subTest(bad=bad):
+                result = AgentResult()
+                self.assertIsNone(
+                    apply_terminal_result_event(bad, result),  # type: ignore[arg-type]
+                )
+                self.assertEqual(result.events, [])
+
 
 if __name__ == "__main__":
     unittest.main()

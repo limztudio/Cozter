@@ -417,6 +417,8 @@ def apply_terminal_result_event(
     assistant text was streamed. Error text can be provider-specific; pass
     *error_message* to override the default ``error`` / ``result`` fields.
     """
+    if not isinstance(event, dict):
+        return
     usage = event.get("usage")
     if isinstance(usage, dict):
         result.usage = dict(usage)
