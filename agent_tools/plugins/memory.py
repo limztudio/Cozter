@@ -298,6 +298,14 @@ class MemoryTool(AgentTool):
 
     def _list(self, sessions_dir: str, workspace: str) -> str:
         sessions = _load_sessions(sessions_dir)
+        colony_count = len(_colony_items(workspace))
+        if not sessions:
+            if colony_count:
+                return (
+                    "No sessions recorded in this workspace yet."
+                    f" Colony: {colony_count} items in .cozter/colony.json"
+                )
+            return "No sessions recorded in this workspace yet."
         lines: list[str] = []
         for data in sessions[:_LIST_SESSIONS_CAP]:
             flags = []
@@ -321,11 +329,9 @@ class MemoryTool(AgentTool):
                 " when coverage is unclear)"
             )
         lines.append(
-            f"Colony: {len(_colony_items(workspace))}"
+            f"Colony: {colony_count}"
             " items in .cozter/colony.json"
         )
-        if not sessions:
-            return "No sessions recorded in this workspace yet."
         return _fit_output(lines, header)
 
     def _read(self, sessions_dir: str, args: dict) -> str:
@@ -353,12 +359,12 @@ class MemoryTool(AgentTool):
             f" {data['created'][:10] or 'unknown date'},"
             f" {total} message(s), showing last {len(window)})"
         )
-        lines = [
-            f"{shown_from + offset}. {msg['role'].capitalize()}:"
-            f" {msg['content'][:_LINE_CAP - len('… [line clipped]')]}"
-            + ("… [line clipped]" if len(msg["content"]) > _LINE_CAP else "")
-            for offset, msg in enumerate(window)
-        ]
+        lines = []
+        for offset, msg in enumerate(window):
+            content = msg["content"]
+            if len(content) > _LINE_CAP:
+                content = content[:_LINE_CAP] + "… [line clipped]"
+            lines.append(f"{shown_from + offset}. {msg['role'].capitalize()}: {content}")
         return _fit_output(lines, header)
 
 
