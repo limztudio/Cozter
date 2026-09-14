@@ -36,7 +36,7 @@ class GlobTool(AgentTool):
         assert pattern is not None  # non-None once error is None
 
         max_results = coerce_int_arg(
-            args.get("max_results") or 100,
+            args.get("max_results", 100),
             default=100,
             minimum=1,
             maximum=500,

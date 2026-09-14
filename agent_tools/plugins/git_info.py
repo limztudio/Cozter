@@ -66,7 +66,7 @@ class GitInfoTool(AgentTool):
             argv += ["status", "--short", "--branch"]
         elif action == "log":
             limit = coerce_int_arg(
-                args.get("limit") or 10, default=10, minimum=1, maximum=50,
+                args.get("limit", 10), default=10, minimum=1, maximum=50,
             )
             argv += ["log", "--oneline", f"-n{limit}"]
         else:

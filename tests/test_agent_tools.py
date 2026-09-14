@@ -84,6 +84,23 @@ class AgentToolHelperTests(unittest.TestCase):
             3,
         )
 
+    def test_explicit_zero_clamps_to_minimum_not_default(self) -> None:
+        # Callers must pass args.get(key, DEFAULT) raw (not `or DEFAULT`)
+        # so explicit 0 clamps to minimum uniformly: tree.py always did
+        # this; glob/list_dir/grep/fetch/search/bash/git/memory now do too.
+        self.assertEqual(
+            coerce_int_arg(0, default=100, minimum=1, maximum=500),
+            1,
+        )
+        self.assertEqual(
+            coerce_int_arg(None, default=100, minimum=1, maximum=500),
+            100,
+        )
+        self.assertEqual(
+            coerce_int_arg("", default=100, minimum=1, maximum=500),
+            100,
+        )
+
     def test_summarize_arg_uses_default_and_truncates(self) -> None:
         self.assertEqual(
             summarize_arg("glob", {}, "pattern", default="?"),

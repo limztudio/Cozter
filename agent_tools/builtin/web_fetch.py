@@ -124,7 +124,7 @@ class WebFetchTool(AgentTool):
             return validation_error
 
         max_chars = coerce_int_arg(
-            args.get("max_chars") or 12_000,
+            args.get("max_chars", 12_000),
             default=12_000,
             minimum=1_000,
             maximum=30_000,

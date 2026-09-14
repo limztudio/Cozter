@@ -57,7 +57,7 @@ class BashTool(AgentTool):
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string"
         timeout = coerce_int_arg(
-            args.get("timeout") or _BASH_DEFAULT_TIMEOUT,
+            args.get("timeout", _BASH_DEFAULT_TIMEOUT),
             default=_BASH_DEFAULT_TIMEOUT,
             minimum=1,
             maximum=_BASH_MAX_TIMEOUT,

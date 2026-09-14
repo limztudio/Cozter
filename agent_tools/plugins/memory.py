@@ -246,7 +246,7 @@ class MemoryTool(AgentTool):
             return error
         assert query is not None
         limit = coerce_int_arg(
-            args.get("limit") or _MATCH_LIMIT_DEFAULT,
+            args.get("limit", _MATCH_LIMIT_DEFAULT),
             default=_MATCH_LIMIT_DEFAULT,
             minimum=1,
             maximum=_MATCH_LIMIT_MAX,
@@ -332,7 +332,7 @@ class MemoryTool(AgentTool):
                 " unique prefix, or 'last')"
             )
         count = coerce_int_arg(
-            args.get("limit") or _READ_MESSAGES_DEFAULT,
+            args.get("limit", _READ_MESSAGES_DEFAULT),
             default=_READ_MESSAGES_DEFAULT,
             minimum=1,
             maximum=_READ_MESSAGES_MAX,

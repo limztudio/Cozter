@@ -39,7 +39,7 @@ class ListDirTool(AgentTool):
             return f"Not a directory: {raw_path}"
 
         max_results = coerce_int_arg(
-            args.get("max_results") or 200,
+            args.get("max_results", 200),
             default=200,
             minimum=1,
             maximum=1000,

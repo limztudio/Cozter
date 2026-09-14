@@ -77,7 +77,7 @@ class GrepTool(AgentTool):
             file_glob = "**/*"
 
         max_results = coerce_int_arg(
-            args.get("max_results") or 50,
+            args.get("max_results", 50),
             default=50,
             minimum=1,
             maximum=200,

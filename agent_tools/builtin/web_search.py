@@ -66,7 +66,7 @@ class WebSearchTool(AgentTool):
             return error
 
         max_results = coerce_int_arg(
-            args.get("max_results") or 5,
+            args.get("max_results", 5),
             default=5,
             minimum=1,
             maximum=10,
