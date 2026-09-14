@@ -148,6 +148,10 @@ def get_recent(
     recent = _get_user(user_id).get("recent", [])
     if not isinstance(recent, list):
         return []
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return []
+    if limit < 0:
+        return []
     paths: list[str] = []
     seen: set[str] = set()
     for path in recent:
