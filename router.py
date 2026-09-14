@@ -49,23 +49,26 @@ def _build_session_block(data: dict) -> str:
     malformed or unusually verbose.  The id remains first, allowing a useful
     choice whenever it fits in normal session-id bounds.
     """
-    sid = data["id"] if isinstance(data.get("id"), str) else ""
+    sid = (
+        data.get("id") if isinstance(data, dict) else None
+    )
+    sid = sid if isinstance(sid, str) else ""
     if not sid:
         return ""
-    raw_name = data.get("name")
+    raw_name = data.get("name") if isinstance(data, dict) else None
     name = raw_name if isinstance(raw_name, str) and raw_name else sid[:8]
     block = [
         f"id: {sid}",
         f"name: {_truncate_router_text(name, ROUTER_PER_SESSION_CHARS)}",
     ]
-    summary = data.get("summary")
+    summary = data.get("summary") if isinstance(data, dict) else None
     if isinstance(summary, str) and summary:
         block.append(
             "summary: " + _truncate_router_text(
                 summary, ROUTER_PER_SESSION_CHARS,
             ),
         )
-    long_term = data.get("long_term")
+    long_term = data.get("long_term") if isinstance(data, dict) else None
     if isinstance(long_term, list):
         str_items = [i for i in long_term if isinstance(i, str) and i]
         items = [
