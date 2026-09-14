@@ -1075,6 +1075,21 @@ class SessionStateFallbackTests(unittest.TestCase):
             "?: 123",
         )
 
+    def test_set_summary_clamps_negative_keep_recent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data = session.create_session(tmp)
+            session.append_messages(
+                tmp, data["id"],
+                [{"role": "user", "content": str(i)} for i in range(5)],
+            )
+            # A negative retain-count must behave like 0, not inflate
+            # compacted_count past the messages that actually existed.
+            session.set_summary(tmp, data["id"], "s", keep_recent=-3)
+            loaded = session.load_session(tmp, data["id"])
+            assert loaded is not None
+            self.assertEqual(loaded["messages"], [])
+            self.assertEqual(loaded["compacted_count"], 5)
+
 
 class QueueStateFallbackTests(unittest.TestCase):
     def test_queue_entry_selection_and_promotion_preserve_order(self) -> None:

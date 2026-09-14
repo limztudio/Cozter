@@ -496,6 +496,10 @@ def set_summary(
     if data is None:
         return
     msgs = data.get("messages", [])
+    # keep_recent is an internal retain-count, but hand-edited callers and
+    # future refactors must not turn a negative into "drop everything and
+    # inflate the compacted tally".
+    keep_recent = max(0, keep_recent)
     basis = len(msgs) if summarized_count is None else min(
         summarized_count, len(msgs),
     )
