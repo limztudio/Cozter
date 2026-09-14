@@ -823,13 +823,12 @@ def get_reasoning_effort(workspace_path: str) -> int:
 
 def set_reasoning_effort(workspace_path: str, effort: int) -> None:
     """Clamp to 0-100 and persist."""
-    try:
-        numeric = int(effort)  # type: ignore[arg-type]
-    except (TypeError, ValueError, OverflowError):
+    # Strict int-only, matching _set_minimum_int_setting: a float or
+    # numeric string from a model/tool arg must be rejected loudly rather
+    # than silently truncated into a different effort level.
+    if isinstance(effort, bool) or not isinstance(effort, int):
         raise ValueError("reasoning effort must be an integer 0-100")
-    if isinstance(effort, bool):
-        raise ValueError("reasoning effort must be an integer 0-100")
-    clamped = max(0, min(numeric, 100))
+    clamped = max(0, min(effort, 100))
     _set_setting(workspace_path, "reasoning_effort", clamped)
 
 
