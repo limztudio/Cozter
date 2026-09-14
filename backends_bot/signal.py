@@ -11,6 +11,7 @@ import base64
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -76,7 +77,7 @@ def _signal_rate_limit_delay(exc: BaseException) -> float | None:
         delay = float(match.group(1))
     except ValueError:
         return None
-    if delay < 0:
+    if not math.isfinite(delay) or delay < 0:
         return None
     return min(delay, _SIGNAL_ATTACH_RETRY_MAX_DELAY_SEC)
 
@@ -1519,7 +1520,7 @@ def _dedupe_group_urls(group_urls: list[str]) -> list[str]:
         if not url:
             continue
         normalized = _normalize_group_url(url)
-        if normalized in seen:
+        if not normalized or normalized in seen:
             continue
         seen.add(normalized)
         urls.append(url)
