@@ -681,11 +681,21 @@ def create_text_file_atomically(
 
 
 def _write_text_to_fd(fd: int, text: str) -> None:
-    """Write and flush UTF-8 text to an owned temporary-file descriptor."""
-    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
+    """Write and flush UTF-8 text to an owned temporary-file descriptor.
+
+    Model-supplied text can contain lone surrogates (``"\\ud800"`` in JSON
+    decodes fine but is not encodable as strict UTF-8).  Surface that as an
+    ``OSError`` so file-error handling at the call sites (and the tool
+    runner's failure path) reports a model-facing message instead of a raw
+    codec traceback.
+    """
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+    except UnicodeEncodeError as exc:
+        raise OSError(f"cannot encode file content as UTF-8: {exc}") from exc
 
 
 def copy_file_atomically(source_path: str, target_path: str) -> bool:
