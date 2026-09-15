@@ -88,7 +88,7 @@ class GrepTool(AgentTool):
         # would keep running after asyncio cancels its await, so isolate the
         # whole scan in a killable process instead.
         # No timeout: the scan runs until it finishes or the turn is
-        # cancelled; cancel reaps the worker (see _scan_in_subprocess).
+        # cancelled; cancel reaps the worker (see _start_scan_worker).
         # Run the blocking wait directly in this coroutine's thread: the
         # worker already lives in its own process, and receive_conn.poll()
         # yields in 0.1s slices so the event loop stays responsive without
@@ -233,34 +233,6 @@ def _read_scan_payload(receive_conn: Any) -> list[str]:
     ):
         raise RuntimeError("grep worker returned an invalid result")
     return payload
-
-
-def _scan_in_subprocess(
-    workspace_path: str,
-    search_root: str,
-    file_glob: str,
-    regex: re.Pattern[str],
-    max_results: int,
-) -> list[str]:
-    """Run grep work in a process that cancel always reaps (no timeout).
-
-    Blocking wait kept for direct (non-async) callers; the tool itself
-    uses :func:`_scan_in_subprocess_async`.
-    """
-    proc, receive_conn = _start_scan_worker(
-        workspace_path, search_root, file_glob, regex, max_results,
-    )
-    try:
-        while True:
-            if receive_conn.poll(0.1):
-                return _read_scan_payload(receive_conn)
-            if not proc.is_alive():
-                # A child that exits without writing a result is a real scan
-                # failure, not a no-match result.
-                raise RuntimeError("grep worker exited without a result")
-    finally:
-        receive_conn.close()
-        _stop_scan_worker(proc)
 
 
 async def _scan_in_subprocess_async(

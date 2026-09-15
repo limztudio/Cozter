@@ -52,21 +52,6 @@ logger = logging.getLogger(__name__)
 _TOOL_RESULT_MAX = 4_000
 
 
-def tool_timeout() -> int | None:
-    """Legacy accessor kept for compatibility; no timeout is enforced.
-
-    Tools run until they finish or the turn is cancelled (``/stop``,
-    new user message, ``[[await]]`` pause). ``None`` means no wall-clock
-    ceiling. Read fresh each call so a config change takes effect on
-    the next tool invocation without a restart.
-    """
-    from .. import config as cfg  # local import: avoid load-time cycle
-    try:
-        return cfg.get_tool_timeout()
-    except Exception:
-        return None
-
-
 # ---------------------------------------------------------------------------
 # Tool discovery: import every sibling module to trigger self-registration
 # ---------------------------------------------------------------------------
