@@ -159,8 +159,8 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
         from Cozter.backends_agent import base as agent_base
 
         for clip in (
-            tools_base._clip_status_value,
-            agent_base._clip_status_value,
+            tools_base.clip_status_value,
+            agent_base.clip_status_value,
         ):
             out = clip("x" * 300)
             self.assertLessEqual(len(out), 200)

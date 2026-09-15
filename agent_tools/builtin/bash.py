@@ -7,8 +7,9 @@ import os
 import shutil
 from typing import Any, ClassVar
 
-from ..base import AgentTool, _clip_status_value, coerce_int_arg
+from ..base import AgentTool, coerce_int_arg
 from ...utils import (
+    clip_status_value,
     has_managed_process_group,
     kill_and_wait,
     mark_process_group_leader,
@@ -126,7 +127,7 @@ class BashTool(AgentTool):
         cmd = args.get("command", "")
         if not isinstance(cmd, str):
             cmd = str(cmd)
-        return f"$ {_clip_status_value(cmd)}"
+        return f"$ {clip_status_value(cmd)}"
 
 
 def _find_shell() -> list[str] | None:

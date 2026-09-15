@@ -17,11 +17,11 @@ from typing import Any, ClassVar
 
 from ..base import (
     AgentTool,
-    _clip_status_value,
     coerce_int_arg,
     object_parameters,
     resolve_inside_workspace,
 )
+from ...utils import clip_status_value
 
 _GIT_TIMEOUT_SECONDS = 15
 _MAX_OUTPUT_CHARS = 12_000
@@ -171,10 +171,10 @@ class GitInfoTool(AgentTool):
         action = args.get("action") if isinstance(args, dict) else None
         path = args.get("path") if isinstance(args, dict) else None
         suffix = (
-            f" ({_clip_status_value(path)})"
+            f" ({clip_status_value(path)})"
             if isinstance(path, str) and path else ""
         )
-        return f"git {_clip_status_value(action or '?', 40)}{suffix}"
+        return f"git {clip_status_value(action or '?', 40)}{suffix}"
 
 
 async def _git_once(

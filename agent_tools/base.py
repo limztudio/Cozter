@@ -413,17 +413,14 @@ def prepare_source_destination(
     return raw_src, raw_dst, src, dst
 
 
-_clip_status_value = clip_status_value
-
-
 def summarize_path(action: str, args: dict, default: str = "?") -> str:
-    return f"{action}: {_clip_status_value(args.get('path', default))}"
+    return f"{action}: {clip_status_value(args.get('path', default))}"
 
 
 def summarize_path_pair(action: str, args: dict) -> str:
     return (
-        f"{action}: {_clip_status_value(args.get('source', '?'))}"
-        f" -> {_clip_status_value(args.get('destination', '?'))}"
+        f"{action}: {clip_status_value(args.get('source', '?'))}"
+        f" -> {clip_status_value(args.get('destination', '?'))}"
     )
 
 

@@ -13,7 +13,6 @@ from unittest import mock
 
 from Cozter import agent_tools
 from Cozter.agent_tools.base import (
-    _clip_status_value,
     _path_matches_glob,
     apply_string_replacement,
     coerce_int_arg,
@@ -44,6 +43,7 @@ from Cozter.agent_tools.builtin.read_file import ReadFileTool
 from Cozter.agent_tools.builtin.tree import TreeTool
 from Cozter.agent_tools.builtin.write_file import WriteFileTool
 from Cozter.tests.helpers import kill_process, wait_for_process_exit
+from Cozter.utils import clip_status_value
 
 
 class AgentToolHelperTests(unittest.TestCase):
@@ -126,9 +126,9 @@ class AgentToolHelperTests(unittest.TestCase):
             "copy_file: " + "s" * _keep + _marker
             + " -> " + "d" * _keep + _marker,
         )
-        self.assertEqual(_clip_status_value("ok"), "ok")
+        self.assertEqual(clip_status_value("ok"), "ok")
         self.assertEqual(
-            _clip_status_value("x" * 201), "x" * _keep + _marker,
+            clip_status_value("x" * 201), "x" * _keep + _marker,
         )
 
     def test_read_file_rejects_non_finite_range_values(self) -> None:

@@ -19,12 +19,12 @@ from typing import Any, ClassVar
 
 from ..base import (
     AgentTool,
-    _clip_status_value,
     ensure_parent_dir,
     object_parameters,
     resolve_inside_workspace,
     write_text_after_edit,
 )
+from ...utils import clip_status_value
 
 _NOTES_RELPATH = ".cozter/notes.md"
 
@@ -136,8 +136,8 @@ class NotesTool(AgentTool):
         action = args.get("action") if isinstance(args, dict) else None
         text = args.get("text") if isinstance(args, dict) else None
         if action == "append" and isinstance(text, str) and text:
-            return f"notes append: {_clip_status_value(text.strip(), 80)}"
-        return f"notes {_clip_status_value(action or '?', 40)}"
+            return f"notes append: {clip_status_value(text.strip(), 80)}"
+        return f"notes {clip_status_value(action or '?', 40)}"
 
 
 def _read_notes_text(target: str) -> str:

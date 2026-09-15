@@ -584,9 +584,6 @@ def apply_terminal_result_event(
 _TRUNCATED_PREVIEW_SUFFIX = "… [truncated preview — say PARTIAL + remainder]"
 
 
-_clip_status_value = clip_status_value
-
-
 def _validated_status_limit(limit: object) -> int:
     """Validate a status-preview limit as an int, mapping junk to 0.
 
@@ -628,7 +625,7 @@ def summarize_cli_tool(name: object, tool_input: object) -> str:
         return label
     command = tool_input.get("command") or tool_input.get("cmd")
     if isinstance(command, str) and command:
-        return f"$ {_clip_status_value(command)}"
+        return f"$ {clip_status_value(command)}"
     path = (
         tool_input.get("path")
         or tool_input.get("file_path")
@@ -636,8 +633,8 @@ def summarize_cli_tool(name: object, tool_input: object) -> str:
         or tool_input.get("filename")
     )
     if isinstance(path, str) and path:
-        return f"{_clip_status_value(label, 40)}: {_clip_status_value(path)}"
-    return _clip_status_value(label, 40)
+        return f"{clip_status_value(label, 40)}: {clip_status_value(path)}"
+    return clip_status_value(label, 40)
 
 
 async def create_prompt_subprocess(
