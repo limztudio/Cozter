@@ -3373,7 +3373,7 @@ class BotPlatform(ABC):
                     uid, q, entry_id, reason="update was pending",
                 )
                 await ctx.reply_text(
-                    "Update restart pending. Queued for after restart."
+                    f"Queued ({q.qsize()}/{self.max_queue_size})."
                 )
             return
 
@@ -3440,7 +3440,7 @@ class BotPlatform(ABC):
                 uid, q, entry_id, reason="update became pending",
             )
             await ctx.reply_text(
-                "Update restart pending. Queued for after restart."
+                f"Queued ({q.qsize()}/{max(self.max_queue_size, q.qsize())})."
             )
             # Normally this returns immediately while the update is pending.
             # Starting it still covers a no-update/cancel race that resumes
