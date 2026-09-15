@@ -2090,7 +2090,7 @@ class BotPlatform(ABC):
         async with workspace.get_lock(ws):
             schedules.add_schedule(ws, ctx.user_id, schedule)
         await ctx.reply_text(
-            f"Schedule created:\n"
+            "Schedule created:\n"
             f"  Days: {', '.join(days)}\n"
             f"  Time: {time_str}\n"
             f"  Command: {command}"
@@ -3284,7 +3284,7 @@ class BotPlatform(ABC):
                     parts.append(
                         f"[File contents of {att.filename}]\n"
                         f"{content}\n"
-                        f"[End of file]"
+                        "[End of file]"
                     )
                 else:
                     parts.append(

@@ -514,7 +514,7 @@ def load_config() -> dict:
     if has_slack:
         if not cfg.get("slack_app_token"):
             print(
-                f"ERROR: 'slack_app_token' (xapp-...) is required for"
+                "ERROR: 'slack_app_token' (xapp-...) is required for"
                 f" Socket Mode in {CONFIG_PATH}."
             )
             sys.exit(1)

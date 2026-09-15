@@ -2223,7 +2223,7 @@ async def _run_turn_impl(
                 effective_prompt = prompt
             await _stream_event(ChatEvent(
                 kind="tool",
-                content=f"Continuing with judge follow-up"
+                content="Continuing with judge follow-up"
                 f" {judged_rounds}/{flexible.JUDGE_MAX_CONTINUES}...",
             ))
             attachment_images_before = await asyncio.to_thread(
