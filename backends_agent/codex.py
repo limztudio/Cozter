@@ -11,6 +11,7 @@ import time
 from .base import (
     CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
+    attachment_image_paths,
     create_prompt_subprocess, executable_command, fallback_model_tables,
     record_backend_error,
     truncate_status_text,
@@ -368,8 +369,7 @@ class CodexBackend(Backend):
         # Native vision: codex exec takes repeatable -i/--image flags.
         # Images ride as real pixels alongside the stdin text prompt.
         if self.supports_vision and not compaction:
-            from .base import attachment_image_paths as _vision_paths
-            for _image_path in _vision_paths(prompt, workspace_path):
+            for _image_path in attachment_image_paths(prompt, workspace_path):
                 cmd += ["--image", _image_path]
 
         return await create_prompt_subprocess(cmd, prompt)

@@ -38,10 +38,12 @@ from .base import (
     ProcessResourceMap,
     apply_messages_assistant_content,
     apply_terminal_result_event,
+    attachment_image_paths,
     create_captured_subprocess,
     executable_command,
     extract_messages_style_agent_text,
     fallback_model_tables,
+    grok_prompt_json,
     record_backend_error,
     summarize_cli_tool,
 )
@@ -249,13 +251,9 @@ class GrokBackend(CachedModelCatalog, Backend):
         # plain-text --prompt-file. Falls back to --prompt-file otherwise.
         prompt_json: str | None = None
         if self.supports_vision and not compaction:
-            from .base import (
-                attachment_image_paths as _vision_paths,
-                grok_prompt_json as _prompt_json,
-            )
-            _image_paths = _vision_paths(prompt, workspace_path)
+            _image_paths = attachment_image_paths(prompt, workspace_path)
             if _image_paths:
-                prompt_json = _prompt_json(prompt, _image_paths)
+                prompt_json = grok_prompt_json(prompt, _image_paths)
         if prompt_json is not None:
             cmd += ["--prompt-json", prompt_json]
             prompt_path = ""

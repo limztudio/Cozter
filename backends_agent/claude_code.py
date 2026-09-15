@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from .base import (
     AgentResult, Backend, ChatEvent, DetachedTaskStatus,
     append_detached_task, apply_messages_assistant_content,
-    apply_terminal_result_event,
+    apply_terminal_result_event, attachment_image_paths,
     create_captured_subprocess,
     create_prompt_subprocess, executable_command,
     extract_messages_style_agent_text,
@@ -686,8 +686,7 @@ class ClaudeCodeBackend(Backend):
         # no extra CLI flag is needed — the attachment marker plus the
         # vision hint in the prompt are the delivery mechanism.
         if self.supports_vision and not compaction:
-            from .base import attachment_image_paths as _vision_paths
-            _vision_hint_paths = _vision_paths(prompt, workspace_path)
+            _vision_hint_paths = attachment_image_paths(prompt, workspace_path)
             if _vision_hint_paths:
                 prompt = (
                     prompt

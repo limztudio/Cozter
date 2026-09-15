@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import shutil
+import struct
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
@@ -84,7 +85,6 @@ def _probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
         return None
     # PNG: 8-byte signature + IHDR chunk with big-endian w/h.
     if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
-        import struct
         try:
             w, h = struct.unpack(">II", head[16:24])
             if 0 < w <= 100000 and 0 < h <= 100000:
@@ -93,7 +93,6 @@ def _probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
             pass
     # GIF: "GIF87a"/"GIF89a" + little-endian w/h.
     if head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
-        import struct
         try:
             w, h = struct.unpack("<HH", head[6:10])
             if w and h:
@@ -126,7 +125,6 @@ def _probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
             pass
     # BMP: "BM" + little-endian w/h at offset 18.
     if head[:2] == b"BM" and len(head) >= 26:
-        import struct
         try:
             w, h = struct.unpack("<ii", head[18:26])
             if w and h:

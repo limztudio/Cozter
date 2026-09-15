@@ -2,7 +2,9 @@
 
 import asyncio
 import base64
+import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -197,13 +199,11 @@ def attachment_image_paths(
     extension, and fit the per-turn byte cap. Never raises: unreadable
     or escaping paths are skipped so a text-only turn proceeds.
     """
-    import re as _re
-
-    if not isinstance(prompt, str) or "attachment saved to:" not in prompt:
-        return []
     try:
-        pattern = _re.compile(_ATTACHMENT_SAVED_PATTERN, _re.IGNORECASE)
-    except _re.error:
+        pattern = re.compile(_ATTACHMENT_SAVED_PATTERN, re.IGNORECASE)
+    except re.error:
+        return []
+    if not isinstance(prompt, str) or "attachment saved to:" not in prompt:
         return []
     seen: set[str] = set()
     found: list[str] = []
@@ -262,14 +262,12 @@ def vision_image_url_parts(image_paths: list[str]) -> list[dict]:
 
 def grok_prompt_json(prompt: str, image_paths: list[str]) -> str:
     """Build a grok --prompt-json payload carrying text + image parts."""
-    import json as _json
-
     content: list[dict] = [{"type": "text", "text": prompt}]
     for part in vision_image_url_parts(image_paths):
         url = part.get("image_url", {}).get("url", "")
         if url:
             content.append({"type": "image", "source": {"url": url}})
-    return _json.dumps([{
+    return json.dumps([{
         "role": "user",
         "content": content,
     }])

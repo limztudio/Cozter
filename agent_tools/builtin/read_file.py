@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import struct
 from typing import Any, ClassVar
 
 from ..base import (
@@ -145,8 +146,6 @@ class ReadFileTool(AgentTool):
 
 def _describe_image_file(target: str, shown_path: object) -> str:
     """Return verified metadata for an image instead of binary noise."""
-    import struct
-
     shown = shown_path if isinstance(shown_path, str) else target
     try:
         size = os.path.getsize(target)

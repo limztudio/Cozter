@@ -32,7 +32,7 @@ from ..utils import iter_bounded_lines
 from ._http_proc import HttpAgentProcess, http_error_translator
 from .base import (
     AgentResult, Backend, CachedModelCatalog, ChatEvent, append_text_result,
-    record_error_event,
+    attachment_image_paths, record_error_event, vision_image_url_parts,
 )
 
 logger = logging.getLogger(__name__)
@@ -1196,8 +1196,6 @@ def _vision_parts_for_prompt(
     same image set. Returns None when no in-workspace image is referenced
     (normal text turn) so the text-only message shape is preserved.
     """
-    from .base import attachment_image_paths, vision_image_url_parts
-
     images = vision_image_url_parts(
         attachment_image_paths(prompt, workspace_path),
     )

@@ -160,7 +160,6 @@ class AgentTool(ABC):
         """
         import asyncio
         import json
-        import sys
 
         raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
         try:
