@@ -836,3 +836,120 @@ class NoHandoffLeakTests(unittest.TestCase):
         prompt = flexible.build_subtask_prompt("req", plan, 0, [])
         self.assertIn("[followup:", prompt)
         self.assertIn("Never write 'Next turn should:'", prompt)
+
+
+class JudgeVerdictTests(unittest.TestCase):
+    def test_done_ships_the_draft(self) -> None:
+        verdict = flexible.parse_judge(
+            "[VERDICT]\nDONE\n[/VERDICT]\n",
+        )
+        self.assertFalse(verdict.should_continue)
+
+    def test_continue_names_missing_and_next(self) -> None:
+        verdict = flexible.parse_judge(
+            "[VERDICT]\nCONTINUE\n[/VERDICT]\n"
+            "[MISSING]\nerror counts\n[/MISSING]\n"
+            "[NEXT]\ngrep the full log\n[/NEXT]\n",
+        )
+        self.assertTrue(verdict.should_continue)
+        self.assertEqual(verdict.missing, "error counts")
+        self.assertEqual(verdict.next_instruction, "grep the full log")
+
+    def test_continue_without_next_is_done(self) -> None:
+        verdict = flexible.parse_judge(
+            "[VERDICT]\nCONTINUE\n[/VERDICT]\n",
+        )
+        self.assertFalse(verdict.should_continue)
+
+    def test_garbage_is_done(self) -> None:
+        self.assertFalse(flexible.parse_judge("").should_continue)
+        self.assertFalse(flexible.parse_judge("looks fine").should_continue)
+
+    def test_judge_prompt_covers_request_and_draft(self) -> None:
+        prompt = flexible.build_judge_prompt("fix it", "partial fix")
+        self.assertIn("fix it", prompt)
+        self.assertIn("partial fix", prompt)
+        self.assertIn("[VERDICT]", prompt)
+        self.assertIn("No tools", prompt)
+
+
+class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_judge_failure_ships_the_draft(self) -> None:
+        verdict, restarting = await agent._judge_draft(
+            "req", "draft", "/tmp",
+            summary_backend_name="missing-backend",
+            summary_model=None,
+            inject_queue=None,
+            injected=[],
+        )
+        self.assertFalse(restarting)
+        self.assertFalse(verdict.should_continue)
+
+    async def test_awaiting_draft_skips_the_judge(self) -> None:
+        with mock.patch.object(
+            agent, "run_internal_backend",
+            side_effect=AssertionError("judge must not run"),
+        ):
+            verdict, restarting = await agent._judge_draft(
+                "req", "which one?\n\n[[await]]", "/tmp",
+                summary_backend_name="codex",
+                summary_model=None,
+                inject_queue=None,
+                injected=[],
+            )
+        self.assertFalse(restarting)
+        self.assertFalse(verdict.should_continue)
+
+    async def test_direct_turn_continues_then_ships(self) -> None:
+        drafts = ["partial answer", "full answer"]
+        calls = {"drive": 0}
+
+        async def fast_drive(*_args, **_kwargs):
+            text = drafts[min(calls["drive"], 1)]
+            calls["drive"] += 1
+            return AgentResult(text=text), False
+
+        async def fake_judge(*_args, **_kwargs):
+            round_no = _kwargs.get("round_no", 1)
+            if round_no == 1:
+                return flexible.JudgeVerdict(
+                    should_continue=True,
+                    missing="evidence",
+                    next_instruction="add evidence",
+                ), False
+            return flexible.JudgeVerdict(should_continue=False), False
+
+        with tempfile.TemporaryDirectory() as ws:
+            from Cozter import session
+            data = session.create_session(ws, name="Work")
+            backend = type(
+                "B", (),
+                {
+                    "name": "judge-test",
+                    "default_summary_model": "m",
+                    "supports_typed_plugins": True,
+                    "supports_plugin_prelude": False,
+                    "supports_detached_tasks": False,
+                },
+            )()
+            with (
+                mock.patch.object(
+                    agent.backends_agent, "get_backend", return_value=backend,
+                ),
+                mock.patch.object(agent, "_drive_backend", fast_drive),
+                mock.patch.object(agent, "_judge_draft", fake_judge),
+                mock.patch.object(
+                    agent.compaction, "maybe_compact",
+                    new_callable=mock.AsyncMock,
+                ),
+                mock.patch.object(
+                    agent.titling, "maybe_auto_title",
+                    new_callable=mock.AsyncMock,
+                ),
+            ):
+                result = await agent.run(
+                    "answer me", ws, 1,
+                    backend_name="judge-test", session_id=data["id"],
+                )
+        self.assertEqual(result.text, "full answer")
+        self.assertEqual(calls["drive"], 2)

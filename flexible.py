@@ -46,6 +46,12 @@ MAX_SUBTASKS = 12
 PLAN_TIMEOUT = 120  # seconds; on timeout the planner falls back to one task
 MERGE_TIMEOUT = 180  # seconds; on timeout the worker reports are concatenated
 
+# Universal continue-judge bounds: every backend, every turn. After each
+# draft answer the summary backend judges DONE vs CONTINUE. Capped so a
+# turn cannot loop forever; cost/latency stays bounded for chat surfaces.
+JUDGE_MAX_CONTINUES = 3
+JUDGE_TIMEOUT = 60  # seconds; on timeout or parse failure the draft ships
+
 # The user-facing rubric the planner grades each sub-task against.
 _RUBRIC = (
     "low  - straightforward, well-scoped work.\n"
@@ -145,6 +151,36 @@ _MERGE_QUESTION_RULE = (
 _MERGE_BLOCKED_RULE = (
     "- A BLOCKED report needs a user answer: end with its question"
     " plus \"[[await]]\" on its own line.\n"
+)
+
+# Universal continue-judge: after every draft answer the summary backend
+# decides DONE vs CONTINUE. Every backend and every turn uses this same
+# rubric (not just flexible, not just default): the judge never does the
+# work itself, it only names the single missing checklist item + the next
+# instruction, or DONE. No tools; decision from the text.
+_JUDGE_RULES = (
+    "Continue-judge: decide whether the draft below fully answers the"
+    " user's request.\n\n"
+    "Rules:\n"
+    "- Read the request, then the draft. DONE only when every asked item"
+    " is answered with evidence and no PARTIAL + remainder is left.\n"
+    "- A draft ending with [[await]] is DONE: it waits on the user.\n"
+    "- Never mention plans/workers/tiers; never emit 'Next turn should:'.\n"
+    "- No tools; decide from the text.\n"
+    "- Reply in exactly this format, nothing else:\n\n"
+    "[VERDICT]\n"
+    "DONE\n"
+    "[/VERDICT]\n\n"
+    "or:\n\n"
+    "[VERDICT]\n"
+    "CONTINUE\n"
+    "[/VERDICT]\n"
+    "[MISSING]\n"
+    "one checklist line still uncovered\n"
+    "[/MISSING]\n"
+    "[NEXT]\n"
+    "one self-contained follow-up instruction for the worker\n"
+    "[/NEXT]\n"
 )
 
 
@@ -429,3 +465,48 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
             continue
         parts.append(f"**{i + 1}. {task.instruction}**\n\n{text}")
     return "\n\n".join(parts)
+
+
+@dataclass(frozen=True)
+class JudgeVerdict:
+    """A parsed continue-judge reply: keep going, or ship the draft."""
+
+    should_continue: bool
+    missing: str = ""
+    next_instruction: str = ""
+
+
+def build_judge_prompt(request: str, draft: str) -> str:
+    """Prompt the summary agent to judge one draft answer.
+
+    *request* is the bare user request; *draft* is the candidate reply.
+    The judge never does the work itself - it returns DONE or one
+    CONTINUE step with the missing checklist item + next instruction.
+    """
+    parts = [
+        _JUDGE_RULES,
+        "--- request ---",
+        request if isinstance(request, str) and request else "(empty)",
+        "",
+        "--- draft ---",
+        _truncate_report(draft) if draft else "(no draft)",
+        "",
+        "--- end ---",
+    ]
+    return "\n".join(parts)
+
+
+def parse_judge(raw: str) -> JudgeVerdict:
+    """Parse a judge reply; fail-closed to DONE so a bad verdict ships."""
+    if not isinstance(raw, str) or not raw.strip():
+        return JudgeVerdict(should_continue=False)
+    verdict = (extract_marker_block(raw, "VERDICT") or "").strip().upper()
+    if verdict != "CONTINUE":
+        return JudgeVerdict(should_continue=False)
+    missing = (extract_marker_block(raw, "MISSING") or "").strip()
+    followup = (extract_marker_block(raw, "NEXT") or "").strip()
+    if not followup:
+        return JudgeVerdict(should_continue=False)
+    return JudgeVerdict(
+        should_continue=True, missing=missing, next_instruction=followup,
+    )

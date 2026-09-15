@@ -1246,6 +1246,73 @@ def _split_attach_markers(text: str) -> tuple[str, list[str]]:
     return _collapse_extra_blank_lines(cleaned), markers
 
 
+async def _judge_draft(
+    request: str,
+    draft: str,
+    workspace_path: str,
+    *,
+    summary_backend_name: str,
+    summary_model: str | None,
+    inject_queue: asyncio.Queue[str] | None,
+    injected: list[str] | None,
+    on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
+    round_no: int = 1,
+) -> tuple[flexible.JudgeVerdict, bool]:
+    """Ask the summary backend whether *draft* fully answers *request*.
+
+    Universal continue-judge: every backend and every turn (direct and
+    flexible) routes through here. Returns ``(verdict, restarting)`` like
+    :func:`_drive_backend` - an inject mid-judge abandons the verdict and
+    the caller restarts the turn. ``[[await]]`` drafts and empty drafts
+    are DONE without a model call: nothing is left to judge. Judge
+    failures (missing CLI, timeout, unparsable reply) fail closed to DONE
+    so the draft ships instead of looping.
+    """
+    cleaned, awaiting = extract_await(draft or "")
+    if awaiting or not cleaned.strip():
+        return flexible.JudgeVerdict(should_continue=False), False
+    try:
+        summary_backend = backends_agent.get_backend(summary_backend_name)
+    except (ValueError, AttributeError, TypeError) as exc:
+        logger.warning("Continue judge unavailable (%s) - shipping draft", exc)
+        return flexible.JudgeVerdict(should_continue=False), False
+    if on_event is not None:
+        await on_event(ChatEvent(
+            kind="tool",
+            content=f"judge: round {round_no} with"
+            f" {summary_backend.name}/{summary_model}",
+        ))
+    try:
+        raw, restarting = await _run_with_inject_watch(
+            run_internal_backend(
+                summary_backend,
+                workspace_path,
+                flexible.build_judge_prompt(request, cleaned),
+                summary_model,
+                timeout=flexible.JUDGE_TIMEOUT,
+                label="Continue judge",
+                log=logger,
+                missing_executable_message=(
+                    "%s CLI not found - shipping the draft without judging"
+                ),
+                missing_level=logging.WARNING,
+            ),
+            inject_queue,
+            injected,
+        )
+    except (AttributeError, TypeError) as exc:
+        # Test doubles / misconfigured summary backends without launch():
+        # judge is advisory, so ship the draft rather than failing the turn.
+        logger.warning("Continue judge unavailable (%s) - shipping draft", exc)
+        return flexible.JudgeVerdict(should_continue=False), False
+    if restarting:
+        return flexible.JudgeVerdict(should_continue=False), True
+    if raw is None:
+        # Judge CLI missing: ship the draft rather than looping or dying.
+        return flexible.JudgeVerdict(should_continue=False), False
+    return flexible.parse_judge(raw or ""), False
+
+
 async def _run_flexible(
     contextual_prompt: str,
     request: str,
@@ -2104,6 +2171,130 @@ async def _run_turn_impl(
         )
         for path in new_attachment_paths:
             result.events.append(ChatEvent(kind="attachment", content=path))
+
+        # Universal continue-judge: every backend, every turn. The summary
+        # backend judges the draft; CONTINUE re-drives the SAME backend
+        # with the judge's single next instruction appended, then the
+        # draft is re-judged. Capped at JUDGE_MAX_CONTINUES rounds, then
+        # the best draft ships. Inject/cancel/[[await]] break the loop
+        # immediately: awaited answers outrank paused work, and collaborative
+        # questions are DONE by definition. Judge failures fail closed to
+        # DONE so the draft ships instead of looping.
+        judged_rounds = 0
+        while judged_rounds < flexible.JUDGE_MAX_CONTINUES:
+            draft = result.text
+            _draft_clean, draft_awaiting = extract_await(draft or "")
+            if draft_awaiting or not _draft_clean.strip():
+                break
+            verdict, judge_restarting = await _judge_draft(
+                effective_prompt, draft, workspace_path,
+                summary_backend_name=summary_backend,
+                summary_model=summary_model,
+                inject_queue=inject_queue,
+                injected=injected,
+                on_event=_stream_event,
+                round_no=judged_rounds + 1,
+            )
+            if judge_restarting:
+                _drain_queue(inject_queue, collect=injected)
+                logger.info(
+                    "Restarting %s with %d injected message(s)",
+                    backend.name, len(injected),
+                )
+                await _stream_event(ChatEvent(
+                    kind="tool",
+                    content="Restarting with injected context...",
+                ))
+                result = None  # type: ignore[assignment]
+                restarting = True
+                break
+            if not verdict.should_continue:
+                break
+            judged_rounds += 1
+            followup = (
+                f"\n\n[Judge follow-up {judged_rounds}/"
+                f"{flexible.JUDGE_MAX_CONTINUES}:"
+                f" {verdict.missing} -- {verdict.next_instruction}]"
+                if verdict.missing
+                else f"\n\n[Judge follow-up {judged_rounds}/"
+                f"{flexible.JUDGE_MAX_CONTINUES}:"
+                f" {verdict.next_instruction}]"
+            )
+            if injected:
+                followup += (
+                    "\n\n[Added while you were thinking]:\n"
+                    + "\n".join(injected)
+                )
+                injected.clear()
+                effective_prompt = prompt
+            await _stream_event(ChatEvent(
+                kind="tool",
+                content=f"Continuing with judge follow-up"
+                f" {judged_rounds}/{flexible.JUDGE_MAX_CONTINUES}...",
+            ))
+            attachment_images_before = await asyncio.to_thread(
+                _snapshot_attachment_images, workspace_path,
+            )
+            try:
+                if is_flexible:
+                    result, restarting = await _run_flexible(
+                        contextual_prompt + followup,
+                        effective_prompt + followup, workspace_path,
+                        approval=approval,
+                        effort=effort,
+                        collaborative=collaborative,
+                        summary_backend_name=summary_backend,
+                        summary_model=summary_model,
+                        on_event=_stream_event,
+                        inject_queue=inject_queue,
+                        injected=injected,
+                    )
+                else:
+                    result, restarting = await _drive_backend(
+                        backend, workspace_path,
+                        _build_backend_prompt(
+                            backend, contextual_prompt + followup,
+                            collaborative=collaborative,
+                            allow_detached_requests=not explicit_session,
+                        ),
+                        model, approval,
+                        effort=effort,
+                        on_event=_stream_event,
+                        inject_queue=inject_queue,
+                        injected=injected,
+                        close_inject_on_completion=True,
+                    )
+            except BackendUnavailable as e:
+                result = AgentResult()
+                set_error_result(result, str(e))
+                result.session_id = session_id
+                _close_inject_queue(inject_queue)
+                _drain_queue(inject_queue)
+                return result
+            if restarting:
+                _drain_queue(inject_queue, collect=injected)
+                logger.info(
+                    "Restarting %s with %d injected message(s)",
+                    backend.name, len(injected),
+                )
+                await _stream_event(ChatEvent(
+                    kind="tool",
+                    content="Restarting with injected context...",
+                ))
+                break
+            explicit_attachment_sources = _explicit_attachment_sources(
+                result.events, workspace_path,
+            )
+            new_attachment_paths = await asyncio.to_thread(
+                _collect_new_attachment_images,
+                attachment_images_before,
+                workspace_path,
+                exclude_sources=explicit_attachment_sources,
+            )
+            for path in new_attachment_paths:
+                result.events.append(ChatEvent(kind="attachment", content=path))
+        if restarting:
+            continue  # restart loop
 
         break  # normal completion
 
