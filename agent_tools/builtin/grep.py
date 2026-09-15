@@ -12,11 +12,12 @@ from typing import Any
 
 from ..base import (
     AgentTool,
+    capped_list_tail,
     coerce_int_arg,
     iter_workspace_files,
     object_parameters,
     require_nonempty_string_arg,
-    resolve_inside_workspace,
+    resolve_tool_path,
     summarize_arg,
 )
 
@@ -66,12 +67,12 @@ class GrepTool(AgentTool):
             return f"Invalid regex: {exc}"
 
         raw_path = args.get("path") or "."
-        if not isinstance(raw_path, str):
-            raw_path = "."
-        try:
-            search_root = resolve_inside_workspace(workspace_path, raw_path)
-        except ValueError as exc:
-            return f"Error: {exc}"
+        search_root, raw_path, path_error = resolve_tool_path(
+            workspace_path, raw_path,
+        )
+        if path_error:
+            return path_error
+        assert search_root is not None  # non-None once error is empty
         if not os.path.isdir(search_root):
             return f"Not a directory: {raw_path}"
 
@@ -110,12 +111,8 @@ class GrepTool(AgentTool):
 
         summary = "\n".join(results)
         if len(results) >= max_results:
-            summary += (
-                f"\n(stopped at {max_results} matches;"
-                " remainder omitted — raise max_results / narrow path/glob"
-                " to fetch the rest; never treat this preview as full"
-                " coverage; say PARTIAL + remainder when coverage is"
-                " unclear)"
+            summary += capped_list_tail(
+                max_results, "max_results", "narrow path/glob",
             )
         return summary
 

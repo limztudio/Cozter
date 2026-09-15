@@ -12,7 +12,7 @@ from ..base import (
     path_property,
     read_text_for_edit,
     replacement_properties,
-    resolve_inside_workspace,
+    resolve_tool_path,
     summarize_path,
     validate_replacement_strings,
     write_text_after_edit,
@@ -39,11 +39,12 @@ class MultiEditTool(AgentTool):
     }
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        raw_path = args.get("path", "")
-        try:
-            target = resolve_inside_workspace(workspace_path, raw_path)
-        except ValueError as exc:
-            return f"Error: {exc}"
+        target, raw_path, path_error = resolve_tool_path(
+            workspace_path, args.get("path", ""),
+        )
+        if path_error:
+            return path_error
+        assert target is not None  # non-None once error is empty
         edits = args.get("edits")
         if not isinstance(edits, list) or not edits:
             return "Error: 'edits' must be a non-empty list"

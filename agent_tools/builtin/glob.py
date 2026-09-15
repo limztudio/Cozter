@@ -7,6 +7,7 @@ import os
 
 from ..base import (
     AgentTool,
+    capped_list_tail,
     coerce_int_arg,
     iter_workspace_files,
     object_parameters,
@@ -57,12 +58,8 @@ class GlobTool(AgentTool):
         matches.sort()
         summary = "\n".join(matches)
         if len(matches) >= max_results:
-            summary += (
-                f"\n(stopped at {max_results} matches;"
-                " remainder omitted — raise max_results / narrow pattern"
-                " to fetch the rest; never treat this preview as full"
-                " coverage; say PARTIAL + remainder when coverage is"
-                " unclear)"
+            summary += capped_list_tail(
+                max_results, "max_results", "narrow pattern",
             )
         return summary
 

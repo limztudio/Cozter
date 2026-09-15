@@ -7,7 +7,7 @@ import os
 from ..base import (
     AgentTool,
     path_parameters,
-    resolve_inside_workspace,
+    resolve_tool_path,
     summarize_path,
 )
 
@@ -18,13 +18,12 @@ class MakeDirTool(AgentTool):
     parameters = path_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        raw_path = args.get("path", "")
-        if not isinstance(raw_path, str):
-            return "Error: 'path' must be a string"
-        try:
-            target = resolve_inside_workspace(workspace_path, raw_path)
-        except ValueError as exc:
-            return f"Error: {exc}"
+        target, raw_path, path_error = resolve_tool_path(
+            workspace_path, args.get("path", ""),
+        )
+        if path_error:
+            return path_error
+        assert target is not None  # non-None once error is empty
         if os.path.exists(target) and not os.path.isdir(target):
             return f"Path already exists as a file: {raw_path}"
         try:
