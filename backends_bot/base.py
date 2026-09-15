@@ -40,6 +40,7 @@ from ..utils import create_background_task
 from ..utils import drain_queue as _drain_queue
 from ..utils import ensure_lock
 from ..utils import load_json_object
+from ..utils import IMAGE_EXTENSIONS
 from ..utils import parse_decimal_int
 from ..utils import probe_image_dimensions
 from ..utils import save_json_object
@@ -57,9 +58,6 @@ _TEXT_EXTENSIONS = frozenset({
     ".sql", ".graphql", ".proto",
     ".dockerfile", ".gitignore", ".env",
     ".log", ".diff", ".patch",
-})
-_IMAGE_EXTENSIONS = frozenset({
-    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
 })
 _INLINE_SIZE_LIMIT = 50_000
 
@@ -3241,7 +3239,7 @@ class BotPlatform(ABC):
 
         ext = os.path.splitext(att.filename)[1].lower()
         if (
-            ext in _IMAGE_EXTENSIONS or att.kind in ("photo", "video")
+            ext in IMAGE_EXTENSIONS or att.kind in ("photo", "video")
         ) and ext not in _TEXT_EXTENSIONS:
             try:
                 dims = await asyncio.to_thread(

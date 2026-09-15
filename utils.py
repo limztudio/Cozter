@@ -168,6 +168,15 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
     return None
 
 
+# One canonical image-extension set shared by the agent artifact scan, the
+# bot-platform inbound filter, and the vision MIME map in
+# backends_agent.base. agent.py's magic-sniff keeps its own small table
+# because it identifies files by content, not extension.
+IMAGE_EXTENSIONS = frozenset({
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
+})
+
+
 def drain_queue(
     q: asyncio.Queue | None, collect: list | None = None,
 ) -> None:

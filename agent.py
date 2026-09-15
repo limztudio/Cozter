@@ -24,6 +24,7 @@ from .backends_agent.base import (
     append_text_result, set_error_result,
 )
 from .utils import (
+    IMAGE_EXTENSIONS,
     abandon_subprocess_stream_task,
     await_cancelled,
     cleanup_backend_process,
@@ -138,10 +139,6 @@ _EXTRA_BLANK_LINES_RE = re.compile(r"\n{3,}")
 _SAFE_IMAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _MAX_DETACHED_TASK_REQUESTS = 3
 _MAX_DETACHED_TASK_PROMPT_CHARS = 12_000
-
-_IMAGE_EXTENSIONS = {
-    ".png", ".jpg", ".jpeg", ".webp", ".gif",
-}
 
 _IMAGE_MAGIC = (
     (b"\x89PNG\r\n\x1a\n", ".png"),
@@ -351,7 +348,7 @@ def _image_extension(path: str) -> str | None:
     if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
         return ".webp"
     ext = os.path.splitext(path)[1].lower()
-    return ext if ext in _IMAGE_EXTENSIONS else None
+    return ext if ext in IMAGE_EXTENSIONS else None
 
 
 def _safe_generated_image_name(src: str, ext: str) -> str:
@@ -502,7 +499,7 @@ def _iter_image_files(root: str, *, skip_dirs: bool) -> list[str]:
                 ]
             for filename in filenames:
                 ext = os.path.splitext(filename)[1].lower()
-                if ext not in _IMAGE_EXTENSIONS:
+                if ext not in IMAGE_EXTENSIONS:
                     continue
                 path = os.path.realpath(os.path.join(dirpath, filename))
                 # os.walk lists file symlinks even when it does not follow
