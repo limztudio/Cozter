@@ -413,9 +413,7 @@ def prepare_source_destination(
     return raw_src, raw_dst, src, dst
 
 
-def _clip_status_value(value: object, max_chars: int = 200) -> str:
-    """Return a status-line preview with a visible cut marker when clipped."""
-    return clip_status_value(value, max_chars)
+_clip_status_value = clip_status_value
 
 
 def summarize_path(action: str, args: dict, default: str = "?") -> str:

@@ -23,7 +23,8 @@ from ..utils import (
 
 # Keep model pickers responsive to local CLI/account-policy changes without
 # probing on every request. All backend catalogs use the same refresh cadence.
-MODEL_CATALOG_TTL_SEC = 60.0# Codex and Grok both probe a local CLI for the live catalog. Copilot and the
+MODEL_CATALOG_TTL_SEC = 60.0
+# Codex and Grok both probe a local CLI for the live catalog. Copilot and the
 # HTTP backends keep their own shorter timeouts because those probes talk to a
 # different process or network endpoint.
 CLI_MODEL_DISCOVERY_TIMEOUT_SEC = 15
@@ -583,9 +584,7 @@ def apply_terminal_result_event(
 _TRUNCATED_PREVIEW_SUFFIX = "… [truncated preview — say PARTIAL + remainder]"
 
 
-def _clip_status_value(value: object, max_chars: int = 200) -> str:
-    """Return a status-line preview with a visible cut marker when clipped."""
-    return clip_status_value(value, max_chars)
+_clip_status_value = clip_status_value
 
 
 def _validated_status_limit(limit: object) -> int:
