@@ -32,15 +32,15 @@ class OpenAIBackoffTests(unittest.TestCase):
 
 
 class HttpErrorTranslatorTests(unittest.TestCase):
-    def test_timeout_names_the_active_backend_setting(self) -> None:
+    def test_timeout_reports_request_failure(self) -> None:
         async def fail() -> None:
             async with http_error_translator(
                 "Z.ai", 30, "zai_socket_timeout",
             ):
-                raise TimeoutError
+                raise TimeoutError("timed out")
 
         with self.assertRaisesRegex(
-            RuntimeError, r"raise zai_socket_timeout in config\.json",
+            RuntimeError, r"Z\.ai request timed out",
         ):
             asyncio.run(fail())
 
@@ -185,7 +185,31 @@ class OpenAIStreamShapeTests(unittest.TestCase):
 
         self.assertEqual(asyncio.run(collect()), ["valid"])
 
-    def test_stream_once_bounds_connect_timeout(self) -> None:
+    def test_stream_once_runs_without_wall_clock_timeout(self) -> None:
+        captured: list[object] = []
+
+        class RecordingSession(_SSESession):
+            def post(self, *args, **kwargs):
+                captured.append(kwargs.get("timeout"))
+                return super().post(*args, **kwargs)
+
+        response = _SSEResponse([
+            b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
+            b'data: [DONE]\n\n',
+        ])
+        with mock.patch.object(
+            oa.aiohttp, "ClientSession", return_value=RecordingSession(response),
+        ):
+            text, _, _ = asyncio.run(oa._stream_once(
+                "http://x/chat/completions", {}, {}, None, "test",
+            ))
+        self.assertEqual(text, "ok")
+        timeout = captured[0]
+        self.assertIsNone(timeout.total)
+        self.assertIsNone(timeout.sock_read)
+        self.assertIsNone(timeout.sock_connect)
+
+    def test_stream_once_honors_explicit_sock_read_for_compatibility(self) -> None:
         captured: list[object] = []
 
         class RecordingSession(_SSESession):
@@ -205,7 +229,6 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             ))
         self.assertEqual(text, "ok")
         timeout = captured[0]
-        self.assertEqual(timeout.sock_connect, oa._SOCK_CONNECT_TIMEOUT_SEC)
         self.assertEqual(timeout.sock_read, 30)
         self.assertIsNone(timeout.total)
 

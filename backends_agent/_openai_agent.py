@@ -274,7 +274,7 @@ class OpenAIChatBackend(Backend):
         """
         return 8
 
-    def _socket_timeout(self) -> None:
+    def _socket_timeout(self) -> int | None:
         # No wall-clock timeout on generation: the stream runs until the
         # provider finishes or the turn is cancelled (cancel is the only
         # stop). Kept as a hook returning None so subclasses keep working.

@@ -62,8 +62,9 @@ class _FakeNet:
         self.outcomes = list(outcomes)
         self.urls: list[str] = []
 
-    def __call__(self, url: str, *, timeout: int,
-                 allow_redirects: bool = True):
+    def __call__(self, url: str, *,
+                 allow_redirects: bool = True,
+                 timeout: object = None):
         del timeout, allow_redirects  # unused; the tool passes them
         self.urls.append(url)
         outcome = self.outcomes.pop(0)

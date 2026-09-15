@@ -556,7 +556,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                 try:
                     text = await asyncio.wait_for(
                         utils.drain_llm_subprocess(
-                            proc, Backend(), 10, "internal test",
+                            proc, Backend(), "internal test",
                         ),
                         timeout=2,
                     )

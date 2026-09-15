@@ -132,7 +132,7 @@ class ProcessDrainTests(unittest.TestCase):
             proc = await create_python_script_process(script)
 
             backend = CleanupStubBackend()
-            text = await utils.drain_llm_subprocess(proc, backend, 5, "test")
+            text = await utils.drain_llm_subprocess(proc, backend, "test")
 
             self.assertEqual(text, "done")
             self.assertEqual(proc.returncode, 0)
@@ -151,7 +151,6 @@ class ProcessDrainTests(unittest.TestCase):
                 text = await utils.drain_llm_subprocess(
                     proc,
                     StubBackend(),
-                    5,
                     "test",
                     log=log,
                 )
