@@ -19,7 +19,6 @@ import logging
 import os
 import re
 import shutil
-import struct
 import tempfile
 import uuid
 from abc import ABC, abstractmethod
@@ -42,6 +41,7 @@ from ..utils import drain_queue as _drain_queue
 from ..utils import ensure_lock
 from ..utils import load_json_object
 from ..utils import parse_decimal_int
+from ..utils import probe_image_dimensions
 from ..utils import save_json_object
 from ..utils import try_parse_int
 
@@ -68,70 +68,6 @@ def _read_inline_text_attachment(path: str) -> str:
     """Read only enough text to decide whether an attachment can be inlined."""
     with open(path, encoding="utf-8", errors="replace") as f:
         return f.read(_INLINE_SIZE_LIMIT + 1)
-
-
-def _probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
-    """Return (width, height, format) for common image files, else None.
-
-    Pure-stdlib header probe (PNG/JPEG/GIF/BMP) so photo uploads can be
-    described without adding a Pillow dependency. Reads only headers.
-    """
-    try:
-        with open(path, "rb") as f:
-            head = f.read(64 * 1024)
-    except OSError:
-        return None
-    if len(head) < 16:
-        return None
-    # PNG: 8-byte signature + IHDR chunk with big-endian w/h.
-    if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
-        try:
-            w, h = struct.unpack(">II", head[16:24])
-            if 0 < w <= 100000 and 0 < h <= 100000:
-                return (w, h, "PNG")
-        except Exception:
-            pass
-    # GIF: "GIF87a"/"GIF89a" + little-endian w/h.
-    if head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
-        try:
-            w, h = struct.unpack("<HH", head[6:10])
-            if w and h:
-                return (w, h, "GIF")
-        except Exception:
-            pass
-    # JPEG: scan for SOF0-SOF3 markers carrying big-endian h/w.
-    if head[:2] == b"\xff\xd8":
-        try:
-            i = 2
-            while i + 9 < len(head):
-                if head[i] != 0xFF:
-                    i += 1
-                    continue
-                marker = head[i + 1]
-                if marker in (0xC0, 0xC1, 0xC2, 0xC3):
-                    h = (head[i + 5] << 8) | head[i + 6]
-                    w = (head[i + 7] << 8) | head[i + 8]
-                    if w and h:
-                        return (w, h, "JPEG")
-                    return None
-                if marker in (0xD8, 0xD9, 0x00, 0x01) or 0xD0 <= marker <= 0xD7:
-                    i += 2
-                    continue
-                seg_len = (head[i + 2] << 8) | head[i + 3]
-                if seg_len < 2:
-                    return None
-                i += 2 + seg_len
-        except Exception:
-            pass
-    # BMP: "BM" + little-endian w/h at offset 18.
-    if head[:2] == b"BM" and len(head) >= 26:
-        try:
-            w, h = struct.unpack("<ii", head[18:26])
-            if w and h:
-                return (abs(w), abs(h), "BMP")
-        except Exception:
-            pass
-    return None
 
 
 UPLOADS_DIR = "uploads"
@@ -3309,7 +3245,7 @@ class BotPlatform(ABC):
         ) and ext not in _TEXT_EXTENSIONS:
             try:
                 dims = await asyncio.to_thread(
-                    _probe_image_dimensions, att.local_path,
+                    probe_image_dimensions, att.local_path,
                 )
                 size = 0
                 try:

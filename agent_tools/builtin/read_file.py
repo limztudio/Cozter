@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import struct
 from typing import Any, ClassVar
 
 from ..base import (
@@ -146,41 +145,13 @@ class ReadFileTool(AgentTool):
 
 def _describe_image_file(target: str, shown_path: object) -> str:
     """Return verified metadata for an image instead of binary noise."""
+    from ...utils import probe_image_dimensions
     shown = shown_path if isinstance(shown_path, str) else target
     try:
         size = os.path.getsize(target)
     except OSError as exc:
         return f"Read failed: {exc}"
-    dims: tuple[int, int, str] | None = None
-    try:
-        with open(target, "rb") as handle:
-            head = handle.read(64 * 1024)
-        if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
-            w, h = struct.unpack(">II", head[16:24])
-            if 0 < w <= 100000 and 0 < h <= 100000:
-                dims = (w, h, "PNG")
-        elif head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
-            w, h = struct.unpack("<HH", head[6:10])
-            if w and h:
-                dims = (w, h, "GIF")
-        elif head[:2] == b"\xff\xd8":
-            i = 2
-            while i + 9 < len(head):
-                if head[i] != 0xFF:
-                    i += 1
-                    continue
-                if head[i + 1] in (0xC0, 0xC1, 0xC2, 0xC3):
-                    h = (head[i + 5] << 8) | head[i + 6]
-                    w = (head[i + 7] << 8) | head[i + 8]
-                    if w and h:
-                        dims = (w, h, "JPEG")
-                    break
-                seg = (head[i + 2] << 8) | head[i + 3]
-                if seg < 2:
-                    break
-                i += 2 + seg
-    except (OSError, struct.error):
-        dims = None
+    dims = probe_image_dimensions(target)
     if dims is not None:
         w, h, fmt = dims
         return (

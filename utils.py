@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import signal
+import struct
 import subprocess
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
@@ -107,6 +108,64 @@ def clip_status_value(value: object, max_chars: int = 200) -> str:
     if max_chars <= len(_marker):
         return text[:max(0, max_chars - 1)] + "…" if max_chars > 1 else "…"[:max_chars]
     return text[:max_chars - len(_marker)] + _marker
+
+
+def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
+    """Return (width, height, format) for common image files, else None.
+
+    Pure-stdlib header probe (PNG/JPEG/GIF/BMP) so photo uploads can be
+    described without adding a Pillow dependency. Reads only the first
+    64 KiB of headers; never raises. One shared implementation replaces
+    the copies that used to live in the bot platform, the read_file
+    tool, and the signal adapter.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64 * 1024)
+    except OSError:
+        return None
+    if len(head) < 16:
+        return None
+    try:
+        # PNG: 8-byte signature + IHDR chunk with big-endian w/h.
+        if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+            w, h = struct.unpack(">II", head[16:24])
+            if 0 < w <= 100000 and 0 < h <= 100000:
+                return (w, h, "PNG")
+        # GIF: "GIF87a"/"GIF89a" + little-endian w/h.
+        elif head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
+            w, h = struct.unpack("<HH", head[6:10])
+            if w and h:
+                return (w, h, "GIF")
+        # JPEG: scan for SOF0-SOF3 markers carrying big-endian h/w.
+        elif head[:2] == b"\xff\xd8":
+            i = 2
+            while i + 9 < len(head):
+                if head[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = head[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+                    h = (head[i + 5] << 8) | head[i + 6]
+                    w = (head[i + 7] << 8) | head[i + 8]
+                    if w and h:
+                        return (w, h, "JPEG")
+                    return None
+                if marker in (0xD8, 0xD9, 0x00, 0x01) or 0xD0 <= marker <= 0xD7:
+                    i += 2
+                    continue
+                seg_len = (head[i + 2] << 8) | head[i + 3]
+                if seg_len < 2:
+                    return None
+                i += 2 + seg_len
+        # BMP: "BM" + little-endian w/h at offset 18.
+        elif head[:2] == b"BM" and len(head) >= 26:
+            w, h = struct.unpack("<ii", head[18:26])
+            if w and h:
+                return (abs(w), abs(h), "BMP")
+    except (OSError, struct.error):
+        return None
+    return None
 
 
 def drain_queue(
