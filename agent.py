@@ -1850,11 +1850,10 @@ class _InterruptedTurn:
 def _interrupted_turn_note(turn: _InterruptedTurn) -> str:
     """Build the assistant-side session entry for a cancelled turn."""
     lines = [
-        "[Interrupted turn — stopped before completion at {stamp}. Work it "
+        "[Interrupted turn — stopped before completion at "
+        f"{datetime.now().strftime('%Y-%m-%d %H:%M')}. Work it "
         "already did in this workspace may be incomplete or "
-        "half-applied.]".format(
-            stamp=datetime.now().strftime("%Y-%m-%d %H:%M"),
-        ),
+        "half-applied.]",
     ]
     digest = _format_session_response(
         AgentResult(events=list(turn.events)), turn.workspace_path,
