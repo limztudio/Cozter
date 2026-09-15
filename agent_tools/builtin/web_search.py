@@ -29,8 +29,9 @@ _SEARCH_ENDPOINTS = (
 )
 # A 200 response carrying an empty shell (no result anchors) is common while
 # the service sheds load, so each endpoint is tried twice before moving on.
+# No wall-clock timeout: each attempt runs until it finishes or the turn is
+# cancelled (cancel is the only stop).
 _ATTEMPTS_PER_ENDPOINT = 2
-_ATTEMPT_TIMEOUT_SECONDS = 15
 _RETRY_DELAY_SECONDS = 0.5
 
 # One scan bound so a pathological response cannot make the parser churn.
@@ -83,9 +84,7 @@ class WebSearchTool(AgentTool):
             for _attempt in range(_ATTEMPTS_PER_ENDPOINT):
                 attempts_left -= 1
                 try:
-                    async with open_http_response(
-                        url, timeout=_ATTEMPT_TIMEOUT_SECONDS,
-                    ) as response:
+                    async with open_http_response(url) as response:
                         if response.status != 200:
                             failures.append(
                                 f"{host}: HTTP {response.status}",

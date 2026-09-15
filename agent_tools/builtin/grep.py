@@ -7,7 +7,6 @@ import multiprocessing
 import os
 import re
 import stat
-import time
 from typing import Any
 
 from ..base import (
@@ -28,14 +27,11 @@ _GREP_MAX_FILE_BYTES = 1_000_000  # 1 MB
 # the agent's tool-result cap and hide every other match.
 _GREP_MAX_LINE_CHARS = 200
 # Python's built-in regex engine has no per-match deadline. Run scans in a
-# short-lived process and cap its lifetime so a catastrophic pattern cannot
-# leave an abandoned executor thread consuming CPU after the tool timeout.
-_GREP_MAX_SCAN_SECONDS = 30.0
+# killable process instead of a thread so cancel (/stop, new message) always
+# reaps the worker instead of leaving an abandoned executor thread behind.
+# No wall-clock timeout: the scan runs until it finishes or the turn is
+# cancelled.
 _GREP_WORKER_JOIN_SECONDS = 0.5
-
-
-class _GrepScanTimeout(RuntimeError):
-    """Raised internally when the isolated grep worker exceeded its budget."""
 
 
 class GrepTool(AgentTool):
@@ -91,17 +87,12 @@ class GrepTool(AgentTool):
         # CPU-bound and cannot be interrupted at an await point. A thread
         # would keep running after asyncio cancels its await, so isolate the
         # whole scan in a killable process instead.
-        timeout = _grep_scan_timeout()
+        # No timeout: the scan runs until it finishes or the turn is
+        # cancelled; cancel reaps the worker (see _scan_in_subprocess).
         try:
             results = await asyncio.to_thread(
                 _scan_in_subprocess,
                 workspace_path, search_root, file_glob, regex, max_results,
-                timeout,
-            )
-        except _GrepScanTimeout:
-            return (
-                f"Grep timed out after {timeout:g}s and was stopped. "
-                "Simplify the regex or narrow the search path."
             )
         except Exception as exc:
             return f"Grep failed: {exc}"
@@ -163,16 +154,6 @@ class GrepTool(AgentTool):
         return summarize_arg("grep", args, "pattern", default="?")
 
 
-def _grep_scan_timeout() -> float:
-    """Return a finite worker deadline no greater than tool_timeout."""
-    # Import lazily because this builtin is discovered while agent_tools is
-    # initializing. The generic tool wrapper reads the same setting, so an
-    # isolated worker always exits no later than that outer timeout.
-    from ... import config
-
-    return min(float(config.get_tool_timeout()), _GREP_MAX_SCAN_SECONDS)
-
-
 def _scan_worker(
     result_conn: Any,
     workspace_path: str,
@@ -181,7 +162,7 @@ def _scan_worker(
     regex: re.Pattern[str],
     max_results: int,
 ) -> None:
-    """Run one scan in a child process and return its bounded result."""
+    """Run one scan in a child process and return its result."""
     try:
         result_conn.send((True, GrepTool._scan(
             workspace_path, search_root, file_glob, regex, max_results,
@@ -199,7 +180,7 @@ def _scan_worker(
 
 
 def _stop_scan_worker(proc: Any) -> None:
-    """Join a completed worker or forcibly stop an overdue one."""
+    """Join a completed worker or forcibly stop a cancelled one."""
     proc.join(_GREP_WORKER_JOIN_SECONDS)
     if not proc.is_alive():
         return
@@ -216,9 +197,8 @@ def _scan_in_subprocess(
     file_glob: str,
     regex: re.Pattern[str],
     max_results: int,
-    timeout: float,
 ) -> list[str]:
-    """Run grep work in a process that is always reaped by its deadline."""
+    """Run grep work in a process that cancel always reaps (no timeout)."""
     context = multiprocessing.get_context("spawn")
     receive_conn, send_conn = context.Pipe(duplex=False)
     proc = context.Process(
@@ -236,11 +216,9 @@ def _scan_in_subprocess(
         send_conn.close()
         raise
     send_conn.close()
-    deadline = time.monotonic() + timeout
     try:
         while True:
-            remaining = deadline - time.monotonic()
-            if receive_conn.poll(max(0.0, min(remaining, 0.1))):
+            if receive_conn.poll(0.1):
                 ok, payload = receive_conn.recv()
                 if not ok:
                     raise RuntimeError(str(payload))
@@ -250,8 +228,6 @@ def _scan_in_subprocess(
                 ):
                     raise RuntimeError("grep worker returned an invalid result")
                 return payload
-            if remaining <= 0:
-                raise _GrepScanTimeout
             if not proc.is_alive():
                 # A child that exits without writing a result is a real scan
                 # failure, not a no-match result.

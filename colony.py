@@ -152,7 +152,7 @@ CONSOLIDATE_PROMPT = (
     "- <remaining session-specific item>\n"
     "[/SESSION]\n"
 )
-CONSOLIDATE_TIMEOUT = 360  # heavier than per-session compaction; aggregates all sessions
+CONSOLIDATE_TIMEOUT: float | None = None  # no timeout; cancel is the only stop
 CONSOLIDATE_MAX_INPUT_CHARS = 100_000
 # Leave most of the aggregate prompt for current session evidence.  Existing
 # colony state is persisted/model-produced text too, so its item-count cap

@@ -343,8 +343,9 @@ class ZaiBackend(CachedOpenAIChatBackend):
         # of forcing a no-tools final answer.
         return True
 
-    def _socket_timeout(self) -> int:
-        return cfg.get_zai_socket_timeout()
+    def _socket_timeout(self) -> None:
+        # No wall-clock timeout on generation: cancel is the only stop.
+        return None
 
     def _socket_timeout_setting(self) -> str:
         return "zai_socket_timeout"

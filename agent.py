@@ -84,7 +84,7 @@ _COMPLETENESS_RULE = (
     f"{WHOLE_SCOPE_RULE}"
     f" {DOC_FOLLOWING_RULE}"
     " Verify-with-evidence: build/test/verify = enumerate targets, run"
-    " canonical commands with adequate timeout (up to 120s/call, capture"
+    " canonical commands with no timeout (cancel is the only stop; capture"
     " to file), grep full logs for error/warning/exception, fix each,"
     " re-run until zero; runtime = launch + exercise paths + check logs;"
     " report commands + exit codes + counts; never claim clean from"
@@ -1292,7 +1292,7 @@ async def _judge_draft(
     :func:`_drive_backend` - an inject mid-judge abandons the verdict and
     the caller restarts the turn. ``[[await]]`` drafts and empty drafts
     are DONE without a model call: nothing is left to judge. Judge
-    failures (missing CLI, timeout, unparsable reply) fail closed to DONE
+    failures (missing CLI, unparsable reply) fail closed to DONE
     so the draft ships instead of looping.
     """
     cleaned, awaiting = extract_await(draft or "")

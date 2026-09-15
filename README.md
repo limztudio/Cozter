@@ -341,19 +341,17 @@ accepted from or sent to Telegram, Slack, and Signal.
 
 The llama safety settings are read at the start of every llama turn:
 `llama_max_agent_turns` (default 60) limits tool-call turns before Cozter
-forces a final answer, `llama_tool_repeat_limit` (default 3) skips an
-identical call after that many executions, and `llama_socket_timeout`
-(default 1800 seconds) is the per-read timeout for a slow local server.
-Connecting to that server is separately capped at 30 seconds so a
-black-holed URL cannot stall a turn until the OS TCP timeout.
+forces a final answer, and `llama_tool_repeat_limit` (default 3) skips an
+identical call after that many executions. Generation streams and tool
+calls carry no wall-clock timeout: cancel (`/stop`, new user message,
+`[[await]]` pause) is the only stop, so a slow server or a long
+search/build simply keeps running instead of timing out and forcing a
+wasteful retry.
 
 Agent turns do not have a wall-clock timeout; long-running work is
-allowed to finish. `tool_timeout` (default 120s) still caps each
-cooperative/asynchronous individual tool call for HTTP backends. It is not a
-plugin sandbox: trusted plugin code that blocks the event loop synchronously
-can still stall the process and must isolate blocking work itself. CLI-backend
-plugin scripts instead use that CLI's shell/tool policy and are not governed
-by `tool_timeout`. `update_idle_timeout` (default 1200s) controls how often
+allowed to finish. `tool_timeout`, `llama_socket_timeout`,
+`zai_socket_timeout`, and `meta_socket_timeout` remain accepted config
+keys for compatibility but enforce nothing. `update_idle_timeout` (default 1200s) controls how often
 the auto-update loop dumps diagnostics while waiting for active turns; it
 keeps waiting instead of restarting through active work.
 `dump_traceback_interval` (default 0) enables optional periodic thread dumps
@@ -391,7 +389,7 @@ no capacity, Cozter safely uses the workspace's `/compact` message interval
 instead.
 
 `llama_max_retries` (default 2) is how many times a transient llama HTTP
-failure — a dropped connection, a read timeout, an HTTP 429/5xx, or a streamed
+failure — a dropped connection, an HTTP 429/5xx, or a streamed
 completion that exceeds Cozter's retained-state limits — is retried with
 exponential backoff before the turn fails. A capped completion is discarded
 before any of its buffered tool calls execute. Set it to `0` to disable
@@ -421,13 +419,12 @@ catalog live; the offline fallback lists the published chat models
 (`muse-spark-1.3`, default, with `muse-spark-1.2` anchoring the cheap
 summary/low tier). Private or preview IDs can be added via `extra_models`
 (`{"meta": ["muse-spark-…"]}`); published Muse Spark context is 1M tokens,
-overridable per model via `model_context_windows`. `meta_socket_timeout`
-(default 300s) and `meta_max_retries` (default 2) mirror the other cloud
-knobs, including the 30-second connect cap.
+overridable per model via `model_context_windows`.
+`meta_max_retries` (default 2) mirrors the other cloud retry knob.
 
-`zai_socket_timeout` (default 300s) and `zai_max_retries` (default 2)
-mirror the llama knobs and retry behavior for the cloud call. The same
-30-second connect cap applies so a misconfigured endpoint fails promptly. Select `zai`
+`zai_socket_timeout` is accepted but enforces nothing (cancel is the only
+stop); `zai_max_retries` (default 2) mirrors the llama retry behavior for
+the cloud call. Select `zai`
 with `/agent`, pick a model with `/model` (default `glm-5.3`), and add private
 or regional GLM ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai
 coding turns automatically continue into another tool-enabled segment when
@@ -789,7 +786,7 @@ tools: `bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`,
 `apply_patch`, `delete_file`, `copy_file`, `move_file`, `make_dir`,
 `list_dir`, `tree`, `glob`, `grep`, `web_search`, and `web_fetch`.
 For build/test/verify work the `bash` tool description directs the model
-to use an adequate timeout (up to 120s per call), capture output to a file,
+to run with no timeout (cancel is the only stop), capture output to a file,
 grep the full log for error/warning/exception/traceback, and never claim
 clean from a truncated tail-only preview.
 
@@ -801,11 +798,11 @@ for disabled examples or local scratch tools. One file, two invocation paths:
 Treat plugins as trusted bot code: discovery imports their modules in the
 Cozter process, so module-level code runs at startup and any dependencies must
 be installed in the project environment. Restart after adding, removing, or
-changing a plugin. For HTTP backends, `tool_timeout` bounds a
-cooperative/asynchronous plugin call but cannot preempt synchronous
-event-loop blocking; it does not sandbox plugin code. CLI-backend plugins run
-through that CLI's own shell/tool policy and are not governed by Cozter's
-`tool_timeout`.
+changing a plugin. Plugin calls carry no wall-clock timeout (cancel is
+the only stop); trusted plugin code that blocks the event loop
+synchronously can still stall the process and must isolate blocking work
+itself. It does not sandbox plugin code. CLI-backend plugins run
+through that CLI's own shell/tool policy.
 
 - **HTTP backends** (`llama`, `meta`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
@@ -914,9 +911,9 @@ remainder]` marker with the suffix reserved inside the cap, and tight caps
 keep a visible ellipsis. `list_dir` and `tree` skip an entry whose `is_dir()` raises (a dangling
 symlink, ELOOP, or vanished file) instead of aborting the rest of the listing.
 `grep` only opens regular files up to 1 MB and runs its regex scan in a
-killable worker process. It stops and reaps that worker after the smaller of
-`tool_timeout` and 30 seconds, so an expensive pattern cannot keep consuming
-CPU after a timeout; narrow the pattern or search path if that happens.
+killable worker process that cancel always reaps; a slow scan simply keeps
+running until it finishes or the turn is cancelled, so narrow the pattern
+or search path if a query is too broad.
 The `web_search` and `web_fetch` tools also cap downloaded response bodies
 at 5 MiB and share the bounded `read_bounded_text()` reader in
 `agent_tools/base.py`, which reports whether the cap was hit so the model
@@ -928,7 +925,7 @@ so a transient failure of one frontend no longer fails the call, and
 sponsored (`ad_*`) and DuckDuckGo-internal links never become results.
 `web_fetch` instead uses a public-network-only client with redirect targets
 validated individually, preventing redirects into private addresses.
-Transient transport failures (connection reset, resolver hiccup, timeout)
+Transient transport failures (connection reset, resolver hiccup)
 are retried once with a short delay; HTTP error statuses, refused content
 types, and redirect-loop or non-public redirect targets are final and are
 never retried. It
@@ -1028,7 +1025,7 @@ strand a run nobody is watching. Every agent turn preamble now also carries the 
 doc-following / verify-with-evidence completeness rule (list every target first, do each,
 re-check leftovers; enumerate every rule/section when told to follow a
 doc; build/test/verify means enumerate targets, run canonical commands
-with adequate timeout up to 120s per call captured to a file, grep the
+with no timeout (cancel is the only stop) captured to a file, grep the
 full logs for error/warning/exception, fix each hit, re-run until zero,
 exercise runtime paths and check logs, and report commands + exit codes +
 counts; never claim done with work left or clean from a truncated preview
@@ -1317,9 +1314,9 @@ identity and delete it in `cleanup_process` after the child is reaped.
 
 Internal LLM jobs (routing, session titling, compaction, and colony
 consolidation) all go through `utils.run_internal_backend()`. The shared
-runner applies each job's timeout, consumes stdout and stderr without pipe
-deadlocks, kills timed-out or cancelled children, and logs stderr when a
-backend exits without an assistant response. HTTP backends expose the same
+runner carries no wall-clock timeout (cancel is the only stop), consumes
+stdout and stderr without pipe deadlocks, kills cancelled children, and
+logs stderr when a backend exits without an assistant response. HTTP backends expose the same
 process-shaped contract through `backends_agent/_http_proc.py`, so the
 orchestrator uses one cleanup model for CLI and API agents.
 

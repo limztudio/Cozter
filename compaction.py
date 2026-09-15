@@ -30,7 +30,7 @@ _in_flight: set[tuple[str, str]] = set()
 
 KEEP_RECENT_AFTER_COMPACT = 5
 MAX_SUMMARY_CHARS = 80_000  # ~20K tokens - safe for most models
-COMPACT_TIMEOUT = 240  # seconds; large sessions with rich long-term lists need headroom
+COMPACT_TIMEOUT: float | None = None  # no timeout; cancel is the only stop
 
 # Model windows include fixed system instructions, tools, a future user
 # message, and the model's reply. Trigger before stored conversation material

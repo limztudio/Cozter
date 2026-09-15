@@ -791,58 +791,60 @@ class ReadFileToolTests(unittest.TestCase):
 
 class BashToolTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "POSIX process group behavior")
-    def test_timeout_kills_child_process_group(self) -> None:
-        async def run() -> tuple[str, int]:
+    def test_cancel_kills_child_process_group(self) -> None:
+        async def run() -> str:
             with tempfile.TemporaryDirectory() as tmp:
                 pid_path = os.path.join(tmp, "child.pid")
-                result = await BashTool().run(
+                task = asyncio.create_task(BashTool().run(
                     tmp,
-                    {
-                        "command": "sleep 30 & echo $! > child.pid; wait",
-                        "timeout": 1,
-                    },
-                )
+                    {"command": "sleep 30 & echo $! > child.pid; wait"},
+                ))
+                await asyncio.sleep(1)
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
                 with open(pid_path, encoding="utf-8") as f:
                     child_pid = int(f.read().strip())
-                return result, child_pid
+                assert wait_for_process_exit(child_pid), (
+                    f"child process {child_pid} survived bash tool cancel"
+                )
+                return "cancelled"
 
-        result, child_pid = asyncio.run(run())
-        self.assertIn("timed out after 1s", result)
-
-        self.assertTrue(
-            wait_for_process_exit(child_pid),
-            f"child process {child_pid} survived bash tool timeout",
-        )
+        self.assertEqual(asyncio.run(run()), "cancelled")
 
     @unittest.skipIf(os.name == "nt", "POSIX process group behavior")
-    def test_timeout_kills_child_after_shell_exits(self) -> None:
+    def test_cancel_kills_child_after_shell_exits(self) -> None:
         """A background child can keep the shell's stdout pipe open alone."""
-        async def run() -> tuple[str, int]:
+        async def run() -> str:
             with tempfile.TemporaryDirectory() as tmp:
                 pid_path = os.path.join(tmp, "child.pid")
-                result = await BashTool().run(
+                task = asyncio.create_task(BashTool().run(
                     tmp,
                     {
                         # Do not wait: the shell exits immediately, while the
                         # child retains the inherited stdout pipe.
                         "command": "sleep 30 & echo $! > child.pid",
-                        "timeout": 1,
                     },
-                )
+                ))
+                await asyncio.sleep(1)
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
                 with open(pid_path, encoding="utf-8") as f:
                     child_pid = int(f.read().strip())
-                return result, child_pid
+                try:
+                    assert wait_for_process_exit(child_pid), (
+                        f"child process {child_pid} survived after shell exit"
+                    )
+                finally:
+                    kill_process(child_pid)
+                return "cancelled"
 
-        result, child_pid = asyncio.run(run())
-        try:
-            self.assertIn("timed out after 1s", result)
-
-            self.assertTrue(
-                wait_for_process_exit(child_pid),
-                f"child process {child_pid} survived after shell exit",
-            )
-        finally:
-            kill_process(child_pid)
+        self.assertEqual(asyncio.run(run()), "cancelled")
 
 
 class PluginScriptTests(unittest.TestCase):
@@ -1253,13 +1255,14 @@ class ConfirmPermissionGateTests(unittest.TestCase):
 
 
 class ExecuteToolTimeoutTests(unittest.TestCase):
-    def test_execute_tool_enforces_configured_timeout(self) -> None:
+    def test_execute_tool_has_no_timeout_and_runs_to_completion(self) -> None:
+        """Cancel is the only stop: a slow tool finishes, never times out."""
         class SlowTool:
             file_action = None
 
             async def run(self, workspace_path: str, args: dict) -> str:
                 del workspace_path, args
-                await asyncio.sleep(60)
+                await asyncio.sleep(0.05)
                 return "finished"
 
         async def run() -> tuple[str, list[dict]]:
@@ -1272,16 +1275,13 @@ class ExecuteToolTimeoutTests(unittest.TestCase):
             )
 
         original_tools = agent_tools._BY_NAME
-        original_timeout = agent_tools.tool_timeout
         agent_tools._BY_NAME = {**original_tools, "slow_test": SlowTool()}
-        agent_tools.tool_timeout = lambda: 0.01
         try:
             result, events = asyncio.run(run())
         finally:
             agent_tools._BY_NAME = original_tools
-            agent_tools.tool_timeout = original_timeout
 
-        self.assertIn("Tool slow_test timed out after 0.01s", result)
+        self.assertEqual(result, "finished")
         self.assertEqual(events[0]["type"], "tool_use")
         self.assertEqual(events[-1]["type"], "tool_result")
         self.assertEqual(events[-1]["output"], result)

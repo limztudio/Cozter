@@ -52,17 +52,19 @@ logger = logging.getLogger(__name__)
 _TOOL_RESULT_MAX = 4_000
 
 
-def tool_timeout() -> int:
-    """Wall-clock ceiling (seconds) for a single ``execute_tool`` call.
+def tool_timeout() -> int | None:
+    """Legacy accessor kept for compatibility; no timeout is enforced.
 
-    Lazy import of ``config`` avoids an import cycle at module load
-    (``config`` is a leaf module, but importing it eagerly here would
-    pull it in before the package is fully initialized in some entry
-    orders). Read fresh each call so a config change takes effect on
+    Tools run until they finish or the turn is cancelled (``/stop``,
+    new user message, ``[[await]]`` pause). ``None`` means no wall-clock
+    ceiling. Read fresh each call so a config change takes effect on
     the next tool invocation without a restart.
     """
     from .. import config as cfg  # local import: avoid load-time cycle
-    return cfg.get_tool_timeout()
+    try:
+        return cfg.get_tool_timeout()
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -315,12 +317,12 @@ async def execute_tool(
     if tool is None:
         result = f"Unknown tool: {name}"
     else:
-        timeout = tool_timeout()
+        # No wall-clock timeout: tools run until they finish or the turn
+        # is cancelled (/stop, new user message, [[await]] pause).
+        # Cancel is the only stop; a slow search/build simply keeps
+        # running instead of timing out and forcing a wasteful retry.
         try:
-            raw_result: object = await asyncio.wait_for(
-                tool.run(workspace_path, args),
-                timeout=timeout,
-            )
+            raw_result: object = await tool.run(workspace_path, args)
             if isinstance(raw_result, str):
                 result = raw_result
             else:
@@ -334,12 +336,9 @@ async def execute_tool(
                     f"Tool {name} returned an invalid non-text result "
                     f"({result_type})."
                 )
-        except asyncio.TimeoutError:
-            logger.error("Tool %s exceeded tool_timeout=%ss", name, timeout)
-            result = (
-                f"Tool {name} timed out after {timeout:g}s. Try a narrower"
-                " request or a different approach."
-            )
+        except asyncio.CancelledError:
+            # Cancel (/stop, new message, [[await]]) is the only stop.
+            raise
         except Exception as exc:
             result = f"Tool {name} failed: {exc}"
 

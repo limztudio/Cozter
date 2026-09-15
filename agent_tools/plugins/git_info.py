@@ -24,7 +24,7 @@ from ..base import (
 )
 from ...utils import clip_status_value
 
-_GIT_TIMEOUT_SECONDS = 15
+# No wall-clock timeout: git runs until done or cancelled.
 _MAX_OUTPUT_CHARS = 12_000
 _MAX_GIT_ERROR_CHARS = 500
 _ACTIONS = ("status", "log", "diff")
@@ -183,7 +183,7 @@ async def _git_once(
     workspace: str,
     env: dict[str, str],
 ) -> tuple[str, str, int]:
-    """Run one git argv, reaping the process on timeout or cancellation."""
+    """Run one git argv, reaping the process on cancellation."""
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdin=asyncio.subprocess.DEVNULL,
@@ -193,11 +193,9 @@ async def _git_once(
         env=env,
     )
     try:
-        stdout_b, stderr_b = await asyncio.wait_for(
-            proc.communicate(), _GIT_TIMEOUT_SECONDS,
-        )
+        stdout_b, stderr_b = await proc.communicate()
     except BaseException:
-        # The outer tool timeout or a turn stop cancelled us; never orphan
+        # A turn stop cancelled us; never orphan
         # the git process inside Cozter's process group.
         if proc.returncode is None:
             proc.kill()

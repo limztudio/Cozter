@@ -43,8 +43,8 @@ plugin unless its class sets `requires_full_permission = True`. Set that flag
 for any capability that can access host resources outside Cozter's
 workspace-bounded tool model, such as arbitrary paths, commands, credentials,
 or sockets. The flag only controls HTTP-tool availability; it does not
-sandbox plugin code. HTTP calls are bounded by `tool_timeout` only while they
-yield control to the event loop, while CLI-backend plugin scripts follow that
+sandbox plugin code. Plugin calls carry no wall-clock timeout (cancel is
+the only stop), while CLI-backend plugin scripts follow that
 CLI's own shell/tool policy instead.
 
 ## Template

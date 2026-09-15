@@ -187,14 +187,12 @@ def get_llama_tool_repeat_limit() -> int:
     return _get_int_at_least("llama_tool_repeat_limit", 1)
 
 
-def get_llama_socket_timeout() -> int:
-    """Return the per-socket-read timeout in seconds for the llama HTTP call.
+def get_llama_socket_timeout() -> int | None:
+    """Legacy llama socket-timeout setting; no timeout is enforced.
 
-    A slow llama-server (heavy model, large context, weak hardware) can
-    take many minutes to emit the first byte of a response, especially
-    after a tool turn folds a large file's contents back into context.
-    The default is intentionally generous; lower it only if you have a
-    fast server and want failures to surface quickly.
+    Generation streams run until the provider finishes or the turn is
+    cancelled (cancel is the only stop). Kept so existing config files
+    keep loading; callers ignore the value.
     """
     return _get_int_at_least("llama_socket_timeout", 1)
 
@@ -253,8 +251,8 @@ def get_zai_base_url() -> str:
     return _get_https_url("zai_base_url")
 
 
-def get_zai_socket_timeout() -> int:
-    """Per-socket-read timeout (seconds) for zai HTTP calls."""
+def get_zai_socket_timeout() -> int | None:
+    """Legacy zai socket-timeout setting; no timeout is enforced."""
     return _get_int_at_least("zai_socket_timeout", 1)
 
 
@@ -274,8 +272,8 @@ def get_meta_base_url() -> str:
     return _get_https_url("meta_base_url")
 
 
-def get_meta_socket_timeout() -> int:
-    """Per-socket-read timeout (seconds) for Meta Model API HTTP calls."""
+def get_meta_socket_timeout() -> int | None:
+    """Legacy Meta socket-timeout setting; no timeout is enforced."""
     return _get_int_at_least("meta_socket_timeout", 1)
 
 
@@ -284,13 +282,12 @@ def get_meta_max_retries() -> int:
     return _get_int_at_least("meta_max_retries", 0)
 
 
-def get_tool_timeout() -> int:
-    """Wall-clock ceiling (seconds) for a single agent tool call.
+def get_tool_timeout() -> int | None:
+    """Legacy tool-timeout setting; no timeout is enforced.
 
-    Even built-ins like ``bash`` enforce their own per-call timeout, but
-    a plugin or a custom tool can hang (blocking I/O, infinite loop) and
-    block the whole turn. This wraps every ``execute_tool`` call as a
-    safety net. Defaults to 120s, matching bash's hard cap.
+    Tools run until they finish or the turn is cancelled (cancel is the
+    only stop). Kept so existing config files keep loading; the tool
+    runner ignores the value.
     """
     return _get_int_at_least("tool_timeout", 1)
 

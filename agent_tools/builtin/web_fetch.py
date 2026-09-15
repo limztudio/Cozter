@@ -33,8 +33,8 @@ class _FetchRefused(Exception):
 
     Covers HTTP error statuses, refused content types, refused redirect
     targets, and redirect loops. Transport failures (connection resets,
-    DNS hiccups, timeouts) stay ordinary exceptions so the caller can
-    retry them once.
+    DNS hiccups) stay ordinary exceptions so the caller can retry them
+    once. No wall-clock timeout: requests run until done or cancelled.
     """
 
 
@@ -54,7 +54,6 @@ async def _fetch_following_redirects(
         async with session.get(
             current_url,
             allow_redirects=False,
-            timeout=aiohttp.ClientTimeout(total=30),
         ) as response:
             location = response.headers.get("location")
             if response.status in _REDIRECT_STATUSES and location:
@@ -132,7 +131,8 @@ class WebFetchTool(AgentTool):
         )
 
         # One retry covers transient transport failures (connection reset,
-        # resolver hiccup, timeout); every other outcome is final.
+        # resolver hiccup); every other outcome is final. No timeout —
+        # cancel is the only stop.
         final_url = url
         content_type = ""
         body = ""
@@ -145,10 +145,12 @@ class WebFetchTool(AgentTool):
                 break
             except _FetchRefused as exc:
                 return str(exc)
-            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            except aiohttp.ClientError as exc:
                 if attempt + 1 >= _FETCH_ATTEMPTS:
                     return f"Fetch failed: {exc}"
                 await asyncio.sleep(_FETCH_RETRY_DELAY_SECONDS)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 return f"Fetch failed: {exc}"
 

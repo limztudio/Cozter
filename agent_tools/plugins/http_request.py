@@ -35,7 +35,7 @@ from ..base import (
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 5
-_TIMEOUT_SECONDS = 30
+# No wall-clock timeout: requests run until done or cancelled.
 _DEFAULT_MAX_CHARS = 3_500
 # A tool-call argument, not a file upload: keep request bodies modest.
 _MAX_BODY_CHARS = 100_000
@@ -117,7 +117,6 @@ async def _request_following_redirects(
     while True:
         kwargs: dict[str, Any] = {
             "allow_redirects": False,
-            "timeout": aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS),
         }
         if current_body is not None:
             kwargs["data"] = current_body

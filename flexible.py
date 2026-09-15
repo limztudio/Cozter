@@ -43,14 +43,18 @@ TIER_DESCRIPTIONS = {
 # plan prohibitively slow or expensive.
 MAX_SUBTASKS = 12
 
-PLAN_TIMEOUT = 120  # seconds; on timeout the planner falls back to one task
-MERGE_TIMEOUT = 180  # seconds; on timeout the worker reports are concatenated
+# No wall-clock timeout on planner/merge/judge: each runs until it
+# finishes or the turn is cancelled (cancel is the only stop). The names
+# below are kept as legacy sentinels (None = no timeout) so existing
+# call sites keep working without passing a timeout.
+PLAN_TIMEOUT: float | None = None
+MERGE_TIMEOUT: float | None = None
 
 # Universal continue-judge bounds: every backend, every turn. After each
 # draft answer the summary backend judges DONE vs CONTINUE. Capped so a
 # turn cannot loop forever; cost/latency stays bounded for chat surfaces.
 JUDGE_MAX_CONTINUES = 3
-JUDGE_TIMEOUT = 60  # seconds; on timeout or parse failure the draft ships
+JUDGE_TIMEOUT: float | None = None
 
 # The user-facing rubric the planner grades each sub-task against.
 _RUBRIC = (
@@ -82,7 +86,7 @@ _PLANNER_RULES = (
     " hiding dozens of rules.\n"
     "- Build/verify requests (buildable, no error/warning, no runtime"
     " warning): split into enumerate-targets + canonical build/test with"
-    " adequate timeout (up to 120s/call, capture to file) + grep full logs"
+    " no timeout (cancel is the only stop; capture to file) + grep full logs"
     " for error/warning/exception + fix + re-run until zero + runtime"
     " launch/exercise/log-check; each task states evidence required"
     " (commands + exit codes + counts), never one vague 'check build' task.\n"
@@ -397,8 +401,8 @@ def build_subtask_prompt(
         " (read fully via offset chunks + grep), apply each, never stop"
         " after first/last few.\n"
         "Build/verify (buildable, no error/warning, no runtime warning):"
-        " enumerate targets, run canonical build/test with adequate timeout"
-        " (up to 120s/call, capture output to file), grep FULL logs for"
+        " enumerate targets, run canonical build/test with no timeout"
+        " (cancel is the only stop; capture output to file), grep FULL logs for"
         " error/warning/exception/traceback (never eyeball tail only), fix"
         " each hit, re-run until zero remain; runtime means launch +"
         " exercise paths + check logs, not just compile.\n"

@@ -1026,14 +1026,17 @@ def split_text_chunks(text: str, limit: int) -> list[str]:
 async def drain_llm_subprocess(
     proc: asyncio.subprocess.Process,
     backend,
-    timeout: float,
     label: str,
     *,
     log: logging.Logger | None = None,
+    timeout: float | None = None,
 ) -> str:
     """Drain JSON event lines from an internal LLM subprocess and return
-    the last agent text emitted, or an empty string on timeout/no output.
+    the last agent text emitted, or an empty string on no output.
 
+    No wall-clock timeout by default: the call runs until it finishes or
+    the turn is cancelled (cancel is the only stop). ``timeout`` is kept
+    for compatibility and applied only when explicitly passed positive.
     The subprocess is *always* killed and reaped on exit — including on
     cancellation — so /stop or any other exception path can't leak a
     running subprocess past the cancelled task.
@@ -1050,7 +1053,17 @@ async def drain_llm_subprocess(
 
     assert proc.stdout is not None  # spawned with stdout=PIPE
     try:
-        async with asyncio.timeout(timeout):
+        if timeout is not None and timeout > 0:
+            async with asyncio.timeout(timeout):
+                async for event in iter_process_json_events(
+                    proc, on_invalid=_capture_bare_text,
+                ):
+                    text = backend.extract_agent_text(event)
+                    if text:
+                        raw = text
+                await wait_for_process_exit(proc)
+                finished = True
+        else:
             async for event in iter_process_json_events(
                 proc, on_invalid=_capture_bare_text,
             ):
@@ -1059,9 +1072,9 @@ async def drain_llm_subprocess(
                     raw = text
             await wait_for_process_exit(proc)
             finished = True
-    except TimeoutError:
+    except (TimeoutError, asyncio.TimeoutError):
         finished = True
-        active_log.warning("%s timed out after %ds", label, timeout)
+        active_log.warning("%s timed out after %ss", label, timeout)
     finally:
         try:
             if proc.returncode is None:
@@ -1095,17 +1108,21 @@ async def run_internal_backend(
     prompt: str,
     model: str | None,
     *,
-    timeout: float,
     label: str,
     log: logging.Logger,
     missing_executable_message: str,
     missing_level: int = logging.ERROR,
+    timeout: float | None = None,
 ) -> str | None:
     """Launch and drain an internal no-tools backend call.
 
     Internal prompts include user-controlled conversation content.  Keep them
     at the least-privileged ``deny`` level instead of treating summarization,
     titling, and routing as a reason to bypass backend safety controls.
+
+    No wall-clock timeout by default: the call runs until it finishes or
+    the turn is cancelled (cancel is the only stop). ``timeout`` is kept
+    for compatibility and applied only when explicitly passed positive.
 
     Return ``None`` when the backend executable is missing and an empty
     string when it runs without producing an agent response.
@@ -1123,7 +1140,7 @@ async def run_internal_backend(
     return await drain_llm_subprocess(
         proc,
         backend,
-        timeout,
         label,
         log=log,
+        timeout=timeout,
     )

@@ -7,7 +7,7 @@ import os
 import shutil
 from typing import Any, ClassVar
 
-from ..base import AgentTool, coerce_int_arg
+from ..base import AgentTool
 from ...utils import (
     clip_status_value,
     has_managed_process_group,
@@ -15,16 +15,14 @@ from ...utils import (
     mark_process_group_leader,
 )
 
-# Bash tool default timeout (model can override via the ``timeout``
-# argument up to this hard cap).
-_BASH_DEFAULT_TIMEOUT = 30
-_BASH_MAX_TIMEOUT = 120
+# Bash runs with no wall-clock timeout: cancel (/stop, new user message,
+# [[await]] pause) is the only stop. A slow build/search simply keeps
+# running instead of timing out and forcing a wasteful retry.
 
 # Hard ceiling on captured output. A command like ``yes`` or ``cat /dev/zero``
-# emits gigabytes well within the timeout; buffering it whole (as
-# ``communicate()`` does) would OOM the bot before the timeout ever fires.
-# Only the first few KB reach the model anyway (execute_tool caps the result),
-# so once we hit this we stop reading and kill the command tree.
+# emits gigabytes; buffering it whole (as ``communicate()`` does) would OOM
+# the bot. Only the first few KB reach the model anyway (execute_tool caps
+# the result), so once we hit this we stop reading and kill the command tree.
 _BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024  # 4 MB
 
 
@@ -35,8 +33,8 @@ class BashTool(AgentTool):
     # child processes. Keep it out of HTTP agents' default ``auto`` mode.
     requires_full_permission = True
     description = (
-        "Run a shell command (cwd = workspace). For build/test/verify:"
-        " use adequate timeout (up to 120), capture output to a file"
+        "Run a shell command (cwd = workspace, no timeout — runs until done"
+        " or cancelled). For build/test/verify: capture output to a file"
         " (`... 2>&1 | tee /tmp/build.log`), then grep the FULL file for"
         " error/warning/exception/traceback — never eyeball tail only;"
         " a truncated preview is not proof of clean."
@@ -45,10 +43,6 @@ class BashTool(AgentTool):
         "type": "object",
         "properties": {
             "command": {"type": "string"},
-            "timeout": {
-                "type": "integer",
-                "description": f"max {_BASH_MAX_TIMEOUT}.",
-            },
         },
         "required": ["command"],
     }
@@ -57,12 +51,8 @@ class BashTool(AgentTool):
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string"
-        timeout = coerce_int_arg(
-            args.get("timeout", _BASH_DEFAULT_TIMEOUT),
-            default=_BASH_DEFAULT_TIMEOUT,
-            minimum=1,
-            maximum=_BASH_MAX_TIMEOUT,
-        )
+        # No timeout: the command runs until it exits or the turn is
+        # cancelled (/stop, new user message). Extra args are ignored.
 
         # Use the shell so the model can use pipes, redirection, etc.
         shell = _find_shell()
@@ -92,19 +82,15 @@ class BashTool(AgentTool):
 
         truncated = False
         try:
-            async with asyncio.timeout(timeout):
-                stdout, truncated = await _read_capped(
-                    proc.stdout, _BASH_MAX_OUTPUT_BYTES,
-                )
-                if truncated:
-                    # Runaway output - stop draining and reap the tree so a
-                    # firehose command can't hold memory or keep running.
-                    await _kill_command_tree(proc)
-                else:
-                    await proc.wait()
-        except TimeoutError:
-            await _kill_command_tree(proc)
-            return f"Error: command timed out after {timeout}s"
+            stdout, truncated = await _read_capped(
+                proc.stdout, _BASH_MAX_OUTPUT_BYTES,
+            )
+            if truncated:
+                # Runaway output - stop draining and reap the tree so a
+                # firehose command can't hold memory or keep running.
+                await _kill_command_tree(proc)
+            else:
+                await proc.wait()
         except asyncio.CancelledError:
             # /stop fired mid-command - kill the shell so we don't leak it.
             await _kill_command_tree(proc)

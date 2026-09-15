@@ -1111,16 +1111,24 @@ async def read_bounded_text(
 async def open_http_response(
     url: str,
     *,
-    timeout: int,
     allow_redirects: bool = True,
+    timeout: int | None = None,
 ) -> AsyncIterator[aiohttp.ClientResponse]:
-    """Open one HTTP request with the shared web-tool client settings."""
+    """Open one HTTP request with the shared web-tool client settings.
+
+    No wall-clock timeout by default: the request runs until it finishes
+    or the turn is cancelled. ``timeout`` is accepted for compatibility
+    and applied only when explicitly passed as a positive value.
+    """
+    client_timeout: aiohttp.ClientTimeout | None = None
+    if timeout is not None and timeout > 0:
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
     async with (
         aiohttp.ClientSession(headers=HTTP_USER_AGENT_HEADERS) as session,
         session.get(
             url,
             allow_redirects=allow_redirects,
-            timeout=aiohttp.ClientTimeout(total=timeout),
+            timeout=client_timeout,
         ) as response,
     ):
         yield response

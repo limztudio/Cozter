@@ -98,7 +98,7 @@ class HttpAgentProcess:
 @contextlib.asynccontextmanager
 async def http_error_translator(
     label: str,
-    sock_read_timeout: int,
+    sock_read_timeout: int | None = None,
     timeout_setting: str = "the configured socket timeout",
 ) -> AsyncIterator[None]:
     """Map aiohttp client errors to user-facing ``RuntimeError`` messages.
@@ -111,9 +111,8 @@ async def http_error_translator(
                 ...
 
     *label* names the service in each error message. *sock_read_timeout*
-    is the configured timeout value (printed in the timeout error so the
-    user knows what to raise), and *timeout_setting* names that backend's
-    configuration key.
+    and *timeout_setting* are legacy labels kept for compatibility; no
+    wall-clock timeout is enforced (cancel is the only stop).
     """
     try:
         yield
@@ -129,11 +128,9 @@ async def http_error_translator(
         raise RuntimeError(
             f"{label} dropped the connection mid-response"
         ) from exc
-    except TimeoutError as exc:
+    except (TimeoutError, asyncio.TimeoutError) as exc:
         raise RuntimeError(
-            f"{label} did not respond within {sock_read_timeout}s"
-            f" (raise {timeout_setting} in config.json if your"
-            " server is slow, not stuck)"
+            f"{label} request timed out: {exc}"
         ) from exc
     except aiohttp.ClientError as exc:
         raise RuntimeError(f"{label} request failed: {exc}") from exc
