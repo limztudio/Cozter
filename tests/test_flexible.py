@@ -823,3 +823,16 @@ class CoveragePromptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class NoHandoffLeakTests(unittest.TestCase):
+    def test_merge_rules_ban_handoff_notes(self) -> None:
+        self.assertIn("Next turn should:", flexible._MERGE_RULES)
+
+    def test_worker_prompt_bans_handoff_notes(self) -> None:
+        plan = flexible.Plan(
+            understanding="",
+            subtasks=(flexible.Subtask(tier="low", instruction="do it"),),
+        )
+        prompt = flexible.build_subtask_prompt("req", plan, 0, [])
+        self.assertIn("[followup:", prompt)
+        self.assertIn("Never write 'Next turn should:'", prompt)

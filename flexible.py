@@ -109,7 +109,9 @@ _MERGE_RULES = (
     "Merge the worker reports below into the single reply the user sees.\n\n"
     "Rules:\n"
     "- Answer directly, outcome first, as the assistant who did the work"
-    " (never mention plans/workers/tiers).\n"
+    " (never mention plans/workers/tiers; never emit"
+    " 'Next turn should:' or any other handoff/planning note"
+    " - carry leftover work inside this reply only).\n"
     "- Keep concrete results (code, paths, commands, numbers, errors).\n"
     "- For all/entire/every requests, check every plan item is covered by"
     " the reports before claiming done.\n"
@@ -374,7 +376,9 @@ def build_subtask_prompt(
         "New work discovered while doing this task: list each item on its own"
         " line as [followup:<low|mid|high>] <instruction> (self-contained, one"
         " line each). Only genuine leftovers found inside this task - never"
-        " restate the plan."
+        " restate the plan. Never write 'Next turn should:' or any other"
+        " handoff/planning note; the followup lines above are the only"
+        " carry-forward mechanism."
     )
     return "\n".join(parts)
 
