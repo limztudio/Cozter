@@ -20,7 +20,8 @@ from . import (
 from . import workspace as workspace_mod
 from .agent_tools.base import copy_file_atomically
 from .backends_agent.base import (
-    NO_RESPONSE_TEXT, AgentResult, ChatEvent, append_detached_task_request,
+    DOC_FOLLOWING_RULE, NO_RESPONSE_TEXT, WHOLE_SCOPE_RULE, AgentResult,
+    ChatEvent, append_detached_task_request,
     append_text_result, set_error_result,
 )
 from .utils import (
@@ -80,12 +81,8 @@ _AUTONOMY_POLICY = (
 )
 
 _COMPLETENESS_RULE = (
-    "Whole-scope: all/entire/every/whole = list every target first,"
-    " do each, re-check leftovers; never sample; never claim done"
-    " with work left — say PARTIAL + remainder."
-    " Doc-following: told to follow a file/doc/standard = enumerate"
-    " every rule/section first (read fully via offset+grep), apply each,"
-    " never stop after first/last few."
+    f"{WHOLE_SCOPE_RULE}"
+    f" {DOC_FOLLOWING_RULE}"
     " Verify-with-evidence: build/test/verify = enumerate targets, run"
     " canonical commands with adequate timeout (up to 120s/call, capture"
     " to file), grep full logs for error/warning/exception, fix each,"

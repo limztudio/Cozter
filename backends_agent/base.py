@@ -23,11 +23,38 @@ from ..utils import (
 
 # Keep model pickers responsive to local CLI/account-policy changes without
 # probing on every request. All backend catalogs use the same refresh cadence.
-MODEL_CATALOG_TTL_SEC = 60.0
-# Codex and Grok both probe a local CLI for the live catalog. Copilot and the
+MODEL_CATALOG_TTL_SEC = 60.0# Codex and Grok both probe a local CLI for the live catalog. Copilot and the
 # HTTP backends keep their own shorter timeouts because those probes talk to a
 # different process or network endpoint.
 CLI_MODEL_DISCOVERY_TIMEOUT_SEC = 15
+
+# --- Shared turn-preamble wording -------------------------------------------
+# The CLI backends build their prompt in agent.py while the in-process HTTP
+# backends build theirs here. Both must carry the same contract or one path
+# silently drops rules. Keep the canonical text in this module; agent.py
+# re-exports it so there is exactly one source of truth.
+WHOLE_SCOPE_RULE = (
+    "Whole-scope: all/entire/every/whole = list every target first,"
+    " do each, re-check leftovers; never sample; never claim done"
+    " with work left — say PARTIAL + remainder."
+)
+DOC_FOLLOWING_RULE = (
+    "Doc-following: told to follow a file/doc/standard = enumerate"
+    " every rule/section first (read fully via offset+grep), apply each,"
+    " never stop after first/last few."
+)
+PROGRESS_RULE = (
+    "Progress is tool status (Thinking... preview, done/total may grow);"
+    " notify DONE only when everything is done."
+)
+VISION_RULE = (
+    "Photo uploads: the prompt carries the saved path plus verified"
+    " dimensions/format/size. On vision backends the image pixels also"
+    " ride as a native image part — look at them and answer what is in"
+    " the picture. On text-only backends there are no pixels: say what"
+    " tools verified and ask the user to describe the content instead"
+    " of guessing."
+)
 
 # One curated CLI fallback row: model id, reasoning-effort vocabulary, and the
 # published active context window used before a live catalog is available.

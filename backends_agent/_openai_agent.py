@@ -31,6 +31,7 @@ from .. import agent_tools as tools
 from ..utils import iter_bounded_lines
 from ._http_proc import HttpAgentProcess, http_error_translator
 from .base import (
+    DOC_FOLLOWING_RULE, PROGRESS_RULE, VISION_RULE, WHOLE_SCOPE_RULE,
     AgentResult, Backend, CachedModelCatalog, ChatEvent, append_text_result,
     attachment_image_paths, record_error_event, vision_image_url_parts,
 )
@@ -1248,20 +1249,10 @@ def _system_prompt(
     parts = [
         "Cozter assistant.",
         f"Workspace: {workspace_path}",
-        "Whole-scope: all/entire/every/whole = list every target first,"
-        " do each, re-check leftovers; never sample; never claim done"
-        " with work left — say PARTIAL + remainder."
-        " Doc-following: told to follow a file/doc/standard = enumerate"
-        " every rule/section first (read fully via offset+grep), apply each,"
-        " never stop after first/last few."
-        " Progress is tool status (Thinking... preview, done/total may grow);"
-        " notify DONE only when everything is done.",
-        "Photo uploads: the prompt carries the saved path plus verified"
-        " dimensions/format/size. On vision backends the image pixels also"
-        " ride as a native image part — look at them and answer what is in"
-        " the picture. On text-only backends there are no pixels: say what"
-        " tools verified and ask the user to describe the content instead"
-        " of guessing.",
+        WHOLE_SCOPE_RULE,
+        DOC_FOLLOWING_RULE,
+        PROGRESS_RULE,
+        VISION_RULE,
     ]
     if tool_names:
         parts.append(
