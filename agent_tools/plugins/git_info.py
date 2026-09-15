@@ -20,6 +20,7 @@ from ..base import (
     coerce_int_arg,
     object_parameters,
     resolve_inside_workspace,
+    truncate_with_marker,
 )
 from ...utils import clip_status_value
 
@@ -213,14 +214,9 @@ async def _git_once(
 def _bounded(text: str) -> str:
     if len(text) <= _MAX_OUTPUT_CHARS:
         return text
-    _suffix = (
-        f"\n… [truncated, {len(text)} chars total;"
-        " never treat this preview as full content;"
-        " say PARTIAL + remainder when coverage is unclear]"
+    return truncate_with_marker(
+        text, _MAX_OUTPUT_CHARS, "say PARTIAL + remainder when coverage is unclear",
     )
-    if _MAX_OUTPUT_CHARS <= len(_suffix):
-        return text[:max(0, _MAX_OUTPUT_CHARS - 1)] + "…" if _MAX_OUTPUT_CHARS > 1 else "…"[:_MAX_OUTPUT_CHARS]
-    return text[:_MAX_OUTPUT_CHARS - len(_suffix)] + _suffix
 
 
 if __name__ == "__main__":

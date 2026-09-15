@@ -133,12 +133,21 @@ def _head_changed() -> bool:
     return False
 
 
+# One wording for every git-transport failure path below so the three
+# except-handlers cannot drift apart.
+_GIT_UNAVAILABLE_MSG = "git not available or timed out, skipping update check"
+
+
+def _log_git_unavailable() -> None:
+    logger.error(_GIT_UNAVAILABLE_MSG)
+
+
 def _fetch_origin() -> bool:
     """Refresh remote refs without modifying the working tree."""
     try:
         fetch = _git("fetch", "origin")
     except (OSError, subprocess.TimeoutExpired):
-        logger.error("git not available or timed out, skipping update check")
+        _log_git_unavailable()
         return False
     if fetch.returncode != 0:
         logger.warning("git fetch failed: %s", fetch.stderr.strip())
@@ -192,7 +201,7 @@ def _remote_update_available() -> bool:
         except ValueError:
             return False
     except (OSError, subprocess.TimeoutExpired):
-        logger.error("git not available or timed out, skipping update check")
+        _log_git_unavailable()
         return False
 
 
@@ -232,7 +241,7 @@ def fetch_and_pull() -> bool:
             if pull.returncode != 0:
                 logger.warning("git pull failed: %s", pull.stderr.strip())
     except (OSError, subprocess.TimeoutExpired):
-        logger.error("git not available or timed out, skipping update check")
+        _log_git_unavailable()
         return _head_changed()
 
     return _head_changed()

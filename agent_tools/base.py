@@ -384,6 +384,11 @@ def path_replacement_parameters() -> dict[str, Any]:
     )
 
 
+def no_clobber_result(raw_dst: str) -> str:
+    """Shared no-clobber refusal for the copy/move transfer tools."""
+    return f"Destination already exists: {raw_dst}"
+
+
 def prepare_source_destination(
     workspace: str,
     args: dict,
@@ -409,12 +414,34 @@ def prepare_source_destination(
     if file_action is not None and not os.path.isfile(src):
         return f"Not a file (refusing to {file_action}): {raw_src}"
     if exists(dst):
-        return f"Destination already exists: {raw_dst}"
+        return no_clobber_result(raw_dst)
     return raw_src, raw_dst, src, dst
 
 
 def summarize_path(action: str, args: dict, default: str = "?") -> str:
     return f"{action}: {clip_status_value(args.get('path', default))}"
+
+
+def truncate_with_marker(text: str, max_chars: int, hint: str) -> str:
+    """Clip *text* to *max_chars* with a visible PARTIAL + remainder marker.
+
+    One shared implementation for the tool-preview truncation blocks in
+    ``agent_tools/__init__``, ``builtin/web_fetch``, ``plugins/git_info``,
+    and ``plugins/http_request`` so their wording and edge behavior (tiny
+    budgets that fit only the ellipsis) cannot drift apart. *hint* is the
+    per-tool paging advice, e.g. ``"use read_file offset/limit ..."``.
+    """
+    suffix = (
+        f"\n… [truncated, {len(text)} chars total; {hint};"
+        " never treat this preview as full content;"
+        " say PARTIAL + remainder when coverage is unclear]"
+    )
+    if max_chars <= len(suffix):
+        return (
+            text[:max(0, max_chars - 1)] + "…"
+            if max_chars > 1 else "…"[:max_chars]
+        )
+    return text[:max_chars - len(suffix)] + suffix
 
 
 def summarize_path_pair(action: str, args: dict) -> str:

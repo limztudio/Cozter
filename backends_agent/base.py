@@ -24,6 +24,10 @@ from ..utils import (
 # Keep model pickers responsive to local CLI/account-policy changes without
 # probing on every request. All backend catalogs use the same refresh cadence.
 MODEL_CATALOG_TTL_SEC = 60.0
+# Shared suffix for the default detached-task stubs below. The four methods
+# each raise their own NotImplementedError (so tracebacks keep the caller),
+# but the user-facing wording lives here so the four copies cannot drift.
+_DETACHED_UNSUPPORTED_SUFFIX = "does not support detached tasks"
 # Codex and Grok both probe a local CLI for the live catalog. Copilot and the
 # HTTP backends keep their own shorter timeouts because those probes talk to a
 # different process or network endpoint.
@@ -887,7 +891,7 @@ class Backend(ABC):
     ) -> str:
         """Start a provider-owned detached task and return its identifier."""
         raise NotImplementedError(
-            f"{self.name or type(self).__name__} does not support detached tasks",
+            f"{self.name or type(self).__name__} {_DETACHED_UNSUPPORTED_SUFFIX}",
         )
 
     async def get_detached_task_status(
@@ -897,7 +901,7 @@ class Backend(ABC):
     ) -> DetachedTaskStatus | None:
         """Return a task's latest state, or None if it no longer exists."""
         raise NotImplementedError(
-            f"{self.name or type(self).__name__} does not support detached tasks",
+            f"{self.name or type(self).__name__} {_DETACHED_UNSUPPORTED_SUFFIX}",
         )
 
     async def get_detached_task_output(
@@ -907,7 +911,7 @@ class Backend(ABC):
     ) -> str:
         """Return a detached task's most recent/final output."""
         raise NotImplementedError(
-            f"{self.name or type(self).__name__} does not support detached tasks",
+            f"{self.name or type(self).__name__} {_DETACHED_UNSUPPORTED_SUFFIX}",
         )
 
     async def stop_detached_task(
@@ -917,7 +921,7 @@ class Backend(ABC):
     ) -> bool:
         """Request cancellation; True means the provider accepted it."""
         raise NotImplementedError(
-            f"{self.name or type(self).__name__} does not support detached tasks",
+            f"{self.name or type(self).__name__} {_DETACHED_UNSUPPORTED_SUFFIX}",
         )
 
     def tier_model(self, tier: str) -> str:

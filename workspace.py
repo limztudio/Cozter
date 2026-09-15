@@ -671,9 +671,15 @@ def get_model(workspace_path: str) -> str:
     )
 
 
-def set_model(workspace_path: str, model: str) -> None:
+def _require_model(model: str) -> str:
+    """Validate a model id shared by the three set_*_model setters."""
     if not isinstance(model, str) or not model:
         raise ValueError("model must be a non-empty string")
+    return model
+
+
+def set_model(workspace_path: str, model: str) -> None:
+    _require_model(model)
     backend_name = get_backend_name(workspace_path)
     _set_setting(workspace_path, _model_key(backend_name), model)
 
@@ -692,8 +698,7 @@ def get_summary_model(workspace_path: str) -> str:
 
 def set_summary_model(workspace_path: str, model: str) -> None:
     """Store the summary model under the summary backend's key."""
-    if not isinstance(model, str) or not model:
-        raise ValueError("model must be a non-empty string")
+    _require_model(model)
     summary_backend = get_summary_backend_name(workspace_path)
     _set_setting(
         workspace_path, _model_key(summary_backend, SUMMARY_SCOPE), model,
@@ -754,8 +759,7 @@ def get_flexible_model(workspace_path: str, tier: str) -> str:
 
 
 def set_flexible_model(workspace_path: str, tier: str, model: str) -> None:
-    if not isinstance(model, str) or not model:
-        raise ValueError("model must be a non-empty string")
+    _require_model(model)
     backend_name = get_flexible_backend_name(workspace_path, tier)
     _set_setting(
         workspace_path,

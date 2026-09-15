@@ -906,6 +906,39 @@ def _close_inject_queue(inject_queue: asyncio.Queue[str] | None) -> None:
         close()
 
 
+def _error_result(
+    session_id: str | None,
+    message: str,
+    inject_queue: asyncio.Queue[str] | None,
+) -> AgentResult:
+    """Build a terminal BackendUnavailable result with the queue drained."""
+    result = AgentResult()
+    set_error_result(result, message)
+    result.session_id = session_id
+    _close_inject_queue(inject_queue)
+    _drain_queue(inject_queue)
+    return result
+
+
+async def _announce_restart(
+    backend_name: str,
+    injected: list[str],
+    inject_queue: asyncio.Queue[str] | None,
+    on_event: Callable[[ChatEvent], Awaitable[None]] | None,
+) -> None:
+    """Drain a restart's pending injects and announce the rebuild."""
+    _drain_queue(inject_queue, collect=injected)
+    logger.info(
+        "Restarting %s with %d injected message(s)",
+        backend_name, len(injected),
+    )
+    if on_event is not None:
+        await on_event(ChatEvent(
+            kind="tool",
+            content="Restarting with injected context...",
+        ))
+
+
 def _build_backend_prompt(
     backend,
     contextual_prompt: str,
@@ -2132,25 +2165,14 @@ async def _run_turn_impl(
                     close_inject_on_completion=True,
                 )
         except BackendUnavailable as e:
-            result = AgentResult()
-            set_error_result(result, str(e))
-            result.session_id = session_id
-            _close_inject_queue(inject_queue)
-            _drain_queue(inject_queue)
-            return result
+            return _error_result(session_id, str(e), inject_queue)
 
         # If we're restarting due to inject, drain pipes and any extra
         # injects that arrived while we were shutting down.
         if restarting:
-            _drain_queue(inject_queue, collect=injected)
-            logger.info(
-                "Restarting %s with %d injected message(s)",
-                backend.name, len(injected),
+            await _announce_restart(
+                backend.name, injected, inject_queue, _stream_event,
             )
-            await _stream_event(ChatEvent(
-                kind="tool",
-                content="Restarting with injected context...",
-            ))
             continue  # restart loop
 
         explicit_attachment_sources = _explicit_attachment_sources(
@@ -2189,15 +2211,9 @@ async def _run_turn_impl(
                 round_no=judged_rounds + 1,
             )
             if judge_restarting:
-                _drain_queue(inject_queue, collect=injected)
-                logger.info(
-                    "Restarting %s with %d injected message(s)",
-                    backend.name, len(injected),
+                await _announce_restart(
+                    backend.name, injected, inject_queue, _stream_event,
                 )
-                await _stream_event(ChatEvent(
-                    kind="tool",
-                    content="Restarting with injected context...",
-                ))
                 result = None  # type: ignore[assignment]
                 restarting = True
                 break
@@ -2258,22 +2274,11 @@ async def _run_turn_impl(
                         close_inject_on_completion=True,
                     )
             except BackendUnavailable as e:
-                result = AgentResult()
-                set_error_result(result, str(e))
-                result.session_id = session_id
-                _close_inject_queue(inject_queue)
-                _drain_queue(inject_queue)
-                return result
+                return _error_result(session_id, str(e), inject_queue)
             if restarting:
-                _drain_queue(inject_queue, collect=injected)
-                logger.info(
-                    "Restarting %s with %d injected message(s)",
-                    backend.name, len(injected),
+                await _announce_restart(
+                    backend.name, injected, inject_queue, _stream_event,
                 )
-                await _stream_event(ChatEvent(
-                    kind="tool",
-                    content="Restarting with injected context...",
-                ))
                 break
             explicit_attachment_sources = _explicit_attachment_sources(
                 result.events, workspace_path,

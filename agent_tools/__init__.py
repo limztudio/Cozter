@@ -43,6 +43,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .base import AgentTool
+from .base import truncate_with_marker
 
 logger = logging.getLogger(__name__)
 
@@ -343,20 +344,12 @@ async def execute_tool(
             result = f"Tool {name} failed: {exc}"
 
     if len(result) > _TOOL_RESULT_MAX:
-        _suffix = (
-            f"\n… [{len(result)} chars total; truncated —"
-            " use read_file offset/limit or grep to fetch remainder"
-            " (page until no truncation marker remains);"
-            " never treat this preview as full content;"
-            " say PARTIAL + remainder when work is left]"
+        result = truncate_with_marker(
+            result, _TOOL_RESULT_MAX,
+            "truncated — use read_file offset/limit or grep to fetch"
+            " remainder (page until no truncation marker remains);"
+            " say PARTIAL + remainder when work is left",
         )
-        if _TOOL_RESULT_MAX <= len(_suffix):
-            result = (
-                "…"[:_TOOL_RESULT_MAX] if _TOOL_RESULT_MAX <= 1
-                else result[:_TOOL_RESULT_MAX - 1] + "…"
-            )
-        else:
-            result = result[:_TOOL_RESULT_MAX - len(_suffix)] + _suffix
 
     return _emit_tool_result(emit, name, result)
 

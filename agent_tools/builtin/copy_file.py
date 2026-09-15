@@ -6,6 +6,7 @@ from ..base import (
     AgentTool,
     copy_file_atomically,
     ensure_parent_dir,
+    no_clobber_result,
     prepare_source_destination,
     source_destination_parameters,
     summarize_path_pair,
@@ -30,7 +31,7 @@ class CopyFileTool(AgentTool):
             # can create a file or symlink before a normal copy opens dst.
             # The shared helper publishes only a completed, no-clobber copy.
             if not copy_file_atomically(src, dst):
-                return f"Destination already exists: {raw_dst}"
+                return no_clobber_result(raw_dst)
         except OSError as exc:
             return f"Copy failed: {exc}"
         return f"Copied: {raw_src} -> {raw_dst}"
