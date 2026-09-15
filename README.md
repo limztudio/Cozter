@@ -659,7 +659,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/reserve` | Create a recurring scheduled prompt |
 | `/schedules` | List schedules and delete one by number |
 | `/version` | Show the current git version and last commit date |
-| `/doctor` | Check each backend's readiness (CLI executable, llama endpoint, or Z.ai API key) |
+| `/doctor` | Check each backend's readiness (CLI executable, server endpoint, or API key) |
 | `/cancel` | Cancel a picker/wizard, pending answer, running turn, or queued work |
 | `/start` | Confirm the bot is running |
 
@@ -1565,9 +1565,9 @@ upstream; if any of those are unavailable, it safely skips the auto-pull.
 
 Only when an update is available does Cozter pause new AI turns, wait for
 active turns to finish, fast-forward-pull, install any changed
-`requirements.txt`, and broadcast a "restarting" message. If a timed-out
-`git pull` still moved HEAD, Cozter restarts for that new commit rather than
-keeping the running process on the old one. On POSIX, the
+`requirements.txt`, and broadcast a "restarting" message. If a pull fails or
+times out after already moving HEAD, Cozter still restarts for that new
+commit rather than keeping the running process on the old one. On POSIX, the
 daemon then re-execs itself in place. On Windows, it exits for the bootstrap
 or `run_cozter.ps1` supervisor to relaunch it. Manual pulls and local commits
 while the bot is running also trigger this safe restart path. A service
