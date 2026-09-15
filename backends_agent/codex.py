@@ -29,10 +29,10 @@ _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 # These values preserve useful token-aware compaction before a user opens the
 # picker or on hosts where the catalog probe is unavailable.  They are active
 # CLI windows, not the larger maximum capability a model may advertise.
-# Verified 2026-09-14: live ``codex debug models`` (codex-cli 0.147.0)
-# lists gpt-5.6-sol/terra/luna, gpt-5.5, and gpt-5.3-codex-spark as
-# visibility=list (plus hide-only gpt-reserve and codex-auto-review, which
-# the parser skips). gpt-6-astra shipped on the OpenAI API on 2026-09-04
+# Verified 2026-09-15: live ``codex debug models`` (codex-cli 0.147.0)
+# lists gpt-5.6-sol/terra/luna and gpt-5.5 as visibility=list (plus
+# hide-only gpt-reserve and codex-auto-review, which the parser skips).
+# gpt-6-astra shipped on the OpenAI API on 2026-09-04
 # (1.05M max context; Codex sessions use the 272K active window like the
 # gpt-5.6 family) but this CLI build does not list it yet, so it stays
 # first in this fallback as forward cover ahead of the CLI rollout.
@@ -41,12 +41,12 @@ _FALLBACK_MODEL_SPECS = (
     ("gpt-5.6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-terra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
-    ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
     # gpt-5.4 and gpt-5.4-mini retired from Codex ChatGPT sign-in on
     # 2026-08-31; OpenAI's documented replacements are gpt-5.6-terra and
-    # gpt-5.6-luna. Keep Spark: the live CLI still lists that research
-    # preview, and it is the only remaining sub-272K Codex window.
-    ("gpt-5.3-codex-spark", _COMMON_EFFORT_LEVELS, 128_000),
+    # gpt-5.6-luna. The gpt-5.3-codex-spark research preview is gone from
+    # the live catalog too (absent even as hide-only on 2026-09-15), so
+    # the fallback ends here at gpt-5.5.
+    ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
 )
 (
     _FALLBACK_MODELS,

@@ -978,7 +978,7 @@ the hard ones:
 Defaults put all three tiers on `codex` (`gpt-5.6-luna` / `gpt-5.6-terra` /
 `gpt-5.6-sol`). Codex keeps the high tier and chat default on Sol:
 Astra shipped on the OpenAI API on 2026-09-04 but is still rolling out in
-live CLI catalogs (verified 2026-09-14 against codex-cli 0.147.0, which
+live CLI catalogs (verified 2026-09-15 against codex-cli 0.147.0, which
 does not list it yet), so a pinned `gpt-6-astra` default would fail closed
 on those accounts. Pointing a
 tier at another agent picks that agent's cheap/mid/strong models
@@ -1173,12 +1173,12 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. That built-in Codex fallback (verified 2026-09-14 against
+authoritative. That built-in Codex fallback (verified 2026-09-15 against
 codex-cli 0.147.0) lists `gpt-6-astra` first as forward cover — it shipped
 on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
 the GPT-5.6 family, but that CLI build does not list it yet — followed by
-the GPT-5.6 Sol/Terra/Luna family, `gpt-5.5`, and `gpt-5.3-codex-spark`
-(the remaining sub-272K window); `gpt-5.4` and `gpt-5.4-mini` were retired
+the GPT-5.6 Sol/Terra/Luna family and `gpt-5.5`; `gpt-5.3-codex-spark` is
+gone from the live catalog, and `gpt-5.4` and `gpt-5.4-mini` were retired
 from Codex ChatGPT sign-in. Grok's published `grok-4.6` and `grok-4.5` IDs use a 500K-token
 window for that same trigger; custom or private Grok models stay unknown
 until an operator sets `model_context_windows`. Grok delivers its prompt
