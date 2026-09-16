@@ -706,7 +706,10 @@ class BotPlatform(ABC):
                 ctx.args = ""
                 await pending(ctx)
                 return
-            await ctx.reply_text(f"Unknown command: /{ctx.command}")
+            await ctx.reply_text(
+                f"Unknown command: /{ctx.command}."
+                f" Available: /{' /'.join(sorted(self._COMMANDS))}"
+            )
             return
         # Any new command cancels a pending text-input flow. /cancel
         # uses ctx.had_pending to decide its reply.

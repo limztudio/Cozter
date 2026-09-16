@@ -76,6 +76,17 @@ class BotCommandTests(unittest.TestCase):
 
         self.assertEqual(self.bot.ai_texts, [text])
 
+    def test_unknown_slash_command_lists_available(self) -> None:
+        ctx = self.bot.make_context(
+            self.uid, "c1", text="/nope", command="nope", args="",
+        )
+        self._run(self.bot.dispatch_command(ctx))
+
+        self.assertIn("Unknown command: /nope", self._last())
+        self.assertIn("/cancel", self._last())
+        self.assertIn("/doctor", self._last())
+        self.assertEqual(self.bot.ai_texts, [])
+
     def test_backslash_cancel_exits_pending_input_flow(self) -> None:
         self._run(self.bot.cmd_open(self._ctx()))
         self.assertIn(self.uid, self.bot._pending_input)
