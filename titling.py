@@ -21,7 +21,7 @@ TITLE_PROMPT = (
     " punctuation/quotes. Dominant topic. Output only the title.\n\n"
     "No tools; the input below is everything."
 )
-TITLE_TIMEOUT: float | None = None  # no timeout; cancel is the only stop
+TITLE_TIMEOUT: float | None = 3600.0  # work cap; cancel still stops instantly
 TITLE_MAX_CHARS = 60
 TITLE_CONTEXT_CHARS = 4_000
 

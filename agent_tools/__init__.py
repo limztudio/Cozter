@@ -52,6 +52,25 @@ logger = logging.getLogger(__name__)
 _TOOL_RESULT_MAX = 4_000
 
 
+def _tool_timeout_seconds() -> float | None:
+    """Return the real-work cap for one tool call (default 3600s).
+
+    Read lazily so a config edit takes effect on the next tool call
+    without a restart. Malformed/absent config falls back to 3600s.
+    """
+    try:
+        from .. import config as _cfg
+
+        value = _cfg.get_tool_timeout()
+    except Exception:
+        return 3600.0
+    try:
+        seconds = float(value) if value is not None else 3600.0
+    except (TypeError, ValueError):
+        return 3600.0
+    return seconds if seconds > 0 else 3600.0
+
+
 # ---------------------------------------------------------------------------
 # Tool discovery: import every sibling module to trigger self-registration
 # ---------------------------------------------------------------------------
@@ -302,12 +321,18 @@ async def execute_tool(
     if tool is None:
         result = f"Unknown tool: {name}"
     else:
-        # No wall-clock timeout: tools run until they finish or the turn
-        # is cancelled (/stop, new user message, [[await]] pause).
-        # Cancel is the only stop; a slow search/build simply keeps
-        # running instead of timing out and forcing a wasteful retry.
+        # Real-work cap: tools run up to tool_timeout (default 3600s) so
+        # a slow search/build finishes instead of timing out and forcing
+        # a wasteful retry. Cancel (/stop, new message, [[await]]) still
+        # stops instantly.
         try:
-            raw_result: object = await tool.run(workspace_path, args)
+            cap = _tool_timeout_seconds()
+            if cap is not None and cap > 0:
+                raw_result: object = await asyncio.wait_for(
+                    tool.run(workspace_path, args), timeout=cap,
+                )
+            else:
+                raw_result = await tool.run(workspace_path, args)
             if isinstance(raw_result, str):
                 result = raw_result
             else:

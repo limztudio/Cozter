@@ -24,7 +24,7 @@ from ..base import (
 )
 from ...utils import clip_status_value
 
-# No wall-clock timeout: git runs until done or cancelled.
+# Real-work cap: git runs up to 3600s (under the tool runner cap) or until cancelled.
 _MAX_OUTPUT_CHARS = 12_000
 _MAX_GIT_ERROR_CHARS = 500
 _ACTIONS = ("status", "log", "diff")

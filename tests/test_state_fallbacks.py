@@ -706,7 +706,7 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
         old = config.CONFIG_PATH
         config.CONFIG_PATH = "/nonexistent/config.json"
         try:
-            self.assertEqual(config.get_tool_timeout(), 120)
+            self.assertEqual(config.get_tool_timeout(), 3600)
             self.assertEqual(config.get_update_idle_timeout(), 1200)
             # 0 means "disabled": the periodic dump is off by default,
             # but SIGUSR1 still works. Must be a valid return.
@@ -736,7 +736,7 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
 
     def test_positive_getters_reject_zero_and_non_ints(self) -> None:
         for key, getter, default in [
-            ("tool_timeout", config.get_tool_timeout, 120),
+            ("tool_timeout", config.get_tool_timeout, 3600),
             ("update_idle_timeout", config.get_update_idle_timeout, 1200),
         ]:
             for bad in (0, -1, True, "forever", None):

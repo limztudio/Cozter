@@ -29,8 +29,8 @@ _GREP_MAX_LINE_CHARS = 200
 # Python's built-in regex engine has no per-match deadline. Run scans in a
 # killable process instead of a thread so cancel (/stop, new message) always
 # reaps the worker instead of leaving an abandoned executor thread behind.
-# No wall-clock timeout: the scan runs until it finishes or the turn is
-# cancelled.
+# Real-work cap: the scan runs up to tool_timeout (default 3600s)
+# or until the turn is cancelled.
 _GREP_WORKER_JOIN_SECONDS = 0.5
 
 
@@ -87,8 +87,9 @@ class GrepTool(AgentTool):
         # CPU-bound and cannot be interrupted at an await point. A thread
         # would keep running after asyncio cancels its await, so isolate the
         # whole scan in a killable process instead.
-        # No timeout: the scan runs until it finishes or the turn is
-        # cancelled; cancel reaps the worker (see _start_scan_worker).
+        # Real-work cap: the scan runs up to tool_timeout (default 3600s)
+        # or until the turn is cancelled; cancel reaps the worker
+        # (see _start_scan_worker).
         # Run the blocking wait directly in this coroutine's thread: the
         # worker already lives in its own process, and receive_conn.poll()
         # yields in 0.1s slices so the event loop stays responsive without

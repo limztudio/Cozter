@@ -1112,13 +1112,14 @@ async def open_http_response(
     url: str,
     *,
     allow_redirects: bool = True,
-    timeout: int | None = None,
+    timeout: int | None = 3600,
 ) -> AsyncIterator[aiohttp.ClientResponse]:
     """Open one HTTP request with the shared web-tool client settings.
 
-    No wall-clock timeout by default: the request runs until it finishes
-    or the turn is cancelled. ``timeout`` is accepted for compatibility
-    and applied only when explicitly passed as a positive value.
+    Real-work cap: web fetches run up to 3600s (the tool runner's own
+    3600s cap still applies outside), so slow pages finish instead of
+    timing out early. Cancel still stops instantly. Pass an explicit
+    positive ``timeout`` to override, or 0/None for no client timeout.
     """
     client_timeout: aiohttp.ClientTimeout | None = None
     if timeout is not None and timeout > 0:

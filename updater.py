@@ -13,12 +13,11 @@ REQUIREMENTS_PATH = os.path.join(MODULE_ROOT, "requirements.txt")
 _STARTUP_COMMIT: str | None = None
 
 
-_GIT_TIMEOUT = 30  # seconds — prevents hung network calls from blocking forever
+_GIT_TIMEOUT = 3600  # seconds — real-work cap so slow fetches finish; cancel still stops the turn
 # Dependency installation only runs when an update changed requirements (or
-# while repairing a missing fresh-venv dependency), but it must still be
-# bounded: intake is paused during an update restart and an unbounded pip
-# process would queue chat messages indefinitely.
-_PIP_INSTALL_TIMEOUT = 180
+# while repairing a missing fresh-venv dependency). Real-work cap of 3600s
+# so slow installs finish instead of timing out early.
+_PIP_INSTALL_TIMEOUT = 3600
 
 # A Windows supervisor (such as run_cozter.ps1) treats this as a normal
 # self-update restart.  It is non-zero so Task Scheduler recovery can also

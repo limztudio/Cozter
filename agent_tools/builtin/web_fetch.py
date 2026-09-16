@@ -34,7 +34,7 @@ class _FetchRefused(Exception):
     Covers HTTP error statuses, refused content types, refused redirect
     targets, and redirect loops. Transport failures (connection resets,
     DNS hiccups) stay ordinary exceptions so the caller can retry them
-    once. No wall-clock timeout: requests run until done or cancelled.
+    once. Real-work cap: requests run up to 3600s or until cancelled.
     """
 
 
@@ -131,8 +131,8 @@ class WebFetchTool(AgentTool):
         )
 
         # One retry covers transient transport failures (connection reset,
-        # resolver hiccup); every other outcome is final. No timeout —
-        # cancel is the only stop.
+        # resolver hiccup); every other outcome is final. Real-work cap
+        # of 3600s; cancel still stops instantly.
         final_url = url
         content_type = ""
         body = ""

@@ -80,10 +80,11 @@ _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
 # values rather than carrying attacker-controlled megabyte strings around.
 _MAX_MODEL_ID_CHARS = 512
 _MAX_MODEL_IDS = 4_096
-# Generation can run for a long time, so requests carry no timeout at all:
-# no total, no connect, no sock-read. Cancel (/stop, new user message,
-# [[await]] pause) is the only stop — a slow provider simply keeps
-# streaming instead of timing out and forcing a wasteful retry.
+# Generation can run for a long time, so requests carry a 3600s real-work
+# cap (no total/connect cap, sock-read = per-backend socket timeout).
+# Cancel (/stop, new user message, [[await]] pause) still stops instantly —
+# a slow provider keeps streaming up to the cap instead of timing out early
+# and forcing a wasteful retry.
 # Error responses never reach the model in full (their messages are trimmed
 # below), so do not let a misconfigured or hostile endpoint make the bot
 # buffer an arbitrarily large HTML/JSON error document first.
@@ -275,10 +276,10 @@ class OpenAIChatBackend(Backend):
         return 8
 
     def _socket_timeout(self) -> int | None:
-        # No wall-clock timeout on generation: the stream runs until the
-        # provider finishes or the turn is cancelled (cancel is the only
-        # stop). Kept as a hook returning None so subclasses keep working.
-        return None
+        # Real-work cap hook: subclasses return their configured socket
+        # timeout (default 3600s); the stream runs up to that bound or
+        # until the turn is cancelled. Cancel still stops instantly.
+        return 3600
 
     def _socket_timeout_setting(self) -> str:
         """Config setting to mention in a request error (legacy label)."""
@@ -763,8 +764,8 @@ async def _stream_completion(
     and HTTP 429/5xx are retried with exponential backoff up to
     *max_retries* times - retrying a completion is safe because tool side
     effects only run *after* this returns. A bad status or malformed
-    response is not retried. No wall-clock timeout: the stream runs
-    until the provider finishes or the turn is cancelled.
+    response is not retried. Real-work cap: the stream runs up to the
+    ``sock_read`` bound (default 3600s) or until the turn is cancelled.
     """
     async with http_error_translator(label, sock_read, timeout_setting):
         attempt = 0
@@ -798,10 +799,9 @@ async def _stream_once(
     """One streaming attempt; raise _RetryableError for transient failures.
 
     Parses Server-Sent Events. ``data:`` lines carry JSON deltas;
-    ``data: [DONE]`` terminates the stream. No wall-clock timeout:
-    the stream runs until the provider finishes or the turn is
-    cancelled (cancel is the only stop). A subclass-provided positive
-    ``sock_read`` is still honored for compatibility.
+    ``data: [DONE]`` terminates the stream. Real-work cap: the stream runs
+    up to the subclass-provided ``sock_read`` bound (default 3600s) or
+    until the turn is cancelled; cancel still stops instantly.
     """
     if sock_read is not None and sock_read > 0:
         timeout = aiohttp.ClientTimeout(total=None, sock_read=sock_read)

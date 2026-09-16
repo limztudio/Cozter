@@ -15,9 +15,10 @@ from ...utils import (
     mark_process_group_leader,
 )
 
-# Bash runs with no wall-clock timeout: cancel (/stop, new user message,
-# [[await]] pause) is the only stop. A slow build/search simply keeps
-# running instead of timing out and forcing a wasteful retry.
+# Bash runs under the real-work tool cap (tool_timeout, default 3600s):
+# cancel (/stop, new user message, [[await]] pause) still stops instantly.
+# A slow build/search keeps running up to the cap instead of timing out
+# early and forcing a wasteful retry.
 
 # Hard ceiling on captured output. A command like ``yes`` or ``cat /dev/zero``
 # emits gigabytes; buffering it whole (as ``communicate()`` does) would OOM
@@ -33,7 +34,7 @@ class BashTool(AgentTool):
     # child processes. Keep it out of HTTP agents' default ``auto`` mode.
     requires_full_permission = True
     description = (
-        "Run a shell command (cwd = workspace, no timeout — runs until done"
+        "Run a shell command (cwd = workspace, 3600s real-work cap — runs until done"
         " or cancelled). For build/test/verify: capture output to a file"
         " (`... 2>&1 | tee /tmp/build.log`), then grep the FULL file for"
         " error/warning/exception/traceback — never eyeball tail only;"
@@ -51,8 +52,9 @@ class BashTool(AgentTool):
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string"
-        # No timeout: the command runs until it exits or the turn is
-        # cancelled (/stop, new user message). Extra args are ignored.
+        # Real-work cap: the command runs up to tool_timeout (default 3600s)
+        # or until the turn is cancelled (/stop, new user message).
+        # Extra args are ignored.
 
         # Use the shell so the model can use pipes, redirection, etc.
         shell = _find_shell()

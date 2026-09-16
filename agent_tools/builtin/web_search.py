@@ -29,8 +29,8 @@ _SEARCH_ENDPOINTS = (
 )
 # A 200 response carrying an empty shell (no result anchors) is common while
 # the service sheds load, so each endpoint is tried twice before moving on.
-# No wall-clock timeout: each attempt runs until it finishes or the turn is
-# cancelled (cancel is the only stop).
+# Real-work cap: each attempt runs up to 3600s (under the tool runner's
+# own 3600s cap) or until the turn is cancelled; cancel still stops instantly.
 _ATTEMPTS_PER_ENDPOINT = 2
 _RETRY_DELAY_SECONDS = 0.5
 

@@ -84,7 +84,7 @@ _COMPLETENESS_RULE = (
     f"{WHOLE_SCOPE_RULE}"
     f" {DOC_FOLLOWING_RULE}"
     " Verify-with-evidence: build/test/verify = enumerate targets, run"
-    " canonical commands with no timeout (cancel is the only stop; capture"
+    " canonical commands with 3600s cap (cancel still stops instantly; capture"
     " to file), grep full logs for error/warning/exception, fix each,"
     " re-run until zero; runtime = launch + exercise paths + check logs;"
     " report commands + exit codes + counts; never claim clean from"

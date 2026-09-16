@@ -111,8 +111,8 @@ async def http_error_translator(
                 ...
 
     *label* names the service in each error message. *sock_read_timeout*
-    and *timeout_setting* are legacy labels kept for compatibility; no
-    wall-clock timeout is enforced (cancel is the only stop).
+    and *timeout_setting* name the real-work cap (default 3600s) shown in
+    timeout errors; cancel still stops instantly.
     """
     try:
         yield

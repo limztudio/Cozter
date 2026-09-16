@@ -178,8 +178,12 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         return True
 
     def _socket_timeout(self) -> int | None:
-        # No wall-clock timeout on generation: cancel is the only stop.
-        return None
+        # Real-work cap: slow generation streams keep running up to
+        # meta_socket_timeout (default 3600s). Cancel still stops instantly.
+        try:
+            return cfg.get_meta_socket_timeout()
+        except Exception:
+            return 3600
 
     def _socket_timeout_setting(self) -> str:
         return "meta_socket_timeout"

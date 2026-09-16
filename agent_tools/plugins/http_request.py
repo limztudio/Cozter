@@ -35,7 +35,7 @@ from ..base import (
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 5
-# No wall-clock timeout: requests run until done or cancelled.
+# Real-work cap: requests run up to 3600s (under the tool runner cap) or until cancelled.
 _DEFAULT_MAX_CHARS = 3_500
 # A tool-call argument, not a file upload: keep request bodies modest.
 _MAX_BODY_CHARS = 100_000

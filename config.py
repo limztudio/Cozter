@@ -28,20 +28,22 @@ _DEFAULT_CONFIG = {
     "llama_server_url": "http://127.0.0.1:8080",
     "llama_max_agent_turns": 60,
     "llama_tool_repeat_limit": 3,
-    "llama_socket_timeout": 1800,
+    "llama_socket_timeout": 3600,
     "llama_max_retries": 2,
     "zai_api_key": "",
     "zai_base_url": "https://api.z.ai/api/paas/v4",
-    "zai_socket_timeout": 300,
+    "zai_socket_timeout": 3600,
     "zai_max_retries": 2,
     "meta_api_key": "",
     "meta_base_url": "https://api.meta.ai/v1",
-    "meta_socket_timeout": 300,
+    "meta_socket_timeout": 3600,
     "meta_max_retries": 2,
-    # Hard backstop on a single tool call, so a wedged plugin/custom tool
-    # cannot block the whole turn indefinitely. Agent turns themselves are
-    # not wall-clock limited; long-running work is allowed to finish.
-    "tool_timeout": 120,
+    # Real-work cap on a single tool call (search/build/fetch/...): 3600s
+    # so slow work finishes instead of timing out and forcing a wasteful
+    # retry. Cancel (/stop, new message, [[await]]) still stops instantly.
+    # Chat-reply paths (Signal RPC, model discovery, stream drains) keep
+    # their own short timeouts.
+    "tool_timeout": 3600,
     # Diagnostic interval for the auto-update loop while it is waiting on
     # active turns. Reaching this interval emits stuck-turn diagnostics and
     # then continues waiting; it does not cancel the turn or force an update
@@ -188,11 +190,10 @@ def get_llama_tool_repeat_limit() -> int:
 
 
 def get_llama_socket_timeout() -> int | None:
-    """Legacy llama socket-timeout setting; no timeout is enforced.
+    """Real-work cap for llama generation streams (default 3600s).
 
-    Generation streams run until the provider finishes or the turn is
-    cancelled (cancel is the only stop). Kept so existing config files
-    keep loading; callers ignore the value.
+    Slow providers keep streaming up to this bound instead of timing out
+    early and forcing a wasteful retry. Cancel still stops instantly.
     """
     return _get_int_at_least("llama_socket_timeout", 1)
 
@@ -252,7 +253,7 @@ def get_zai_base_url() -> str:
 
 
 def get_zai_socket_timeout() -> int | None:
-    """Legacy zai socket-timeout setting; no timeout is enforced."""
+    """Real-work cap for zai generation streams (default 3600s). Cancel still stops instantly."""
     return _get_int_at_least("zai_socket_timeout", 1)
 
 
@@ -273,7 +274,7 @@ def get_meta_base_url() -> str:
 
 
 def get_meta_socket_timeout() -> int | None:
-    """Legacy Meta socket-timeout setting; no timeout is enforced."""
+    """Real-work cap for Meta generation streams (default 3600s). Cancel still stops instantly."""
     return _get_int_at_least("meta_socket_timeout", 1)
 
 
@@ -283,11 +284,12 @@ def get_meta_max_retries() -> int:
 
 
 def get_tool_timeout() -> int | None:
-    """Legacy tool-timeout setting; no timeout is enforced.
+    """Real-work cap on a single tool call (default 3600s).
 
-    Tools run until they finish or the turn is cancelled (cancel is the
-    only stop). Kept so existing config files keep loading; the tool
-    runner ignores the value.
+    Tools (search/build/fetch/...) run up to this bound instead of timing
+    out early and forcing a wasteful retry. Cancel (/stop, new message,
+    [[await]]) still stops instantly. Chat-reply paths keep their own
+    short timeouts.
     """
     return _get_int_at_least("tool_timeout", 1)
 

@@ -79,8 +79,12 @@ class LlamaBackend(CachedOpenAIChatBackend):
         return cfg.get_llama_tool_repeat_limit()
 
     def _socket_timeout(self) -> int | None:
-        # No wall-clock timeout on generation: cancel is the only stop.
-        return None
+        # Real-work cap: slow generation streams keep running up to
+        # llama_socket_timeout (default 3600s). Cancel still stops instantly.
+        try:
+            return cfg.get_llama_socket_timeout()
+        except Exception:
+            return 3600
 
     def _socket_timeout_setting(self) -> str:
         return "llama_socket_timeout"

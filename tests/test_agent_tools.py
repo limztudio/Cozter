@@ -1267,8 +1267,8 @@ class ConfirmPermissionGateTests(unittest.TestCase):
 
 
 class ExecuteToolTimeoutTests(unittest.TestCase):
-    def test_execute_tool_has_no_timeout_and_runs_to_completion(self) -> None:
-        """Cancel is the only stop: a slow tool finishes, never times out."""
+    def test_execute_tool_real_work_cap_finishes_slow_tool(self) -> None:
+        """3600s real-work cap: a slow tool finishes; cancel still stops instantly."""
         class SlowTool:
             file_action = None
 

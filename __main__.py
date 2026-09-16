@@ -95,9 +95,9 @@ if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
 _VENV_REEXEC_ENV = "COZTER_VENV_REEXEC"
 _WINDOWS_CHILD_RESTART_DELAY_SEC = 1
 # A dependency bootstrap is only a recovery path for a newly-created venv.
-# It must not leave a scheduled Slack service hung forever before it has even
-# opened its Socket Mode connection.
-_DEPENDENCY_INSTALL_TIMEOUT_SEC = 180
+# Real-work cap of 3600s so a slow install finishes instead of timing out
+# early; chat surfaces connect after it completes.
+_DEPENDENCY_INSTALL_TIMEOUT_SEC = 3600
 _REQUIRED_RUNTIME_MODULES = (
     "aiohttp",
     "slack_bolt",

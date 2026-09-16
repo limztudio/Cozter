@@ -284,20 +284,20 @@ example layout lives in `.config/config.example.json`):
   "llama_server_url": "http://127.0.0.1:8080",
   "llama_max_agent_turns": 60,
   "llama_tool_repeat_limit": 3,
-  "llama_socket_timeout": 1800,
+  "llama_socket_timeout": 3600,
   "llama_max_retries": 2,
 
   "zai_api_key": "",
   "zai_base_url": "https://api.z.ai/api/paas/v4",
-  "zai_socket_timeout": 300,
+  "zai_socket_timeout": 3600,
   "zai_max_retries": 2,
 
   "meta_api_key": "",
   "meta_base_url": "https://api.meta.ai/v1",
-  "meta_socket_timeout": 300,
+  "meta_socket_timeout": 3600,
   "meta_max_retries": 2,
 
-  "tool_timeout": 120,
+  "tool_timeout": 3600,
   "update_idle_timeout": 1200,
   "dump_traceback_interval": 0,
   "update_check_interval": 300,
@@ -342,16 +342,16 @@ accepted from or sent to Telegram, Slack, and Signal.
 The llama safety settings are read at the start of every llama turn:
 `llama_max_agent_turns` (default 60) limits tool-call turns before Cozter
 forces a final answer, and `llama_tool_repeat_limit` (default 3) skips an
-identical call after that many executions. Generation streams and tool
-calls carry no wall-clock timeout: cancel (`/stop`, new user message,
-`[[await]]` pause) is the only stop, so a slow server or a long
-search/build simply keeps running instead of timing out and forcing a
-wasteful retry.
+identical call after that many executions. Real work carries a 3600s cap:
+tool calls (`tool_timeout`, default 3600s) and generation streams
+(`llama_socket_timeout`, `zai_socket_timeout`, `meta_socket_timeout`,
+each default 3600s) keep running up to that bound so slow work finishes
+instead of timing out and forcing a wasteful retry. Cancel (`/stop`, new
+user message, `[[await]]` pause) still stops instantly. Chat-reply paths
+(Signal RPC, model discovery, stream drains) keep their own short timeouts.
 
 Agent turns do not have a wall-clock timeout; long-running work is
-allowed to finish. `tool_timeout`, `llama_socket_timeout`,
-`zai_socket_timeout`, and `meta_socket_timeout` remain accepted config
-keys for compatibility but enforce nothing. `update_idle_timeout` (default 1200s) controls how often
+allowed to finish. `update_idle_timeout` (default 1200s) controls how often
 the auto-update loop dumps diagnostics while waiting for active turns; it
 keeps waiting instead of restarting through active work.
 `dump_traceback_interval` (default 0) enables optional periodic thread dumps
@@ -422,8 +422,8 @@ summary/low tier). Private or preview IDs can be added via `extra_models`
 overridable per model via `model_context_windows`.
 `meta_max_retries` (default 2) mirrors the other cloud retry knob.
 
-`zai_socket_timeout` is accepted but enforces nothing (cancel is the only
-stop); `zai_max_retries` (default 2) mirrors the llama retry behavior for
+`zai_socket_timeout` (default 3600s) is the real-work cap for zai generation
+streams (cancel still stops instantly); `zai_max_retries` (default 2) mirrors the llama retry behavior for
 the cloud call. Select `zai`
 with `/agent`, pick a model with `/model` (default `glm-5.3`), and add private
 or regional GLM ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai
@@ -786,7 +786,7 @@ tools: `bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`,
 `apply_patch`, `delete_file`, `copy_file`, `move_file`, `make_dir`,
 `list_dir`, `tree`, `glob`, `grep`, `web_search`, and `web_fetch`.
 For build/test/verify work the `bash` tool description directs the model
-to run with no timeout (cancel is the only stop), capture output to a file,
+to run with the 3600s real-work cap (cancel still stops instantly), capture output to a file,
 grep the full log for error/warning/exception/traceback, and never claim
 clean from a truncated tail-only preview.
 
@@ -798,8 +798,8 @@ for disabled examples or local scratch tools. One file, two invocation paths:
 Treat plugins as trusted bot code: discovery imports their modules in the
 Cozter process, so module-level code runs at startup and any dependencies must
 be installed in the project environment. Restart after adding, removing, or
-changing a plugin. Plugin calls carry no wall-clock timeout (cancel is
-the only stop); trusted plugin code that blocks the event loop
+changing a plugin. Plugin calls carry the 3600s real-work cap (cancel still
+stops instantly); trusted plugin code that blocks the event loop
 synchronously can still stall the process and must isolate blocking work
 itself. It does not sandbox plugin code. CLI-backend plugins run
 through that CLI's own shell/tool policy.
@@ -1025,7 +1025,7 @@ strand a run nobody is watching. Every agent turn preamble now also carries the 
 doc-following / verify-with-evidence completeness rule (list every target first, do each,
 re-check leftovers; enumerate every rule/section when told to follow a
 doc; build/test/verify means enumerate targets, run canonical commands
-with no timeout (cancel is the only stop) captured to a file, grep the
+with 3600s cap (cancel still stops instantly) captured to a file, grep the
 full logs for error/warning/exception, fix each hit, re-run until zero,
 exercise runtime paths and check logs, and report commands + exit codes +
 counts; never claim done with work left or clean from a truncated preview
@@ -1314,7 +1314,7 @@ identity and delete it in `cleanup_process` after the child is reaped.
 
 Internal LLM jobs (routing, session titling, compaction, and colony
 consolidation) all go through `utils.run_internal_backend()`. The shared
-runner carries no wall-clock timeout (cancel is the only stop), consumes
+runner carries the 3600s real-work cap (cancel still stops instantly), consumes
 stdout and stderr without pipe deadlocks, kills cancelled children, and
 logs stderr when a backend exits without an assistant response. HTTP backends expose the same
 process-shaped contract through `backends_agent/_http_proc.py`, so the

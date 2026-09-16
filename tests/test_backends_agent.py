@@ -2803,7 +2803,7 @@ class MetaBackendTests(unittest.TestCase):
             config._DEFAULT_CONFIG["meta_base_url"],
             "https://api.meta.ai/v1",
         )
-        self.assertEqual(config._DEFAULT_CONFIG["meta_socket_timeout"], 300)
+        self.assertEqual(config._DEFAULT_CONFIG["meta_socket_timeout"], 3600)
         self.assertEqual(config._DEFAULT_CONFIG["meta_max_retries"], 2)
         self.assertEqual(config._DEFAULT_CONFIG["meta_api_key"], "")
 
