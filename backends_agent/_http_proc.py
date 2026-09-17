@@ -129,6 +129,11 @@ async def http_error_translator(
             f"{label} dropped the connection mid-response"
         ) from exc
     except (TimeoutError, asyncio.TimeoutError) as exc:
+        if sock_read_timeout is not None:
+            raise RuntimeError(
+                f"{label} request timed out after {sock_read_timeout}s"
+                f" ({timeout_setting}): {exc}"
+            ) from exc
         raise RuntimeError(
             f"{label} request timed out: {exc}"
         ) from exc
