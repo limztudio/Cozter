@@ -347,7 +347,11 @@ tool calls (`tool_timeout`, default 3600s) and generation streams
 (`llama_socket_timeout`, `zai_socket_timeout`, `meta_socket_timeout`,
 each default 3600s) keep running up to that bound so slow work finishes
 instead of timing out and forcing a wasteful retry. Cancel (`/stop`, new
-user message, `[[await]]` pause) still stops instantly. Chat-reply paths
+user message, `[[await]]` pause) still stops instantly. A generation-stream
+timeout surfaces as `<service> request timed out after <N>s
+(<socket-timeout-setting>)`, naming the real-work bound and the config key
+that controls it, so the message itself points at the knob to raise.
+Chat-reply paths
 (Signal RPC, model discovery, stream drains) keep their own short timeouts.
 
 Agent turns do not have a wall-clock timeout; long-running work is
@@ -668,7 +672,10 @@ the literal name. The `/agent` picker deliberately reserves option `0` for
 the default `flexible` meta-agent; its direct backends start at 1. `/open`
 also accepts a recent-workspace number directly as `/open 2`.
 If a picker entry is not recognized, Cozter keeps the picker open and asks
-again; use `/cancel` to leave it.
+again; use `/cancel` to leave it. An unrecognized slash command (for
+example `/nope`) replies `Unknown command: /nope` followed by the sorted
+list of available commands (`/agent /bg /cancel …`), so the valid names
+are visible without guessing.
 
 `/context` applies a character budget to each composed turn. Cozter never
 truncates the current user message: it trims saved context first and, if
@@ -806,7 +813,10 @@ through that CLI's own shell/tool policy.
 
 - **HTTP backends** (`llama`, `meta`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
-  the 16 built-in tools in `agent_tools/builtin/`
+  the 17 files under `agent_tools/builtin/` (`bash`, `read_file`,
+  `write_file`, `edit_file`, `multi_edit`, `apply_patch`, `delete_file`,
+  `copy_file`, `move_file`, `make_dir`, `list_dir`, `tree`, `glob`, `grep`,
+  `web_search`, and `web_fetch`)
 - **CLI backends** (`codex`, `claude_code`, `copilot`, `grok`) can't have
   external tools injected into their fixed toolkit. The bot
   instead lists each plugin in their prompt and tells the model to
@@ -1291,7 +1301,7 @@ Cozter/
 │
 └── agent_tools/          tool surface for HTTP backends + plugin registry
     ├── base.py             AgentTool ABC; path/argument validation and shared HTTP helpers
-    ├── builtin/            16 built-in tools (read_file, edit_file, glob, grep, bash, web_search, ...)
+    ├── builtin/            17 files: 16 built-in tools (bash, read_file, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch) plus __init__.py
     └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, memory, http_request shipped live)
 ```
 
@@ -1428,7 +1438,8 @@ ignored for local secrets and runtime queues.
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
   `llama.py`, `zai.py`, and `meta.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
-  the 16 files under `agent_tools/builtin/`, and user plugins plus their
+  the 17 files under `agent_tools/builtin/` (16 tools plus its
+  `__init__.py`), and user plugins plus their
   README under `agent_tools/plugins/`
 - Project metadata, CI, and docs: `requirements.txt`, `py.typed`, `mypy.ini`,
   `pyproject.toml` (the Ruff E4/E7/E9/F lint contract), `.gitlab-ci.yml`,
