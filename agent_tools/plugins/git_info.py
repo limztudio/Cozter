@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
-from contextlib import suppress
 from typing import Any, ClassVar
 
 from ..base import (
@@ -22,13 +20,25 @@ from ..base import (
     coerce_int_arg,
     object_parameters,
     resolve_inside_workspace,
-    truncate_with_marker,
 )
 from ...utils import clip_status_value
+from ._git_common import (
+    MAX_GIT_ERROR_CHARS as _MAX_GIT_ERROR_CHARS,
+    MAX_OUTPUT_CHARS,
+    GitFailed as _GitFailed,
+    add_common_git_flags,
+    bounded as _bounded,
+    check_ref as _checked_ref,
+    first_stderr_line,
+    git_once as _git_once,
+)
+
+# Test-visible alias (tests/test_titling.py reads _MAX_OUTPUT_CHARS).
+_MAX_OUTPUT_CHARS = MAX_OUTPUT_CHARS
 
 # Real-work cap: git runs up to 3600s (under the tool runner cap) or until cancelled.
-_MAX_OUTPUT_CHARS = 12_000
-_MAX_GIT_ERROR_CHARS = 500
+# Output/error limits, ref validation, failure type, process runner, and
+# output clipping live in ._git_common (shared with git_ops/git_sync).
 # Read-only actions only: local writes live in git_ops, network sync in
 # git_sync. The docstring order matches the action order below.
 _ACTIONS = (
@@ -41,29 +51,6 @@ _ACTIONS = (
     "show",
     "blame",
 )
-
-
-class _GitFailed(Exception):
-    """Git exited non-zero; carries the model-facing stderr excerpt."""
-
-
-_REF_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
-
-
-def _checked_ref(name: str) -> str:
-    """Validate a revision token so no model flag can enter the argv."""
-    if len(name) > 200 or not _REF_RE.match(name):
-        raise ValueError(f"invalid ref {name!r}")
-    for marker in (
-        "..", "@{", "~", "^", ":", "?", "*", "[", "\\",
-        "'", '"', "`", "$", "(", ")", "|", ";", "&", "<", ">",
-        "!", " ", "\t", "\n",
-    ):
-        if marker in name:
-            raise ValueError(f"invalid ref {name!r}")
-    if name.startswith(("-", "/", ".")) or name.endswith(("/", ".", ".lock")):
-        raise ValueError(f"invalid ref {name!r}")
-    return name
 
 
 class GitInfoTool(AgentTool):
@@ -228,12 +215,7 @@ class GitInfoTool(AgentTool):
         fsmonitor daemon spawn, and no locale-dependent path quoting.
         """
         env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
-        argv = [
-            argv[0],
-            "-c", "core.fsmonitor=false",
-            "-c", "core.quotepath=false",
-            *argv[1:],
-        ]
+        argv = add_common_git_flags(argv)
         try:
             stdout, stderr, returncode = await _git_once(
                 argv, workspace, env,
@@ -257,17 +239,7 @@ class GitInfoTool(AgentTool):
                     rebuilt, workspace, env,
                 )
         if returncode != 0:
-            # Keep the diagnostic to git's first stderr line; later lines
-            # are usually usage text that would flood the tool result.
-            first_line = stderr.strip().splitlines()
-            raw_detail = first_line[0] if first_line else "?"
-            if len(raw_detail) > _MAX_GIT_ERROR_CHARS:
-                raw_detail = (
-                    raw_detail[:_MAX_GIT_ERROR_CHARS - len("… [clipped]")]
-                    + "… [clipped]"
-                )
-            detail = raw_detail
-            raise _GitFailed(detail or "?")
+            raise _GitFailed(first_stderr_line(stderr))
         return stdout, stderr
 
     def summarize(self, args: dict) -> str:
@@ -279,45 +251,6 @@ class GitInfoTool(AgentTool):
         )
         suffix = f" ({clip_status_value(detail)})" if detail else ""
         return f"git {clip_status_value(action or '?', 40)}{suffix}"
-
-
-async def _git_once(
-    argv: list[str],
-    workspace: str,
-    env: dict[str, str],
-) -> tuple[str, str, int]:
-    """Run one git argv, reaping the process on cancellation."""
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=workspace,
-        env=env,
-    )
-    try:
-        stdout_b, stderr_b = await proc.communicate()
-    except BaseException:
-        # A turn stop cancelled us; never orphan
-        # the git process inside Cozter's process group.
-        if proc.returncode is None:
-            proc.kill()
-            with suppress(ProcessLookupError):
-                await proc.wait()
-        raise
-    return (
-        stdout_b.decode("utf-8", errors="replace"),
-        stderr_b.decode("utf-8", errors="replace"),
-        proc.returncode if proc.returncode is not None else -1,
-    )
-
-
-def _bounded(text: str) -> str:
-    if len(text) <= _MAX_OUTPUT_CHARS:
-        return text
-    return truncate_with_marker(
-        text, _MAX_OUTPUT_CHARS, "say PARTIAL + remainder when coverage is unclear",
-    )
 
 
 if __name__ == "__main__":

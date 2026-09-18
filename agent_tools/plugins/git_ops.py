@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from contextlib import suppress
 from typing import Any, ClassVar
 
 from ..base import (
@@ -26,14 +25,22 @@ from ..base import (
     coerce_int_arg,
     object_parameters,
     resolve_inside_workspace,
-    truncate_with_marker,
 )
 from ...utils import clip_status_value
+from ._git_common import (
+    MAX_GIT_ERROR_CHARS as _MAX_GIT_ERROR_CHARS,
+    GitFailed as _GitFailed,
+    add_common_git_flags,
+    bounded as _bounded,
+    clean_ref as _clean_ref,
+    first_stderr_line,
+    git_once as _git_once,
+)
 
 # Real-work cap: git runs under the tool runner cap (default 3600s) or
 # until cancelled.
-_MAX_OUTPUT_CHARS = 12_000
-_MAX_GIT_ERROR_CHARS = 500
+# Output/error limits, ref validation, failure type, process runner, and
+# output clipping live in ._git_common (shared with git_info/git_sync).
 _MAX_MESSAGE_CHARS = 2_000
 _ACTIONS = (
     "add",
@@ -57,38 +64,7 @@ _ACTIONS = (
     "clean",
 )
 _RESET_MODES = ("soft", "mixed", "hard")
-_REF_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
 _STASH_RE = re.compile(r"^stash@\{\d+\}$")
-
-
-class _GitFailed(Exception):
-    """Git exited non-zero; carries the model-facing stderr excerpt."""
-
-
-def _invalid_ref_chars(name: str) -> bool:
-    """Return True when *name* carries characters git treats specially."""
-    for marker in (
-        "..", "@{", "~", "^", ":", "?", "*", "[", "\\",
-        "'", '"', "`", "$", "(", ")", "|", ";", "&", "<", ">",
-        "!", " ", "\t", "\n",
-    ):
-        if marker in name:
-            return True
-    return False
-
-
-def _clean_ref(value: object, *, what: str = "ref") -> tuple[str | None, str | None]:
-    """Validate a branch/tag/ref name; return (value, error)."""
-    if not isinstance(value, str) or not value.strip():
-        return None, f"Error: '{what}' must be a non-empty string"
-    name = value.strip()
-    if len(name) > 200 or not _REF_RE.match(name):
-        return None, f"Error: invalid {what} {name!r}"
-    if _invalid_ref_chars(name):
-        return None, f"Error: invalid {what} {name!r}"
-    if name.startswith(("-", "/", ".")) or name.endswith(("/", ".", ".lock")):
-        return None, f"Error: invalid {what} {name!r}"
-    return name, None
 
 
 def _clean_message(value: object) -> tuple[str | None, str | None]:
@@ -442,63 +418,14 @@ async def _run_git(argv: list[str], workspace: str) -> tuple[str, str]:
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_OPTIONAL_LOCKS": "1",
     }
-    argv = [
-        argv[0],
-        "-c", "core.fsmonitor=false",
-        "-c", "core.quotepath=false",
-        *argv[1:],
-    ]
+    argv = add_common_git_flags(argv)
     try:
         stdout, stderr, returncode = await _git_once(argv, workspace, env)
     except asyncio.TimeoutError:
         raise
     if returncode != 0:
-        first_line = stderr.strip().splitlines()
-        raw_detail = first_line[0] if first_line else "?"
-        if len(raw_detail) > _MAX_GIT_ERROR_CHARS:
-            raw_detail = (
-                raw_detail[:_MAX_GIT_ERROR_CHARS - len("… [clipped]")]
-                + "… [clipped]"
-            )
-        raise _GitFailed(raw_detail or "?")
+        raise _GitFailed(first_stderr_line(stderr))
     return stdout, stderr
-
-
-async def _git_once(
-    argv: list[str],
-    workspace: str,
-    env: dict[str, str],
-) -> tuple[str, str, int]:
-    """Run one git argv, reaping the process on cancellation."""
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=workspace,
-        env=env,
-    )
-    try:
-        stdout_b, stderr_b = await proc.communicate()
-    except BaseException:
-        if proc.returncode is None:
-            proc.kill()
-            with suppress(ProcessLookupError):
-                await proc.wait()
-        raise
-    return (
-        stdout_b.decode("utf-8", errors="replace"),
-        stderr_b.decode("utf-8", errors="replace"),
-        proc.returncode if proc.returncode is not None else -1,
-    )
-
-
-def _bounded(text: str) -> str:
-    if len(text) <= _MAX_OUTPUT_CHARS:
-        return text
-    return truncate_with_marker(
-        text, _MAX_OUTPUT_CHARS, "say PARTIAL + remainder when coverage is unclear",
-    )
 
 
 if __name__ == "__main__":
