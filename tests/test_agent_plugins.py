@@ -483,7 +483,8 @@ class GitOpsToolTests(_GitRepoMixin):
         self.assertEqual(
             self.invoke(action="discard", paths=["a.txt"]), "OK",
         )
-        content = open(os.path.join(self.workspace, "a.txt")).read()
+        with open(os.path.join(self.workspace, "a.txt")) as f:
+            content = f.read()
         self.assertEqual(content, "hello\n")
 
     def test_stash_round_trip(self) -> None:
