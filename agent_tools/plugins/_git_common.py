@@ -136,5 +136,5 @@ def bounded(text: str) -> str:
     if len(text) <= MAX_OUTPUT_CHARS:
         return text
     return truncate_with_marker(
-        text, MAX_OUTPUT_CHARS, "say PARTIAL + remainder when coverage is unclear",
+        text, MAX_OUTPUT_CHARS, TRUNCATION_MARKER,
     )
