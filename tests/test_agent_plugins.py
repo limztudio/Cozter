@@ -14,6 +14,8 @@ from Cozter.agent_tools.plugins import http_request as http_request_module
 from Cozter.agent_tools.plugins.calculator import CalculatorTool
 from Cozter.agent_tools.plugins.current_time import CurrentTimeTool
 from Cozter.agent_tools.plugins.git_info import GitInfoTool
+from Cozter.agent_tools.plugins.git_ops import GitOpsTool
+from Cozter.agent_tools.plugins.git_sync import GitSyncTool
 from Cozter.agent_tools.plugins.http_request import HttpRequestTool
 from Cozter.agent_tools.plugins.memory import MemoryTool
 from Cozter.agent_tools.plugins.notes import NotesTool
@@ -290,6 +292,298 @@ class GitInfoToolTests(unittest.TestCase):
             self.invoke(action="diff", path="../outside").startswith(
                 "Error:",
             ),
+        )
+
+    def test_branches_lists_current_branch(self) -> None:
+        self._commit("a.txt", "hello\n", "initial commit")
+        result = self.invoke(action="branches")
+        self.assertFalse(result.startswith("Error:"))
+        self.assertIn("*", result)
+
+    def test_tags_and_stashes_empty_reports(self) -> None:
+        self._commit("a.txt", "hello\n", "initial commit")
+        self.assertEqual(self.invoke(action="tags"), "No tags.")
+        self.assertEqual(self.invoke(action="stashes"), "No stashes.")
+
+    def test_tags_lists_created_tag(self) -> None:
+        self._commit("a.txt", "hello\n", "initial commit")
+        self._git("tag", "v1")
+        result = self.invoke(action="tags")
+        self.assertIn("v1", result)
+
+    def test_stash_push_and_list(self) -> None:
+        self._commit("a.txt", "hello\n", "initial commit")
+        with open(os.path.join(self.workspace, "a.txt"), "a") as f:
+            f.write("more\n")
+        self._git("stash", "push", "-m", "wip")
+        result = self.invoke(action="stashes")
+        self.assertIn("wip", result)
+
+    def test_show_displays_head_summary(self) -> None:
+        self._commit("a.txt", "hello\n", "show me")
+        result = self.invoke(action="show")
+        self.assertIn("show me", result)
+        self.assertIn("a.txt", result)
+
+    def test_blame_needs_path_and_marks_author(self) -> None:
+        self._commit("a.txt", "hello\n", "initial commit")
+        self.assertTrue(
+            self.invoke(action="blame").startswith("Error:"),
+        )
+        result = self.invoke(action="blame", path="a.txt")
+        self.assertIn("hello", result)
+
+    def test_blame_single_line(self) -> None:
+        self._commit("a.txt", "one\ntwo\n", "initial commit")
+        result = self.invoke(action="blame", path="a.txt", line=2)
+        self.assertIn("two", result)
+
+    def test_ref_injection_rejected(self) -> None:
+        self._commit("a.txt", "hello\n", "initial commit")
+        for bad in ("--help", "-h", "HEAD;id", "a b", "..", "stash@{0}x"):
+            with self.subTest(bad=bad):
+                self.assertTrue(
+                    self.invoke(action="show", ref=bad).startswith("Error:"),
+                )
+
+
+class _GitRepoMixin(unittest.TestCase):
+    tool_class = None  # type: ignore[assignment]
+
+    def setUp(self) -> None:
+        if not GitInfoToolTests._git_available():
+            self.skipTest("git not available")
+        assert self.tool_class is not None
+        self.tool = self.tool_class()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.workspace = self._tmp.name
+        subprocess.run(
+            ["git", "-C", self.workspace, "init", "-q"], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "config", "user.email",
+             "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "config", "user.name",
+             "Cozter Tests"],
+            check=True,
+        )
+
+    def invoke(self, **args: object) -> str:
+        return _run(self.tool.run(self.workspace, args))
+
+    def write(self, filename: str, content: str) -> None:
+        with open(os.path.join(self.workspace, filename), "w") as f:
+            f.write(content)
+
+    def append(self, filename: str, content: str) -> None:
+        with open(os.path.join(self.workspace, filename), "a") as f:
+            f.write(content)
+
+
+class GitOpsToolTests(_GitRepoMixin):
+    tool_class = GitOpsTool
+
+    def test_add_and_commit_round_trip(self) -> None:
+        self.write("a.txt", "hello\n")
+        self.assertEqual(
+            self.invoke(action="add", paths=["a.txt"]), "OK",
+        )
+        result = self.invoke(action="commit", message="init")
+        self.assertIn("init", result)
+        log = subprocess.run(
+            ["git", "-C", self.workspace, "log", "--oneline"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertIn("init", log.stdout)
+
+    def test_add_all_flag(self) -> None:
+        self.write("a.txt", "hello\n")
+        self.write("b.txt", "world\n")
+        self.assertEqual(self.invoke(action="add", all=True), "OK")
+
+    def test_add_rejects_escape(self) -> None:
+        self.assertTrue(
+            self.invoke(action="add", paths=["../outside"]).startswith(
+                "Error:",
+            ),
+        )
+
+    def test_commit_needs_message(self) -> None:
+        self.write("a.txt", "hello\n")
+        self.invoke(action="add", paths=["a.txt"])
+        self.assertTrue(
+            self.invoke(action="commit", message=" ").startswith("Error:"),
+        )
+
+    def test_checkout_and_branch_create(self) -> None:
+        self.write("a.txt", "hello\n")
+        self.invoke(action="add", paths=["a.txt"])
+        self.invoke(action="commit", message="init")
+        self.assertEqual(
+            self.invoke(action="branch-create", branch="feat/x"), "OK",
+        )
+        self.assertEqual(
+            self.invoke(action="checkout", branch="feat/x"), "OK",
+        )
+
+    def test_branch_delete_and_rename(self) -> None:
+        self.write("a.txt", "hello\n")
+        self.invoke(action="add", paths=["a.txt"])
+        self.invoke(action="commit", message="init")
+        self.invoke(action="branch-create", branch="old")
+        self.assertEqual(
+            self.invoke(action="branch-rename", branch="old",
+                        new_branch="new"),
+            "OK",
+        )
+        deleted = self.invoke(action="branch-delete", branch="new")
+        self.assertIn("Deleted branch", deleted)
+
+    def test_branch_name_injection_rejected(self) -> None:
+        for bad in ("--help", "-d", "a b", "..", "a;id"):
+            with self.subTest(bad=bad):
+                self.assertTrue(
+                    self.invoke(
+                        action="branch-create", branch=bad,
+                    ).startswith("Error:"),
+                )
+
+    def test_tag_create_and_delete(self) -> None:
+        self.write("a.txt", "hello\n")
+        self.invoke(action="add", paths=["a.txt"])
+        self.invoke(action="commit", message="init")
+        self.assertEqual(
+            self.invoke(action="tag-create", tag="v1"), "OK",
+        )
+        deleted = self.invoke(action="tag-delete", tag="v1")
+        self.assertIn("Deleted tag", deleted)
+
+    def test_merge_ff_only(self) -> None:
+        self.write("a.txt", "hello\n")
+        self.invoke(action="add", paths=["a.txt"])
+        self.invoke(action="commit", message="init")
+        self.invoke(action="branch-create", branch="side")
+        self.invoke(action="checkout", branch="side")
+        self.write("b.txt", "side\n")
+        self.invoke(action="add", paths=["b.txt"])
+        self.invoke(action="commit", message="side work")
+        self.invoke(action="checkout", branch="master")
+        result = self.invoke(action="merge", branch="side")
+        self.assertFalse(result.startswith("Error:"))
+
+    def test_reset_and_discard(self) -> None:
+        self.write("a.txt", "hello\n")
+        self.invoke(action="add", paths=["a.txt"])
+        self.invoke(action="commit", message="init")
+        self.append("a.txt", "more\n")
+        self.assertEqual(
+            self.invoke(action="discard", paths=["a.txt"]), "OK",
+        )
+        content = open(os.path.join(self.workspace, "a.txt")).read()
+        self.assertEqual(content, "hello\n")
+
+    def test_stash_round_trip(self) -> None:
+        self.write("a.txt", "hello\n")
+        self.invoke(action="add", paths=["a.txt"])
+        self.invoke(action="commit", message="init")
+        self.append("a.txt", "more\n")
+        result = self.invoke(
+            action="stash-push", message="wip", paths=["a.txt"],
+        )
+        self.assertFalse(result.startswith("Error:"))
+        popped = self.invoke(action="stash-pop")
+        self.assertFalse(popped.startswith("Error:"))
+
+    def test_clean_needs_confirmation(self) -> None:
+        self.write("junk.txt", "x\n")
+        self.assertTrue(
+            self.invoke(
+                action="clean", paths=["junk.txt"],
+            ).startswith("Error:"),
+        )
+        cleaned = self.invoke(
+            action="clean", paths=["junk.txt"], force=True,
+        )
+        self.assertIn("junk.txt", cleaned)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.workspace, "junk.txt"),
+        ))
+
+    def test_invalid_action_rejected(self) -> None:
+        self.assertTrue(
+            self.invoke(action="push").startswith("Error:"),
+        )
+
+
+class GitSyncToolTests(_GitRepoMixin):
+    tool_class = GitSyncTool
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.remote_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.remote_dir, ignore_errors=True)
+        subprocess.run(
+            ["git", "init", "--bare", "-q", self.remote_dir], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "remote", "add", "origin",
+             self.remote_dir],
+            check=True,
+        )
+
+    def test_requires_full_permission(self) -> None:
+        self.assertTrue(self.tool.requires_full_permission)
+
+    def test_remotes_lists_origin(self) -> None:
+        result = self.invoke(action="remotes")
+        self.assertIn("origin", result)
+
+    def test_push_fetch_pull_round_trip(self) -> None:
+        self.write("a.txt", "hello\n")
+        subprocess.run(
+            ["git", "-C", self.workspace, "add", "a.txt"], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "commit", "-q", "-m", "init"],
+            check=True,
+        )
+        pushed = self.invoke(
+            action="push", remote="origin", branch="master",
+            upstream=True,
+        )
+        self.assertFalse(
+            pushed.startswith("Error:"), msg=pushed,
+        )
+        fetched = self.invoke(action="fetch", remote="origin")
+        self.assertFalse(
+            fetched.startswith("Error:"), msg=fetched,
+        )
+        pulled = self.invoke(
+            action="pull", remote="origin", branch="master",
+        )
+        self.assertFalse(
+            pulled.startswith("Error:"), msg=pulled,
+        )
+
+    def test_remote_injection_rejected(self) -> None:
+        self.assertTrue(
+            self.invoke(
+                action="fetch", remote="--help",
+            ).startswith("Error:"),
+        )
+        self.assertTrue(
+            self.invoke(
+                action="push", remote="origin;id",
+            ).startswith("Error:"),
+        )
+
+    def test_invalid_action_rejected(self) -> None:
+        self.assertTrue(
+            self.invoke(action="commit").startswith("Error:"),
         )
 
 

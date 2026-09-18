@@ -879,10 +879,19 @@ Shipped plugins:
   newest entries win when the 64 KiB ceiling forces a trim, and both
   over-long entries and tail-only reads are explicitly marked as
   clipped/preview output with PARTIAL + remainder pointers.
-- `git_info` - read-only `status`/`log`/`diff` snapshot of the
-  workspace repository, so HTTP backends without a shell can still see
-  repo state; the argv is fixed and read-only, and `path` arguments
-  must stay inside the workspace.
+- `git_info` - read-only `status`/`log`/`diff`/`branches`/`tags`/
+  `stashes`/`show`/`blame` inspection of the workspace repository, so
+  HTTP backends without a shell can still see repo state; the argv is
+  fixed and read-only, and `path` arguments must stay inside the
+  workspace.
+- `git_ops` - local-only Git writes (`add`/`unstage`/`commit`/
+  `checkout`/`branch-*`/`stash-*`/`reset`/`merge`/`rebase`/`tag-*`/
+  `discard`/`clean`) with a fixed argv: branch/tag/ref names are
+  validated, paths stay inside the workspace, `clean` needs explicit
+  confirmation, and `push` never appears here. Available in `auto`.
+- `git_sync` - network Git sync (`fetch`/`pull`/`push`/`remotes`) with a
+  fixed argv, `--ff-only` pulls, and `--force-with-lease` instead of
+  `--force`. Full permission only; prompts stay disabled.
 - `memory` - search/read the workspace's durable chat memory (capped colony
   lists, excerpts, result counts, and session lists carry explicit
   PARTIAL/remainder pointers instead of silent cuts): past
@@ -1302,7 +1311,7 @@ Cozter/
 └── agent_tools/          tool surface for HTTP backends + plugin registry
     ├── base.py             AgentTool ABC; path/argument validation and shared HTTP helpers
     ├── builtin/            17 files: 16 built-in tools (bash, read_file, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch) plus __init__.py
-    └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, memory, http_request shipped live)
+    └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, git_ops, git_sync, memory, http_request shipped live)
 ```
 
 ## Process and tool safety

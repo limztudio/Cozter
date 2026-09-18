@@ -27,8 +27,13 @@ the plugin's `os.getcwd()` returns the right path.
   for disabled examples or local scratch plugins.
 - Shipped live plugins: `current_time.py`, `calculator.py`,
   `notes.py` (persistent workspace notes at `.cozter/notes.md`),
-  `git_info.py` (read-only `status`/`log`/`diff` snapshot with a fixed,
-  non-mutating argv), `memory.py` (search/read past session
+  `git_info.py` (read-only `status`/`log`/`diff`/`branches`/`tags`/
+  `stashes`/`show`/`blame` inspection with a fixed, non-mutating argv),
+  `git_ops.py` (local-only `add`/`commit`/`checkout`/`branch`/`stash`/
+  `reset`/`merge`/`rebase`/`tag`/`discard`/`clean` with validated names
+  and workspace-bounded paths; `auto`-visible), `git_sync.py`
+  (`fetch`/`pull`/`push`/`remotes` with `requires_full_permission`),
+  `memory.py` (search/read past session
   transcripts, summaries, long-term notes, and colony items under
   `.cozter/`), and `http_request.py` (GET/POST/PUT/PATCH/DELETE against
   public hosts with web_fetch's public-address safety model; shows

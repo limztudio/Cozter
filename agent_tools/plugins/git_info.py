@@ -1,17 +1,19 @@
-"""Plugin: read-only Git snapshot of the workspace repository.
+"""Plugin: read-only Git inspection of the workspace repository.
 
 HTTP backends (llama, meta, zai, ...) work through Cozter's typed tools
 and have no shell outside ``full`` permission, so they cannot ask the
-repository for its own state. This plugin exposes the three read-only
-questions agents ask most - what changed, what happened recently, and
-what does the patch look like - with a fixed, read-only argv the model
-cannot extend.
+repository for its own state. This plugin exposes the read-only
+questions agents ask most - what changed, what happened recently, what
+does the patch look like, which branches/tags/stashes exist, who changed
+a line, and what a revision contains - with a fixed, read-only argv the
+model cannot extend.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import re
 from contextlib import suppress
 from typing import Any, ClassVar
 
@@ -27,17 +29,49 @@ from ...utils import clip_status_value
 # Real-work cap: git runs up to 3600s (under the tool runner cap) or until cancelled.
 _MAX_OUTPUT_CHARS = 12_000
 _MAX_GIT_ERROR_CHARS = 500
-_ACTIONS = ("status", "log", "diff")
+# Read-only actions only: local writes live in git_ops, network sync in
+# git_sync. The docstring order matches the action order below.
+_ACTIONS = (
+    "status",
+    "log",
+    "diff",
+    "branches",
+    "tags",
+    "stashes",
+    "show",
+    "blame",
+)
 
 
 class _GitFailed(Exception):
     """Git exited non-zero; carries the model-facing stderr excerpt."""
 
 
+_REF_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
+
+
+def _checked_ref(name: str) -> str:
+    """Validate a revision token so no model flag can enter the argv."""
+    if len(name) > 200 or not _REF_RE.match(name):
+        raise ValueError(f"invalid ref {name!r}")
+    for marker in (
+        "..", "@{", "~", "^", ":", "?", "*", "[", "\\",
+        "'", '"', "`", "$", "(", ")", "|", ";", "&", "<", ">",
+        "!", " ", "\t", "\n",
+    ):
+        if marker in name:
+            raise ValueError(f"invalid ref {name!r}")
+    if name.startswith(("-", "/", ".")) or name.endswith(("/", ".", ".lock")):
+        raise ValueError(f"invalid ref {name!r}")
+    return name
+
+
 class GitInfoTool(AgentTool):
     name = "git_info"
     order = 20  # utility tools group
-    description = "Git status/log/diff. Read-only."
+    description = (
+        "Git status/log/diff/branches/tags/stashes/show/blame. Read-only."
+    )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
             "action": {
@@ -45,6 +79,10 @@ class GitInfoTool(AgentTool):
                 "enum": list(_ACTIONS),
             },
             "path": {"type": "string"},
+            "ref": {
+                "type": "string",
+                "description": "Revision for show/blame/log (branch, tag, or SHA).",
+            },
             "patch": {
                 "type": "boolean",
                 "description": "Full patch.",
@@ -53,6 +91,10 @@ class GitInfoTool(AgentTool):
                 "type": "integer",
                 "description": "max 50.",
             },
+            "line": {
+                "type": "integer",
+                "description": "1-based line for blame; needs path.",
+            },
         },
         ["action"],
     )
@@ -60,34 +102,15 @@ class GitInfoTool(AgentTool):
     async def run(self, workspace_path: str, args: dict) -> str:
         action = args.get("action")
         if not isinstance(action, str) or action not in _ACTIONS:
-            return "Error: 'action' must be one of status, log, diff"
-
-        argv: list[str] = ["git", "-C", workspace_path]
-        if action == "status":
-            argv += ["status", "--short", "--branch"]
-        elif action == "log":
-            limit = coerce_int_arg(
-                args.get("limit", 10), default=10, minimum=1, maximum=50,
+            return (
+                "Error: 'action' must be one of "
+                + ", ".join(_ACTIONS)
             )
-            argv += ["log", "--oneline", f"-n{limit}"]
-        else:
-            argv.append("diff")
-            if args.get("patch") is True:
-                argv.append("HEAD")
-            else:
-                # ``--stat HEAD`` covers staged and unstaged work.
-                argv += ["--stat", "HEAD"]
-            pathspec = args.get("path")
-            if isinstance(pathspec, str) and pathspec.strip():
-                try:
-                    argv += [
-                        "--",
-                        resolve_inside_workspace(
-                            workspace_path, pathspec.strip(),
-                        ),
-                    ]
-                except ValueError as exc:
-                    return f"Error: {exc}"
+
+        try:
+            argv = self._build_argv(workspace_path, action, args)
+        except ValueError as exc:
+            return f"Error: {exc}"
 
         try:
             stdout, stderr = await self._run_git(argv, workspace_path)
@@ -104,6 +127,10 @@ class GitInfoTool(AgentTool):
                 return "No commits yet."
             if action == "diff":
                 return "No changes."
+            if action == "tags":
+                return "No tags."
+            if action == "stashes":
+                return "No stashes."
             return "(no output)"
         if stderr.strip():
             clipped_err = stderr.strip()
@@ -114,6 +141,81 @@ class GitInfoTool(AgentTool):
                 )
             text += f"\n\ngit said:\n{clipped_err}"
         return _bounded(text)
+
+    @staticmethod
+    def _build_argv(
+        workspace_path: str, action: str, args: dict,
+    ) -> list[str]:
+        """Build the fixed read-only argv; raise ValueError for bad args."""
+        argv: list[str] = ["git", "-C", workspace_path]
+        if action == "status":
+            return argv + ["status", "--short", "--branch"]
+        if action == "log":
+            limit = coerce_int_arg(
+                args.get("limit", 10), default=10, minimum=1, maximum=50,
+            )
+            tail: list[str] = ["log", "--oneline", f"-n{limit}"]
+            ref = args.get("ref")
+            if isinstance(ref, str) and ref.strip():
+                tail.append(_checked_ref(ref.strip()))
+            return argv + tail
+        if action == "diff":
+            tail = ["diff"]
+            if args.get("patch") is True:
+                tail.append("HEAD")
+            else:
+                # ``--stat HEAD`` covers staged and unstaged work.
+                tail += ["--stat", "HEAD"]
+            pathspec = args.get("path")
+            if isinstance(pathspec, str) and pathspec.strip():
+                tail += [
+                    "--",
+                    resolve_inside_workspace(
+                        workspace_path, pathspec.strip(),
+                    ),
+                ]
+            return argv + tail
+        if action == "branches":
+            return argv + ["branch", "-vv"]
+        if action == "tags":
+            limit = coerce_int_arg(
+                args.get("limit", 50), default=50, minimum=1, maximum=50,
+            )
+            return argv + ["tag", "--list", "-n1", "--sort=-creatordate"]
+        if action == "stashes":
+            return argv + ["stash", "list"]
+        if action == "show":
+            ref = args.get("ref")
+            revision = (
+                _checked_ref(ref.strip())
+                if isinstance(ref, str) and ref.strip()
+                else "HEAD"
+            )
+            return argv + ["show", "--stat", "--oneline", revision]
+        # action == "blame"
+        pathspec = args.get("path")
+        if not isinstance(pathspec, str) or not pathspec.strip():
+            raise ValueError("'blame' needs 'path' (a workspace file)")
+        resolved = resolve_inside_workspace(workspace_path, pathspec.strip())
+        line = args.get("line")
+        if line is None or line is False:
+            ref = args.get("ref")
+            revision = (
+                _checked_ref(ref.strip())
+                if isinstance(ref, str) and ref.strip()
+                else "HEAD"
+            )
+            return argv + ["blame", revision, "--", resolved]
+        number = coerce_int_arg(line, default=0, minimum=1, maximum=1_000_000)
+        ref = args.get("ref")
+        revision = (
+            _checked_ref(ref.strip())
+            if isinstance(ref, str) and ref.strip()
+            else "HEAD"
+        )
+        return argv + [
+            "blame", "-L", f"{number},{number}", revision, "--", resolved,
+        ]
 
     @staticmethod
     async def _run_git(argv: list[str], workspace: str) -> tuple[str, str]:
@@ -171,10 +273,11 @@ class GitInfoTool(AgentTool):
     def summarize(self, args: dict) -> str:
         action = args.get("action") if isinstance(args, dict) else None
         path = args.get("path") if isinstance(args, dict) else None
-        suffix = (
-            f" ({clip_status_value(path)})"
-            if isinstance(path, str) and path else ""
+        ref = args.get("ref") if isinstance(args, dict) else None
+        detail = path if isinstance(path, str) and path else (
+            ref if isinstance(ref, str) and ref else ""
         )
+        suffix = f" ({clip_status_value(detail)})" if detail else ""
         return f"git {clip_status_value(action or '?', 40)}{suffix}"
 
 
