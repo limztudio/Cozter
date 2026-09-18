@@ -23,10 +23,10 @@ from ..base import (
 )
 from ...utils import clip_status_value
 from ._git_common import (
-    MAX_GIT_ERROR_CHARS as _MAX_GIT_ERROR_CHARS,
     MAX_OUTPUT_CHARS,
     GitFailed as _GitFailed,
     add_common_git_flags,
+    append_stderr_note as _append_stderr_note,
     bounded as _bounded,
     check_ref as _checked_ref,
     first_stderr_line,
@@ -119,15 +119,7 @@ class GitInfoTool(AgentTool):
             if action == "stashes":
                 return "No stashes."
             return "(no output)"
-        if stderr.strip():
-            clipped_err = stderr.strip()
-            if len(clipped_err) > _MAX_GIT_ERROR_CHARS:
-                clipped_err = (
-                    clipped_err[:_MAX_GIT_ERROR_CHARS - len("… [stderr clipped]")]
-                    + "… [stderr clipped]"
-                )
-            text += f"\n\ngit said:\n{clipped_err}"
-        return _bounded(text)
+        return _bounded(_append_stderr_note(text, stderr))
 
     @staticmethod
     def _build_argv(

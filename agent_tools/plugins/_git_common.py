@@ -13,6 +13,7 @@ permission levels stay in their own modules.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from contextlib import suppress
 
@@ -138,3 +139,52 @@ def bounded(text: str) -> str:
     return truncate_with_marker(
         text, MAX_OUTPUT_CHARS, TRUNCATION_MARKER,
     )
+
+
+def append_stderr_note(text: str, stderr: str) -> str:
+    """Append git's stderr excerpt to *text* with the shared clip marker."""
+    if not stderr.strip():
+        return text
+    clipped_err = stderr.strip()
+    if len(clipped_err) > MAX_GIT_ERROR_CHARS:
+        clipped_err = (
+            clipped_err[:MAX_GIT_ERROR_CHARS - len("… [stderr clipped]")]
+            + "… [stderr clipped]"
+        )
+    return f"{text}\n\ngit said:\n{clipped_err}"
+
+
+def finish_git_output(
+    stdout: str, stderr: str, *, empty_text: str = "OK",
+) -> str:
+    """Clip stdout/stderr into the model-facing result with empty handling."""
+    text = stdout.strip()
+    if not text:
+        return empty_text
+    return bounded(append_stderr_note(text, stderr))
+
+
+def finish_git_run_error(action: object, exc: BaseException) -> str:
+    """Map a git runner failure to the model-facing ``Error: ...`` string."""
+    if isinstance(exc, FileNotFoundError):
+        return "Error: git is not installed or not on PATH"
+    if isinstance(exc, TimeoutError):
+        return f"Error: git {action} timed out"
+    return f"Error: git {action}: {exc}"
+
+
+async def run_git(argv: list[str], workspace: str) -> tuple[str, str]:
+    """Run a fixed git argv with prompts disabled; return decoded output."""
+    env = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "1",
+    }
+    argv = add_common_git_flags(argv)
+    try:
+        stdout, stderr, returncode = await git_once(argv, workspace, env)
+    except asyncio.TimeoutError:
+        raise
+    if returncode != 0:
+        raise GitFailed(first_stderr_line(stderr))
+    return stdout, stderr

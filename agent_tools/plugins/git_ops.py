@@ -15,8 +15,6 @@ credential use separately.
 
 from __future__ import annotations
 
-import asyncio
-import os
 import re
 from typing import Any, ClassVar
 
@@ -28,13 +26,11 @@ from ..base import (
 )
 from ...utils import clip_status_value
 from ._git_common import (
-    MAX_GIT_ERROR_CHARS as _MAX_GIT_ERROR_CHARS,
     GitFailed as _GitFailed,
-    add_common_git_flags,
-    bounded as _bounded,
     clean_ref as _clean_ref,
-    first_stderr_line,
-    git_once as _git_once,
+    finish_git_output as _finish_git_output,
+    finish_git_run_error as _finish_git_run_error,
+    run_git as _run_git,
 )
 
 # Real-work cap: git runs under the tool runner cap (default 3600s) or
@@ -152,24 +148,9 @@ class GitOpsTool(AgentTool):
             return argv  # model-facing "Error: ..." from builder
         try:
             stdout, stderr = await _run_git(argv, workspace_path)
-        except FileNotFoundError:
-            return "Error: git is not installed or not on PATH"
-        except TimeoutError:
-            return f"Error: git {action} timed out"
-        except _GitFailed as exc:
-            return f"Error: git {action}: {exc}"
-        text = stdout.strip()
-        if not text:
-            return "OK"
-        if stderr.strip():
-            clipped_err = stderr.strip()
-            if len(clipped_err) > _MAX_GIT_ERROR_CHARS:
-                clipped_err = (
-                    clipped_err[:_MAX_GIT_ERROR_CHARS - len("… [stderr clipped]")]
-                    + "… [stderr clipped]"
-                )
-            text += f"\n\ngit said:\n{clipped_err}"
-        return _bounded(text)
+        except (FileNotFoundError, TimeoutError, _GitFailed) as exc:
+            return _finish_git_run_error(action, exc)
+        return _finish_git_output(stdout, stderr)
 
     async def _build_argv(
         self, workspace_path: str, action: str, args: dict,
@@ -403,29 +384,6 @@ class GitOpsTool(AgentTool):
         suffix = f" ({clip_status_value(extra)})" if extra else ""
         limit = coerce_int_arg(40, default=40, minimum=1, maximum=200)
         return f"git {clip_status_value(action or '?', limit)}{suffix}"
-
-
-async def _run_git(argv: list[str], workspace: str) -> tuple[str, str]:
-    """Run a fixed local-write git argv and return decoded output.
-
-    The argv is built by :meth:`GitOpsTool._build_argv` from constants
-    plus validated names/messages/paths, never from model-supplied flags.
-    ``GIT_TERMINAL_PROMPT=0`` keeps a misconfigured repo from hanging on
-    a credential prompt; stdin stays DEVNULL either way.
-    """
-    env = {
-        **os.environ,
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_OPTIONAL_LOCKS": "1",
-    }
-    argv = add_common_git_flags(argv)
-    try:
-        stdout, stderr, returncode = await _git_once(argv, workspace, env)
-    except asyncio.TimeoutError:
-        raise
-    if returncode != 0:
-        raise _GitFailed(first_stderr_line(stderr))
-    return stdout, stderr
 
 
 if __name__ == "__main__":
