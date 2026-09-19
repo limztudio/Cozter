@@ -1311,7 +1311,7 @@ Cozter/
 └── agent_tools/          tool surface for HTTP backends + plugin registry
     ├── base.py             AgentTool ABC; path/argument validation and shared HTTP helpers
     ├── builtin/            17 files: 16 built-in tools (bash, read_file, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch) plus __init__.py
-    └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, git_ops, git_sync, memory, http_request shipped live)
+    └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, git_ops, git_sync, memory, http_request shipped live; _git_common.py holds the git tools' shared runner/validation/truncation and is skipped by the loader)
 ```
 
 ## Process and tool safety
@@ -1498,7 +1498,9 @@ that owns them:
 - Tool/plugin behavior: `agent_tools/__init__.py`, `agent_tools/base.py`,
   `agent_tools/builtin/`, and `agent_tools/plugins/README.md`; shared
   validation, workspace-boundary checks, no-clobber file publication, HTTP
-  request setup, and bounded response reading live in `agent_tools/base.py`
+  request setup, and bounded response reading live in `agent_tools/base.py`;
+  the git tools' shared subprocess runner, ref validation, truncation marker,
+  and stderr/output finishing live in `agent_tools/plugins/_git_common.py`
 - Workspace, session, queue, schedule, compaction, and colony state:
   `workspace.py` (including `ensure_workspace_state_dir()`), `session.py`,
   `schedules.py`, `compaction.py`, and `colony.py`
