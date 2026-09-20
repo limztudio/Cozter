@@ -1457,7 +1457,7 @@ ignored for local secrets and runtime queues.
   restart path), `.gitignore`, and this README
 - Tests: `tests/conftest.py`, shared `tests/helpers.py`, plus focused
   `unittest` modules covering agent attachments, prompts, process cleanup,
-  and post-turn behavior;
+  interrupted-turn persistence, and post-turn behavior;
   backend model defaults, shared catalog/result/content helpers, CLI tool
   summaries, process-resource maps, event parsing, and llama retry; bot and
   Slack commands; compaction; the flexible meta-agent; inject; import
@@ -1467,8 +1467,8 @@ ignored for local secrets and runtime queues.
   fallbacks including containment-checked nested workspace dirs; status
   latency and thinking-status display; updater behavior; utilities
   including the shared lock helper; upload limits; and the built-in/plugin
-  tool surface, including discovery scans that continue after a failed
-  `is_dir()`
+  tool surface, including off-event-loop discovery scans that continue after
+  a failed `is_dir()`
 
 The normal working checkout may also contain ignored runtime state such as
 `.venv/`, `.cozter/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
@@ -1641,13 +1641,14 @@ Run the current unit tests from the parent directory, or set
 covers malformed state/config fallbacks, persistent queue restoration,
 schedule parsing, backend model defaults, shared catalog/result/content
 helpers, CLI tool summaries, process-resource maps, event parsing, llama
-retry behavior, the flexible meta-agent's planning/merge, post-turn and
-inject flow, subprocess draining and exceptional-path cleanup, prompt
-construction, attachment handling, run-lock cancellation, session
+retry behavior, the flexible meta-agent's planning/merge, post-turn,
+interrupted-turn, and inject flow, subprocess draining and
+exceptional-path cleanup, prompt construction, attachment handling,
+run-lock cancellation, session
 picking, auto-titling, compaction, platform/Slack/Signal rich-text
 formatting, status-latency and thinking-status display, runtime
-diagnostics, updater behavior, detached tasks, agent-tool helpers, and
-built-in discovery/edit/patch safety.
+diagnostics, updater behavior, detached tasks, agent-tool helpers,
+off-event-loop discovery scans, and built-in discovery/edit/patch safety.
 
 If `codex` is on `PATH`, one catalog-consistency test also invokes
 `codex debug models` with a 15-second timeout; it skips when that command
