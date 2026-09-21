@@ -593,17 +593,19 @@ class BackendModelTests(unittest.TestCase):
     def test_grok_model_listing_parser_uses_only_available_model_rows(self) -> None:
         output = """You are logged in with grok.com.
 
-Default model: grok-4.6
+Default model: grok-4.7
 
 Available models:
-  * grok-4.6 (default)
+  * grok-4.7 (default)
+  - grok-4.7-build-fast
+  - grok-4.6
   - grok-4.5
 
 warning: ignored after the catalog
 """
         self.assertEqual(
             grok_mod._parse_models_output(output),
-            ("grok-4.6", "grok-4.5"),
+            ("grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"),
         )
         self.assertEqual(grok_mod._parse_models_output("login failed"), ())
 
@@ -638,6 +640,10 @@ warning: ignored after the catalog
         self.assertEqual(backend.convert_effort(50), "high")
         self.assertEqual(backend.convert_effort(100), "xhigh")
         self.assertEqual(
+            backend.effort_levels_for_model("grok-4.7"),
+            ("low", "medium", "high", "xhigh"),
+        )
+        self.assertEqual(
             backend.effort_levels_for_model("grok-4.6"),
             ("low", "medium", "high", "xhigh"),
         )
@@ -668,6 +674,10 @@ warning: ignored after the catalog
     def test_grok_context_windows_cover_only_published_cli_ids(self) -> None:
         backend = GrokBackend()
         self.assertEqual(backend.context_window_tokens(None), 500_000)
+        self.assertEqual(backend.context_window_tokens("grok-4.7"), 500_000)
+        self.assertEqual(
+            backend.context_window_tokens("grok-4.7-build-fast"), 500_000,
+        )
         self.assertEqual(backend.context_window_tokens("grok-4.6"), 500_000)
         self.assertEqual(backend.context_window_tokens("grok-4.5"), 500_000)
         self.assertIsNone(backend.context_window_tokens("company-grok"))

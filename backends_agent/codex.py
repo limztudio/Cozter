@@ -29,14 +29,14 @@ _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 # These values preserve useful token-aware compaction before a user opens the
 # picker or on hosts where the catalog probe is unavailable.  They are active
 # CLI windows, not the larger maximum capability a model may advertise.
-# Verified 2026-09-20: live ``codex debug models`` (codex-cli 0.147.0)
-# lists gpt-5.6-sol/terra/luna and gpt-5.5 as visibility=list (plus
-# hide-only gpt-reserve and codex-auto-review, which the parser skips).
+# Verified 2026-09-21: live ``codex debug models`` (codex-cli 0.155.1)
+# lists gpt-6-astra plus gpt-5.6-sol/terra/luna and gpt-5.5 as
+# visibility=list (plus hide-only gpt-reserve and codex-auto-review,
+# which the parser skips).
 # gpt-6-astra shipped on the OpenAI API on 2026-09-04
-# (1.05M max context; Codex sessions use the 272K active window like the
-# gpt-5.6 family) but the 0.147.0 CLI build still does not list it
-# (re-verified 2026-09-20), so it stays
-# first in this fallback as forward cover ahead of the CLI rollout.
+# (872K max context; Codex sessions use the 272K active window like the
+# gpt-5.6 family) and now rides
+# first in this fallback as the live-listed flagship.
 _FALLBACK_MODEL_SPECS = (
     ("gpt-6-astra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
@@ -45,7 +45,7 @@ _FALLBACK_MODEL_SPECS = (
     # gpt-5.4 and gpt-5.4-mini retired from Codex ChatGPT sign-in on
     # 2026-08-31; OpenAI's documented replacements are gpt-5.6-terra and
     # gpt-5.6-luna. The gpt-5.3-codex-spark research preview is gone from
-    # the live catalog too (absent even as hide-only on 2026-09-20), so
+    # the live catalog too (absent even as hide-only on 2026-09-21), so
     # the fallback ends here at gpt-5.5.
     ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
 )
@@ -154,7 +154,8 @@ class CodexBackend(Backend):
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.6-luna"
     # Cheap/everyday/strong GPT-5.6 family. Keep the chat default on Sol:
-    # Astra is still rolling out, so a pinned gpt-6-astra default would fail
+    # Astra is now live-listed, but older/company-managed CLIs may still
+    # lack it, so a pinned gpt-6-astra default would fail
     # closed on accounts whose live catalog has not listed it yet.
     tier_models = {
         "low": "gpt-5.6-luna",

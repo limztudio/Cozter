@@ -55,10 +55,17 @@ logger = logging.getLogger(__name__)
 # Keep only currently documented CLI models in the conservative fallback,
 # with every capability beside its ID so picker, effort, and compaction
 # cannot drift apart.  Grok rejects unsupported ``--effort`` values, so
-# unpublished/custom IDs use the three-level subset both published models
-# share rather than grok-4.6's extra ``xhigh``.
+# unpublished/custom IDs use the three-level subset rather than the extra
+# ``xhigh`` the current 4.7/4.6 models accept.
+# Verified 2026-09-21: live ``grok models`` (grok 1.0.13) lists
+# grok-4.7 (default), grok-4.7-build-fast, grok-4.6, and grok-4.5.
+# grok-4.7 shipped 2026-09-21 (500K context; effort low/medium/high/xhigh
+# per xAI release notes); Grok 4.7 Fast is the same model at 2x rates via
+# Cursor/Grok Build only, so it shares the 4.7 capabilities here.
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high")
 _FALLBACK_MODEL_SPECS = (
+    ("grok-4.7", (*_COMMON_EFFORT_LEVELS, "xhigh"), 500_000),
+    ("grok-4.7-build-fast", (*_COMMON_EFFORT_LEVELS, "xhigh"), 500_000),
     ("grok-4.6", (*_COMMON_EFFORT_LEVELS, "xhigh"), 500_000),
     ("grok-4.5", _COMMON_EFFORT_LEVELS, 500_000),
 )
@@ -143,8 +150,8 @@ class GrokBackend(CachedModelCatalog, Backend):
     executable = "grok"
     supports_vision = True
     vision_mode = "prompt_file"
-    default_model = "grok-4.6"
-    default_summary_model = "grok-4.6"
+    default_model = "grok-4.7"
+    default_summary_model = "grok-4.7"
     # Default-model vocabulary. ``effort_levels_for_model`` narrows this for
     # grok-4.5 and unpublished IDs; effort=0 still means do not override.
     effort_levels = (*_COMMON_EFFORT_LEVELS, "xhigh")

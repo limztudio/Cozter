@@ -996,10 +996,9 @@ the hard ones:
 
 Defaults put all three tiers on `codex` (`gpt-5.6-luna` / `gpt-5.6-terra` /
 `gpt-5.6-sol`). Codex keeps the high tier and chat default on Sol:
-Astra shipped on the OpenAI API on 2026-09-04 but is still rolling out in
-live CLI catalogs (verified 2026-09-20 against codex-cli 0.147.0, which
-does not list it yet), so a pinned `gpt-6-astra` default would fail closed
-on those accounts. Pointing a
+Astra is now live-listed (verified 2026-09-21 against codex-cli 0.155.1),
+but a pinned `gpt-6-astra` default would still fail closed
+on older/company-managed CLIs whose catalogs have not listed it yet. Pointing a
 tier at another agent picks that agent's cheap/mid/strong models
 automatically (its `tier_models` table) — for `zai` that is
 `glm-5.3-flash` / `glm-4.7` / `glm-5.3`, and for `meta`
@@ -1066,7 +1065,7 @@ its own, only the three tiers above.
 | `codex` | `codex exec --ephemeral --json` | `gpt-5.6-sol` | `gpt-5.6-luna` |
 | `claude_code` | `claude --print --output-format stream-json --verbose` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
-| `grok` | `grok --prompt-file … --output-format streaming-messages-json` | `grok-4.6` | `grok-4.6` |
+| `grok` | `grok --prompt-file … --output-format streaming-messages-json` | `grok-4.7` | `grok-4.7` |
 | `llama` | Unauthenticated OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
 | `meta` | Meta Model API `…/v1/chat/completions` (Bearer) | `muse-spark-1.3` | `muse-spark-1.2` |
 | `zai` | Z.ai `…/api/paas/v4/chat/completions` (Bearer) | `glm-5.3` | `glm-4.5-air` |
@@ -1192,13 +1191,14 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. That built-in Codex fallback (verified 2026-09-20 against
-codex-cli 0.147.0) lists `gpt-6-astra` first as forward cover — it shipped
+authoritative. That built-in Codex fallback (verified 2026-09-21 against
+codex-cli 0.155.1) lists `gpt-6-astra` first as the live-listed flagship — it shipped
 on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
-the GPT-5.6 family, but that CLI build does not list it yet — followed by
+the GPT-5.6 family — followed by
 the GPT-5.6 Sol/Terra/Luna family and `gpt-5.5`; `gpt-5.3-codex-spark` is
 gone from the live catalog, and `gpt-5.4` and `gpt-5.4-mini` were retired
-from Codex ChatGPT sign-in. Grok's published `grok-4.6` and `grok-4.5` IDs use a 500K-token
+from Codex ChatGPT sign-in. Grok's published `grok-4.7`, `grok-4.7-build-fast`,
+`grok-4.6`, and `grok-4.5` IDs use a 500K-token
 window for that same trigger; custom or private Grok models stay unknown
 until an operator sets `model_context_windows`. Grok delivers its prompt
 through `--prompt-file` rather than `-p`, so Cozter's history budget is not
@@ -1234,7 +1234,7 @@ maps the percentage to its own vocabulary and request shape:
 | `zai` | GLM-5.3/Flash: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | Model-aware: current Fable / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.5–4.6 and Sonnet 4.6 use 4; Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
-| `grok` | Model-aware: grok-4.6 uses 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on grok-4.6; `--effort high` otherwise |
+| `grok` | Model-aware: grok-4.7 / grok-4.7-build-fast / grok-4.6 use 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on 4.7/4.6; `--effort high` otherwise |
 
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort
