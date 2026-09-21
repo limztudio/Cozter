@@ -218,6 +218,10 @@ VISION_MAX_IMAGES_PER_TURN = 4
 _ATTACHMENT_SAVED_PATTERN = (
     r"\[[^\]\n]*attachment saved to:\s*([^\]\n]+?)\s*\]"
 )
+# Compiled once: the pattern string is a module constant and therefore can
+# never raise re.error at call time; compiling per call only burned CPU on
+# every turn across the five vision-capable backends.
+_ATTACHMENT_SAVED_RE = re.compile(_ATTACHMENT_SAVED_PATTERN, re.IGNORECASE)
 
 
 def attachment_image_paths(
@@ -231,10 +235,6 @@ def attachment_image_paths(
     extension, and fit the per-turn byte cap. Never raises: unreadable
     or escaping paths are skipped so a text-only turn proceeds.
     """
-    try:
-        pattern = re.compile(_ATTACHMENT_SAVED_PATTERN, re.IGNORECASE)
-    except re.error:
-        return []
     if not isinstance(prompt, str) or "attachment saved to:" not in prompt:
         return []
     seen: set[str] = set()
@@ -243,7 +243,7 @@ def attachment_image_paths(
         root = os.path.realpath(workspace_path)
     except OSError:
         return []
-    for match in pattern.finditer(prompt):
+    for match in _ATTACHMENT_SAVED_RE.finditer(prompt):
         rel = match.group(1).strip()
         if not rel or rel in seen:
             continue
