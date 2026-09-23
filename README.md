@@ -735,7 +735,9 @@ back to `--prompt-file` text when no image is referenced), and
 `claude_code` via a prompt hint telling the model to open the saved path
 with its own Read tool. The shared helper keeps only in-workspace images
 referenced by `[… attachment saved to: …]` markers (up to 4 per turn,
-4 MiB each) and never raises, so an ordinary text turn is unchanged. The
+4 MiB each) and never raises, so an ordinary text turn is unchanged. Its
+marker pattern is compiled once and plain text turns short-circuit on a
+cheap substring check before the regex runs. The
 `read_file` tool likewise returns verified dimensions/format/size for
 image files (`png`/`jpg`/`gif`/`webp`/`bmp`) instead of binary noise, so
 the model answers from what is actually in the picture rather than
