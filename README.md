@@ -737,7 +737,10 @@ with its own Read tool. The shared helper keeps only in-workspace images
 referenced by `[… attachment saved to: …]` markers (up to 4 per turn,
 4 MiB each) and never raises, so an ordinary text turn is unchanged. Its
 marker pattern is compiled once and plain text turns short-circuit on a
-cheap substring check before the regex runs. The
+cheap substring check before the regex runs. The same module-level
+precompile hygiene covers the other hot paths: the `apply_patch`
+hunk-header parser, the `web_fetch` page-title scan, and the platform
+state filename sanitizer in `backends_bot/base.py`. The
 `read_file` tool likewise returns verified dimensions/format/size for
 image files (`png`/`jpg`/`gif`/`webp`/`bmp`) instead of binary noise, so
 the model answers from what is actually in the picture rather than
