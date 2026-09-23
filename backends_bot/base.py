@@ -76,6 +76,9 @@ _ATTACHMENT_SEND_GAP_SEC = 0.6
 _STATUS_OPERATION_TIMEOUT_SEC = 4.0
 _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
 _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
+# Precompiled once: _platform_state_file_path runs per state save/load, so
+# an inline re.sub would recompile the sanitizer on every call.
+_UNSAFE_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 NO_WORKSPACE_TEXT = (
     "No workspace selected (or it was deleted). Use /new or /open."
 )
@@ -2188,9 +2191,7 @@ class BotPlatform(ABC):
         # ``slack:U123ABC`` would otherwise produce filenames with a
         # colon, which Windows rejects (and POSIX treats as legal but
         # cross-platform-hostile). Strip the full Windows-reserved set.
-        safe = re.sub(
-            r'[<>:"/\\|?*\x00-\x1f]', '_', self.platform_id,
-        )
+        safe = _UNSAFE_FILENAME_CHARS_RE.sub('_', self.platform_id)
         return os.path.join(workspace.CONFIG_DIR, f"{stem}_{safe}.json")
 
     def _read_platform_state_file(self, path: str, label: str) -> dict:

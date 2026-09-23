@@ -32,6 +32,9 @@ _MAX_PATCH_BYTES = 1 * 1024 * 1024
 _MAX_PATCH_LINES = 20_000
 _MAX_FILE_BYTES = 1 * 1024 * 1024
 _MAX_FILE_LINES = 50_000
+# Precompiled once: _parse_hunk_header runs per hunk, so an inline
+# re.match would recompile the pattern on every hunk header parsed.
+_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 
 class _PatchError(Exception):
@@ -231,10 +234,7 @@ def _parse_hunk_header(
     header: str,
 ) -> tuple[int, int | None, int | None]:
     """Return the old start and declared old/new counts from a hunk header."""
-    match = re.match(
-        r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@",
-        header,
-    )
+    match = _HUNK_HEADER_RE.match(header)
     if match is None:
         return 1, None, None
     try:

@@ -26,6 +26,9 @@ _MAX_REDIRECTS = 10
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _FETCH_ATTEMPTS = 2
 _FETCH_RETRY_DELAY_SECONDS = 0.4
+# Precompiled once: WebFetchTool.run executes per fetch, so an inline
+# re.search would recompile the title pattern on every fetched page.
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 
 class _FetchRefused(Exception):
@@ -155,11 +158,7 @@ class WebFetchTool(AgentTool):
                 return f"Fetch failed: {exc}"
 
         title = ""
-        title_match = re.search(
-            r"<title[^>]*>(.*?)</title>",
-            body,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
+        title_match = _TITLE_RE.search(body)
         if title_match:
             title = html_to_text(title_match.group(1))
 
