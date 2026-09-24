@@ -13,7 +13,8 @@ from __future__ import annotations
 import ast
 import math
 import operator as op
-from typing import Any, Callable, ClassVar
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 from ..base import AgentTool, require_nonempty_string_arg
 from ...utils import clip_status_value

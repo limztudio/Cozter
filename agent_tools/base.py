@@ -14,7 +14,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, suppress
-from functools import lru_cache
+from functools import cache
 from typing import Any, ClassVar
 
 import aiohttp
@@ -267,13 +267,15 @@ def utf8_byte_limit_exceeded(
     index = 0
     while index < len(text):
         char = text[index]
-        if restore_crlf and char == "\r" and index + 1 < len(text):
-            if text[index + 1] == "\n":
-                used += 2
-                index += 2
-                if used > limit:
-                    return True
-                continue
+        if (
+            restore_crlf and char == "\r" and index + 1 < len(text)
+            and text[index + 1] == "\n"
+        ):
+            used += 2
+            index += 2
+            if used > limit:
+                return True
+            continue
         if restore_crlf and char == "\n":
             used += 2
         else:
@@ -564,7 +566,7 @@ def _match_glob_parts(pattern_parts: list[str], path_parts: list[str]) -> bool:
     keeps an agent-supplied pattern such as ``**/**/**/...`` polynomial
     instead of exponential while preserving the existing matching rules.
     """
-    @lru_cache(maxsize=None)
+    @cache
     def matches(pattern_index: int, path_index: int) -> bool:
         if pattern_index == len(pattern_parts):
             return path_index == len(path_parts)

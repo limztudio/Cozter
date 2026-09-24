@@ -98,10 +98,9 @@ class ReadFileTool(AgentTool):
         if os.path.splitext(target)[1].lower() in {
             ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
         }:
-            describe = await asyncio.to_thread(
+            return await asyncio.to_thread(
                 _describe_image_file, target, args.get("path"),
             )
-            return describe
 
         offset = args.get("offset")
         limit = args.get("limit")

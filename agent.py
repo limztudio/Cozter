@@ -849,7 +849,7 @@ def _build_contextual_prompt(
         )
         history_parts = [
             render(quota)
-            for (render, _natural), quota in zip(descriptors, quotas)
+            for (render, _natural), quota in zip(descriptors, quotas, strict=True)
             if quota
         ]
         history_parts = [part for part in history_parts if part]
