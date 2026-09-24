@@ -57,10 +57,10 @@ logger = logging.getLogger(__name__)
 # cannot drift apart.  Grok rejects unsupported ``--effort`` values, so
 # unpublished/custom IDs use the three-level subset rather than the extra
 # ``xhigh`` the current 4.7/4.6 models accept.
-# Verified 2026-09-23: live ``grok models`` (grok 1.0.13) lists
+# Verified 2026-09-24: live ``grok models`` (grok 1.0.13) lists
 # grok-4.7 (default), grok-4.7-build-fast, grok-4.6, and grok-4.5.
 # grok-4.7 shipped 2026-09-21 (500K context; effort low/medium/high/xhigh
-# per xAI release notes, re-verified 2026-09-23); Grok 4.7 Fast is the same model at 2x rates via
+# per xAI release notes, re-verified 2026-09-24); Grok 4.7 Fast is the same model at 2x rates via
 # Cursor/Grok Build only, so it shares the 4.7 capabilities here.
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high")
 _FALLBACK_MODEL_SPECS = (
