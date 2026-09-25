@@ -42,8 +42,9 @@ class _FallbackModelSpec(NamedTuple):
 # Muse Spark is Meta Superintelligence Labs' multimodal reasoning model for
 # agentic tasks (tool calling, coding, computer use) with a documented
 # 1,048,576-token context window that the model actively manages. Only
-# chat-completion model IDs belong here: Muse Image (image generation) and
-# Muse Voice Transcribe (speech-to-text) are invoked through other endpoints.
+# chat-completion model IDs belong here: Muse Image (image generation),
+# Muse Voice Transcribe (speech-to-text), and SAM (vision segmentation) are
+# invoked through other endpoints.
 _FALLBACK_MODEL_SPECS = (
     # Muse Spark 1.3 is the current flagship on the Model API.
     _FallbackModelSpec("muse-spark-1.3", 1_048_576),
@@ -54,12 +55,14 @@ _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _MODEL_CONTEXT_WINDOWS = {
     spec.name: spec.context_window for spec in _FALLBACK_MODEL_SPECS
 }
-# Meta's catalog also includes models invoked through non-chat endpoints.
+# Meta's catalog also includes models invoked through non-chat endpoints
+# (image generation, speech-to-text, and SAM vision segmentation).
 # Keep this deliberately small and exact: unknown/private IDs stay selectable
 # because they may be valid chat models on an operator's account.
 _NON_CHAT_COMPLETION_MODEL_PREFIXES = (
     "muse-image",
     "muse-voice",
+    "sam-",
 )
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 

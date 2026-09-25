@@ -2103,6 +2103,9 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertEqual(
             backend.context_window_tokens("glm-5.3-flash"), 1_000_000,
         )
+        self.assertEqual(
+            backend.context_window_tokens("glm-5.3-flashx"), 1_000_000,
+        )
         self.assertEqual(backend.context_window_tokens("glm-5.2"), 1_000_000)
         self.assertEqual(
             backend.context_window_tokens("GLM-5.2[1M]"), 1_000_000,
@@ -2136,6 +2139,7 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertEqual(zai_mod._FALLBACK_MODELS, (
             "glm-5.3",
             "glm-5.3-flash",
+            "glm-5.3-flashx",
             "glm-5.2",
             "glm-5v-turbo",
             "glm-5.1",
@@ -2460,7 +2464,8 @@ class ZaiBackendTests(unittest.TestCase):
     def test_glm_5_3_family_uses_its_reasoning_only_effort_scale(self) -> None:
         backend = ZaiBackend()
         for model in (
-            "GLM-5.3", "GLM-5.3-FLASH", "glm-5.3[1m]", "glm-5.3-flash[1m]",
+            "GLM-5.3", "GLM-5.3-FLASH", "GLM-5.3-FLASHX",
+            "glm-5.3[1m]", "glm-5.3-flash[1m]",
         ):
             with self.subTest(model=model):
                 self.assertEqual(
@@ -2500,7 +2505,8 @@ class ZaiBackendTests(unittest.TestCase):
             - {"glm-4-32b-0414-128k"},
         )
         for model in (
-            "glm-5.3", "glm-5.3-flash", "glm-5.3-flash[1m]",
+            "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx",
+            "glm-5.3-flash[1m]",
             "glm-5.2", "GLM-5.2[1M]",
             "glm-4.5-air",
         ):
@@ -2510,7 +2516,7 @@ class ZaiBackendTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertFalse(backend._preserve_reasoning_content(model))
 
-        for model in ("glm-5.3", "glm-5.3-flash", "glm-5.2"):
+        for model in ("glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.2"):
             with self.subTest(model=model):
                 self.assertEqual(
                     backend._preserved_reasoning_request_fields(model, {}),
@@ -2531,6 +2537,7 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-5.3-flash[1m]",
             "glm-5.3",
             "glm-5.3-flash",
+            "glm-5.3-flashx",
             "glm-5.2",
             "glm-5.1",
             "glm-5-turbo",
@@ -2705,6 +2712,7 @@ class MetaBackendTests(unittest.TestCase):
                     "muse-voice-transcribe-1.0",
                     "muse-spark-1.3",
                     "muse-image-1.0",
+                    "sam-3.1",
                     "muse-spark-1.2-contributor",
                 ),
             ) as fetch,
@@ -2740,7 +2748,7 @@ class MetaBackendTests(unittest.TestCase):
             mock.patch.object(
                 meta_mod,
                 "fetch_model_ids",
-                return_value=("muse-image", "muse-voice-transcribe"),
+                return_value=("muse-image", "muse-voice-transcribe", "sam-3.1"),
             ),
         ):
             self.assertEqual(

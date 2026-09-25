@@ -1,6 +1,6 @@
 """Z.ai (Zhipu GLM) backend: OpenAI-compatible cloud API.
 
-Z.ai serves the GLM models (glm-5.3, glm-5.3-flash, glm-5.2, glm-5.1,
+Z.ai serves the GLM models (glm-5.3, glm-5.3-flash/flashx, glm-5.2, glm-5.1,
 glm-5, ...) through OpenAI-compatible endpoints with Bearer auth. It reuses
 the shared :class:`OpenAIChatBackend` loop; this module supplies only Z.ai's
 specifics - the endpoint, the Authorization header built from the configured
@@ -52,9 +52,13 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-5.3", 1_000_000, True, True),
     # GLM-5.3-Flash is now sold on the same general endpoint (native
     # multimodal, 1M context, the same mandatory three-level reasoning, and
-    # documented tool-call streaming). Keep it here so the default fallback
+    # documented tool-call streaming). GLM-5.3-FlashX is its faster
+    # serving variant (200 tok/s, same 1M context and reasoning scale per
+    # the provider's Flash/FlashX overview; live-listed on the account
+    # /models catalog 2026-09-25). Keep both here so the default fallback
     # never omits a current public chat ID.
     _FallbackModelSpec("glm-5.3-flash", 1_000_000, True, True),
+    _FallbackModelSpec("glm-5.3-flashx", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.2", 1_000_000, True, True),
     # This vision model supports text and native functions, but its request
     # schema does not accept the text-only ``tool_stream`` extension.
@@ -133,7 +137,7 @@ _NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
 # the thinking toggle is supplied. Do not send the contradictory disabled
 # setting for a low Cozter effort percentage.
 _COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
-_GLM_5_3_REASONING_MODELS = frozenset({"glm-5.3", "glm-5.3-flash"})
+_GLM_5_3_REASONING_MODELS = frozenset({"glm-5.3", "glm-5.3-flash", "glm-5.3-flashx"})
 _GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
@@ -174,7 +178,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
-    # GLM-5.3-flash / GLM-5V are documented multimodal (native vision +
+    # GLM-5.3-flash / GLM-5.3-flashx / GLM-5V are documented multimodal (native vision +
     # image_url input), so photo uploads can ride as real image parts.
     supports_vision = True
     vision_mode = "openai_parts"
@@ -328,7 +332,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
         """Enable incremental tool-call deltas on documented agent models.
 
         ``tool_stream`` is supported by documented text chat-completion
-        models from GLM-4.6 onward, plus the GLM-5.3-Flash multimodal model.
+        models from GLM-4.6 onward, plus the GLM-5.3-Flash/FlashX multimodal models.
         Older vision schemas deliberately omit the field, so those models
         keep standard streamed tool-call deltas. The shared SSE parser handles
         either shape. Unrecognized account-specific IDs intentionally omit the

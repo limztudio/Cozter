@@ -41,7 +41,7 @@ are trusted in-process code, not sandboxed extensions.
     llama-server or LM Studio); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
   - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.3`, `glm-5.3-flash`,
-    `glm-5.2`, `glm-5v-turbo`, `glm-5.1`, `glm-5`, `glm-4.7` family,
+    `glm-5.3-flashx`, `glm-5.2`, `glm-5v-turbo`, `glm-5.1`, `glm-5`, `glm-4.7` family,
     `glm-4.6`/`glm-4.6v`/`glm-4.5` variants including `glm-4.5-air`
     (the default summary model), plus documented Coding Plan `[1m]` pins);
     OpenAI-compatible,
@@ -408,7 +408,7 @@ valid HTTPS URL. A blank, malformed, or non-HTTPS override falls back to the
 default so the API key is never sent over cleartext HTTP.
 GLM Coding Plan users can instead set it to
 `https://api.z.ai/api/coding/paas/v4`. The normal endpoint's fallback already
-includes `glm-5.3` and multimodal `glm-5.3-flash`; the Coding Plan fallback
+includes `glm-5.3` and multimodal `glm-5.3-flash`/`glm-5.3-flashx`; the Coding Plan fallback
 also offers the documented `glm-5.3[1m]` and `glm-5.3-flash[1m]` pins.
 `meta_api_key` enables the `meta` backend (Meta Model API — Muse Spark).
 Get one from the Meta Model API developer console and paste it here (the
@@ -417,7 +417,8 @@ talks to Meta's OpenAI-compatible endpoint at `https://api.meta.ai/v1`;
 `meta_base_url` overrides it if Meta publishes a new path — it must include
 the version segment, because only `/chat/completions` is appended, and it
 must be HTTPS so the API key is never sent over cleartext HTTP.
-Muse Image and Muse Voice Transcribe need other endpoints and are never
+Muse Image, Muse Voice Transcribe, and SAM vision segmentation need other endpoints
+and are never
 offered as agent models. Model discovery queries the account's `/models`
 catalog live; the offline fallback lists the published chat models
 (`muse-spark-1.3`, default, with `muse-spark-1.2` anchoring the cheap
@@ -1001,7 +1002,7 @@ the hard ones:
 
 Defaults put all three tiers on `codex` (`gpt-5.6-luna` / `gpt-5.6-terra` /
 `gpt-5.6-sol`). Codex keeps the high tier and chat default on Sol:
-Astra is now live-listed (verified 2026-09-24 against codex-cli 0.156.0),
+Astra is now live-listed (verified 2026-09-25 against codex-cli 0.156.0),
 but a pinned `gpt-6-astra` default would still fail closed
 on older/company-managed CLIs whose catalogs have not listed it yet. Pointing a
 tier at another agent picks that agent's cheap/mid/strong models
@@ -1102,7 +1103,7 @@ endpoints.
 and points at Z.ai's endpoint; `meta` adds Meta's Bearer header and compat
 endpoint. That loop reuses one HTTP session for the
 turn's tool calls and retries. Z.ai's text chat-completion models from GLM-4.6
-onward, plus multimodal `glm-5.3-flash`, opt into Z.ai's incremental
+onward, plus multimodal `glm-5.3-flash`/`glm-5.3-flashx`, opt into Z.ai's incremental
 tool-call argument stream; older vision models use their standard streamed
 function-call deltas because that vision request schema does not accept
 `tool_stream`. The shared SSE parser merges
@@ -1139,7 +1140,7 @@ picker queries the configured Z.ai `/models` endpoint and retains its curated
 agent-capable fallback, including text-compatible multimodal models such as
 `glm-5v-turbo`, `glm-4.6v`, and `glm-4.5v`, if the account cannot be queried.
 The normal Z.ai fallback includes the general endpoint's default
-`glm-5.3` model and multimodal `glm-5.3-flash`. A Coding Plan base URL also
+`glm-5.3` model and multimodal `glm-5.3-flash`/`glm-5.3-flashx`. A Coding Plan base URL also
 surfaces `glm-5.3[1m]` and `glm-5.3-flash[1m]`. Cozter maps `/effort` for
 both families to Z.ai's supported `low` / `high` / `max` reasoning levels, preserves
 their opaque reasoning state between tool calls, and enables their documented
@@ -1196,7 +1197,7 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. That built-in Codex fallback (verified 2026-09-24 against
+authoritative. That built-in Codex fallback (verified 2026-09-25 against
 codex-cli 0.156.0) lists the `gpt-6-astra` / `gpt-6-sol` / `gpt-6-luna` trio first in live-listed order — Astra shipped
 on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
 the GPT-5.6 family (Sol is the coding/everyday workhorse, Luna the fast
@@ -1237,7 +1238,7 @@ maps the percentage to its own vocabulary and request shape:
 |---|---|---|
 | `codex` | Model-aware: 4–6 levels | `ultra` (Astra/Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
-| `zai` | GLM-5.3/Flash: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
+| `zai` | GLM-5.3/Flash/FlashX: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | Model-aware: current Fable / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.5–4.6 and Sonnet 4.6 use 4; Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
 | `grok` | Model-aware: grok-4.7 / grok-4.7-build-fast / grok-4.6 use 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on 4.7/4.6; `--effort high` otherwise |
