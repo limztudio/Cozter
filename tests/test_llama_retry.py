@@ -946,6 +946,119 @@ class OpenAIToolLimitTests(unittest.TestCase):
         ))
 
 
+class OpenAIParallelToolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._orig_stream = oa._stream_completion
+        self._orig_execute = oa.tools.execute_tool
+
+    def tearDown(self) -> None:
+        oa._stream_completion = self._orig_stream
+        oa.tools.execute_tool = self._orig_execute
+
+    def test_payload_advertises_parallel_tool_calls(self) -> None:
+        calls: list[dict] = []
+
+        async def stream(*args, **kwargs):
+            calls.append(copy.deepcopy(args[1]))
+            return "done", "", []
+
+        async def execute_tool(name, args, workspace_path, approval, emit):
+            return f"{name} ok"
+
+        oa._stream_completion = stream
+        oa.tools.execute_tool = execute_tool
+
+        proc = _CaptureProc()
+        asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
+            proc, "/tmp", "work", None, "auto", False, 0,
+        ))
+
+        self.assertTrue(calls)
+        self.assertTrue(calls[0].get("parallel_tool_calls") is True)
+
+    def test_batch_runs_concurrently_and_preserves_order(self) -> None:
+        payloads: list[dict] = []
+        active = 0
+        peak = 0
+
+        async def stream(*args, **kwargs):
+            payloads.append(copy.deepcopy(args[1]))
+            if len(payloads) == 1:
+                return "", "", [
+                    _tool_call("c1", "a.txt"),
+                    _tool_call("c2", "b.txt"),
+                ]
+            return "done", "", []
+
+        async def execute_tool(name, args, workspace_path, approval, emit):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            try:
+                await asyncio.sleep(0.2)
+                return f"{args['path']} ok"
+            finally:
+                active -= 1
+
+        oa._stream_completion = stream
+        oa.tools.execute_tool = execute_tool
+
+        proc = _CaptureProc()
+        asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
+            proc, "/tmp", "work", None, "auto", False, 0,
+        ))
+
+        # Overlap proves gather (sequential would never exceed 1).
+        self.assertGreaterEqual(peak, 2)
+        tool_msgs = [
+            m for m in payloads[1]["messages"] if m.get("role") == "tool"
+        ]
+        self.assertEqual(
+            [m.get("tool_call_id") for m in tool_msgs], ["c1", "c2"],
+        )
+        self.assertEqual(
+            [m.get("content") for m in tool_msgs],
+            ["a.txt ok", "b.txt ok"],
+        )
+
+    def test_repeat_skipped_without_execution(self) -> None:
+        payloads: list[dict] = []
+        ran = 0
+
+        async def stream(*args, **kwargs):
+            payloads.append(copy.deepcopy(args[1]))
+            if len(payloads) == 1:
+                dup = _tool_call("c-base", "x.txt")
+                batch = []
+                for i in range(4):
+                    one = copy.deepcopy(dup)
+                    one["id"] = f"c{i}"
+                    batch.append(one)
+                return "", "", batch
+            return "done", "", []
+
+        async def execute_tool(name, args, workspace_path, approval, emit):
+            nonlocal ran
+            ran += 1
+            return f"{name} ok"
+
+        oa._stream_completion = stream
+        oa.tools.execute_tool = execute_tool
+
+        proc = _CaptureProc()
+        asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
+            proc, "/tmp", "work", None, "auto", False, 0,
+        ))
+
+        # Repeat limit is 3: the 4th identical call is skipped, not run.
+        self.assertEqual(ran, 3)
+        tool_msgs = [
+            m for m in payloads[1]["messages"] if m.get("role") == "tool"
+        ]
+        self.assertEqual(len(tool_msgs), 4)
+        self.assertIn("Skipped", tool_msgs[3].get("content", ""))
+
+
 class OpenAIToolPermissionTests(unittest.TestCase):
     def test_tool_schema_fails_closed_for_unknown_permission(self) -> None:
         self.assertIsNone(oa._tools_for_approval("unexpected", False))

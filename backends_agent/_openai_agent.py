@@ -2,7 +2,8 @@
 
 llama-server, Z.ai (GLM), and any other server that speaks OpenAI-style
 ``/chat/completions`` with streaming + tool calls share one tool-calling
-loop: send messages + tools, execute the ``tool_calls`` the model returns,
+loop: send messages + tools, execute the ``tool_calls`` the model returns
+concurrently via asyncio.gather (results re-ordered before appending),
 append the results, and re-call until the model stops calling tools. The
 loop runs inside a fake ``asyncio.subprocess.Process`` (HttpAgentProcess)
 so agent.py consumes its events the same way it does the CLI backends'.
@@ -480,17 +481,58 @@ class OpenAIChatBackend(Backend):
                         return
 
                     # Execute each requested tool and append the result.
+                    # One turn's tool_calls run concurrently via
+                    # asyncio.gather (results re-ordered to request order
+                    # before appending) so independent reads/searches
+                    # overlap instead of running strictly sequentially.
                     # ``approval`` is passed through to execute_tool, which
                     # re-enforces the permission gate as a backstop even if
                     # the model asks for a tool it was not offered.
+                    _batch_names: list[str] = []
+                    _batch_args: list[dict] = []
+                    _batch_skipped: list[bool] = []
                     for call in tool_calls:
-                        name, args = tools.parse_openai_call(call)
-                        sig = tools.tool_signature(name, args)
-                        tool_repeat_counts[sig] = (
-                            tool_repeat_counts.get(sig, 0) + 1
+                        _b_name, _b_args = tools.parse_openai_call(call)
+                        _b_sig = tools.tool_signature(_b_name, _b_args)
+                        tool_repeat_counts[_b_sig] = (
+                            tool_repeat_counts.get(_b_sig, 0) + 1
+                        )
+                        _batch_names.append(_b_name)
+                        _batch_args.append(_b_args)
+                        _batch_skipped.append(
+                            tool_repeat_counts[_b_sig] > tool_repeat_limit,
                         )
 
-                        if tool_repeat_counts[sig] > tool_repeat_limit:
+                    async def _run_one(
+                        _name: str, _args: dict,
+                    ) -> str:
+                        # execute_tool owns permission checks, status
+                        # events, result truncation, and the per-tool
+                        # timeout.
+                        return await tools.execute_tool(
+                            _name, _args, workspace_path, approval,
+                            proc.emit,
+                        )
+
+                    _results: list[str | None] = [None] * len(tool_calls)
+                    _to_run_idx: list[int] = [
+                        i for i, _skip in enumerate(_batch_skipped)
+                        if not _skip
+                    ]
+                    if _to_run_idx:
+                        _gathered = await asyncio.gather(
+                            *(
+                                _run_one(
+                                    _batch_names[i], _batch_args[i],
+                                )
+                                for i in _to_run_idx
+                            ),
+                        )
+                        for _pos, _res in zip(_to_run_idx, _gathered):
+                            _results[_pos] = _res
+                    for _i, call in enumerate(tool_calls):
+                        name = _batch_names[_i]
+                        if _batch_skipped[_i]:
                             result = (
                                 f"Skipped: {name} repeated"
                                 f" >{tool_repeat_limit}x. Answer"
@@ -502,13 +544,13 @@ class OpenAIChatBackend(Backend):
                                 "output": result,
                             })
                         else:
-                            # execute_tool owns permission checks, status
-                            # events, result truncation, and the per-tool
-                            # timeout.
-                            result = await tools.execute_tool(
-                                name, args, workspace_path, approval,
-                                proc.emit,
+                            _res_item: str | None = _results[_i]
+                            _res_str: str = (
+                                _res_item
+                                if isinstance(_res_item, str)
+                                else f"Tool {name} failed: no result"
                             )
+                            result = _res_str
 
                         # Include ``name`` alongside tool_call_id; strict
                         # servers reject tool messages without it.
@@ -661,6 +703,10 @@ def _completion_payload(
     payload.update(effort_fields)
     if tools_schema is not None:
         payload["tools"] = tools_schema
+        # Advertise concurrent execution: the loop runs one turn's
+        # tool_calls via asyncio.gather (results appended in order),
+        # so the model may batch independent calls in a single turn.
+        payload["parallel_tool_calls"] = True
     return payload
 
 
@@ -1262,6 +1308,8 @@ def _system_prompt(
     if tool_names:
         parts.append(
             f"Tools: {', '.join(tool_names)}."
+            " You may call multiple independent tools in one turn;"
+            " they run concurrently (results return in order)."
             " One pass; don't repeat calls."
         )
     else:
