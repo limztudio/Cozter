@@ -356,15 +356,38 @@ def list_sessions_with_data(workspace: str) -> list[dict]:
 
     Skips files that don't parse as JSON or lack an ``id``. Callers
     that only need lightweight metadata can use :func:`list_sessions`,
-    which projects from this result.
+    which projects from this result. Callers that only need the newest
+    N sessions (e.g. the router) should use
+    :func:`list_newest_sessions_with_data`, which parses only the newest
+    files instead of every session in the workspace.
     """
+    return _list_sessions_with_data(workspace, limit=None)
+
+
+def list_newest_sessions_with_data(
+    workspace: str, limit: int,
+) -> tuple[list[dict], int]:
+    """Return (newest *limit* sessions' data, total session count).
+
+    Files are ordered by mtime (newest first) so only the newest *limit*
+    files are parsed; older sessions are counted but skipped. Falls back
+    to full parsing when mtimes are unavailable.
+    """
+    return _list_sessions_with_data(workspace, limit=limit)
+
+
+def _list_sessions_with_data(
+    workspace: str, limit: int | None,
+) -> list[dict] | tuple[list[dict], int]:
     sdir = _sessions_dir(workspace)
     if not os.path.isdir(sdir):
-        return []
+        return ([], 0) if limit is not None else []
+    fnames = [f for f in os.listdir(sdir) if f.endswith(".json")]
+    total = len(fnames)
+    if limit is not None:
+        fnames = _newest_first(sdir, fnames, limit)
     out: list[dict] = []
-    for fname in os.listdir(sdir):
-        if not fname.endswith(".json"):
-            continue
+    for fname in fnames:
         fpath = os.path.join(sdir, fname)
         expected_id = fname[:-len(".json")]
         data = _load_session_path(
@@ -373,7 +396,27 @@ def list_sessions_with_data(workspace: str) -> list[dict]:
         if data is not None:
             out.append(data)
     out.sort(key=lambda d: d.get("created", ""), reverse=True)
+    if limit is not None:
+        return out, total
     return out
+
+
+def _newest_first(sdir: str, fnames: list[str], limit: int) -> list[str]:
+    """Order session files newest-first by mtime, keeping *limit* names.
+
+    Falls back to the raw directory order when no file can be stated,
+    so behavior never degrades below the previous full scan.
+    """
+    if limit < 1:
+        return []
+    try:
+        stamped = [
+            (os.stat(os.path.join(sdir, f)).st_mtime_ns, f) for f in fnames
+        ]
+    except OSError:
+        return fnames[:limit]
+    stamped.sort(key=lambda item: item[0], reverse=True)
+    return [f for _, f in stamped[:limit]]
 
 
 def list_sessions(workspace: str) -> list[dict]:

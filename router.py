@@ -160,9 +160,12 @@ async def select_or_create_session(
     """
     backend = backends_agent.get_backend(backend_name)
 
-    sessions_data = session.list_sessions_with_data(workspace_path)
-    total_sessions = len(sessions_data)
-    sessions_data = sessions_data[:ROUTER_MAX_SESSIONS]
+    # Parse only the newest files: the router caps its prompt at
+    # ROUTER_MAX_SESSIONS, so parsing every historic session first is
+    # pure overhead in workspaces with long session histories.
+    sessions_data, total_sessions = session.list_newest_sessions_with_data(
+        workspace_path, ROUTER_MAX_SESSIONS,
+    )
     if total_sessions > ROUTER_MAX_SESSIONS:
         logger.info(
             "Router: %d session(s) total, routing over newest %d",
