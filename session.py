@@ -12,6 +12,7 @@ import logging
 import os
 import uuid
 from datetime import datetime
+from typing import overload
 
 from . import workspace as workspace_mod
 from .utils import take_recent_lines
@@ -374,6 +375,18 @@ def list_newest_sessions_with_data(
     to full parsing when mtimes are unavailable.
     """
     return _list_sessions_with_data(workspace, limit=limit)
+
+
+@overload
+def _list_sessions_with_data(
+    workspace: str, limit: None,
+) -> list[dict]: ...
+
+
+@overload
+def _list_sessions_with_data(
+    workspace: str, limit: int,
+) -> tuple[list[dict], int]: ...
 
 
 def _list_sessions_with_data(
