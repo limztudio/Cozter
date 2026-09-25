@@ -99,17 +99,42 @@ def ensure_workspace_state_dir(workspace_path: str, *parts: str) -> str:
 
 
 def _load_all() -> dict:
-    """Load workspace state.
+    """Load workspace state, cached by file mtime+size.
 
     Shape: {user_id_str: {current: {bot_id: path}, recent: [path, ...]}}.
+    Scheduler enumeration and per-turn routing read this repeatedly;
+    edits change mtime/size so the next read sees them.
     """
-    return load_json_object(
+    global _STATE_CACHE
+    try:
+        stat_result = os.stat(WORKSPACE_STATE_PATH)
+        mtime_ns: int | None = stat_result.st_mtime_ns
+        size: int | None = stat_result.st_size
+    except OSError:
+        mtime_ns = None
+        size = None
+    if _STATE_CACHE is not None and _STATE_CACHE[0] == mtime_ns and _STATE_CACHE[1] == size:
+        return dict(_STATE_CACHE[2])
+    data = load_json_object(
         WORKSPACE_STATE_PATH, "workspace state file", logger,
     )
+    _STATE_CACHE = (mtime_ns, size, dict(data))
+    return data
+
+
+_STATE_CACHE: tuple[int | None, int | None, dict] | None = None
 
 
 def _save_all(data: dict) -> None:
     save_json_object(WORKSPACE_STATE_PATH, data)
+    global _STATE_CACHE
+    try:
+        stat_result = os.stat(WORKSPACE_STATE_PATH)
+        _STATE_CACHE = (
+            stat_result.st_mtime_ns, stat_result.st_size, dict(data),
+        )
+    except OSError:
+        _STATE_CACHE = None
 
 
 def _get_user(user_id: int | str) -> dict:

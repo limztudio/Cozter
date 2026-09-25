@@ -135,27 +135,34 @@ class WebFetchTool(AgentTool):
 
         # One retry covers transient transport failures (connection reset,
         # resolver hiccup); every other outcome is final. Real-work cap
-        # of 3600s; cancel still stops instantly.
+        # of 3600s; cancel still stops instantly. One session serves both
+        # attempts so the retry reuses the connection pool instead of
+        # paying for a fresh connector + DNS validation pass.
         final_url = url
         content_type = ""
         body = ""
-        for attempt in range(_FETCH_ATTEMPTS):
-            try:
-                async with _open_public_http_session() as session:
-                    final_url, content_type, body = (
-                        await _fetch_following_redirects(session, url)
-                    )
-                break
-            except _FetchRefused as exc:
-                return str(exc)
-            except aiohttp.ClientError as exc:
-                if attempt + 1 >= _FETCH_ATTEMPTS:
-                    return f"Fetch failed: {exc}"
-                await asyncio.sleep(_FETCH_RETRY_DELAY_SECONDS)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                return f"Fetch failed: {exc}"
+        try:
+            async with _open_public_http_session() as session:
+                for attempt in range(_FETCH_ATTEMPTS):
+                    try:
+                        final_url, content_type, body = (
+                            await _fetch_following_redirects(session, url)
+                        )
+                        break
+                    except _FetchRefused as exc:
+                        return str(exc)
+                    except aiohttp.ClientError as exc:
+                        if attempt + 1 >= _FETCH_ATTEMPTS:
+                            return f"Fetch failed: {exc}"
+                        await asyncio.sleep(_FETCH_RETRY_DELAY_SECONDS)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        return f"Fetch failed: {exc}"
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return f"Fetch failed: {exc}"
 
         title = ""
         title_match = _TITLE_RE.search(body)
