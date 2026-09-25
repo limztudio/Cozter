@@ -71,11 +71,38 @@ def _load_last_session_map(workspace: str) -> dict:
 
     JSON corruption is logged and swallowed: this is a UX hint, not
     load-bearing state, so a broken file falls back to "no last session"
-    rather than blocking the turn.
+    rather than blocking the turn. Cached by mtime+size; a turn reads
+    this map several times (resolve + persist + re-resolve).
     """
-    return load_json_object(
-        _last_session_path(workspace), "last_session file", logger,
-    )
+    path = _last_session_path(workspace)
+    try:
+        stat_result = os.stat(path)
+        mtime_ns: int | None = stat_result.st_mtime_ns
+        size: int | None = stat_result.st_size
+    except OSError:
+        mtime_ns = None
+        size = None
+    cached = _LAST_SESSION_CACHE.get(path)
+    if cached is not None and cached[0] == mtime_ns and cached[1] == size:
+        return dict(cached[2])
+    data = load_json_object(path, "last_session file", logger)
+    _LAST_SESSION_CACHE[path] = (mtime_ns, size, dict(data))
+    return data
+
+
+_LAST_SESSION_CACHE: dict[str, tuple[int | None, int | None, dict]] = {}
+
+
+def _save_last_session_map(workspace: str, data: dict) -> None:
+    path = _last_session_path(workspace)
+    save_json_object(path, data)
+    try:
+        stat_result = os.stat(path)
+        _LAST_SESSION_CACHE[path] = (
+            stat_result.st_mtime_ns, stat_result.st_size, dict(data),
+        )
+    except OSError:
+        _LAST_SESSION_CACHE.pop(path, None)
 
 
 def get_last_session(workspace: str, user_id: int | str) -> str | None:
@@ -93,7 +120,7 @@ def set_last_session(
         return
     data = _load_last_session_map(workspace)
     data[str(user_id)] = session_id
-    save_json_object(_last_session_path(workspace), data)
+    _save_last_session_map(workspace, data)
 
 
 def migrate_last_session(
@@ -115,7 +142,7 @@ def migrate_last_session(
         if not _is_safe_session_id(session_id):
             continue
         data[target_key] = session_id
-        save_json_object(_last_session_path(workspace), data)
+        _save_last_session_map(workspace, data)
         return True
     return False
 
