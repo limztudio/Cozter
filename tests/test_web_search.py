@@ -56,7 +56,12 @@ class _Response:
 
 
 class _FakeNet:
-    """Queue of per-request outcomes: exceptions or (status, body)."""
+    """Queue of per-request outcomes: exceptions or (status, body).
+
+    Outcomes pop in call order; under the concurrent endpoint race the
+    two endpoints' requests interleave, so tests assert on the URL set
+    rather than a strict sequential order.
+    """
 
     def __init__(self, *outcomes: object) -> None:
         self.outcomes = list(outcomes)
@@ -107,17 +112,22 @@ class WebSearchToolTests(unittest.TestCase):
 
     def test_falls_back_to_lite_endpoint(self) -> None:
         net = _FakeNet(
-            OSError("connection reset"),
-            # html retry answers 200 with an empty shell -> move on
             (200, b"<html><body></body></html>"),
+            (200, b"<html><body></body></html>"),
+            (200, _LITE_BODY.encode()),
             (200, _LITE_BODY.encode()),
         )
         result = _run_search(net, query="anything")
         self.assertIn("1. Lite One", result)
         self.assertIn("https://lite.example/one", result)
         self.assertIn("2. Lite Two", result)
+        # Both endpoints race concurrently; the html shell has no
+        # results, so the lite results win regardless of request order.
         self.assertTrue(
-            net.urls[2].startswith("https://lite.duckduckgo.com"),
+            any(
+                url.startswith("https://lite.duckduckgo.com")
+                for url in net.urls
+            ),
         )
         # The lite page's own navigation links must not become results.
         self.assertNotIn("Home", result)
@@ -125,11 +135,19 @@ class WebSearchToolTests(unittest.TestCase):
     def test_retries_same_endpoint_before_moving_on(self) -> None:
         net = _FakeNet(
             SimpleNamespace(status=503, content=_Content(b"")),
-            (200, _HTML_BODY.encode()),
+            (200, _LITE_BODY.encode()),
+            (200, _LITE_BODY.encode()),
         )
         result = _run_search(net, query="anything")
-        self.assertIn("First Result", result)
-        self.assertEqual(net.urls[0], net.urls[1])
+        self.assertIn("Lite One", result)
+        # The 503 endpoint is retried (same URL requested twice across
+        # the concurrent race), then the healthy endpoint's results win.
+        html_urls = [
+            url for url in net.urls
+            if url.startswith("https://html.duckduckgo.com")
+        ]
+        self.assertEqual(len(html_urls), 2)
+        self.assertEqual(html_urls[0], html_urls[1])
 
     def test_all_attempts_failing_reports_each_host_once(self) -> None:
         net = _FakeNet(

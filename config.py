@@ -70,12 +70,49 @@ _DEFAULT_CONFIG = {
 }
 
 
+_CONFIG_CACHE_PATH: str | None = None
+_CONFIG_CACHE_MTIME_NS: int | None = None
+_CONFIG_CACHE_SIZE: int | None = None
+_CONFIG_CACHE_DATA: dict | None = None
+
+
 def _load_config_object() -> dict:
-    """Read config.json and require the top-level JSON value to be an object."""
+    """Read config.json and require the top-level JSON value to be an object.
+
+    Results are cached by path + mtime + size so hot paths (per-tool
+    ``tool_timeout`` reads, per-turn socket-timeout getters) avoid
+    re-parsing the file on every call. A config edit changes mtime/size
+    and takes effect on the next getter without a restart.
+    """
+    global _CONFIG_CACHE_PATH, _CONFIG_CACHE_MTIME_NS
+    global _CONFIG_CACHE_SIZE, _CONFIG_CACHE_DATA
+    try:
+        stat_result = os.stat(CONFIG_PATH)
+        mtime_ns = stat_result.st_mtime_ns
+        size = stat_result.st_size
+    except OSError:
+        # Missing/unstatable: fall through to open() so callers keep the
+        # previous error semantics (FileNotFoundError / ValueError).
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+        if not isinstance(cfg, dict):
+            raise ValueError("config.json must contain a JSON object")
+        return cfg
+    if (
+        _CONFIG_CACHE_DATA is not None
+        and _CONFIG_CACHE_PATH == CONFIG_PATH
+        and _CONFIG_CACHE_MTIME_NS == mtime_ns
+        and _CONFIG_CACHE_SIZE == size
+    ):
+        return _CONFIG_CACHE_DATA
     with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = json.load(f)
     if not isinstance(cfg, dict):
         raise ValueError("config.json must contain a JSON object")
+    _CONFIG_CACHE_PATH = CONFIG_PATH
+    _CONFIG_CACHE_MTIME_NS = mtime_ns
+    _CONFIG_CACHE_SIZE = size
+    _CONFIG_CACHE_DATA = cfg
     return cfg
 
 

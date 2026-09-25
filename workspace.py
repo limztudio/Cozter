@@ -404,14 +404,43 @@ def _settings_path(workspace_path: str) -> str:
     return workspace_state_path(workspace_path, "settings.json")
 
 
+_SETTINGS_CACHE: dict[str, tuple[int | None, int | None, dict]] = {}
+
+
 def _load_settings(workspace_path: str) -> dict:
-    return load_json_object(
-        _settings_path(workspace_path), "workspace settings", logger,
-    )
+    """Return workspace settings, cached by file mtime+size.
+
+    A turn reads settings many times (backend, model, permission,
+    effort, budgets); re-parsing the same small JSON on every getter
+    is pure overhead. Edits change mtime/size so the next getter sees
+    them without a restart; saves refresh the entry inline.
+    """
+    path = _settings_path(workspace_path)
+    try:
+        stat_result = os.stat(path)
+        mtime_ns = stat_result.st_mtime_ns
+        size = stat_result.st_size
+    except OSError:
+        mtime_ns = None
+        size = None
+    cached = _SETTINGS_CACHE.get(path)
+    if cached is not None and cached[0] == mtime_ns and cached[1] == size:
+        return dict(cached[2])
+    data = load_json_object(path, "workspace settings", logger)
+    _SETTINGS_CACHE[path] = (mtime_ns, size, dict(data))
+    return data
 
 
 def _save_settings(workspace_path: str, settings: dict) -> None:
     save_json_object(_settings_path(workspace_path), settings)
+    path = _settings_path(workspace_path)
+    try:
+        stat_result = os.stat(path)
+        _SETTINGS_CACHE[path] = (
+            stat_result.st_mtime_ns, stat_result.st_size, dict(settings),
+        )
+    except OSError:
+        _SETTINGS_CACHE.pop(path, None)
 
 
 def _set_setting(workspace_path: str, key: str, value: object) -> None:

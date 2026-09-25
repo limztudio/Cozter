@@ -74,19 +74,24 @@ class WebSearchTool(AgentTool):
         )
 
         encoded = urllib.parse.urlencode({"q": query})
-        failures: list[str] = []
-        saw_page = False
-        attempts_left = len(_SEARCH_ENDPOINTS) * _ATTEMPTS_PER_ENDPOINT
 
-        for template in _SEARCH_ENDPOINTS:
+        async def _try_endpoint(
+            template: str,
+        ) -> tuple[str, list[str], list[str], bool]:
+            """Try one endpoint twice; return (host, lines, failures, page).
+
+            Runs concurrently with the other endpoint via gather, so a
+            slow/flaky frontend no longer blocks the healthy one.
+            """
             url = template.format(qs=encoded)
             host = urllib.parse.urlsplit(url).netloc
-            for _attempt in range(_ATTEMPTS_PER_ENDPOINT):
-                attempts_left -= 1
+            local_failures: list[str] = []
+            saw_local_page = False
+            for attempt in range(_ATTEMPTS_PER_ENDPOINT):
                 try:
                     async with open_http_response(url) as response:
                         if response.status != 200:
-                            failures.append(
+                            local_failures.append(
                                 f"{host}: HTTP {response.status}",
                             )
                         else:
@@ -95,30 +100,46 @@ class WebSearchTool(AgentTool):
                             )
                             if _search_capped:
                                 body += "<!-- … [fetch capped at 5 MB — preview only] -->"
-                            saw_page = True
+                            saw_local_page = True
                             results = _parse_results(body, max_results)
                             if results:
-                                if len(results) < max_results + (
-                                    1 if results[-1].startswith("(…parser") else 0
-                                ) and results[-1].startswith("(…parser"):
-                                    pass  # scan-cap footnote already appended
-                                elif len(
-                                    [r for r in results if r[:1].isdigit()]
-                                ) >= max_results:
-                                    results.append(
-                                        "(showing first"
-                                        f" {max_results} result(s); raise"
-                                        " max_results up to 10 for more;"
-                                        " never treat this preview as full"
-                                        " coverage; say PARTIAL + remainder"
-                                        " when coverage is unclear)"
-                                    )
-                                return "\n".join(results)
-                            failures.append(f"{host}: no results parsed")
+                                return host, results, local_failures, True
+                            local_failures.append(f"{host}: no results parsed")
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
-                    failures.append(f"{host}: {exc}")
-                if attempts_left:
+                    local_failures.append(f"{host}: {exc}")
+                if attempt + 1 < _ATTEMPTS_PER_ENDPOINT:
                     await asyncio.sleep(_RETRY_DELAY_SECONDS)
+            return host, [], local_failures, saw_local_page
+
+        gathered = await asyncio.gather(
+            *(_try_endpoint(t) for t in _SEARCH_ENDPOINTS),
+        )
+        failures: list[str] = []
+        saw_page = False
+        # Chain order wins (html first), but both endpoints already ran
+        # concurrently, so the slow one never blocked the healthy one.
+        for _host, results, endpoint_failures, page in gathered:
+            failures.extend(endpoint_failures)
+            saw_page = saw_page or page
+            if results:
+                if len(results) < max_results + (
+                    1 if results[-1].startswith("(…parser") else 0
+                ) and results[-1].startswith("(…parser"):
+                    pass  # scan-cap footnote already appended
+                elif len(
+                    [r for r in results if r[:1].isdigit()]
+                ) >= max_results:
+                    results.append(
+                        "(showing first"
+                        f" {max_results} result(s); raise"
+                        " max_results up to 10 for more;"
+                        " never treat this preview as full"
+                        " coverage; say PARTIAL + remainder"
+                        " when coverage is unclear)"
+                    )
+                return "\n".join(results)
 
         if saw_page:
             # At least one endpoint answered 200; an empty parse then most
