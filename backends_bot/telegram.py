@@ -290,7 +290,6 @@ class TelegramBot(BotPlatform):
         if ext in _TELEGRAM_PHOTO_EXTENSIONS:
             try:
                 await self._send_file_with_retry(
-                    chat_id,
                     lambda f: self.app.bot.send_photo(
                         chat_id=chat_id, photo=f, filename=name,
                     ),
@@ -304,7 +303,6 @@ class TelegramBot(BotPlatform):
                     exc_info=True,
                 )
         await self._send_file_with_retry(
-            chat_id,
             lambda f: self.app.bot.send_document(
                 chat_id=chat_id, document=f, filename=name,
             ),
@@ -312,7 +310,7 @@ class TelegramBot(BotPlatform):
         )
 
     async def _send_file_with_retry(
-        self, chat_id: str, sender, path: str,
+        self, sender, path: str,
     ) -> None:
         """Upload one file, honoring Telegram flood-control waits.
 

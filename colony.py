@@ -23,7 +23,6 @@ consolidation pass.
 """
 
 import logging
-import os
 import re
 
 from . import backends_agent, session
@@ -36,6 +35,7 @@ from .utils import (
     parse_bullets,
     run_internal_backend,
     save_json_object,
+    stat_mtime_size,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,13 +68,7 @@ _COLONY_CACHE: dict[str, tuple[int | None, int | None, dict]] = {}
 
 def _load(workspace: str) -> dict:
     path = _path(workspace)
-    try:
-        stat_result = os.stat(path)
-        mtime_ns: int | None = stat_result.st_mtime_ns
-        size: int | None = stat_result.st_size
-    except OSError:
-        mtime_ns = None
-        size = None
+    mtime_ns, size = stat_mtime_size(path)
     cached = _COLONY_CACHE.get(path)
     if cached is not None and cached[0] == mtime_ns and cached[1] == size:
         return {"items": list(cached[2]["items"]),
@@ -104,14 +98,14 @@ def _load(workspace: str) -> dict:
 
 def _refresh_colony_cache(path: str, items: list[str], count: int) -> None:
     """Refresh the cache entry after an inline write."""
-    try:
-        stat_result = os.stat(path)
-        _COLONY_CACHE[path] = (
-            stat_result.st_mtime_ns, stat_result.st_size,
-            {"items": list(items), "compact_count": count},
-        )
-    except OSError:
+    mtime_ns, size = stat_mtime_size(path)
+    if mtime_ns is None:
         _COLONY_CACHE.pop(path, None)
+        return
+    _COLONY_CACHE[path] = (
+        mtime_ns, size,
+        {"items": list(items), "compact_count": count},
+    )
 
 
 def get_items(workspace: str) -> list[str]:

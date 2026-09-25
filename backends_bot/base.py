@@ -258,8 +258,8 @@ async def download_http_file(
         raise ValueError(f"Refusing to fetch non-http url: {url!r}")
 
     async with (
-        aiohttp.ClientSession() as session,
-        session.get(url, headers=headers) as response,
+        aiohttp.ClientSession() as http_session,
+        http_session.get(url, headers=headers) as response,
     ):
         response.raise_for_status()
         if upload_size_exceeds_limit(

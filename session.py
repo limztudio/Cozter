@@ -19,6 +19,7 @@ from .utils import take_recent_lines
 from .utils import load_json_object
 from .utils import normalize_string_list
 from .utils import save_json_object
+from .utils import stat_mtime_size
 
 logger = logging.getLogger(__name__)
 
@@ -76,13 +77,7 @@ def _load_last_session_map(workspace: str) -> dict:
     this map several times (resolve + persist + re-resolve).
     """
     path = _last_session_path(workspace)
-    try:
-        stat_result = os.stat(path)
-        mtime_ns: int | None = stat_result.st_mtime_ns
-        size: int | None = stat_result.st_size
-    except OSError:
-        mtime_ns = None
-        size = None
+    mtime_ns, size = stat_mtime_size(path)
     cached = _LAST_SESSION_CACHE.get(path)
     if cached is not None and cached[0] == mtime_ns and cached[1] == size:
         return dict(cached[2])
@@ -97,13 +92,11 @@ _LAST_SESSION_CACHE: dict[str, tuple[int | None, int | None, dict]] = {}
 def _save_last_session_map(workspace: str, data: dict) -> None:
     path = _last_session_path(workspace)
     save_json_object(path, data)
-    try:
-        stat_result = os.stat(path)
-        _LAST_SESSION_CACHE[path] = (
-            stat_result.st_mtime_ns, stat_result.st_size, dict(data),
-        )
-    except OSError:
+    mtime_ns, size = stat_mtime_size(path)
+    if mtime_ns is None:
         _LAST_SESSION_CACHE.pop(path, None)
+        return
+    _LAST_SESSION_CACHE[path] = (mtime_ns, size, dict(data))
 
 
 def get_last_session(workspace: str, user_id: int | str) -> str | None:

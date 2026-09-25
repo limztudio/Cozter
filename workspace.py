@@ -10,6 +10,7 @@ from .utils import CONFIG_DIR, COZTER_DIR, is_path_within
 from .utils import ensure_lock
 from .utils import load_json_object
 from .utils import save_json_object
+from .utils import stat_mtime_size
 
 logger = logging.getLogger(__name__)
 
@@ -106,13 +107,7 @@ def _load_all() -> dict:
     edits change mtime/size so the next read sees them.
     """
     global _STATE_CACHE
-    try:
-        stat_result = os.stat(WORKSPACE_STATE_PATH)
-        mtime_ns: int | None = stat_result.st_mtime_ns
-        size: int | None = stat_result.st_size
-    except OSError:
-        mtime_ns = None
-        size = None
+    mtime_ns, size = stat_mtime_size(WORKSPACE_STATE_PATH)
     if _STATE_CACHE is not None and _STATE_CACHE[0] == mtime_ns and _STATE_CACHE[1] == size:
         return dict(_STATE_CACHE[2])
     data = load_json_object(
@@ -128,13 +123,11 @@ _STATE_CACHE: tuple[int | None, int | None, dict] | None = None
 def _save_all(data: dict) -> None:
     save_json_object(WORKSPACE_STATE_PATH, data)
     global _STATE_CACHE
-    try:
-        stat_result = os.stat(WORKSPACE_STATE_PATH)
-        _STATE_CACHE = (
-            stat_result.st_mtime_ns, stat_result.st_size, dict(data),
-        )
-    except OSError:
+    mtime_ns, size = stat_mtime_size(WORKSPACE_STATE_PATH)
+    if mtime_ns is None:
         _STATE_CACHE = None
+        return
+    _STATE_CACHE = (mtime_ns, size, dict(data))
 
 
 def _get_user(user_id: int | str) -> dict:
@@ -441,13 +434,7 @@ def _load_settings(workspace_path: str) -> dict:
     them without a restart; saves refresh the entry inline.
     """
     path = _settings_path(workspace_path)
-    try:
-        stat_result = os.stat(path)
-        mtime_ns = stat_result.st_mtime_ns
-        size = stat_result.st_size
-    except OSError:
-        mtime_ns = None
-        size = None
+    mtime_ns, size = stat_mtime_size(path)
     cached = _SETTINGS_CACHE.get(path)
     if cached is not None and cached[0] == mtime_ns and cached[1] == size:
         return dict(cached[2])
@@ -459,13 +446,11 @@ def _load_settings(workspace_path: str) -> dict:
 def _save_settings(workspace_path: str, settings: dict) -> None:
     save_json_object(_settings_path(workspace_path), settings)
     path = _settings_path(workspace_path)
-    try:
-        stat_result = os.stat(path)
-        _SETTINGS_CACHE[path] = (
-            stat_result.st_mtime_ns, stat_result.st_size, dict(settings),
-        )
-    except OSError:
+    mtime_ns, size = stat_mtime_size(path)
+    if mtime_ns is None:
         _SETTINGS_CACHE.pop(path, None)
+        return
+    _SETTINGS_CACHE[path] = (mtime_ns, size, dict(settings))
 
 
 def _set_setting(workspace_path: str, key: str, value: object) -> None:

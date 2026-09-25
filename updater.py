@@ -329,7 +329,7 @@ def restart_script(exit_code: int = 0) -> None:
             # in this runtime. The supervisor relaunches Cozter without
             # retaining this process as another Python ancestor.
             os._exit(WINDOWS_SUPERVISOR_RESTART_EXIT_CODE)
-            return
+            return  # pylint: disable=unreachable  # reachable when os._exit is mocked in tests
         parent_dir = os.path.dirname(MODULE_ROOT)
         os.chdir(parent_dir)
         with contextlib.suppress(Exception):

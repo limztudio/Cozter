@@ -203,12 +203,12 @@ def _ensure_venv_and_reexec() -> None:
         # supervisor for the venv child instead.  Direct Task Scheduler
         # launches otherwise have no supervisor: each self-update would
         # spawn a child and leave its Python parent waiting forever.
-        from . import updater
+        from . import updater as _windows_updater  # pylint: disable=redefined-outer-name
 
-        env[updater.WINDOWS_SUPERVISOR_ENV] = "1"
+        env[_windows_updater.WINDOWS_SUPERVISOR_ENV] = "1"
         while True:
             rc = subprocess.call(args, env=env, cwd=_pkg_parent)
-            if rc != updater.WINDOWS_SUPERVISOR_RESTART_EXIT_CODE:
+            if rc != _windows_updater.WINDOWS_SUPERVISOR_RESTART_EXIT_CODE:
                 os._exit(rc)
             time.sleep(_WINDOWS_CHILD_RESTART_DELAY_SEC)
     os.execve(python, args, env)

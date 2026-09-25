@@ -546,6 +546,19 @@ def save_json_object(path: str, data: dict) -> None:
     atomic_write(path, data, target_dir)
 
 
+def stat_mtime_size(path: str) -> tuple[int | None, int | None]:
+    """Return ``(mtime_ns, size)`` for *path*, or ``(None, None)`` on OSError.
+
+    Shared by the small mtime+size-guarded JSON caches (colony, session,
+    workspace state/settings) so the stat idiom lives in one place.
+    """
+    try:
+        stat_result = os.stat(path)
+        return stat_result.st_mtime_ns, stat_result.st_size
+    except OSError:
+        return None, None
+
+
 def normalize_string_list(
     value: object,
     *,
