@@ -1,6 +1,7 @@
 """Regression coverage for durable completed-turn text delivery."""
 
 import asyncio
+import os
 import tempfile
 import unittest
 from unittest import mock
@@ -213,6 +214,104 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                     await bot._drain_message_queue("u1")
                 run_agent.assert_awaited_once()
             self.assertIn("final response", bot.sent)
+
+    async def test_pipelined_uploads_overlap_next_turn(self) -> None:
+        """Texts return fast; pictures upload behind the next agent turn."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old_config_dir = workspace.CONFIG_DIR
+            workspace.CONFIG_DIR = tmp
+            self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
+            first_pic = os.path.join(tmp, "first.png")
+            second_pic = os.path.join(tmp, "second.png")
+            with open(first_pic, "wb") as f:
+                f.write(b"first-picture")
+            with open(second_pic, "wb") as f:
+                f.write(b"second-picture")
+
+            class _UploadBot(_ReplyDeliveryBot):
+                def __init__(self, workspace_path: str) -> None:
+                    super().__init__(workspace_path, fail_final=False)
+                    self.files: list[str] = []
+                    self.release_uploads = asyncio.Event()
+                    self.text_order: list[str] = []
+
+                async def send_text(
+                    self, chat_id: str, text: str, *, rich: bool = False,
+                ) -> None:
+                    self.sent.append(text)
+                    self.text_order.append(text)
+                    return None
+
+                async def send_file(self, chat_id: str, path: str) -> None:
+                    self.files.append(os.path.basename(path))
+                    await self.release_uploads.wait()
+
+            bot = _UploadBot(tmp)
+            first = AgentResult(events=[
+                ChatEvent(kind="text", content="first answer"),
+                ChatEvent(kind="attachment", content=first_pic),
+            ])
+            await bot._send_result("chat", tmp, first, uid="u1")
+            # Texts are out while the picture is still uploading: the turn
+            # already returned, so the next turn can start immediately.
+            self.assertEqual(bot.sent, ["first answer"])
+            self.assertEqual(bot.files, [])
+            self.assertTrue(bot.has_active_turns())
+
+            second = AgentResult(events=[
+                ChatEvent(kind="text", content="second answer"),
+                ChatEvent(kind="attachment", content=second_pic),
+            ])
+            second_task = asyncio.create_task(
+                bot._send_result("chat", tmp, second, uid="u1"),
+            )
+            await asyncio.sleep(0.05)
+            # The second reply's text waits for the first picture, keeping
+            # conversational order even though agent work overlapped.
+            self.assertNotIn("second answer", bot.sent)
+            bot.release_uploads.set()
+            await second_task
+            # Yield so background upload tasks drain their callbacks.
+            for _ in range(20):
+                await asyncio.sleep(0)
+            self.assertEqual(bot.sent, ["first answer", "second answer"])
+            self.assertEqual(bot.files, ["first.png", "second.png"])
+            self.assertFalse(bot.has_active_turns())
+
+    async def test_cancel_discards_background_uploads(self) -> None:
+        """Cancelled pictures never send and unblock has_active_turns."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old_config_dir = workspace.CONFIG_DIR
+            workspace.CONFIG_DIR = tmp
+            self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
+            pic = os.path.join(tmp, "pic.png")
+            with open(pic, "wb") as f:
+                f.write(b"picture")
+
+            class _StuckUploadBot(_ReplyDeliveryBot):
+                def __init__(self, workspace_path: str) -> None:
+                    super().__init__(workspace_path, fail_final=False)
+                    self.files: list[str] = []
+
+                async def send_file(self, chat_id: str, path: str) -> None:
+                    self.files.append(os.path.basename(path))
+                    await asyncio.sleep(3600)
+
+            bot = _StuckUploadBot(tmp)
+            result = AgentResult(events=[
+                ChatEvent(kind="text", content="answer"),
+                ChatEvent(kind="attachment", content=pic),
+            ])
+            await bot._send_result("chat", tmp, result, uid="u1")
+            self.assertEqual(bot.sent, ["answer"])
+            self.assertTrue(bot.has_active_turns())
+            task_running, cancelled_work = await bot._cancel_user_work("u1")
+            self.assertTrue(cancelled_work)
+            self.assertFalse(task_running)
+            self.assertEqual(bot.files, [])
+            for _ in range(20):
+                await asyncio.sleep(0)
+            self.assertFalse(bot.has_active_turns())
 
 
 if __name__ == "__main__":

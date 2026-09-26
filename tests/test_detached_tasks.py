@@ -617,6 +617,20 @@ class DetachedTaskLedgerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await self.bot._list_detached_task_records(), [])
 
+    async def test_detached_await_marker_does_not_pause_normal_queue(
+        self,
+    ) -> None:
+        """A provider's [[await]] marker must not park the normal queue."""
+        self.backend.output = "Which path?\n\n[[await]]"
+        await self._register()
+
+        await self.bot._check_detached_tasks()
+
+        self.assertEqual(self.bot.sent, [
+            "Background task 048e1065 completed.\n\nWhich path?",
+        ])
+        self.assertNotIn("u1", self.bot._awaiting_answer)
+
     async def test_completed_payload_survives_failed_delivery_and_retries(self) -> None:
         await self._register()
         self.bot.fail_sends = True

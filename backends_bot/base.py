@@ -69,7 +69,6 @@ def _read_inline_text_attachment(path: str) -> str:
 
 
 UPLOADS_DIR = "uploads"
-_ATTACHMENT_SEND_GAP_SEC = 0.6
 # Status previews are useful, but they must never hold up the model stream or
 # the final answer when a platform API call is slow or a Socket Mode
 # connection is being refreshed.
@@ -443,6 +442,14 @@ class BotPlatform(ABC):
         # chat platform to hold up delivery or cancellation for everyone.
         self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
         self._pending_reply_delivery_users: set[str] = set()
+        # Background attachment uploads pipelined behind text replies.
+        # _attachment_tasks tracks in-flight upload tasks per owner for
+        # cancellation and has_active_turns; _attachment_tails keeps the
+        # latest upload task per chat so the next reply's texts wait for
+        # earlier pictures to the same chat (conversational order) while
+        # the agent work itself already overlapped.
+        self._attachment_tasks: dict[str, set[asyncio.Task]] = {}
+        self._attachment_tails: dict[str, asyncio.Task] = {}
         # Detached provider tasks are intentionally separate from the inbound
         # message queue: queue entries are prompts that _drain_message_queue
         # reruns through an agent, while these records are already-computed
@@ -572,6 +579,8 @@ class BotPlatform(ABC):
         """Stop the background services started by _start_daemon_services."""
         await self.stop_detached_task_watcher()
         await self.stop_scheduler()
+        for owner in list(self._attachment_tasks):
+            await self._cancel_attachment_uploads(owner)
 
     async def _send_text_best_effort(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -645,6 +654,11 @@ class BotPlatform(ABC):
         """Return True while any agent reply is still in progress."""
         if any(not task.done() for task in self._running_tasks.values()):
             return True
+        tasks = self._attachment_tasks
+        if any(
+            not task.done() for owned in tasks.values() for task in owned
+        ):
+            return True
         return any(lock.locked() for lock in self._task_locks.values())
 
     def stuck_turn_diagnostics(self) -> str:
@@ -676,6 +690,20 @@ class BotPlatform(ABC):
                 for uid, task in tasks.items()
             ]
             parts.append("running_tasks=[" + ", ".join(names) + "]")
+        pending_uploads = {
+            owner: sum(1 for task in owned if not task.done())
+            for owner, owned in self._attachment_tasks.items()
+        }
+        pending_uploads = {
+            owner: count for owner, count in pending_uploads.items()
+            if count
+        }
+        if pending_uploads:
+            uploads = [
+                f"{owner}({count})"
+                for owner, count in sorted(pending_uploads.items())
+            ]
+            parts.append("pending_uploads=[" + ", ".join(uploads) + "]")
         if locks:
             parts.append("held_locks=[" + ", ".join(sorted(locks)) + "]")
         return "; ".join(parts) or "<no stuck state found>"
@@ -1005,8 +1033,15 @@ class BotPlatform(ABC):
             persisted = await self._clear_persistent_queue(uid)
         delayed_replies = await self._clear_reply_deliveries(uid)
         detached_cancelled = await self._cancel_detached_tasks(uid)
+        # Cancel uploads first: _await_attachment_tail shields the tail,
+        # so a stuck upload would otherwise wedge the delivery attempt
+        # below behind the very upload being cancelled.
+        cancelled_uploads = await self._cancel_attachment_uploads(uid)
         cleared = max(len(drained), persisted, delayed_replies)
-        return task_running, bool(was_awaiting or cleared or detached_cancelled)
+        return task_running, bool(
+            was_awaiting or cleared or detached_cancelled
+            or cancelled_uploads
+        )
 
     # ----- /new (dir-input flow) -----------------------------------------
 
@@ -2904,10 +2939,12 @@ class BotPlatform(ABC):
         result = agent.AgentResult()
         agent.append_text_result(result, message)
         try:
-            # uid=None deliberately avoids turning a provider's textual
-            # ``[[await]]`` marker into a pause in the user's normal queue.
-            await self._send_result(
+            # Uploads stay owned by the user (cancellable) without
+            # letting a provider's textual ``[[await]]`` marker pause
+            # the normal queue.
+            await self._send_detached_result(
                 record["chat_id"], record["workspace_path"], result,
+                record["user_id"],
             )
         except Exception:
             # Keep the staged payload for at-least-once delivery after a
@@ -3785,23 +3822,136 @@ class BotPlatform(ABC):
             return None
         return ws
 
+    async def _await_attachment_tail(self, chat_id: str) -> None:
+        """Wait for earlier background uploads to the same chat, in order.
+
+        Called at the start of ``_send_result`` so a follow-up reply's
+        texts never overtake the previous reply's pictures. The wait
+        happens after the agent already finished, so the previous turn's
+        uploads overlapped this turn's agent work — only a still-running
+        tail blocks, preserving conversational order.
+        """
+        tail = self._attachment_tails.get(chat_id)
+        if tail is None or tail.done():
+            return
+        try:
+            await asyncio.shield(tail)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
+    def _track_attachment_upload(
+        self, owner: str, chat_id: str, paths: list[str],
+    ) -> asyncio.Task[None]:
+        """Launch parallel background uploads chained after the tail."""
+        tail = self._attachment_tails.get(chat_id)
+        if tail is not None and tail.done():
+            tail = None
+
+        async def _send_one(abs_path: str) -> None:
+            try:
+                await self.send_file(chat_id, abs_path)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(
+                    "Failed to send attachment %s: %s", abs_path, e,
+                )
+                await self._send_text_best_effort(
+                    chat_id,
+                    f"Failed to attach {os.path.basename(abs_path)}: {e}",
+                )
+
+        async def _run() -> None:
+            if tail is not None and not tail.done():
+                try:
+                    await asyncio.shield(tail)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+            # Parallel uploads: platform clients pace/serialize the actual
+            # HTTP sends themselves (Signal lock + 1.2s pacing, Telegram
+            # / Slack retries), so N pictures upload concurrently while
+            # the 0.6s turn-level pre-gap is gone.
+            await asyncio.gather(*(_send_one(path) for path in paths))
+
+        task: asyncio.Task[None] = create_background_task(
+            _run(),
+            name=f"{self.platform_id}:upload:{owner}",
+            log=logger,
+        )
+        owned = self._attachment_tasks.setdefault(owner, set())
+        owned.add(task)
+        self._attachment_tails[chat_id] = task
+
+        def _done(done: asyncio.Task[None]) -> None:
+            owned.discard(done)
+            if not owned:
+                self._attachment_tasks.pop(owner, None)
+            if self._attachment_tails.get(chat_id) is done:
+                self._attachment_tails.pop(chat_id, None)
+
+        task.add_done_callback(_done)
+        return task
+
+    async def _cancel_attachment_uploads(self, owner: str) -> int:
+        """Cancel background uploads owned by *owner*; return count."""
+        owned = self._attachment_tasks.get(owner)
+        if not owned:
+            return 0
+        tasks = [task for task in owned if not task.done()]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await asyncio.gather(task, return_exceptions=True)
+            except asyncio.CancelledError:
+                pass
+        return len(tasks)
+
+    async def _send_detached_result(
+        self, chat_id: str, ws: str, result: agent.AgentResult, uid: str,
+    ) -> None:
+        """Send a detached callback without arming the [[await]] pause.
+
+        Uploads stay owned by *uid* so /cancel still finds them; only
+        the queue-pause side effect is suppressed, since a provider's
+        textual ``[[await]]`` marker must not park the normal queue.
+        """
+        await self._send_result(chat_id, ws, result, uid=uid)
+        self._awaiting_answer.discard(uid)
+
     async def _send_result(
         self, chat_id: str, ws: str, result: agent.AgentResult,
         *, uid: str | None = None,
     ) -> None:
         """Send the agent's reply (text + attachments) and honor [[await]].
 
-        ``uid``, when provided, opts the user's queue into the await
-        pause: if any text event contains ``[[await]]``, the marker is
-        stripped and ``self._awaiting_answer`` is set so the next
-        drain pass will block until the user's next message clears it.
-        Ephemeral schedule turns omit ``uid`` because their session is
-        deleted right after, so there's nothing to resume into.
+        ``uid`` has two jobs: it opts the user's queue into the await
+        pause, and it owns the background picture uploads so /cancel can
+        find them. Detached callbacks pass the user id with awaiting
+        disabled via ``_send_detached_result`` (their textual ``[[await]]``
+        marker must not pause the normal queue); ephemeral schedule turns
+        omit ``uid`` because their session is deleted right after, so
+        ownership falls back to the chat.
+
+        Latency shape: texts (and the usage footer) send synchronously
+        first, then pictures upload in a per-chat background chain. The
+        turn returns as soon as texts are out, so the per-user lock
+        releases and the next queued turn's agent work overlaps the
+        uploads. The next reply's texts wait for the earlier tail first,
+        preserving conversational order without blocking agent work.
+        Attachments stay best-effort: a crash mid-upload loses only the
+        pictures, never the staged text payload.
         """
+        await self._await_attachment_tail(chat_id)
         awaiting = False
         sent_sources: set[str] = set()
+        pending_uploads: list[str] = []
 
-        async def send_attachment(path: str) -> None:
+        def collect_attachment(path: str) -> None:
             source_path = agent.attachment_source_path(path, ws)
             if source_path is None:
                 logger.warning(
@@ -3817,27 +3967,11 @@ class BotPlatform(ABC):
                 )
                 return
             sent_sources.add(source_path)
-            try:
-                # Small gap between back-to-back uploads: every chat
-                # platform throttles rapid-fire file sends (Signal's
-                # attachment CDN answers with "Retry after N seconds",
-                # Telegram with flood-control waits, Slack with
-                # ``ratelimited``), so pacing here avoids most throttles
-                # before the per-platform retries even engage.
-                await asyncio.sleep(_ATTACHMENT_SEND_GAP_SEC)
-                await self.send_file(chat_id, abs_path)
-            except Exception as e:
-                logger.warning(
-                    "Failed to send attachment %s: %s", abs_path, e,
-                )
-                await self._send_text_best_effort(
-                    chat_id,
-                    f"Failed to attach {os.path.basename(abs_path)}: {e}",
-                )
+            pending_uploads.append(abs_path)
 
         for ev in result.events:
             if ev.kind == "attachment":
-                await send_attachment(ev.content)
+                collect_attachment(ev.content)
                 continue
             if ev.kind != "text":
                 continue
@@ -3850,7 +3984,7 @@ class BotPlatform(ABC):
             if text:
                 await self.send_text(chat_id, text, rich=True)
             for path in attach_paths:
-                await send_attachment(path)
+                collect_attachment(path)
 
         # Compact per-turn token/cost footer, when the backend reported
         # usage and the operator hasn't disabled it.
@@ -3860,6 +3994,10 @@ class BotPlatform(ABC):
                 await self._send_text_best_effort(
                     chat_id, footer, rich=True,
                 )
+
+        if pending_uploads:
+            owner = uid if uid is not None else f"chat:{chat_id}"
+            self._track_attachment_upload(owner, chat_id, pending_uploads)
 
         if awaiting and uid is not None:
             self._arm_awaiting_answer(uid)
