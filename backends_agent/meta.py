@@ -20,7 +20,11 @@ import logging
 from typing import NamedTuple
 
 from .. import config as cfg
-from ._openai_agent import CachedOpenAIChatBackend, fetch_model_ids
+from ._openai_agent import (
+    CachedOpenAIChatBackend,
+    discover_bearer_models,
+    fetch_model_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,36 +133,18 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
     # ---- model discovery -----------------------------------------------
 
     def _fetch_models(self) -> tuple[str, ...]:
-        key = cfg.get_meta_api_key()
-        base_url = cfg.get_meta_base_url()
-        if not key:
-            logger.debug(
-                "Meta Model API key is unset; using fallback model list",
-            )
-            return _FALLBACK_MODELS
-
-        url = base_url.rstrip("/") + "/models"
-        try:
-            model_ids = fetch_model_ids(
-                url,
-                timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
-                headers={"Authorization": f"Bearer {key}"},
-            )
-        except Exception as exc:
-            logger.debug(
-                "Could not query Meta Model API models at %s (%s); "
-                "using fallback",
-                url, exc,
-            )
-            return _FALLBACK_MODELS
-
-        chat_models = _chat_completion_model_ids(model_ids)
-        if not chat_models and model_ids:
-            logger.debug(
-                "Meta Model API catalog contained no chat-completion "
-                "models; using fallback",
-            )
-        return chat_models or _FALLBACK_MODELS
+        return discover_bearer_models(
+            label="Meta Model API",
+            api_key=cfg.get_meta_api_key(),
+            base_url=cfg.get_meta_base_url(),
+            timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
+            fallback_models=_FALLBACK_MODELS,
+            keep_model_id=lambda model_id: (
+                isinstance(model_id, str)
+                and not _is_non_chat_completion_model_id(model_id)
+            ),
+            fetch=fetch_model_ids,
+        )
 
     # ---- OpenAIChatBackend hooks ---------------------------------------
 
@@ -194,12 +180,8 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
     def _max_retries(self) -> int:
         return cfg.get_meta_max_retries()
 
-    def health_check(self) -> tuple[bool, str]:
-        # HTTP backend: readiness is "is an API key configured?". We don't
-        # spend a real request here (that would bill the account).
-        if not cfg.get_meta_api_key():
-            return False, "no API key set (set meta_api_key in config.json)"
-        return True, (
-            f"configured (endpoint {self._chat_endpoint()},"
-            f" default model {self.default_model})"
-        )
+    def _api_key(self) -> str:
+        return cfg.get_meta_api_key()
+
+    def _api_key_setting(self) -> str:
+        return "meta_api_key"

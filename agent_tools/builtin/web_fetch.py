@@ -19,6 +19,7 @@ from ..base import (
     summarize_arg,
     truncate_with_marker,
     validate_public_url as _validate_public_url,
+    with_fetch_cap_marker,
 )
 
 
@@ -93,13 +94,9 @@ async def _fetch_following_redirects(
                 )
 
             body, _fetch_capped = await read_bounded_text(response)
-            if _fetch_capped:
-                body += (
-                    "\n… [fetch capped at 5 MB — preview only, not full"
-                    " coverage; narrow the request; say PARTIAL + remainder"
-                    " when coverage is unclear]"
-                )
-            return final_url, content_type, body
+            return final_url, content_type, with_fetch_cap_marker(
+                body, _fetch_capped,
+            )
 
 
 class WebFetchTool(AgentTool):

@@ -30,6 +30,7 @@ from ..base import (
     summarize_arg,
     truncate_with_marker,
     validate_public_url,
+    with_fetch_cap_marker,
 )
 
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
@@ -152,13 +153,10 @@ async def _request_following_redirects(
             if not _is_textual_content_type(content_type):
                 return status, str(response.url), content_type, None
             text, _http_capped = await read_bounded_text(response)
-            if _http_capped:
-                text += (
-                    "\n… [fetch capped at 5 MB — preview only, not full"
-                    " coverage; narrow the request; say PARTIAL + remainder"
-                    " when coverage is unclear]"
-                )
-            return status, str(response.url), content_type, text
+            return (
+                status, str(response.url), content_type,
+                with_fetch_cap_marker(text, _http_capped),
+            )
 
 
 class HttpRequestTool(AgentTool):

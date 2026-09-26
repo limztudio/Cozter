@@ -23,7 +23,7 @@ import math
 import random
 import urllib.request
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import aiohttp
@@ -163,6 +163,63 @@ def fetch_model_ids(
     return extract_model_ids(payload)
 
 
+def discover_bearer_models(
+    *,
+    label: str,
+    api_key: str,
+    base_url: str,
+    timeout: float,
+    fallback_models: tuple[str, ...],
+    keep_model_id: Callable[[object], bool] | None = None,
+    fetch: Callable[..., tuple[str, ...]] = fetch_model_ids,
+) -> tuple[str, ...]:
+    """Discover an OpenAI-style ``/models`` catalog with a Bearer key.
+
+    Shared by the Meta Model API and Z.ai backends: without a key the
+    curated *fallback_models* are returned without a network probe; a
+    failed probe also falls back; an empty-after-filter catalog keeps the
+    live IDs (an account may legitimately serve only unknown IDs) only
+    when the probe itself returned IDs. *keep_model_id* filters the live
+    catalog (provider-specific non-chat IDs); ``None`` keeps every ID.
+    *fetch* is the catalog probe (default :func:`fetch_model_ids`);
+    backends pass their module-level alias so tests can keep patching
+    the per-backend ``fetch_model_ids`` name.
+    """
+    if not api_key:
+        logger.debug(
+            "%s API key is unset; using fallback model list", label,
+        )
+        return fallback_models
+
+    url = base_url.rstrip("/") + "/models"
+    try:
+        model_ids = fetch(
+            url,
+            timeout=timeout,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    except Exception as exc:
+        logger.debug(
+            "Could not query %s models at %s (%s); using fallback",
+            label, url, exc,
+        )
+        return fallback_models
+
+    if keep_model_id is not None:
+        chat_models = tuple(
+            model_id for model_id in model_ids if keep_model_id(model_id)
+        )
+    else:
+        chat_models = model_ids
+    if not chat_models and model_ids:
+        logger.debug(
+            "%s model catalog contained no chat-completion models; "
+            "using fallback",
+            label,
+        )
+    return chat_models or fallback_models
+
+
 def _message_payload_bytes(message: dict[str, Any]) -> int:
     """Return the approximate UTF-8 JSON size retained for one chat message."""
     # Match the default JSON escaping used by aiohttp's request serializer so
@@ -288,6 +345,29 @@ class OpenAIChatBackend(Backend):
 
     def _max_retries(self) -> int:
         return 2
+
+    # ---- shared API-key readiness probe ---------------------------------
+
+    def _api_key(self) -> str:
+        """Configured Bearer key, or ``""`` when unset. Providers override."""
+        return ""
+
+    def _api_key_setting(self) -> str:
+        """Config key name shown when no API key is configured."""
+        return "api_key"
+
+    def health_check(self) -> tuple[bool, str]:
+        # HTTP backend: readiness is "is an API key configured?". We don't
+        # spend a real request here (that would bill the account).
+        if not self._api_key():
+            return False, (
+                f"no API key set (set {self._api_key_setting()}"
+                " in config.json)"
+            )
+        return True, (
+            f"configured (endpoint {self._chat_endpoint()},"
+            f" default model {self.default_model})"
+        )
 
     # ---- launch ---------------------------------------------------------
 

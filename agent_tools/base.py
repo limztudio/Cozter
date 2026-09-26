@@ -1109,6 +1109,22 @@ async def read_bounded_text(
     return body_bytes.decode(encoding, errors="replace"), truncated
 
 
+def with_fetch_cap_marker(text: str, capped: bool) -> str:
+    """Append the shared fetch-cap PARTIAL + remainder footer when capped.
+
+    Covers the identical truncation footers in ``builtin/web_fetch`` and
+    ``plugins/http_request`` so their wording stays in sync. Returns
+    *text* unchanged when *capped* is False.
+    """
+    if not capped:
+        return text
+    return text + (
+        "\n… [fetch capped at 5 MB — preview only, not full"
+        " coverage; narrow the request; say PARTIAL + remainder"
+        " when coverage is unclear]"
+    )
+
+
 @asynccontextmanager
 async def open_http_response(
     url: str,
