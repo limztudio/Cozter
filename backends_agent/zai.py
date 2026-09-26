@@ -55,7 +55,7 @@ _FALLBACK_MODEL_SPECS = (
     # documented tool-call streaming). GLM-5.3-FlashX is its faster
     # serving variant (200 tok/s, same 1M context and reasoning scale per
     # the provider's Flash/FlashX overview; live-listed on the account
-    # /models catalog 2026-09-25). Keep both here so the default fallback
+    # /models catalog 2026-09-26). Keep both here so the default fallback
     # never omits a current public chat ID.
     _FallbackModelSpec("glm-5.3-flash", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.3-flashx", 1_000_000, True, True),
