@@ -85,7 +85,12 @@ are trusted in-process code, not sandboxed extensions.
   Cozter stages its text (and any usage footer) in a separate delivery
   ledger. A failed chat send or restart retries that finished text before
   later work, rather than rerunning agent tools; attachment uploads remain
-  best-effort so a retry cannot duplicate a file
+  best-effort so a retry cannot duplicate a file. Texts (and the usage
+  footer) send synchronously first; pictures then upload in a per-chat
+  background chain, so the turn returns as soon as texts are out and the
+  next queued turn's agent work overlaps the uploads — the next reply's
+  texts wait for the earlier tail first, preserving conversational order.
+  `/cancel` and daemon stop cancel in-flight uploads
 - **Platform-safe text delivery**: long replies are split at chat-surface API
   boundaries. Telegram applies its 4,096-character limit to both rich agent
   replies and plain command/status output, splitting rich Markdown before
@@ -479,7 +484,11 @@ the completed agent turn and its tools. Delivery is intentionally
 at-least-once: if a platform accepts text but Cozter cannot record that fact,
 the text can be delivered again after recovery. Attachments stay on the
 normal best-effort path because chat-file uploads do not have a safe
-idempotency key. CLI mode likewise restores staged final text after restart.
+idempotency key: texts (and the usage footer) send synchronously first,
+then pictures upload in a per-chat background chain, so the turn returns
+as soon as texts are out and the next queued turn's agent work overlaps
+the uploads; the next reply's texts wait for the earlier tail first,
+preserving order without blocking agent work. CLI mode likewise restores staged final text after restart.
 
 For Signal, `signal-cli` must already be installed, registered, and
 running as a JSON-RPC daemon. Each invite URL in `signal_group_urls` is
@@ -702,7 +711,9 @@ session-only Bash hook that denies ordinary `&`, `nohup`, `disown`,
 `run_in_background`, and nested `claude --bg` launches, so those jobs cannot
 silently escape the callback ledger.
 `/stop` (or `/cancel` when no picker is active) also stops a tracked detached
-task. If Claude reports that a task is blocked waiting for input, Cozter
+task, including its user-owned picture uploads. A detached completion's
+textual `[[await]]` marker is delivered as text but never pauses the
+normal queue. If Claude reports that a task is blocked waiting for input, Cozter
 notifies the chat; use `claude agents` and `claude attach` in the workspace
 to continue that interactive session.
 
@@ -793,6 +804,13 @@ trusted external artifact cannot become an automatic attachment merely by
 being linked into a workspace. Replies can end with
 `[[await]]` when the agent needs a user decision; the marker is stripped
 and that user's queued work pauses until the next message arrives.
+Texts (and the usage footer) send synchronously first; pictures then
+upload in a per-chat background chain, so the turn returns as soon as
+texts are out and the next queued turn's agent work overlaps the uploads
+— the next reply's texts wait for the earlier tail first, preserving
+conversational order without blocking agent work. `/cancel` and daemon
+stop cancel in-flight uploads, and in-flight uploads count as active
+turns in status and diagnostics.
 
 ## Plugins
 
@@ -946,7 +964,10 @@ at 5 MiB and share the bounded `read_bounded_text()` reader in
 `agent_tools/base.py`, which reports whether the cap was hit so the model
 sees an explicit PARTIAL preview marker instead of a silent cut
 (`web_fetch` appends a fetch-capped note; `web_search` marks the capped page
-and notes when only the first N results are shown). `web_search` tries DuckDuckGo's `html` and `lite`
+and notes when only the first N results are shown). The fetch-capped
+footer itself is one shared `with_fetch_cap_marker()` helper in
+`agent_tools/base.py`, used by both `web_fetch` and the `http_request`
+plugin so their wording stays in sync. `web_search` tries DuckDuckGo's `html` and `lite`
 frontends race concurrently via `asyncio.gather` — two attempts each, with a short
 delay between tries — so a slow/flaky frontend no longer blocks the healthy
 one, and sponsored (`ad_*`) and DuckDuckGo-internal links never become results.
@@ -1105,7 +1126,11 @@ endpoints.
 `llama`, `meta`, and `zai` share one in-process OpenAI-compatible agent loop
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
 and points at Z.ai's endpoint; `meta` adds Meta's Bearer header and compat
-endpoint. That loop reuses one HTTP session for the
+endpoint. `meta` and `zai` model discovery also share that module's Bearer
+`/models` probe (`discover_bearer_models`: no-key fallback, Bearer fetch,
+provider non-chat filter, empty-catalog fallback; each backend keeps a
+per-module `fetch_model_ids` alias) and its shared key health check.
+That loop reuses one HTTP session for the
 turn's tool calls and retries. One turn's `tool_calls` run concurrently via
 `asyncio.gather` (results re-ordered to request order before appending), so
 independent reads/searches overlap instead of running strictly sequentially;
@@ -1318,13 +1343,15 @@ Cozter/
 │   ├── flexible.py         flexible meta-agent backend (no CLI of its own)
 │   ├── _http_proc.py       process-like adapter and error handling for HTTP backends
 │   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop;
-│   │                       one HTTP session per turn; shared catalog cache
+│   │                       one HTTP session per turn; shared catalog cache,
+│   │                       Bearer discovery probe, and key health check
 │   ├── llama.py            local /v1/chat/completions backend hooks
 │   ├── zai.py              Z.ai /api/paas/v4/chat/completions backend hooks
 │   └── meta.py             Meta Model API /v1/chat/completions backend hooks
 │
 └── agent_tools/          tool surface for HTTP backends + plugin registry
-    ├── base.py             AgentTool ABC; path/argument validation and shared HTTP helpers
+    ├── base.py             AgentTool ABC; path/argument validation, shared HTTP
+    │                       helpers, and the shared fetch-cap PARTIAL footer
     ├── builtin/            17 files: 16 built-in tools (bash, read_file, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch) plus __init__.py
     └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, git_ops, git_sync, memory, http_request shipped live; _git_common.py holds the git tools' shared runner/validation/truncation and is skipped by the loader)
 ```
@@ -1662,8 +1689,8 @@ schedule parsing, backend model defaults, shared catalog/result/content
 helpers, CLI tool summaries, process-resource maps, event parsing, llama
 retry behavior, the flexible meta-agent's planning/merge, post-turn,
 interrupted-turn, and inject flow, subprocess draining and
-exceptional-path cleanup, prompt construction, attachment handling,
-run-lock cancellation, session
+exceptional-path cleanup, prompt construction, attachment handling
+(texts-first, pipelined uploads), run-lock cancellation, session
 picking, auto-titling, compaction, platform/Slack/Signal rich-text
 formatting, status-latency and thinking-status display, runtime
 diagnostics, updater behavior, detached tasks, agent-tool helpers,
