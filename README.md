@@ -587,7 +587,9 @@ deleted-session facts into later conversations.
 Maintenance prompts treat persisted model output as recovery data, not as an
 unbounded source of context, and every budget reserves its truncation marker
 inside the cap so a clipped maintenance prompt always reads as a PARTIAL
-preview rather than full coverage. The session router sends at most 12 sessions and
+preview rather than full coverage. The session router parses and sends at most
+12 sessions — ordered newest-first by mtime so older sessions are counted but
+skipped, never parsed — and
 caps each description at 400 characters, marking truncated session blocks as
 previews to route on without inventing unseen content. Compaction clips an oversized prior
 summary and sends a contiguous oldest prefix of raw history; even when its
@@ -945,11 +947,13 @@ at 5 MiB and share the bounded `read_bounded_text()` reader in
 sees an explicit PARTIAL preview marker instead of a silent cut
 (`web_fetch` appends a fetch-capped note; `web_search` marks the capped page
 and notes when only the first N results are shown). `web_search` tries DuckDuckGo's `html` and `lite`
-frontends in order - two attempts each, with a short delay between tries -
-so a transient failure of one frontend no longer fails the call, and
-sponsored (`ad_*`) and DuckDuckGo-internal links never become results.
+frontends race concurrently via `asyncio.gather` — two attempts each, with a short
+delay between tries — so a slow/flaky frontend no longer blocks the healthy
+one, and sponsored (`ad_*`) and DuckDuckGo-internal links never become results.
 `web_fetch` instead uses a public-network-only client with redirect targets
 validated individually, preventing redirects into private addresses.
+One HTTP session serves both fetch attempts so the retry reuses the
+connection pool instead of paying for a fresh connector + DNS validation pass.
 Transient transport failures (connection reset, resolver hiccup)
 are retried once with a short delay; HTTP error statuses, refused content
 types, and redirect-loop or non-public redirect targets are final and are
@@ -1102,7 +1106,11 @@ endpoints.
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
 and points at Z.ai's endpoint; `meta` adds Meta's Bearer header and compat
 endpoint. That loop reuses one HTTP session for the
-turn's tool calls and retries. Z.ai's text chat-completion models from GLM-4.6
+turn's tool calls and retries. One turn's `tool_calls` run concurrently via
+`asyncio.gather` (results re-ordered to request order before appending), so
+independent reads/searches overlap instead of running strictly sequentially;
+the loop advertises `parallel_tool_calls` so the model may batch independent
+calls in a single turn. Z.ai's text chat-completion models from GLM-4.6
 onward, plus multimodal `glm-5.3-flash`/`glm-5.3-flashx`, opt into Z.ai's incremental
 tool-call argument stream; older vision models use their standard streamed
 function-call deltas because that vision request schema does not accept
@@ -1510,7 +1518,11 @@ that owns them:
   and stderr/output finishing live in `agent_tools/plugins/_git_common.py`
 - Workspace, session, queue, schedule, compaction, and colony state:
   `workspace.py` (including `ensure_workspace_state_dir()`), `session.py`,
-  `schedules.py`, `compaction.py`, and `colony.py`
+  `schedules.py`, `compaction.py`, and `colony.py`. Hot JSON reads
+  (`config.json`, workspace state/settings, colony, last-session pointers)
+  are cached by file mtime+size via the shared `utils.stat_mtime_size()`
+  helper, so repeated per-turn/per-tool reads skip re-parsing until an
+  edit changes mtime/size
 - CI and local quality gates: `.gitlab-ci.yml`, `.github/workflows/ci.yml`,
   `mypy.ini`, `pyproject.toml`, and `tests/`
 
