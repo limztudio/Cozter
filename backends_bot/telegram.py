@@ -8,6 +8,16 @@ import math
 import os
 import re
 
+# Opt into python-telegram-bot's timedelta time-period API (PTB_TIMEDELTA=1).
+# Since v22.2 every ``RetryAfter.retry_after`` access without this emits a
+# PTBDeprecationWarning, and the int form is removed in the next major
+# release (requirements allow <23, so that upgrade can land unreviewed).
+# ``_telegram_retry_delay`` already accepts both int and timedelta via
+# ``total_seconds()``, so opting in only silences the warning and
+# future-proofs the flood-control path. setdefault keeps an operator's
+# explicit PTB_TIMEDELTA choice authoritative.
+os.environ.setdefault("PTB_TIMEDELTA", "1")
+
 from telegram import Update
 from telegram.error import NetworkError
 from telegram.ext import (
