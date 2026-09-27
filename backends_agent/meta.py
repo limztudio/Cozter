@@ -71,17 +71,6 @@ _NON_CHAT_COMPLETION_MODEL_PREFIXES = (
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
 
-def _chat_completion_model_ids(model_ids: tuple[str, ...]) -> tuple[str, ...]:
-    """Drop known Meta IDs that require an endpoint other than chat."""
-    if not isinstance(model_ids, tuple):
-        return ()
-    return tuple(
-        model_id for model_id in model_ids
-        if isinstance(model_id, str) and model_id.strip()
-        and not _is_non_chat_completion_model_id(model_id)
-    )
-
-
 def _is_non_chat_completion_model_id(model_id: str) -> bool:
     if not isinstance(model_id, str):
         return False

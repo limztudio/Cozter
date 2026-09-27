@@ -146,17 +146,6 @@ _GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
 _MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
 
-def _chat_completion_model_ids(model_ids: tuple[str, ...]) -> tuple[str, ...]:
-    """Drop known Z.ai IDs that require an endpoint other than chat."""
-    if not isinstance(model_ids, tuple):
-        return ()
-    return tuple(
-        model_id for model_id in model_ids
-        if isinstance(model_id, str) and model_id.strip()
-        and model_id.casefold() not in _NON_CHAT_COMPLETION_MODEL_IDS
-    )
-
-
 def _capability_model_id(model: str | None) -> str:
     """Normalize Z.ai's model suffixes for local capability lookups.
 
