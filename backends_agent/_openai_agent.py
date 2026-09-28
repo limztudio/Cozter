@@ -608,7 +608,7 @@ class OpenAIChatBackend(Backend):
                                 for i in _to_run_idx
                             ),
                         )
-                        for _pos, _res in zip(_to_run_idx, _gathered):
+                        for _pos, _res in zip(_to_run_idx, _gathered, strict=True):
                             _results[_pos] = _res
                     for _i, call in enumerate(tool_calls):
                         name = _batch_names[_i]

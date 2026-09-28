@@ -441,12 +441,22 @@ def build_merge_prompt(
     parts.append("\nPlan:")
     parts.append(_render_plan(plan))
     parts.append("\n--- reports ---")
-    for i, (task, text) in enumerate(zip(plan.subtasks, results)):
+    # Index over both sides instead of zip(): the worker loop can append
+    # follow-up sub-tasks, so lengths may differ by the time we merge.
+    # Zipping would silently drop the longer side's tail; spell out both.
+    report_count = max(len(plan.subtasks), len(results))
+    for i in range(report_count):
+        task = plan.subtasks[i] if i < len(plan.subtasks) else None
+        text = results[i] if i < len(results) else ""
         tag = " [BLOCKED]" if i in blocked else ""
-        parts.append(
+        header = (
             f"\n--- {i + 1} [{task.tier}]:"
             f" {task.instruction}{tag} ---\n"
-            f"{_truncate_report(text) if text else '(no report)'}"
+            if task is not None
+            else f"\n--- {i + 1} [unknown]: (no sub-task){tag} ---\n"
+        )
+        parts.append(
+            header + (_truncate_report(text) if text else "(no report)"),
         )
     parts.append("\n--- end ---\n\nWrite the user's reply.")
     return "\n".join(parts)
@@ -462,10 +472,17 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
     if len(results) == 1:
         return results[0]
     parts: list[str] = []
-    for i, (task, text) in enumerate(zip(plan.subtasks, results)):
+    # See build_merge_prompt: index, don't zip, so a length mismatch
+    # cannot silently drop reports.
+    for i in range(max(len(plan.subtasks), len(results))):
+        text = results[i] if i < len(results) else ""
         if not text:
             continue
-        parts.append(f"**{i + 1}. {task.instruction}**\n\n{text}")
+        if i < len(plan.subtasks):
+            instruction = plan.subtasks[i].instruction
+        else:
+            instruction = "(no sub-task)"
+        parts.append(f"**{i + 1}. {instruction}**\n\n{text}")
     return "\n\n".join(parts)
 
 

@@ -12,7 +12,6 @@ explain their errors.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import urllib.parse
@@ -242,7 +241,7 @@ class HttpRequestTool(AgentTool):
                 )
         except _RequestRefused as exc:
             return str(exc)
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+        except (aiohttp.ClientError, TimeoutError, OSError) as exc:
             return f"Request failed: {exc}"
         except Exception as exc:  # aiohttp raises bare Exception subclasses
             return f"Request failed: {exc}"

@@ -96,7 +96,7 @@ def _load_config_object() -> dict:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
         if not isinstance(cfg, dict):
-            raise ValueError("config.json must contain a JSON object")
+            raise ValueError("config.json must contain a JSON object") from None
         return cfg
     if (
         _CONFIG_CACHE_DATA is not None

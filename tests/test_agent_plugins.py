@@ -1041,7 +1041,7 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_transport_failure_reported(self) -> None:
         @asynccontextmanager
         async def failing_open():
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
             yield  # pragma: no cover - makes this an async generator
 
         with mock.patch.object(

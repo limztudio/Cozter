@@ -11,7 +11,6 @@ model cannot extend.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from typing import Any, ClassVar
 
@@ -212,8 +211,8 @@ class GitInfoTool(AgentTool):
             stdout, stderr, returncode = await _git_once(
                 argv, workspace, env,
             )
-        except asyncio.TimeoutError:
-            # Same class as TimeoutError on 3.11+; run() reports it.
+        except TimeoutError:
+            # Same class as asyncio.TimeoutError on 3.11+; run() reports it.
             raise
         if returncode != 0 and "HEAD" in argv:
             head_failure = any(

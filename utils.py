@@ -1085,7 +1085,7 @@ async def drain_llm_subprocess(
                     raw = text
             await wait_for_process_exit(proc)
             finished = True
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         finished = True
         active_log.warning("%s timed out after %ss", label, timeout)
     finally:

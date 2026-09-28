@@ -294,7 +294,7 @@ class SignalBot(BotPlatform):
                     ),
                     timeout=min(1.0, max(0.1, deadline - loop.time())),
                 )
-            except (OSError, asyncio.TimeoutError) as exc:
+            except (OSError, TimeoutError) as exc:
                 last_error = exc
                 if loop.time() >= deadline:
                     raise SignalCliError(
@@ -1720,10 +1720,10 @@ def _extract_timestamp_from_value(value: Any) -> str | None:
 def _timestamp_rpc_param(value: str) -> int:
     try:
         return int(str(value).strip())
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError, OverflowError) as exc:
         raise SignalCliError(
             f"signal-cli returned a non-numeric timestamp: {value!r}",
-        )
+        ) from exc
 
 
 def _attachment_payload(value: Any) -> str:
