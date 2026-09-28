@@ -244,10 +244,9 @@ class UpdaterRequirementsTests(unittest.TestCase):
                 updater.subprocess,
                 "run",
                 side_effect=subprocess.TimeoutExpired("pip", 1),
-            ),
+            ),self.assertRaisesRegex(RuntimeError, "pip install timed out")
         ):
-            with self.assertRaisesRegex(RuntimeError, "pip install timed out"):
-                updater.install_requirements()
+            updater.install_requirements()
 
 
 class RestartScriptTests(unittest.TestCase):
@@ -281,9 +280,9 @@ class RestartScriptTests(unittest.TestCase):
                 updater.os, "_exit", side_effect=SystemExit,
             ) as exit_mock,
             mock.patch.object(updater.os, "execv") as execv_mock,
+            self.assertRaises(SystemExit),
         ):
-            with self.assertRaises(SystemExit):
-                updater.restart_script()
+            updater.restart_script()
 
         call_mock.assert_not_called()
         exit_mock.assert_called_once_with(

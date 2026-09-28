@@ -125,9 +125,8 @@ class ReadFileBoundValidationTests(unittest.TestCase):
             _validated_read_bound(-5, "offset", default=0), 0,
         )
         for bad in (True, False, 1.9, "1", [1], {"x": 1}):
-            with self.subTest(bad=bad):
-                with self.assertRaises(ValueError):
-                    _validated_read_bound(bad, "offset", default=0)
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                _validated_read_bound(bad, "offset", default=0)
 
     def test_tool_returns_error_string_for_junk_bounds(self) -> None:
         from Cozter.agent_tools.builtin.read_file import ReadFileTool

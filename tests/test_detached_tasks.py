@@ -407,16 +407,15 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
         )
         with mock.patch.object(
             claude_code_mod, "_MAX_DETACHED_COMMAND_OUTPUT_BYTES", 128,
+        ), self.assertRaisesRegex(
+            RuntimeError, "command output exceeded the 128 byte limit",
         ):
-            with self.assertRaisesRegex(
-                RuntimeError, "command output exceeded the 128 byte limit",
-            ):
-                await asyncio.wait_for(
-                    claude_code_mod._run_claude_command(
-                        [sys.executable, "-c", script], cwd=os.getcwd(),
-                    ),
-                    timeout=5,
-                )
+            await asyncio.wait_for(
+                claude_code_mod._run_claude_command(
+                    [sys.executable, "-c", script], cwd=os.getcwd(),
+                ),
+                timeout=5,
+            )
 
     @unittest.skipIf(os.name == "nt", "inherits POSIX subprocess pipes")
     async def test_control_command_timeout_reaps_launcher_with_open_pipes(

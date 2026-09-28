@@ -389,8 +389,7 @@ class SignalIdCoercionTests(unittest.TestCase):
             42,
         )
         for bad in ("abc", "", "  ", True):
-            with self.subTest(bad=bad):
-                with self.assertRaises(ValueError):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
                     _telegram_message_id(
                         MessageHandle(chat_id="c", message_id=bad),  # type: ignore[arg-type]
                     )

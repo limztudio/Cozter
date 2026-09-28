@@ -139,9 +139,8 @@ class AttachmentGuardTests(unittest.TestCase):
 
             with mock.patch.dict(
                 os.environ, {"COZTER_ATTACHMENT_ROOTS": external}, clear=False,
-            ):
-                with self.assertLogs(agent.logger, level="WARNING"):
-                    copied = agent.prepare_attachment_path(source, ws)
+            ), self.assertLogs(agent.logger, level="WARNING"):
+                copied = agent.prepare_attachment_path(source, ws)
 
             self.assertIsNone(copied)
             self.assertEqual(os.listdir(outside), [])

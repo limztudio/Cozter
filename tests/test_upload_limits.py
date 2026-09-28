@@ -95,9 +95,10 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ]
             for bot in bots:
-                with self.subTest(platform=type(bot).__name__):
-                    with self.assertRaises(UploadTooLargeError):
-                        await bot.send_file("chat", path)
+                with self.subTest(
+                    platform=type(bot).__name__,
+                ), self.assertRaises(UploadTooLargeError):
+                    await bot.send_file("chat", path)
 
     async def test_text_attachment_reads_only_inline_limit_plus_one(self) -> None:
         bot = SignalBot(
@@ -299,9 +300,8 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch(
                 "Cozter.backends_bot.base.aiohttp.ClientSession",
                 return_value=download_session,
-            ):
-                with self.assertRaises(UploadTooLargeError):
-                    await _download_telegram_file(file, destination, 3)
+            ), self.assertRaises(UploadTooLargeError):
+                await _download_telegram_file(file, destination, 3)
 
             self.assertEqual(download_session.request_kwargs, {"headers": None})
             self.assertFalse(os.path.exists(destination))
@@ -344,14 +344,13 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch(
                 "Cozter.backends_bot.base.aiohttp.ClientSession",
                 return_value=download_session,
-            ):
-                with self.assertRaises(UploadTooLargeError):
-                    await _download_private(
-                        "https://files.example/large",
-                        "bot-token",
-                        destination,
-                        max_upload_bytes=3,
-                    )
+            ), self.assertRaises(UploadTooLargeError):
+                await _download_private(
+                    "https://files.example/large",
+                    "bot-token",
+                    destination,
+                    max_upload_bytes=3,
+                )
 
             self.assertEqual(download_session.request_kwargs, {
                 "headers": {"Authorization": "Bearer bot-token"},
@@ -432,10 +431,12 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_upload_path_reservation_keeps_same_names_distinct(self) -> None:
         with tempfile.TemporaryDirectory() as upload_dir:
-            with reserve_upload_path(upload_dir, "report.txt") as first:
-                with reserve_upload_path(upload_dir, "report.txt") as second:
-                    write_bytes_atomically(first, b"first")
-                    write_bytes_atomically(second, b"second")
+            with (
+                reserve_upload_path(upload_dir, "report.txt") as first,
+                reserve_upload_path(upload_dir, "report.txt") as second,
+            ):
+                write_bytes_atomically(first, b"first")
+                write_bytes_atomically(second, b"second")
 
             self.assertEqual(os.path.basename(first), "report.txt")
             self.assertEqual(os.path.basename(second), "report (2).txt")
@@ -446,9 +447,11 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_upload_path_reservation_is_removed_after_failure(self) -> None:
         with tempfile.TemporaryDirectory() as upload_dir:
-            with self.assertRaisesRegex(RuntimeError, "download failed"):
-                with reserve_upload_path(upload_dir, "report.txt"):
-                    raise RuntimeError("download failed")
+            with (
+                self.assertRaisesRegex(RuntimeError, "download failed"),
+                reserve_upload_path(upload_dir, "report.txt"),
+            ):
+                raise RuntimeError("download failed")
 
             self.assertEqual(os.listdir(upload_dir), [])
 
@@ -650,9 +653,8 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch(
             "Cozter.backends_bot.signal.asyncio.sleep",
             new=mock.AsyncMock(),
-        ) as sleep_mock:
-            with self.assertRaises(SignalCliError):
-                await bot.send_file("group", __file__)
+        ) as sleep_mock, self.assertRaises(SignalCliError):
+            await bot.send_file("group", __file__)
         self.assertEqual(bot._rpc_request.await_count, 1)
         sleep_mock.assert_not_awaited()
 
@@ -770,9 +772,8 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch(
                 "Cozter.backends_bot.slack.asyncio.sleep",
                 new=mock.AsyncMock(),
-            ) as sleep_mock:
-                with self.assertRaises(SlackApiError):
-                    await bot.send_file("C1", path)
+            ) as sleep_mock, self.assertRaises(SlackApiError):
+                await bot.send_file("C1", path)
         sleep_mock.assert_not_awaited()
 
 

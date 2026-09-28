@@ -368,11 +368,10 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             session = _SSESession(response)
             with mock.patch.object(
                 oa.aiohttp, "ClientSession", return_value=session,
-            ):
-                with self.assertRaisesRegex(RuntimeError, "HTTP 400"):
-                    await oa._stream_once(
-                        "http://x/chat/completions", {}, {}, 30, "test",
-                    )
+            ), self.assertRaisesRegex(RuntimeError, "HTTP 400"):
+                await oa._stream_once(
+                    "http://x/chat/completions", {}, {}, 30, "test",
+                )
             self.assertEqual(
                 content.read_sizes, [oa._MAX_HTTP_ERROR_BODY_BYTES],
             )
@@ -487,11 +486,13 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 b"data: abc\n"
                 b"data: def\n\n",
             ])
-            with mock.patch.object(oa, "_MAX_SSE_EVENT_BYTES", 5):
-                with self.assertRaisesRegex(
+            with (
+                mock.patch.object(oa, "_MAX_SSE_EVENT_BYTES", 5),
+                self.assertRaisesRegex(
                     oa._SSEEventTooLargeError, "event exceeded",
-                ):
-                    _ = [event async for event in oa._iter_sse_events(content)]
+                ),
+            ):
+                _ = [event async for event in oa._iter_sse_events(content)]
 
         asyncio.run(collect())
 
@@ -500,22 +501,26 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             {"choices": [{"delta": {"content": "abcd"}}]},
             {"choices": [{"delta": {"content": "efgh"}}]},
         ]
-        with mock.patch.object(oa, "_MAX_COMPLETION_TEXT_BYTES", 7):
-            with self.assertRaisesRegex(
+        with (
+            mock.patch.object(oa, "_MAX_COMPLETION_TEXT_BYTES", 7),
+            self.assertRaisesRegex(
                 oa._RetryableError, "completion text exceeded",
-            ):
-                self._stream(events)
+            ),
+        ):
+            self._stream(events)
 
     def test_completion_reasoning_has_an_aggregate_size_cap(self) -> None:
         events = [
             {"choices": [{"delta": {"reasoning_content": "abcd"}}]},
             {"choices": [{"delta": {"reasoning_content": "efgh"}}]},
         ]
-        with mock.patch.object(oa, "_MAX_COMPLETION_REASONING_BYTES", 7):
-            with self.assertRaisesRegex(
+        with (
+            mock.patch.object(oa, "_MAX_COMPLETION_REASONING_BYTES", 7),
+            self.assertRaisesRegex(
                 oa._RetryableError, "completion reasoning exceeded",
-            ):
-                self._stream(events)
+            ),
+        ):
+            self._stream(events)
 
     def test_fragmented_tool_arguments_are_joined_at_completion(self) -> None:
         text, reasoning, tool_calls = self._stream([
@@ -582,11 +587,13 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 }],
             },
         ]
-        with mock.patch.object(oa, "_MAX_TOOL_ARGUMENT_BYTES", 7):
-            with self.assertRaisesRegex(
+        with (
+            mock.patch.object(oa, "_MAX_TOOL_ARGUMENT_BYTES", 7),
+            self.assertRaisesRegex(
                 oa._RetryableError, "tool-call arguments exceeded",
-            ):
-                self._stream(argument_events)
+            ),
+        ):
+            self._stream(argument_events)
 
         buffer_events = [
             {"choices": [{"delta": {"content": "abc"}}]},
@@ -618,11 +625,13 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 ("tool arguments", buffer_events),
                 ("reasoning", reasoning_buffer_events),
             ):
-                with self.subTest(source=source):
-                    with self.assertRaisesRegex(
+                with (
+                    self.subTest(source=source),
+                    self.assertRaisesRegex(
                         oa._RetryableError, "completion buffers exceeded",
-                    ):
-                        self._stream(events)
+                    ),
+                ):
+                    self._stream(events)
 
     def test_tool_call_identifier_fields_are_bounded(self) -> None:
         cases = (
@@ -645,13 +654,12 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         for setting, tool_call, message in cases:
             with self.subTest(setting=setting), mock.patch.object(
                 oa, setting, 3,
-            ):
-                with self.assertRaisesRegex(oa._RetryableError, message):
-                    self._stream([{
-                        "choices": [{"delta": {
-                            "tool_calls": [{"index": 0, **tool_call}],
-                        }}],
-                    }])
+            ), self.assertRaisesRegex(oa._RetryableError, message):
+                self._stream([{
+                    "choices": [{"delta": {
+                        "tool_calls": [{"index": 0, **tool_call}],
+                    }}],
+                }])
 
     def test_completion_tool_call_count_is_bounded(self) -> None:
         events = [
@@ -667,11 +675,13 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             }
             for i in range(3)
         ]
-        with mock.patch.object(oa, "_MAX_TOOL_CALLS_PER_COMPLETION", 2):
-            with self.assertRaisesRegex(
+        with (
+            mock.patch.object(oa, "_MAX_TOOL_CALLS_PER_COMPLETION", 2),
+            self.assertRaisesRegex(
                 oa._RetryableError, "completion exceeded 2 tool calls",
-            ):
-                self._stream(events)
+            ),
+        ):
+            self._stream(events)
 
     def test_malformed_tool_call_delta_is_a_no_op(self) -> None:
         buffers: dict[int, dict[str, object]] = {}

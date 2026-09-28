@@ -140,14 +140,15 @@ class DiscoveryToolAsyncTests(unittest.TestCase):
                 args[4].append("entry")
                 return False
 
-            with tempfile.TemporaryDirectory() as workspace:
-                with mock.patch.object(tool, "_walk", side_effect=slow_walk):
-                    task = asyncio.create_task(tool.run(workspace, {}))
-                    try:
-                        await _wait_for_start(started)
-                        self.assertFalse(task.done())
-                    finally:
-                        release.set()
-                    self.assertEqual(await task, "entry")
+            with tempfile.TemporaryDirectory() as workspace, mock.patch.object(
+                tool, "_walk", side_effect=slow_walk,
+            ):
+                task = asyncio.create_task(tool.run(workspace, {}))
+                try:
+                    await _wait_for_start(started)
+                    self.assertFalse(task.done())
+                finally:
+                    release.set()
+                self.assertEqual(await task, "entry")
 
         asyncio.run(run())

@@ -362,9 +362,8 @@ class BuiltinEditToolTests(unittest.TestCase):
             with mock.patch(
                 "Cozter.agent_tools.base.os.replace",
                 side_effect=OSError("simulated replace failure"),
-            ):
-                with self.assertRaisesRegex(OSError, "simulated"):
-                    write_text_after_edit(path, "replacement", uses_crlf=False)
+            ), self.assertRaisesRegex(OSError, "simulated"):
+                write_text_after_edit(path, "replacement", uses_crlf=False)
 
             with open(path, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "original")
@@ -532,9 +531,8 @@ class MoveFileToolTests(unittest.TestCase):
                 with mock.patch(
                     "Cozter.agent_tools.base.os.unlink",
                     side_effect=fail_source_unlink,
-                ):
-                    with self.assertRaisesRegex(OSError, "simulated source"):
-                        move_path_no_clobber(source, destination)
+                ), self.assertRaisesRegex(OSError, "simulated source"):
+                    move_path_no_clobber(source, destination)
 
                 self.assertTrue(os.path.lexists(source))
                 self.assertFalse(os.path.lexists(destination))
@@ -683,11 +681,10 @@ class WriteFileToolTests(unittest.TestCase):
                 with mock.patch(
                     "Cozter.agent_tools.base.os.replace",
                     side_effect=OSError("simulated replace failure"),
-                ):
-                    with self.assertRaisesRegex(OSError, "simulated"):
-                        await WriteFileTool().run(tmp, {
-                            "path": "note.txt", "content": "replacement",
-                        })
+                ), self.assertRaisesRegex(OSError, "simulated"):
+                    await WriteFileTool().run(tmp, {
+                        "path": "note.txt", "content": "replacement",
+                    })
 
                 with open(path, encoding="utf-8") as f:
                     self.assertEqual(f.read(), "original")
@@ -1566,9 +1563,8 @@ class ApplyPatchToolTests(unittest.TestCase):
             with mock.patch(
                 "Cozter.agent_tools.base.os.link",
                 side_effect=OSError("simulated link failure"),
-            ):
-                with self.assertRaisesRegex(OSError, "simulated link"):
-                    self._run(tmp, patch)
+            ), self.assertRaisesRegex(OSError, "simulated link"):
+                self._run(tmp, patch)
 
             self.assertFalse(os.path.exists(p))
 

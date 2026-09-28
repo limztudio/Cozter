@@ -32,21 +32,19 @@ class ApplyPatchLimitsTests(unittest.TestCase):
         return asyncio.run(ApplyPatchTool().run(workspace, {"patch": patch}))
 
     def test_patch_byte_limit_is_reported_before_parsing(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(
-                apply_patch_module, "_MAX_PATCH_BYTES", 16,
-            ):
-                out = self._run(tmp, "x" * 17)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            apply_patch_module, "_MAX_PATCH_BYTES", 16,
+        ):
+            out = self._run(tmp, "x" * 17)
 
         self.assertIn("patch exceeds the 16-byte limit", out)
         self.assertIn("split it into smaller patches", out)
 
     def test_patch_line_limit_is_reported_before_splitlines(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(
-                apply_patch_module, "_MAX_PATCH_LINES", 2,
-            ):
-                out = self._run(tmp, "one\ntwo\nthree")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            apply_patch_module, "_MAX_PATCH_LINES", 2,
+        ):
+            out = self._run(tmp, "one\ntwo\nthree")
 
         self.assertIn("patch exceeds the 2-line limit", out)
 
@@ -116,10 +114,9 @@ class ApplyPatchLimitsTests(unittest.TestCase):
         with (
             mock.patch.object(apply_patch_module, "_MAX_FILE_BYTES", 8),
             mock.patch.object(apply_patch_module.os, "stat", return_value=stat_result),
-            mock.patch("builtins.open", reader),
+            mock.patch("builtins.open", reader),self.assertRaises(_FileLimitError)
         ):
-            with self.assertRaises(_FileLimitError):
-                _read_file_lines("grown-after-stat.txt")
+            _read_file_lines("grown-after-stat.txt")
 
         reader().read.assert_called_once_with(9)
 

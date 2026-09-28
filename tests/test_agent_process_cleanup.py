@@ -153,18 +153,17 @@ class AgentProcessCleanupTests(unittest.TestCase):
                 backend_base.asyncio,
                 "create_subprocess_exec",
                 side_effect=capture_process,
+            ), self.assertRaisesRegex(
+                RuntimeError,
+                "closed stdin before Cozter could deliver the prompt",
             ):
-                with self.assertRaisesRegex(
-                    RuntimeError,
-                    "closed stdin before Cozter could deliver the prompt",
-                ):
-                    await asyncio.wait_for(
-                        backend_base.create_prompt_subprocess(
-                            [sys.executable, "-c", script],
-                            "x" * (1024 * 1024),
-                        ),
-                        timeout=5,
-                    )
+                await asyncio.wait_for(
+                    backend_base.create_prompt_subprocess(
+                        [sys.executable, "-c", script],
+                        "x" * (1024 * 1024),
+                    ),
+                    timeout=5,
+                )
 
             self.assertEqual(len(created), 1)
             self.assertIsNotNone(created[0].returncode)
@@ -203,16 +202,15 @@ class AgentProcessCleanupTests(unittest.TestCase):
                 data = session.create_session(tmp)
                 with mock.patch.object(
                     agent.backends_agent, "get_backend", return_value=backend,
-                ):
-                    with self.assertRaisesRegex(RuntimeError, "delivery failed"):
-                        await agent.run(
-                            "hello",
-                            tmp,
-                            1,
-                            on_event=fail_callback,
-                            backend_name=backend.name,
-                            session_id=data["id"],
-                        )
+                ), self.assertRaisesRegex(RuntimeError, "delivery failed"):
+                    await agent.run(
+                        "hello",
+                        tmp,
+                        1,
+                        on_event=fail_callback,
+                        backend_name=backend.name,
+                        session_id=data["id"],
+                    )
 
             assert backend.proc is not None
             self.assertTrue(backend.cleaned)

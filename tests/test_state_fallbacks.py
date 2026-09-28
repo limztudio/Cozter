@@ -186,9 +186,10 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 workspace.WORKSPACE_STATE_PATH = old_path
 
     def test_set_permission_rejects_unknown_values(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(ValueError):
-                workspace.set_permission(tmp, "maybe")
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(
+            ValueError,
+        ):
+            workspace.set_permission(tmp, "maybe")
 
     def test_max_permission_parsing(self) -> None:
         with temporary_config({"max_permission": "auto"}) as path:
@@ -201,16 +202,15 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             self.assertEqual(config.get_max_permission(), "deny")
 
     def test_invalid_max_permission_blocks_daemon_start(self) -> None:
-        with temporary_config({
+        with (
+            temporary_config({
             "telegram_bot_tokens": ["token"],
             "user_ids": [1],
             "max_permission": "nonsense",
-        }):
-            with (
-                contextlib.redirect_stdout(io.StringIO()),
-                self.assertRaises(SystemExit) as exited,
-            ):
-                config.load_config()
+        }), contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            config.load_config()
         self.assertEqual(exited.exception.code, 1)
 
     def test_non_utf8_config_blocks_daemon_start_cleanly(self) -> None:
@@ -270,9 +270,10 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
         """A state path must stay below .cozter, not merely the workspace."""
         with tempfile.TemporaryDirectory() as ws:
             for component in (".", "..", "../settings.json", "a/b", "a\\b"):
-                with self.subTest(component=component):
-                    with self.assertRaisesRegex(ValueError, "invalid workspace"):
-                        workspace.workspace_state_path(ws, component)
+                with self.subTest(component=component), self.assertRaisesRegex(
+                    ValueError, "invalid workspace",
+                ):
+                    workspace.workspace_state_path(ws, component)
 
     def test_workspace_upload_path_rejects_symlink_escape(self) -> None:
         with tempfile.TemporaryDirectory() as ws, \
@@ -667,9 +668,10 @@ class ConfigFallbackTests(unittest.TestCase):
             self.assertIn("must contain a JSON object", out.getvalue())
 
     def test_runtime_getters_reject_non_object_config(self) -> None:
-        with temporary_config([]):
-            with self.assertRaisesRegex(ValueError, "JSON object"):
-                config.get_llama_max_agent_turns()
+        with temporary_config([]), self.assertRaisesRegex(
+            ValueError, "JSON object",
+        ):
+            config.get_llama_max_agent_turns()
 
     def test_load_config_normalizes_directly_consumed_positive_ints(
         self,

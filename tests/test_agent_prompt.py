@@ -211,23 +211,22 @@ class VerifyEvidenceReachesEveryAgentTests(unittest.TestCase):
 class CompactionTargetTests(unittest.TestCase):
     def test_flexible_targets_include_summary_and_every_tier(self) -> None:
         backend = SimpleNamespace(name=agent.flexible.BACKEND_NAME)
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(
-                agent.workspace_mod,
-                "get_flexible_run_config",
-                return_value={
-                    "low": ("llama", "small"),
-                    "mid": ("codex", "medium"),
-                    "high": ("zai", "large"),
-                },
-            ):
-                targets = agent._compaction_context_targets(
-                    tmp,
-                    backend,
-                    None,
-                    "claude_code",
-                    "summary-model",
-                )
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            agent.workspace_mod,
+            "get_flexible_run_config",
+            return_value={
+                "low": ("llama", "small"),
+                "mid": ("codex", "medium"),
+                "high": ("zai", "large"),
+            },
+        ):
+            targets = agent._compaction_context_targets(
+                tmp,
+                backend,
+                None,
+                "claude_code",
+                "summary-model",
+            )
 
         self.assertEqual(targets, (
             ("claude_code", "summary-model"),

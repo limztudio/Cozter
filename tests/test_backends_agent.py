@@ -727,12 +727,11 @@ warning: ignored after the catalog
                     grok_mod,
                     "create_captured_subprocess",
                     new=mock.AsyncMock(side_effect=OSError("boom")),
-                ),
+                ),self.assertRaises(OSError)
             ):
-                with self.assertRaises(OSError):
-                    await GrokBackend().launch(
-                        "/work", "hello-prompt", "grok-4.6", "auto",
-                    )
+                await GrokBackend().launch(
+                    "/work", "hello-prompt", "grok-4.6", "auto",
+                )
 
         asyncio.run(run())
         after = set(glob.glob(os.path.join(
@@ -2252,11 +2251,10 @@ class ZaiBackendTests(unittest.TestCase):
         response.__enter__.return_value = response
         with mock.patch.object(
             openai_agent_mod.urllib.request, "urlopen", return_value=response,
-        ):
-            with self.assertRaisesRegex(ValueError, "model catalog response"):
-                openai_agent_mod.fetch_model_ids(
-                    "https://models.example.test/v1/models", timeout=1,
-                )
+        ), self.assertRaisesRegex(ValueError, "model catalog response"):
+            openai_agent_mod.fetch_model_ids(
+                "https://models.example.test/v1/models", timeout=1,
+            )
         response.read.assert_called_once_with(
             openai_agent_mod._MAX_MODEL_DISCOVERY_BYTES + 1,
         )

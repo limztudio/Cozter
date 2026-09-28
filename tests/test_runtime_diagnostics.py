@@ -124,17 +124,18 @@ class VenvBootstrapTests(unittest.TestCase):
                 main.subprocess,
                 "check_call",
                 side_effect=subprocess.TimeoutExpired("pip", 1),
-            ),
+            ),self.assertRaisesRegex(RuntimeError, "Timed out installing")
         ):
-            with self.assertRaisesRegex(RuntimeError, "Timed out installing"):
-                main._install_deps()
+            main._install_deps()
 
     def test_unsupported_python_is_rejected_before_bootstrap(self) -> None:
         main = _load_main_module()
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
-            with self.assertRaises(SystemExit) as exited:
-                main._require_supported_python((3, 10))
+        with (
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            main._require_supported_python((3, 10))
 
         self.assertEqual(exited.exception.code, 1)
         self.assertIn("requires Python 3.11", stderr.getvalue())
@@ -184,9 +185,11 @@ class LaunchArgumentTests(unittest.TestCase):
 
     def test_help_exits_without_starting_the_runtime(self) -> None:
         stdout = io.StringIO()
-        with mock.patch.object(self._main.sys, "stdout", stdout):
-            with self.assertRaises(SystemExit) as exited:
-                self._main._validate_launch_args(["--help"])
+        with (
+            mock.patch.object(self._main.sys, "stdout", stdout),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            self._main._validate_launch_args(["--help"])
 
         self.assertEqual(exited.exception.code, 0)
         self.assertIn("Usage: python -m Cozter", stdout.getvalue())
@@ -194,9 +197,11 @@ class LaunchArgumentTests(unittest.TestCase):
 
     def test_unknown_launch_argument_fails_instead_of_starting_daemon(self) -> None:
         stderr = io.StringIO()
-        with mock.patch.object(self._main.sys, "stderr", stderr):
-            with self.assertRaises(SystemExit) as exited:
-                self._main._validate_launch_args(["--typo"])
+        with (
+            mock.patch.object(self._main.sys, "stderr", stderr),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            self._main._validate_launch_args(["--typo"])
 
         self.assertEqual(exited.exception.code, 2)
         self.assertIn("--typo", stderr.getvalue())
@@ -428,10 +433,9 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(main.asyncio, "sleep", side_effect=fake_sleep),
             mock.patch.object(
                 main.updater, "check_for_update", return_value=False,
-            ) as check_mock,
+            ) as check_mock,self.assertRaises(asyncio.CancelledError)
         ):
-            with self.assertRaises(asyncio.CancelledError):
-                await main.update_loop([bot], interval=1)
+            await main.update_loop([bot], interval=1)
 
         check_mock.assert_called_once_with()
         # No update found, so intake must not be paused for a restart.
