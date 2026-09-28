@@ -101,8 +101,8 @@ def _load_config_object() -> dict:
     if (
         _CONFIG_CACHE_DATA is not None
         and _CONFIG_CACHE_PATH == CONFIG_PATH
-        and _CONFIG_CACHE_MTIME_NS == mtime_ns
-        and _CONFIG_CACHE_SIZE == size
+        and mtime_ns == _CONFIG_CACHE_MTIME_NS
+        and size == _CONFIG_CACHE_SIZE
     ):
         return _CONFIG_CACHE_DATA
     with open(CONFIG_PATH, encoding="utf-8") as f:

@@ -19,7 +19,7 @@ class EditFileReadLimitTests(unittest.TestCase):
     def test_at_limit_utf8_crlf_content_keeps_existing_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "note.txt")
-            raw = "one\r\ntwo café\r\n".encode("utf-8")
+            raw = "one\r\ntwo café\r\n".encode()
             with open(path, "wb") as f:
                 f.write(raw)
 

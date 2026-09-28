@@ -487,7 +487,7 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
 def _newline_line_limit_exceeded(text: str, limit: int) -> bool:
     """Return whether patch's LF-normalized representation has too many lines."""
     if not text:
-        return 1 > limit
+        return limit < 1
     line_count = text.count("\n")
     if not text.endswith("\n"):
         line_count += 1

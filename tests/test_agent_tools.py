@@ -519,10 +519,15 @@ class MoveFileToolTests(unittest.TestCase):
 
                 original_unlink = os.unlink
 
-                def fail_source_unlink(path: str, *args, **kwargs) -> None:
-                    if path == source:
+                def fail_source_unlink(
+                    path: str, *args: object, _source: str = source,
+                    _real_unlink: object = original_unlink,
+                    **kwargs: object,
+                ) -> None:
+                    if path == _source:
                         raise OSError("simulated source unlink failure")
-                    original_unlink(path, *args, **kwargs)
+                    assert callable(_real_unlink)
+                    _real_unlink(path, *args, **kwargs)
 
                 with mock.patch(
                     "Cozter.agent_tools.base.os.unlink",

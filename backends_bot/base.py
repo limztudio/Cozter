@@ -2559,20 +2559,19 @@ class BotPlatform(ABC):
         recalled, but this lock guarantees a reply which has not begun its
         outbound send cannot race past this explicit cancellation.
         """
-        async with self._reply_delivery_lock(uid):
-            async with self._reply_delivery_file_lock:
-                data = self._read_reply_deliveries_file()
-                records = self._reply_delivery_records(data.get("deliveries"))
-                remaining = [
-                    record for record in records if record["user_id"] != uid
-                ]
-                removed = len(records) - len(remaining)
-                if removed:
-                    if remaining:
-                        data["deliveries"] = remaining
-                    else:
-                        data.pop("deliveries", None)
-                    self._write_reply_deliveries_file(data)
+        async with self._reply_delivery_lock(uid), self._reply_delivery_file_lock:
+            data = self._read_reply_deliveries_file()
+            records = self._reply_delivery_records(data.get("deliveries"))
+            remaining = [
+                record for record in records if record["user_id"] != uid
+            ]
+            removed = len(records) - len(remaining)
+            if removed:
+                if remaining:
+                    data["deliveries"] = remaining
+                else:
+                    data.pop("deliveries", None)
+                self._write_reply_deliveries_file(data)
         self._pending_reply_delivery_users.discard(uid)
         return removed
 

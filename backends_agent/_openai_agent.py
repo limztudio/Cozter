@@ -837,9 +837,9 @@ def _backoff_delay(
 ) -> float:
     """Seconds to wait before retry *attempt* (1-based); honors Retry-After."""
     if retry_after is not None:
-        if isinstance(retry_after, bool):
-            retry_after = None
-        elif not isinstance(retry_after, (int, float)):
+        if isinstance(retry_after, bool) or not isinstance(
+            retry_after, (int, float),
+        ):
             retry_after = None
         elif not math.isfinite(retry_after):
             # A non-finite header value must not reach asyncio.sleep: nan

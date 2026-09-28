@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest import mock
 
 from Cozter import config
@@ -538,7 +539,8 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             tg_file: object, local_path: str, _max_upload_bytes: int,
         ) -> None:
             write_bytes_atomically(
-                local_path, str(getattr(tg_file, "file_id")).encode(),
+                local_path,
+                str(cast(Any, tg_file).file_id).encode(),
             )
 
         bot.dispatch_file = mock.AsyncMock(

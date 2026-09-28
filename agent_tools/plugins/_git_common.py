@@ -41,10 +41,7 @@ class GitFailed(Exception):
 
 def has_invalid_ref_chars(name: str) -> bool:
     """Return True when *name* carries characters git treats specially."""
-    for marker in _REF_MARKERS:
-        if marker in name:
-            return True
-    return False
+    return any(marker in name for marker in _REF_MARKERS)
 
 
 def check_ref(name: str) -> str:

@@ -93,7 +93,7 @@ def _build_router_prompt(
     preview = prompt.strip()
     if len(preview) > ROUTER_PROMPT_PREVIEW_CHARS:
         marker = "… [message preview truncated]"
-        if ROUTER_PROMPT_PREVIEW_CHARS <= len(marker):
+        if len(marker) >= ROUTER_PROMPT_PREVIEW_CHARS:
             preview = preview[:max(0, ROUTER_PROMPT_PREVIEW_CHARS - 1)] + "…"
         else:
             preview = (
