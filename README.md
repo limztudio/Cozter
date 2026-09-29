@@ -1127,7 +1127,8 @@ endpoints.
 (`backends_agent/_openai_agent.py`); `zai` just adds the Bearer auth header
 and points at Z.ai's endpoint; `meta` adds Meta's Bearer header and compat
 endpoint. `meta` and `zai` model discovery also share that module's Bearer
-`/models` probe (`discover_bearer_models`: no-key fallback, Bearer fetch,
+`/models` probe (`discover_bearer_models`: non-HTTP(S) catalog-URL refusal,
+no-key fallback, Bearer fetch,
 provider non-chat filter, empty-catalog fallback; each backend keeps a
 per-module `fetch_model_ids` alias) and its shared key health check.
 That loop reuses one HTTP session for the
