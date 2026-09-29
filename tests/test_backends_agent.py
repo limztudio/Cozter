@@ -2262,6 +2262,17 @@ class ZaiBackendTests(unittest.TestCase):
             openai_agent_mod._MAX_MODEL_DISCOVERY_BYTES + 1,
         )
 
+    def test_model_discovery_refuses_non_http_scheme(self) -> None:
+        with mock.patch.object(
+            openai_agent_mod.urllib.request, "urlopen",
+        ) as urlopen_mock, self.assertRaisesRegex(
+            ValueError, "refusing to fetch model catalog",
+        ):
+            openai_agent_mod.fetch_model_ids(
+                "file:///etc/passwd", timeout=1,
+            )
+        urlopen_mock.assert_not_called()
+
     def test_authenticated_model_discovery_does_not_forward_bearer_on_redirect(
         self,
     ) -> None:

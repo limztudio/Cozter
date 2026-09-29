@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import random
+import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -142,7 +143,17 @@ def fetch_model_ids(
     request. Keeping it here avoids providers drifting in response decoding
     or model-ID normalization while still letting each backend choose its URL,
     timeout, authentication headers, and fallback behavior.
+
+    Only ``http``/``https`` catalog URLs are fetched: a hand-edited
+    ``*_base_url`` reaching a ``file:``/custom-scheme URL must fail loudly
+    instead of reading local files through this probe.
     """
+    try:
+        scheme = urllib.parse.urlsplit(url).scheme.lower()
+    except ValueError:
+        scheme = ""
+    if scheme not in ("http", "https"):
+        raise ValueError(f"refusing to fetch model catalog from {url!r}")
     request: str | urllib.request.Request = url
     if headers:
         request = urllib.request.Request(url, method="GET")
