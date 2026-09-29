@@ -1115,7 +1115,7 @@ Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
 aliases, the supported `sonnet[1m]`, `opus[1m]`, `fable[1m]`, and
 `opusplan[1m]` long-context aliases, and verified version pins (including
-Fable 5.1, Fable 5, Sonnet 5, Opus 5.5, Opus 5, `claude-sonnet-5[1m]`, and explicit
+Fable 5.1, Fable 5, Sonnet 5.5, Sonnet 5, Opus 5.5, Opus 5, `claude-sonnet-5-5[1m]`, `claude-sonnet-5[1m]`, and explicit
 `[1m]` variants of other documented long-context models).
 Only the explicit `[1m]` selections receive Cozter's 1M-token context metadata;
 aliases and bare version pins remain capacity-unknown because their active
@@ -1272,7 +1272,7 @@ maps the percentage to its own vocabulary and request shape:
 | `codex` | Model-aware: 4–6 levels | `ultra` (Astra/Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
 | `zai` | GLM-5.3/Flash/FlashX: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
-| `claude_code` | Model-aware: current Fable / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.5–4.6 and Sonnet 4.6 use 4; Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
+| `claude_code` | Model-aware: current Fable / Sonnet 5.5 / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.5–4.6 and Sonnet 4.6 use 4; Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
 | `grok` | Model-aware: grok-4.7 / grok-4.7-build-fast / grok-4.6 use 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on 4.7/4.6; `--effort high` otherwise |
 

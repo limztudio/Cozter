@@ -1825,6 +1825,7 @@ warning: ignored after the catalog
             "opusplan[1m]",
             "claude-fable-5-1",
             "claude-fable-5",
+            "claude-sonnet-5-5",
             "claude-sonnet-5",
             "claude-opus-5-5",
             "claude-opus-5",
@@ -1841,6 +1842,7 @@ warning: ignored after the catalog
             "claude-opus-5[1m]",
             "claude-opus-5-5[1m]",
             "claude-opus-4-8[1m]",
+            "claude-sonnet-5-5[1m]",
             "claude-sonnet-5[1m]",
         ):
             with self.subTest(model=model):
@@ -1860,6 +1862,7 @@ warning: ignored after the catalog
             "claude-fable-5",
             "claude-opus-5-5",
             "claude-opus-5",
+            "claude-sonnet-5-5",
             "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7",
             "claude-opus-4-6", "claude-sonnet-4-6",
             "claude-sonnet-4-5-20250929", "private",
