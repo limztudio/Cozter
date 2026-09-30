@@ -29,7 +29,7 @@ _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 # These values preserve useful token-aware compaction before a user opens the
 # picker or on hosts where the catalog probe is unavailable.  They are active
 # CLI windows, not the larger maximum capability a model may advertise.
-# Verified 2026-09-28: live ``codex debug models`` (codex-cli 0.158.0)
+# Verified 2026-09-30: live ``codex debug models`` (codex-cli 0.158.0)
 # lists gpt-6-astra/sol/luna plus gpt-5.6-sol/terra/luna and gpt-5.5 as
 # visibility=list (plus hide-only gpt-reserve and codex-auto-review,
 # which the parser skips).
@@ -50,7 +50,7 @@ _FALLBACK_MODEL_SPECS = (
     # 2026-08-31; OpenAI's documented replacements are gpt-5.6-terra and
     # gpt-5.6-luna. The gpt-5.3-codex-spark research preview is gone from
     # the fallback ends here at gpt-5.5.
-    # (absent even as hide-only on 2026-09-28; re-verified with 0.158.0).
+    # (absent even as hide-only on 2026-09-30; re-verified with 0.158.0).
     ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
 )
 (
