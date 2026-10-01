@@ -201,6 +201,7 @@ class GrokBackend(CachedModelCatalog, Backend):
                 [*executable_command(self.executable), "models"],
                 capture_output=True,
                 timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
+                check=False,
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.debug("grok models probe failed (%s); using fallback", exc)

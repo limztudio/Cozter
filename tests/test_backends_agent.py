@@ -1160,6 +1160,7 @@ warning: ignored after the catalog
             ["codex", "debug", "models"],
             capture_output=True,
             timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
+            check=False,
         )
 
     def test_codex_discovery_falls_back_after_failed_probes(self) -> None:

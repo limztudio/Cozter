@@ -1119,10 +1119,7 @@ class BotPlatform(ABC):
         recent = workspace.get_recent(ctx.user_id, self.recent_limit)
         if text.isdecimal():
             number = parse_decimal_int(text)
-            if number is None:
-                idx = -1
-            else:
-                idx = number - 1
+            idx = -1 if number is None else number - 1
             if 0 <= idx < len(recent):
                 path = recent[idx]
             else:

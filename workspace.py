@@ -320,22 +320,21 @@ def migrate_current_workspace_platform_keys(
 def _merge_recent(primary: str, *recent_lists: object) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
-    for value in (primary,):
-        value = canonicalize_workspace_path(value)
-        if value and value not in seen:
-            merged.append(value)
-            seen.add(value)
+    canonical_primary = canonicalize_workspace_path(primary)
+    if canonical_primary and canonical_primary not in seen:
+        merged.append(canonical_primary)
+        seen.add(canonical_primary)
     for recent in recent_lists:
         if not isinstance(recent, list):
             continue
         for value in recent:
             if not isinstance(value, str) or not value or value in seen:
                 continue
-            value = canonicalize_workspace_path(value)
-            if value in seen:
+            canonical = canonicalize_workspace_path(value)
+            if canonical in seen:
                 continue
-            merged.append(value)
-            seen.add(value)
+            merged.append(canonical)
+            seen.add(canonical)
             if len(merged) >= MAX_RECENT:
                 return merged
     return merged[:MAX_RECENT]

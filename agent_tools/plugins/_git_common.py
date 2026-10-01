@@ -180,7 +180,7 @@ async def run_git(argv: list[str], workspace: str) -> tuple[str, str]:
     argv = add_common_git_flags(argv)
     try:
         stdout, stderr, returncode = await git_once(argv, workspace, env)
-    except TimeoutError:
+    except TimeoutError:  # asyncio.TimeoutError is the same class on 3.11+
         raise
     if returncode != 0:
         raise GitFailed(first_stderr_line(stderr))

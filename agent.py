@@ -66,7 +66,7 @@ class DetachedTaskLaunch:
 # (see workspace.get_interaction_style); scheduled / ephemeral turns run
 # unattended and cannot pause on [[await]], so they are always autonomous.
 _ATTACH_HINT = (
-    "Send created files via \"[[attach: PATH]]\" on its own line."
+    'Send created files via "[[attach: PATH]]" on its own line.'
 )
 
 _COLLABORATION_POLICY = (

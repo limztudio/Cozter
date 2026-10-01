@@ -31,6 +31,7 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *args],
         cwd=MODULE_ROOT, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
+        check=False,
     )
 
 
@@ -288,6 +289,7 @@ def install_requirements() -> None:
             capture_output=True,
             text=True,
             timeout=_PIP_INSTALL_TIMEOUT,
+            check=False,
         )
     except subprocess.TimeoutExpired as exc:
         logger.error(

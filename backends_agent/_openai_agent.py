@@ -1003,8 +1003,8 @@ async def _post_completion_stream(
                 raise RuntimeError(
                     f"{label} returned HTTP {resp.status}: {clipped}"
                 )
-            async for data in _iter_sse_events(resp.content):
-                data = data.strip()
+            async for raw_data in _iter_sse_events(resp.content):
+                data = raw_data.strip()
                 if data == "[DONE]":
                     saw_terminal_marker = True
                     break
@@ -1302,7 +1302,7 @@ def _merge_tool_call(
         argument_parts.append(args_frag)
         buf["_argument_bytes"] = next_bytes
         return fragment_bytes
-    elif isinstance(args_frag, dict):
+    if isinstance(args_frag, dict):
         # Some servers (GLM / Z.ai, some local runtimes) send the whole
         # arguments object in one delta instead of string fragments.
         try:

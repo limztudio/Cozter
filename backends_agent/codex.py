@@ -273,6 +273,7 @@ class CodexBackend(Backend):
                 [*prefix, "debug", "models"],
                 capture_output=True,
                 timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
+                check=False,
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.debug(
@@ -298,6 +299,7 @@ class CodexBackend(Backend):
                     ],
                     capture_output=True,
                     timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
+                    check=False,
                 )
             except (subprocess.TimeoutExpired, OSError) as exc:
                 logger.debug(

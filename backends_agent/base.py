@@ -878,7 +878,6 @@ class Backend(ABC):
         A backend that creates per-launch temporary state can override this;
         the normal and internal drain paths call it after reaping the process.
         """
-        return None
 
     async def launch_detached(
         self,
