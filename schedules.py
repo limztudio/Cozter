@@ -12,6 +12,7 @@ Each ``<schedule_dict>``:
 """
 
 import logging
+import uuid
 from datetime import datetime, time as dt_time, timedelta
 
 from . import workspace as workspace_mod
@@ -48,6 +49,21 @@ def add_schedule(
     data = _load_all(workspace)
     key = str(user_id)
     schedules = _schedule_list(data, key)
+    if isinstance(schedule, dict):
+        raw_id = schedule.get("id")
+        taken = {
+            s.get("id")
+            for s in schedules
+            if isinstance(s, dict) and isinstance(s.get("id"), str)
+        }
+        # Duplicate ids make update/remove ambiguous: the writer claims
+        # only the first twin while the stale twin stays due forever and
+        # refires every tick. Mint a fresh id so each record is unique.
+        if not isinstance(raw_id, str) or not raw_id or raw_id in taken:
+            fresh = uuid.uuid4().hex[:12]
+            while fresh in taken:
+                fresh = uuid.uuid4().hex[:12]
+            schedule["id"] = fresh
     schedules.append(schedule)
     data[key] = schedules
     save_json_object(_path(workspace), data)
@@ -186,14 +202,22 @@ def update_schedule_fired(
     data = _load_all(workspace)
     key = str(user_id)
     schedules = _schedule_list(data, key)
+    claimed: dict | None = None
     for s in schedules:
         if not isinstance(s, dict):
             continue
         if s.get("id") == schedule_id:
+            # Stamp every twin: legacy files can hold duplicate ids, and
+            # stamping only the first leaves the stale twin due forever
+            # (refire every tick). New duplicates are blocked in
+            # add_schedule, this just heals old files.
             s["last_fired"] = fired_at
-            save_json_object(_path(workspace), data)
-            return dict(s)
-    return None
+            if claimed is None:
+                claimed = dict(s)
+    if claimed is None:
+        return None
+    save_json_object(_path(workspace), data)
+    return claimed
 
 
 # ---------------------------------------------------------------------------
