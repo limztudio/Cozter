@@ -29,17 +29,20 @@ _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 # These values preserve useful token-aware compaction before a user opens the
 # picker or on hosts where the catalog probe is unavailable.  They are active
 # CLI windows, not the larger maximum capability a model may advertise.
-# Verified 2026-09-30: live ``codex debug models`` (codex-cli 0.158.0)
-# lists gpt-6-astra/sol/luna plus gpt-5.6-sol/terra/luna and gpt-5.5 as
-# visibility=list (plus hide-only gpt-reserve and codex-auto-review,
-# which the parser skips).
+# Verified 2026-10-01: live ``codex debug models`` (codex-cli 0.159.3)
+# lists gpt-6.1-sol first, then gpt-6-astra/sol/luna plus
+# gpt-5.6-sol/terra/luna and gpt-5.5 as visibility=list (plus hide-only
+# gpt-reserve and codex-auto-review, which the parser skips).
 # gpt-6-astra shipped on the OpenAI API on 2026-09-04
 # (872K max context; Codex sessions use the 272K active window like the
 # gpt-5.6 family). gpt-6-sol is the coding/everyday workhorse and
 # gpt-6-luna the fast affordable tier; both ride the same 272K active
-# window (872K max). The gpt-6 trio rides
+# window (872K max). gpt-6.1-sol was unveiled at DevDay on 2026-09-29 as
+# the upgraded workhorse (near-Astra coding performance at lower cost;
+# same 272K active window, 872K max). The gpt-6.1/gpt-6 quartet rides
 # first in this fallback in live-listed order.
 _FALLBACK_MODEL_SPECS = (
+    ("gpt-6.1-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-astra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
@@ -50,7 +53,7 @@ _FALLBACK_MODEL_SPECS = (
     # 2026-08-31; OpenAI's documented replacements are gpt-5.6-terra and
     # gpt-5.6-luna. The gpt-5.3-codex-spark research preview is gone from
     # the fallback ends here at gpt-5.5.
-    # (absent even as hide-only on 2026-09-30; re-verified with 0.158.0).
+    # (absent even as hide-only on 2026-10-01; re-verified with 0.159.3).
     ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
 )
 (

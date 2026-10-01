@@ -969,6 +969,7 @@ warning: ignored after the catalog
     def test_codex_fallback_models_are_current_and_selectable(self) -> None:
         models = codex_mod._FALLBACK_MODELS
         self.assertEqual(models, (
+            "gpt-6.1-sol",
             "gpt-6-astra",
             "gpt-6-sol",
             "gpt-6-luna",
@@ -1020,6 +1021,10 @@ warning: ignored after the catalog
         self.assertIsNone(backend.convert_effort(0))
         self.assertEqual(backend.convert_effort(1), "low")
         self.assertEqual(backend.convert_effort(100), "ultra")
+        self.assertEqual(
+            backend.effort_levels_for_model("gpt-6.1-sol"),
+            ("low", "medium", "high", "xhigh", "max", "ultra"),
+        )
         self.assertEqual(
             backend.effort_levels_for_model("gpt-6-astra"),
             ("low", "medium", "high", "xhigh", "max", "ultra"),
