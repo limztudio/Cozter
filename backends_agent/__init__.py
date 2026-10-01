@@ -42,18 +42,15 @@ _BACKENDS: dict[str, Backend] = {
     FLEXIBLE_BACKEND: FlexibleBackend(),
 }
 
-# Backends that own a real CLI/HTTP turn. Summary agents and flexible's
-# difficulty tiers must come from this list - pointing either at flexible
-# itself would recurse.
+# Turn-capable backends only: summary agents and flexible tiers must come
+# from here (flexible itself would recurse).
 DIRECT_BACKENDS = list(_DIRECT.keys())
 
-# Everything a user can select as their chat agent.  Keep the meta-agent
-# first: the interactive /agent picker assigns it the dedicated ``0`` slot.
+# Meta-agent first: the /agent picker gives it the dedicated ``0`` slot.
 AVAILABLE_BACKENDS = [FLEXIBLE_BACKEND, *_DIRECT]
 
 DEFAULT_BACKEND = FLEXIBLE_BACKEND
-# Fallback for every role flexible cannot fill: summary agent, and the
-# agent behind each of flexible's own difficulty tiers.
+# Fallback when flexible can't fill a role (summary agent, own tiers).
 DEFAULT_DIRECT_BACKEND = "codex"
 
 

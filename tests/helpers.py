@@ -21,9 +21,7 @@ class TestBot(BotPlatform):
     keeping the abstract-platform plumbing in one place.
     """
 
-    # This is a reusable fake rather than a pytest test case.  Its historical
-    # name starts with ``Test``, so mark it explicitly to keep pytest's
-    # collection warnings from obscuring real test failures.
+    # Reusable fake (Test* name predates pytest): mark to silence collection warnings.
     __test__ = False
 
     @property
@@ -87,9 +85,7 @@ def process_is_running(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    # A reparented child may briefly remain as a zombie after SIGKILL; it
-    # cannot keep a pipe open or mutate a workspace. Other POSIX systems may
-    # not mount Linux's /proc, where a successful kill(0) is sufficient.
+    # A reparented zombie can't hold a pipe or mutate; kill(0) suffices off Linux.
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
             parts = f.read().split()

@@ -50,18 +50,8 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# ``grok models`` is account-aware, but the picker must remain useful when
-# Grok is absent, unauthenticated, or its model-list command is unavailable.
-# Keep only currently documented CLI models in the conservative fallback,
-# with every capability beside its ID so picker, effort, and compaction
-# cannot drift apart.  Grok rejects unsupported ``--effort`` values, so
-# unpublished/custom IDs use the three-level subset rather than the extra
-# ``xhigh`` the current 4.7/4.6 models accept.
-# Verified 2026-10-01: live ``grok models`` (grok 1.0.13) lists
-# grok-4.7 (default), grok-4.7-build-fast, grok-4.6, and grok-4.5.
-# grok-4.7 shipped 2026-09-21 (500K context; effort low/medium/high/xhigh
-# per xAI release notes, re-verified 2026-10-01); Grok 4.7 Fast is the same model at 2x rates via
-# Cursor/Grok Build only, so it shares the 4.7 capabilities here.
+# Discovery fallback: documented CLI models + capabilities (verified
+# 2026-10-01, grok 1.0.13).
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high")
 _FALLBACK_MODEL_SPECS = (
     ("grok-4.7", (*_COMMON_EFFORT_LEVELS, "xhigh"), 500_000),
@@ -81,9 +71,8 @@ _PROMPT_FILE_PREFIX = "cozter-grok-prompt-"
 def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
     """Extract model IDs from the human-readable ``grok models`` listing.
 
-    Current Grok Build releases intentionally expose this command as plain
-    text rather than JSON.  Only accept entries after its ``Available models``
-    heading so login banners and diagnostics cannot become selectable models.
+    Plain text (not JSON) by design; only entries under the
+    ``Available models`` heading count (banners/diagnostics excluded).
     """
     if isinstance(output, bytes):
         output = output.decode("utf-8", errors="replace")
@@ -95,9 +84,7 @@ def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
     reading_models = False
     for line in output.splitlines():
         stripped = line.strip()
-        # Cheap identity check first: the heading is a fixed string, so
-        # only casefold lines that already match it modulo case/space.
-        # This skips a temp lowered copy for every banner/diagnostic line.
+        # Case-insensitive heading match, cheap identity check first.
         if (
             len(stripped) == len("Available models:")
             and stripped.casefold() == "available models:"
@@ -136,7 +123,7 @@ def _write_prompt_file(prompt: str) -> str:
 
 
 def _remove_prompt_file(path: str) -> None:
-    """Delete a prompt file, ignoring a race with an already-reaped path."""
+    """Delete a prompt file, ignoring reaping races."""
     if not isinstance(path, str) or not path:
         return
     try:
@@ -152,19 +139,14 @@ class GrokBackend(CachedModelCatalog, Backend):
     vision_mode = "prompt_file"
     default_model = "grok-4.7"
     default_summary_model = "grok-4.7"
-    # Default-model vocabulary. ``effort_levels_for_model`` narrows this for
-    # grok-4.5 and unpublished IDs; effort=0 still means do not override.
+    # Default-model vocabulary; per-model narrowing in effort_levels_for_model.
     effort_levels = (*_COMMON_EFFORT_LEVELS, "xhigh")
-    # Grok's model catalog is account-dependent, so do not route flexible's
-    # low tier to a potentially unavailable pinned model before its picker
-    # refreshes. Every unset tier uses the policy-safe default_model.
+    # Account-dependent catalog: leave tiers unset (policy-safe default_model).
     tier_models: dict[str, str] = {}
     permission_arg_sets = {
         "full": ("--always-approve",),
-        # Headless Grok currently ignores ``--permission-mode auto`` and
-        # reports ask/default instead. Always-approve still auto-runs tools
-        # so a chat turn cannot hang, while the workspace sandbox confines
-        # writes to CWD / Grok home / temp.
+        # Headless Grok ignores `--permission-mode auto`: always-approve keeps
+        # turns from hanging; the sandbox still confines writes.
         "auto": ("--always-approve", "--sandbox", "workspace"),
         "restricted": (
             "--permission-mode",
@@ -173,8 +155,7 @@ class GrokBackend(CachedModelCatalog, Backend):
             "read-only",
             "--tools",
             "read_file,grep,list_dir",
-            # ``--tools`` is an allowlist, but Grok still exposes its MCP
-            # discovery/execution pair unless those names are denied.
+            # Allowlist still exposes MCP discovery/execution: deny those names.
             "--disallowed-tools",
             "search_tool,use_tool",
         ),
@@ -220,8 +201,7 @@ class GrokBackend(CachedModelCatalog, Backend):
     ) -> tuple[str, ...]:
         """Return only the effort values the selected Grok model accepts.
 
-        Grok exits the turn when ``--effort`` is not in the model's menu, so
-        unpublished and custom IDs stay on the shared three-level subset.
+        Unknown IDs stay on the three-level subset (bad --effort exits).
         """
         selected = (model or self.default_model).strip()
         return _FALLBACK_MODEL_EFFORT_LEVELS.get(
@@ -254,9 +234,7 @@ class GrokBackend(CachedModelCatalog, Backend):
             "streaming-messages-json",
         ]
         self.append_launch_options(cmd, model, effort, approval)
-        # Native vision: when images are referenced, send JSON content
-        # blocks via --prompt-json (text + image parts) instead of the
-        # plain-text --prompt-file. Falls back to --prompt-file otherwise.
+        # Vision: JSON content blocks via --prompt-json, else --prompt-file.
         prompt_json: str | None = None
         if self.supports_vision and not compaction:
             _image_paths = attachment_image_paths(prompt, workspace_path)
@@ -266,29 +244,22 @@ class GrokBackend(CachedModelCatalog, Backend):
             cmd += ["--prompt-json", prompt_json]
             prompt_path = ""
         else:
-            # Keep the prompt argument last so model/permission flags cannot be
-            # parsed as prompt text. ``--prompt-file`` avoids the platform argv
-            # cap that ``-p`` inherits; Cozter's default history budget already
-            # exceeds Windows' CreateProcess limit.
+            # Prompt arg last (flags can't parse as prompt text); file avoids argv caps.
             prompt_path = _write_prompt_file(prompt)
             cmd += ["--prompt-file", prompt_path]
         try:
             proc = await create_captured_subprocess(
                 cmd,
                 cwd=workspace_path,
-                # Keep launched shell commands in an owned POSIX process group;
-                # /stop and /inject can then stop the complete agent tree.
+                # Owned process group: /stop and /inject stop the whole tree.
                 start_new_session=os.name != "nt",
             )
         except BaseException:
             if prompt_path:
                 _remove_prompt_file(prompt_path)
             raise
-        # Key by the Process object, not PID: concurrent turns on this
-        # singleton can otherwise clobber each other after PID reuse.
-        # A --prompt-json turn has no temp file (empty path): remember it
-        # anyway so cleanup pops symmetrically, and _remove_prompt_file
-        # no-ops on the empty value.
+        # Key by Process (not PID): concurrent turns survive PID reuse.
+        # Empty path (prompt-json) still registers for symmetric cleanup.
         self._prompt_files.remember(proc, prompt_path)
         return proc
 
@@ -337,14 +308,11 @@ class GrokBackend(CachedModelCatalog, Backend):
             return
 
         if etype == "error":
-            # A late provider error must be recorded, but must not erase
-            # a useful model reply that was already streamed.
+            # Record, but never erase an already-streamed reply.
             record_backend_error(result, self._error_message(event))
             return
 
-        # ``system``, ``user`` (tool result), reasoning, and metadata events
-        # are useful to Grok's own transcript but do not improve Cozter's
-        # compact live status display.
+        # Transcript-only events: skip the compact live status display.
         if etype not in {
             "system",
             "user",

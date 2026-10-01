@@ -78,11 +78,8 @@ if __name__ == "__main__" and not __package__:
     )
 
 
-# Make ``Cozter`` importable from any subprocess we spawn (codex,
-# claude_code, copilot, grok CLIs) and from any bash command they run. The
-# CLI subprocesses inherit our env, so when the model invokes a plugin
-# via ``python -m Cozter.agent_tools.plugins.<name>``, Python can
-# resolve the package without the user setting PYTHONPATH manually.
+# Make ``Cozter`` importable from spawned CLIs/bash (inherited env;
+# no manual PYTHONPATH needed).
 _pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _existing_pythonpath = os.environ.get("PYTHONPATH", "")
 if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
@@ -198,11 +195,8 @@ def _ensure_venv_and_reexec() -> None:
     env = {**os.environ, _VENV_REEXEC_ENV: "1"}
     args = [python, "-m", "Cozter", *sys.argv[1:]]
     if os.name == "nt":
-        # Python 3.13's Windows os.execve() path can crash in the CRT while
-        # copying the environment.  Keep this launcher as a *single*
-        # supervisor for the venv child instead.  Direct Task Scheduler
-        # launches otherwise have no supervisor: each self-update would
-        # spawn a child and leave its Python parent waiting forever.
+        # 3.13 Windows execve can crash: keep one supervisor for the venv
+        # child so self-updates don't orphan parents.
         from . import updater as _windows_updater  # pylint: disable=redefined-outer-name
 
         env[_windows_updater.WINDOWS_SUPERVISOR_ENV] = "1"
@@ -319,10 +313,7 @@ def log_crash(exc: BaseException) -> str:
 logger = logging.getLogger(__name__)
 
 
-# File object that faulthandler and the SIGUSR1 dump write into. Opened
-# lazily so tests can import this module without a writable .log/ dir,
-# and so the path reflects the configured LOG_DIR even if it is created
-# after import time.
+# Dump target: opened lazily so imports/tests need no writable .log/ dir.
 _dump_file: TextIO | None = None
 
 
@@ -568,12 +559,8 @@ def _cli_mode_requested() -> bool:
     return any(arg in _CLI_MODE_FLAGS for arg in sys.argv[1:])
 
 
-# Two-phase CLI lifecycle, signalled via one env var:
-#   - launcher (no env): user ran ``python -m Cozter -cli`` from a
-#     shell. Run the respawner loop in *this* terminal.
-#   - bot (COZTER_CLI_CHILD=1): the loop spawned us; run main_cli with
-#     update_loop attached. On auto-update, exit with
-#     ``CLI_RESTART_EXIT_CODE`` so the loop relaunches us in place.
+# Two-phase CLI lifecycle via one env var: launcher (respawn loop) vs
+# bot child (exits with CLI_RESTART_EXIT_CODE to relaunch in place).
 _CLI_CHILD_ENV = "COZTER_CLI_CHILD"
 
 
@@ -663,10 +650,7 @@ async def main() -> None:
         except NotImplementedError:
             signal.signal(sig, lambda *_: _signal_handler())
 
-    # SIGUSR1 dumps asyncio tasks + threads + per-bot turn state into
-    # diagnostics.log on demand, without restarting. From the host:
-    #   kill -USR1 $(systemctl show -p MainPID --value app-Cozter@autostart)
-    # It's Windows-incompatible (add_signal_handler raises), so guard it.
+    # SIGUSR1 dumps tasks/threads/turn state on demand (POSIX only).
     if hasattr(signal, "SIGUSR1"):
         try:
             loop.add_signal_handler(

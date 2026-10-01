@@ -47,8 +47,7 @@ from .base import truncate_with_marker
 
 logger = logging.getLogger(__name__)
 
-# Cap each tool result fed back to the model: huge outputs blow up the
-# prompt and rarely help the model.
+# Bound tool results: huge outputs blow up the prompt, rarely help.
 _TOOL_RESULT_MAX = 4_000
 
 
@@ -97,9 +96,8 @@ def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
         try:
             importlib.import_module(f"{pkg_name}.{_mod_info.name}")
         except Exception:
-            # A module can define a concrete AgentTool before later import
-            # code fails. Class definition self-registers it (and may evict a
-            # colliding builtin), so restore the whole pre-import registry.
+            # Class definition may already have self-registered before the
+            # failure: roll back the whole registry to the pre-import state.
             AgentTool.registry[:] = before
             logger.exception(
                 "Failed to load %s.%s", pkg_name, _mod_info.name,
@@ -114,28 +112,19 @@ def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
 
 _load_subpackage("builtin", mark_as_plugin=False)
 
-# When a plugin is invoked as ``python -m Cozter.agent_tools.plugins.name``,
-# Python imports this package before executing that module as ``__main__``.
-# Eagerly importing plugins in that narrow path preloads the target module and
-# makes runpy warn that execution may be unpredictable. Normal bot startup and
-# ordinary imports still discover plugins immediately.
+# Defer plugin imports under ``python -m``: preloading there makes runpy
+# warn about unpredictable execution. Normal startup still loads them.
 if not sys.argv or sys.argv[0] != "-m":
     _load_subpackage("plugins", mark_as_plugin=True)
 
-# Sort registered tools deterministically: explicit ``order`` then name.
+# Deterministic order: explicit ``order`` then name.
 _TOOLS: tuple[AgentTool, ...] = tuple(
     sorted(AgentTool.registry, key=lambda t: (t.order, t.name))
 )
 _BY_NAME: dict[str, AgentTool] = {t.name: t for t in _TOOLS}
 
-# Tools that only read state - no file writes, no shell, no side effects.
-# These realize the "confirm" permission as a look-but-don't-touch surface
-# for the llama backend: a chat bot can't prompt per tool call, so confirm
-# exposes (and execute_tool permits) only these, rather than silently
-# running writes unconfirmed. Anything not listed - mutating builtins,
-# bash, and ALL plugins - is treated as unsafe and withheld. The safe
-# default for an unlisted/new tool is "withheld under confirm"; extend
-# this set when adding a genuinely read-only builtin tool.
+# Read-only surface for "confirm" mode (no prompts per call on chat bots):
+# anything unlisted (mutating builtins, bash, all plugins) is withheld.
 READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
     "read_file",
     "list_dir",
@@ -150,10 +139,8 @@ READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
 def _is_confirm_read_only(tool: AgentTool | None) -> bool:
     """Return whether *tool* may be exposed and run in confirm mode.
 
-    A plugin can use the same name as a builtin because registrations are
-    keyed by name.  Names alone therefore are not a permission boundary: a
-    colliding plugin must remain withheld even if it replaces a read-only
-    builtin in the registry.
+    Registry is keyed by name, so a colliding plugin could shadow a
+    read-only builtin: withhold every plugin regardless of name.
     """
     return (
         tool is not None
@@ -163,12 +150,10 @@ def _is_confirm_read_only(tool: AgentTool | None) -> bool:
 
 
 def _is_auto_allowed(tool: AgentTool | None) -> bool:
-    """Return whether *tool* is safe to expose to HTTP agents in auto mode.
+    """Return whether *tool* is safe for HTTP agents in auto mode.
 
-    ``auto`` may edit files through Cozter's workspace-checked built-ins, but
-    it must not silently grant direct host access. New tools default to this
-    mode; an author must explicitly mark an escape-capable one with
-    ``requires_full_permission``.
+    New tools default to auto; mark escape-capable ones with
+    ``requires_full_permission`` to opt out.
     """
     return tool is not None and not bool(
         getattr(tool, "requires_full_permission", False),
@@ -213,10 +198,8 @@ _EmitFn = Callable[[dict], None]
 def parse_openai_call(call: dict) -> tuple[str, dict]:
     """Pull ``(name, args)`` out of an OpenAI-shape tool_call dict.
 
-    Per the OpenAI Chat Completions spec, ``function.arguments`` is a
-    JSON-encoded string; this helper parses it into a dict. Backends
-    using other tool-call formats should construct ``(name, args)``
-    themselves and call :func:`execute_tool` directly.
+    Per the OpenAI spec, ``function.arguments`` is a JSON string; some
+    servers return an already-parsed object. Accept both.
     """
     if not isinstance(call, dict):
         return "", {}
@@ -227,9 +210,7 @@ def parse_openai_call(call: dict) -> tuple[str, dict]:
     if not isinstance(name, str):
         name = ""
     raw = fn.get("arguments")
-    # Per the OpenAI spec, ``arguments`` is a JSON-encoded string, but some
-    # servers (GLM / Z.ai and various local runtimes) return an already
-    # parsed object. Accept both; anything else -> no args.
+    # Also accept an already-parsed object (GLM/Z.ai, local runtimes).
     if isinstance(raw, dict):
         args = raw
     elif isinstance(raw, str) and raw.strip():
@@ -258,9 +239,7 @@ async def execute_tool(
     emit: _EmitFn,
 ) -> str:
     """Run a tool by name; emit status events; return the result string."""
-    # Tool calls come from provider output, so do not let a malformed
-    # non-string/unhashable name fail before this wrapper can return a
-    # model-facing error and emit the matching result event.
+    # Provider output may be malformed: normalize before emitting events.
     if not isinstance(name, str):
         name = ""
     if not isinstance(args, dict):
@@ -275,11 +254,8 @@ async def execute_tool(
     })
 
     if approval not in {"auto", "full", "confirm"}:
-        # Tool schemas are normally omitted for deny/unknown permission
-        # values, but an OpenAI-compatible server can still return a stray
-        # tool call. Keep this execution boundary fail-closed so malformed
-        # provider output or a bad caller can never turn a no-tools turn into
-        # a workspace mutation.
+        # Schemas omit tools here, but a stray provider call could still
+        # arrive: stay fail-closed against workspace mutation.
         logger.info("%s mode blocked tool: %s", approval, name)
         result = (
             f"Blocked: '{name}' cannot run because permission mode "
@@ -288,10 +264,7 @@ async def execute_tool(
         return _emit_tool_result(emit, name, result)
 
     if approval == "confirm" and not _is_confirm_read_only(tool):
-        # A chat surface can't prompt per tool call, so "confirm" is a
-        # read-only gate: state-changing tools are withheld rather than run
-        # unconfirmed. (Ask-before-acting on writes is /style
-        # collaborative, which pauses the whole turn for the user's reply.)
+        # "confirm" is a read-only gate (ask-before-write lives at turn level).
         logger.info("confirm mode blocked state-changing tool: %s", name)
         result = (
             f"Blocked: '{name}' can change state, and confirm mode only "
@@ -306,9 +279,8 @@ async def execute_tool(
         and tool is not None
         and not _is_auto_allowed(tool)
     ):
-        # The schema normally withholds these tools, but a provider can emit
-        # a stray/hallucinated call. Re-check at execution time so ``auto``
-        # never becomes a back door to the unrestricted host shell.
+        # Re-check at execution: a stray/hallucinated call must not turn
+        # ``auto`` into a back door to the host shell.
         logger.info("auto mode blocked full-only tool: %s", name)
         result = (
             f"Blocked: '{name}' requires full permission because it can "
@@ -321,10 +293,7 @@ async def execute_tool(
     if tool is None:
         result = f"Unknown tool: {name}"
     else:
-        # Real-work cap: tools run up to tool_timeout (default 3600s) so
-        # a slow search/build finishes instead of timing out and forcing
-        # a wasteful retry. Cancel (/stop, new message, [[await]]) still
-        # stops instantly.
+        # Real-work cap (up to tool_timeout); cancel still stops instantly.
         try:
             cap = _tool_timeout_seconds()
             if cap is not None and cap > 0:
@@ -347,8 +316,7 @@ async def execute_tool(
                     f"({result_type})."
                 )
         except asyncio.CancelledError:
-            # Cancel (/stop, new message, [[await]]) is the only stop.
-            raise
+            raise  # cancel is the only stop.
         except Exception as exc:
             result = f"Tool {name} failed: {exc}"
 

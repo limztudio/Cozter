@@ -46,37 +46,26 @@ from ..utils import terminate_windows_process_tree
 
 logger = logging.getLogger(__name__)
 
-# Floor applied on every platform: the Windows CreateProcess command line
-# caps at 32767 chars for the whole argv, so keep the prompt well under it.
+# Prompt caps: Windows argv 32767 (whole line); Linux MAX_ARG_STRLEN 131072
+# per arg (plus NUL). Same conservative limit everywhere.
 _WINDOWS_PROMPT_CHARS = 28_000
-# Linux also limits one individual argument (MAX_ARG_STRLEN) to 131072 bytes,
-# independently of the much larger aggregate ARG_MAX. Leave room for its NUL
-# terminator and keep the same conservative limit for other POSIX platforms.
+# Linux per-arg cap (MAX_ARG_STRLEN 131072, plus NUL); same limit on POSIX.
 _POSIX_PROMPT_ARG_BYTES = 128_000
 _ACP_PROTOCOL_VERSION = 1
 _MODEL_DISCOVERY_TIMEOUT_SEC = 12
 _MODEL_FAILURE_RETRY_SEC = 15
 _MAX_ACP_MESSAGES_PER_REQUEST = 100
-# ACP's account-aware catalog is provider-controlled data that ultimately
-# reaches chat pickers and workspace caches. Keep it in line with the HTTP
-# backend catalog limits: normal model IDs are short, and thousands of
-# selectable IDs are already far beyond a usable picker.
+# Provider-controlled catalog data: bound IDs/options like HTTP backends.
 _MAX_ACP_MODEL_ID_CHARS = 512
 _MAX_ACP_MODEL_OPTIONS = 4_096
-# The output cap alone does not constrain an ACP response made entirely of
-# duplicate, overlong, or otherwise invalid entries. Bound both the number of
-# option nodes inspected and the nested group depth so a malformed catalog
-# cannot monopolize the synchronous picker path.
+# Also bound node count/depth: dup/overlong/invalid entries alone could
+# otherwise monopolize the synchronous picker.
 _MAX_ACP_OPTION_NODES = _MAX_ACP_MODEL_OPTIONS * 4
 _MAX_ACP_OPTION_GROUP_DEPTH = 16
-# ACP stdout is line-delimited JSON-RPC. Bound one physical line so a
-# verbose or malformed CLI cannot grow the picker thread until timeout.
+# Bound one JSON-RPC line: a verbose/malformed CLI can't grow the picker thread.
 _MAX_ACP_LINE_CHARS = 1 * 1024 * 1024
 _COPILOT_HOME_FILES = ("config.json", "settings.json")
-# Copilot policies are workspace-scoped, but a long-running bot can visit an
-# unbounded number of workspaces. These are short-lived discovery caches, not
-# durable state, so keep their memory use bounded even when callers never
-# revisit an old workspace after its TTL expires.
+# Short-lived discovery caches (not durable): bounded for long-running bots.
 _MAX_WORKSPACE_MODEL_CACHE_ENTRIES = 64
 
 # ``auto`` is accepted by Copilot even if a named-model catalog cannot be
@@ -116,10 +105,8 @@ def _prompt_argv_units(prompt: str) -> int:
     if not isinstance(prompt, str):
         return 0
     if sys.platform == "win32":
-        # CreateProcessW receives the fully quoted command line, not raw argv
-        # values. ``list2cmdline`` is the same quoting routine subprocess
-        # uses, so quotes/backslashes in the prompt cannot evade this cap;
-        # astral characters still consume two UTF-16 units.
+        # ``list2cmdline`` quoting: quotes can't evade the cap; astral
+        # chars count as two UTF-16 units.
         encoded = subprocess.list2cmdline([prompt])
         return len(encoded.encode("utf-16-le", errors="replace")) // 2
     return len(prompt.encode("utf-8", errors="replace"))
@@ -302,21 +289,12 @@ class CopilotBackend(Backend):
     # An ACP list is authoritative for this account, so ``extra_models`` must
     # not inject arbitrary, unverified names back into a picker.
     allow_unverified_extra_models = False
-    # No override is represented by Cozter's effort=0 (omit the flag).
-    # Current Copilot CLI builds accept ``minimal`` for named models; do not
-    # include ``none`` because a nonzero Cozter percentage should never turn
-    # reasoning off.
+    # effort=0 omits the flag; never map nonzero effort to ``none``.
     effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
 
     def __init__(self) -> None:
-        # The backend is a process-wide singleton, but Copilot applies some
-        # model policies at the repository level (for example a workspace's
-        # .github/allowed_models.txt). Cache ACP results per canonical
-        # workspace, never a failed probe: a transient sign-in/network
-        # failure should keep that picker fail-closed to ``auto`` but recover
-        # on its next open. Refresh successful results periodically so
-        # changed account or repository policy is reflected without a bot
-        # restart.
+        # Policies are per-workspace: cache ACP results per workspace,
+        # never failed probes; refresh periodically (fail-closed to auto).
         self._workspace_model_catalogs: dict[
             str, tuple[tuple[str, ...], float],
         ] = {}
@@ -420,10 +398,8 @@ class CopilotBackend(Backend):
                 return cached
 
             self._prune_workspace_model_caches(now, keep_key=workspace_key)
-            # An expired catalog must not keep displaying names that a newly
-            # applied policy might have removed. A failed refresh therefore
-            # deliberately falls back to only ``auto`` rather than this old
-            # value.
+            # Failed refresh falls back to ``auto`` (stale names may be
+            # policy-removed).
             self._workspace_model_catalogs.pop(workspace_key, None)
             models = self._discover_models(workspace_key)
             if models is not None:
@@ -617,11 +593,8 @@ class CopilotBackend(Backend):
         ]
         self.append_launch_options(cmd, model, effort, approval)
 
-        # Native vision: copilot takes repeatable --attachment flags for
-        # images/native documents in non-interactive mode. Resolve paths
-        # before argv truncation: the tail cut keeps the request (and its
-        # markers) at the end, so paths found here still match the text
-        # the model receives via -p.
+        # Native vision via --attachment flags; resolve before argv
+        # truncation so paths match the tail-kept prompt.
         _vision_image_paths: list[str] = []
         if self.supports_vision and not compaction:
             _vision_image_paths = attachment_image_paths(prompt, workspace_path)
@@ -646,11 +619,8 @@ class CopilotBackend(Backend):
             _remove_isolated_copilot_home(isolated_home)
             raise
 
-        # The shared drain paths call ``cleanup_process`` after reaping this
-        # process, including cancellation and injected-message restarts.
-        # Key by the Process object, not PID: concurrent turns on this
-        # singleton can otherwise delete another run's private home after
-        # PID reuse.
+        # Key by Process, not PID: concurrent turns + PID reuse could
+        # delete another run's private home.
         self._process_homes.remember(proc, isolated_home)
         return proc
 
@@ -768,10 +738,7 @@ class CopilotBackend(Backend):
     @staticmethod
     def _extract_text(event: dict) -> str | None:
         """Pull text content from an event using best-effort key probing."""
-        # Copilot CLI 1.0.70 wraps streamed assistant output in an event
-        # envelope: ``{"type": "assistant.message", "data":
-        # {"content": "..."}}``.  Older builds put the content directly
-        # on the event, so accept both shapes.
+        # Accept both pre/post-1.0.70 assistant event shapes.
         payloads = [event]
         data = event.get("data")
         if isinstance(data, dict):
@@ -857,10 +824,8 @@ def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
     models: list[str] = []
     seen: set[str] = set()
     inspected = 0
-    # Iterative depth-first traversal preserves ACP's declared order without
-    # copying a potentially huge top-level list or risking Python recursion
-    # limits on malformed nested groups. Each frame holds (options, next
-    # index, group depth).
+    # Iterative DFS: preserves order without copying huge lists or
+    # risking recursion limits.
     pending: list[tuple[list, int, int]] = [(values, 0, 0)]
     while pending and len(models) < _MAX_ACP_MODEL_OPTIONS:
         options, index, depth = pending[-1]

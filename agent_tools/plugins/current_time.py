@@ -25,8 +25,7 @@ class CurrentTimeTool(AgentTool):
             if not isinstance(tz_name, str):
                 return f"Invalid timezone {tz_name!r}: must be a string"
             try:
-                # UTC is built into Python and must work even on minimal
-                # Windows hosts without the optional IANA tzdata package.
+                # UTC needs no IANA tzdata: works on minimal Windows hosts.
                 if tz_name.strip().upper() == "UTC":
                     return datetime.now(UTC).isoformat()
                 from zoneinfo import ZoneInfo

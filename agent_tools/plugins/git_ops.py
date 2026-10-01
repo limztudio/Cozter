@@ -33,10 +33,7 @@ from ._git_common import (
     run_git as _run_git,
 )
 
-# Real-work cap: git runs under the tool runner cap (default 3600s) or
-# until cancelled.
-# Output/error limits, ref validation, failure type, process runner, and
-# output clipping live in ._git_common (shared with git_info/git_sync).
+# Real-work cap (tool runner); shared limits/validation live in ._git_common.
 _MAX_MESSAGE_CHARS = 2_000
 _ACTIONS = (
     "add",

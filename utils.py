@@ -24,22 +24,14 @@ _STDERR_CAPTURE_BYTES = 64 * 1024
 # has short event lines, so keep a generous cap while preventing the decoder
 # buffer from growing until it exhausts the bot process.
 _MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024
-# A CLI spawned with ``start_new_session=True`` leads this process group on
-# POSIX.  Keep the identifier on the process object at spawn time: by the
-# time a leaked descendant is discovered, its direct parent can already have
-# exited and ``os.getpgid(parent_pid)`` then cannot recover the group.
+# A CLI spawned with ``start_new_session=True`` leads the group: snapshot
+# the id at spawn, before the parent can exit.
 _PROCESS_GROUP_ID_ATTR = "_cozter_process_group_id"
-# A parent that has exited while its stdout pipe remains open has left that
-# descriptor in a child (or another inherited descendant).  After signalling
-# the owned group, give pipe shutdown a short grace period before abandoning
-# the reader so cancellation and internal LLM calls cannot wedge forever on a
-# deliberately detached descendant.
+# After signalling the group, allow a short pipe-shutdown grace before
+# abandoning the reader.
 _POST_EXIT_STREAM_DRAIN_TIMEOUT = 1.0
-# Once a parent has exited, stdout is no longer trustworthy as a backend
-# stream: an ordinary child can keep the descriptor open and emit syntactically
-# valid JSON forever.  Keep a short grace for finite parent-authored backlog,
-# but cap the amount parsed during that grace so a child cannot drive memory
-# growth before the tree cleanup takes effect.
+# Exited-parent stdout is untrusted: cap what is parsed during the backlog
+# grace so an inheriting child can't grow memory.
 _POST_EXIT_STREAM_DRAIN_BYTES = 8 * 1024 * 1024
 _PROCESS_EXIT_POLL_INTERVAL = 0.05
 _BackgroundResult = TypeVar("_BackgroundResult")
@@ -168,10 +160,7 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
     return None
 
 
-# One canonical image-extension set shared by the agent artifact scan, the
-# bot-platform inbound filter, and the vision MIME map in
-# backends_agent.base. agent.py's magic-sniff keeps its own small table
-# because it identifies files by content, not extension.
+# Canonical image extensions (by name). agent.py sniffs by content instead.
 IMAGE_EXTENSIONS = frozenset({
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
 })
@@ -204,11 +193,8 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-            # fsync before the rename so the data is durably on disk. Without
-            # it, a power loss can land the rename while the file's blocks are
-            # still zero, leaving a truncated/empty target - which readers
-            # treat as "absent" and silently reset to defaults (e.g. a "deny"
-            # permission would revert to the more permissive default).
+            # fsync before rename: a torn write otherwise reads as
+            # "absent" and resets to defaults.
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, target)  # atomic on same filesystem
@@ -362,20 +348,12 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
     """
     pid = getattr(proc, "pid", None)
     if os.name == "nt":
-        # ``asyncio`` has no Windows equivalent of POSIX process groups.
-        # ``taskkill /T`` follows the child-process tree, which matters when
-        # a .cmd shim launches Node or an agent invokes a build/test command.
-        # A brief, best-effort synchronous wait makes the caller's subsequent
-        # ``proc.wait()`` safe to treat as complete teardown.  If taskkill is
-        # unavailable or rejects an already-exited PID, retain the existing
-        # single-process kill as a fallback.
+        # No POSIX groups on Windows: ``taskkill /T`` walks the child tree
+        # (falls back to a single-process kill).
         if terminate_windows_process_tree(pid):
             return
     elif has_managed_process_group(proc):
-        # Do not ask the OS for the parent's current group here.  It is common
-        # for a CLI wrapper to exit after spawning a child that inherited its
-        # pipes; at that point getpgid(parent_pid) raises ProcessLookupError,
-        # but the original group (and its descendants) still exists.
+        # Use the stored group: the parent may already have exited.
         if _kill_process_group(getattr(proc, _PROCESS_GROUP_ID_ATTR)):
             return
     elif isinstance(pid, int) and pid > 0:

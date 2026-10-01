@@ -70,10 +70,7 @@ def workspace_state_path(workspace_path: str, *parts: str) -> str:
         or "\x00" in part
         or os.path.isabs(part)
         or part in {".", ".."}
-        # State helpers pass one filename/directory at a time.  Reject both
-        # separator spellings even on POSIX, where a backslash is otherwise a
-        # legal filename character, so persisted or cross-platform input
-        # cannot use a single component to walk out of ``.cozter``.
+        # One path component only: reject both separators so state can't escape.
         or "/" in part
         or "\\" in part
         for part in parts
@@ -356,17 +353,12 @@ AVAILABLE_BACKENDS = backends_agent.AVAILABLE_BACKENDS
 DIRECT_BACKENDS = backends_agent.DIRECT_BACKENDS
 DEFAULT_BACKEND = backends_agent.DEFAULT_BACKEND
 FLEXIBLE_BACKEND = backends_agent.FLEXIBLE_BACKEND
-# Compaction + auto-titling default to codex regardless of which agent
-# runs the chat turns - codex is the cheapest summarizer for most users.
-# Both the agent and the model under it are independently configurable
-# via /summaryagent and /summarymodel.
+# Compaction/titling default to codex (cheapest summarizer); see
+# /summaryagent and /summarymodel.
 DEFAULT_SUMMARY_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
 
-# The flexible agent's difficulty tiers. Each binds an agent and a model,
-# set with /agent_flexible_<tier> and /model_flexible_<tier>. All three
-# start on the default direct backend so a fresh workspace works without
-# any setup; the per-backend tier_models tables pick sensibly sized models
-# within whichever agent a tier points at.
+# Flexible difficulty tiers (agent+model each); all start on the default
+# backend so fresh workspaces work unset-up.
 FLEXIBLE_TIERS = flexible.TIERS
 FLEXIBLE_TIER_DESCRIPTIONS = flexible.TIER_DESCRIPTIONS
 DEFAULT_FLEXIBLE_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
@@ -390,11 +382,8 @@ PERMISSION_DESCRIPTIONS = {
     ),
 }
 
-# Interaction style: how collaborative the agent is on interactive chat
-# turns. It selects which policy the shared prompt preamble in
-# agent.py carries, so it steers every backend the same way (codex,
-# copilot, claude_code, grok, llama). Scheduled/ephemeral turns cannot pause on
-# [[await]], so they always run autonomously regardless of this setting.
+# Interaction style: picks the shared prompt policy for chat turns.
+# Scheduled/ephemeral turns always run autonomously.
 AVAILABLE_STYLES = ["collaborative", "autonomous"]
 DEFAULT_STYLE = "collaborative"
 STYLE_DESCRIPTIONS = {
@@ -405,15 +394,8 @@ STYLE_DESCRIPTIONS = {
     "autonomous": "Decide and proceed without asking (full-auto)",
 }
 
-# Reasoning effort: a single 0-100 percentage. Each agent backend maps the
-# percentage to its own native scale. The available levels are model-aware for
-# Codex, while other backends expose between four and seven levels or a native
-# thinking switch; Copilot's policy-aware ``auto`` selector delegates effort
-# to the CLI. This sidesteps the per-backend vocabulary problem - the user
-# picks one number and every backend reacts in its own way.
-#
-# 0 is the "off" value: no effort signal is sent and each backend's
-# server-side default is used. 1-100 are explicit overrides.
+# Reasoning effort 0-100: one number, each backend maps to its native
+# scale. 0 = backend default.
 DEFAULT_REASONING_EFFORT = 0
 
 
@@ -627,11 +609,7 @@ def get_available_summary_models(workspace_path: str) -> list[str]:
     )
 
 
-# A model is stored per (backend, role) so each agent keeps its own model
-# memory: switch agents and back, and the model you had set returns.
-# Roles ("scopes"): "" the chat model (``codex_model``), "summary" the
-# summary model (``codex_summary_model``), and ``flexible_<tier>`` each of
-# the flexible agent's difficulty tiers (``codex_flexible_high_model``).
+# Per-(backend, role) model memory: switching agents restores each model.
 CHAT_SCOPE = ""
 SUMMARY_SCOPE = "summary"
 
@@ -905,11 +883,8 @@ def _set_minimum_int_setting(
     _set_setting(workspace_path, key, value)
 
 
-# Defaults for the two per-workspace turn-counter knobs. Owned here
-# because :mod:`colony` and :mod:`compaction` need workspace settings
-# at module import time; defining them up there too creates a cycle
-# only late imports could break. Settled here, both consumer modules
-# can import workspace.DEFAULT_* directly.
+# Turn-counter defaults live here so colony/compaction can import them
+# without a cycle.
 DEFAULT_COLONY_INTERVAL = 3
 DEFAULT_COMPACT_INTERVAL = 10
 
@@ -936,12 +911,8 @@ def set_compact_interval(workspace_path: str, interval: int) -> None:
     _set_minimum_int_setting(workspace_path, "compact_interval", interval)
 
 
-# Character budget for the context block (colony + long-term memory +
-# session summary + recent messages) that agent.py prepends to each turn's
-# prompt. Measured in characters as a provider-agnostic proxy for tokens -
-# there is no single tokenizer across the codex/claude/copilot/grok/llama
-# backends - so raise it for large-context models and lower it for small
-# local ones. agent.py drops the oldest recent messages first to fit.
+# Char budget for the prepended context block (provider-agnostic token
+# proxy). Oldest messages drop first to fit.
 DEFAULT_HISTORY_BUDGET = 20_000
 MIN_HISTORY_BUDGET = 2_000
 
@@ -959,10 +930,7 @@ def set_history_budget(workspace_path: str, budget: int) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Per-workspace lock — every concurrent reader/writer of a workspace's files
-# (sessions, colony, schedules, settings) takes this lock to serialize.
-# ---------------------------------------------------------------------------
+# ---- Per-workspace lock: serializes all workspace file access ----
 
 _locks: dict[str, asyncio.Lock] = {}
 

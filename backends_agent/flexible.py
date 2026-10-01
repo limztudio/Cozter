@@ -18,9 +18,7 @@ class FlexibleBackend(Backend):
     name = BACKEND_NAME
     executable = "flexible"  # never spawned; kept for error-message parity
 
-    # Flexible has no model of its own — each tier carries one. The /model
-    # picker special-cases the empty list and points at the per-tier
-    # commands instead.
+    # No model of its own (per-tier models); /model picker points at tier commands.
     available_models = ()
     default_model = ""
     default_summary_model = ""

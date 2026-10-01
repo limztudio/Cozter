@@ -37,10 +37,7 @@ TIER_DESCRIPTIONS = {
     ),
 }
 
-# Bounds the fan-out: each sub-task is a full agent turn, so an
-# over-eager planner would otherwise turn one message into unbounded runs.
-# Twelve leaves room for genuinely broad work without making an accidental
-# plan prohibitively slow or expensive.
+# Cap fan-out: each sub-task is a full agent turn.
 MAX_SUBTASKS = 12
 
 # Work cap: 3600s on planner/merge/judge; cancel (/stop, new message)
@@ -137,11 +134,7 @@ _MERGE_RULES = (
     "- User's language. No tool calls; work is done.\n"
 )
 
-# The merge step writes the reply the user actually reads, so it is the
-# only step downstream of the planner that can stop the turn and wait.
-# Without this the pipeline can end on a blocking question and still let
-# the queue drain straight past it, leaving the user's answer to land as
-# an unrelated new turn.
+# The merge writes the visible reply: it alone can stop the turn and wait.
 _MERGE_QUESTION_RULE = (
     "- \"[[await]]\" on its own line only for a blocking question."
     " Optional offers: no marker.\n"
@@ -155,11 +148,8 @@ _MERGE_BLOCKED_RULE = (
     " plus \"[[await]]\" on its own line.\n"
 )
 
-# Universal continue-judge: after every draft answer the summary backend
-# decides DONE vs CONTINUE. Every backend and every turn uses this same
-# rubric (not just flexible, not just default): the judge never does the
-# work itself, it only names the single missing checklist item + the next
-# instruction, or DONE. No tools; decision from the text.
+# Continue-judge: names the one missing item + next step, or DONE.
+# No tools; decides from the text.
 _JUDGE_RULES = (
     "Continue-judge: decide whether the draft below fully answers the"
     " user's request.\n\n"

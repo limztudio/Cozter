@@ -1,13 +1,8 @@
 """Shared plumbing for the git agent-tool plugins.
 
-``git_info`` (read-only inspection), ``git_ops`` (local writes), and
-``git_sync`` (network sync) each build their own fixed argv, but all
-three validate model-supplied ref names the same way, run one git
-process with the same cancellation-safe reaping, and clip oversized
-output with the same marker. This module holds that shared half so a
-fix to validation, process cleanup, or truncation lands once instead
-of three times. The per-tool action tables, argv builders, and
-permission levels stay in their own modules.
+``git_info``/``git_ops``/``git_sync`` share ref validation, one
+cancellation-safe runner, and one output clipper; per-tool tables, argv
+builders, and permission levels stay in their own modules.
 """
 
 from __future__ import annotations
@@ -19,14 +14,12 @@ from contextlib import suppress
 
 from ..base import truncate_with_marker
 
-# Output/error clipping shared by every git tool: large diffs and logs
-# are truncated with a marker, first-stderr-line diagnostics are capped.
+# Shared output/error clipping for all git tools.
 MAX_OUTPUT_CHARS = 12_000
 MAX_GIT_ERROR_CHARS = 500
 TRUNCATION_MARKER = "say PARTIAL + remainder when coverage is unclear"
 
-# Model-supplied names may only use these characters; the marker and
-# edge checks below reject everything git would treat specially.
+# Allowed ref chars; markers/edge checks below reject git-special cases.
 REF_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
 _REF_MARKERS = (
     "..", "@{", "~", "^", ":", "?", "*", "[", "\\",
@@ -45,10 +38,7 @@ def has_invalid_ref_chars(name: str) -> bool:
 
 
 def check_ref(name: str) -> str:
-    """Validate a revision token so no model flag can enter the argv.
-
-    Raises ValueError for bad input (used by git_info's argv builder).
-    """
+    """Validate a revision token so no model flag can enter the argv."""
     if len(name) > 200 or not REF_RE.match(name):
         raise ValueError(f"invalid ref {name!r}")
     if has_invalid_ref_chars(name):
@@ -61,8 +51,7 @@ def check_ref(name: str) -> str:
 def clean_ref(value: object, *, what: str = "ref") -> tuple[str | None, str | None]:
     """Validate a branch/tag/ref name; return (value, error).
 
-    Tuple form (used by git_ops/git_sync builders that return
-    model-facing ``"Error: ..."`` strings instead of raising).
+    Tuple form for builders that return model-facing ``"Error: ..."`` strings.
     """
     if not isinstance(value, str) or not value.strip():
         return None, f"Error: '{what}' must be a non-empty string"
@@ -115,8 +104,7 @@ async def git_once(
     try:
         stdout_b, stderr_b = await proc.communicate()
     except BaseException:
-        # A turn stop cancelled us; never orphan
-        # the git process inside Cozter's process group.
+        # Cancelled turn: never orphan the git process.
         if proc.returncode is None:
             proc.kill()
             with suppress(ProcessLookupError):

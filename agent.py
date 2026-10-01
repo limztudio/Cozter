@@ -53,18 +53,9 @@ class DetachedTaskLaunch:
     task_id: str
     session_id: str
 
-# Shared preamble prepended to every backend's prompt. It documents the
-# out-of-band markers Cozter understands and sets the agent's working
-# disposition. Because it rides on top of whatever the underlying CLI
-# does, it is the one lever that steers every backend (codex/copilot/
-# claude_code/grok/llama/zai) the same way.
-#
-# Two variants: the collaboration policy (the Claude-Code-style
-# disposition — ask a short question and pause via [[await]] rather than
-# guessing) and an autonomous "decide and proceed" policy. Interactive
-# turns pick between them via the workspace's interaction-style setting
-# (see workspace.get_interaction_style); scheduled / ephemeral turns run
-# unattended and cannot pause on [[await]], so they are always autonomous.
+# Per-backend prompt preamble: documents Cozter markers + working policy
+# (collaborative vs autonomous). Scheduled/ephemeral turns are always
+# autonomous (no one to answer [[await]]).
 _ATTACH_HINT = (
     'Send created files via "[[attach: PATH]]" on its own line.'
 )
@@ -370,10 +361,8 @@ def _copy_to_unique_path(source: str, directory: str, filename: str) -> str | No
             directory,
             filename if index == 1 else f"{stem}-{index}{ext}",
         )
-        # This is only a fast path: the atomic publisher below remains the
-        # authority because another writer can create the name immediately
-        # after this check. Skipping known collisions avoids recopied image
-        # data when a long-lived workspace already has many attachments.
+        # Fast path only (publisher below is authoritative): skip known
+        # collisions to avoid recopied image data.
         if os.path.lexists(candidate):
             continue
         if copy_file_atomically(source, candidate):
@@ -399,11 +388,8 @@ def _copy_generated_image_into_workspace(
         return src_real
 
     try:
-        # ``.cozter`` is workspace state, but a writable workspace can still
-        # contain a symlink at this path.  Create, then re-resolve, and
-        # reject an escape *before* copying: otherwise an explicitly allowed
-        # external image could be written through that symlink somewhere
-        # outside the workspace.
+        # Re-resolve after create: a symlink here must not redirect the
+        # copy outside the workspace.
         dest_dir = workspace_mod.ensure_workspace_state_dir(
             workspace_path, "generated_images",
         )
@@ -782,10 +768,8 @@ def _build_contextual_prompt(
 
     full = "\n".join(parts)
 
-    # Truncate if too long. Durable blocks remain higher-value context than
-    # raw messages, but each is bounded too: a malformed or unusually large
-    # persisted memory item must not turn the configured history budget into
-    # an unbounded prompt.
+    # Bound durable blocks too: malformed/large memory must not unbound
+    # the prompt.
     if len(full) > budget:
         keywords = _request_keywords(prompt)
         colony_list = _relevance_last(list(colony_list), keywords)
@@ -829,17 +813,12 @@ def _build_contextual_prompt(
         continuation = (
             "New message:"
         )
-        # Preserve the user's request intact even under a tight history
-        # setting. If the required continuation wrapper itself would push an
-        # otherwise fitting request over budget, omit both it and all saved
-        # context rather than quietly exceeding the configured cap.
+        # Never exceed the cap to fit context: drop wrapper + history, keep
+        # the request intact.
         fixed_length = len(continuation) + 1 + len(prompt)
         if fixed_length > budget:
             return prompt
-        # Include join separators in the fixed cost. If the user's new
-        # message (plus its required continuation wrapper) exceeds the
-        # setting, it remains intact and all saved context is dropped rather
-        # than cutting off the request itself.
+        # Count join separators too; oversized requests still stay intact.
         context_budget = max(
             0,
             budget - fixed_length - len(descriptors),
@@ -1000,18 +979,12 @@ async def _drive_backend(
     except FileNotFoundError as e:
         raise BackendUnavailable(backend) from e
     except (OSError, RuntimeError) as exc:
-        # ``create_prompt_subprocess`` already reaps a child whose stdin
-        # closed during startup. Surface that (and other launch failures) as
-        # a normal chat result instead of letting a backend startup problem
-        # escape the turn runner and strand the user's queued work.
+        # Surface launch failures as a normal chat result (don't strand
+        # queued work).
         result = AgentResult()
         set_error_result(result, f"{backend.name} could not start: {exc}")
-        # ``backend.launch()`` can yield before it fails, leaving an accepted
-        # /inject in the queue even though no watcher was started yet. Carry
-        # it into the normal restart path rather than replying with a launch
-        # error and silently discarding the user's added context. With no
-        # pending inject, this is a terminal direct-backend phase, so close
-        # the bot-owned queue before later post-turn awaits begin.
+        # A pre-failure /inject still counts: carry it into the restart
+        # path instead of discarding it.
         if _take_pending_injections(inject_queue, injected):
             return result, True
         if close_inject_on_completion:
@@ -1070,15 +1043,9 @@ async def _drive_backend(
         )
         raise
     finally:
-        # Event parsing and chat-platform callbacks can fail just like
-        # cancellation can. Never let any exceptional stream exit leave
-        # the backend (or its stderr drain task) running in the
-        # background.
+        # No exceptional stream exit may leak the backend/drain task.
         try:
-            # An exceptional/cancelled/restarting stream owns no durable
-            # provider task, so tear down its complete process tree now.
-            # The clean normal path is deliberately deferred until after the
-            # final injection drain below, where we know it will not restart.
+            # No durable provider task here: tear down the whole tree now.
             if (
                 proc.returncode is None
                 or cancelled
@@ -1116,10 +1083,8 @@ async def _drive_backend(
     if restarting:
         return result, True
 
-    # ``inject_task`` is cancelled as part of normal teardown.  Do one
-    # last synchronous drain before handing off to another flexible phase
-    # (or finalizing a direct turn), so an accepted message cannot land in
-    # the watcher teardown gap and disappear.
+    # Final sync drain: an accepted message must not vanish in the
+    # watcher-teardown gap.
     if _take_pending_injections(inject_queue, injected):
         # The watcher was already stopped during teardown, so this late
         # injection cannot have signalled a parent that had cleanly exited.
@@ -1130,17 +1095,12 @@ async def _drive_backend(
     if close_inject_on_completion:
         _close_inject_queue(inject_queue)
 
-    # This is a genuinely completed foreground turn: all stream cleanup and
-    # the final injection race have settled.  Stop ordinary same-group child
-    # work, but preserve a backend-reported provider task that Cozter tracks
-    # through its detached-task ledger.
+    # Completed turn: stop same-group children, preserve ledger-tracked
+    # provider tasks.
     if has_managed_process_group(proc) and not result.detached_tasks:
         terminate_process_group(proc)
 
-    # Keyed on the *text*, not on the events: a backend that streamed tool
-    # calls and then died still owes the caller an answer, and leaving it
-    # textless would hand the flexible merge step an empty worker report
-    # with no hint of what went wrong.
+    # Keyed on text: a tool-streaming death still owes an error answer.
     if proc.returncode != 0 and not result.text:
         msg = f"{backend.name} exited with code {proc.returncode}"
         if stderr:
@@ -1197,10 +1157,8 @@ async def _run_with_inject_watch(
         except asyncio.CancelledError:
             pass
         except Exception:
-            # Both tasks can complete on the same event-loop tick. The
-            # injected message intentionally wins that race, so a completed
-            # planner/merge failure belongs to the abandoned attempt rather
-            # than escaping and preventing the restart.
+            # Same-tick race: the injected message wins; the completed
+            # failure belongs to the abandoned attempt.
             logger.debug(
                 "Discarding internal backend failure after an inject",
                 exc_info=True,
@@ -1213,10 +1171,8 @@ async def _run_with_inject_watch(
     # phase returns to its caller.  Collect it here and restart, instead of
     # letting an acknowledged /inject fall through a phase boundary.
     if _take_pending_injections(inject_queue, injected):
-        # Retrieve the completed result so an exception is not left
-        # unobserved. An inject that arrived after the call finished still
-        # wins: the user was told "Injected." and the failed planner/merge
-        # belongs to the abandoned attempt.
+        # Retrieve the result (no unobserved exceptions); late injects
+        # still win over finished failures.
         try:
             call_task.result()
         except asyncio.CancelledError:
@@ -1449,10 +1405,8 @@ async def _run_flexible(
             _build_backend_prompt(
                 tier_backend,
                 flexible.build_subtask_prompt(
-                    # Workers get the bare user request, not the full
-                    # history: the planner already saw the context and
-                    # wrote self-contained instructions, so resending up
-                    # to history_budget chars per worker is pure cost.
+                    # Bare request only: planner instructions are already
+                    # self-contained; history would be pure cost.
                     request, plan, done, reports,
                 ),
                 collaborative=False,
@@ -1468,10 +1422,7 @@ async def _run_flexible(
         if restarting:
             return result, True
 
-        # The workers' tool/file events are the visible trace of the turn
-        # and stream through as usual. Their *text* is internal - it goes
-        # to the merge step, not to the user - so it is kept out of the
-        # events the bot renders as chat messages.
+        # Worker text is internal (feeds the merge, not the chat).
         result.events.extend(
             ev for ev in sub_result.events if ev.kind != "text"
         )
@@ -1488,13 +1439,8 @@ async def _run_flexible(
         attach_markers.extend(markers)
         report = report.strip()
 
-        # A worker that says nothing at all has failed, whatever its exit
-        # code claimed. Saying nothing is a legitimate outcome for a direct
-        # turn, but never for a sub-task: an empty report tells the merge
-        # step nothing, and if the merge is broken too - it usually is, since
-        # a misconfigured agent tends to break every step at once - it leaves
-        # the user with a blank answer and no idea which tier went quiet.
-        # Name the tier instead, so it reaches the user either way.
+        # An empty worker report is a failure: name the tier so it
+        # reaches the user either way.
         if not report:
             report = (
                 f"(no output: {tier_backend_name}/{tier_model} ended the"
@@ -1508,17 +1454,12 @@ async def _run_flexible(
             report += f"\n\n(the agent then failed: {sub_result.error})"
         reports.append(report)
 
-        # Workers run under the autonomy policy, so one that asks anyway is
-        # genuinely stuck. Remember that: the merge step below has to end
-        # the turn on that question *and* pause the queue, or the user's
-        # answer lands as an unrelated new turn.
+        # A worker that asks is stuck: merge must end on its question
+        # and pause the queue.
         if worker_awaiting:
             blocked.append(done)
 
-        # Workers may discover genuine leftover work inside their own task.
-        # They report it as [followup:<tier>] lines; append unseen items to
-        # the queue so the progress total grows live (done/total) instead of
-        # silently dropping leftovers or claiming done with work left.
+        # Worker [followup:<tier>] lines grow the queue live (done/total).
         for extra in flexible.parse_followups(report):
             if extra not in queue and len(queue) < flexible.MAX_SUBTASKS * 2:
                 queue.append(extra)
@@ -1581,20 +1522,12 @@ async def _run_flexible(
         return AgentResult(), True
     final = (merged or "").strip() or flexible.merge_fallback(plan, reports)
 
-    # The merge writes the reply the user reads, so it is the one step
-    # downstream of the planner allowed to end the turn on a question and
-    # pause the queue. Pull the marker off wherever the merge put it and
-    # re-add it last, so the pause still happens when a worker blocked and
-    # the merge relayed its question without one. An unattended turn has
-    # nobody to answer, so it never pauses - a marker there would strand
-    # the run.
+    # Only the merge may end on a question: normalize the marker to last
+    # (unattended turns never pause).
     final, merge_awaiting = extract_await(final)
     final = final.strip()
 
-    # Every worker came back empty *and* the merge model had nothing to
-    # add. Report that as the failure it is - a bare placeholder here
-    # reads as an answer and tells the user nothing about which tier
-    # broke.
+    # All-empty workers + merge is a failure: say which tier broke.
     if not final:
         logger.warning(
             "Flexible produced no text: %d worker report(s) all empty",
@@ -1689,11 +1622,8 @@ async def _resolve_or_create_user_session(
             backend_name=summary_backend,
         )
     assert isinstance(session_id, str) and session_id
-    # Routing can await a summary backend. If the user creates or selects a
-    # session during that wait, their explicit choice must remain the target
-    # for the *next* message instead of being silently overwritten by this
-    # older in-flight turn. The read/compare/write below has no await point,
-    # so command handling on this event loop cannot interleave it.
+    # Explicit session choice during routing wins for the next message
+    # (read/compare/write has no await point).
     if session.get_last_session(workspace_path, user_id) == last_session_id:
         session.set_last_session(workspace_path, user_id, session_id)
     return session_id, session_data
@@ -2027,19 +1957,13 @@ async def _run_turn_impl(
     backend = backends_agent.get_backend(backend_name)
     is_flexible = backend.name == flexible.BACKEND_NAME
 
-    # The session router, compaction, auto-titling, and (on a flexible
-    # turn) the planner and merge steps all run on the summary backend -
-    # which may differ from the chat backend, and is the backend the
-    # caller's summary_model was resolved against. Flexible is a
-    # meta-agent with no CLI of its own, so it can never fill that role:
-    # fall back to a real backend rather than recursing into itself.
+    # Router/compaction/titling/planner/merge run on the summary backend
+    # (flexible has no CLI: fall back to a real backend).
     summary_backend = summary_backend_name or (
         backends_agent.DEFAULT_DIRECT_BACKEND if is_flexible else backend.name
     )
-    # Bot callers resolve this from persisted workspace settings, but public
-    # callers may omit it. Keep routing, flexible planning, compaction, and
-    # titling on the summary backend's intended default instead of letting a
-    # backend silently fall back to its general chat-model default.
+    # Default the summary model to the summary backend's intent, not the
+    # chat-model fallback.
     summary_model = _resolve_summary_model(summary_model, summary_backend)
     compaction_context_targets = _compaction_context_targets(
         workspace_path,
@@ -2049,10 +1973,7 @@ async def _run_turn_impl(
         summary_model,
     )
 
-    # Track whether the caller pinned a specific session: when True
-    # (ephemeral schedule runs), we do NOT update the user's
-    # last_session - that would clobber whatever they were actually
-    # working on with a throwaway scheduler session.
+    # Pinned (ephemeral) sessions never clobber the user's last_session.
     explicit_session = session_id is not None
 
     # session_data is reused on every inject restart so the session file
@@ -2085,10 +2006,7 @@ async def _run_turn_impl(
     # restart, just like session_data.
     colony_items = colony.get_items(workspace_path)
 
-    # Interactive turns honor the workspace's interaction style; scheduled/
-    # ephemeral turns (explicit_session) can't pause on [[await]], so they
-    # always run under the autonomous policy. Resolved once and reused
-    # across inject restarts.
+    # Scheduled/ephemeral turns always run autonomous (no [[await]]).
     collaborative = _is_collaborative_turn(
         workspace_path, explicit_session=explicit_session,
     )
@@ -2187,14 +2105,9 @@ async def _run_turn_impl(
         for path in new_attachment_paths:
             result.events.append(ChatEvent(kind="attachment", content=path))
 
-        # Universal continue-judge: every backend, every turn. The summary
-        # backend judges the draft; CONTINUE re-drives the SAME backend
-        # with the judge's single next instruction appended, then the
-        # draft is re-judged. Capped at JUDGE_MAX_CONTINUES rounds, then
-        # the best draft ships. Inject/cancel/[[await]] break the loop
-        # immediately: awaited answers outrank paused work, and collaborative
-        # questions are DONE by definition. Judge failures fail closed to
-        # DONE so the draft ships instead of looping.
+        # Continue-judge: CONTINUE re-drives the same backend with one
+        # next instruction (capped); inject/cancel/await break out,
+        # failures fail closed to DONE.
         judged_rounds = 0
         while judged_rounds < flexible.JUDGE_MAX_CONTINUES:
             draft = result.text
@@ -2315,10 +2228,7 @@ async def _run_turn_impl(
         # Only a completed write suppresses the interrupted-turn fallback.
         turn.logged_normally = True
 
-    # Compaction may take another model round-trip. The answer is already
-    # complete, so keep it out of the foreground turn; Slack can post the
-    # result as soon as ``agent.run`` returns. The helper preserves the old
-    # compaction-before-title ordering.
+    # Compaction runs post-turn (answer already complete).
     create_background_task(
         _run_post_turn_maintenance(
             workspace_path,

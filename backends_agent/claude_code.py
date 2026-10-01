@@ -58,24 +58,12 @@ _NO_EFFORT_MODELS = frozenset({
 })
 _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 
-# Claude Code does not expose a safe, non-interactive account model catalog
-# with numeric capacities. Keep only the CLI's explicit ``[1m]`` selections:
-# a bare current-model ID can resolve to a provider or plan with a smaller
-# window. Aliases, default selection, and arbitrary/private IDs likewise stay
-# unknown so compaction keeps the message-interval safeguard. An operator can
-# configure a known deployment through model_context_windows in Cozter's
-# config.json.
+# No safe non-interactive catalog: keep only explicit ``[1m]`` selections
+# (bare IDs/aliases stay unknown so compaction keeps its safeguard).
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
-    # Only an explicit CLI long-context selection is portable across
-    # Anthropic API, Bedrock, Vertex, Foundry, and gateway deployments. The
-    # current CLI exposes [1m] variants for Sonnet, Opus, Fable, and the
-    # opusplan hybrid. Keep the capacity attached only to the explicit
-    # selection: an ordinary alias can resolve through a provider or account
-    # tier with a smaller window. ``claude-sonnet-5[1m]`` is the CLI's
-    # documented 1M shorthand for Sonnet 5 (and ``claude-sonnet-5-5[1m]``
-    # for Sonnet 5.5, released 2026-09-28); Fable 5/5.1 already include 1M
-    # natively, so their full ``[1m]`` IDs are not catalogued here.
+    # Capacity attaches to explicit ``[1m]`` selections only: aliases can
+    # resolve through smaller-window providers/tiers.
     "sonnet[1m]",
     "opus[1m]",
     "fable[1m]",
@@ -102,24 +90,16 @@ _BACKGROUND_BASH_RE = re.compile(
 _SAFE_BACKGROUND_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _DETACHED_COMMAND_TIMEOUT_SEC = 30
 _BACKGROUND_GUARD_TIMEOUT_SEC = 5
-# A normal control launcher closes its inherited pipes with the parent.  If a
-# Claude supervisor keeps them open instead, retain any already-drained
-# prefix but release those pipe transports promptly rather than waiting for
-# the worker itself to finish.
+# A supervisor may keep inherited pipes open: keep the drained prefix but
+# release the transports promptly.
 _DETACHED_COMMAND_STREAM_DRAIN_TIMEOUT_SEC = 1.0
 _DETACHED_COMMAND_EXIT_CLEANUP_TIMEOUT_SEC = 1.0
-# Detached-task controls are small metadata commands.  Keep each stream well
-# below the size of a normal chat reply, while still leaving plenty of room
-# for a busy ``claude agents --json`` response.  The limit is per stream so a
-# verbose diagnostic cannot starve the stdout reader and deadlock the child.
+# Small metadata commands: keep each stream well below a chat reply
+# (per-stream, so diagnostics can't starve stdout).
 _MAX_DETACHED_COMMAND_OUTPUT_BYTES = 1 * 1024 * 1024
 _DETACHED_COMMAND_READ_BYTES = 64 * 1024
-# Claude's durable JSONL can include tool payloads much larger than the
-# assistant text we need to deliver.  Bound an individual physical line
-# before calling ``json.loads`` and separately bound the visible text kept
-# across the whole transcript.
-# JSON framing and metadata add overhead around a valid 4 MiB visible result,
-# so permit a larger (still finite) record before deciding it is malformed.
+# Durable JSONL can dwarf the needed text: bound physical lines and kept
+# visible text separately (framing overhead needs the larger record cap).
 _MAX_DETACHED_TRANSCRIPT_LINE_BYTES = 8 * 1024 * 1024
 _MAX_DETACHED_OUTPUT_TEXT_BYTES = 4 * 1024 * 1024
 # ``state.json`` carries the fallback result too.  Loading it with
@@ -563,35 +543,8 @@ class ClaudeCodeBackend(Backend):
         "restricted": ("--permission-mode", "plan"),
     }
     supports_detached_tasks = True
-    # Claude Code has no safe non-interactive catalog command.  In
-    # particular, a managed Bedrock/Vertex/Foundry login cannot be enumerated
-    # through Anthropic's public API, and probing candidate IDs can make a
-    # billable request.  Keep this curated fallback plus config.extra_models
-    # until the CLI exposes an account-aware model-list interface.
-    # Mirrors the model registry embedded in the Claude Code CLI. Aliases
-    # resolve to the current default for each tier; ``default`` clears a pin
-    # and lets Claude Code choose the account-tier default. Full IDs pin a
-    # specific version. Mythos stays out of the picker: it ships only to
-    # Project Glasswing participants. Users can still add gateway or local IDs
-    # through config.extra_models.
-    #
-    # Three rules the CLI enforces, each of which this tuple has gotten wrong
-    # before - check them before adding an entry:
-    #   - A dated snapshot exists only where the API publishes one (Opus 4.5,
-    #     Sonnet 4.5, Haiku 4.5). From Opus/Sonnet 4.6 on, the ID is undated
-    #     and inventing a date suffix 404s.
-    #   - ``[1m]`` is only valid on aliases/models whose registry exposes a
-    #     long-context variant. The current aliases are ``sonnet[1m]``,
-    #     ``opus[1m]``, ``fable[1m]``, and ``opusplan[1m]``. Sonnet 4.5
-    #     remains a 200K model. The CLI documents ``claude-sonnet-5[1m]`` as
-    #     Sonnet 5's 1M shorthand (Sonnet 5.5 takes ``claude-sonnet-5-5[1m]``);
-    #     keep full Fable ``[1m]`` IDs out because
-    #     Fable 5/5.1 already include 1M and the CLI migrates
-    #     ``claude-fable-5[1m]`` to ``fable[1m]``.
-    #   - Fast mode is a session toggle (``/fast``) on Opus 5/4.8/4.7, not a
-    #     model ID. The ``claude-opus-4-*-fast`` strings are retired API IDs:
-    #     4.6-fast silently degrades to standard Opus 4.6, and 4.7-fast errors
-    #     once removed.
+    # Curated fallback (+ config.extra_models): dated snapshots only where
+    # published, `[1m]` only on exposed variants, fast = session toggle.
     available_models = (
         "default",
         "sonnet",
@@ -689,10 +642,7 @@ class ClaudeCodeBackend(Backend):
         ]
         self.append_launch_options(cmd, model, effort, approval)
 
-        # Native vision: claude --print reads the prompt from stdin and
-        # the model opens workspace images through its own Read tool, so
-        # no extra CLI flag is needed — the attachment marker plus the
-        # vision hint in the prompt are the delivery mechanism.
+        # Native vision: no CLI flag needed; marker + prompt hint deliver.
         if self.supports_vision and not compaction:
             _vision_hint_paths = attachment_image_paths(prompt, workspace_path)
             if _vision_hint_paths:
@@ -876,10 +826,8 @@ class ClaudeCodeBackend(Backend):
             return
 
         if etype == "user":
-            # Tool results normally stay out of the status display. The one
-            # exception is a paired Bash result from ``claude --bg``: it
-            # contains the short supervisor task id that Cozter can later
-            # validate and monitor after this foreground stream exits.
+            # Show only paired ``claude --bg`` Bash results (carry the
+            # supervisor task id for later monitoring).
             self._handle_user_tool_results(event, result)
             return
 

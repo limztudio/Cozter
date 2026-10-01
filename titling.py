@@ -168,10 +168,7 @@ async def generate(
     parts.append("Recent messages:")
     parts_len += (1 if parts_len else 0) + len("Recent messages:")
 
-    # Newest-first under the remaining budget; the title only needs the
-    # gist, so we don't pull the whole history. ``take_recent_messages``
-    # counts a newline after each returned line, while joining it below adds
-    # one before each line, hence the one-character reserve.
+    # Newest-first: gist only (reserve one char for the join newline).
     message_budget = max(0, context_budget - parts_len - 1)
     msg_lines = session.take_recent_messages(
         data.get("messages", []), message_budget,

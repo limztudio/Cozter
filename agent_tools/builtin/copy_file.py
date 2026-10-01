@@ -27,9 +27,7 @@ class CopyFileTool(AgentTool):
         raw_src, raw_dst, src, dst = paths
         try:
             ensure_parent_dir(dst)
-            # Do not trust the preflight absence check alone: another writer
-            # can create a file or symlink before a normal copy opens dst.
-            # The shared helper publishes only a completed, no-clobber copy.
+            # Preflight races another writer; the helper publishes no-clobber only.
             if not copy_file_atomically(src, dst):
                 return no_clobber_result(raw_dst)
         except OSError as exc:

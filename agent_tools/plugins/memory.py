@@ -262,10 +262,7 @@ class MemoryTool(AgentTool):
             for kind, text in _iter_search_texts(data):
                 if not isinstance(text, str) or not text:
                     continue
-                # Cheap pre-check before casefolding: a case-insensitive
-                # hit needs at least one needle char (either case) in
-                # the text. Non-matching texts skip the temp lowered
-                # copy entirely.
+                # First-char pre-check skips the lowered copy on non-matches.
                 first = needle[0]
                 if first not in text and first.swapcase() not in text:
                     continue

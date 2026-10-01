@@ -82,10 +82,7 @@ class TreeTool(AgentTool):
                             continue
                         yield is_dir, entry.name, entry.path
 
-            # The global result cap means no more than ``remaining`` entries
-            # from this directory can ever be shown. Keep just one extra so
-            # we can retain the existing truncation indicator without sorting
-            # every entry in a large generated directory.
+            # Cap per-directory entries; keep one extra for the truncation marker.
             selected = heapq.nsmallest(
                 remaining + 1,
                 entries(),

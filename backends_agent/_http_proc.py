@@ -44,8 +44,7 @@ class HttpAgentProcess:
         self._label = label
         self.stdout: asyncio.StreamReader = asyncio.StreamReader()
         self.stderr: asyncio.StreamReader = asyncio.StreamReader()
-        # No separate stderr channel from the HTTP path; close it now
-        # so any reader sees EOF immediately.
+        # No stderr channel on the HTTP path: EOF it so readers don't wait.
         self.stderr.feed_eof()
         self.returncode: int | None = None
         self._task: asyncio.Task | None = None
@@ -73,19 +72,12 @@ class HttpAgentProcess:
                 self.returncode = 130
                 raise
             except RuntimeError as exc:
-                # User-facing backend failure - network timeout, auth
-                # rejection, server-side tool error, etc. The message
-                # is already actionable; log briefly without a stack
-                # trace so the bot log doesn't fill with noise on
-                # transient upstream issues. agent.run will read
-                # result.error from the emitted event and may trigger
-                # the file-convert retry.
+                # Actionable user-facing failure: log briefly, no traceback.
                 logger.warning("%s: %s", self._label, exc)
                 self.emit({"type": "error", "message": str(exc)})
                 self.returncode = 1
             except Exception as exc:
-                # Unexpected exception type = real bug somewhere in
-                # the backend. Keep the traceback for debugging.
+                # Unexpected type = real bug: keep the traceback.
                 logger.exception("%s loop crashed", self._label)
                 self.emit({"type": "error", "message": str(exc)})
                 self.returncode = 1

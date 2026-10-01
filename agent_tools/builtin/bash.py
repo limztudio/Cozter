@@ -15,23 +15,16 @@ from ...utils import (
     mark_process_group_leader,
 )
 
-# Bash runs under the real-work tool cap (tool_timeout, default 3600s):
-# cancel (/stop, new user message, [[await]] pause) still stops instantly.
-# A slow build/search keeps running up to the cap instead of timing out
-# early and forcing a wasteful retry.
+# Real-work cap (tool_timeout, default 3600s); cancel stops instantly.
 
-# Hard ceiling on captured output. A command like ``yes`` or ``cat /dev/zero``
-# emits gigabytes; buffering it whole (as ``communicate()`` does) would OOM
-# the bot. Only the first few KB reach the model anyway (execute_tool caps
-# the result), so once we hit this we stop reading and kill the command tree.
+# Output ceiling: only the first KBs reach the model, so stop reading and
+# kill the tree past this instead of buffering a firehose whole.
 _BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024  # 4 MB
 
 
 class BashTool(AgentTool):
     name = "bash"
-    # This shell is intentionally unrestricted: ``cwd`` confines only the
-    # starting directory, not paths, environment access, network access, or
-    # child processes. Keep it out of HTTP agents' default ``auto`` mode.
+    # Unrestricted shell (cwd is only the start dir): full-permission only.
     requires_full_permission = True
     description = (
         "Run a shell command (cwd = workspace, 3600s real-work cap — runs until done"
@@ -52,11 +45,9 @@ class BashTool(AgentTool):
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string"
-        # Real-work cap: the command runs up to tool_timeout (default 3600s)
-        # or until the turn is cancelled (/stop, new user message).
-        # Extra args are ignored.
+        # Extra args are ignored (real-work cap or turn cancel bounds the run).
 
-        # Use the shell so the model can use pipes, redirection, etc.
+        # Pipes/redirection need a real shell.
         shell = _find_shell()
         if shell is None:
             return "Error: no shell available to run bash commands"
@@ -64,9 +55,7 @@ class BashTool(AgentTool):
         try:
             proc = await asyncio.create_subprocess_exec(
                 *shell, command,
-                # A tool must never inherit Cozter's interactive stdin: a
-                # shell command such as ``cat`` could otherwise consume a
-                # CLI user's next message (or a secret piped to the bot).
+                # Never inherit interactive stdin (a `cat` could eat the next message).
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
@@ -88,14 +77,12 @@ class BashTool(AgentTool):
                 proc.stdout, _BASH_MAX_OUTPUT_BYTES,
             )
             if truncated:
-                # Runaway output - stop draining and reap the tree so a
-                # firehose command can't hold memory or keep running.
+                # Reap the tree: a firehose must not hold memory or keep running.
                 await _kill_command_tree(proc)
             else:
                 await proc.wait()
         except asyncio.CancelledError:
-            # /stop fired mid-command - kill the shell so we don't leak it.
-            await _kill_command_tree(proc)
+            await _kill_command_tree(proc)  # /stop must not leak the shell.
             raise
 
         output = stdout.decode("utf-8", errors="replace")
@@ -121,8 +108,7 @@ class BashTool(AgentTool):
 def _find_shell() -> list[str] | None:
     """Return an argv prefix that runs a single shell command."""
     if os.name == "nt":
-        # Prefer bash if available (matches what bash users expect); fall
-        # back to cmd.
+        # Prefer bash; fall back to cmd.
         bash = shutil.which("bash")
         if bash:
             return [bash, "-c"]
@@ -137,11 +123,10 @@ def _find_shell() -> list[str] | None:
 async def _read_capped(
     stream: asyncio.StreamReader, limit: int,
 ) -> tuple[bytes, bool]:
-    """Read *stream* to EOF or until *limit* bytes, whichever comes first.
+    """Read *stream* to EOF or *limit* bytes; return ``(data, truncated)``.
 
-    Returns ``(data, truncated)``. ``data`` is at most *limit* bytes; a slice
-    at the cap may split a multi-byte UTF-8 sequence, which the caller's
-    ``decode(errors="replace")`` handles.
+    A cut at the cap may split a UTF-8 sequence; the caller decodes
+    with ``errors="replace"``.
     """
     chunks: list[bytes] = []
     total = 0
@@ -163,7 +148,5 @@ async def _kill_command_tree(proc: asyncio.subprocess.Process) -> None:
     """Terminate the shell and any children it spawned."""
     if proc.returncode is not None and not has_managed_process_group(proc):
         return
-    # Shared cleanup uses a POSIX process group where available and
-    # ``taskkill /T`` on Windows, so a timed-out shell cannot leave build or
-    # test children behind.
+    # Process-group cleanup (POSIX) / taskkill (Windows): no orphaned children.
     await kill_and_wait(proc)

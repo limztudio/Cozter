@@ -36,16 +36,11 @@ class WriteFileTool(AgentTool):
         content = args.get("content")
         if not isinstance(content, str):
             return "Error: 'content' must be a string"
-        # Opening a FIFO or device for writing can block the bot's event loop
-        # indefinitely. This tool is intentionally for ordinary workspace
-        # files, so refuse existing special paths rather than treating them
-        # as a writable text file.
+        # Refuse FIFOs/devices: opening them for writing can block the loop.
         if os.path.exists(target) and not os.path.isfile(target):
             return f"Error: not a regular file: {args.get('path')}"
         ensure_parent_dir(target)
-        # Keep a pre-existing file intact if the replacement write fails
-        # (for example from ENOSPC or an interrupted filesystem). The shared
-        # helper also preserves an existing file's permission bits.
+        # Atomic replace keeps the old file (and its perms) on write failure.
         write_text_after_edit(target, content, uses_crlf=False)
         return f"Wrote {len(content)} chars to {args.get('path')}"
 

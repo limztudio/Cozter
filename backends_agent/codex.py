@@ -20,27 +20,8 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
-# Safety net for hosts where the CLI is unavailable, unauthenticated, or an
-# older/company-managed build does not support ``codex debug models``.  Keep
-# every fallback capability beside its model ID so this data cannot drift
-# across the picker, reasoning-effort, and compaction paths.  The live catalog
-# is still preferred whenever the installed CLI can provide one.
-# ``codex debug models`` is authoritative when its short-lived cache is warm.
-# These values preserve useful token-aware compaction before a user opens the
-# picker or on hosts where the catalog probe is unavailable.  They are active
-# CLI windows, not the larger maximum capability a model may advertise.
-# Verified 2026-10-01: live ``codex debug models`` (codex-cli 0.159.3)
-# lists gpt-6.1-sol first, then gpt-6-astra/sol/luna plus
-# gpt-5.6-sol/terra/luna and gpt-5.5 as visibility=list (plus hide-only
-# gpt-reserve and codex-auto-review, which the parser skips).
-# gpt-6-astra shipped on the OpenAI API on 2026-09-04
-# (872K max context; Codex sessions use the 272K active window like the
-# gpt-5.6 family). gpt-6-sol is the coding/everyday workhorse and
-# gpt-6-luna the fast affordable tier; both ride the same 272K active
-# window (872K max). gpt-6.1-sol was unveiled at DevDay on 2026-09-29 as
-# the upgraded workhorse (near-Astra coding performance at lower cost;
-# same 272K active window, 872K max). The gpt-6.1/gpt-6 quartet rides
-# first in this fallback in live-listed order.
+# Discovery fallback: curated IDs + capabilities (verified 2026-10-01,
+# 0.159.3). Live catalog preferred.
 _FALLBACK_MODEL_SPECS = (
     ("gpt-6.1-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-astra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
@@ -49,11 +30,7 @@ _FALLBACK_MODEL_SPECS = (
     ("gpt-5.6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-terra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
-    # gpt-5.4 and gpt-5.4-mini retired from Codex ChatGPT sign-in on
-    # 2026-08-31; OpenAI's documented replacements are gpt-5.6-terra and
-    # gpt-5.6-luna. The gpt-5.3-codex-spark research preview is gone from
-    # the fallback ends here at gpt-5.5.
-    # (absent even as hide-only on 2026-10-01; re-verified with 0.159.3).
+    # Retired 2026-08-31 (5.4 line, codex-spark preview): ends at gpt-5.5.
     ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
 )
 (
@@ -115,13 +92,11 @@ def _parse_debug_models_metadata(
                 if effort and effort not in seen_efforts:
                     seen_efforts.add(effort)
                     efforts.append(effort)
-        # An explicitly empty level list means no reasoning override should
-        # be passed for this discovered model.
+        # Empty level list = send no reasoning override for this model.
         efforts_by_model[slug] = tuple(efforts)
 
-        # The catalog also reports ``max_context_window`` and an effective
-        # percent.  Neither is the active input limit for this CLI session;
-        # use only the positive, explicit ``context_window`` value.
+        # Only the explicit context_window is the session input limit
+        # (not max_context_window or effective percent).
         context_window = entry.get("context_window")
         if (
             isinstance(context_window, int)
@@ -150,9 +125,8 @@ class CodexBackend(Backend):
     executable = "codex"
     supports_vision = True
     vision_mode = "cli_file_flag"
-    # Codex has no non-interactive "no tools" mode. Read-only sandboxing is
-    # therefore the strongest restriction for confirm and deny. ``--full-auto``
-    # remains deprecated; auto explicitly uses the writable normal sandbox.
+    # No non-interactive no-tools mode: read-only sandbox is the strongest
+    # restriction for confirm/deny.
     permission_arg_sets = {
         "full": ("--dangerously-bypass-approvals-and-sandbox",),
         "auto": ("--sandbox", "workspace-write"),
@@ -160,10 +134,8 @@ class CodexBackend(Backend):
     }
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.6-luna"
-    # Cheap/everyday/strong GPT-5.6 family. Keep the chat default on Sol:
-    # Astra is now live-listed, but older/company-managed CLIs may still
-    # lack it, so a pinned gpt-6-astra default would fail
-    # closed on accounts whose live catalog has not listed it yet.
+    # Cheap/everyday/strong 5.6 family; default stays Sol (older CLIs may
+    # lack Astra: a pinned Astra default would fail closed).
     tier_models = {
         "low": "gpt-5.6-luna",
         "mid": "gpt-5.6-terra",
@@ -173,9 +145,7 @@ class CodexBackend(Backend):
     effort_levels = (*common_effort_levels, "max", "ultra")
 
     def __init__(self) -> None:
-        # Backends are process-wide singletons. Refresh the catalog on a
-        # short interval: model selection is user-facing, so probing every
-        # picker would be unnecessarily slow.
+        # Singletons: short-interval refresh (probing every picker is too slow).
         self._cached_model_catalog: (
             tuple[tuple[str, ...], dict[str, tuple[str, ...]]] | None
         ) = None
@@ -285,11 +255,8 @@ class CodexBackend(Backend):
                 _FALLBACK_MODEL_CONTEXT_WINDOWS,
             )
         if proc.returncode != 0:
-            # A stale local reasoning setting can prevent even the
-            # read-only catalog command from starting.  Retry with a valid,
-            # temporary override; it does not write or otherwise change the
-            # user's Codex configuration.  A genuine failure still uses the
-            # built-in catalog below.
+            # Stale reasoning config can block the catalog probe: retry with a
+            # temp override (no user config change); genuine failures use fallback.
             try:
                 recovered = subprocess.run(
                     [
@@ -371,14 +338,12 @@ class CodexBackend(Backend):
             approval,
             model_flag="-m",
             effort_flag="-c",
-            # Codex CLI exposes reasoning effort via the generic config
-            # override flag. Unknown levels are rejected by the CLI.
+            # Effort rides the generic config-override flag; CLI rejects unknown levels.
             effort_template="model_reasoning_effort={effort}",
         )
         cmd.append("-")  # read prompt from stdin
 
-        # Native vision: codex exec takes repeatable -i/--image flags.
-        # Images ride as real pixels alongside the stdin text prompt.
+        # Vision: repeatable -i/--image flags ride as real pixels with stdin text.
         if self.supports_vision and not compaction:
             for _image_path in attachment_image_paths(prompt, workspace_path):
                 cmd += ["--image", _image_path]
@@ -389,10 +354,7 @@ class CodexBackend(Backend):
         if not isinstance(event, dict):
             return
         etype = event.get("type", "")
-        # ``or {}`` guards a malformed ``"item": null`` the way the
-        # default alone can't: ``.get("item", {})`` returns {} only when
-        # the key is absent, so a present-but-null value would otherwise
-        # make ``item.get(...)`` raise AttributeError and crash the turn.
+        # `or {}` guards present-but-null `"item"` (default covers absent only).
         item = event.get("item") or {}
         if not isinstance(item, dict):
             item = {}
@@ -440,21 +402,15 @@ class CodexBackend(Backend):
                 err = err_obj
             else:
                 err = "Unknown error"
-            # Keep a streamed agent_message. A late turn.failed is still
-            # recorded, but must not replace the reply the user is owed.
+            # Record, but never replace an already-streamed reply.
             record_backend_error(result, err)
 
         elif etype == "error":
-            # A stream-level failure (expired auth, usage limit, dropped
-            # connection) does not always come with a turn.failed, and codex
-            # can still exit 0 after one. Recording it is the only thing
-            # standing between that and a turn that silently says nothing -
-            # which the flexible merge step would read as an empty worker
-            # report.
+            # Stream failure without turn.failed (codex may still exit 0):
+            # record it, else the turn silently says nothing.
             msg = event.get("message", "Unknown error")
             logger.warning("Codex stream error: %s", msg)
-            # The model may already have answered. Keep the error, but never
-            # let a late one overwrite the reply the user is owed.
+            # Never let a late error overwrite the reply already owed.
             record_backend_error(result, msg)
 
     def extract_agent_text(self, event: dict) -> str | None:

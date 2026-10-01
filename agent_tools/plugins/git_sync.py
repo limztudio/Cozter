@@ -28,10 +28,7 @@ from ._git_common import (
     run_git as _run_git,
 )
 
-# Real-work cap: network sync runs under the tool runner cap
-# (default 3600s) or until cancelled.
-# Output/error limits, name validation, failure type, process runner,
-# and output clipping live in ._git_common (shared with git_info/git_ops).
+# Real-work cap (tool runner); shared limits/validation live in ._git_common.
 _ACTIONS = ("fetch", "pull", "push", "remotes")
 
 

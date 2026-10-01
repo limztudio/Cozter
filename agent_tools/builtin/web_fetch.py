@@ -27,8 +27,7 @@ _MAX_REDIRECTS = 10
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _FETCH_ATTEMPTS = 2
 _FETCH_RETRY_DELAY_SECONDS = 0.4
-# Precompiled once: WebFetchTool.run executes per fetch, so an inline
-# re.search would recompile the title pattern on every fetched page.
+# Precompiled: run() executes per fetch.
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 
@@ -130,11 +129,7 @@ class WebFetchTool(AgentTool):
             maximum=30_000,
         )
 
-        # One retry covers transient transport failures (connection reset,
-        # resolver hiccup); every other outcome is final. Real-work cap
-        # of 3600s; cancel still stops instantly. One session serves both
-        # attempts so the retry reuses the connection pool instead of
-        # paying for a fresh connector + DNS validation pass.
+        # One retry for transient transport failures; one shared session.
         final_url = url
         content_type = ""
         body = ""

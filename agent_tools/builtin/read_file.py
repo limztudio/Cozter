@@ -15,19 +15,13 @@ from ..base import (
 )
 
 
-# ``execute_tool`` limits the result sent back to the model, but applying
-# that limit after ``read()`` still lets one request allocate a multi-GB log
-# or disk image in the bot process. Keep this comfortably above the visible
-# result cap so ordinary source files remain useful while bounding both
-# memory and synchronous disk work.
+# Cap the read itself (not just the model-visible result): one request
+# must not allocate a multi-GB log/image in the bot process.
 _READ_FILE_MAX_CHARS = 128 * 1024
 _READ_FILE_SKIP_CHUNK_CHARS = 64 * 1024
-# An offset is expressed in lines, so reaching it can require scanning a
-# great deal of data (especially in generated files with very long lines).
-# ``asyncio.to_thread`` keeps that scan off the event loop, but cancelling a
-# timed-out await does not stop the underlying worker thread. Bound the skip
-# itself so an untrusted tool argument cannot leave a thread reading a huge
-# file long after the tool call has returned.
+# Offsets are line-based, so reaching one can scan lots of data; a cancelled
+# await does not stop the worker thread. Bound the skip so a hostile offset
+# cannot leave a thread reading long after the call returned.
 _READ_FILE_MAX_SKIP_CHARS = 16 * 1024 * 1024
 
 
@@ -40,11 +34,8 @@ def _validated_read_bound(
 ) -> int | None:
     """Validate an offset/limit tool arg as a real integer bound.
 
-    Tool args arrive as loosely-typed JSON: ``int(True) == 1`` and
-    ``int(1.9) == 1`` would silently turn junk into a different read
-    range, and a raw float reaching ``range()`` raises ``TypeError``
-    instead of the documented error string. Reject bools, non-integral
-    floats, and non-numeric types with a ValueError the caller renders.
+    Tool args are loosely-typed JSON: reject bools, non-integral floats,
+    and non-numeric types instead of silently coercing them.
     """
     if value is None:
         return default
@@ -92,9 +83,7 @@ class ReadFileTool(AgentTool):
         if not os.path.isfile(target):
             return f"File not found: {args.get('path')}"
 
-        # Images are binary: decoding them as text yields noise. Return
-        # verified metadata instead so the model stops guessing from
-        # garbage bytes; vision-capable backends see the pixels natively.
+        # Binary images: return metadata, not decoded noise.
         if os.path.splitext(target)[1].lower() in {
             ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
         }:

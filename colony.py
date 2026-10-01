@@ -146,11 +146,7 @@ def bump_compact_count(workspace: str) -> int:
     return data["compact_count"]
 
 
-# ---------------------------------------------------------------------------
-# Consolidation — promote recurring long_term items into the colony,
-# rewrite each session's long_term with promoted items removed, and
-# retire colony entries whose topic no longer appears in any session.
-# ---------------------------------------------------------------------------
+# ---- Consolidation: promote recurring items, prune stale colony ones ----
 
 CONSOLIDATE_PROMPT = (
     "Consolidate a workspace's shared memory ('colony') from every"
@@ -185,9 +181,8 @@ CONSOLIDATE_PROMPT = (
 )
 CONSOLIDATE_TIMEOUT: float | None = 3600.0  # work cap; cancel still stops instantly
 CONSOLIDATE_MAX_INPUT_CHARS = 100_000
-# Leave most of the aggregate prompt for current session evidence.  Existing
-# colony state is persisted/model-produced text too, so its item-count cap
-# alone cannot prevent it from crowding every session out of a pass.
+# Reserve most of the prompt for session evidence: persisted colony text
+# can otherwise crowd every session out.
 CONSOLIDATE_COLONY_CHARS = CONSOLIDATE_MAX_INPUT_CHARS // 4
 
 _SESSION_BLOCK_RE = re.compile(
@@ -201,8 +196,7 @@ _CONSOLIDATE_TRUNCATION_NOTE = (
     " is unclear]"
 )
 
-# Per-workspace guard so two compactions hitting the same interval mark
-# don't both spawn a colony pass that races against itself.
+# Per-workspace guard: one colony pass at a time.
 _consolidate_in_flight: set[str] = set()
 
 
@@ -253,8 +247,7 @@ def _bounded_colony_lines(items: list[str], budget: int) -> tuple[list[str], boo
             if remaining == 1:
                 lines.append("…")
             elif remaining <= len(marker):
-                # No room for the full marker: keep a visible cut
-                # indicator rather than a silent prefix.
+                # Keep a visible cut indicator, never a silent prefix.
                 lines.append(
                     line[:remaining - 1] + "…" if remaining > 1 else "…"
                 )
@@ -282,10 +275,7 @@ def _build_bounded_session_block(
     name_space = budget - len("Session: ") - len(header_suffix) - len(closing)
     if name_space < 1:
         return ""
-    # A session title helps the model retain topic context, but it cannot be
-    # allowed to consume the space needed for the actual memory block.
-    # The name is only a display hint; mark a clip so the consolidation
-    # prompt never reads it as the full title.
+    # Titles are display hints only: clip them so they never crowd out memory.
     rendered_name = name[:min(name_space, 2_000)]
     if len(name) > len(rendered_name):
         marker = "… [name clipped]"
@@ -319,9 +309,7 @@ def _build_bounded_session_block(
         if item_lines:
             body = "\n".join(item_lines) + "\n" + note
         else:
-            # No room for even one item line: keep a marked prefix of the
-            # truncation note (never a bare cut) so the prompt still shows
-            # that session input was omitted for budget.
+            # Keep a marked prefix of the truncation note so the omission stays visible.
             suffix = "… [preview]"
             if item_budget <= 0:
                 body = ""
@@ -407,11 +395,8 @@ async def _consolidate_inner(
     backend = backends_agent.get_backend(backend_name)
     existing_colony = get_items(workspace_path)
 
-    # Collect every session in the workspace, including ones whose long-term
-    # list is empty. The session name accompanies each list so the model can
-    # judge whether a colony item's topic is still represented in the
-    # workspace. Omitting empty lists made a stale colony impossible to retire
-    # once compaction had cleared every session-local item.
+    # Include empty sessions too: otherwise a colony item can never retire
+    # once compaction clears every session-local list.
     inputs: list[tuple[str, str, list[str]]] = []
     for data in session.list_sessions_with_data(workspace_path):
         lt = data.get("long_term") or []
@@ -450,9 +435,7 @@ async def _consolidate_inner(
         parts.append("(empty)")
     parts.append("")
 
-    # Greedy build: if a session can't fit in the budget, skip the rest.
-    # Sessions are listed newest-first so older sessions are dropped
-    # first under tight budgets.
+    # Greedy, newest-first: skip sessions that no longer fit.
     used = sum(len(p) + 1 for p in parts)
     included: list[str] = []
     for sid, name, lt in inputs:
@@ -496,15 +479,13 @@ async def _consolidate_inner(
         logger.warning("Colony output missing [COLONY] block; aborting")
         return False
 
-    # Drop output for sessions we didn't actually send (the model
-    # invented them) so we don't accidentally rewrite anything else.
+    # Ignore model-invented sessions we never sent.
     included_set = set(included)
     per_session = {
         sid: lt for sid, lt in per_session.items() if sid in included_set
     }
 
-    # Apply atomically: write colony, then re-read+rewrite each session
-    # so concurrent message appends aren't clobbered.
+    # Apply atomically so concurrent appends aren't clobbered.
     async with workspace_mod.get_lock(workspace_path):
         set_items(workspace_path, new_colony)
         for sid, new_lt in per_session.items():

@@ -121,10 +121,7 @@ class CliBot(BotPlatform):
         )
         print("Plain text goes to the AI. Ctrl-D or Ctrl-C exits.")
         print()
-        # A prior terminal run may have completed an agent turn just as
-        # stdout failed or the process was interrupted. Load its staged
-        # reply before accepting fresh prompts so the watcher can preserve
-        # conversational order while it retries delivery.
+        # Load the staged reply first so delivery order survives restarts.
         await self.restore_reply_deliveries()
         self.start_detached_task_watcher()
         self._input_task = asyncio.create_task(self._input_loop())
@@ -153,11 +150,7 @@ class CliBot(BotPlatform):
     # ----- input loop -----------------------------------------------------
 
     async def _input_loop(self) -> None:
-        # Drive stdin from a daemon thread so the asyncio loop never has
-        # to wait for ``input()`` to return at shutdown. The daemon thread
-        # is killed automatically when the interpreter exits, avoiding
-        # the ``executor.shutdown(wait=True)`` hang that the previous
-        # ``asyncio.to_thread`` version had on unhandled exceptions.
+        # Daemon-thread stdin: never blocks loop shutdown.
         loop = asyncio.get_running_loop()
         line_q: asyncio.Queue[str | None] = asyncio.Queue()
 
@@ -171,12 +164,8 @@ class CliBot(BotPlatform):
                 return False
 
         def _reader() -> None:
-            # Bare ``input()`` (no prompt arg) so the reader thread only
-            # blocks on stdin. The "> " prompt is printed from the
-            # asyncio side just before awaiting each line, so it always
-            # lands AFTER the previous turn's AI output (status lines,
-            # reply text) instead of being scrolled out of view by an
-            # eager re-prompt.
+            # Bare ``input()``: prompt prints from the asyncio side so it
+            # lands after the previous turn's output.
             while True:
                 try:
                     line = input()
@@ -224,14 +213,8 @@ class CliBot(BotPlatform):
             ctx = self._ctx(command=cmd, args=args)
             await self.dispatch_command(ctx)
         else:
-            # Fire-and-forget the AI dispatch so the input loop returns
-            # immediately and the next line's "> " prompt shows up
-            # right away. If a turn is already running, _dispatch_ai
-            # sees the held task lock and routes the new message
-            # through the per-user queue (printing the
-            # "Queued (X/N)." feedback) instead of having it sit
-            # silently in the CLI's line buffer waiting for the
-            # current await to return.
+            # Fire-and-forget dispatch: busy turns queue with feedback
+            # instead of stalling the input loop.
             create_background_task(
                 self.dispatch_text(self._ctx(text=line)),
                 name="cli-dispatch",

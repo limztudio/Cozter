@@ -49,7 +49,6 @@ class GlobTool(AgentTool):
                 self._find_matches, abs_ws, pattern, max_results,
             )
         except Exception as exc:
-            # Filesystem trouble should surface as a clean model-facing error.
             return f"Glob failed: {exc}"
 
         if not matches:

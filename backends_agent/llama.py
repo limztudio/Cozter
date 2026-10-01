@@ -24,13 +24,11 @@ logger = logging.getLogger(__name__)
 class LlamaBackend(CachedOpenAIChatBackend):
     name = "llama"
     executable = "llama-server"  # only used in "not found" error text
-    # Vision-capable local models (e.g. Qwen-VL, LLaVA via llama-server)
-    # consume the same OpenAI-style image_url parts as zai/meta.
+    # Local VL models use the same OpenAI-style image_url parts as zai/meta.
     supports_vision = True
     vision_mode = "openai_parts"
 
-    # The model list is populated dynamically from /v1/models and cached
-    # briefly. Stored as a tuple per the Backend contract.
+    # Populated from /v1/models, cached briefly (tuple per Backend contract).
     default_model = "auto"
     default_summary_model = "auto"
 
@@ -51,8 +49,7 @@ class LlamaBackend(CachedOpenAIChatBackend):
             return ("auto",)
 
     def health_check(self) -> tuple[bool, str]:
-        # llama is an HTTP endpoint, not a CLI: probe /v1/models instead of
-        # looking for a binary on PATH.
+        # HTTP endpoint, not a CLI: probe /v1/models, not PATH.
         url = self._models_url()
         try:
             ids = fetch_model_ids(url, timeout=2.0)
@@ -68,8 +65,7 @@ class LlamaBackend(CachedOpenAIChatBackend):
         return cfg.get_llama_server_url().rstrip("/") + "/v1/chat/completions"
 
     def _request_model(self, model: str | None) -> str | None:
-        # ``model="auto"`` (our sentinel default) means "let the server
-        # decide": drop the field and llama-server uses its loaded model.
+        # "auto" = server decides: drop the field for llama-server's loaded model.
         return None if not model or model == "auto" else model
 
     def _max_agent_turns(self) -> int:
@@ -79,8 +75,7 @@ class LlamaBackend(CachedOpenAIChatBackend):
         return cfg.get_llama_tool_repeat_limit()
 
     def _socket_timeout(self) -> int | None:
-        # Real-work cap: slow generation streams keep running up to
-        # llama_socket_timeout (default 3600s). Cancel still stops instantly.
+        # Real-work cap (llama_socket_timeout); cancel stops instantly.
         try:
             return cfg.get_llama_socket_timeout()
         except Exception:

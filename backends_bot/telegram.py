@@ -8,14 +8,8 @@ import math
 import os
 import re
 
-# Opt into python-telegram-bot's timedelta time-period API (PTB_TIMEDELTA=1).
-# Since v22.2 every ``RetryAfter.retry_after`` access without this emits a
-# PTBDeprecationWarning, and the int form is removed in the next major
-# release (requirements allow <23, so that upgrade can land unreviewed).
-# ``_telegram_retry_delay`` already accepts both int and timedelta via
-# ``total_seconds()``, so opting in only silences the warning and
-# future-proofs the flood-control path. setdefault keeps an operator's
-# explicit PTB_TIMEDELTA choice authoritative.
+# Opt into PTB's timedelta API: silences deprecation warnings and
+# future-proofs flood control (operator override still wins).
 os.environ.setdefault("PTB_TIMEDELTA", "1")
 
 from telegram import Update
@@ -112,10 +106,7 @@ def _telegram_retry_delay(exc: BaseException) -> float | None:
             ) else float(retry_after)
         except (TypeError, ValueError, OverflowError):
             return None
-        # A non-finite server value must not reach asyncio.sleep: nan raises
-        # ValueError ("Sleep length must be a non-negative number") and inf
-        # would sleep effectively forever. Cap +inf at the max delay and
-        # reject nan/-inf (fail fast on a meaningless throttle).
+        # Non-finite throttles: cap +inf, reject nan/-inf.
         if not math.isfinite(seconds):
             if seconds == float("inf"):
                 return _TELEGRAM_SEND_MAX_DELAY_SEC
@@ -225,10 +216,7 @@ class TelegramBot(BotPlatform):
         if not text:
             return None
         if not rich:
-            # Command output and other plain replies can exceed Telegram's
-            # 4,096-character API cap just as rich agent replies can.  Split
-            # them with the same lossless helper instead of failing the
-            # entire durable delivery.
+            # Plain replies can also exceed the API cap: split losslessly.
             last: MessageHandle | None = None
             for chunk in split_text_chunks(text, _TELEGRAM_TEXT_LIMIT):
                 msg = await self.app.bot.send_message(
@@ -381,11 +369,8 @@ class TelegramBot(BotPlatform):
             | filters.VOICE
             | filters.VIDEO_NOTE
         )
-        # ``filters.UpdateType.MESSAGE`` restricts these handlers to genuine
-        # new messages. Without it, an edited message also matches (its text
-        # lives in ``update.edited_message``, so ``update.message`` is None)
-        # and ``_on_text`` / ``_on_file`` would crash dereferencing it - a
-        # crash on the very common action of fixing a typo in a prior message.
+        # Restrict to new messages: edited ones carry no ``update.message``
+        # and would crash the handlers.
         self.app.add_handler(
             MessageHandler(
                 attachment_filter & filters.UpdateType.MESSAGE,
@@ -412,10 +397,7 @@ class TelegramBot(BotPlatform):
                 )
                 await asyncio.sleep(5 * attempt)
         await self.app.start()
-        # Restore in-flight / queued messages before polling begins so a
-        # new user message can't race past the restored backlog and run
-        # out of order. app.bot.send_message works after initialize(), so
-        # drain can still post "Thinking..." during restore.
+        # Restore the backlog before polling so new messages can't race it.
         await self._start_daemon_services()
         await self.app.updater.start_polling(drop_pending_updates=True)
         logger.info("Telegram bot started polling.")

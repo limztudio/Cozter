@@ -137,10 +137,7 @@ def _parse_router_output(raw: str, valid_ids: set[str]) -> str | None:
             continue
         if token.upper() == "NEW":
             return "NEW"
-        # Session state deliberately permits safe IDs with punctuation such
-        # as ``-`` and ``_``.  Membership is the relevant safety check here;
-        # a narrower grammar silently made those valid restored sessions
-        # unrouteable.
+        # IDs may carry punctuation: membership (not grammar) is the check.
         if token in valid_ids:
             return token
     return None

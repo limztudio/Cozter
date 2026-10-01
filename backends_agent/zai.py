@@ -38,34 +38,16 @@ class _FallbackModelSpec(NamedTuple):
     streams_tools: bool
 
 
-# Safety net for unavailable/unauthorized model discovery. The installed
-# account's ``/models`` catalog is preferred whenever it can be queried. Keep
-# every fallback capability alongside its model ID so picker order, compaction,
-# preserved reasoning, and tool streaming cannot drift apart. Provider-published
-# capacities apply only to these curated public IDs; private/discovered models
-# stay unknown until an operator configures model_context_windows.
-#
-# GLM-4.5V accepts text-only turns but not function tools in the documented
-# vision request schema. The older 4-32B fallback has no documented
-# preserved-thinking contract.
+# Discovery fallback: curated chat IDs + capabilities (published windows
+# only; 4.5V lacks function tools).
 _FALLBACK_MODEL_SPECS = (
-    # GLM-5.3 is the general Open Platform endpoint's default flagship
-    # chat-completions model. Its documented 1M context, mandatory three-level
-    # reasoning, function calling, preserved thinking, and tool-call streaming
-    # match the Coding Plan variant.
+    # General endpoint flagship: 1M context, mandatory reasoning, functions.
     _FallbackModelSpec("glm-5.3", 1_000_000, True, True),
-    # GLM-5.3-Flash is now sold on the same general endpoint (native
-    # multimodal, 1M context, the same mandatory three-level reasoning, and
-    # documented tool-call streaming). GLM-5.3-FlashX is its faster
-    # serving variant (200 tok/s, same 1M context and reasoning scale per
-    # the provider's Flash/FlashX overview; live-listed on the account
-    # /models catalog 2026-09-26). Keep both here so the default fallback
-    # never omits a current public chat ID.
+    # Flash/FlashX share the endpoint, context, reasoning, and streaming.
     _FallbackModelSpec("glm-5.3-flash", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.3-flashx", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.2", 1_000_000, True, True),
-    # This vision model supports text and native functions, but its request
-    # schema does not accept the text-only ``tool_stream`` extension.
+    # Vision: no text-only ``tool_stream`` extension in its schema.
     _FallbackModelSpec("glm-5v-turbo", 200_000, True, False),
     _FallbackModelSpec("glm-5.1", 200_000, True, True),
     _FallbackModelSpec("glm-5-turbo", 200_000, True, True),
@@ -74,8 +56,7 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4.7-flash", 200_000, True, True),
     _FallbackModelSpec("glm-4.7-flashx", 200_000, True, True),
     _FallbackModelSpec("glm-4.6", 200_000, True, True),
-    # Vision variants also accept text-only turns and native function calls,
-    # but not the text-only ``tool_stream`` extension.
+    # Vision variants: text + native functions, no ``tool_stream`` extension.
     _FallbackModelSpec("glm-4.6v", 128_000, True, False),
     _FallbackModelSpec("glm-4.6v-flashx", 128_000, True, False),
     _FallbackModelSpec("glm-4.6v-flash", 128_000, True, False),
@@ -87,11 +68,8 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4.5-flash", 200_000, True, False),
     _FallbackModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
 )
-# Extra IDs that the GLM Coding Plan endpoint accepts but the general Open
-# Platform endpoint rejects. GLM-5.3 and GLM-5.3-Flash are public general
-# chat-completions models; the ``[1m]`` spelling is the Coding Plan's
-# documented Claude Code long-context pin and must not leak into the
-# default fallback.
+# Coding-Plan-only IDs (rejected by the general endpoint): keep the
+# ``[1m]`` long-context pin out of the default fallback.
 _CODING_PLAN_FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-5.3[1m]", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.3-flash[1m]", 1_000_000, True, True),
@@ -118,28 +96,20 @@ _PRESERVED_THINKING_MODELS = frozenset(
 _TOOL_STREAM_MODELS = frozenset(
     spec.name for spec in _ALL_FALLBACK_MODEL_SPECS if spec.streams_tools
 )
-# Z.ai's catalog can include models that are invoked through a different API
-# path (for example image generation, OCR, or audio transcription). Cozter
-# drives ``/chat/completions`` and should not display those IDs as agent
-# choices. Keep this deliberately small and exact: unknown/private IDs stay
-# selectable because they may be valid chat models on an operator's account.
+# Non-chat API paths (image/OCR/audio): small and exact; unknown IDs stay
+# selectable for operators.
 _NON_CHAT_COMPLETION_MODEL_IDS = frozenset({
     "glm-ocr",
     "glm-image",
     "cogview-4-250304",
     "glm-asr-2512",
-    # This is a specialized phone-use agent, not a general chat-completions
-    # model for Cozter's workspace tool surface.
+    # Phone-use agent, not a general workspace chat model.
     "autoglm-phone-multilingual",
 })
-# Z.ai's vision request schema documents native function tools for the
-# GLM-4.6V family (and its specialized phone agent), but not GLM-4.5V. Keep
-# GLM-4.5V available for text-only use while never sending it an unsupported
-# tool schema. Unknown/private IDs retain the normal OpenAI-compatible path.
+# 4.6V family documents native functions (not 4.5V): keep 4.5V text-only,
+# never send it an unsupported tool schema. Unknown IDs keep the normal path.
 _NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
-# The provider documents these two exact models as always reasoning even when
-# the thinking toggle is supplied. Do not send the contradictory disabled
-# setting for a low Cozter effort percentage.
+# These two always reason: never send a contradictory disabled setting.
 _COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
 _GLM_5_3_REASONING_MODELS = frozenset({"glm-5.3", "glm-5.3-flash", "glm-5.3-flashx"})
 _GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
@@ -171,23 +141,20 @@ class ZaiBackend(CachedOpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
-    # GLM-5.3-flash / GLM-5.3-flashx / GLM-5V are documented multimodal (native vision +
-    # image_url input), so photo uploads can ride as real image parts.
+    # Documented multimodal: photo uploads ride as real image parts.
     supports_vision = True
     vision_mode = "openai_parts"
 
     default_model = "glm-5.3"
     default_summary_model = "glm-4.5-air"
-    # Flash is the current cheap general-endpoint model. Keep mid on GLM-4.7
-    # so the three tiers stay distinct without jumping to the glm-5.3 flagship.
+    # Cheap current general model; mid stays on 4.7 so tiers stay distinct.
     tier_models = {
         "low": "glm-5.3-flash",
         "mid": "glm-4.7",
         "high": "glm-5.3",
     }
-    # GLM-5.2 accepts seven reasoning-effort values. The GLM-5.3 family has
-    # its own constrained three-level scale; other current text models expose
-    # only the thinking switch, handled separately in _effort_fields.
+    # GLM-5.2: seven levels; GLM-5.3 family: constrained three-level scale;
+    # other text models: thinking switch only (see _effort_fields).
     effort_levels = (
         "none", "minimal", "low", "medium", "high", "xhigh", "max",
     )
@@ -228,8 +195,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
     # ---- OpenAIChatBackend hooks ---------------------------------------
 
     def _chat_endpoint(self) -> str:
-        # base_url already carries the /api/paas/v4 version segment, so we
-        # append /chat/completions directly (NOT /v1/chat/completions).
+        # base_url already carries the version segment: append directly.
         return cfg.get_zai_base_url().rstrip("/") + "/chat/completions"
 
     def _auth_headers(self) -> dict[str, str]:
@@ -237,7 +203,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
         return {"Authorization": f"Bearer {key}"} if key else {}
 
     def _request_model(self, model: str | None) -> str:
-        # Z.ai requires a model field; fall back to the configured default.
+        # Model field is required; default when unset.
         return model or self.default_model
 
     def _effort_fields(
@@ -249,10 +215,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
             return {}
         selected = _capability_model_id(model or self.default_model)
         if selected in _GLM_5_3_REASONING_MODELS:
-            # This GLM-5.3 family is reasoning-only and rejects the
-            # generic disabled setting. Its API accepts only these three
-            # effort levels, so map Cozter's percentage directly onto that
-            # scale.
+            # Reasoning-only family: only these three levels; map percentage onto them.
             levels = self.effort_levels_for_model(model)
             index = min(
                 percent * len(levels) // 100,
@@ -322,14 +285,11 @@ class ZaiBackend(CachedOpenAIChatBackend):
         return {"tool_stream": True} if selected in _TOOL_STREAM_MODELS else {}
 
     def _auto_continue_after_tool_limit(self) -> bool:
-        # Long z.ai coding runs can legitimately need more tool turns than
-        # Cozter's per-segment guard. Keep going in a fresh segment instead
-        # of forcing a no-tools final answer.
+        # Long coding runs may need more tool turns: continue in a fresh segment.
         return True
 
     def _socket_timeout(self) -> int | None:
-        # Real-work cap: slow generation streams keep running up to
-        # zai_socket_timeout (default 3600s). Cancel still stops instantly.
+        # Real-work cap (zai_socket_timeout); cancel stops instantly.
         try:
             return cfg.get_zai_socket_timeout()
         except Exception:

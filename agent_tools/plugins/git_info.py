@@ -35,11 +35,7 @@ from ._git_common import (
 # Test-visible alias (tests/test_titling.py reads _MAX_OUTPUT_CHARS).
 _MAX_OUTPUT_CHARS = MAX_OUTPUT_CHARS
 
-# Real-work cap: git runs up to 3600s (under the tool runner cap) or until cancelled.
-# Output/error limits, ref validation, failure type, process runner, and
-# output clipping live in ._git_common (shared with git_ops/git_sync).
-# Read-only actions only: local writes live in git_ops, network sync in
-# git_sync. The docstring order matches the action order below.
+# Real-work cap (tool runner); shared limits/validation live in ._git_common.
 _ACTIONS = (
     "status",
     "log",

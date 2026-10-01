@@ -28,8 +28,7 @@ from aiohttp.resolver import DefaultResolver
 from ..utils import clip_status_value, is_path_within
 
 
-# Hard cap on raw HTTP body bytes per web tool call so a pathological
-# URL can't OOM the bot.
+# Bound raw HTTP bodies per web call: a pathological URL must not OOM the bot.
 _MAX_FETCH_BYTES = 5 * 1024 * 1024  # 5 MB
 HTTP_USER_AGENT_HEADERS = {
     "User-Agent": (
@@ -94,11 +93,8 @@ class AgentTool(ABC):
     order: ClassVar[int] = 100
     requires_full_permission: ClassVar[bool] = False
 
-    # Whether this tool was loaded from ``agent_tools/plugins/`` (True)
-    # vs ``agent_tools/builtin/`` (False). Set by the package loader
-    # on each registered instance, not on the class. CLI backends use
-    # the flag to enumerate plugins in their bash prelude; HTTP backends
-    # see plugins as ordinary typed tools in the schema either way.
+    # Set by the loader per instance (not on the class): CLI backends use
+    # it to enumerate plugins in their bash prelude.
     is_plugin: bool = False
 
     # Populated by __init_subclass__. Read by the package's __init__.
@@ -106,19 +102,12 @@ class AgentTool(ABC):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        # Skip intermediate abstract classes that don't implement run().
-        # ABCMeta sets cls.__abstractmethods__ AFTER __init_subclass__
-        # runs (it's done in ABCMeta._abc_init, called from __new__
-        # after super().__new__ returns). So we check the run method's
-        # own __isabstractmethod__ flag, which IS set at definition
-        # time and survives inheritance: True for an intermediate
-        # subclass that hasn't overridden run, False for a concrete
-        # implementation.
+        # Skip abstract intermediates: check run()'s own flag, which is set
+        # at definition time (ABCMeta fills __abstractmethods__ later).
         if getattr(cls.run, "__isabstractmethod__", False):
             return
         instance = cls()
-        # Idempotent: replace any prior registration with the same name
-        # so a hot-reload doesn't accumulate duplicates.
+        # Idempotent: same-name re-registration replaces (hot-reload safe).
         AgentTool.registry[:] = [
             t for t in AgentTool.registry if t.name != instance.name
         ]
@@ -232,11 +221,7 @@ def coerce_int_arg(
 ) -> int:
     """Return an int argument clamped to the provided bounds."""
     try:
-        # value is an arbitrary tool arg; the except handles non-numerics.
-        # Reject bools (True would silently become 1) and non-integral
-        # floats (3.9 would silently truncate to 3): a model passing a
-        # wrong-typed arg should get the documented default, not a
-        # quietly different number.
+        # Wrong-typed args fall back to the default, never a coerced neighbor.
         if isinstance(value, bool):
             raise TypeError("bool is not an int arg")
         if isinstance(value, float) and not value.is_integer():
@@ -258,10 +243,8 @@ def utf8_byte_limit_exceeded(
 ) -> bool:
     """Return whether encoded *text* would exceed *limit* bytes.
 
-    Count UTF-8 bytes incrementally instead of allocating a potentially large
-    encoded copy.  When *restore_crlf* is true, a lone LF represents the CRLF
-    sequence that a later atomic writer will restore; an existing CRLF stays
-    one two-byte newline rather than becoming ``\r\r\n``.
+    Counts incrementally (no large encoded copy). With *restore_crlf*, a
+    lone LF counts as the CRLF the atomic writer will restore.
     """
     used = 0
     index = 0
@@ -634,22 +617,16 @@ def _edit_file_too_large_error() -> str:
 def read_text_for_edit(path: str) -> tuple[str, bool] | str:
     """Read a UTF-8 text file for in-place editing.
 
-    Returns ``(text, uses_crlf)``: *text* has any ``\\r\\n`` normalized to
-    ``\\n`` so newline-based match strings still match a CRLF file, and
-    *uses_crlf* records the file's convention so :func:`write_text_after_edit`
-    can restore it byte-for-byte. Returns a model-facing error string (no
-    ``Error:`` prefix) if the file exceeds the edit-size limit or is not valid
-    UTF-8. A read-modify-write edit would otherwise replace every non-UTF-8
-    byte in the whole file with U+FFFD, silently corrupting content the edit
-    never touched, so we refuse.
+    Returns ``(text, uses_crlf)`` with CRLF normalized to LF so match
+    strings still match; refuses binary/oversize files (a rewrite would
+    corrupt untouched bytes).
     """
     try:
         with open(path, "rb") as f:
             if os.fstat(f.fileno()).st_size > _MAX_EDIT_FILE_BYTES:
                 return _edit_file_too_large_error()
-            # The stat above avoids reading known-large files, but a writer
-            # can grow the file immediately afterward. Keep this read bounded
-            # too, and use one extra byte to distinguish an exact-limit file.
+            # stat() races growth: keep the read itself bounded (+1 byte
+            # distinguishes an exact-limit file).
             raw = f.read(_MAX_EDIT_FILE_BYTES + 1)
     except OSError as exc:
         return f"could not read file: {exc}"
@@ -671,9 +648,8 @@ def read_text_for_edit(path: str) -> tuple[str, bool] | str:
 def _restore_text_newlines(text: str, *, uses_crlf: bool) -> str:
     """Restore CRLF safely after an edit normalized the original file.
 
-    Replacement text comes directly from a tool call and can already contain
-    CRLF sequences. Normalize those first, then restore the target's newline
-    convention, so an inserted ``\r\n`` does not become ``\r\r\n``.
+    Normalize tool-supplied CRLF first so inserted ``\\r\\n`` never becomes
+    ``\\r\\r\\n``.
     """
     if not uses_crlf:
         return text
@@ -683,14 +659,9 @@ def _restore_text_newlines(text: str, *, uses_crlf: bool) -> str:
 def write_text_after_edit(path: str, text: str, *, uses_crlf: bool) -> None:
     """Atomically replace text at *path*, restoring its newline convention.
 
-    ``newline=""`` disables the platform newline translation open() would
-    otherwise apply on write (which turns every ``\\n`` into ``\\r\\n`` on
-    Windows), so only the bytes the edit actually changed differ on disk.
-    Write into the target's directory and replace only after the full file is
-    flushed: a write failure can then leave the old source intact instead of
-    truncating it midway through an edit, patch application, or overwrite.
-    Existing files retain their mode; a missing target is created through the
-    same atomic replacement path.
+    Writes to a temp file in the target dir and replaces only after flush,
+    so failures leave the old source intact. ``newline=""`` avoids platform
+    newline translation; existing mode bits are preserved.
     """
     text = _restore_text_newlines(text, uses_crlf=uses_crlf)
     parent = os.path.dirname(path) or "."
@@ -731,9 +702,7 @@ def create_text_file_atomically(
         _write_text_to_fd(fd, text)
         return _publish_new_file_no_clobber(tmp_path, path)
     finally:
-        # After a successful link the target retains the completed inode, so
-        # removing the temporary name cannot affect it.  Best-effort cleanup
-        # also handles failures before the target existed.
+        # Target holds the inode after a successful link; unlink is safe.
         with suppress(OSError):
             os.unlink(tmp_path)
 
@@ -741,11 +710,8 @@ def create_text_file_atomically(
 def _write_text_to_fd(fd: int, text: str) -> None:
     """Write and flush UTF-8 text to an owned temporary-file descriptor.
 
-    Model-supplied text can contain lone surrogates (``"\\ud800"`` in JSON
-    decodes fine but is not encodable as strict UTF-8).  Surface that as an
-    ``OSError`` so file-error handling at the call sites (and the tool
-    runner's failure path) reports a model-facing message instead of a raw
-    codec traceback.
+    Lone surrogates (valid JSON, unencodable UTF-8) surface as OSError so
+    call sites report a model-facing message, not a codec traceback.
     """
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
@@ -759,24 +725,15 @@ def _write_text_to_fd(fd: int, text: str) -> None:
 def copy_file_atomically(source_path: str, target_path: str) -> bool:
     """Copy one file to a new path without ever overwriting a concurrent file.
 
-    A preflight ``exists()`` check alone cannot uphold a no-clobber contract:
-    another writer can create a file (or a symlink) before ``shutil.copy2``
-    opens the destination, causing that operation to overwrite it or follow
-    the link.  Copy into a completed same-directory temporary file first,
-    then publish it with a hard link, whose target creation is atomic and
-    fails when the destination already exists.  The no-hard-link fallback
-    retains the same no-clobber guarantee through an exclusive reservation.
-
-    Return ``True`` only when this call created *target_path*; return
-    ``False`` if it already existed when publishing the completed copy.
+    Preflight ``exists()`` checks race: copy to a same-dir temp file first,
+    then publish via atomic hard link (no-clobber). True only when this
+    call created the target.
     """
     parent = os.path.dirname(target_path) or "."
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
     os.close(fd)
     try:
-        # copy2 preserves the documented file metadata on the normal,
-        # hard-link publication path. Sync the completed temporary contents
-        # before making the destination name visible.
+        # copy2 keeps metadata on the hard-link path; fsync before publishing.
         shutil.copy2(source_path, tmp_path)
         with open(tmp_path, "rb") as tmp_file:
             os.fsync(tmp_file.fileno())
@@ -784,8 +741,7 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
             tmp_path, target_path, preserve_metadata=True,
         )
     finally:
-        # A successful hard link owns the same inode independently, and the
-        # fallback has copied it. In every case this temporary name is ours.
+        # Ours in every case (link owns the inode; fallback copied it).
         with suppress(OSError):
             os.unlink(tmp_path)
 
@@ -885,11 +841,8 @@ def _copy_to_exclusive_new_path(
 def _copy_file_metadata_to_fd(source_path: str, target_fd: int) -> None:
     """Best-effort copy of standard file metadata through an open target fd.
 
-    The no-hard-link fallback must not re-open the just-reserved destination
-    by pathname: another actor could replace that name between the exclusive
-    create and metadata copy. File-descriptor operations preserve mode and
-    timestamps without that race. Extended metadata remains platform-specific
-    in the fallback, while the normal ``copy2`` + link path retains it.
+    Fd-based ops avoid re-opening the reserved destination by name (racing
+    a replacement); extended metadata stays hard-link-path-only.
     """
     source_stat = os.stat(source_path, follow_symlinks=False)
     try:
@@ -899,9 +852,7 @@ def _copy_file_metadata_to_fd(source_path: str, target_fd: int) -> None:
             ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
         )
     except (AttributeError, OSError):
-        # Some Windows filesystems do not support descriptor-based metadata
-        # operations. The completed bytes and no-clobber guarantee matter
-        # more than metadata on that fallback path.
+        # Bytes + no-clobber matter more than metadata on this fallback.
         return
 
 
@@ -944,24 +895,16 @@ def _move_regular_file_no_clobber(source_path: str, target_path: str) -> bool:
     """Publish a regular file at a new name before unlinking its old name."""
     source_stat = os.stat(source_path, follow_symlinks=False)
     try:
-        # A hard link is an atomic create: unlike rename, it refuses to
-        # replace a destination which appeared after preflight.  Unlinking the
-        # original afterwards is a true rename on the usual same-filesystem
-        # path and preserves all file metadata.
+        # Atomic create (unlike rename): refuses a destination that raced in.
         os.link(source_path, target_path, follow_symlinks=False)
-        # The target is the same inode as the source at publication time, so
-        # this identity remains safe even if another writer later changes the
-        # source path.
+        # Same inode as source at publish: identity survives later rewrites.
         target_stat = source_stat
     except FileExistsError:
         return False
     except OSError as exc:
         if not _hard_link_unsupported(exc):
             raise
-        # A workspace may cross a mount boundary or live on a filesystem
-        # without hard links.  The shared helper publishes a finished copy
-        # with the same no-clobber guarantee; remove the source only after it
-        # succeeds.
+        # No-link filesystem/mount: finished-copy publish instead; unlink source after.
         if not copy_file_atomically(source_path, target_path):
             return False
         target_stat = os.stat(target_path, follow_symlinks=False)
@@ -1011,9 +954,7 @@ def _complete_no_clobber_move(
     try:
         os.unlink(source_path)
     except OSError:
-        # Preserve all-or-nothing behavior when the target was ours.  If a
-        # different actor replaced it, _unlink_if_same_file leaves that newer
-        # destination untouched.
+        # Roll back only our target; a replaced-by-other target is left alone.
         _unlink_if_same_file(target_path, target_stat)
         raise
 
@@ -1079,26 +1020,22 @@ def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
 async def read_bounded_text(
     resp: aiohttp.ClientResponse,
 ) -> tuple[str, bool]:
-    """Read up to MAX_FETCH_BYTES from *resp* and decode with its charset.
+    """Read up to MAX_FETCH_BYTES; return ``(text, truncated)``.
 
-    Returns ``(text, truncated)``: *truncated* is True when the body hit
-    the byte cap, so callers can mark the preview PARTIAL + remainder
-    instead of passing a silent bare cut to the model.
+    *truncated* marks a PARTIAL preview so callers never pass a silent cut.
     """
     chunks: list[bytes] = []
     remaining = _MAX_FETCH_BYTES
     truncated = False
     while remaining:
-        # StreamReader.read(n) may return fewer than n bytes before EOF, so a
-        # single large read can silently truncate a chunked/slow response.
+        # read(n) may short-return before EOF: loop, don't trust one big read.
         chunk = await resp.content.read(min(64 * 1024, remaining))
         if not chunk:
             break
         chunks.append(chunk)
         remaining -= len(chunk)
         if remaining <= 0:
-            # Cap reached: one more read tells whether more bytes remain
-            # without buffering the whole firehose body.
+            # Probe one byte: capped or exact without buffering the firehose.
             extra = await resp.content.read(1)
             if extra:
                 truncated = True
@@ -1110,11 +1047,9 @@ async def read_bounded_text(
 
 
 def with_fetch_cap_marker(text: str, capped: bool) -> str:
-    """Append the shared fetch-cap PARTIAL + remainder footer when capped.
+    """Append the shared fetch-cap PARTIAL footer when capped.
 
-    Covers the identical truncation footers in ``builtin/web_fetch`` and
-    ``plugins/http_request`` so their wording stays in sync. Returns
-    *text* unchanged when *capped* is False.
+    Keeps web_fetch/http_request wording in sync; unchanged when False.
     """
     if not capped:
         return text
@@ -1132,12 +1067,10 @@ async def open_http_response(
     allow_redirects: bool = True,
     timeout: int | None = 3600,
 ) -> AsyncIterator[aiohttp.ClientResponse]:
-    """Open one HTTP request with the shared web-tool client settings.
+    """Open one HTTP request with shared web-tool client settings.
 
-    Real-work cap: web fetches run up to 3600s (the tool runner's own
-    3600s cap still applies outside), so slow pages finish instead of
-    timing out early. Cancel still stops instantly. Pass an explicit
-    positive ``timeout`` to override, or 0/None for no client timeout.
+    Real-work cap (up to 3600s); cancel stops instantly. Positive
+    ``timeout`` overrides; 0/None means no client timeout.
     """
     client_timeout: aiohttp.ClientTimeout | None = None
     if timeout is not None and timeout > 0:
@@ -1198,7 +1131,7 @@ def _is_public_ip(value: str) -> bool:
     except ValueError:
         return False
 
-    # A scoped IPv6 address is never an appropriate public HTTP target.
+    # Scoped IPv6 is never a valid public target.
     if isinstance(address, ipaddress.IPv6Address) and address.scope_id:
         return False
 
@@ -1225,8 +1158,7 @@ def _is_valid_host(host: str) -> bool:
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        # A colon is only valid here as part of an IPv6 literal.
-        if ":" in host:
+        if ":" in host:  # valid only inside an IPv6 literal.
             return False
         try:
             ascii_host = host.encode("idna").decode("ascii")
@@ -1261,15 +1193,13 @@ def validate_public_url(url: str) -> str | None:
     if host is None or not _is_valid_host(host):
         return "Error: invalid URL host"
 
-    # aiohttp bypasses custom resolvers for numeric hosts. Parse all numeric
-    # spellings locally (including legacy decimal/octal IPv4 forms) so they
-    # receive the same public-address policy before a connection is opened.
+    # aiohttp skips resolvers for numeric hosts: check every numeric
+    # spelling locally (incl. legacy IPv4 forms) before connecting.
     default_port = 443 if parsed.scheme == "https" else 80
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        # Match aiohttp/yarl's IDNA handling before asking the socket layer
-        # whether a hostname is actually a numeric spelling.
+        # Same IDNA handling as aiohttp/yarl before the numeric probe.
         numeric_host = host.encode("idna").decode("ascii")
     else:
         numeric_host = host
@@ -1296,8 +1226,7 @@ async def open_public_http_session() -> AsyncIterator[aiohttp.ClientSession]:
     resolver = PublicResolver()
     connector = aiohttp.TCPConnector(
         resolver=resolver,
-        # Re-resolve each new connection, so aiohttp's cache cannot outlive
-        # our validation of a hostname's current DNS answers.
+        # Re-resolve per connection: cache must not outlive DNS validation.
         use_dns_cache=False,
     )
     try:
@@ -1308,7 +1237,7 @@ async def open_public_http_session() -> AsyncIterator[aiohttp.ClientSession]:
         ) as session:
             yield session
     finally:
-        # Older aiohttp releases do not close a caller-provided resolver.
+        # Caller-owned resolver: close only if we created it.
         await resolver.close()
 
 
@@ -1445,9 +1374,8 @@ def html_to_text(value: str) -> str:
             index = next_markup
             continue
 
-        # A literal '<' should remain visible.  For markup-shaped but
-        # unfinished input, preserve the remaining text and stop rather than
-        # repeatedly scanning the same malformed suffix.
+        # Keep a bare '<' visible; on unfinished markup stop instead of
+        # rescanning the same malformed suffix.
         if not _is_html_tag_start(value, index) and not (
             index + 1 < length and value[index + 1] in "!?"
         ):

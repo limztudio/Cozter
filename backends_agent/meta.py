@@ -36,21 +36,11 @@ class _FallbackModelSpec(NamedTuple):
     context_window: int
 
 
-# Safety net for unavailable/unauthorized model discovery. The account's
-# ``/models`` catalog is preferred whenever it can be queried. Keep every
-# fallback capability alongside its model ID so picker order and compaction
-# cannot drift apart. Provider-published capacities apply only to these
-# curated public IDs; private/discovered models stay unknown until an
-# operator configures model_context_windows.
-#
-# Muse Spark is Meta Superintelligence Labs' multimodal reasoning model for
-# agentic tasks (tool calling, coding, computer use) with a documented
-# 1,048,576-token context window that the model actively manages. Only
-# chat-completion model IDs belong here: Muse Image (image generation),
-# Muse Voice Transcribe (speech-to-text), and SAM (vision segmentation) are
-# invoked through other endpoints.
+# Discovery fallback when /models is unavailable: curated chat IDs only
+# (image/voice/SAM use other endpoints). Capabilities ride beside IDs so
+# picker and compaction can't drift; published windows cover only these.
 _FALLBACK_MODEL_SPECS = (
-    # Muse Spark 1.3 is the current flagship on the Model API.
+    # Current flagship on the Model API.
     _FallbackModelSpec("muse-spark-1.3", 1_048_576),
     _FallbackModelSpec("muse-spark-1.2", 1_048_576),
     _FallbackModelSpec("muse-spark-1.1", 1_048_576),
@@ -59,10 +49,8 @@ _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _MODEL_CONTEXT_WINDOWS = {
     spec.name: spec.context_window for spec in _FALLBACK_MODEL_SPECS
 }
-# Meta's catalog also includes models invoked through non-chat endpoints
-# (image generation, speech-to-text, and SAM vision segmentation).
-# Keep this deliberately small and exact: unknown/private IDs stay selectable
-# because they may be valid chat models on an operator's account.
+# Non-chat endpoints (image/voice/SAM): excluded from chat fallback.
+# Kept small and exact; unknown IDs stay selectable for operators.
 _NON_CHAT_COMPLETION_MODEL_PREFIXES = (
     "muse-image",
     "muse-voice",
@@ -82,11 +70,10 @@ def _is_non_chat_completion_model_id(model_id: str) -> bool:
 
 
 def _capability_model_id(model: str | None) -> str:
-    """Normalize Meta's pricing-tier suffixes for capability lookups.
+    """Normalize pricing-tier suffixes for capability lookups.
 
-    The request must keep the exact selected ID, but a tier variant such as
-    ``muse-spark-1.3-contributor`` shares the base model's published context
-    window and streaming behavior, so capability lookups use the base name.
+    Requests keep the exact ID; e.g. ``-contributor`` shares the base
+    model's window and streaming behavior.
     """
     if not isinstance(model, str):
         return ""
@@ -97,17 +84,13 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
     name = "meta"
     executable = "meta"  # HTTP backend; never spawns a subprocess
 
-    # Muse Spark is documented multimodal (agentic tool calling + computer
-    # use), so photo uploads can ride as real image parts.
+    # Documented multimodal: photo uploads ride as real image parts.
     supports_vision = True
     vision_mode = "openai_parts"
 
     default_model = "muse-spark-1.3"
     default_summary_model = "muse-spark-1.2"
-    # Contributor pricing variants (``muse-spark-1.3-contributor``) sit
-    # alongside the canonical IDs on every account; tiers keep the
-    # canonical IDs, and authenticated discovery supersedes this table
-    # with the account's real catalog.
+    # Tier variants sit beside canonical IDs; discovery supersedes this.
     tier_models = {
         "low": "muse-spark-1.2",
         "mid": "muse-spark-1.3",

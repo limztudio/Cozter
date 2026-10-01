@@ -40,11 +40,8 @@ _MODEL_CONTEXT_COMPACT_FRACTION = 0.60
 # Summarize before its truncation logic has to discard much raw history.
 _HISTORY_BUDGET_COMPACT_FRACTION = 0.75
 
-# A previously persisted summary is model output, so it is not guaranteed to
-# respect the requested 80-200 word target.  Reserve most of the compaction
-# prompt for the raw messages that actually need compacting; otherwise one
-# oversized old summary can leave no room for even a single message and block
-# every later compaction attempt.
+# Old summaries are model output: reserve most of the prompt for raw
+# messages so one oversized summary can't block every later pass.
 _PREVIOUS_SUMMARY_FRACTION = 4
 _PREVIOUS_SUMMARY_TRUNCATION_MARKER = (
     "\n… [previous summary truncated: remainder omitted — this is a preview,"
@@ -178,10 +175,7 @@ def _compaction_prompt_parts(
                     " say PARTIAL + remainder when coverage is unclear]",
                     *lt_lines,
                 ]
-                # Keep the fixed prefix inside the same fraction: drop the
-                # oldest retained lines (newest retained last) to fit.
-                # Track the joined length incrementally instead of
-                # re-joining on every check (O(n^2)).
+                # Drop oldest lines to fit (newest retained last).
                 lt_total = sum(len(line) + 1 for line in lt_lines)
                 while len(lt_lines) > 1 and lt_total > lt_max:
                     lt_total -= len(lt_lines[1]) + 1
@@ -243,11 +237,7 @@ def _oversized_first_message_prefix(
     prefix = session.format_msg_line(
         {"role": first.get("role"), "content": ""}, cap=None,
     )
-    # The partial line carries the oversized-message marker inserted by
-    # _take_oldest_message_lines, so leave that many slots out of the raw
-    # prefix. Mirrors the renderer's tiny-budget fallback: budget 1 keeps a
-    # bare ellipsis, and budgets that cannot fit the full marker keep a
-    # plain clipped prefix with no marker.
+    # Leave room for the oversized-message marker carried by the partial line.
     if budget - len(prefix) == 1:
         marker_len = 1
     elif budget - len(prefix) <= len(_OVERSIZED_MESSAGE_MARKER):
@@ -440,10 +430,7 @@ async def _maybe_compact_under_maintenance_lock(
         return
     keep_recent = KEEP_RECENT_AFTER_COMPACT
     if oversized_first is not None:
-        # The prompt includes only a persisted prefix of the original first
-        # message. Save its summary, then retain the exact unseen suffix in
-        # that same message slot. Any other count would make a later raw
-        # message look covered even though it was not sent to the backend.
+        # Retain the exact unseen suffix so unsent messages never look covered.
         if covered_count != 1:
             logger.error(
                 "Oversized-message compaction covered an unsafe number of "
@@ -452,10 +439,7 @@ async def _maybe_compact_under_maintenance_lock(
             )
             return
     elif covered_count <= KEEP_RECENT_AFTER_COMPACT:
-        # A handful of large messages can each fit the prompt while still
-        # covering too few to trim against the usual keep-recent floor.
-        # Keep one fewer than we covered so this pass still shrinks history
-        # instead of retrying the same prefix forever.
+        # Keep one fewer than covered so the pass still shrinks history.
         if covered_count < 1:
             logger.error(
                 "Compaction did not cover enough messages for session %s "
@@ -469,12 +453,8 @@ async def _maybe_compact_under_maintenance_lock(
             "keeping %d so history can still shrink",
             session_id, covered_count, keep_recent,
         )
-    # Reject summaries that are suspiciously short compared to the existing
-    # one - a sign of a truncated or failed backend response.
-    # An oversized stored summary is explicitly truncated before the next
-    # model call. It may therefore be replaced by a normally sized summary;
-    # comparing the result with the pathological original would reject every
-    # recovery attempt even after the prompt itself has room again.
+    # Reject suspiciously short summaries (truncated/failed responses).
+    # Compare against the truncated stored summary so recovery can succeed.
     min_len = (
         100
         if len(existing_summary) > _previous_summary_budget()
@@ -488,11 +468,7 @@ async def _maybe_compact_under_maintenance_lock(
         )
         return
     async with workspace_mod.get_lock(workspace_path):
-        # The summarizer runs outside this lock. A user can rename the
-        # session while it is in flight, so do not let a title derived from
-        # the older snapshot overwrite that newer choice. The summary itself
-        # is still safe to apply: set_summary trims only the prefix captured
-        # in that snapshot and keeps any appended messages.
+        # Never let a stale in-flight title overwrite a newer rename.
         latest = session.load_session(workspace_path, session_id)
         if latest is None:
             return
@@ -508,10 +484,7 @@ async def _maybe_compact_under_maintenance_lock(
                 keep_recent=keep_recent,
                 long_term_rewrite=new_long_term,
                 title=title_to_save,
-                # Only trim the contiguous prefix actually sent to the summary
-                # backend. A foreground turn can append more while the summary
-                # runs, and oversized histories intentionally leave their later
-                # messages raw for the next pass.
+                # Trim only the prefix actually sent; later messages stay raw.
                 summarized_count=covered_count,
             )
         else:
@@ -570,11 +543,7 @@ def _take_oldest_message_lines(messages: list[dict], budget: int) -> list[str]:
         line = session.format_msg_line(message, cap=None)
         if used + len(line) > budget:
             if not lines and budget > 0:
-                # An exceptionally large first message must not block all
-                # future compactions: only a contiguous oldest prefix may be
-                # removed, so skipping it means every later pass chooses the
-                # same zero-message prefix.  Give the summary model a marked
-                # prefix and let successful compaction advance the history.
+                # A huge first message must not block all future passes.
                 marker = _OVERSIZED_MESSAGE_MARKER
                 if budget == 1:
                     lines.append("…")
@@ -628,10 +597,7 @@ async def compact_session(
     # Large prompts cause the summary model to return truncated/empty output.
     parts = _compaction_prompt_parts(existing_summary, existing_long_term)
 
-    # Add a contiguous oldest prefix until we hit the budget. cap=None so
-    # the model sees full message content (compaction's budget is generous
-    # enough to afford it). The caller only removes this exact prefix, which
-    # prevents unsent messages from being mistaken for summarized history.
+    # Oldest contiguous prefix only, uncapped; caller removes exactly this.
     budget = _compaction_message_budget(parts)
     msg_lines = _take_oldest_message_lines(messages, budget)
     parts.extend(msg_lines)

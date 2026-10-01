@@ -24,16 +24,12 @@ from ..base import (
 )
 
 
-# Applying a patch necessarily materializes both the patch and the target
-# text. Keep those allocations comfortably bounded: agents can split a large
-# edit into several calls, while one accidental generated file must not make a
-# single tool invocation consume unbounded memory or CPU.
+# Patch + target both materialize: bound them so one call can't OOM the bot.
 _MAX_PATCH_BYTES = 1 * 1024 * 1024
 _MAX_PATCH_LINES = 20_000
 _MAX_FILE_BYTES = 1 * 1024 * 1024
 _MAX_FILE_LINES = 50_000
-# Precompiled once: _parse_hunk_header runs per hunk, so an inline
-# re.match would recompile the pattern on every hunk header parsed.
+# Compiled per-hunk (avoids recompiling on every hunk header).
 _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 
@@ -57,10 +53,8 @@ class _Hunk:
         self.new_count = new_count
         self.old: list[str] = []  # context + deleted lines (content only)
         self.new: list[str] = []  # context + added lines (content only)
-        # A unified diff's "\\ No newline at end of file" marker applies to
-        # the immediately preceding body line.  Remember which side of this
-        # hunk is the output EOF so apply can preserve the requested newline
-        # state instead of inheriting it blindly from the old file.
+        # "No newline" marker belongs to the preceding body line: remember
+        # which output side owns the EOF newline.
         self.last_marker: str | None = None
         self.new_ends_with_newline: bool | None = None
 
@@ -104,10 +98,8 @@ class _FilePatch:
         if self.old_path is not None:
             return
         for hunk in self.hunks:
-            # A creation diff's old side is /dev/null, so it cannot contain
-            # a context or deletion line.  Previously those lines were simply
-            # discarded while the new side was written, turning a malformed
-            # diff into a different successful file creation.
+            # A creation diff has no old side: reject context/deletion lines
+            # instead of silently writing a different file.
             if hunk.old:
                 raise _PatchError(
                     "creation hunk contains old/context lines for /dev/null",
@@ -268,22 +260,15 @@ def _parse_patch(
                 raise _PatchError(
                     "no-newline marker does not follow a hunk body line",
                 )
-            # The marker is emitted only for a final old/new line.  A marker
-            # following a deletion means the replacement side ends with a
-            # newline; one following an addition/context means it does not.
+            # Marker after a deletion => replacement ends with newline, else not.
             hunk.new_ends_with_newline = hunk.last_marker == "-"
             hunk.last_marker = None
             continue
-        # File-header-looking content is legal inside a hunk: deleting a line
-        # that starts with ``--`` produces ``--- ...`` in the diff, and adding
-        # one that starts with ``++`` produces ``+++ ...``. Only recognize the
-        # next file header once the current hunk's declared counts are full.
+        # ``---``/``+++`` lines are legal hunk content (e.g. deleting ``-- x``):
+        # only treat them as headers once declared counts are full.
         if hunk is not None and hunk.complete:
-            # A completed hunk may be followed by another hunk or a complete
-            # ``---``/``+++`` file-header pair. A lone header-looking line is
-            # still an overlong hunk body line (for example ``--- value`` is
-            # a deletion of ``-- value``), not a harmless preamble. Reject it
-            # rather than clearing the hunk and silently discarding the edit.
+            # Lone header-looking line = overlong hunk body (e.g. ``--- value``
+            # deletes ``-- value``): reject, don't silently discard the edit.
             next_line = lines[index + 1] if index + 1 < len(lines) else None
             if (
                 not line
@@ -331,8 +316,7 @@ def _parse_patch(
         if hunk is None:
             continue  # preamble / "diff --git" / "index" lines
         if not line:
-            # A bare empty line is an empty context line (some emitters drop
-            # the leading space).
+            # Bare empty line = empty context line (space dropped by emitter).
             hunk.old.append("")
             hunk.new.append("")
             hunk.last_marker = " "
@@ -415,9 +399,7 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
         if output_error is not None:
             return f"{fp.new_path}: skipped ({output_error})"
         ensure_parent_dir(target)
-        # Do not turn a concurrent creator into a silent overwrite.  The
-        # no-clobber helper also keeps failed writes from exposing a partial
-        # new source file.
+        # No-clobber: concurrent creators fail, partial writes stay hidden.
         if not create_text_file_atomically(target, out, uses_crlf=False):
             return f"{fp.new_path}: skipped (file already exists)"
         return f"{fp.new_path}: created ({len(new_lines)} lines)"
@@ -462,8 +444,7 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
             f"file exceeds the {_MAX_FILE_BYTES:,}-byte limit",
         )
     with open(path, "rb") as f:
-        # The size check above is only a fast path: the file can grow after
-        # stat(), so keep the actual read bounded too.
+        # stat() races growth: keep the read itself bounded.
         raw = f.read(_MAX_FILE_BYTES + 1)
     if len(raw) > _MAX_FILE_BYTES:
         raise _FileLimitError(
@@ -528,7 +509,7 @@ def _apply_hunks(lines: list[str], hunks: list[_Hunk]) -> list[str] | str:
 def _locate(lines: list[str], hunk: _Hunk) -> int | None:
     old = hunk.old
     if not old:
-        # Pure insertion: use the start hint, clamped in-range.
+        # Pure insertion: start hint, clamped in-range.
         return min(max(hunk.start - 1, 0), len(lines))
     n, m = len(lines), len(old)
     if m > n:

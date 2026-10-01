@@ -19,29 +19,23 @@ from ..base import (
 )
 
 
-# DuckDuckGo serves the same results from two independent frontends. Their
-# rate limits and outage profiles differ, so walking the chain turns a
-# single flaky host (a recurring failure in practice) into a per-query
-# internal retry instead of a failed tool call.
+# Two DDG frontends with independent rate limits: chain them as a
+# per-query internal retry instead of failing on one flaky host.
 _SEARCH_ENDPOINTS = (
     "https://html.duckduckgo.com/html/?{qs}",
     "https://lite.duckduckgo.com/lite/?{qs}",
 )
-# A 200 response carrying an empty shell (no result anchors) is common while
-# the service sheds load, so each endpoint is tried twice before moving on.
-# Real-work cap: each attempt runs up to 3600s (under the tool runner's
-# own 3600s cap) or until the turn is cancelled; cancel still stops instantly.
+# Empty 200 shells are common under load: try each endpoint twice.
 _ATTEMPTS_PER_ENDPOINT = 2
 _RETRY_DELAY_SECONDS = 0.5
 
-# One scan bound so a pathological response cannot make the parser churn.
+# Bound the anchor scan against pathological responses.
 _MAX_ANCHORS_SCANNED = 200
 _ANCHOR_RE = re.compile(
     r'<a\b[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
     re.IGNORECASE | re.DOTALL,
 )
-# DuckDuckGo tags its sponsored links with these query parameters on its
-# own /l/ redirector; real results never carry them.
+# Sponsored-link markers on DDG's own /l/ redirector; real results lack them.
 _AD_PARAMS = frozenset({"ad_provider", "ad_domain", "ad_tool"})
 _DDG_HOST_SUFFIX = "duckduckgo.com"
 
@@ -118,8 +112,7 @@ class WebSearchTool(AgentTool):
         )
         failures: list[str] = []
         saw_page = False
-        # Chain order wins (html first), but both endpoints already ran
-        # concurrently, so the slow one never blocked the healthy one.
+        # Both already ran concurrently; chain order (html first) wins.
         for _host, results, endpoint_failures, page in gathered:
             failures.extend(endpoint_failures)
             saw_page = saw_page or page
@@ -142,8 +135,7 @@ class WebSearchTool(AgentTool):
                 return "\n".join(results)
 
         if saw_page:
-            # At least one endpoint answered 200; an empty parse then most
-            # likely means the query genuinely has no results.
+            # A 200 with no parseable results means genuinely no results.
             return "No search results found."
         return "Search failed: " + "; ".join(dict.fromkeys(failures))
 
@@ -154,10 +146,8 @@ class WebSearchTool(AgentTool):
 def _parse_results(body: str, max_results: int) -> list[str]:
     """Extract numbered result lines from either DuckDuckGo frontend.
 
-    The ``html`` frontend marks results with ``class="result__a"`` anchors;
-    the ``lite`` frontend renders plain anchors inside its results table.
-    Both are parsed with one generic anchor scan plus filters, because every
-    non-result link on either page points back at a DuckDuckGo host.
+    ``html`` uses ``class="result__a"`` anchors; ``lite`` uses plain anchors
+    in its results table. One generic anchor scan + filters covers both.
     """
     results: list[str] = []
     seen: set[str] = set()

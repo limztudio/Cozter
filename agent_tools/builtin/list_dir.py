@@ -88,8 +88,7 @@ class ListDirTool(AgentTool):
                     try:
                         is_dir = entry.is_dir(follow_symlinks=False)
                     except OSError:
-                        # A dangling symlink, ELOOP, or vanished entry must
-                        # not abort the rest of the listing.
+                        # One bad entry must not abort the rest of the listing.
                         is_dir = False
                     yield entry.name, is_dir
 

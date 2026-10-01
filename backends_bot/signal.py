@@ -86,11 +86,8 @@ def _signal_rate_limit_delay(exc: BaseException) -> float | None:
         return None
     return min(delay, _SIGNAL_ATTACH_RETRY_MAX_DELAY_SEC)
 
-# JSON-RPC methods that make signal-cli dispatch a Signal message. If the
-# socket drops after signal-cli acted but before its response returns, an
-# automatic retry would deliver a duplicate, so these are not retried on a
-# transport error (a rare lost reply is preferable to a visible duplicate).
-# ``remoteDelete`` is intentionally omitted: re-deleting is idempotent.
+# Send-methods are not retried on transport error: a duplicate is worse
+# than a rare lost reply. (``remoteDelete`` is idempotent, so omitted.)
 _NON_IDEMPOTENT_RPC_METHODS = frozenset({"send"})
 
 
@@ -473,10 +470,7 @@ class SignalBot(BotPlatform):
         """
         subscription = await self._subscribe_receive()
 
-        # Keep this state transition await-free.  If EOF happened while the
-        # subscription request was in flight, the reader has already cleared
-        # the transport; if it happens after this block, it sees
-        # ``_receive_started`` and schedules a reconnect itself.
+        # Keep this transition await-free so EOF races still reconnect.
         self._receive_subscription = subscription
         self._receive_started = True
         self._receive_subscribed = True

@@ -28,16 +28,13 @@ from ...utils import clip_status_value
 
 _NOTES_RELPATH = ".cozter/notes.md"
 
-# Total size ceiling. Appending past it trims the oldest entries, so the
-# tool can never strand the model with a "notes full" dead end.
+# Size ceiling: appending past it trims oldest entries (never "notes full").
 _NOTES_MAX_BYTES = 64 * 1024
-# After a trim, keep roughly this much of the newest material.
+# Keep roughly this much newest material after a trim.
 _NOTES_KEEP_BYTES = 32 * 1024
-# One appended entry is capped so a runaway argument cannot bypass the
-# trim budget (UTF-8 worst case is 4 bytes per character).
+# Per-entry cap so one runaway argument can't bypass the trim budget.
 _MAX_ENTRY_CHARS = 2_000
-# read() returns the tail of the notes, sized so execute_tool's 4,000
-# character result cap still shows the newest entry rather than hiding it.
+# Tail sized to fit execute_tool's 4,000-char result cap.
 _READ_TAIL_CHARS = 3_500
 
 
@@ -173,7 +170,7 @@ def _fit_entries(parts: list[str]) -> str:
     if len(combined_bytes) <= _NOTES_MAX_BYTES:
         return combined
 
-    # Split on raw bytes so per-entry sizes come from one encode.
+    # Byte-split: one encode gives every entry size.
     entries: list[tuple[str, int]] = []
     current_lines: list[bytes] = []
     current_size = 0
@@ -187,7 +184,7 @@ def _fit_entries(parts: list[str]) -> str:
             current_lines = []
             current_size = 0
         current_lines.append(raw_line)
-        # +1 accounts for the "\n" that join() will re-insert.
+        # +1 for the "\n" join() re-inserts.
         current_size += len(raw_line) + 1
     if current_lines:
         text = b"\n".join(current_lines).decode(
@@ -203,8 +200,7 @@ def _fit_entries(parts: list[str]) -> str:
         kept.append(text)
         used += size
     kept.reverse()
-    # Entries already carry their trailing blank line, so plain
-    # concatenation reproduces the append format exactly.
+    # Entries carry their trailing blank line: plain concat reproduces append format.
     return "".join(kept)
 
 

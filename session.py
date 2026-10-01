@@ -609,10 +609,7 @@ def set_summary(
     )
     trimmed = max(0, basis - keep_recent)
     data["compacted_count"] = data.get("compacted_count", 0) + trimmed
-    # Keep everything from the trim point onward: the last *keep_recent* of the
-    # summarized prefix (raw context continuity) plus any messages appended
-    # after the snapshot. msgs[trimmed:] reduces to msgs[-keep_recent:] in the
-    # no-race case.
+    # Keep the trim point onward: summarized tail + messages appended since.
     data["messages"] = msgs[trimmed:]
     if first_message_tail is not None and data["messages"]:
         first = data["messages"][0]

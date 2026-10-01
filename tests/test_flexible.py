@@ -351,10 +351,8 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_blocked_worker_pauses_the_turn_without_the_marker(
         self,
     ) -> None:
-        # Workers run under the autonomy policy, so one that asks anyway is
-        # genuinely stuck. The merge model is a cheap one and may relay the
-        # question as prose — the pause must not depend on it remembering
-        # the marker, or the user's answer lands as an unrelated new turn.
+        # A worker that still asks is stuck: the pause must not depend on
+        # the cheap merge model relaying the marker.
         self.worker_texts = [
             "Blocked. Which retry path?\n\n[[await]]", "high report",
         ]

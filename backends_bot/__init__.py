@@ -56,8 +56,7 @@ def create_platforms(config: dict) -> list[BotPlatform]:
     bots: list[BotPlatform] = []
 
     if tg_tokens:
-        # Deferred import to avoid requiring slack_bolt at telegram-only
-        # deploys (and vice versa).
+        # Deferred: avoid requiring the other platform's dependency.
         from .telegram import TelegramBot
         raw_ids = config.get("user_ids") or []
         if isinstance(raw_ids, (str, int)) and not isinstance(raw_ids, bool):

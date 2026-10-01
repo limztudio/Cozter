@@ -38,16 +38,9 @@ _DEFAULT_CONFIG = {
     "meta_base_url": "https://api.meta.ai/v1",
     "meta_socket_timeout": 3600,
     "meta_max_retries": 2,
-    # Real-work cap on a single tool call (search/build/fetch/...): 3600s
-    # so slow work finishes instead of timing out and forcing a wasteful
-    # retry. Cancel (/stop, new message, [[await]]) still stops instantly.
-    # Chat-reply paths (Signal RPC, model discovery, stream drains) keep
-    # their own short timeouts.
+    # Real-work cap: slow work finishes; cancel still stops instantly.
     "tool_timeout": 3600,
-    # Diagnostic interval for the auto-update loop while it is waiting on
-    # active turns. Reaching this interval emits stuck-turn diagnostics and
-    # then continues waiting; it does not cancel the turn or force an update
-    # restart through active work.
+    # Stuck-turn diagnostic interval: emits diagnostics, never cancels work.
     "update_idle_timeout": 1200,
     # Interval (seconds) between automatic faulthandler traceback
     # dumps. 0 disables the periodic dump; the on-demand SIGUSR1
@@ -465,10 +458,8 @@ def load_config() -> dict:
         sys.exit(1)
     cfg["max_permission"] = normalized_max_permission
 
-    # These values are consumed directly from the returned mapping by the
-    # launcher/platform constructors rather than through the defensive getter
-    # helpers above. Normalize them here so malformed JSON cannot crash
-    # ``asyncio.sleep`` or queue sizing later in startup/message handling.
+    # Consumed directly by constructors (not via getters): normalize here
+    # so malformed JSON can't crash startup/handling.
     for key in (
         "update_check_interval",
         "recent_workspace_limit",
@@ -506,13 +497,8 @@ def load_config() -> dict:
         if isinstance(signal_socket_raw, str) else ""
     )
 
-    # Telegram user IDs may be written as ints or strings, and as a list or a
-    # bare scalar. Coerce to a clean list of string IDs: a bare int would make
-    # the platform constructor's ``[str(t) for t in ids]`` raise TypeError
-    # (crash-restart loop, since the config is reread identically on restart),
-    # and a bare string would iterate into single characters, silently locking
-    # out the real user. ``normalize_string_list`` can't be reused here because
-    # it drops non-string items (i.e. every integer ID).
+    # Coerce ints/strings/scalars to string IDs: a bare int crashes the
+    # constructor (restart loop), a bare string iterates into characters.
     raw_user_ids = cfg.get("user_ids")
     if isinstance(raw_user_ids, (str, int)) and not isinstance(
         raw_user_ids, bool,

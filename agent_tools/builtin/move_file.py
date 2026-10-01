@@ -28,9 +28,7 @@ class MoveFileTool(AgentTool):
         if isinstance(paths, str):
             return paths
         raw_src, raw_dst, src, dst = paths
-        # A symlink to a directory is still a single filesystem entry: it can
-        # safely be moved even when its target directory contains the new
-        # link. Only a real source directory has the self-descendant hazard.
+        # Dir symlinks are single entries (safe to move); only real dirs risk self-nesting.
         if (
             not os.path.islink(src)
             and os.path.isdir(src)

@@ -80,10 +80,8 @@ def _md_to_mrkdwn(text: str) -> str:
 
 def _mrkdwn_line(line: str) -> str:
     line = escape_html_entities(line)
-    # Bold first, into placeholders, so the single-asterisk italic
-    # regex below can't mis-match the `*bold*` we're about to emit.
-    # Headers -> bold (Slack has no heading syntax).
-    # Cheap substring guards skip the regex engine for plain lines.
+    # Bold first (into placeholders) so italic can't mis-match it.
+    # Substring guards skip the regex for plain lines.
     if line[:1] == "#":
         line = _SLACK_HEADING_RE.sub(_bold_sub, line)
     if "**" in line:
@@ -237,14 +235,8 @@ def _split_slack_markdown(
     if len(text) <= limit:
         return [text]
 
-    # A split inside a fence adds a prefix (the reopened opener + "\n") to the
-    # continuation chunk and a suffix ("\n" + the closing marker) to the
-    # preceding chunk. The prefix reopens the fence active at the END of the
-    # previous chunk while the suffix closes the fence active at the END of the
-    # current chunk - which can be a DIFFERENT fence. Reserve the independent
-    # maxima so the worst-case prefix+suffix pairing still fits; a single
-    # combined max (opener+marker of the same fence) can under-reserve when a
-    # long-opener fence and a long-marker fence interleave across a boundary.
+    # Split chunks reopen/close fences independently: reserve each maximum
+    # separately so mixed fences still fit.
     max_opener = 0
     max_marker = 0
     # Single pre-scan for the reserve sizes; the chunk loop below replays
@@ -470,10 +462,7 @@ class SlackBot(BotPlatform):
         self.app.event("app_mention")(self._on_app_mention)
 
         self._handler = AsyncSocketModeHandler(self.app, self.app_token)
-        # Restore in-flight / queued messages before connecting so new
-        # user events can't race past the restored backlog. app.client
-        # is already ready (auth_test succeeded above), so drain can
-        # still post messages via chat_postMessage during restore.
+        # Restore the backlog before connecting so new events can't race it.
         await self._start_daemon_services()
         await self._handler.connect_async()
         logger.info(

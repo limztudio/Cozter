@@ -20,9 +20,7 @@ class DeleteFileTool(AgentTool):
 
     async def run(self, workspace_path: str, args: dict) -> str:
         raw_path = args.get("path", "")
-        # Keep the final pathname intact: unlinking a symlink must remove the
-        # link rather than its in-workspace target. The resolver still checks
-        # that an existing link cannot point outside the workspace.
+        # Unlink the link itself, not its target; resolver still confines it.
         try:
             target = resolve_workspace_entry(workspace_path, raw_path)
         except ValueError as exc:

@@ -20,17 +20,13 @@ from ..base import (
     summarize_arg,
 )
 
-# Skip grep on files bigger than this - usually binary or generated.
+# Skip files above this size (usually binary/generated).
 _GREP_MAX_FILE_BYTES = 1_000_000  # 1 MB
 
-# Per-match-line truncation so one giant minified line can't blow past
-# the agent's tool-result cap and hide every other match.
+# Truncate match lines so one minified line can't hide the other matches.
 _GREP_MAX_LINE_CHARS = 200
-# Python's built-in regex engine has no per-match deadline. Run scans in a
-# killable process instead of a thread so cancel (/stop, new message) always
-# reaps the worker instead of leaving an abandoned executor thread behind.
-# Real-work cap: the scan runs up to tool_timeout (default 3600s)
-# or until the turn is cancelled.
+# No per-match deadline in ``re``: scan in a killable process so cancel
+# always reaps the worker (real-work cap: up to tool_timeout).
 _GREP_WORKER_JOIN_SECONDS = 0.5
 
 
@@ -83,17 +79,9 @@ class GrepTool(AgentTool):
             maximum=200,
         )
 
-        # regex.search on adversarial input (catastrophic backtracking) is
-        # CPU-bound and cannot be interrupted at an await point. A thread
-        # would keep running after asyncio cancels its await, so isolate the
-        # whole scan in a killable process instead.
-        # Real-work cap: the scan runs up to tool_timeout (default 3600s)
-        # or until the turn is cancelled; cancel reaps the worker
-        # (see _start_scan_worker).
-        # Run the blocking wait directly in this coroutine's thread: the
-        # worker already lives in its own process, and receive_conn.poll()
-        # yields in 0.1s slices so the event loop stays responsive without
-        # an extra thread hop per scan.
+        # Regex is CPU-bound and uninterruptable: isolate in a killable
+        # process (real-work cap; cancel reaps it). Poll in 0.1s slices so
+        # the loop stays responsive without an extra thread hop.
         try:
             results = await _scan_in_subprocess_async(
                 workspace_path, search_root, file_glob, regex, max_results,
@@ -125,10 +113,7 @@ class GrepTool(AgentTool):
         ):
             try:
                 metadata = os.stat(fpath)
-                # os.walk also yields FIFOs, sockets, and device files. A
-                # blocking open of one of those can strand this worker thread
-                # long after the tool coroutine times out, so grep only reads
-                # regular files.
+                # Skip non-regular files (FIFOs/sockets/devices block on open).
                 if (
                     not stat.S_ISREG(metadata.st_mode)
                     or metadata.st_size > _GREP_MAX_FILE_BYTES
@@ -172,9 +157,7 @@ def _scan_worker(
             workspace_path, search_root, file_glob, regex, max_results,
         )))
     except BaseException as exc:
-        # This isolated child is always reaped by the parent. Preserve a
-        # concise failure for the tool caller instead of silently returning
-        # an empty match set if the filesystem scan itself broke.
+        # Report scan failures instead of returning a false empty match set.
         try:
             result_conn.send((False, f"{type(exc).__name__}: {exc}"))
         except Exception:
@@ -245,9 +228,8 @@ async def _scan_in_subprocess_async(
 ) -> list[str]:
     """Wait for the grep worker without stalling the event loop.
 
-    The worker lives in its own process; the blocking ``poll()`` waits in
-    0.1s slices on a helper thread so /stop cancels this await promptly
-    and the ``finally`` below reaps the worker instead of stranding it.
+    ``poll()`` waits in 0.1s slices on a helper thread so /stop cancels
+    promptly and the ``finally`` below still reaps the worker.
     """
     proc, receive_conn = _start_scan_worker(
         workspace_path, search_root, file_glob, regex, max_results,
@@ -257,12 +239,9 @@ async def _scan_in_subprocess_async(
             if await asyncio.to_thread(receive_conn.poll, 0.1):
                 return _read_scan_payload(receive_conn)
             if not proc.is_alive():
-                # A child that exits without writing a result is a real scan
-                # failure, not a no-match result.
+                # Silent child exit is a scan failure, not "no matches".
                 raise RuntimeError("grep worker exited without a result")
     finally:
         receive_conn.close()
-        # A thread keeps the reap (join/terminate) running to completion
-        # even if a second /stop cancels this wait; the worker is never
-        # left alive behind a cancelled turn.
+        # Reap on a thread so the worker never survives a cancelled turn.
         await asyncio.to_thread(_stop_scan_worker, proc)

@@ -51,8 +51,7 @@ class MultiEditTool(AgentTool):
         if not os.path.isfile(target):
             return f"File not found: {raw_path}"
 
-        # Validate every edit up-front so we don't start applying partial
-        # edits and then discover a malformed one halfway through.
+        # Validate all edits first: no partial application on a late malformed edit.
         for i, edit in enumerate(edits):
             if not isinstance(edit, dict):
                 return f"Edit {i}: must be an object"
@@ -71,8 +70,7 @@ class MultiEditTool(AgentTool):
         for i, edit in enumerate(edits):
             old = edit["old_string"]
             new = edit["new_string"]
-            # Match EditFileTool's fail-safe handling of malformed tool
-            # arguments: only a JSON boolean true permits broad replacement.
+            # Same fail-safe as edit_file: only JSON true broadens replacement.
             replace_all = edit.get("replace_all") is True
             content, count, replacements = apply_string_replacement(
                 content, old, new, replace_all=replace_all,

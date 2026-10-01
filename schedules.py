@@ -121,11 +121,8 @@ def migrate_schedules(
     target = data.get(target_key, [])
     if not isinstance(target, list):
         target = []
-    # Schedule IDs are generated as strings, but this is persisted state and
-    # may have been hand-edited or migrated from an older installation.  Do
-    # not put arbitrary truthy JSON values (lists/dicts are unhashable) into
-    # the de-duplication set: one malformed record must not abort migration of
-    # every other schedule.
+    # Persisted IDs may be hand-edited: never let one malformed record
+    # abort the whole migration.
     seen_ids = {
         schedule_id
         for s in target
@@ -207,10 +204,8 @@ def update_schedule_fired(
         if not isinstance(s, dict):
             continue
         if s.get("id") == schedule_id:
-            # Stamp every twin: legacy files can hold duplicate ids, and
-            # stamping only the first leaves the stale twin due forever
-            # (refire every tick). New duplicates are blocked in
-            # add_schedule, this just heals old files.
+            # Stamp every twin: heals legacy duplicates (new ones are
+            # already blocked in add_schedule).
             s["last_fired"] = fired_at
             if claimed is None:
                 claimed = dict(s)
@@ -220,10 +215,7 @@ def update_schedule_fired(
     return claimed
 
 
-# ---------------------------------------------------------------------------
-# Schedule field parsers and time-slot computation. Pure functions used by
-# both the user-input wizard (``cmd_reserve``) and the scheduler tick.
-# ---------------------------------------------------------------------------
+# ---- Schedule field parsers + time-slot computation (pure functions) ----
 
 def parse_days(text: object) -> list[str]:
     """Parse a days spec into ordered, de-duplicated abbreviations.
@@ -293,10 +285,7 @@ def parse_iso(value: object) -> datetime | None:
         try:
             return parsed.astimezone().replace(tzinfo=None)
         except (OverflowError, OSError, ValueError):
-            # An otherwise valid offset timestamp at datetime's representable
-            # edge can underflow/overflow while converting to local time.
-            # Treat hand-edited state like any other malformed timestamp so
-            # one schedule cannot abort the entire scheduler tick.
+            # Clamp edge timestamps: one bad schedule must not abort the tick.
             return None
     return parsed
 

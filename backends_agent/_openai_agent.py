@@ -48,48 +48,31 @@ _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
 # Bound their aggregate too; otherwise a peer can bypass the line cap by never
 # emitting the blank event delimiter.
 _MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
-# A stream can contain arbitrarily many individually valid events. Keep the
-# retained completion state bounded too: otherwise a provider that dribbles
-# tiny text/tool fragments can bypass the per-event limit and grow this
-# process without bound. Tool arguments get their own cap because one call
-# should never monopolize the whole completion buffer.
+# Bound retained completion state: dribbled fragments must not grow the
+# process; tool args get their own cap.
 _MAX_COMPLETION_TEXT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_REASONING_BYTES = 4 * 1024 * 1024
 _MAX_TOOL_ARGUMENT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_BUFFER_BYTES = 8 * 1024 * 1024
-# Tool-call IDs and names are retained with every buffered call, but unlike
-# arguments they previously had no individual cap. Keep them comfortably
-# above normal provider limits while ensuring a malformed HTTP backend cannot
-# grow a completion's metadata outside the aggregate buffer budget.
+# Cap call ids/names too: metadata must stay inside the buffer budget.
 _MAX_TOOL_CALL_ID_CHARS = 512
 _MAX_TOOL_NAME_CHARS = 512
-# Tool loops retain every assistant and tool message for the next completion.
-# Per-completion limits alone therefore still permit an unbounded aggregate
-# request body across many turns (and Z.ai's auto-continue segments). Keep
-# the retained conversation below a comfortably-large but finite ceiling.
+# Cap the retained conversation: per-completion limits alone still allow
+# unbounded growth across turns.
 _MAX_AGENT_MESSAGE_BYTES = 32 * 1024 * 1024
 # Models normally issue only a small batch of calls before receiving their
 # results. This also bounds the bookkeeping for malformed streams that keep
 # inventing new tool-call indexes without sending argument text.
 _MAX_TOOL_CALLS_PER_COMPLETION = 128
-# Model discovery runs against operator-configured endpoints too.  Keep a
-# malformed proxy or server from making a model-picker request retain an
-# unbounded response before the backend can fall back to its safe defaults.
-# One MiB comfortably fits thousands of ordinary model IDs.
+# Bound discovery responses (1 MiB fits thousands of model IDs).
 _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
 # Catalog entries are later displayed in chat pickers and may be inserted into
 # request payloads.  Provider model IDs are normally short, so reject absurd
 # values rather than carrying attacker-controlled megabyte strings around.
 _MAX_MODEL_ID_CHARS = 512
 _MAX_MODEL_IDS = 4_096
-# Generation can run for a long time, so requests carry a 3600s real-work
-# cap (no total/connect cap, sock-read = per-backend socket timeout).
-# Cancel (/stop, new user message, [[await]] pause) still stops instantly —
-# a slow provider keeps streaming up to the cap instead of timing out early
-# and forcing a wasteful retry.
-# Error responses never reach the model in full (their messages are trimmed
-# below), so do not let a misconfigured or hostile endpoint make the bot
-# buffer an arbitrarily large HTML/JSON error document first.
+# 3600s real-work cap (cancel still stops instantly); bound error bodies
+# (their messages are trimmed before reaching the model).
 _MAX_HTTP_ERROR_BODY_BYTES = 8 * 1024
 _EOF_SUCCESS_FINISH_REASONS = frozenset({
     "stop", "length", "tool_calls", "function_call", "content_filter",
@@ -158,10 +141,7 @@ def fetch_model_ids(
     if headers:
         request = urllib.request.Request(url, method="GET")
         for name, value in headers.items():
-            # urllib's default redirect handler copies ordinary request
-            # headers to the new URL, including across origins and HTTPS to
-            # HTTP. Authentication must never follow that redirect, so keep
-            # it in Request.unredirected_hdrs instead.
+            # Auth must never follow redirects (urllib copies headers).
             request.add_unredirected_header(name, value)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         body = response.read(_MAX_MODEL_DISCOVERY_BYTES + 1)
@@ -420,10 +400,8 @@ class OpenAIChatBackend(Backend):
         tool_repeat_limit = self._tool_repeat_limit()
         request_model = self._request_model(model)
 
-        # Approval -> tool exposure (see _tools_for_approval):
-        #   * deny / compaction -> no tools (chat only)
-        #   * confirm -> read-only tools only (look-but-don't-touch)
-        #   * auto / full -> all tools
+        # Approval -> tools: deny/compaction none, confirm read-only,
+        # auto/full all.
         tools_schema = _tools_for_approval(approval, compaction)
         if tools_schema and not self._supports_tools_for_model(request_model):
             tools_schema = None
@@ -436,11 +414,8 @@ class OpenAIChatBackend(Backend):
         effort_fields = self._effort_fields(effort, request_model)
         preserve_reasoning = self._preserve_reasoning_content(request_model)
 
-        # Photo uploads arrive as "[Photo attachment saved to: <rel>]"
-        # text. On vision-capable backends, also attach the referenced
-        # workspace image bytes as a native OpenAI-style image_url part so
-        # the model sees pixels instead of only a path. Text-only backends
-        # keep the path + verified dimensions/format/size text from _ai_file.
+        # Vision backends also attach the referenced image bytes so the
+        # model sees pixels, not just a path.
         user_content: str | list[dict[str, Any]] = prompt
         if getattr(self, "supports_vision", False):
             vision_parts = _vision_parts_for_prompt(
@@ -449,10 +424,7 @@ class OpenAIChatBackend(Backend):
             if vision_parts is not None:
                 user_content = vision_parts
 
-        # The endpoint is stateless, so the model has no idea what cwd it is
-        # operating against unless we tell it. CLI backends learn the
-        # workspace via their --add-dir / -C / cwd flag; here it goes in the
-        # prompt, rebuilt every turn so a workspace switch propagates.
+        # Stateless endpoint: workspace goes in the prompt (rebuilt per turn).
         messages: list[dict] = [
             {
                 "role": "system",
@@ -499,10 +471,7 @@ class OpenAIChatBackend(Backend):
             payload = _completion_payload(
                 messages, request_model, effort_fields, tools_schema,
             )
-            # The initial tool-enabled request can create reasoning that must
-            # be replayed on its next turn. A no-tools final request can also
-            # follow one of those turns, so preserve its provider setting
-            # whenever the retained transcript already carries reasoning.
+            # Preserve reasoning once the transcript carries it.
             if preserve_reasoning and (
                 tools_schema is not None or has_preserved_reasoning
             ):
@@ -542,18 +511,12 @@ class OpenAIChatBackend(Backend):
                     if tool_calls:
                         assistant_msg["tool_calls"] = tool_calls
                         if preserve_reasoning and reasoning_content:
-                            # Z.ai validates the exact, ordered block from its
-                            # preceding assistant response before accepting a
-                            # tool result. This is opaque provider state, never
-                            # user-facing assistant text.
+                            # Opaque Z.ai provider state (validated verbatim).
                             assistant_msg["reasoning_content"] = (
                                 reasoning_content
                             )
                             has_preserved_reasoning = True
-                    # Surface this turn's commentary even if more tool calls
-                    # follow; otherwise the user would only see whatever the
-                    # model says in the FINAL turn, losing "Let me check that
-                    # file" narration.
+                    # Surface per-turn commentary, not just the final turn.
                     if assistant_text:
                         proc.emit({
                             "type": "assistant_text",
@@ -563,22 +526,14 @@ class OpenAIChatBackend(Backend):
                     if not tool_calls:
                         return
 
-                    # This response will be sent back to the model alongside
-                    # the next tool result.  Refuse before running a requested
-                    # tool if retaining it would already exceed the run-wide
-                    # bound.
+                    # Refuse before running if retaining it would break the
+                    # run-wide bound.
                     if not append_message(assistant_msg):
                         emit_message_limit_error()
                         return
 
-                    # Execute each requested tool and append the result.
-                    # One turn's tool_calls run concurrently via
-                    # asyncio.gather (results re-ordered to request order
-                    # before appending) so independent reads/searches
-                    # overlap instead of running strictly sequentially.
-                    # ``approval`` is passed through to execute_tool, which
-                    # re-enforces the permission gate as a backstop even if
-                    # the model asks for a tool it was not offered.
+                    # Run one turn's tool_calls concurrently (results
+                    # re-ordered); approval is re-enforced inside execute_tool.
                     _batch_names: list[str] = []
                     _batch_args: list[dict] = []
                     _batch_skipped: list[bool] = []
@@ -658,10 +613,7 @@ class OpenAIChatBackend(Backend):
                 if not self._auto_continue_after_tool_limit():
                     break
                 if segment >= max_segments:
-                    # Auto-continue is on but we've hit the ceiling: stop
-                    # looping and fall through to force a final no-tools
-                    # answer, rather than re-planning segments (and billing)
-                    # without end.
+                    # Ceiling hit: fall through to a final no-tools answer.
                     logger.warning(
                         "%s hit the %d-segment cap (%d tool turns each);"
                         " forcing a final answer",
@@ -972,10 +924,7 @@ async def _post_completion_stream(
     # Tool calls arrive in pieces: we accumulate by index because the
     # OpenAI streaming protocol fragments name/arguments across deltas.
     tool_buffers: dict[int, dict[str, Any]] = {}
-    # A transport EOF alone is not a valid completion: a dropped connection
-    # can leave partial text or tool-call arguments in the buffers.  [DONE]
-    # is the usual marker, while a handful of OpenAI-compatible servers end
-    # cleanly after a standard finish_reason instead.
+    # EOF alone isn't completion: dropped connections leave partial buffers.
     saw_terminal_marker = False
     terminal_finish_reason: str | None = None
 
@@ -1049,10 +998,7 @@ async def _post_completion_stream(
                         saw_terminal_marker = True
                         terminal_finish_reason = finish_reason
                     else:
-                        # A terminal provider error can arrive alongside a
-                        # [DONE] sentinel and partially accumulated tool
-                        # arguments. Do not hand that partial call to the
-                        # tool executor just because the transport closed.
+                        # Never run a partial call closed by an error + [DONE].
                         raise RuntimeError(
                             f"{label} stream ended with {finish_reason}; "
                             "response was incomplete",
@@ -1103,10 +1049,8 @@ async def _post_completion_stream(
     ) as exc:
         raise _RetryableError(f"{label}: {exc}") from exc
     except (_SSEEventTooLargeError, _CompletionTooLargeError) as exc:
-        # Do not continue a completion after dropping one of its deltas or
-        # hitting a retained-state cap: it could contain text or a fragment
-        # of a tool call. Retrying is safe because no buffered calls run until
-        # this function succeeds.
+        # Never continue after dropped deltas/caps (retry is safe: nothing
+        # buffered runs until this succeeds).
         raise _RetryableError(f"{label}: {exc}") from exc
 
     if not saw_terminal_marker:
@@ -1114,11 +1058,7 @@ async def _post_completion_stream(
             f"{label} stream ended before a completion marker",
         )
 
-    # ``length`` means the provider hit its output cap.  A text-only reply
-    # can still be presented as a truncated answer, but a tool call at that
-    # boundary may be missing argument fragments.  Never run a potentially
-    # truncated action; retrying the completion is safe because no tool has
-    # executed yet.
+    # ``length`` = output cap: never run a possibly-truncated tool call.
     if terminal_finish_reason == "length" and tool_buffers:
         raise _RetryableError(
             f"{label} stream ended with length while a tool call was pending",
