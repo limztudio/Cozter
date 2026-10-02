@@ -12,8 +12,7 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 DEFAULT_UPDATE_CHECK_INTERVAL = 300
 DEFAULT_RECENT_WORKSPACE_LIMIT = 10
 DEFAULT_MESSAGE_QUEUE_SIZE = 50
-# Bound a single attachment well below the JSON-RPC stream backstop and
-# common chat-platform quotas. Operators with a justified need can raise it.
+# Bound one attachment below stream/platform quotas; raise only with justification.
 DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _PERMISSION_LEVELS = frozenset({"full", "auto", "confirm", "deny"})
 
@@ -42,22 +41,17 @@ _DEFAULT_CONFIG = {
     "tool_timeout": 3600,
     # Stuck-turn diagnostic interval: emits diagnostics, never cancels work.
     "update_idle_timeout": 1200,
-    # Interval (seconds) between automatic faulthandler traceback
-    # dumps. 0 disables the periodic dump; the on-demand SIGUSR1
-    # dump always works regardless. See __main__._enable_faulthandler.
+    # Periodic faulthandler dump interval (0 disables; SIGUSR1 always works).
     "dump_traceback_interval": 0,
-    # Fetches are cheap and non-blocking, but five minutes avoids needless
-    # network churn for a long-running service.
+    # Five minutes avoids needless churn for a long-running service.
     "update_check_interval": DEFAULT_UPDATE_CHECK_INTERVAL,
     "recent_workspace_limit": DEFAULT_RECENT_WORKSPACE_LIMIT,
     "message_queue_size": DEFAULT_MESSAGE_QUEUE_SIZE,
     "max_upload_bytes": DEFAULT_MAX_UPLOAD_BYTES,
     "extra_models": {},
-    # Explicit capacities for private/self-hosted models whose backend cannot
-    # discover a context window.  Shape: {backend: {model_or_*: tokens}}.
+    # Explicit capacities for undiscoverable models: {backend: {model_or_*: tokens}}.
     "model_context_windows": {},
-    # Do not grant remote chat users the CLI sandbox/approval bypass unless
-    # an operator explicitly opts in via config.json.
+    # CLI bypass needs explicit operator opt-in via config.json.
     "max_permission": "auto",
     "show_usage": True,
 }
@@ -84,8 +78,7 @@ def _load_config_object() -> dict:
         mtime_ns = stat_result.st_mtime_ns
         size = stat_result.st_size
     except OSError:
-        # Missing/unstatable: fall through to open() so callers keep the
-        # previous error semantics (FileNotFoundError / ValueError).
+        # Missing/unstatable: fall through to open() to keep error semantics.
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
         if not isinstance(cfg, dict):
@@ -139,8 +132,7 @@ def _create_default_config() -> None:
     os.makedirs(config_dir, mode=0o700, exist_ok=True)
     _restrict_config_permissions(config_dir, 0o700)
 
-    # ``open(..., "w")`` honors the process umask and usually creates 0644.
-    # os.open's explicit mode guarantees no group/other read bits on POSIX.
+    # os.open's explicit mode guarantees no group/other read bits (open() honors umask).
     fd = os.open(
         CONFIG_PATH,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -409,8 +401,7 @@ def load_config() -> dict:
         try:
             _create_default_config()
         except FileExistsError:
-            # Another startup created it between the existence check and
-            # exclusive open; continue through normal validation below.
+            # Raced by another startup; continue through normal validation.
             pass
         except (OSError, RuntimeError) as exc:
             print(f"ERROR: could not create a private config file: {exc}")
@@ -458,8 +449,7 @@ def load_config() -> dict:
         sys.exit(1)
     cfg["max_permission"] = normalized_max_permission
 
-    # Consumed directly by constructors (not via getters): normalize here
-    # so malformed JSON can't crash startup/handling.
+    # Constructor-consumed (not via getters): normalize so bad JSON can't crash startup.
     for key in (
         "update_check_interval",
         "recent_workspace_limit",
@@ -474,9 +464,7 @@ def load_config() -> dict:
         ):
             cfg[key] = _DEFAULT_CONFIG[key]
 
-    # Filter whitespace-only / empty tokens so users who leave placeholders
-    # in the file get a "not configured" error rather than a runtime
-    # auth-failure later.
+    # Filter blank tokens so placeholders fail as "not configured", not runtime auth.
     cfg["telegram_bot_tokens"] = normalize_string_list(
         cfg.get("telegram_bot_tokens") or []
     )
@@ -497,8 +485,7 @@ def load_config() -> dict:
         if isinstance(signal_socket_raw, str) else ""
     )
 
-    # Coerce ints/strings/scalars to string IDs: a bare int crashes the
-    # constructor (restart loop), a bare string iterates into characters.
+    # Coerce IDs to strings: bare ints crash the constructor, bare strings iterate chars.
     raw_user_ids = cfg.get("user_ids")
     if isinstance(raw_user_ids, (str, int)) and not isinstance(
         raw_user_ids, bool,
@@ -540,8 +527,7 @@ def load_config() -> dict:
                 f" Socket Mode in {CONFIG_PATH}."
             )
             sys.exit(1)
-        # Normalize: drop non-string / whitespace-only entries so a stray
-        # placeholder doesn't pass the populated-list check.
+        # Drop non-string/blank entries so placeholders fail the populated check.
         slack_channels = normalize_string_list(
             cfg.get("slack_channel_ids") or []
         )

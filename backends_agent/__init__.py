@@ -42,8 +42,7 @@ _BACKENDS: dict[str, Backend] = {
     FLEXIBLE_BACKEND: FlexibleBackend(),
 }
 
-# Turn-capable backends only: summary agents and flexible tiers must come
-# from here (flexible itself would recurse).
+# Turn-capable only: summary agents/tiers must come from here (flexible would recurse).
 DIRECT_BACKENDS = list(_DIRECT.keys())
 
 # Meta-agent first: the /agent picker gives it the dedicated ``0`` slot.

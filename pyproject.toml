@@ -1,7 +1,5 @@
-# Local tool configuration. This is intentionally minimal: the project's
-# canonical gates (lint/type/test) live in .github/workflows/ci.yml and
-# .gitlab-ci.yml. Mypy is configured in mypy.ini; Ruff's explicit rule set
-# below preserves the original E4/E7/E9/F lint contract as Ruff evolves.
+# Minimal local config; gates live in CI workflows, mypy in mypy.ini.
+# Explicit Ruff rule set preserves the E4/E7/E9/F contract as Ruff evolves.
 
 [tool.ruff]
 target-version = "py311"

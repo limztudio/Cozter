@@ -25,9 +25,7 @@ TITLE_TIMEOUT: float | None = 3600.0  # work cap; cancel still stops instantly
 TITLE_MAX_CHARS = 60
 TITLE_CONTEXT_CHARS = 4_000
 
-# Per-session guard so two concurrent run() calls (in theory) on the
-# same session don't both spawn a title pass. The bot's per-user lock
-# already serializes turns, but we don't rely on that here.
+# Per-session guard against concurrent title passes (don't rely on the bot's per-user lock).
 _in_flight: set[tuple[str, str]] = set()
 
 
@@ -89,9 +87,7 @@ async def maybe_auto_title(
         if not title:
             return
         async with workspace_mod.get_lock(workspace_path):
-            # A compaction (or a manual rename) can finish while this title
-            # request is in flight. Re-check under the same lock used by the
-            # writer so this stale fallback never overwrites the newer name.
+            # A rename may land mid-request; re-check under the writer lock so this fallback never wins.
             latest = session.load_session(workspace_path, session_id)
             if latest is None or not session.is_default_name(
                 latest.get("name"),

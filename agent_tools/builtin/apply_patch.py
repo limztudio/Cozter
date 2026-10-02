@@ -159,9 +159,7 @@ class ApplyPatchTool(AgentTool):
         return f"apply_patch ({n} file{'s' if n != 1 else ''})"
 
 
-# ---------------------------------------------------------------------------
 # Parsing
-# ---------------------------------------------------------------------------
 
 
 def _validate_patch_limits(text: str) -> None:
@@ -347,9 +345,7 @@ def _parse_patch(
     return patches
 
 
-# ---------------------------------------------------------------------------
 # Applying
-# ---------------------------------------------------------------------------
 
 
 def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:

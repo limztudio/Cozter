@@ -75,9 +75,7 @@ class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
                 bot.release_final_reply.set()
                 await asyncio.wait_for(turn, timeout=1)
 
-            # ``_run_turn`` is normally wrapped by ``_dispatch_ai``, which
-            # owns the usual map cleanup.  This direct unit call leaves the
-            # closed queue behind only for this test.
+            # Direct unit call skips _dispatch_ai cleanup; pop the closed queue here.
             bot._inject_queues.pop("u1", None)
 
 

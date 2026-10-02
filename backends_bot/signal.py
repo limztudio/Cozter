@@ -147,7 +147,7 @@ class SignalBot(BotPlatform):
     def authorized(self, user_id: str, chat_id: str) -> bool:
         return str(chat_id) in self._group_ids
 
-    # ----- send/edit primitives ------------------------------------------
+    # send/edit primitives
 
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -215,7 +215,7 @@ class SignalBot(BotPlatform):
         # with every tool event. The final reply still arrives normally.
         return None
 
-    # ----- lifecycle ------------------------------------------------------
+    # lifecycle
 
     async def start(self) -> None:
         self._stop_requested.clear()
@@ -271,7 +271,7 @@ class SignalBot(BotPlatform):
         await self._stop_jsonrpc()
         logger.info("Signal bot stopped.")
 
-    # ----- JSON-RPC transport --------------------------------------------
+    # JSON-RPC transport
 
     async def _start_jsonrpc(self) -> None:
         await self._connect_jsonrpc(resubscribe=False)
@@ -775,7 +775,7 @@ class SignalBot(BotPlatform):
             attachment=attachment,
         )
 
-    # ----- signal-cli helpers --------------------------------------------
+    # signal-cli helpers
 
     async def _resolve_group_ids(self) -> dict[str, str]:
         resolved: dict[str, str] = {}
@@ -1425,9 +1425,7 @@ def _signal_style_strings_for_chunk(
     ]
     if not relevant:
         return []
-    # One UTF-16 prefix sum over the chunk: the old form sliced and
-    # re-encoded a body prefix per span (quadratic on styled replies).
-    # Astral chars count 2 units, everything else 1 — no encode needed.
+    # One UTF-16 prefix sum (astral = 2 units); avoids per-span re-encode (was quadratic).
     need = max(end for _, end, _ in relevant)
     prefix: list[int] = [0] * (need - chunk_start + 1)
     total = 0

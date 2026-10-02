@@ -28,7 +28,7 @@ _DETACHED_UNSUPPORTED_SUFFIX = "does not support detached tasks"
 # CLI probe timeouts: codex/grok use this; copilot/HTTP use their own.
 CLI_MODEL_DISCOVERY_TIMEOUT_SEC = 15
 
-# --- Shared turn-preamble wording -------------------------------------------
+# Shared turn-preamble wording
 # Canonical turn-preamble wording (single source of truth; agent.py re-exports).
 WHOLE_SCOPE_RULE = (
     "Whole-scope: all/entire/every/whole = list every target first,"
@@ -190,13 +190,9 @@ class ProcessResourceMap:
             return self._items.pop(id(proc), None)
 
 
-# ---------------------------------------------------------------------------
 # Shared native-vision plumbing
-# ---------------------------------------------------------------------------
 
-# Cap inline image bytes per vision turn: uploads are already bounded by
-# max_upload_bytes, but base64 inflates by ~4/3 and the retained message
-# transcript is capped — keep one photo affordable inside that budget.
+# Cap image bytes per vision turn (base64 inflates ~4/3 against a capped transcript).
 VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 VISION_MIME_BY_EXT = {
     ".jpg": "image/jpeg",
@@ -210,9 +206,7 @@ VISION_MAX_IMAGES_PER_TURN = 4
 _ATTACHMENT_SAVED_PATTERN = (
     r"\[[^\]\n]*attachment saved to:\s*([^\]\n]+?)\s*\]"
 )
-# Compiled once: the pattern string is a module constant and therefore can
-# never raise re.error at call time; compiling per call only burned CPU on
-# every turn across the five vision-capable backends.
+# Compiled once (module-constant pattern; per-call compile burned CPU every turn).
 _ATTACHMENT_SAVED_RE = re.compile(_ATTACHMENT_SAVED_PATTERN, re.IGNORECASE)
 
 
@@ -343,22 +337,15 @@ class AgentResult:
     # turn.completed, claude_code's result). Backend-shaped dict; None
     # otherwise. See agent.format_usage for the display formatter.
     usage: dict | None = None
-    # Provider jobs discovered during this foreground turn. Their lifecycle
-    # continues after the CLI stream exits, so the bot tracks them through a
-    # separate durable ledger rather than treating them as ChatEvents.
+    # Provider jobs outliving the CLI stream; tracked in a durable ledger, not as ChatEvents.
     detached_tasks: list[DetachedTaskRef] = field(default_factory=list)
-    # Agent-authored requests for Cozter to start a provider-owned task after
-    # the foreground stream ends. Unlike ``detached_tasks``, these do not
-    # already have a provider task id; the bot launches and persists them.
+    # Requests for Cozter to launch provider tasks post-stream (no provider id yet).
     detached_task_requests: list[DetachedTaskRequest] = field(
         default_factory=list,
     )
-    # Set by agent.run after routing. A later completion can use it to append
-    # output to the conversation that originally started the detached work.
+    # Set by agent.run after routing; later completions append here.
     session_id: str | None = None
-    # Per-run correlation ids for backend parser use. Keeping these on the
-    # result (rather than a singleton Backend instance) prevents concurrent
-    # turns from cross-wiring a tool result to another user's task launch.
+    # Per-run parser correlation ids (on the result, so concurrent turns can't cross-wire).
     detached_task_tool_use_ids: set[str] = field(
         default_factory=set, repr=False,
     )

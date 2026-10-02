@@ -171,9 +171,7 @@ class AgentTool(ABC):
         print(result)
 
 
-# ---------------------------------------------------------------------------
 # Helpers shared across tools
-# ---------------------------------------------------------------------------
 
 
 def resolve_workspace_entry(workspace: str, path: str) -> str:

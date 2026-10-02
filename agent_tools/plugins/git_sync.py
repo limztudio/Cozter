@@ -121,8 +121,7 @@ class GitSyncTool(AgentTool):
         if args.get("upstream") is True:
             tail.append("-u")
         if args.get("force") is True:
-            # Never plain --force: --force-with-lease refuses when the
-            # upstream moved since the last fetch instead of overwriting.
+            # Never plain --force; --force-with-lease refuses when upstream moved.
             tail.append("--force-with-lease")
         if remote is not None:
             tail.append(remote)

@@ -66,7 +66,7 @@ class CliBot(BotPlatform):
         # the lone local user unconditionally.
         return True
 
-    # ----- send/edit primitives ------------------------------------------
+    # send/edit primitives
 
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -109,7 +109,7 @@ class CliBot(BotPlatform):
         else:
             print(text)
 
-    # ----- lifecycle ------------------------------------------------------
+    # lifecycle
 
     async def start(self) -> None:
         _prepare_console()
@@ -147,7 +147,7 @@ class CliBot(BotPlatform):
         # before the first input prompt.
         return
 
-    # ----- input loop -----------------------------------------------------
+    # input loop
 
     async def _input_loop(self) -> None:
         # Daemon-thread stdin: never blocks loop shutdown.
@@ -237,9 +237,7 @@ class CliBot(BotPlatform):
         )
 
 
-# ---------------------------------------------------------------------------
 # Module helpers
-# ---------------------------------------------------------------------------
 
 def _prepare_console() -> None:
     """Make stdout/stderr UTF-8 so tool/file emojis don't crash cp1252."""

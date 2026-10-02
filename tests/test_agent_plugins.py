@@ -180,8 +180,7 @@ class NotesToolTests(unittest.TestCase):
         self.assertIn("PARTIAL + remainder", clipped)
 
     def test_oversized_legacy_file_keeps_newest_entries(self) -> None:
-        # A pre-existing oversized notes file must not push the newest
-        # entries out of the window a later append reads.
+        # An oversized legacy file must not evict the newest entries.
         os.makedirs(os.path.dirname(self.notes_path()), exist_ok=True)
         with open(self.notes_path(), "w", encoding="utf-8") as f:
             f.write("## 2000-01-01 00:00:00\n" + "old " * 30_000 + "\n")

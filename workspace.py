@@ -342,23 +342,17 @@ def ensure_cozter_dir(path: str) -> None:
     _workspace_state_dir(path, create=True)
 
 
-# ---------------------------------------------------------------------------
 # Workspace settings (stored in .cozter/settings.json)
-# ---------------------------------------------------------------------------
 
 AVAILABLE_BACKENDS = backends_agent.AVAILABLE_BACKENDS
-# Backends that own a real turn. ``flexible`` is a meta-agent that routes
-# to these, so it can be a chat agent but never a summary agent nor one of
-# its own difficulty tiers - either would recurse.
+# Real-turn backends; ``flexible`` routes to these and can't be its own tier (recursion).
 DIRECT_BACKENDS = backends_agent.DIRECT_BACKENDS
 DEFAULT_BACKEND = backends_agent.DEFAULT_BACKEND
 FLEXIBLE_BACKEND = backends_agent.FLEXIBLE_BACKEND
-# Compaction/titling default to codex (cheapest summarizer); see
-# /summaryagent and /summarymodel.
+# Compaction/titling default to codex (cheapest summarizer).
 DEFAULT_SUMMARY_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
 
-# Flexible difficulty tiers (agent+model each); all start on the default
-# backend so fresh workspaces work unset-up.
+# Difficulty tiers; all default so fresh workspaces work unset-up.
 FLEXIBLE_TIERS = flexible.TIERS
 FLEXIBLE_TIER_DESCRIPTIONS = flexible.TIER_DESCRIPTIONS
 DEFAULT_FLEXIBLE_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
@@ -721,9 +715,7 @@ def set_summary_model(workspace_path: str, model: str) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # Flexible agent — one (agent, model) pair per difficulty tier
-# ---------------------------------------------------------------------------
 
 def _validate_tier(tier: str) -> None:
     if tier not in FLEXIBLE_TIERS:
@@ -930,7 +922,7 @@ def set_history_budget(workspace_path: str, budget: int) -> None:
     )
 
 
-# ---- Per-workspace lock: serializes all workspace file access ----
+# Per-workspace lock: serializes all workspace file access
 
 _locks: dict[str, asyncio.Lock] = {}
 

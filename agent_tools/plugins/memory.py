@@ -163,8 +163,7 @@ def _excerpt(text: str, index: int, needle_len: int) -> str:
     full = f"{prefix}{snippet}{suffix}"
     if len(full) <= cap:
         return full
-    # The outer cap would otherwise silently drop the tail (possibly the
-    # suffix marker itself). Keep the edge markers honest instead.
+    # Outer cap could drop the tail/suffix marker; keep edge markers honest.
     if suffix:
         budget = max(0, cap - len(prefix) - len(suffix))
         return f"{prefix}{snippet[:budget]}{suffix}"
@@ -183,8 +182,7 @@ def _iter_search_texts(data: dict):
 
 def _fit_output(lines: list[str], header: str) -> str:
     """Join *lines* under the result budget, dropping from the end."""
-    # Track the joined size incrementally: the previous form re-summed
-    # every remaining line after each pop (quadratic in the match count).
+    # Track joined size incrementally (was quadratic re-sum per pop).
     total = len(header) + sum(len(line) + 1 for line in lines)
     omitted_len = len("(…more omitted)")
     dropped = 0

@@ -310,9 +310,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_merged_answer_may_end_on_a_blocking_question(
         self,
     ) -> None:
-        # The merge writes the reply the user reads, so it is the only step
-        # after the planner that can stop the turn: the marker must survive
-        # to _send_result, which is what pauses the queue.
+        # Only the merge (post-planner) can stop the turn: the marker must reach _send_result.
         self.merge_output = "Fixed the check.\n\nWhich retry path?\n\n[[await]]"
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
@@ -384,9 +382,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("[[await]]", result.text)
 
     async def test_an_optional_offer_does_not_pause_the_turn(self) -> None:
-        # Nothing blocked and the merge left the marker off, so the trailing
-        # question is a suggestion, not a blocker. Pausing here would wedge
-        # the queue on every "want me to also...?".
+        # No marker = suggestion, not blocker; pausing would wedge the queue.
         self.merge_output = "Fixed the check. Want me to add tests too?"
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)

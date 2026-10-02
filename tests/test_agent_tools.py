@@ -62,9 +62,7 @@ class AgentToolHelperTests(unittest.TestCase):
             coerce_int_arg(float("inf"), default=10, minimum=1, maximum=20),
             10,
         )
-        # Bools and non-integral floats must not silently coerce: True
-        # would become 1 and 3.9 would truncate to 3. Integral floats
-        # (3.0) still coerce for JSON-number tolerance.
+        # No silent bool/fraction coerce (True->1, 3.9->3); integral floats (3.0) still coerce.
         self.assertEqual(
             coerce_int_arg(True, default=10, minimum=1, maximum=20),
             10,
@@ -83,9 +81,7 @@ class AgentToolHelperTests(unittest.TestCase):
         )
 
     def test_explicit_zero_clamps_to_minimum_not_default(self) -> None:
-        # Callers must pass args.get(key, DEFAULT) raw (not `or DEFAULT`)
-        # so explicit 0 clamps to minimum uniformly: tree.py always did
-        # this; glob/list_dir/grep/fetch/search/bash/git/memory now do too.
+        # Pass args.get(key, DEFAULT) raw (not `or DEFAULT`) so explicit 0 clamps uniformly.
         self.assertEqual(
             coerce_int_arg(0, default=100, minimum=1, maximum=500),
             1,
@@ -823,8 +819,7 @@ class BashToolTests(unittest.TestCase):
                 task = asyncio.create_task(BashTool().run(
                     tmp,
                     {
-                        # Do not wait: the shell exits immediately, while the
-                        # child retains the inherited stdout pipe.
+                        # Don't wait: shell exits at once while the child keeps the pipe.
                         "command": "sleep 30 & echo $! > child.pid",
                     },
                 ))
@@ -1376,8 +1371,7 @@ class ParseOpenAICallTests(unittest.TestCase):
         self.assertEqual(args, {"path": "a.py"})
 
     def test_dict_arguments_are_accepted(self) -> None:
-        # GLM / Z.ai and some local runtimes return an already-parsed
-        # object instead of a JSON string; it must not crash.
+        # Already-parsed objects (GLM/Z.ai, local runtimes) must not crash.
         _, args = agent_tools.parse_openai_call(
             {"function": {"name": "x", "arguments": {"path": "b.py"}}},
         )
@@ -1790,9 +1784,7 @@ class ApplyPatchToolTests(unittest.TestCase):
     def test_fuzzy_trailing_whitespace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             p = os.path.join(tmp, "w.txt")
-            # File has trailing spaces the patch context omits: the fuzzy
-            # fallback still applies (context trailing ws normalizes to the
-            # patch's form).
+            # Fuzzy fallback still applies when context omits trailing spaces.
             self._write(p, "keep  \ndrop\n")
             out = self._run(tmp, (
                 "--- a/w.txt\n+++ b/w.txt\n@@ -1,2 +1,1 @@\n keep\n-drop\n"

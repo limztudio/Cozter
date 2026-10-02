@@ -635,8 +635,7 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
             await bot.send_file("group", __file__)
         self.assertEqual(bot._rpc_request.await_count, 2)
         self.assertEqual(len(sleeps), 2)
-        # sleeps[0] honors the server's "Retry after 4 seconds"; sleeps[1]
-        # is the 1.2s inter-send pacing before the retry.
+        # sleeps[0] honors Retry-After; sleeps[1] is the 1.2s inter-send pacing.
         self.assertGreaterEqual(sleeps[0], 4.0)
 
     async def test_signal_non_throttle_error_fails_fast(self) -> None:

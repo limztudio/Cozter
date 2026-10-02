@@ -25,8 +25,7 @@ _GREP_MAX_FILE_BYTES = 1_000_000  # 1 MB
 
 # Truncate match lines so one minified line can't hide the other matches.
 _GREP_MAX_LINE_CHARS = 200
-# No per-match deadline in ``re``: scan in a killable process so cancel
-# always reaps the worker (real-work cap: up to tool_timeout).
+# ``re`` has no per-match deadline: scan in a killable process so cancel reaps it.
 _GREP_WORKER_JOIN_SECONDS = 0.5
 
 
@@ -79,9 +78,7 @@ class GrepTool(AgentTool):
             maximum=200,
         )
 
-        # Regex is CPU-bound and uninterruptable: isolate in a killable
-        # process (real-work cap; cancel reaps it). Poll in 0.1s slices so
-        # the loop stays responsive without an extra thread hop.
+        # CPU-bound, uninterruptable regex: isolate in a killable process; poll in 0.1s slices.
         try:
             results = await _scan_in_subprocess_async(
                 workspace_path, search_root, file_glob, regex, max_results,

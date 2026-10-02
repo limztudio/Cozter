@@ -123,8 +123,7 @@ def _without_heredoc_bodies(command: str) -> str:
             body_line = line.rstrip("\r\n")
             if strip_tabs:
                 body_line = body_line.lstrip("\t")
-            # Preserve line count without allowing literal body text to look
-            # like a control operator to the simple scanner below.
+            # Preserve line count without letting body text mimic control operators.
             kept.append("\n" if line.endswith("\n") else "")
             if body_line == delimiter:
                 pending.popleft()

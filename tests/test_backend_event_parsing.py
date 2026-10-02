@@ -396,8 +396,7 @@ class CopilotParseTests(unittest.TestCase):
         }
         r = _run(self.backend, [event])
         self.assertEqual(r.text, "answer")
-        # Internal calls (planning, merging, compaction) use this separate
-        # extraction path instead of ``parse_event``.
+        # Internal calls (plan/merge/compact) use this path instead of parse_event.
         self.assertEqual(self.backend.extract_agent_text(event), "answer")
 
     def test_current_cli_uses_final_message_not_partial_deltas(self) -> None:

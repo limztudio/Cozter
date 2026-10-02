@@ -146,7 +146,7 @@ def bump_compact_count(workspace: str) -> int:
     return data["compact_count"]
 
 
-# ---- Consolidation: promote recurring items, prune stale colony ones ----
+# Consolidation: promote recurring items, prune stale colony ones
 
 CONSOLIDATE_PROMPT = (
     "Consolidate a workspace's shared memory ('colony') from every"

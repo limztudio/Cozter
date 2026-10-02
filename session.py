@@ -63,9 +63,7 @@ def _last_session_path(workspace: str) -> str:
     return workspace_mod.workspace_state_path(workspace, LAST_SESSION_FILE)
 
 
-# ---------------------------------------------------------------------------
 # Last-session pointer (per workspace, keyed by user)
-# ---------------------------------------------------------------------------
 
 
 def _load_last_session_map(workspace: str) -> dict:
@@ -141,9 +139,7 @@ def migrate_last_session(
     return False
 
 
-# ---------------------------------------------------------------------------
 # Session CRUD
-# ---------------------------------------------------------------------------
 
 def _safe_text(value: object, default: str = "") -> str:
     """Return a string for persisted free-text fields."""
@@ -531,9 +527,7 @@ def set_session_name(
     save_session(workspace, session_id, data)
 
 
-# ---------------------------------------------------------------------------
 # Message persistence
-# ---------------------------------------------------------------------------
 
 def append_messages(
     workspace: str, session_id: str, messages: list[dict],
@@ -547,9 +541,7 @@ def append_messages(
     return len(data["messages"])
 
 
-# ---------------------------------------------------------------------------
 # Summary and compaction
-# ---------------------------------------------------------------------------
 
 def set_summary(
     workspace: str,

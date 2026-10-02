@@ -165,7 +165,7 @@ class GrokBackend(CachedModelCatalog, Backend):
         super().__init__()
         self._prompt_files = ProcessResourceMap()
 
-    # ---- model discovery -----------------------------------------------
+    # model discovery
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
@@ -213,7 +213,7 @@ class GrokBackend(CachedModelCatalog, Backend):
         selected = (model or self.default_model).strip()
         return _FALLBACK_MODEL_CONTEXT_WINDOWS.get(selected)
 
-    # ---- launch ---------------------------------------------------------
+    # launch
 
     async def launch(
         self,
@@ -271,7 +271,7 @@ class GrokBackend(CachedModelCatalog, Backend):
         if path is not None:
             _remove_prompt_file(path)
 
-    # ---- streaming event parsing ---------------------------------------
+    # streaming event parsing
 
     _FILE_TOOL_NAMES = frozenset(
         {

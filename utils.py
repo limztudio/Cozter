@@ -20,9 +20,7 @@ CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.
     os.path.dirname(os.path.abspath(__file__)), ".config",
 )
 _STDERR_CAPTURE_BYTES = 64 * 1024
-# A malformed CLI can emit an unbroken stdout line forever. JSONL normally
-# has short event lines, so keep a generous cap while preventing the decoder
-# buffer from growing until it exhausts the bot process.
+# Malformed CLIs can emit endless lines; keep a generous cap against decoder OOM.
 _MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024
 # A CLI spawned with ``start_new_session=True`` leads the group: snapshot
 # the id at spawn, before the parent can exit.

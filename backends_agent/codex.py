@@ -153,7 +153,7 @@ class CodexBackend(Backend):
         self._catalog_expires_at = 0.0
         self._model_catalog_lock = threading.Lock()
 
-    # ---- model discovery -----------------------------------------------
+    # model discovery
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]

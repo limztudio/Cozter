@@ -298,9 +298,7 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             ):
                 output = await backend.get_detached_task_output("/work", task_id)
 
-        # The separator is part of the retained output budget too, and a
-        # budget too tight for the full marker keeps a visible cut
-        # indicator rather than a silent bare prefix.
+        # Separator counts toward budget; tight budgets keep a visible cut indicator.
         self.assertEqual(output, "first…")
         self.assertIn("…", output)
         self.assertLessEqual(len(output.encode("utf-8")), 8)

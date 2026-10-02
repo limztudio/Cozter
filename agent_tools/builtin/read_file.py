@@ -15,13 +15,10 @@ from ..base import (
 )
 
 
-# Cap the read itself (not just the model-visible result): one request
-# must not allocate a multi-GB log/image in the bot process.
+# Cap the read itself: one request must not allocate multi-GB logs/images.
 _READ_FILE_MAX_CHARS = 128 * 1024
 _READ_FILE_SKIP_CHUNK_CHARS = 64 * 1024
-# Offsets are line-based, so reaching one can scan lots of data; a cancelled
-# await does not stop the worker thread. Bound the skip so a hostile offset
-# cannot leave a thread reading long after the call returned.
+# Line-based offsets scan data; a cancelled await won't stop the worker thread — bound the skip.
 _READ_FILE_MAX_SKIP_CHARS = 16 * 1024 * 1024
 
 

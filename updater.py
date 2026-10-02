@@ -19,9 +19,7 @@ _GIT_TIMEOUT = 3600  # seconds — real-work cap so slow fetches finish; cancel 
 # so slow installs finish instead of timing out early.
 _PIP_INSTALL_TIMEOUT = 3600
 
-# A Windows supervisor (such as run_cozter.ps1) treats this as a normal
-# self-update restart.  It is non-zero so Task Scheduler recovery can also
-# restart a directly launched task if configured to do so.
+# Non-zero so both the ps1 supervisor and Task Scheduler recovery restart on it.
 WINDOWS_SUPERVISOR_RESTART_EXIT_CODE = 75
 WINDOWS_SUPERVISOR_ENV = "COZTER_WINDOWS_SUPERVISED"
 
@@ -81,9 +79,7 @@ def _local_ahead_of_upstream() -> bool:
         )
     except (OSError, subprocess.TimeoutExpired):
         return True
-    # A non-zero rev-parse normally means this branch has no configured
-    # upstream. Do not issue a bare ``git pull`` in that state: it cannot
-    # choose a branch and only produces repeated error logs.
+    # No upstream configured: a bare `git pull` can't choose a branch — skip it.
     if upstream_result.returncode != 0:
         return True
     upstream = upstream_result.stdout.strip()
@@ -95,9 +91,7 @@ def _local_ahead_of_upstream() -> bool:
         )
     except (OSError, subprocess.TimeoutExpired):
         return True
-    # Once an upstream resolved, failure to compare it with HEAD is an
-    # indeterminate state. Treat it as locally ahead so auto-update never
-    # mutates a checkout whose safety could not be established.
+    # Indeterminate compare state: treat as ahead so auto-update never mutates blindly.
     if count_result.returncode != 0:
         return True
     count = count_result.stdout.strip()
@@ -345,7 +339,5 @@ def restart_script(exit_code: int = 0) -> None:
     os._exit(exit_code)
 
 
-# Exit code signalling "please respawn me" to the CLI mode respawn loop.
-# Any other non-zero exit code stops the loop (so crash tracebacks stay
-# visible instead of getting overwritten by restart spam).
+# Respawn-me exit code; other non-zero codes stop the loop (tracebacks stay visible).
 CLI_RESTART_EXIT_CODE = 99

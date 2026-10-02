@@ -102,7 +102,7 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         selected = _capability_model_id(model or self.default_model)
         return _MODEL_CONTEXT_WINDOWS.get(selected)
 
-    # ---- model discovery -----------------------------------------------
+    # model discovery
 
     def _fetch_models(self) -> tuple[str, ...]:
         return discover_bearer_models(
@@ -118,7 +118,7 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
             fetch=fetch_model_ids,
         )
 
-    # ---- OpenAIChatBackend hooks ---------------------------------------
+    # OpenAIChatBackend hooks
 
     def _chat_endpoint(self) -> str:
         # base_url already carries the /v1 version segment, so we append

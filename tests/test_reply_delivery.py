@@ -74,8 +74,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertLogs("Cozter.backends_bot.base", level="WARNING"):
                     await bot._dispatch_ai(ctx, "prompt")
 
-                # The inbound prompt is safely complete: recovery uses the
-                # persisted completed reply, never another agent invocation.
+                # Recovery uses the persisted reply, never another agent invocation.
                 self.assertEqual(
                     [entry["text"] for entry in bot._read_queue_file()["u1"]],
                     ["later prompt"],
@@ -115,9 +114,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 ChatEvent(kind="text", content="final response"),
             ])
 
-            # Deliberately stop after the durable reply write, simulating a
-            # process crash before the foreground handler completes the
-            # matching inbound entry.
+            # Stop after the durable write: simulates a crash before inbound completion.
             await before_crash._stage_reply_delivery(
                 "u1", entry_id, "chat", tmp, result, allow_await=True,
             )

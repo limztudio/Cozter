@@ -65,8 +65,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 encoding="utf-8",
             ) as f:
                 json.dump({
-                    # "flexible" is a valid chat agent but never a valid
-                    # summary agent — it has no CLI to run one on.
+                    # "flexible" is a chat agent, never a summary agent (no CLI for that).
                     "backend": "missing",
                     "summary_backend": "flexible",
                     "permission": "bad",
@@ -82,7 +81,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 workspace.get_run_config(tmp)
             )
             self.assertEqual(backend, "flexible")
-            # Flexible carries a model per difficulty tier, not one of its own.
+            # Flexible carries a model per tier, not one of its own.
             self.assertEqual(model, "")
             self.assertEqual(summary_model, "gpt-5.6-luna")
             self.assertEqual(permission, "auto")
@@ -473,7 +472,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             )
             workspace.set_history_budget(tmp, 8_000)
             self.assertEqual(workspace.get_history_budget(tmp), 8_000)
-            # A malformed stored value falls back to the default.
+            # Malformed stored value falls back to default.
             with open(
                 os.path.join(tmp, ".cozter", "settings.json"),
                 "w",
@@ -1090,8 +1089,7 @@ class SessionStateFallbackTests(unittest.TestCase):
                 tmp, data["id"],
                 [{"role": "user", "content": str(i)} for i in range(5)],
             )
-            # A negative retain-count must behave like 0, not inflate
-            # compacted_count past the messages that actually existed.
+            # Negative retain-count behaves as 0; never inflates compacted_count.
             session.set_summary(tmp, data["id"], "s", keep_recent=-3)
             loaded = session.load_session(tmp, data["id"])
             assert loaded is not None
@@ -1121,8 +1119,7 @@ class QueueStateFallbackTests(unittest.TestCase):
         q.put_nowait(("normal", "chat", "normal-id", False))
         q.put_nowait(("short",))
         q.put_nowait(("sched", "chat", "sched-id", True))
-        # Well-formed entries still resolve; the malformed shape neither
-        # matches nor crashes the drain predicates.
+        # Well-formed entries resolve; malformed shapes neither match nor crash.
         self.assertTrue(BotPlatform._has_pending_normal_entries(q))
         self.assertEqual(
             BotPlatform._pop_next_queue_entry(q, ephemeral_only=True),

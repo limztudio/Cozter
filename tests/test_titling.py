@@ -66,8 +66,7 @@ class AutoTitlingTests(unittest.IsolatedAsyncioTestCase):
                 ))
                 await asyncio.wait_for(started.wait(), timeout=1)
 
-                # This is the same write a compaction title (or a manual
-                # rename) performs while the fallback title is in flight.
+                # Same write a compaction/manual rename performs mid-fallback.
                 async with workspace.get_lock(workspace_path):
                     session.set_session_name(
                         workspace_path, data["id"], "Compaction Title",

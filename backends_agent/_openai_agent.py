@@ -66,9 +66,7 @@ _MAX_AGENT_MESSAGE_BYTES = 32 * 1024 * 1024
 _MAX_TOOL_CALLS_PER_COMPLETION = 128
 # Bound discovery responses (1 MiB fits thousands of model IDs).
 _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
-# Catalog entries are later displayed in chat pickers and may be inserted into
-# request payloads.  Provider model IDs are normally short, so reject absurd
-# values rather than carrying attacker-controlled megabyte strings around.
+# Picker/payload-bound IDs: reject absurd lengths instead of carrying attacker MB strings.
 _MAX_MODEL_ID_CHARS = 512
 _MAX_MODEL_IDS = 4_096
 # 3600s real-work cap (cancel still stops instantly); bound error bodies
@@ -233,7 +231,7 @@ class OpenAIChatBackend(Backend):
     # OpenAI Chat Completions supports the standard 4-level effort words.
     effort_levels: tuple[str, ...] = ("minimal", "low", "medium", "high")
 
-    # ---- hooks a concrete backend overrides ----------------------------
+    # hooks a concrete backend overrides
 
     def _chat_endpoint(self) -> str:
         """Full URL of the chat/completions endpoint."""
@@ -337,7 +335,7 @@ class OpenAIChatBackend(Backend):
     def _max_retries(self) -> int:
         return 2
 
-    # ---- shared API-key readiness probe ---------------------------------
+    # shared API-key readiness probe
 
     def _api_key(self) -> str:
         """Configured Bearer key, or ``""`` when unset. Providers override."""
@@ -360,7 +358,7 @@ class OpenAIChatBackend(Backend):
             f" default model {self.default_model})"
         )
 
-    # ---- launch ---------------------------------------------------------
+    # launch
 
     async def launch(  # type: ignore[override]
         self,
@@ -664,7 +662,7 @@ class OpenAIChatBackend(Backend):
                     ),
                 })
 
-    # ---- event parsing --------------------------------------------------
+    # event parsing
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
         if not isinstance(event, dict):
@@ -726,9 +724,7 @@ class CachedOpenAIChatBackend(CachedModelCatalog, OpenAIChatBackend):
         return self._live_model_catalog()
 
 
-# ---------------------------------------------------------------------------
 # Streaming chat-completions client
-# ---------------------------------------------------------------------------
 
 
 def _completion_payload(
@@ -1171,9 +1167,7 @@ def _merge_tool_call(
         return 0
 
     idx = delta.get("index", 0)
-    # Indices are used as dictionary keys and sorted at the end of the
-    # stream. Reject booleans, strings, and negative values so malformed
-    # events cannot create incomparable keys or otherwise disrupt a turn.
+    # Indices become sorted dict keys; reject non-int/negative so malformed events can't break the turn.
     if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
         return 0
 
@@ -1264,9 +1258,7 @@ def _merge_tool_call(
     return 0
 
 
-# ---------------------------------------------------------------------------
 # Vision attachments
-# ---------------------------------------------------------------------------
 
 
 def _vision_parts_for_prompt(
@@ -1287,9 +1279,7 @@ def _vision_parts_for_prompt(
     return [{"type": "text", "text": prompt}, *images]
 
 
-# ---------------------------------------------------------------------------
 # Tool exposure + system prompt
-# ---------------------------------------------------------------------------
 
 
 def _tools_for_approval(

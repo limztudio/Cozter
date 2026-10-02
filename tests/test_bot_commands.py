@@ -63,7 +63,7 @@ class BotCommandTests(unittest.TestCase):
     def _run(self, coro) -> None:
         asyncio.run(coro)
 
-    # -- text command aliases ---------------------------------------------
+    # text command aliases
     def test_backslash_command_alias_dispatches_with_arguments(self) -> None:
         self._run(self.bot.dispatch_text(self._ctx(text=r"\context 8000")))
 
@@ -96,7 +96,7 @@ class BotCommandTests(unittest.TestCase):
         self.assertNotIn(self.uid, self.bot._pending_input)
         self.assertEqual(self._last(), "Cancelled.")
 
-    # -- /permission -------------------------------------------------------
+    # /permission
     def test_permission_flow_sets_value(self) -> None:
         self._run(self.bot.cmd_permission(self._ctx()))
         self.assertIn("Available modes", self._last())
@@ -109,14 +109,14 @@ class BotCommandTests(unittest.TestCase):
         self.assertIn("Unknown mode", self._last())
         self.assertEqual(workspace.get_permission(self.ws), "auto")  # default
 
-    # -- /style ------------------------------------------------------------
+    # /style
     def test_style_flow_sets_value(self) -> None:
         self._run(self.bot._receive_style(self._ctx(text="autonomous")))
         self.assertEqual(
             workspace.get_interaction_style(self.ws), "autonomous",
         )
 
-    # -- /effort -----------------------------------------------------------
+    # /effort
     def test_effort_flow_sets_value(self) -> None:
         self._run(self.bot._receive_effort(self._ctx(text="60")))
         self.assertEqual(workspace.get_reasoning_effort(self.ws), 60)
@@ -133,7 +133,7 @@ class BotCommandTests(unittest.TestCase):
         self._run(self.bot.cmd_effort(self._ctx()))
         self.assertIn("zai:", self._last())
 
-    # -- /context ----------------------------------------------------------
+    # /context
     def test_compact_sets_interval(self) -> None:
         self._run(self.bot.cmd_compact(self._ctx(args="12")))
         self.assertEqual(workspace.get_compact_interval(self.ws), 12)
@@ -154,7 +154,7 @@ class BotCommandTests(unittest.TestCase):
                 self._run(handler(self._ctx(args=too_long)))
                 self.assertEqual(self._last(), "Error: number is too large.")
 
-    # -- /reserve ----------------------------------------------------------
+    # /reserve
     def test_reserve_wizard_binds_days_and_time_across_callbacks(self) -> None:
         self._run(self.bot.cmd_reserve(self._ctx()))
         self._run(self.bot.dispatch_text(self._ctx(text="mon,wed")))
@@ -172,14 +172,14 @@ class BotCommandTests(unittest.TestCase):
         self.assertEqual(entries[0]["time"], "09:30")
         self.assertEqual(entries[0]["command"], "run report")
 
-    # -- /doctor -----------------------------------------------------------
+    # /doctor
     def test_doctor_lists_every_direct_backend(self) -> None:
         self._run(self.bot.cmd_doctor(self._ctx()))
         out = self._last()
         for name in ("codex", "claude_code", "copilot", "grok", "llama", "zai"):
             self.assertIn(name, out)
 
-    # -- /agent ------------------------------------------------------------
+    # /agent
     def test_agent_picker_reserves_zero_for_flexible(self) -> None:
         self._run(self.bot.cmd_agent(self._ctx()))
 
@@ -228,7 +228,7 @@ class BotCommandTests(unittest.TestCase):
                 self.assertIn("Unknown model: missing", self._last())
                 self.assertIn(self.uid, self.bot._pending_input)
 
-    # -- /sessions ---------------------------------------------------------
+    # /sessions
     def test_sessions_list_and_switch(self) -> None:
         first = session.create_session(self.ws, name="First")
         session.create_session(self.ws, name="Second")

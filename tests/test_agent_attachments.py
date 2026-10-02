@@ -49,8 +49,7 @@ class AttachmentGuardTests(unittest.TestCase):
             evil = os.path.join(outside, "evil.txt")
             with open(evil, "w", encoding="utf-8") as f:
                 f.write("secret")
-            # Exists, but outside the workspace and not an image in a
-            # trusted generated-image root -> must be refused.
+            # Outside workspace / untrusted image root -> must be refused.
             self.assertIsNone(agent.attachment_source_path(evil, ws))
             self.assertIsNone(agent.prepare_attachment_path(evil, ws))
 

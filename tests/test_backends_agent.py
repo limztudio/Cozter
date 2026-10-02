@@ -1568,8 +1568,7 @@ warning: ignored after the catalog
             self.assertEqual(
                 backend.available_models_for_workspace(workspace_path), ("auto",),
             )
-            # A short fallback throttle prevents an unavailable CLI from
-            # spawning another ACP process for every picker interaction.
+            # Short throttle: an unavailable CLI must not respawn ACP per picker open.
             self.assertEqual(
                 backend.available_models_for_workspace(workspace_path), ("auto",),
             )
@@ -1632,9 +1631,7 @@ warning: ignored after the catalog
                 backend.available_models_for_workspace(allowed_workspace),
                 ("auto", "project-allowed"),
             )
-            # The failure throttle for one project must not hide an allowed
-            # model in another, and the successful catalog must not revive it
-            # in the project whose policy returned no named choices.
+            # Per-project throttles: failures/revivals must not leak across projects.
             self.assertEqual(
                 backend.available_models_for_workspace(blocked_workspace),
                 ("auto",),

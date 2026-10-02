@@ -69,19 +69,13 @@ def _read_inline_text_attachment(path: str) -> str:
 
 
 UPLOADS_DIR = "uploads"
-# Status previews are useful, but they must never hold up the model stream or
-# the final answer when a platform API call is slow or a Socket Mode
-# connection is being refreshed.
+# Status previews must never block the model stream or final answer.
 _STATUS_OPERATION_TIMEOUT_SEC = 4.0
-# /inject already queues its message synchronously via put_if_active; the
-# "Injected." ack is cosmetic. Bound it so a slow/flaky platform send
-# (e.g. signal-cli socket reconnects, Broken-pipe retries) cannot make
-# /inject look dead while a scheduled (ephemeral) turn is processing.
+# Ack is cosmetic (message already queued); bound it so a slow platform send can't stall the handler.
 _INJECT_ACK_TIMEOUT_SEC = 8.0
 _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
 _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
-# Precompiled once: _platform_state_file_path runs per state save/load, so
-# an inline re.sub would recompile the sanitizer on every call.
+# Precompiled: used on every state save/load.
 _UNSAFE_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 NO_WORKSPACE_TEXT = (
     "No workspace selected (or it was deleted). Use /new or /open."
@@ -306,9 +300,7 @@ def write_bytes_atomically(local_path: str, data: bytes) -> None:
         output.write(data)
 
 
-# ---------------------------------------------------------------------------
 # Message handle + attachment info
-# ---------------------------------------------------------------------------
 
 @dataclass
 class MessageHandle:
@@ -326,9 +318,7 @@ class AttachmentInfo:
     caption: str = ""
 
 
-# ---------------------------------------------------------------------------
 # BotContext - per-event facade handed to every command handler.
-# ---------------------------------------------------------------------------
 
 @dataclass
 class BotContext:
@@ -344,9 +334,7 @@ class BotContext:
     args: str
     attachment: AttachmentInfo | None
     platform: BotPlatform
-    # Set by dispatch_command when a pending text-input flow existed and
-    # was cleared by this command arriving. /cancel uses this to avoid
-    # treating a wizard-exit command as a request to clear AI work.
+    # Set when this command cleared a pending input flow; /cancel won't treat it as AI-work clear.
     had_pending: bool = False
 
     async def reply_text(
@@ -389,9 +377,7 @@ class _InjectQueue(asyncio.Queue[str]):
         self._accepting = False
 
 
-# ---------------------------------------------------------------------------
 # BotPlatform - shared state and command logic.
-# ---------------------------------------------------------------------------
 
 class BotPlatform(ABC):
     """Base class: holds all command logic, leaves I/O to subclasses."""
@@ -404,9 +390,7 @@ class BotPlatform(ABC):
         max_queue_size: int = config.DEFAULT_MESSAGE_QUEUE_SIZE,
         max_upload_bytes: int = config.DEFAULT_MAX_UPLOAD_BYTES,
     ):
-        # notify_targets are the chat IDs the bot greets on startup and uses
-        # as its authorization set by default. For Telegram these are user
-        # IDs; for Slack they are channel IDs (see SlackBot).
+        # Startup-greet + default auth set: Telegram user IDs, Slack channel IDs.
         self.notify_targets: list[str] = [str(t) for t in notify_targets]
         self.recent_limit = recent_limit
         self.max_queue_size = max_queue_size
@@ -438,9 +422,7 @@ class BotPlatform(ABC):
         # Serializes read-modify-write on the persistent-queue file so
         # concurrent enqueue/complete calls don't clobber each other.
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
-        # A completed turn's final text is staged here before outbound I/O.
-        # Keeping it separate from the inbound prompt queue lets a later
-        # delivery retry resend the answer without rerunning the agent.
+        # Staged final text (separate from inbound queue) so retries resend without rerunning.
         self._reply_delivery_file_lock: asyncio.Lock = asyncio.Lock()
         # Serializes one user's delivery attempts with /cancel and /stop.
         # A separate lock per user avoids allowing one temporarily unavailable
@@ -507,7 +489,7 @@ class BotPlatform(ABC):
             platform=self,
         )
 
-    # ----- platform identity + I/O primitives (abstract) ------------------
+    # platform identity + I/O primitives (abstract)
 
     @property
     @abstractmethod
@@ -699,7 +681,7 @@ class BotPlatform(ABC):
             parts.append("held_locks=[" + ", ".join(sorted(locks)) + "]")
         return "; ".join(parts) or "<no stuck state found>"
 
-    # ----- event dispatch hooks (called by platform adapters) -------------
+    # event dispatch hooks (called by platform adapters)
 
     def authorized(self, user_id: str, _chat_id: str) -> bool:
         """Return True if an event from *(user_id, chat_id)* is allowed.
@@ -929,7 +911,7 @@ class BotPlatform(ABC):
         logger.info("User %s answered while %s; queue resumed", uid, reason)
         return True
 
-    # ----- simple commands ------------------------------------------------
+    # simple commands
 
     async def cmd_start(self, ctx: BotContext) -> None:
         await ctx.reply_text("Cozter bot is running.")
@@ -985,9 +967,7 @@ class BotPlatform(ABC):
         queued, delayed, or detached work was removed. Both ``/cancel`` and
         ``/stop`` use the same cleanup; only their no-work reply differs.
         """
-        # Advance this before the first await below. A dispatch that already
-        # chose an intake path but is suspended in _persist_enqueue() then
-        # recognizes that /stop happened before it makes its entry runnable.
+        # Advance pre-await so suspended dispatches notice /stop before going runnable.
         self._cancel_generations[uid] = (
             self._cancel_generations.get(uid, 0) + 1
         )
@@ -1023,7 +1003,7 @@ class BotPlatform(ABC):
             or cancelled_uploads
         )
 
-    # ----- /new (dir-input flow) -----------------------------------------
+    # /new (dir-input flow)
 
     async def cmd_new(self, ctx: BotContext) -> None:
         current = workspace.get_current(ctx.user_id, self.platform_id)
@@ -1064,7 +1044,7 @@ class BotPlatform(ABC):
         workspace.select_workspace(ctx.user_id, path, self.platform_id)
         await ctx.reply_text(f"Workspace created and selected:\n{path}")
 
-    # ----- /open ----------------------------------------------------------
+    # /open
 
     async def cmd_open(self, ctx: BotContext) -> None:
         if ctx.args.strip():
@@ -1143,7 +1123,7 @@ class BotPlatform(ABC):
         workspace.select_workspace(ctx.user_id, path, self.platform_id)
         await ctx.reply_text(f"Workspace selected:\n{path}")
 
-    # ----- /model ---------------------------------------------------------
+    # /model
 
     async def cmd_model(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1174,7 +1154,7 @@ class BotPlatform(ABC):
             success_text="Model set to: {model}",
         )
 
-    # ----- /summarymodel --------------------------------------------------
+    # /summarymodel
 
     async def cmd_summarymodel(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1203,7 +1183,7 @@ class BotPlatform(ABC):
             success_text="Summary model set to: {model}",
         )
 
-    # ----- /agent ---------------------------------------------------------
+    # /agent
 
     async def cmd_agent(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1373,7 +1353,7 @@ class BotPlatform(ABC):
         )
         return "\n".join(lines)
 
-    # ----- /agent_flexible_<tier>, /model_flexible_<tier> ------------------
+    # /agent_flexible_<tier>, /model_flexible_<tier>
 
     async def _show_flexible_agent(self, ctx: BotContext, tier: str) -> None:
         ws = await self._require_ws(ctx)
@@ -1451,7 +1431,7 @@ class BotPlatform(ABC):
             success_text=f"Flexible {tier} model set to: {{model}}",
         )
 
-    # ----- /summaryagent --------------------------------------------------
+    # /summaryagent
 
     async def cmd_summaryagent(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1483,7 +1463,7 @@ class BotPlatform(ABC):
             f"Summary model: {summary_model}"
         )
 
-    # ----- /permission ----------------------------------------------------
+    # /permission
 
     async def cmd_permission(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1534,7 +1514,7 @@ class BotPlatform(ABC):
         desc = workspace.PERMISSION_DESCRIPTIONS[perm]
         await ctx.reply_text(f"Permission set to: {perm}\n{desc}")
 
-    # ----- /style ---------------------------------------------------------
+    # /style
 
     async def cmd_style(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1577,7 +1557,7 @@ class BotPlatform(ABC):
         desc = workspace.STYLE_DESCRIPTIONS[style]
         await ctx.reply_text(f"Interaction style set to: {style}\n{desc}")
 
-    # ----- /effort --------------------------------------------------------
+    # /effort
 
     async def cmd_effort(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1629,7 +1609,7 @@ class BotPlatform(ABC):
                if value == 0 else "")
         )
 
-    # ----- /refresh -------------------------------------------------------
+    # /refresh
 
     async def cmd_refresh(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1654,7 +1634,7 @@ class BotPlatform(ABC):
             )
         await ctx.reply_text(msg)
 
-    # ----- /compact -------------------------------------------------------
+    # /compact
 
     @staticmethod
     def _first_command_argument(ctx: BotContext) -> str:
@@ -1733,7 +1713,7 @@ class BotPlatform(ABC):
         ]
         await ctx.reply_text("\n".join(lines))
 
-    # ----- /context -------------------------------------------------------
+    # /context
 
     async def cmd_context(self, ctx: BotContext) -> None:
         ws = await self._workspace_for_decimal_setting(
@@ -1760,7 +1740,7 @@ class BotPlatform(ABC):
         ]
         await ctx.reply_text("\n".join(lines))
 
-    # ----- /newsession ----------------------------------------------------
+    # /newsession
 
     async def cmd_newsession(self, ctx: BotContext) -> None:
         """Start a fresh session in the current workspace.
@@ -1782,7 +1762,7 @@ class BotPlatform(ABC):
             "Your next message goes into this fresh session.",
         )
 
-    # ----- /sessions ------------------------------------------------------
+    # /sessions
 
     @staticmethod
     def _pick_session(choice: str, sessions: list[dict]) -> dict | None:
@@ -1861,7 +1841,7 @@ class BotPlatform(ABC):
             "Your next message continues this conversation.",
         )
 
-    # ----- /colony --------------------------------------------------------
+    # /colony
 
     async def cmd_colony(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1899,9 +1879,7 @@ class BotPlatform(ABC):
         items = colony.get_items(ws)
         count = colony.get_compact_count(ws)
         interval = workspace.get_colony_interval(ws)
-        # interval - (count % interval) is in [1, interval]: when count
-        # is a multiple of interval (start, or just-consolidated state),
-        # a full interval of compactions is needed before the next pass.
+        # Countdown in [1, interval]; multiples (start/just-consolidated) need a full interval.
         until = interval - (count % interval) if interval > 0 else 0
         lines = [
             f"Colony items: {len(items)}",
@@ -1921,7 +1899,7 @@ class BotPlatform(ABC):
         ])
         await ctx.reply_text("\n".join(lines))
 
-    # ----- /stop ----------------------------------------------------------
+    # /stop
 
     async def cmd_stop(self, ctx: BotContext) -> None:
         # /stop abandons a pending question and every queued prompt,
@@ -1932,7 +1910,7 @@ class BotPlatform(ABC):
             return
         await ctx.reply_text("Nothing is running.")
 
-    # ----- /bg, /background ---------------------------------------------
+    # /bg, /background
 
     async def cmd_background(self, ctx: BotContext) -> None:
         """Launch a provider-owned detached task and arrange its callback."""
@@ -1987,7 +1965,7 @@ class BotPlatform(ABC):
             f"`claude agents` or `claude logs {launch.task_id}`.",
         )
 
-    # ----- /inject --------------------------------------------------------
+    # /inject
 
     async def cmd_inject(self, ctx: BotContext) -> None:
         text = ctx.args.strip()
@@ -2005,10 +1983,7 @@ class BotPlatform(ABC):
         if outcome == "full":
             await ctx.reply_text("Inject queue full.")
             return
-        # The message is already queued at this point; the ack is
-        # cosmetic. Bound it so a slow platform send (e.g. a flaky
-        # signal-cli socket mid-scheduled-turn) cannot stall the
-        # receive handler and make /inject look dead.
+        # Ack is cosmetic (already queued); bound it so a slow send can't stall the handler.
         try:
             await asyncio.wait_for(
                 ctx.reply_text("Injected."),
@@ -2024,7 +1999,7 @@ class BotPlatform(ABC):
         except Exception:
             logger.warning("Inject ack send failed", exc_info=True)
 
-    # ----- /reserve (recurring schedule wizard) --------------------------
+    # /reserve (recurring schedule wizard)
 
     async def cmd_reserve(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -2131,7 +2106,7 @@ class BotPlatform(ABC):
             f"  Command: {command}"
         )
 
-    # ----- /schedules (list/delete) --------------------------------------
+    # /schedules (list/delete)
 
     async def cmd_schedules(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -2199,9 +2174,9 @@ class BotPlatform(ABC):
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
         )
 
-    # ----- Persistent message queue: mirror pending messages to JSON so -----
-    # ----- restarts resume. Persist-then-enqueue; complete only after  -----
-    # ----- the turn settles (shutdown keeps the entry; /stop clears it). -----
+    # Persistent message queue: mirror pending messages to JSON so
+    # restarts resume. Persist-then-enqueue; complete only after
+    # the turn settles (shutdown keeps the entry; /stop clears it).
 
     def _platform_state_file_path(self, stem: str) -> str:
         """Return a durable per-platform state path with a safe file name."""
@@ -2345,7 +2320,7 @@ class BotPlatform(ABC):
         for uid in drained_users:
             self._start_queue_drain(uid)
 
-    # ----- Durable final-reply delivery ---------------------------------
+    # Durable final-reply delivery
 
     def _reply_deliveries_file_path(self) -> str:
         """Return the per-platform ledger for completed text replies."""
@@ -2563,9 +2538,7 @@ class BotPlatform(ABC):
         """
         record_id = record["id"]
         uid = record["user_id"]
-        # _check_reply_deliveries() works from a snapshot. Re-read the record
-        # while holding the same per-user lock as /cancel and /stop so a stale
-        # snapshot cannot send a reply which the user just discarded.
+        # Delivery works from a snapshot; re-read under the per-user lock so a stale one can't send.
         async with self._reply_delivery_lock(uid):
             record = await self._get_reply_delivery_record(record_id)
             if record is None:
@@ -2623,7 +2596,7 @@ class BotPlatform(ABC):
         for record in await self._list_reply_delivery_records():
             await self._deliver_staged_reply(record)
 
-    # ----- Detached provider tasks --------------------------------------
+    # Detached provider tasks
 
     def _detached_tasks_file_path(self) -> str:
         """Return this platform's durable detached-task ledger path."""
@@ -3062,7 +3035,7 @@ class BotPlatform(ABC):
                 cancelled += 1
         return cancelled
 
-    # ----- Scheduler loop ------------------------------------------------
+    # Scheduler loop
 
     async def start_scheduler(self) -> None:
         """Kick off the background scheduler task. Idempotent."""
@@ -3212,7 +3185,7 @@ class BotPlatform(ABC):
         # and the running handler's own drain-after-turn picks up later.
         self._start_queue_drain(uid)
 
-    # ----- AI chat + file -------------------------------------------------
+    # AI chat + file
 
     async def _require_ws(self, ctx: BotContext) -> str | None:
         ws = workspace.get_current(ctx.user_id, self.platform_id)
@@ -3307,7 +3280,7 @@ class BotPlatform(ABC):
 
         await self._dispatch_ai(ctx, "\n".join(parts))
 
-    # ----- dispatch + AI turn --------------------------------------------
+    # dispatch + AI turn
 
     def _cleanup_turn(self, uid: str, lock: asyncio.Lock) -> None:
         self._running_tasks.pop(uid, None)
@@ -3451,9 +3424,7 @@ class BotPlatform(ABC):
         # [[await]] answer: clear the flag only after lock acquisition so
         # racing drains still see it and yield.
         self._awaiting_answer.discard(uid)
-        # Register the task as soon as the lock is held, so /stop can
-        # find it even if the turn yields on its initial Telegram/Slack
-        # API calls (send "Thinking..." etc.) before it fully starts.
+        # Register early so /stop finds the task even if startup yields on greeting sends.
         self._running_tasks[uid] = asyncio.current_task()
         try:
             await self._run_turn(
@@ -3931,9 +3902,7 @@ class BotPlatform(ABC):
 
     def _arm_awaiting_answer(self, uid: str) -> None:
         """Honor a delivered ``[[await]]`` reply without stranding backlog."""
-        # A [[await]] pause parks *new* messages (the next user reply is
-        # treated as the answer). But messages sent during this turn are
-        # already queued, before the question existed, and must still drain.
+        # [[await]] parks new messages as the answer; already-queued turn messages still drain.
         q = self._message_queues.get(uid)
         if q is not None and self._has_pending_normal_entries(q):
             logger.info(
@@ -4050,7 +4019,7 @@ class BotPlatform(ABC):
             finally:
                 self._cleanup_turn(uid, lock)
 
-    # ----- helpers --------------------------------------------------------
+    # helpers
 
     @staticmethod
     def _pick_option(

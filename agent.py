@@ -550,9 +550,7 @@ def _collect_new_attachment_images(
     return copied
 
 
-# ------------------------------------------------------------------
 # Contextual prompt building
-# ------------------------------------------------------------------
 
 _CONTEXT_TRUNCATION_MARKER = (
     "\n… [truncated to fit budget; older context omitted — never treat"
@@ -838,9 +836,7 @@ def _build_contextual_prompt(
     return full
 
 
-# ------------------------------------------------------------------
 # Backend execution
-# ------------------------------------------------------------------
 
 class BackendUnavailable(Exception):
     """A backend's CLI is not installed on this machine."""
@@ -1010,9 +1006,7 @@ async def _drive_backend(
         if injected is not None:
             injected.append(msg)
         restarting = True
-        # Kill the whole process group (not just the parent PID) so a CLI
-        # backend's grandchildren - a build/test command it shelled out to -
-        # don't keep running and mutating the workspace after the restart.
+        # Kill the whole process group so shelled-out grandchildren can't keep mutating the workspace.
         terminate_process_group(active_proc)
 
     inject_task: asyncio.Task | None = None
@@ -1167,9 +1161,7 @@ async def _run_with_inject_watch(
     # The call finished first; stop watching without consuming a message.
     watch_task.cancel()
     await await_cancelled(watch_task)
-    # A message can arrive after the watcher is cancelled but before this
-    # phase returns to its caller.  Collect it here and restart, instead of
-    # letting an acknowledged /inject fall through a phase boundary.
+    # A message can arrive after watcher cancel but before return; collect it and restart.
     if _take_pending_injections(inject_queue, injected):
         # Retrieve the result (no unobserved exceptions); late injects
         # still win over finished failures.
@@ -1191,9 +1183,7 @@ async def _run_with_inject_watch(
     return call_task.result(), False
 
 
-# ------------------------------------------------------------------
 # Flexible agent — plan, route by difficulty, merge
-# ------------------------------------------------------------------
 
 # Usage fields format_usage knows how to display; summed across the
 # workers so a flexible turn reports one total rather than N partials.
@@ -1551,9 +1541,7 @@ async def _run_flexible(
     return result, False
 
 
-# ------------------------------------------------------------------
 # Main run function
-# ------------------------------------------------------------------
 
 async def run(
     prompt: str,
@@ -2253,9 +2241,7 @@ async def _run_turn_impl(
     return result
 
 
-# ------------------------------------------------------------------
 # Session logging
-# ------------------------------------------------------------------
 
 def _log_to_session(
     workspace_path: str, session_id: str, prompt: str, result: AgentResult,

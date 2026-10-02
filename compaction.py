@@ -32,9 +32,7 @@ KEEP_RECENT_AFTER_COMPACT = 5
 MAX_SUMMARY_CHARS = 80_000  # ~20K tokens - safe for most models
 COMPACT_TIMEOUT: float | None = 3600.0  # work cap; cancel still stops instantly
 
-# Model windows include fixed system instructions, tools, a future user
-# message, and the model's reply. Trigger before stored conversation material
-# consumes more than this portion so the estimate does not crowd those out.
+# Trigger before stored material crowds out system instructions/tools/reply space.
 _MODEL_CONTEXT_COMPACT_FRACTION = 0.60
 # ``/context`` remains a per-workspace character ceiling for saved context.
 # Summarize before its truncation logic has to discard much raw history.

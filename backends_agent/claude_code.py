@@ -850,7 +850,7 @@ class ClaudeCodeBackend(Backend):
         # text blocks are partials and may not include the full answer.
         return extract_messages_style_agent_text(event)
 
-    # -- helpers ----------------------------------------------------------
+    # helpers
 
     def _handle_user_tool_results(
         self, event: dict, result: AgentResult,

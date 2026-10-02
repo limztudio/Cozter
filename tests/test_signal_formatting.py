@@ -298,8 +298,7 @@ class SignalReceiveStartupTests(unittest.TestCase):
 
             reconnect_mock = mock.AsyncMock(side_effect=reconnect)
 
-            # Simulate the reader task clearing its transport state while the
-            # subscribe RPC is completing, before startup marks receive active.
+            # Simulate reader clearing transport mid-subscribe, before receive goes active.
             bot._subscribe_receive = mock.AsyncMock(return_value=41)  # type: ignore[method-assign]
             bot._jsonrpc_connected = mock.Mock(return_value=False)  # type: ignore[method-assign]
             bot._connect_jsonrpc = reconnect_mock  # type: ignore[method-assign]

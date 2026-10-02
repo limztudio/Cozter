@@ -19,8 +19,7 @@ from ..base import (
 )
 
 
-# Two DDG frontends with independent rate limits: chain them as a
-# per-query internal retry instead of failing on one flaky host.
+# Two DDG frontends, independent limits: chain as per-query retry, not failover-once.
 _SEARCH_ENDPOINTS = (
     "https://html.duckduckgo.com/html/?{qs}",
     "https://lite.duckduckgo.com/lite/?{qs}",

@@ -44,7 +44,7 @@ class HttpAgentProcess:
         self._label = label
         self.stdout: asyncio.StreamReader = asyncio.StreamReader()
         self.stderr: asyncio.StreamReader = asyncio.StreamReader()
-        # No stderr channel on the HTTP path: EOF it so readers don't wait.
+        # No stderr on the HTTP path: EOF it so readers don't wait.
         self.stderr.feed_eof()
         self.returncode: int | None = None
         self._task: asyncio.Task | None = None

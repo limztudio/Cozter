@@ -216,9 +216,7 @@ class GitInfoTool(AgentTool):
                 for marker in ("unknown revision", "ambiguous argument 'head'")
             )
             if head_failure:
-                # A repository with zero commits has no HEAD revision; fall
-                # back to diffing against the index (which git compares
-                # with the empty tree there) instead of failing outright.
+                # Zero-commit repo has no HEAD; diff against the index (empty tree) instead of failing.
                 rebuilt = [
                     "--cached" if arg == "HEAD" else arg for arg in argv
                 ]

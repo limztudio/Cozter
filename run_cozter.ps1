@@ -1,8 +1,4 @@
-# Restartable Windows Task Scheduler entry point for Cozter.
-#
-# Configure Task Scheduler to run this script through powershell.exe.  It
-# keeps the scheduled task alive while Cozter runs and restarts the venv
-# process after clean updates or failures.
+# Restartable Task Scheduler entry: keeps Cozter alive, restarts venv after updates/failures.
 
 $ErrorActionPreference = "Stop"
 $projectRoot = $PSScriptRoot

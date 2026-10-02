@@ -46,9 +46,7 @@ from .formatting import escape_html_entities, render_fenced_markdown
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
 # Markdown -> Slack mrkdwn
-# ---------------------------------------------------------------------------
 
 # Private Use Area placeholders that won't collide with user text or
 # interfere with re.sub replacement-template parsing.
@@ -239,9 +237,7 @@ def _split_slack_markdown(
     # separately so mixed fences still fit.
     max_opener = 0
     max_marker = 0
-    # Single pre-scan for the reserve sizes; the chunk loop below replays
-    # fence state with the same cheap helpers (plain prefix check in
-    # _fence_open, string ops in _fence_closes — no per-line regex).
+    # One pre-scan for reserves; the chunk loop replays fence state with the same cheap helpers.
     for line in text.splitlines():
         fence = _fence_open(line)
         if fence is None:
@@ -255,9 +251,7 @@ def _split_slack_markdown(
         max_opener + max_marker + 2 if (max_opener or max_marker) else 0
     )
     if limit <= fence_wrap_reserve:
-        # A single fence line is longer than a Slack Markdown block. We
-        # cannot preserve that malformed/exceptional fence, but still send
-        # the reply as bounded chunks rather than dropping it with an error.
+        # Over-long fences can't be preserved; still send bounded chunks, not an error.
         return split_text_chunks(text, limit)
 
     # Keep raw chunks deliberately below Slack's limit. That leaves enough
@@ -332,9 +326,7 @@ async def _update_rich_markdown(
     )
 
 
-# ---------------------------------------------------------------------------
 # Slack platform adapter
-# ---------------------------------------------------------------------------
 
 class SlackBot(BotPlatform):
     """Slack Socket-Mode adapter."""
@@ -376,7 +368,7 @@ class SlackBot(BotPlatform):
         """Slack authorization is channel-scoped: allow if *chat_id* is listed."""
         return str(chat_id) in self.notify_targets
 
-    # ----- send/edit primitives ------------------------------------------
+    # send/edit primitives
 
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -447,7 +439,7 @@ class SlackBot(BotPlatform):
             filename=name,
         )
 
-    # ----- lifecycle ------------------------------------------------------
+    # lifecycle
 
     async def start(self) -> None:
         self.app = AsyncApp(token=self.bot_token)
@@ -481,7 +473,7 @@ class SlackBot(BotPlatform):
         self.app = None
         logger.info("Slack bot stopped.")
 
-    # ----- event handlers -------------------------------------------------
+    # event handlers
 
     # Allow only plain user messages and file uploads; every other subtype
     # (system messages, edits, pins, joins, bot-to-bot chatter, ...) is

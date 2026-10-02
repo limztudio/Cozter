@@ -1,18 +1,5 @@
-# GitLab CI — mirrors .github/workflows/ci.yml.
-#
-# Runs the same three gates on every push to main and on merge requests,
-# across Python 3.11 & 3.12:
-#   1. ruff lint
-#   2. mypy type check
-#   3. unittest
-#
-# The repo root carries __init__.py, so the checked-out project *is* the
-# `Cozter` package. Tests import it as `from Cozter... import` and mypy runs
-# `mypy -p Cozter`, both of which only resolve when the package directory is
-# literally named `Cozter` on PYTHONPATH. The GitHub workflow gets this via
-# `actions/checkout: path: Cozter`; GitLab checks out into $CI_PROJECT_DIR
-# (named after the project, not "Cozter"), so we symlink it to a fresh `Cozter`
-# path in a temp dir and point PYTHONPATH there.
+# GitLab CI mirrors .github/workflows/ci.yml (ruff, mypy, unittest on 3.11/3.12).
+# Symlink checkout to a `Cozter` dir on PYTHONPATH so `from Cozter...` imports resolve.
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
@@ -44,7 +31,6 @@ test:
     - python -m pip install -r requirements.txt ruff mypy
   script:
     - ruff check .
-    # Override mypy.ini's local lowest-supported-version default so each
-    # matrix job actually type-checks its advertised Python target.
+    # Type-check the matrix's own Python version, not mypy.ini's default.
     - mypy --config-file mypy.ini --python-version "$PYTHON_VERSION" -p Cozter
     - python -m unittest discover -s tests

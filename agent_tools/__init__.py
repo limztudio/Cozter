@@ -70,9 +70,7 @@ def _tool_timeout_seconds() -> float | None:
     return seconds if seconds > 0 else 3600.0
 
 
-# ---------------------------------------------------------------------------
 # Tool discovery: import every sibling module to trigger self-registration
-# ---------------------------------------------------------------------------
 
 
 def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
@@ -185,9 +183,7 @@ READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
 )
 
 
-# ---------------------------------------------------------------------------
 # Public API
-# ---------------------------------------------------------------------------
 
 
 # Internal: signature alias for the per-event emit callback that

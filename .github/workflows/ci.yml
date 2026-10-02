@@ -5,8 +5,7 @@ on:
     branches: [main]
   pull_request:
 
-# Test jobs only need to read the repository. Keep the workflow token from
-# acquiring write access through repository or organization defaults.
+# Read-only: test jobs never write back.
 permissions:
   contents: read
 
@@ -18,14 +17,11 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      # Check out into a directory literally named "Cozter" so the package
-      # imports as `Cozter` (tests do `from Cozter... import`, matching the
-      # README's "run from the parent directory" instructions).
+      # Checkout dir must be named "Cozter" so `from Cozter...` imports resolve.
       - uses: actions/checkout@v4
         with:
           path: Cozter
-          # Tests never push or fetch private submodules, so don't leave the
-          # workflow token in the checkout's git config for later steps.
+          # Never push/fetch submodules: keep the workflow token out of git config.
           persist-credentials: false
 
       - uses: actions/setup-python@v5
@@ -45,10 +41,7 @@ jobs:
         run: ruff check .
 
       - name: Type check (mypy)
-        # Run from the parent so the package resolves as `Cozter`, matching
-        # the relative imports and the tests' `from Cozter...` layout. Pass
-        # the matrix target explicitly because mypy.ini keeps the local
-        # lowest-supported-version default for developer runs.
+        # Run from parent so `Cozter` resolves; pass matrix version (mypy.ini defaults locally).
         run: PYTHONPATH="$PWD" mypy --config-file Cozter/mypy.ini --python-version ${{ matrix.python-version }} -p Cozter
 
       - name: Tests (unittest)

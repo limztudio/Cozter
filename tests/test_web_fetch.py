@@ -234,7 +234,6 @@ class HtmlToTextTests(unittest.TestCase):
         )
 
     def test_handles_repeated_unclosed_script_tags(self) -> None:
-        # This fixed-size malformed shape made the former regex repeatedly
-        # rescan its suffix.  Assert the safe output rather than elapsed time.
+        # Former regex rescanned this shape's suffix; assert safe output, not timing.
         malformed = "<script>" * 4_096 + "hidden text"
         self.assertEqual(html_to_text(malformed), "")

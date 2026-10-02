@@ -68,9 +68,7 @@ _COPILOT_HOME_FILES = ("config.json", "settings.json")
 # Short-lived discovery caches (not durable): bounded for long-running bots.
 _MAX_WORKSPACE_MODEL_CACHE_ENTRIES = 64
 
-# ``auto`` is accepted by Copilot even if a named-model catalog cannot be
-# queried. Do not fall back to the generic models from ``copilot help``:
-# those names may be disabled for this account or enterprise.
+# ``auto`` always works; generic `copilot help` names may be account-disabled — don't fall back.
 _FALLBACK_MODELS = ("auto",)
 
 def _max_prompt_chars() -> int:
@@ -159,9 +157,7 @@ def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     if limit <= 0:
         return ""
 
-    # The tail contains the current user request; the preamble and older
-    # context are at the head. Dropping them is a preview, never full
-    # coverage — mark it so the model says PARTIAL + remainder.
+    # Tail holds the request; dropping head context is preview-only — mark PARTIAL + remainder.
     marker = "… [older prompt context dropped to fit argv cap — preview only]"
     if _prompt_argv_units(marker) >= limit:
         # Too tight for the full marker: keep a visible cut indicator
@@ -202,9 +198,7 @@ def _truncate_prompt_preserving_head(prompt: str, limit: int) -> str:
     if not found or not head.startswith("[System:"):
         return _truncate_prompt_for_argv(prompt, limit)
     head_with_sep = head + sep
-    # Measure the fixed prefix once: the old binary search re-encoded
-    # head+marker plus a shrinking tail slice on every probe (quadratic
-    # in prompt size). A single backward scan over the tail is linear.
+    # Single backward scan over the tail (was quadratic re-encode per probe).
     prefix_units = _prompt_argv_units(head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER)
     if prefix_units >= limit:
         return _truncate_prompt_for_argv(prompt, limit)
@@ -313,7 +307,7 @@ class CopilotBackend(Backend):
             return ()
         return self.effort_levels
 
-    # ---- model discovery -----------------------------------------------
+    # model discovery
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
@@ -719,7 +713,7 @@ class CopilotBackend(Backend):
             return None
         return self._assistant_text(event, etype)
 
-    # -- helpers ----------------------------------------------------------
+    # helpers
 
     def _assistant_text(self, event: dict, etype: str) -> str | None:
         """Return the event's text content if it looks like assistant output."""
@@ -1026,9 +1020,7 @@ def _stop_acp_process(
         except OSError:
             pass
     if kill_tree:
-        # A .cmd shim runs beneath cmd.exe. Terminating only that parent can
-        # leave its Copilot/Node child alive on Windows, so tear down the
-        # process tree rooted at the PID we created above.
+        # .cmd shims run under cmd.exe; kill the whole tree or the Copilot/Node child survives.
         terminate_windows_process_tree(proc.pid)
     try:
         if proc.poll() is None:

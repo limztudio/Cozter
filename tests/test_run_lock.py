@@ -14,8 +14,7 @@ class RunLockTests(unittest.TestCase):
         self.assertIs(a, workspace.get_run_lock("/ws/a"))
         self.assertIsNot(a, workspace.get_run_lock("/ws/b"))
         self.assertIsInstance(a, asyncio.Lock)
-        # Distinct from the file lock so a turn can hold it without
-        # deadlocking on the reentrant-unsafe file lock.
+        # Distinct from the file lock so a turn can hold it without deadlocking.
         self.assertIsNot(
             workspace.get_run_lock("/ws/a"), workspace.get_lock("/ws/a"),
         )

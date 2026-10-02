@@ -17,8 +17,7 @@ from ...utils import (
 
 # Real-work cap (tool_timeout, default 3600s); cancel stops instantly.
 
-# Output ceiling: only the first KBs reach the model, so stop reading and
-# kill the tree past this instead of buffering a firehose whole.
+# Output ceiling: stop reading + kill the tree past this; don't buffer a firehose.
 _BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024  # 4 MB
 
 
@@ -148,5 +147,5 @@ async def _kill_command_tree(proc: asyncio.subprocess.Process) -> None:
     """Terminate the shell and any children it spawned."""
     if proc.returncode is not None and not has_managed_process_group(proc):
         return
-    # Process-group cleanup (POSIX) / taskkill (Windows): no orphaned children.
+    # Process-group/taskkill cleanup: no orphaned children.
     await kill_and_wait(proc)

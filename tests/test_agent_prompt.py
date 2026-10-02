@@ -371,9 +371,7 @@ class SessionResponseTests(unittest.TestCase):
         return result
 
     def test_await_marker_is_not_logged_to_session_history(self) -> None:
-        # Logged as-is, the marker replays as something the assistant "said"
-        # on every later turn — and into compaction summaries and auto-titles
-        # — teaching the model to emit it when nothing is blocked.
+        # Logged as-is, the marker replays as assistant speech and teaches false emits.
         with tempfile.TemporaryDirectory() as tmp:
             saved = agent._format_session_response(
                 self._result("Which retry path?\n\n[[await]]"), tmp,

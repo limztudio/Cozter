@@ -76,8 +76,7 @@ class InterruptedTurnMemoryTests(unittest.IsolatedAsyncioTestCase):
             run_task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await run_task
-            # The interrupted-turn record is written by a detached task so a
-            # second /stop cannot abort it; give it the loop to finish.
+            # Detached write survives a second /stop; yield the loop to finish it.
             self.assertEqual(len(interrupted_log_tasks), 1)
             await asyncio.gather(*interrupted_log_tasks)
         return interrupted_log_tasks

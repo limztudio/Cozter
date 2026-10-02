@@ -200,7 +200,7 @@ def _fit_entries(parts: list[str]) -> str:
         kept.append(text)
         used += size
     kept.reverse()
-    # Entries carry their trailing blank line: plain concat reproduces append format.
+    # Entries carry trailing blank lines; plain concat reproduces append format.
     return "".join(kept)
 
 

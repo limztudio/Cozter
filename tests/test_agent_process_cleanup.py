@@ -266,9 +266,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     completed = True
                     return result, restarting, child_pid
                 finally:
-                    # The assertions below should normally see this child
-                    # already dead. Keep the regression itself leak-safe if a
-                    # later change makes the test fail midway through.
+                    # Normally already dead; keep the regression leak-safe on mid-failure.
                     if not completed and os.path.exists(pid_path):
                         with open(pid_path, encoding="utf-8") as f:
                             child_pid = int(f.read())

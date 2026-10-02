@@ -136,9 +136,7 @@ def _rich_telegram_chunks(text: str) -> list[str]:
     return chunks
 
 
-# ---------------------------------------------------------------------------
 # Markdown -> Telegram HTML
-# ---------------------------------------------------------------------------
 
 def _md_to_html(text: str) -> str:
     """Convert common Markdown to Telegram-compatible HTML."""
@@ -175,9 +173,7 @@ def _html_code_block(lines: list[str]) -> list[str]:
     return [f"<pre>{escaped}</pre>"]
 
 
-# ---------------------------------------------------------------------------
 # Telegram platform adapter
-# ---------------------------------------------------------------------------
 
 class TelegramBot(BotPlatform):
     """One-to-one adapter around a python-telegram-bot Application."""
@@ -208,7 +204,7 @@ class TelegramBot(BotPlatform):
             raise RuntimeError("platform_id is only valid after start()")
         return str(self.app.bot.id)
 
-    # ----- send/edit primitives ------------------------------------------
+    # send/edit primitives
 
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -346,7 +342,7 @@ class TelegramBot(BotPlatform):
         assert last_exc is not None
         raise last_exc
 
-    # ----- lifecycle ------------------------------------------------------
+    # lifecycle
 
     async def start(self) -> None:
         self.app = (
@@ -410,7 +406,7 @@ class TelegramBot(BotPlatform):
             await self.app.shutdown()
             logger.info("Telegram bot stopped.")
 
-    # ----- event handlers -------------------------------------------------
+    # event handlers
 
     def _make_command_handler(self, name: str):
         async def handler(

@@ -121,8 +121,7 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertIn("1. Lite One", result)
         self.assertIn("https://lite.example/one", result)
         self.assertIn("2. Lite Two", result)
-        # Both endpoints race concurrently; the html shell has no
-        # results, so the lite results win regardless of request order.
+        # Concurrent race; empty html shell means lite wins regardless of order.
         self.assertTrue(
             any(
                 url.startswith("https://lite.duckduckgo.com")

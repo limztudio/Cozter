@@ -86,9 +86,7 @@ def add_schedule(
             for s in schedules
             if isinstance(s, dict) and isinstance(s.get("id"), str)
         }
-        # Duplicate ids make update/remove ambiguous: the writer claims
-        # only the first twin while the stale twin stays due forever and
-        # refires every tick. Mint a fresh id so each record is unique.
+        # Duplicate ids strand a stale twin due forever; mint a fresh id per record.
         if not isinstance(raw_id, str) or not raw_id or raw_id in taken:
             fresh = uuid.uuid4().hex[:12]
             while fresh in taken:
@@ -245,7 +243,7 @@ def update_schedule_fired(
     return claimed
 
 
-# ---- Schedule field parsers + time-slot computation (pure functions) ----
+# Schedule field parsers + time-slot computation (pure functions)
 
 def parse_days(text: object) -> list[str]:
     """Parse a days spec into ordered, de-duplicated abbreviations.

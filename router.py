@@ -34,8 +34,7 @@ def _truncate_router_text(text: str, limit: int) -> str:
         return "…"[:limit]
     marker = "… [truncated preview]"
     if limit <= len(marker):
-        # Too tight for the full marker: keep a visible cut
-        # indicator rather than a silent prefix.
+        # Too tight for the full marker: keep a visible cut indicator.
         return text[:limit - 1] + "…" if limit > 1 else "…"[:limit]
     return text[:limit - len(marker)] + marker
 
@@ -137,7 +136,7 @@ def _parse_router_output(raw: str, valid_ids: set[str]) -> str | None:
             continue
         if token.upper() == "NEW":
             return "NEW"
-        # IDs may carry punctuation: membership (not grammar) is the check.
+        # IDs may carry punctuation: membership is the check.
         if token in valid_ids:
             return token
     return None
@@ -157,9 +156,7 @@ async def select_or_create_session(
     """
     backend = backends_agent.get_backend(backend_name)
 
-    # Parse only the newest files: the router caps its prompt at
-    # ROUTER_MAX_SESSIONS, so parsing every historic session first is
-    # pure overhead in workspaces with long session histories.
+    # Parse only the newest files; the prompt caps at ROUTER_MAX_SESSIONS anyway.
     sessions_data, total_sessions = session.list_newest_sessions_with_data(
         workspace_path, ROUTER_MAX_SESSIONS,
     )

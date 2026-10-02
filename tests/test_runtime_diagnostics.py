@@ -22,8 +22,7 @@ from unittest import mock
 
 def _load_main_module():
     """Import ``Cozter.__main__`` with the import-time pip install disabled."""
-    # Workspace checkout must win over the live AutoStart install if both are
-    # on sys.path (the dev host has the latter earlier on the path).
+    # Workspace checkout must win over the live AutoStart install on sys.path.
     workspace_pkg_parent = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
@@ -216,8 +215,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
         self._main = _load_main_module()
-        # Point LOG_DIR at our temp dir and reset the cached file handle so
-        # _get_dump_file opens a fresh diagnostics.log inside it.
+        # Point LOG_DIR at temp; reset the handle so a fresh diagnostics.log opens there.
         self._orig_log_dir = self._main.LOG_DIR
         self._orig_dump_file = self._main._dump_file
         self._faulthandler_was_enabled = faulthandler.is_enabled()
@@ -242,8 +240,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
             return f.read()
 
     def test_dump_writes_header_reason_tasks_and_threads(self):
-        # Running inside a real event loop lets asyncio.all_tasks() see the
-        # current task, so the "asyncio tasks" section is non-empty.
+        # A real event loop keeps the "asyncio tasks" section non-empty.
         async def _driver():
             self._main.dump_runtime_diagnostics(None, reason="unit-test")
         asyncio.run(_driver())
@@ -288,9 +285,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         )
 
     def test_enable_faulthandler_is_best_effort_and_silent(self):
-        # With dump_traceback_interval=0 (default) it must still enable the
-        # crash handler without raising. Runs against the real faulthandler;
-        # a failure here would surface as an exception, not a silent skip.
+        # Interval 0 must still enable the crash handler without raising.
         self._main._enable_faulthandler()
 
     def test_update_idle_diagnostic_keeps_waiting_for_active_turn(self):

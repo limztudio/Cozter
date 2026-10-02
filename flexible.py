@@ -45,9 +45,7 @@ MAX_SUBTASKS = 12
 PLAN_TIMEOUT: float | None = 3600.0
 MERGE_TIMEOUT: float | None = 3600.0
 
-# Universal continue-judge bounds: every backend, every turn. After each
-# draft answer the summary backend judges DONE vs CONTINUE. Capped so a
-# turn cannot loop forever; cost/latency stays bounded for chat surfaces.
+# Continue-judge bounds: capped DONE/CONTINUE loop per backend per turn.
 JUDGE_MAX_CONTINUES = 3
 JUDGE_TIMEOUT: float | None = 3600.0
 
@@ -140,9 +138,7 @@ _MERGE_QUESTION_RULE = (
     " Optional offers: no marker.\n"
 )
 
-# Workers run under the autonomy policy, so one that stops to ask has
-# already established the turn cannot finish without the user. Tell the
-# merge outright instead of leaving it to infer that from the report text.
+# Workers run autonomously; a BLOCKED one needs a user answer — say so in the merge rule.
 _MERGE_BLOCKED_RULE = (
     "- A BLOCKED report needs a user answer: end with its question"
     " plus \"[[await]]\" on its own line.\n"
@@ -176,9 +172,7 @@ _JUDGE_RULES = (
 )
 
 
-# Worker reports are unbounded model output, and each one is re-sent to
-# every later worker plus the merge step. Cap each so N workers cost at
-# most N * cap instead of N * anything.
+# Reports are re-sent downstream; cap each so N workers cost at most N * cap.
 _REPORT_MAX_CHARS = 6_000
 _REPORT_TRUNCATION_MARKER = (
     "\n… [report truncated: remainder omitted — never treat this preview"
@@ -431,9 +425,7 @@ def build_merge_prompt(
     parts.append("\nPlan:")
     parts.append(_render_plan(plan))
     parts.append("\n--- reports ---")
-    # Index over both sides instead of zip(): the worker loop can append
-    # follow-up sub-tasks, so lengths may differ by the time we merge.
-    # Zipping would silently drop the longer side's tail; spell out both.
+    # Lengths may differ (follow-ups append mid-loop); index both sides instead of zip().
     report_count = max(len(plan.subtasks), len(results))
     for i in range(report_count):
         task = plan.subtasks[i] if i < len(plan.subtasks) else None

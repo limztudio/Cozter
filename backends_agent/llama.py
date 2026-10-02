@@ -32,7 +32,7 @@ class LlamaBackend(CachedOpenAIChatBackend):
     default_model = "auto"
     default_summary_model = "auto"
 
-    # ---- model discovery ------------------------------------------------
+    # model discovery
 
     def _models_url(self) -> str:
         return cfg.get_llama_server_url().rstrip("/") + "/v1/models"
@@ -59,7 +59,7 @@ class LlamaBackend(CachedOpenAIChatBackend):
             return True, f"server up at {url} ({len(ids)} model(s))"
         return True, f"server up at {url} (no models listed)"
 
-    # ---- OpenAIChatBackend hooks ---------------------------------------
+    # OpenAIChatBackend hooks
 
     def _chat_endpoint(self) -> str:
         return cfg.get_llama_server_url().rstrip("/") + "/v1/chat/completions"
