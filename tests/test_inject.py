@@ -83,3 +83,69 @@ class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InjectAckBoundTests(unittest.IsolatedAsyncioTestCase):
+    async def test_inject_ack_is_bounded_when_send_hangs(self) -> None:
+        """A slow ack send must not stall /inject past the ack bound.
+
+        Regression: while a scheduled (ephemeral) turn is processing,
+        a flaky platform send (e.g. signal-cli reconnects) held
+        ``cmd_inject``'s "Injected." reply for 60s+, making /inject
+        look dead. The message itself is queued synchronously, so the
+        ack is now bounded and the agent still receives it.
+        """
+        import time
+
+        from Cozter.backends_bot import base as bot_base
+
+        class _SlowAckBot(_InjectRaceBot):
+            async def send_text(
+                self, _chat_id: str, text: str, *, rich: bool = False,
+            ):
+                if text == "Injected.":
+                    await asyncio.sleep(60)
+                    return None
+                return await super().send_text(
+                    _chat_id, text, rich=rich,
+                )
+
+        async def waiting_run(*_args, **kwargs) -> AgentResult:
+            iq = kwargs.get("inject_queue")
+            assert iq is not None
+            msg = await asyncio.wait_for(iq.get(), timeout=20)
+            assert msg == "urgent!"
+            return AgentResult(events=[
+                ChatEvent(kind="text", content="after:" + msg),
+            ])
+
+        with tempfile.TemporaryDirectory() as ws:
+            bot = _SlowAckBot(ws)
+            with (
+                mock.patch.object(agent, "run", new=waiting_run),
+                mock.patch.object(
+                    workspace,
+                    "get_run_config",
+                    return_value=("flexible", "auto", "auto", "auto", "codex"),
+                ),
+            ):
+                turn = asyncio.create_task(
+                    bot._run_ephemeral_turn("u1", "chat", "sched cmd"),
+                )
+                await asyncio.sleep(0.5)
+                t0 = time.monotonic()
+                await asyncio.wait_for(
+                    bot.cmd_inject(BotContext(
+                        user_id="u1", chat_id="chat", text="",
+                        command="inject", args="urgent!",
+                        attachment=None, platform=bot,
+                    )),
+                    timeout=bot_base._INJECT_ACK_TIMEOUT_SEC + 15,
+                )
+                self.assertLess(
+                    time.monotonic() - t0,
+                    bot_base._INJECT_ACK_TIMEOUT_SEC + 15,
+                )
+                await asyncio.wait_for(turn, timeout=25)
+
+            bot._inject_queues.pop("u1", None)

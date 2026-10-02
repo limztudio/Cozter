@@ -73,6 +73,11 @@ UPLOADS_DIR = "uploads"
 # the final answer when a platform API call is slow or a Socket Mode
 # connection is being refreshed.
 _STATUS_OPERATION_TIMEOUT_SEC = 4.0
+# /inject already queues its message synchronously via put_if_active; the
+# "Injected." ack is cosmetic. Bound it so a slow/flaky platform send
+# (e.g. signal-cli socket reconnects, Broken-pipe retries) cannot make
+# /inject look dead while a scheduled (ephemeral) turn is processing.
+_INJECT_ACK_TIMEOUT_SEC = 8.0
 _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
 _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
 # Precompiled once: _platform_state_file_path runs per state save/load, so
@@ -2000,7 +2005,24 @@ class BotPlatform(ABC):
         if outcome == "full":
             await ctx.reply_text("Inject queue full.")
             return
-        await ctx.reply_text("Injected.")
+        # The message is already queued at this point; the ack is
+        # cosmetic. Bound it so a slow platform send (e.g. a flaky
+        # signal-cli socket mid-scheduled-turn) cannot stall the
+        # receive handler and make /inject look dead.
+        try:
+            await asyncio.wait_for(
+                ctx.reply_text("Injected."),
+                timeout=_INJECT_ACK_TIMEOUT_SEC,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.warning(
+                "Inject ack send timed out after %.1fs (message queued)",
+                _INJECT_ACK_TIMEOUT_SEC,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Inject ack send failed", exc_info=True)
 
     # ----- /reserve (recurring schedule wizard) --------------------------
 
