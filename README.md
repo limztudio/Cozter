@@ -722,6 +722,10 @@ the host's local time. On Telegram, Slack, and Signal, the scheduler checks
 every 30 seconds and records `last_fired`, so a missed slot fires once after
 restart instead of being lost. Offset-bearing persisted timestamps are
 normalized to that local basis, and malformed schedule fields are ignored.
+Each schedule carries a unique id (minted at creation when missing or
+already taken), and firing stamps every record sharing that id, so a
+legacy duplicate id cannot leave a stale twin due forever and refiring
+every tick.
 Scheduled prompts run through the same persistent queue as user messages,
 but use a fresh ephemeral session that is deleted after the turn; they do
 not append to the user's current conversation. They run autonomously and can
