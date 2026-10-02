@@ -20,8 +20,8 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
-# Discovery fallback: curated IDs + capabilities (verified 2026-10-01,
-# 0.159.3). Live catalog preferred.
+# Discovery fallback: curated IDs + capabilities (verified 2026-10-02,
+# 0.160.0). Live catalog preferred.
 _FALLBACK_MODEL_SPECS = (
     ("gpt-6.1-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-astra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
