@@ -698,7 +698,10 @@ the final reply has closed its injection window. This applies to every
 `flexible` phase—including planning and merge calls as well as workers—so
 context sent while the meta-agent is working cannot be silently lost between
 phases. A failed planner still keeps a pending `/inject` for the fallback
-high-tier turn rather than dropping it.
+high-tier turn rather than dropping it. The confirmation reply itself is
+cosmetic — the message is already queued — so its send is bounded at
+8 seconds: a slow platform send during a scheduled turn cannot stall the
+handler, and the queued context still reaches the agent.
 
 `/bg` (or `/background`) currently uses Claude Code, so choose `claude_code`
 with `/agent` first. Cozter persists the external task ID, polls independently, and sends
@@ -1507,8 +1510,9 @@ ignored for local secrets and runtime queues.
   interrupted-turn persistence, and post-turn behavior;
   backend model defaults, shared catalog/result/content helpers, CLI tool
   summaries, process-resource maps, event parsing, and llama retry; bot and
-  Slack commands; compaction; the flexible meta-agent; inject; import
-  binding; run locks, session picking, and auto-titling; platform, Slack,
+  Slack commands; compaction; the flexible meta-agent; inject (including
+  the bounded confirmation send); run locks, session picking, and
+  auto-titling; platform, Slack,
   and Signal rich-text formatting; durable reply delivery; detached tasks
   and Claude's background-launch guard; runtime diagnostics; state
   fallbacks including containment-checked nested workspace dirs; status
@@ -1551,10 +1555,10 @@ that owns them:
 - Workspace, session, queue, schedule, compaction, and colony state:
   `workspace.py` (including `ensure_workspace_state_dir()`), `session.py`,
   `schedules.py`, `compaction.py`, and `colony.py`. Hot JSON reads
-  (`config.json`, workspace state/settings, colony, last-session pointers)
-  are cached by file mtime+size via the shared `utils.stat_mtime_size()`
-  helper, so repeated per-turn/per-tool reads skip re-parsing until an
-  edit changes mtime/size
+  (`config.json`, workspace state/settings, colony, last-session pointers,
+  and per-workspace schedules) are cached by file mtime+size via the shared
+  `utils.stat_mtime_size()` helper, so repeated per-turn/per-tool reads skip
+  re-parsing until an edit changes mtime/size
 - CI and local quality gates: `.gitlab-ci.yml`, `.github/workflows/ci.yml`,
   `mypy.ini`, `pyproject.toml`, and `tests/`
 
