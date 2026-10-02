@@ -96,6 +96,9 @@ def ensure_workspace_state_dir(workspace_path: str, *parts: str) -> str:
     return workspace_state_path(workspace_path, *parts)
 
 
+_STATE_CACHE: tuple[int | None, int | None, dict] | None = None
+
+
 def _load_all() -> dict:
     """Load workspace state, cached by file mtime+size.
 
@@ -112,9 +115,6 @@ def _load_all() -> dict:
     )
     _STATE_CACHE = (mtime_ns, size, dict(data))
     return data
-
-
-_STATE_CACHE: tuple[int | None, int | None, dict] | None = None
 
 
 def _save_all(data: dict) -> None:

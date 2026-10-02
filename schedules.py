@@ -11,6 +11,7 @@ Each ``<schedule_dict>``:
     {id, days, time, command, created, chat_id, user_id, last_fired?}
 """
 
+import copy
 import logging
 import uuid
 from datetime import datetime, time as dt_time, timedelta
@@ -19,6 +20,7 @@ from . import workspace as workspace_mod
 from .utils import load_json_object
 from .utils import parse_decimal_int
 from .utils import save_json_object
+from .utils import stat_mtime_size
 from .utils import try_parse_int
 
 logger = logging.getLogger(__name__)
@@ -34,8 +36,36 @@ def _path(workspace: str) -> str:
     return workspace_mod.workspace_state_path(workspace, SCHEDULES_FILE)
 
 
+_SCHEDULES_CACHE: dict[str, tuple[int | None, int | None, dict]] = {}
+
+
 def _load_all(workspace: str) -> dict:
-    return load_json_object(_path(workspace), "schedules file", logger)
+    """Return the schedule map for *workspace* (empty on failure).
+
+    Cached by file mtime+size like the session/colony caches: the
+    scheduler tick re-reads this file for every active (user, workspace)
+    pair every 30s, and most ticks change nothing. Edits refresh
+    mtime/size so the next read sees them.
+    """
+    path = _path(workspace)
+    mtime_ns, size = stat_mtime_size(path)
+    cached = _SCHEDULES_CACHE.get(path)
+    if cached is not None and cached[0] == mtime_ns and cached[1] == size:
+        return copy.deepcopy(cached[2])
+    data = load_json_object(path, "schedules file", logger)
+    _SCHEDULES_CACHE[path] = (mtime_ns, size, copy.deepcopy(data))
+    return data
+
+
+def _save_all(workspace: str, data: dict) -> None:
+    """Persist the schedule map and refresh the read cache."""
+    path = _path(workspace)
+    save_json_object(path, data)
+    mtime_ns, size = stat_mtime_size(path)
+    if mtime_ns is None:
+        _SCHEDULES_CACHE.pop(path, None)
+        return
+    _SCHEDULES_CACHE[path] = (mtime_ns, size, copy.deepcopy(data))
 
 
 def _schedule_list(data: dict, user_id: str | int) -> list:
@@ -66,7 +96,7 @@ def add_schedule(
             schedule["id"] = fresh
     schedules.append(schedule)
     data[key] = schedules
-    save_json_object(_path(workspace), data)
+    _save_all(workspace, data)
 
 
 def remove_schedule(
@@ -85,7 +115,7 @@ def remove_schedule(
         data[key] = kept
     else:
         data.pop(key, None)
-    save_json_object(_path(workspace), data)
+    _save_all(workspace, data)
     return True
 
 
@@ -178,7 +208,7 @@ def migrate_schedules(
     if changed:
         if target:
             data[target_key] = target
-        save_json_object(_path(workspace), data)
+        _save_all(workspace, data)
     return moved
 
 
@@ -211,7 +241,7 @@ def update_schedule_fired(
                 claimed = dict(s)
     if claimed is None:
         return None
-    save_json_object(_path(workspace), data)
+    _save_all(workspace, data)
     return claimed
 
 

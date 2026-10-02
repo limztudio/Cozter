@@ -95,8 +95,6 @@ class CleanTitleTests(unittest.TestCase):
 
 class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_titling_summary_clip_never_exceeds_budget(self) -> None:
-        from Cozter import colony as _colony_unused  # noqa: F401 (scope pin)
-
         marker = (
             "… [older summary omitted — preview only;"
             " title from shown context]"
