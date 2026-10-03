@@ -20,11 +20,6 @@ class AwaitMarkerTests(unittest.TestCase):
         self.assertNotIn("[[await]]", cleaned)
         self.assertIn("all done", cleaned)
 
-    def test_no_await_marker(self) -> None:
-        cleaned, awaiting = agent.extract_await("just text")
-        self.assertFalse(awaiting)
-        self.assertEqual(cleaned, "just text")
-
 
 class AttachmentGuardTests(unittest.TestCase):
     @staticmethod

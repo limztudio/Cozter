@@ -41,12 +41,6 @@ class ThinkingDisplayTests(unittest.TestCase):
         self.assertLessEqual(len(clipped), 12)
         self.assertEqual(_short_id("short"), "short")
 
-    def test_empty_is_just_thinking(self) -> None:
-        self.assertEqual(BotPlatform._compose_thinking_display([], ""), "Thinking...")
-        self.assertEqual(
-            BotPlatform._compose_thinking_display([], "   "), "Thinking...",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

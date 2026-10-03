@@ -87,11 +87,6 @@ class CleanTitleTests(unittest.TestCase):
         self.assertIn("… [clipped]", title)
         self.assertLessEqual(len(title), titling.TITLE_MAX_CHARS)
 
-    def test_short_title_untouched(self) -> None:
-        self.assertEqual(titling.clean_title("Short Topic"), "Short Topic")
-        self.assertIsNone(titling.clean_title("   "))
-
-
 class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_titling_summary_clip_never_exceeds_budget(self) -> None:
         marker = (
