@@ -408,9 +408,7 @@ async def _consolidate_inner(
         if not existing_colony:
             logger.info("Colony pass: no sessions in %s", workspace_path)
             return False
-        # With no sessions left, no current topic can justify retaining a
-        # workspace-wide memory item. Clear deterministically rather than
-        # leaving stale facts injected into every future session forever.
+        # No sessions left: drop workspace memory deterministically (never inject stale facts).
         async with workspace_mod.get_lock(workspace_path):
             set_items(workspace_path, [])
         logger.info(

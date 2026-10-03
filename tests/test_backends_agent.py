@@ -1894,9 +1894,7 @@ warning: ignored after the catalog
             "claude-opus-4-1",
             # Sonnet 4.5 has a 200K window; it never exposed a 1M variant.
             "claude-sonnet-4-5-20250929[1m]",
-            # Fable 5/5.1 already include 1M natively; the CLI migrates
-            # ``claude-fable-5[1m]`` to ``fable[1m]`` and does not expose
-            # those full IDs as picker entries.
+            # Fable 5/5.1 are 1M-native; the CLI migrates those IDs away and hides them from the picker.
             "claude-fable-5[1m]",
             "claude-fable-5-1[1m]",
         ):
@@ -1926,9 +1924,7 @@ class CopilotPromptCapTests(unittest.TestCase):
             )
 
     def test_windows_prompt_cap_counts_utf16_units_not_code_points(self) -> None:
-        # An astral character takes two UTF-16 units in CreateProcessW. A
-        # character-count cap could otherwise exceed Windows' command-line
-        # limit despite appearing to be below it.
+        # Astral chars cost 2 UTF-16 units: char counts alone would undercount the Windows cap.
         with mock.patch.object(copilot_mod.sys, "platform", "win32"):
             out = copilot_mod._truncate_prompt_for_argv("x😀😀😀", 4)
             self.assertEqual(out, "😀…")

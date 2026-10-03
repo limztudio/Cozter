@@ -75,9 +75,7 @@ def _telegram_message_id(handle: MessageHandle) -> int:
             f"invalid Telegram message id: {raw!r}",
         ) from exc
 
-# Precompiled Markdown->HTML line patterns (hot path: one call per reply
-# line). Module-level compilation avoids re-parsing the same patterns on
-# every line via re.sub's internal cache.
+# Reply-line regexes (hot path): module-level so patterns compile once.
 _TELEGRAM_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
 _TELEGRAM_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
 _TELEGRAM_BOLD_UNDER_RE = re.compile(r"__(.+?)__")
@@ -497,9 +495,7 @@ class TelegramBot(BotPlatform):
 
         tg_file = await media.get_file()
         try:
-            # Some update objects omit a size but the subsequent getFile
-            # response includes it. Reject before opening the download in
-            # that case too.
+            # getFile may supply a size the update omitted; reject before downloading.
             self._check_upload_size(getattr(tg_file, "file_size", None))
         except UploadTooLargeError:
             await self._reply_file_error(

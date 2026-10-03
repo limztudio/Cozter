@@ -412,9 +412,7 @@ class BotPlatform(ABC):
         self._awaiting_answer: set[str] = set()
         # Multi-step flow state: maps user_id -> next text-input callback.
         self._pending_input: dict[str, Handler] = {}
-        # Scheduler state. Double-fire within one tick cycle is prevented
-        # by the persisted ``last_fired`` timestamp on each schedule,
-        # which also survives bot restarts to enable catch-up firing.
+        # Scheduler state. Persisted last_fired prevents double-fire and enables catch-up.
         self._scheduler_task: asyncio.Task | None = None
         # Set when an auto-update has been pulled and the process is
         # waiting for active AI replies to finish before restarting.
@@ -424,9 +422,7 @@ class BotPlatform(ABC):
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
         # Staged final text (separate from inbound queue) so retries resend without rerunning.
         self._reply_delivery_file_lock: asyncio.Lock = asyncio.Lock()
-        # Serializes one user's delivery attempts with /cancel and /stop.
-        # A separate lock per user avoids allowing one temporarily unavailable
-        # chat platform to hold up delivery or cancellation for everyone.
+        # Per-user delivery-vs-cancel lock: one slow platform must not block everyone.
         self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
         self._pending_reply_delivery_users: set[str] = set()
         # Pipelined attachment uploads: per-chat tails keep pictures ahead
@@ -442,9 +438,7 @@ class BotPlatform(ABC):
         self._cancel_acknowledged: set[str] = set()
         # Per-user epochs: a pre-/stop admission must not run post-/stop.
         self._cancel_generations: dict[str, int] = {}
-        # Serializes a user's durable inbound admission with /cancel and
-        # /stop. This closes the crash window between a cancellation clearing
-        # the queue file and an older dispatch persisting its entry.
+        # Per-user admission lock: closes the cancel-clear vs persist race window.
         self._dispatch_admission_locks: dict[str, asyncio.Lock] = {}
 
     def _check_upload_size(self, size: object) -> None:
@@ -801,9 +795,7 @@ class BotPlatform(ABC):
         turn, which would strand that backlog forever.
         """
         for entry in msg_queue._queue:  # type: ignore[attr-defined]
-            # In-memory entries are built by our own dispatch paths, but a
-            # malformed shape must not crash the await-arm check and strand
-            # the turn. Only a well-formed non-ephemeral entry counts.
+            # Only well-formed non-ephemeral entries count; malformed shapes must not strand the turn.
             if (
                 isinstance(entry, tuple)
                 and len(entry) == 4
@@ -972,9 +964,7 @@ class BotPlatform(ABC):
             self._cancel_generations.get(uid, 0) + 1
         )
 
-        # Signal a foreground agent immediately. A different dispatch can
-        # briefly own the admission barrier while it commits its durable
-        # entry, but that must not delay process cancellation itself.
+        # Signal foreground agents first; admission-barrier ownership must not delay cancellation.
         task = self._running_tasks.get(uid)
         task_running = task is not None and not task.done()
         if task_running:
@@ -993,9 +983,7 @@ class BotPlatform(ABC):
             persisted = await self._clear_persistent_queue(uid)
         delayed_replies = await self._clear_reply_deliveries(uid)
         detached_cancelled = await self._cancel_detached_tasks(uid)
-        # Cancel uploads first: _await_attachment_tail shields the tail,
-        # so a stuck upload would otherwise wedge the delivery attempt
-        # below behind the very upload being cancelled.
+        # Cancel uploads first: the tail shield would otherwise wedge delivery behind the cancelled upload.
         cancelled_uploads = await self._cancel_attachment_uploads(uid)
         cleared = max(len(drained), persisted, delayed_replies)
         return task_running, bool(
@@ -1220,9 +1208,7 @@ class BotPlatform(ABC):
         _, model, summary_model, _, summary_backend = (
             workspace.get_run_config(ws)
         )
-        # Always show the summary agent so the user doesn't read the
-        # following ``Summary model`` line as belonging to *name* - it
-        # belongs to whatever agent ``summary_backend`` points at.
+        # Always show the summary agent: the Summary-model line belongs to summary_backend, not *name*.
         await ctx.reply_text(
             f"Agent set to: {name}\n"
             f"Model: {model}\n"
@@ -2174,9 +2160,7 @@ class BotPlatform(ABC):
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
         )
 
-    # Persistent message queue: mirror pending messages to JSON so
-    # restarts resume. Persist-then-enqueue; complete only after
-    # the turn settles (shutdown keeps the entry; /stop clears it).
+    # Durable queue: persist-then-enqueue; complete after the turn settles (shutdown keeps, /stop clears).
 
     def _platform_state_file_path(self, stem: str) -> str:
         """Return a durable per-platform state path with a safe file name."""
@@ -2581,9 +2565,7 @@ class BotPlatform(ABC):
             try:
                 await self._remove_reply_delivery_record(record_id)
             except Exception:
-                # The chat may already have accepted the reply. Keep the
-                # ledger for at-least-once recovery rather than rerunning the
-                # agent.
+                # Chat may have accepted the reply; keep the ledger for at-least-once recovery.
                 logger.warning(
                     "Delivered completed reply %s but could not clear its "
                     "ledger", record_id, exc_info=True,
@@ -2886,9 +2868,7 @@ class BotPlatform(ABC):
         result = agent.AgentResult()
         agent.append_text_result(result, message)
         try:
-            # Uploads stay owned by the user (cancellable) without
-            # letting a provider's textual ``[[await]]`` marker pause
-            # the normal queue.
+            # Uploads stay user-owned (cancellable); provider [[await]] text must not pause the queue.
             await self._send_detached_result(
                 record["chat_id"], record["workspace_path"], result,
                 record["user_id"],
@@ -3076,9 +3056,7 @@ class BotPlatform(ABC):
         """
         now = datetime.now()
 
-        # (uid, ws, sched, slot) tuples; sorted by creation order so
-        # two schedules firing at the same slot run in the order the
-        # user made them.
+        # Creation-ordered (uid, ws, sched, slot) tuples: same-slot fires run in creation order.
         to_fire: list[tuple[str, str, dict, datetime]] = []
 
         # Iterate workspace state (not notify_targets) so Slack — where
@@ -3097,9 +3075,7 @@ class BotPlatform(ABC):
                 baseline = last_fired or schedules.parse_iso(
                     sched.get("created"),
                 )
-                # Never fire for slots at or before the schedule's
-                # creation time (the user shouldn't see a fire at the
-                # instant they created it).
+                # Never fire at/before creation time (no instant fire on create).
                 if baseline is not None and slot <= baseline:
                     continue
                 to_fire.append((uid, ws, sched, slot))
@@ -3110,9 +3086,7 @@ class BotPlatform(ABC):
             schedule_id = sched.get("id")
             if not isinstance(schedule_id, str) or not schedule_id:
                 continue
-            # Persist last_fired BEFORE queueing the command, so a
-            # crash between marking and queueing at worst drops the
-            # fire rather than firing it twice.
+            # Persist last_fired first: a mid-fire crash drops once rather than firing twice.
             async with workspace.get_lock(ws):
                 claimed_schedule = schedules.update_schedule_fired(
                     ws, uid, schedule_id, slot.isoformat(),
@@ -3135,9 +3109,7 @@ class BotPlatform(ABC):
         if not command or not chat_id:
             return
 
-        # A user who was authorized when creating the schedule may have
-        # been removed since — re-check so stale schedules don't bypass
-        # authorization.
+        # Re-check auth: schedule creators may have been deauthorized since.
         if not self.authorized(uid, chat_id):
             logger.warning(
                 "Skipping schedule for unauthorized user=%s chat=%s",
@@ -3150,9 +3122,7 @@ class BotPlatform(ABC):
         self._ensure_task_lock(uid)
         msg_queue = self._ensure_message_queue(uid)
 
-        # Check capacity BEFORE announcing — otherwise a user with a full
-        # queue sees "⏰ Scheduled: X" immediately followed by "Queue full
-        # — dropped scheduled command: X", which is confusing.
+        # Capacity before announcement: avoids "Scheduled: X" + "Queue full — dropped" confusion.
         if msg_queue.full():
             await self._send_text_best_effort(
                 chat_id,
@@ -3180,9 +3150,7 @@ class BotPlatform(ABC):
             await self._discard_cancelled_dispatch_entry(uid, entry_id, msg_queue)
             return
 
-        # Kick the queue drainer in a background task; if a turn is
-        # already running, _drain_message_queue breaks out immediately
-        # and the running handler's own drain-after-turn picks up later.
+        # Kick the drainer; a running turn's own drain-after-turn picks up if one is already active.
         self._start_queue_drain(uid)
 
     # AI chat + file
@@ -3385,9 +3353,7 @@ class BotPlatform(ABC):
                 self._start_queue_drain(uid)
             return
 
-        # Direct path: persist BEFORE acquiring the lock so a crash
-        # between persist and processing still leaves the entry on
-        # disk to be resumed by restore_queues() after restart.
+        # Persist before locking: a mid-path crash still leaves the entry for restart resume.
         entry_id = await self._persist_admitted_dispatch_entry(
             uid, text, chat_id, generation,
         )
@@ -3416,9 +3382,7 @@ class BotPlatform(ABC):
             await ctx.reply_text(
                 f"Queued ({msg_queue.qsize()}/{max(self.max_queue_size, msg_queue.qsize())})."
             )
-            # Normally this returns immediately while the update is pending.
-            # Starting it still covers a no-update/cancel race that resumes
-            # intake after the entry was placed in memory.
+            # Start anyway: covers the no-update/cancel race resuming intake after in-memory placement.
             self._start_queue_drain(uid)
             return
         # [[await]] answer: clear the flag only after lock acquisition so
@@ -3636,9 +3600,7 @@ class BotPlatform(ABC):
             if status_edit_task is not None and not status_edit_task.done():
                 status_edit_task.cancel()
             if thinking_handle is not None:
-                # The answer must not wait for a stale status message to be
-                # removed. The bounded best-effort cleanup also prevents an
-                # in-flight Slack chat.delete from holding the reply hostage.
+                # Never let stale-status cleanup hold the answer hostage (bounded best-effort).
                 create_background_task(
                     self._run_status_operation(
                         self.delete_message(thinking_handle),
@@ -3648,13 +3610,7 @@ class BotPlatform(ABC):
                     log=logger,
                 )
 
-        # Auto-chain: the capped continue-judge loop exhausted while the
-        # judge still said CONTINUE, so the draft shipped as PARTIAL with
-        # known remainder. Chain hands-free continuation turns in the same
-        # session (no user message) instead of stopping. /stop or a new
-        # message cancels instantly via the per-turn inject queue;
-        # [[await]] drafts never carry a continuation. Bounded by
-        # MAX_AUTO_CHAIN_TURNS so a stubborn remainder still terminates.
+        # Auto-chain: judge exhausted mid-CONTINUE, so chain hands-free same-session turns (bounded).
         chained = 0
         try:
             from .. import flexible as _flexible_mod
@@ -3701,9 +3657,7 @@ class BotPlatform(ABC):
                 content=f"Auto-continue finished after {chained} turn(s).",
             ))
 
-        # Only opt into the [[await]] pause for interactive turns —
-        # ephemeral schedule turns (session_id is set) get their session
-        # deleted right after, so there's nothing to resume into.
+        # [[await]] pause is interactive-only; ephemeral schedule sessions are deleted right after.
         if queue_entry_id is None:
             await self._send_result(
                 chat_id, ws, result,
@@ -3739,9 +3693,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
 
-        # Distinguishable name — the auto-router keys off session
-        # names/topics and the "⏰" prefix together with the non-default
-        # name keeps the auto-title task from racing the delete.
+        # Distinctive name: keeps the auto-title task from racing the delete.
         stripped = text.strip()
         label = stripped.splitlines()[0] if stripped else "scheduled"
         if len(label) > 40:
@@ -3973,9 +3925,7 @@ class BotPlatform(ABC):
         msg_queue = self._message_queues.get(uid)
         if not msg_queue:
             return
-        # Preserve conversational order: a completed answer that the
-        # platform has not accepted yet must be retried before another user
-        # prompt can start a new agent turn.
+        # Conversational order: retry the unaccepted answer before starting a new turn.
         if uid in self._pending_reply_delivery_users:
             return
         # Defensive: if a queue exists, a lock must too. Create on demand
@@ -4003,9 +3953,7 @@ class BotPlatform(ABC):
                 # entries still drain.
                 lock.release()
                 break
-            # In-memory entries come from our own dispatch paths, but a
-            # malformed shape must be dropped (not crash the drain loop
-            # with an unpack error, wedging every later entry forever).
+            # Drop malformed in-memory shapes; never wedge the drain loop on an unpack error.
             if (
                 not isinstance(entry, tuple)
                 or len(entry) != 4
@@ -4039,9 +3987,7 @@ class BotPlatform(ABC):
                     lock.release()
                 continue
 
-            # Register the task before run_ai_turn yields on any API call,
-            # so /stop can cancel it even during the initial "Thinking..."
-            # send. Pops in _cleanup_turn via finally.
+            # Register before first yield so /stop cancels even during the "Thinking..." send.
             self._running_tasks[uid] = asyncio.current_task()
             try:
                 if ephemeral:
@@ -4053,9 +3999,7 @@ class BotPlatform(ABC):
                         uid, msg_chat_id, text, queue_entry_id=entry_id,
                     )
             except asyncio.CancelledError:
-                # Leave the entry on disk so restart resumes it
-                # (or, if /stop caused the cancel, cmd_stop already
-                # cleared the persistent queue).
+                # Keep on disk for restart resume (/stop clears via cmd_stop).
                 if uid not in self._cancel_acknowledged:
                     await self._send_text_best_effort(
                         msg_chat_id, "Cancelled.",

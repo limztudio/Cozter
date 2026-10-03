@@ -1457,9 +1457,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                         first_entered_persist.set()
                         return await original_persist(*args, **kwargs)
 
-                    # Both dispatches pass their initial lock.locked() check.
-                    # The first then owns the admission barrier while blocked
-                    # in persistence and the second waits behind it.
+                    # Both pass the initial lock check; the first then holds the barrier in persistence.
                     await bot._queue_file_lock.acquire()
                     queue_file_lock_held = True
                     with mock.patch.object(
@@ -1554,9 +1552,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                             second_entered_persist.wait(), timeout=1,
                         )
 
-                        # /stop cancels the active turn promptly, then waits
-                        # behind the second dispatch's admission barrier so it
-                        # can clear that pre-stop write durably.
+                        # /stop cancels promptly, then waits behind the second barrier to clear durably.
                         stop_task = asyncio.create_task(
                             bot.cmd_stop(bot.make_context("u1", "chat")),
                         )

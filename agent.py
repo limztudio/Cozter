@@ -53,9 +53,7 @@ class DetachedTaskLaunch:
     task_id: str
     session_id: str
 
-# Per-backend prompt preamble: documents Cozter markers + working policy
-# (collaborative vs autonomous). Scheduled/ephemeral turns are always
-# autonomous (no one to answer [[await]]).
+# Prompt preamble: Cozter markers + working policy. Scheduled/ephemeral turns are always autonomous.
 _ATTACH_HINT = (
     'Send created files via "[[attach: PATH]]" on its own line.'
 )
@@ -288,9 +286,7 @@ def format_usage(usage: dict | None) -> str | None:
         and cost > 0
     ):
         if cost < 0.0001:
-            # Sub-cent costs would round to "$0" at 4dp, implying free.
-            # Keep fixed-point (never scientific notation) so a billed
-            # turn never displays as zero.
+            # Fixed-point (never scientific): sub-cent costs must not display as $0.
             cost_str = f"{cost:.6f}".rstrip("0").rstrip(".")
         else:
             cost_str = f"{cost:.4f}".rstrip("0").rstrip(".")
@@ -485,9 +481,7 @@ def _iter_image_files(root: str, *, skip_dirs: bool) -> list[str]:
                 if ext not in IMAGE_EXTENSIONS:
                     continue
                 path = os.path.realpath(os.path.join(dirpath, filename))
-                # os.walk lists file symlinks even when it does not follow
-                # directory symlinks. Do not let a workspace symlink turn a
-                # workspace-only auto-scan into an external-artifact scan.
+                # os.walk lists file symlinks too; keep workspace-only scans from escaping via symlink.
                 if is_path_within(path, root_real) and os.path.isfile(path):
                     paths.append(path)
     except OSError:
@@ -624,9 +618,7 @@ def _bounded_context_list_block(
             "… [older items omitted — never treat this preview as full"
             " coverage; say PARTIAL + remainder when coverage is unclear]"
         )
-        # Make room for the omission marker within the same body budget
-        # by dropping oldest retained lines first (newest retained last).
-        # Join once per check would be O(n^2); track lengths incrementally.
+        # Drop oldest lines first for the omission marker; track lengths to stay O(n).
         line_lengths = [len(line) for line in lines]
         total = sum(line_lengths) + max(0, len(lines) - 1)
         start = 0
@@ -644,9 +636,7 @@ def _bounded_context_list_block(
     if lines:
         body = "\n".join(lines)
     else:
-        # A single persisted item may be larger than the whole history
-        # budget. Preserve a bounded tail item rather than dropping every
-        # hint that the block exists.
+        # Oversized single item: keep a bounded tail so the block stays visible.
         body = _truncate_context_text(formatter(items[-1]), body_limit)
     return header + body + footer if body else ""
 
@@ -692,9 +682,7 @@ def _request_keywords(text: str, limit: int = 64) -> set[str]:
 def _relevance_last(items: list, keywords: set[str]) -> list:
     if not keywords:
         return items
-    # Probe characters first: an item can only score if it contains at
-    # least one keyword's first character (either case). Non-matching
-    # items skip the lowercase copy + regex scan entirely.
+    # First-char probe: skip items lacking any keyword initial (avoids lowercase copy + regex).
     firsts = {kw[0] for kw in keywords if kw}
     firsts |= {char.swapcase() for char in firsts}
     scored = []
@@ -1056,9 +1044,7 @@ async def _drive_backend(
                 preserve_process_tree=lambda: bool(result.detached_tasks),
             )
         except BaseException:
-            # A reader/teardown failure arrives after the foreground stream
-            # completed, but it is still not a clean turn that may retain
-            # ordinary children.
+            # Late reader/teardown failure: foreground already done, still not a clean turn.
             if has_managed_process_group(proc):
                 terminate_process_group(proc)
             raise
@@ -1080,9 +1066,7 @@ async def _drive_backend(
     # Final sync drain: an accepted message must not vanish in the
     # watcher-teardown gap.
     if _take_pending_injections(inject_queue, injected):
-        # The watcher was already stopped during teardown, so this late
-        # injection cannot have signalled a parent that had cleanly exited.
-        # Do it here before rebuilding the prompt for the restart.
+        # Watcher already stopped in teardown; terminate before rebuilding the restart prompt.
         if has_managed_process_group(proc):
             terminate_process_group(proc)
         return result, True
@@ -1176,9 +1160,7 @@ async def _run_with_inject_watch(
             )
         return None, True
     if close_inject_on_completion:
-        # This is the terminal planner/merge phase.  Closing happens before
-        # returning (and therefore before any reply/session I/O awaits), so
-        # late /inject commands are rejected instead of being dropped.
+        # Terminal planner/merge phase: close before reply/session I/O so late /inject is rejected.
         _close_inject_queue(inject_queue)
     return call_task.result(), False
 
@@ -1349,9 +1331,7 @@ async def _run_flexible(
     # workers run mid-pipeline, where nobody is reading their questions.
     if plan.question:
         if collaborative:
-            # A question ends the Flexible turn without reaching the merge
-            # phase.  It therefore owns the same terminal injection boundary
-            # as a normal merge result.
+            # A planner question ends the turn pre-merge; same terminal injection boundary.
             if _take_pending_injections(inject_queue, injected):
                 return AgentResult(), True
             _close_inject_queue(inject_queue)
@@ -1771,9 +1751,7 @@ async def _run_post_turn_maintenance(
     )
 
 
-# Bounds for the partial-output digest persisted with an interrupted turn:
-# enough to show what the stopped attempt reached without ballooning the
-# context block that later turns receive.
+# Interrupted-turn digest bounds: show what the stopped attempt reached without bloating context.
 INTERRUPTED_TURN_MAX_CHARS = 1200
 INTERRUPTED_TURN_ACTIVITY_CHARS = 300
 # Events retained for that digest; the digest keeps the newest material.
@@ -1915,9 +1893,7 @@ async def _run_turn(
             session_id=session_id,
         )
     except asyncio.CancelledError:
-        # /stop, shutdown, or a mid-turn process replacement: leave a
-        # durable trace of the stopped attempt so a later resume has real
-        # memory of it. Never swallow the cancellation.
+        # Trace the stopped attempt for later resume; never swallow cancellation.
         _log_interrupted_turn(turn)
         raise
 
@@ -2014,9 +1990,7 @@ async def _run_turn_impl(
         if on_event is not None:
             await on_event(event)
 
-    # Backend phases stream through this tee instead of the caller's
-    # callback directly, so a cancelled turn still knows what the stopped
-    # attempt had reached.
+    # Tee backend phases so a cancelled turn still records what it reached.
 
     while True:  # restart loop for inject
         effective_prompt = prompt
@@ -2031,9 +2005,7 @@ async def _run_turn_impl(
             budget=history_budget,
         )
 
-        # Walking a workspace can be expensive (large repositories often
-        # contain generated screenshots), so keep the filesystem scan off the
-        # shared bot event loop.
+        # Workspace scans can be expensive; keep them off the bot event loop.
         attachment_images_before = await asyncio.to_thread(
             _snapshot_attachment_images, workspace_path,
         )
@@ -2093,9 +2065,7 @@ async def _run_turn_impl(
         for path in new_attachment_paths:
             result.events.append(ChatEvent(kind="attachment", content=path))
 
-        # Continue-judge: CONTINUE re-drives the same backend with one
-        # next instruction (capped); inject/cancel/await break out,
-        # failures fail closed to DONE.
+        # Continue-judge: CONTINUE re-drives same backend (capped); inject/cancel/await/failure break out.
         judged_rounds = 0
         while judged_rounds < flexible.JUDGE_MAX_CONTINUES:
             draft = result.text
@@ -2192,9 +2162,7 @@ async def _run_turn_impl(
             )
             for path in new_attachment_paths:
                 result.events.append(ChatEvent(kind="attachment", content=path))
-            # Cap exhausted while the judge still says CONTINUE: keep the
-            # pending verdict on the result so the bot layer auto-chains a
-            # continuation turn instead of shipping PARTIAL as final.
+            # Cap exhausted mid-CONTINUE: keep verdict so the bot layer auto-chains instead of shipping PARTIAL.
             if judged_rounds >= flexible.JUDGE_MAX_CONTINUES:
                 _draft_tail, _tail_awaiting = extract_await(result.text or "")
                 if _tail_awaiting or not _draft_tail.strip():
@@ -2230,17 +2198,13 @@ async def _run_turn_impl(
 
         break  # normal completion
 
-    # The terminal backend phase normally closes this first.  Keep a
-    # defensive close here for direct callers and queues that exited through
-    # an unusual but non-error path, before session/reply work yields.
+    # Defensive close for direct callers / unusual non-error paths, before session/reply yields.
     _close_inject_queue(inject_queue)
     # Discard any messages from a plain programmatic Queue after the final
     # answer. Bot-owned queues reject them before this point.
     _drain_queue(inject_queue)
 
-    # A supported foreground agent may request that Cozter own the remaining
-    # work as a durable provider task. Consume the control marker before its
-    # text reaches session history or the chat platform.
+    # Detached-task requests: consume the control marker before session history / chat delivery.
     _consume_detached_task_requests(result)
 
     # Log the original prompt (including injected context) to session.

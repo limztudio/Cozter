@@ -36,9 +36,7 @@ class _FallbackModelSpec(NamedTuple):
     context_window: int
 
 
-# Discovery fallback when /models is unavailable: curated chat IDs only
-# (image/voice/SAM use other endpoints). Capabilities ride beside IDs so
-# picker and compaction can't drift; published windows cover only these.
+# Offline discovery fallback: curated chat IDs + beside-ID capabilities (picker/compaction can't drift).
 _FALLBACK_MODEL_SPECS = (
     # Current flagship on the Model API.
     _FallbackModelSpec("muse-spark-1.3", 1_048_576),

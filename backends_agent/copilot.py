@@ -172,9 +172,7 @@ def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     return tail + marker if truncated else tail
 
 
-# Marker inserted when the argv cap forces middle context out. It keeps the
-# completeness rule visible so the model never mistakes a clipped preview
-# for full coverage.
+# Marker for argv-clipped middle context: keeps the completeness rule visible.
 _ARGV_MIDDLE_DROPPED_MARKER = (
     "\n… [Copilot argv cap: middle context dropped to fit; "
     "head preamble kept — never treat this preview as full content; "
@@ -271,14 +269,10 @@ class CopilotBackend(Backend):
         "auto": ("--allow-all-tools",),
         "restricted": ("--available-tools", ""),
     }
-    # ``auto`` is policy-aware: Copilot chooses from models allowed for the
-    # signed-in account. It is also the only safe default before ACP has
-    # returned an account-specific catalog.
+    # ``auto`` is policy-aware (account-allowed models); only safe pre-catalog default.
     default_model = "auto"
     default_summary_model = "auto"
-    # A static tier mapping could select a model forbidden for an enterprise
-    # account before the picker is ever opened. Let all unset Copilot tiers
-    # use the policy-aware ``default_model`` instead.
+    # No static tiers: unset tiers use policy-aware default_model (never a forbidden enterprise model).
     tier_models: dict[str, str] = {}
     # An ACP list is authoritative for this account, so ``extra_models`` must
     # not inject arbitrary, unverified names back into a picker.
@@ -402,9 +396,7 @@ class CopilotBackend(Backend):
                 )
                 self._workspace_fallback_expires_at.pop(workspace_key, None)
                 return models
-            # This is a short retry throttle, not a model-list cache: it
-            # prevents an absent/broken CLI from spawning a new process for
-            # each input while still recovering quickly after sign-in.
+            # Short retry throttle (not a cache): avoid per-input spawns, still recover fast after sign-in.
             self._workspace_fallback_expires_at[workspace_key] = (
                 time.monotonic() + _MODEL_FAILURE_RETRY_SEC
             )
@@ -468,9 +460,7 @@ class CopilotBackend(Backend):
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                # ACP's protocol output belongs exclusively on stdout. Do not
-                # leave stderr piped: a verbose CLI failure could otherwise
-                # block this small metadata-only probe.
+                # ACP speaks on stdout only; DEVNULL stderr so verbose failures can't block the probe.
                 stderr=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
@@ -532,9 +522,7 @@ class CopilotBackend(Backend):
                 )
                 return None
 
-            # The session has no prompt and is used only for its catalog. If
-            # this ACP build supports it, explicitly free any session-side
-            # resources before ending the process.
+            # Catalog-only session: free session resources when this ACP build supports it.
             _close_acp_session_if_supported(
                 proc,
                 messages,
@@ -565,9 +553,7 @@ class CopilotBackend(Backend):
         max_prompt_chars = _max_prompt_chars()
         prompt_units = _prompt_argv_units(prompt)
         if prompt_units > max_prompt_chars:
-            # Keep the tail: the user's current message is at the end of the
-            # composed prompt, and the head (capability-hint preamble + old context)
-            # is the least costly to drop.
+            # Keep the tail (current message is last); head preamble/old context drops cheapest.
             logger.warning(
                 "Copilot prompt %d argv units exceeds %d-unit cap; "
                 "dropping oldest context",
@@ -604,9 +590,7 @@ class CopilotBackend(Backend):
                 cmd,
                 cwd=workspace_path,
                 env=env,
-                # On POSIX, an own process group lets /stop or /inject kill
-                # the whole tree. Windows uses taskkill /T in
-                # utils.terminate_process_group.
+                # Own process group on POSIX so /stop//inject kills the tree (Windows: taskkill /T).
                 start_new_session=os.name != "nt",
             )
         except BaseException:
@@ -770,9 +754,7 @@ def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
         if models:
             return models
 
-    # Older ACP SDKs surfaced the same SessionModelState directly on the
-    # session/new result. Keep this compatibility path before configOptions:
-    # both forms are provider-authoritative, unlike a generic CLI help list.
+    # Compat: old ACP SDKs put SessionModelState on session/new; both forms are provider-authoritative.
     models = _catalog_model_ids(payload.get("availableModels"), key="modelId")
     if models:
         return models
@@ -954,9 +936,7 @@ def _acp_request(
         if message.get("id") == request_id:
             result = message.get("result")
             return result if isinstance(result, dict) else None
-        # A metadata-only handshake should not need a client request. Reject
-        # one explicitly rather than leave the ACP server blocked on an
-        # unhandled request until this probe's timeout.
+        # Handshake needs no client request; reject explicitly instead of blocking the probe.
         if "method" in message and "id" in message:
             _reject_acp_request(proc, message.get("id"))
     return None

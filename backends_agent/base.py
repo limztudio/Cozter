@@ -333,9 +333,7 @@ class AgentResult:
     events: list[ChatEvent] = field(default_factory=list)
     text: str = ""
     error: str | None = None
-    # Token/cost usage for the turn, when the backend reports it (codex's
-    # turn.completed, claude_code's result). Backend-shaped dict; None
-    # otherwise. See agent.format_usage for the display formatter.
+    # Backend-shaped usage dict; None when unreported. See agent.format_usage.
     usage: dict | None = None
     # Provider jobs outliving the CLI stream; tracked in a durable ledger, not as ChatEvents.
     detached_tasks: list[DetachedTaskRef] = field(default_factory=list)
@@ -349,10 +347,7 @@ class AgentResult:
     detached_task_tool_use_ids: set[str] = field(
         default_factory=set, repr=False,
     )
-    # Set when the turn's capped continue-judge loop exhausts while the
-    # judge still says CONTINUE: the draft shipped as PARTIAL with known
-    # remainder. The bot layer auto-chains one continuation turn from
-    # this instruction instead of stopping. Empty = nothing to continue.
+    # Set when the judge loop exhausts mid-CONTINUE: PARTIAL draft + instruction for one auto-chained turn.
     continue_instruction: str = ""
 
 
@@ -720,9 +715,7 @@ async def _reap_failed_prompt_subprocess(
         else:
             await proc.wait()
     finally:
-        # This path has no stdout/stderr readers.  A descendant which escaped
-        # the owned group can retain either inherited descriptor after its
-        # launcher exits, so release the unused transports explicitly.
+        # No readers here; an escaped descendant can hold descriptors, so release them explicitly.
         close_subprocess_pipe(proc, 1)
         close_subprocess_pipe(proc, 2)
 
@@ -757,13 +750,10 @@ class Backend(ABC):
     # whose tools are baked into the binary (plugins via bash prelude).
     supports_typed_plugins: bool = False
 
-    # Whether to add the bash/plugin prelude when untyped. CLI backends keep
-    # this True (their model can shell-invoke plugins); shell-less HTTP
-    # backends set False (prelude would describe uncallable plugins).
+    # Untyped bash/plugin prelude: True for CLIs (model can shell-invoke), False for shell-less HTTP.
     supports_plugin_prelude: bool = True
 
-    # Native image pixels (False = honest dimensions-only path, never send
-    # bytes where they'd be silently dropped).
+    # Native image pixels (False = dimensions-only path, never send droppable bytes).
     supports_vision: bool = False
 
     # Delivery form when supports_vision: openai_parts | cli_file_flag |

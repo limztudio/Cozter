@@ -14,9 +14,7 @@ _STARTUP_COMMIT: str | None = None
 
 
 _GIT_TIMEOUT = 3600  # seconds — real-work cap so slow fetches finish; cancel still stops the turn
-# Dependency installation only runs when an update changed requirements (or
-# while repairing a missing fresh-venv dependency). Real-work cap of 3600s
-# so slow installs finish instead of timing out early.
+# Installs run only on requirement changes (or fresh-venv repair); 3600s real-work cap.
 _PIP_INSTALL_TIMEOUT = 3600
 
 # Non-zero so both the ps1 supervisor and Task Scheduler recovery restart on it.
@@ -321,9 +319,7 @@ def restart_script(exit_code: int = 0) -> None:
                     "the bootstrap supervisor",
                     WINDOWS_SUPERVISOR_ENV,
                 )
-            # Avoid os.execv(), whose Windows process handoff is unreliable
-            # in this runtime. The supervisor relaunches Cozter without
-            # retaining this process as another Python ancestor.
+            # No os.execv() (unreliable handoff here); the supervisor relaunches without this ancestor.
             os._exit(WINDOWS_SUPERVISOR_RESTART_EXIT_CODE)
             return  # pylint: disable=unreachable  # reachable when os._exit is mocked in tests
         parent_dir = os.path.dirname(MODULE_ROOT)

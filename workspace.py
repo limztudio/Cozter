@@ -479,9 +479,7 @@ def _coerce_permission(permission: object) -> str:
     )
 
 
-# Privilege order (low -> high). config.max_permission caps the effective
-# permission bot-wide so an operator can forbid e.g. sandbox-bypassing
-# "full" mode across every workspace.
+# Privilege rank (low -> high); config.max_permission caps it bot-wide.
 _PERMISSION_RANK = {"deny": 0, "confirm": 1, "auto": 2, "full": 3}
 
 
@@ -846,9 +844,7 @@ def get_reasoning_effort(workspace_path: str) -> int:
 
 def set_reasoning_effort(workspace_path: str, effort: int) -> None:
     """Clamp to 0-100 and persist."""
-    # Strict int-only, matching _set_minimum_int_setting: a float or
-    # numeric string from a model/tool arg must be rejected loudly rather
-    # than silently truncated into a different effort level.
+    # Strict int-only (like _set_minimum_int_setting): reject floats/strings loudly, never truncate.
     if isinstance(effort, bool) or not isinstance(effort, int):
         raise ValueError("reasoning effort must be an integer 0-100")
     clamped = max(0, min(effort, 100))

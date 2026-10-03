@@ -40,9 +40,7 @@ from ..utils import (
 
 logger = logging.getLogger(__name__)
 
-# Claude Code's effort support is model-specific.  Keep these pinned-model
-# exceptions separate from the aliases below: aliases intentionally follow
-# whichever current model the installed Claude Code resolves for the account.
+# Effort support is model-specific; pinned exceptions stay separate (aliases follow the installed default).
 _FOUR_LEVEL_EFFORT_MODELS = frozenset({
     "claude-opus-4-5",
     "claude-opus-4-5-20251101",
@@ -102,9 +100,7 @@ _DETACHED_COMMAND_READ_BYTES = 64 * 1024
 # visible text separately (framing overhead needs the larger record cap).
 _MAX_DETACHED_TRANSCRIPT_LINE_BYTES = 8 * 1024 * 1024
 _MAX_DETACHED_OUTPUT_TEXT_BYTES = 4 * 1024 * 1024
-# ``state.json`` carries the fallback result too.  Loading it with
-# ``json.load`` would otherwise materialize an arbitrarily large provider
-# file before the result-text cap below can take effect.
+# ``state.json`` also carries the result; cap it before the result-text cap applies.
 _MAX_DETACHED_STATE_BYTES = 8 * 1024 * 1024
 _DETACHED_OUTPUT_TRUNCATION_MARKER = (
     "\n… [truncated: remainder omitted — never treat this preview as full"
@@ -117,18 +113,14 @@ def _background_guard_settings() -> str:
         os.path.dirname(__file__), "claude_background_guard.py",
     )
     return json.dumps({
-        # CLI settings take precedence over workspace/user settings.  A
-        # lower-priority ``disableAllHooks`` must not turn off Cozter's
-        # callback-safety guard for this one session.
+        # CLI settings win; a lower-priority disableAllHooks must not drop this session's guard.
         "disableAllHooks": False,
         "hooks": {
             "PreToolUse": [{
                 "matcher": "Bash",
                 "hooks": [{
                     "type": "command",
-                    # ``args`` selects Claude Code's exec form: both the
-                    # interpreter and path are passed verbatim, including on
-                    # Windows and in workspaces with spaces in their names.
+                    # Exec form: verbatim interpreter + path (Windows, spaced workspaces safe).
                     "command": sys.executable,
                     "args": [guard_path],
                     "timeout": _BACKGROUND_GUARD_TIMEOUT_SEC,
@@ -180,9 +172,7 @@ def _truncate_utf8_text(
         prefix_limit = limit - len(ellipsis)
         text = encoded[:prefix_limit].decode("utf-8", errors="ignore") + "…"
         return text, True, len(text.encode("utf-8", errors="replace"))
-    # ``value`` can contain lone surrogates.  Encode with replacement above,
-    # then decode only a complete UTF-8 prefix so the resulting text remains
-    # safe for JSON/state delivery and fits the byte budget.
+    # Lone surrogates possible: decode a complete UTF-8 prefix only (JSON/state safe, in budget).
     text = (
         encoded[:prefix_limit].decode("utf-8", errors="ignore")
         + (marker if prefix_limit != limit else "")
@@ -317,9 +307,7 @@ def _iter_bounded_transcript_lines(path: str):
                 yield line
                 continue
 
-            # ``readline(limit)`` returns a prefix of an oversized physical
-            # line.  Discard the rest in equally bounded chunks so a malformed
-            # no-newline record cannot make the next fragment look like JSON.
+            # readline(limit) may split oversized lines; drain the rest so fragments can't parse as JSON.
             while not line.endswith(b"\n"):
                 line = file_handle.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1)
                 if not line:
@@ -350,9 +338,7 @@ def _local_background_output(workspace_path: str, task_id: str) -> str:
     pattern = os.path.join(_claude_home(), "projects", "*", f"{session_id}.jsonl")
     candidates.extend(glob.glob(pattern))
 
-    # ``glob`` does not resolve intermediate symlinks.  A project entry may
-    # therefore look like a child of ``projects`` while resolving elsewhere;
-    # normalize every candidate before opening it, just like linkScanPath.
+    # ``glob`` skips intermediate symlinks; normalize every candidate (like linkScanPath).
     paths: list[str] = []
     for candidate in candidates:
         real_path = os.path.realpath(candidate)
@@ -477,9 +463,7 @@ async def _capture_claude_command_output(
             (bytes(stderr.data), stderr.truncated),
         )
     except BaseException:
-        # ``wait_for`` cancels this coroutine on timeout.  A background
-        # descendant may keep its inherited pipe open after the launcher has
-        # exited, so do not leave either reader behind waiting for EOF.
+        # wait_for cancels on timeout; an exited launcher's descendant may hold pipes, so abandon readers.
         await _abandon_command_readers(proc, readers)
         raise
 
@@ -495,16 +479,12 @@ async def _run_claude_command(
             timeout=_DETACHED_COMMAND_TIMEOUT_SEC,
         )
     except TimeoutError as exc:
-        # Do not kill the command's process group here. ``claude --bg``
-        # hands a worker to Claude's supervisor; timing out while the
-        # launcher is slow must not terminate the detached session itself.
+        # Don't kill the group: ``claude --bg`` workers belong to Claude's supervisor, not the slow launcher.
         if proc.returncode is None:
             try:
                 proc.kill()
             except ProcessLookupError:
-                # The launcher can exit in the small race between the
-                # returncode check and ``kill``; its child watcher will still
-                # make the bounded cleanup below observe that exit.
+                # Launcher may exit between the returncode check and kill; bounded cleanup still observes it.
                 pass
         close_subprocess_pipe(proc, 1)
         close_subprocess_pipe(proc, 2)
@@ -534,9 +514,7 @@ class ClaudeCodeBackend(Backend):
     executable = "claude"
     supports_vision = True
     vision_mode = "stdin_text"
-    # ``acceptEdits`` preserves normal checks outside workspace edits; plan
-    # permits inspection while blocking edits, the safest non-interactive
-    # fallback for confirm and deny.
+    # acceptEdits keeps outside checks; plan is the safest fallback for confirm/deny.
     permission_arg_sets = {
         "full": ("--dangerously-skip-permissions",),
         "auto": ("--permission-mode", "acceptEdits"),
@@ -635,9 +613,7 @@ class ClaudeCodeBackend(Backend):
             "--output-format", "stream-json",
             "--verbose",  # required by claude when stream-json is set
             "--no-session-persistence",  # we manage sessions ourselves
-            # Claude's Bash tool is outside Cozter's process tree.  Install
-            # a session-scoped PreToolUse hook so it cannot leave an
-            # untracked ordinary background job behind.
+            # Claude's Bash is outside our tree; session hook blocks untracked background jobs.
             "--settings", _background_guard_settings(),
         ]
         self.append_launch_options(cmd, model, effort, approval)
@@ -714,9 +690,7 @@ class ClaudeCodeBackend(Backend):
                 "Claude Code background task listing failed for %s: %s",
                 task_id, stderr or stdout,
             )
-            # A transient supervisor failure must not be mistaken for a task
-            # disappearing. A completed task may have already retired from
-            # the daemon, though, so consult its durable local state first.
+            # Transient supervisor errors aren't disappearance; retired tasks live in durable local state.
             local = _local_background_status(workspace_path, task_id)
             if local is not None:
                 return local
@@ -770,9 +744,7 @@ class ClaudeCodeBackend(Backend):
         if local:
             return local
 
-        # Compatibility fallback for older Claude Code versions that do not
-        # persist the current job/transcript layout. Newer versions render a
-        # full terminal screen here, hence the durable transcript above.
+        # Fallback for old CLIs without the job/transcript layout (new ones render a full screen here).
         cmd = [*executable_command(self.executable), "logs", task_id]
         returncode, stdout, stderr = await _run_claude_command(
             cmd, cwd=workspace_path,
@@ -819,15 +791,12 @@ class ClaudeCodeBackend(Backend):
             return
 
         if etype == "result":
-            # The terminal event. If the assistant streamed text blocks
-            # above, we already captured them; otherwise fall back to
-            # the cumulative 'result' field.
+            # Terminal event: streamed text already captured, else fall back to cumulative 'result'.
             apply_terminal_result_event(event, result)
             return
 
         if etype == "user":
-            # Show only paired ``claude --bg`` Bash results (carry the
-            # supervisor task id for later monitoring).
+            # Only paired ``claude --bg`` Bash results (carry task id for monitoring).
             self._handle_user_tool_results(event, result)
             return
 
@@ -845,9 +814,7 @@ class ClaudeCodeBackend(Backend):
         )
 
     def extract_agent_text(self, event: dict) -> str | None:
-        # Compaction prefers the terminal result.result field since it's
-        # the aggregated, fully-rendered final reply. Streaming assistant
-        # text blocks are partials and may not include the full answer.
+        # Compaction prefers terminal result.result (aggregated final) over streaming partials.
         return extract_messages_style_agent_text(event)
 
     # helpers

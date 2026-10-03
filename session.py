@@ -584,9 +584,7 @@ def set_summary(
     if not isinstance(msgs, list):
         msgs = []
         data["messages"] = msgs
-    # keep_recent is an internal retain-count, but hand-edited callers and
-    # future refactors must not turn a negative into "drop everything and
-    # inflate the compacted tally".
+    # keep_recent is a retain-count: negatives clamp to 0, never "drop all + inflate tally".
     if isinstance(keep_recent, bool) or not isinstance(keep_recent, int):
         keep_recent = 0
     keep_recent = max(0, keep_recent)

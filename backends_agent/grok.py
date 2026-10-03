@@ -213,8 +213,6 @@ class GrokBackend(CachedModelCatalog, Backend):
         selected = (model or self.default_model).strip()
         return _FALLBACK_MODEL_CONTEXT_WINDOWS.get(selected)
 
-    # launch
-
     async def launch(
         self,
         workspace_path: str,

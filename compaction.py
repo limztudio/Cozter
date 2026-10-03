@@ -45,9 +45,7 @@ _PREVIOUS_SUMMARY_TRUNCATION_MARKER = (
     "\n… [previous summary truncated: remainder omitted — this is a preview,"
     " not full coverage; say PARTIAL + remainder when coverage is unclear]\n"
 )
-# Marker appended when an oversized first message is represented by a
-# bounded prefix. Shared with _oversized_first_message_prefix so the
-# consumed-character accounting always matches the rendered line.
+# Oversized-first-message marker: shared so consumed-char accounting matches the rendered line.
 _OVERSIZED_MESSAGE_MARKER = (
     "… [message truncated for budget — preview only;"
     " summarize only shown prefix; say PARTIAL + remainder]"
@@ -494,9 +492,7 @@ async def _maybe_compact_under_maintenance_lock(
                 or not isinstance(messages[0], dict)
                 or messages[0].get("content") != original_content
             ):
-                # A non-append writer changed the oldest message while the
-                # summary was in flight. Keeping the raw message is safer
-                # than applying a suffix to unrelated session state.
+                # Concurrent non-append write won the race; keeping raw state is safer than a stale suffix.
                 logger.warning(
                     "Skipping stale oversized-message compaction for "
                     "session %s", session_id,

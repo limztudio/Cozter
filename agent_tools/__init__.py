@@ -370,9 +370,7 @@ def cli_plugin_prelude() -> str:
             )
             or "no args"
         )
-        # Use the class's actual __module__ so the python -m line works
-        # even when the plugin file's name differs from the tool's name
-        # attribute (e.g. weather_lookup.py defining GetWeatherTool).
+        # Actual __module__ so the python -m line works when filename != tool name.
         module_path = tool.__class__.__module__
         lines.append(f"- {tool.name}: {tool.description}")
         lines.append(f"  {args_summary} | python -m {module_path} '<JSON>'")

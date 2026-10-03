@@ -40,13 +40,9 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# A single SSE event can legitimately exceed aiohttp's readline threshold
-# when a provider emits a complete tool argument in one delta. Keep generous
-# compatibility headroom without retaining an unbounded no-newline stream.
+# One SSE event can exceed aiohttp's readline limit (whole tool arg in one delta); cap it.
 _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
-# Standard SSE permits an event to contain many individual ``data:`` lines.
-# Bound their aggregate too; otherwise a peer can bypass the line cap by never
-# emitting the blank event delimiter.
+# SSE allows many data: lines per event; cap the aggregate so no-newline peers can't bypass the line cap.
 _MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
 # Bound retained completion state: dribbled fragments must not grow the
 # process; tool args get their own cap.
@@ -60,9 +56,7 @@ _MAX_TOOL_NAME_CHARS = 512
 # Cap the retained conversation: per-completion limits alone still allow
 # unbounded growth across turns.
 _MAX_AGENT_MESSAGE_BYTES = 32 * 1024 * 1024
-# Models normally issue only a small batch of calls before receiving their
-# results. This also bounds the bookkeeping for malformed streams that keep
-# inventing new tool-call indexes without sending argument text.
+# Models batch few calls per turn; this also bounds bookkeeping for malformed index-spam streams.
 _MAX_TOOL_CALLS_PER_COMPLETION = 128
 # Bound discovery responses (1 MiB fits thousands of model IDs).
 _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
@@ -323,9 +317,7 @@ class OpenAIChatBackend(Backend):
         return 8
 
     def _socket_timeout(self) -> int | None:
-        # Real-work cap hook: subclasses return their configured socket
-        # timeout (default 3600s); the stream runs up to that bound or
-        # until the turn is cancelled. Cancel still stops instantly.
+        # Real-work cap hook: subclass socket timeout (default 3600s); cancel still stops instantly.
         return 3600
 
     def _socket_timeout_setting(self) -> str:
@@ -357,8 +349,6 @@ class OpenAIChatBackend(Backend):
             f"configured (endpoint {self._chat_endpoint()},"
             f" default model {self.default_model})"
         )
-
-    # launch
 
     async def launch(  # type: ignore[override]
         self,
@@ -499,9 +489,7 @@ class OpenAIChatBackend(Backend):
                         await stream_completion(payload)
                     )
 
-                    # OpenAI spec: when ``tool_calls`` is present, ``content``
-                    # should be null (not ""). Some strict servers reject
-                    # empty-string content alongside tool_calls.
+                    # OpenAI wants content null (not "") with tool_calls; strict servers reject "".
                     assistant_msg: dict[str, Any] = {
                         "role": "assistant",
                         "content": assistant_text if assistant_text else None,
@@ -550,9 +538,7 @@ class OpenAIChatBackend(Backend):
                     async def _run_one(
                         _name: str, _args: dict,
                     ) -> str:
-                        # execute_tool owns permission checks, status
-                        # events, result truncation, and the per-tool
-                        # timeout.
+                        # execute_tool owns permissions, status events, truncation, per-tool timeout.
                         return await tools.execute_tool(
                             _name, _args, workspace_path, approval,
                             proc.emit,
@@ -742,9 +728,7 @@ def _completion_payload(
     payload.update(effort_fields)
     if tools_schema is not None:
         payload["tools"] = tools_schema
-        # Advertise concurrent execution: the loop runs one turn's
-        # tool_calls via asyncio.gather (results appended in order),
-        # so the model may batch independent calls in a single turn.
+        # One turn's tool_calls run via gather (ordered), so the model may batch independent calls.
         payload["parallel_tool_calls"] = True
     return payload
 
@@ -801,9 +785,7 @@ def _backoff_delay(
         ):
             retry_after = None
         elif not math.isfinite(retry_after):
-            # A non-finite header value must not reach asyncio.sleep: nan
-            # raises ValueError and inf would sleep effectively forever.
-            # Cap +inf at the cap and fall through on nan/-inf.
+            # Never sleep nan/inf: cap +inf, drop nan/-inf.
             retry_after = cap if retry_after == float("inf") else None
         elif retry_after < 0:
             retry_after = None
@@ -958,9 +940,7 @@ async def _post_completion_stream(
                 except json.JSONDecodeError:
                     logger.debug("Non-JSON SSE line: %r", data)
                     continue
-                # Providers occasionally send malformed non-completion events
-                # on the same SSE stream. Ignore those rather than letting an
-                # AttributeError end a turn, but surface explicit errors.
+                # Ignore malformed non-completion events on the stream; still surface explicit errors.
                 if not isinstance(obj, dict):
                     continue
                 if "error" in obj:
@@ -1137,9 +1117,7 @@ async def _iter_sse_events(
         # whitespace because it may be part of a multiline JSON string.
         if data.startswith(" "):
             data = data[1:]
-        # Count the inserted newline too. ``line`` was decoded with
-        # replacement characters, whose UTF-8 form is at least as large as
-        # malformed source bytes, so this remains a conservative bound.
+        # Newline counts too; replacement chars only grow UTF-8, so the bound stays conservative.
         event_bytes += len(data.encode("utf-8")) + (1 if data_lines else 0)
         if event_bytes > _MAX_SSE_EVENT_BYTES:
             raise _SSEEventTooLargeError(
@@ -1148,8 +1126,7 @@ async def _iter_sse_events(
             )
         data_lines.append(data)
     if data_lines:
-        # Tolerate a server that closes immediately after a complete event.
-        # _stream_once still rejects it unless it carried a terminal marker.
+        # Tolerate a server closing right after a complete event (terminal-marker check stays in _stream_once).
         yield "\n".join(data_lines)
 
 
@@ -1172,15 +1149,11 @@ def _merge_tool_call(
         return 0
 
     fn = delta.get("function")
-    # A function-less chunk can legitimately carry the id before later
-    # chunks supply the function name/arguments. A non-object ``function``
-    # field, on the other hand, is not a valid tool-call delta.
+    # Id may precede function name/args; a non-object function field is an invalid delta.
     if fn is not None and not isinstance(fn, dict):
         return 0
 
-    # Pre-seed with a synthetic id so we always have something to put in the
-    # tool-result message's tool_call_id field; some servers reject empty
-    # tool_call_ids. The server-provided id below overrides this if present.
+    # Pre-seed a synthetic id (servers reject empty tool_call_ids); the real id overrides below.
     buf = buffers.get(idx)
     if buf is None:
         if len(buffers) >= _MAX_TOOL_CALLS_PER_COMPLETION:
@@ -1295,9 +1268,7 @@ def _tools_for_approval(
     - auto: workspace-bounded tools; direct host-access tools require full.
     - full: the full tool set.
     """
-    # A malformed approval value must never widen the tool surface. Only the
-    # two explicit write-capable modes get the full schema; deny, compaction,
-    # and unknown values stay chat-only.
+    # Malformed approval must never widen tools: only explicit write-capable modes get full schema.
     if compaction or approval not in {"auto", "full", "confirm"}:
         return None
     if approval == "confirm":

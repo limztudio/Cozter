@@ -48,9 +48,7 @@ logger = logging.getLogger(__name__)
 
 # Markdown -> Slack mrkdwn
 
-# Private Use Area placeholders that won't collide with user text or
-# interfere with re.sub replacement-template parsing.
-# (Defined just below; also paired with _bold_sub for bold-first rewriting.)
+# PUA placeholders: collision-free, re.sub-safe (bold-first rewriting with _bold_sub).
 _BOLD_OPEN = ""
 _BOLD_CLOSE = ""
 
@@ -131,9 +129,7 @@ def _slack_retry_delay(error: SlackApiError) -> float | None:
     data = response.data if hasattr(response, "data") else None
     if isinstance(data, dict):
         code = data.get("error")
-        # Slack answers throttles with error=ratelimited; a missing error
-        # key (unit-test doubles, bare Retry-After headers) is treated as
-        # a throttle when a Retry-After header is present.
+        # Throttle = error ratelimited, or bare Retry-After without an error key (test doubles).
         headers = getattr(response, "headers", None) or {}
         has_retry_after = (
             "Retry-After" in headers or "retry-after" in headers
@@ -150,9 +146,7 @@ def _slack_retry_delay(error: SlackApiError) -> float | None:
         delay = float(raw)
     except (TypeError, ValueError, OverflowError):
         delay = 1.0
-    # A non-finite header value must not reach asyncio.sleep: nan raises
-    # ValueError and inf would sleep effectively forever. Cap +inf at the
-    # max delay and fail fast on nan/-inf.
+    # Never sleep nan/inf: cap +inf, fail fast on nan/-inf.
     if not math.isfinite(delay):
         if delay == float("inf"):
             return _SLACK_SEND_MAX_DELAY_SEC
@@ -341,9 +335,7 @@ class SlackBot(BotPlatform):
         max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
         max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
     ):
-        # channel_ids IS the authorization set for Slack: the bot listens
-        # only in these channels (public C..., private G..., DMs D..., or
-        # multi-party DMs MP...). Stored in ``notify_targets`` on base.
+        # channel_ids is the Slack auth set (stored as notify_targets on base).
         super().__init__(
             channel_ids,
             recent_limit=recent_limit,
@@ -412,9 +404,7 @@ class SlackBot(BotPlatform):
             await _update_rich_markdown(self.app.client, handle, chunks[0])
             return
 
-        # A message handle can only update one Slack message. Rich reply
-        # chunks are posted separately, so preserve the old readable mrkdwn
-        # behavior for an unusually large editable status message.
+        # One handle updates one message; chunks post separately, so keep old mrkdwn for oversized status.
         await self.app.client.chat_update(
             channel=handle.chat_id,
             ts=handle.message_id,
@@ -475,9 +465,7 @@ class SlackBot(BotPlatform):
 
     # event handlers
 
-    # Allow only plain user messages and file uploads; every other subtype
-    # (system messages, edits, pins, joins, bot-to-bot chatter, ...) is
-    # discarded so it can't be interpreted as user input.
+    # Plain messages + file uploads only; all other subtypes are discarded as non-input.
     _ALLOWED_SUBTYPES = frozenset({None, "file_share"})
 
     def _make_command_handler(self, name: str):
@@ -513,16 +501,12 @@ class SlackBot(BotPlatform):
             or not channel
         ):
             return
-        # Slack authorization is channel-scoped: only process events from
-        # channels on the allowlist. This is checked before any download
-        # work so unauthorized senders can't cause side effects.
+        # Channel allowlist first: no download work for unauthorized senders.
         if not self.authorized(uid, channel):
             return
 
         text = (event.get("text") or "").strip()
-        # If Slack delivers both ``message`` and ``app_mention`` for the
-        # same post, let the latter own it.  It strips the bot marker before
-        # dispatching, so the input is processed exactly once.
+        # message + app_mention for one post: the latter owns it (strips marker, dispatches once).
         marker = (
             f"<@{self._bot_user_id}>" if self._bot_user_id is not None else ""
         )
@@ -569,9 +553,7 @@ class SlackBot(BotPlatform):
             return
 
         for attached_file in files:
-            # Use the user-supplied name if meaningful; otherwise fall back
-            # to the Slack file id. basename() guards against path chars
-            # that would otherwise escape upload_dir.
+            # Prefer the user name, else the file id; basename() confines it to upload_dir.
             filename = os.path.basename(attached_file.get("name") or "")
             if not filename:
                 filename = attached_file.get("id") or "file"

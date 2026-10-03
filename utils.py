@@ -451,9 +451,7 @@ async def finish_process_stderr(
         if proc.returncode is None:
             await kill_and_wait(proc)
 
-        # Give an ordinary reader one final scheduling turn to consume any
-        # buffered stderr before deciding an inherited descriptor is still
-        # live.  This keeps normal short-lived CLI output unchanged.
+        # One scheduling turn for buffered stderr before judging an inherited descriptor live.
         await asyncio.sleep(0)
         if stderr_task.done():
             return await stderr_task
@@ -775,9 +773,7 @@ async def iter_process_json_events(
                         await _abandon_post_exit_stream()
                         return
                 if post_exit_bytes >= _POST_EXIT_STREAM_DRAIN_BYTES:
-                    # Preserve EOF if it is already next, but discard a
-                    # further descendant-authored event instead of parsing
-                    # past the bounded post-exit allowance.
+                    # Preserve a pending EOF, but drop further events past the post-exit allowance.
                     try:
                         await next_event_task
                     except StopAsyncIteration:
@@ -1069,9 +1065,7 @@ async def drain_llm_subprocess(
             if proc.returncode is None:
                 await kill_and_wait(proc)
             stderr = await finish_process_stderr(proc, stderr_task)
-            # Internal LLM calls never own provider-detached work.  Their
-            # managed group must therefore end with the foreground response,
-            # even when a child closed both captured descriptors first.
+            # Internal LLM calls own no detached work: end the group with the foreground response.
             if has_managed_process_group(proc):
                 terminate_process_group(proc)
         finally:

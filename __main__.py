@@ -261,9 +261,7 @@ from .utils import await_cancelled  # noqa: E402
 MODULE_ROOT = os.path.dirname(__file__)
 LOG_DIR = os.path.join(MODULE_ROOT, ".log")
 
-# Sleep before respawning after an unhandled exception. Long enough
-# that a tight crash loop logs at human-readable speed; short enough
-# that recovery feels prompt to a watching user.
+# Crash-respawn delay: slow enough to keep crash loops readable, fast enough to recover promptly.
 _CRASH_RESTART_DELAY_SEC = 5
 _UPDATE_IDLE_POLL_SEC = 1
 _UPDATE_IDLE_LOG_SEC = 30
@@ -426,9 +424,7 @@ def _enable_faulthandler() -> None:
     interval = cfg.get_dump_traceback_interval()
     if interval > 0:
         try:
-            # repeat=True keeps it firing every ``interval`` seconds for
-            # the life of the process; a one-shot dump is rarely enough
-            # to catch a transient wedge.
+            # Repeat for process life; a one-shot dump rarely catches a transient wedge.
             faulthandler.dump_traceback_later(
                 interval, repeat=True, file=_get_dump_file(),
             )
@@ -496,9 +492,7 @@ async def _restart_after_update(
                 "Update ready; waiting for active turn(s) before restart"
             ),
         )
-        # Only now is it safe to alter files under the live checkout. A new
-        # turn cannot start while update-restart is pending, and all earlier
-        # turns have completed.
+        # Safe to mutate the checkout now: new turns are blocked, earlier turns done.
         changed = await asyncio.to_thread(updater.fetch_and_pull)
         if not changed:
             logger.info("Update no longer requires a restart; resuming intake")
@@ -590,9 +584,7 @@ async def main_cli() -> None:
     """
     from .backends_bot.cli import CliBot
 
-    # CLI mode has no config to read - reading one would create a
-    # spurious config.json with daemon-only fields on first run and
-    # print misleading "fill in your tokens" messages.
+    # CLI reads no config: avoids a spurious config.json and misleading token prompts.
     cli_interval = cfg.DEFAULT_UPDATE_CHECK_INTERVAL
 
     updater.init_startup_commit()
@@ -618,9 +610,7 @@ async def main_cli() -> None:
 
 async def main() -> None:
     if _cli_mode_requested():
-        # Two phases: this process is either the launcher (run the
-        # respawner loop in the current terminal) or the bot child
-        # spawned by that loop.
+        # Launcher (respawn loop) vs bot child spawned by it.
         if _cli_child_mode():
             await main_cli()
             return

@@ -32,9 +32,7 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Single faux user for state-keying. Workspace/session files end up under
-# this id so they don't collide with real Telegram user IDs (numeric) or
-# Slack channel IDs ("C..."/"D...").
+# Faux local-user id: keeps CLI state files from colliding with Telegram/Slack ids.
 _LOCAL_ID = "local"
 
 
@@ -142,12 +140,8 @@ class CliBot(BotPlatform):
     async def send_startup_messages(
         self, version: str, commit_date: str,
     ) -> None:
-        # The start() banner already covers what the user needs; suppress
-        # the per-platform startup message so the screen isn't cluttered
-        # before the first input prompt.
+        # start() banner suffices; skip the per-platform greeting to reduce clutter.
         return
-
-    # input loop
 
     async def _input_loop(self) -> None:
         # Daemon-thread stdin: never blocks loop shutdown.
@@ -183,9 +177,7 @@ class CliBot(BotPlatform):
 
         try:
             while not self._stop_requested.is_set():
-                # Print the prompt fresh on each iteration so it always
-                # appears at the bottom of the scrollback after the
-                # previous turn's output finishes.
+                # Reprint the prompt each turn so it sits below the last output in scrollback.
                 print("> ", end="", flush=True)
                 line = await line_q.get()
                 if line is None:  # EOF / Ctrl-D
@@ -247,9 +239,7 @@ def _prepare_console() -> None:
 
     _enable_ansi()
 
-    # Suppress INFO-level logging on the console so it doesn't interleave
-    # with chat output. The file handler installed by setup_logging still
-    # captures WARNING+ records.
+    # Console: WARNING+ only (file handler keeps the rest); avoids interleaving with chat.
     root = logging.getLogger()
     for handler in root.handlers:
         if isinstance(handler, logging.StreamHandler) and not isinstance(
@@ -258,9 +248,7 @@ def _prepare_console() -> None:
             handler.setLevel(logging.WARNING)
 
 
-# Whether to emit ANSI color sequences from ``send_status``. Decided once
-# in ``_enable_ansi``; we disable for non-TTY stdout (piped/redirected)
-# so escape codes don't appear literally in log files.
+# ANSI status colors: enabled for TTYs only, so logs never contain raw escape codes.
 _ANSI_ENABLED = False
 
 

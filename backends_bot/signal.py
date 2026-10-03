@@ -210,9 +210,7 @@ class SignalBot(BotPlatform):
         )
 
     async def send_status(self, chat_id: str, text: str) -> None:
-        # Signal has no cheap, reliable transient status surface if
-        # message timestamps are unavailable, so avoid spamming the group
-        # with every tool event. The final reply still arrives normally.
+        # No cheap transient status on Signal; skip per-tool spam, deliver the final reply.
         return None
 
     # lifecycle
@@ -477,9 +475,7 @@ class SignalBot(BotPlatform):
         if self._jsonrpc_connected():
             return
 
-        # The just-returned subscription belonged to the closed connection.
-        # Clear it before asking the normal reconnect path to create a fresh
-        # subscription on the new transport.
+        # Stale subscription from the closed connection; clear before the reconnect path remakes it.
         self._receive_subscription = None
         self._receive_subscribed = False
         try:
@@ -541,9 +537,7 @@ class SignalBot(BotPlatform):
                     # whether we retry this one.
                     await self._close_jsonrpc_transport()
                     if method in _NON_IDEMPOTENT_RPC_METHODS:
-                        # signal-cli may already have dispatched the message
-                        # before the socket dropped; retrying risks a
-                        # duplicate, so surface the error instead.
+                        # Dispatched-before-drop: retrying duplicates, so surface the error.
                         raise
                     logger.warning(
                         "Signal JSON-RPC request %s failed; reconnecting: %s",
@@ -583,9 +577,7 @@ class SignalBot(BotPlatform):
                 await writer.drain()
             response = await asyncio.wait_for(fut, timeout=timeout)
         except BaseException:
-            # CancelledError inherits BaseException.  Leaving its future in
-            # this map until a response (which may never arrive) retains
-            # stale requests for the life of a healthy socket.
+            # CancelledError is BaseException: pop it, or stale requests linger for a healthy socket's life.
             self._jsonrpc_pending.pop(request_id, None)
             raise
         if not isinstance(response, dict):
@@ -728,9 +720,7 @@ class SignalBot(BotPlatform):
 
         with reserve_upload_path(upload_dir, filename) as local_path:
             if source_path:
-                # A local signal-cli attachment can be several megabytes.
-                # Keep the bounded filesystem copy off the JSON-RPC/event
-                # loop just like Telegram's local Bot API path.
+                # Large local attachments: bounded copy off the event loop (like Telegram's local-API path).
                 await asyncio.to_thread(
                     copy_file_with_limit,
                     source_path,

@@ -118,9 +118,7 @@ async def generate(
     if data is None:
         return None
 
-    # Keep the complete backend input bounded, including the fixed title
-    # instructions. Reserve half of the remaining room for the current
-    # exchange so an oversized persisted summary cannot hide it entirely.
+    # Bound the whole input; reserve half the room so a huge summary can't hide the current exchange.
     prompt_prefix = f"{TITLE_PROMPT}\n\n"
     context_budget = max(0, TITLE_CONTEXT_CHARS - len(prompt_prefix))
     recent_reserve = context_budget // 2
@@ -129,9 +127,7 @@ async def generate(
     parts_len = 0  # joined length of parts (newline between items)
     summary = data.get("summary")
     if summary:
-        # Session files can be hand-edited or come from older versions; keep
-        # malformed persisted values from breaking an otherwise best-effort
-        # title pass while still applying the same prompt cap.
+        # Best-effort title: coerce hand-edited/legacy values (same prompt cap), never crash.
         summary_text = summary if isinstance(summary, str) else str(summary)
         summary_prefix = "Previous summary:\n"
         recent_header = "Recent messages:"
