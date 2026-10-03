@@ -838,8 +838,7 @@ def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
         nested = value.get("options")
         if isinstance(nested, list) and depth < _MAX_ACP_OPTION_GROUP_DEPTH:
             pending.append((nested, 0, depth + 1))
-    # Auto is an official Copilot model-selection sentinel. It remains
-    # available even when an ACP catalog lists concrete models only.
+    # ``auto`` stays available even when catalogs list concrete models only.
     return ("auto", *models) if models or "auto" in seen else ()
 
 

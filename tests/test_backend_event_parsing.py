@@ -185,7 +185,7 @@ class CodexParseTests(unittest.TestCase):
         result = _run(self.backend, [
             {"type": "item.completed", "item": None},
         ])
-        # No text captured, no crash; the malformed line is simply ignored.
+        # Malformed line ignored: no text, no crash.
         self.assertEqual(result.text, "")
         self.assertEqual(result.events, [])
 

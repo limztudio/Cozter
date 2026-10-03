@@ -246,8 +246,7 @@ def _skip_command_wrappers(segment: list[str]) -> int:
                     index += 1
                     continue
                 if token.startswith("-"):
-                    # ``env -u NAME`` consumes an option argument; options
-                    # without one simply fall through to the next token.
+                    # ``env -u NAME`` takes an argument; other options fall through.
                     if token in {"-u", "--unset"} and index + 1 < len(segment):
                         index += 2
                     else:

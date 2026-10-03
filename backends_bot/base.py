@@ -1865,7 +1865,7 @@ class BotPlatform(ABC):
         items = colony.get_items(ws)
         count = colony.get_compact_count(ws)
         interval = workspace.get_colony_interval(ws)
-        # Countdown in [1, interval]; multiples (start/just-consolidated) need a full interval.
+        # Countdown in [1, interval]; exact multiples still owe a full interval.
         until = interval - (count % interval) if interval > 0 else 0
         lines = [
             f"Colony items: {len(items)}",
@@ -3226,8 +3226,7 @@ class BotPlatform(ABC):
                 pass
         if ext in _TEXT_EXTENSIONS:
             try:
-                # Read only the decision boundary, off-loop: don't decode
-                # megabytes merely to decline inlining.
+                # Read the decision boundary off-loop: never decode megabytes to decline.
                 content = await asyncio.to_thread(
                     _read_inline_text_attachment, att.local_path,
                 )

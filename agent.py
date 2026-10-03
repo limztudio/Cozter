@@ -1966,8 +1966,7 @@ async def _run_turn_impl(
     # session_id is set by both resolution branches by this point.
     assert session_id is not None
     turn.session_id = session_id
-    # Workspace-shared memory is loaded once and reused on every inject
-    # restart, just like session_data.
+    # Shared workspace memory loads once; reused across inject restarts like session_data.
     colony_items = colony.get_items(workspace_path)
 
     # Scheduled/ephemeral turns always run autonomous (no [[await]]).

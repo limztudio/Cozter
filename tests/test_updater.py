@@ -175,7 +175,7 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
         self.assertFalse(self._pulled(calls))
 
     def test_git_os_error_is_treated_as_an_unavailable_updater(self) -> None:
-        # Git-unavailable errors (not just missing binary) must not crash the loop.
+        # Any git-unavailable error (beyond missing binary) must not crash the loop.
         with mock.patch.object(updater, "_git", side_effect=PermissionError):
             self.assertEqual(updater.get_current_version(), "(unknown)")
             self.assertFalse(updater.check_for_update())

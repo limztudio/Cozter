@@ -402,8 +402,7 @@ class OpenAIChatBackend(Backend):
         effort_fields = self._effort_fields(effort, request_model)
         preserve_reasoning = self._preserve_reasoning_content(request_model)
 
-        # Vision backends also attach the referenced image bytes so the
-        # model sees pixels, not just a path.
+        # Vision backends attach image bytes too (pixels, not only a path).
         user_content: str | list[dict[str, Any]] = prompt
         if getattr(self, "supports_vision", False):
             vision_parts = _vision_parts_for_prompt(
@@ -502,7 +501,7 @@ class OpenAIChatBackend(Backend):
                                 reasoning_content
                             )
                             has_preserved_reasoning = True
-                    # Surface per-turn commentary, not just the final turn.
+                    # Emit per-turn commentary, not only the final turn.
                     if assistant_text:
                         proc.emit({
                             "type": "assistant_text",

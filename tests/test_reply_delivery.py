@@ -263,8 +263,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 bot._send_result("chat", tmp, second, uid="u1"),
             )
             await asyncio.sleep(0.05)
-            # The second reply's text waits for the first picture, keeping
-            # conversational order even though agent work overlapped.
+            # Text waits for the first picture: order holds despite overlapping work.
             self.assertNotIn("second answer", bot.sent)
             bot.release_uploads.set()
             await second_task

@@ -219,8 +219,7 @@ def select_workspace(
     recent = user_state.get("recent", [])
     if not isinstance(recent, list):
         recent = []
-    # Rebuild instead of merely removing an exact string so legacy aliases
-    # (for example ``/work/.``) are normalized and deduplicated too.
+    # Rebuild (not string-remove) so legacy aliases (``/work/.``) normalize and dedupe too.
     user_state["recent"] = _merge_recent(path, recent)
 
     all_state[uid] = user_state

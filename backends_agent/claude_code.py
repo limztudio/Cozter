@@ -880,7 +880,7 @@ class ClaudeCodeBackend(Backend):
             ))
             return
 
-        # Bash gets the command itself; other tools get just their name.
+        # Bash reports its command; other tools report their name.
         if tool == "Bash":
             cmd = inp.get("command") or "?"
             tool_use_id = block.get("id")
