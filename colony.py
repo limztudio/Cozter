@@ -216,9 +216,9 @@ def _parse_consolidate_output(
     )
 
     per_session: dict[str, list[str]] = {}
-    for m in _SESSION_BLOCK_RE.finditer(text):
-        sid = m.group(1).strip()
-        per_session[sid] = parse_bullets(m.group(2))
+    for block_match in _SESSION_BLOCK_RE.finditer(text):
+        sid = block_match.group(1).strip()
+        per_session[sid] = parse_bullets(block_match.group(2))
 
     return new_colony, per_session
 
@@ -436,7 +436,7 @@ async def _consolidate_inner(
     parts.append("")
 
     # Greedy, newest-first: skip sessions that no longer fit.
-    used = sum(len(p) + 1 for p in parts)
+    used = sum(len(part) + 1 for part in parts)
     included: list[str] = []
     for sid, name, lt in inputs:
         block = _build_bounded_session_block(

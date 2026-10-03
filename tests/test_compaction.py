@@ -25,8 +25,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as workspace_path:
             data = session.create_session(workspace_path)
             session.append_messages(workspace_path, data["id"], [
-                {"role": "user", "content": f"message-{i}"}
-                for i in range(6)
+                {"role": "user", "content": f"message-{index}"}
+                for index in range(6)
             ])
             with (
                 mock.patch.object(
@@ -64,8 +64,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as workspace_path:
             data = session.create_session(workspace_path, name="Manual")
             messages = [
-                {"role": "user", "content": f"message-{i}"}
-                for i in range(8)
+                {"role": "user", "content": f"message-{index}"}
+                for index in range(8)
             ]
             session.append_messages(workspace_path, data["id"], messages)
             with (
@@ -398,9 +398,9 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             messages = [
                 {
                     "role": "user",
-                    "content": f"message-{i}:" + ("x" * 2_000),
+                    "content": f"message-{index}:" + ("x" * 2_000),
                 }
-                for i in range(10)
+                for index in range(10)
             ]
             session.append_messages(workspace_path, data["id"], messages)
             with (
@@ -634,8 +634,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as workspace_path:
             data = session.create_session(workspace_path, name="Manual")
             session.append_messages(workspace_path, data["id"], [
-                {"role": "user", "content": f"message-{i}"}
-                for i in range(6)
+                {"role": "user", "content": f"message-{index}"}
+                for index in range(6)
             ])
             saved = session.load_session(workspace_path, data["id"])
             assert saved is not None
@@ -773,7 +773,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         """Clipped rewrite lists tell the model to carry the rest forward."""
         parts = compaction._compaction_prompt_parts(
-            None, [f"item-{i} " + ("z" * 1_000) for i in range(30)],
+            None, [f"item-{index} " + ("z" * 1_000) for index in range(30)],
         )
         joined = "\n".join(parts)
         self.assertIn("older long-term items omitted", joined)

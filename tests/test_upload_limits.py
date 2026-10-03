@@ -82,8 +82,8 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
     async def test_outbound_uploads_are_checked_before_platform_io(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "large.bin")
-            with open(path, "wb") as f:
-                f.write(b"four")
+            with open(path, "wb") as file_handle:
+                file_handle.write(b"four")
 
             bots = [
                 TelegramBot("token", ["user"], max_upload_bytes=3),
@@ -150,8 +150,8 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             upload_dir = os.path.join(ws, ".cozter", "uploads")
             os.makedirs(upload_dir)
             local_path = os.path.join(upload_dir, "photo.png")
-            with open(local_path, "wb") as f:
-                f.write(png)
+            with open(local_path, "wb") as file_handle:
+                file_handle.write(png)
             bot._require_ws = mock.AsyncMock(return_value=ws)
             bot._dispatch_ai = mock.AsyncMock()
             attachment = AttachmentInfo(
@@ -187,8 +187,8 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             rel = os.path.join(".cozter", "uploads", "photo.png")
             local_path = os.path.join(ws, rel)
             os.makedirs(os.path.dirname(local_path))
-            with open(local_path, "wb") as f:
-                f.write(png)
+            with open(local_path, "wb") as file_handle:
+                file_handle.write(png)
             prompt = f"What is this\n[Photo attachment saved to: {rel}]"
             parts = _vision_parts_for_prompt(prompt, ws)
             assert parts is not None
@@ -363,8 +363,8 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             source = os.path.join(tmp, "signal-source.bin")
             upload_dir = os.path.join(tmp, "uploads")
             os.mkdir(upload_dir)
-            with open(source, "wb") as f:
-                f.write(b"four")
+            with open(source, "wb") as file_handle:
+                file_handle.write(b"four")
 
             bot = SignalBot(
                 ["https://signal.group/#test"],
@@ -398,8 +398,8 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             source = os.path.join(tmp, "signal-source.bin")
             upload_dir = os.path.join(tmp, "uploads")
             os.mkdir(upload_dir)
-            with open(source, "wb") as f:
-                f.write(b"abc")
+            with open(source, "wb") as file_handle:
+                file_handle.write(b"abc")
 
             bot = SignalBot(
                 ["https://signal.group/#test"],
@@ -413,8 +413,8 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
                 "",
             )
             assert local is not None
-            with open(local.local_path, "rb") as f:
-                self.assertEqual(f.read(), b"abc")
+            with open(local.local_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"abc")
 
             bot._rpc_request = mock.AsyncMock(
                 return_value=base64.b64encode(b"xyz").decode(),
@@ -426,8 +426,8 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
                 "",
             )
             assert remote is not None
-            with open(remote.local_path, "rb") as f:
-                self.assertEqual(f.read(), b"xyz")
+            with open(remote.local_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"xyz")
 
     async def test_upload_path_reservation_keeps_same_names_distinct(self) -> None:
         with tempfile.TemporaryDirectory() as upload_dir:
@@ -440,10 +440,10 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(os.path.basename(first), "report.txt")
             self.assertEqual(os.path.basename(second), "report (2).txt")
-            with open(first, "rb") as f:
-                self.assertEqual(f.read(), b"first")
-            with open(second, "rb") as f:
-                self.assertEqual(f.read(), b"second")
+            with open(first, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"first")
+            with open(second, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"second")
 
     async def test_upload_path_reservation_is_removed_after_failure(self) -> None:
         with tempfile.TemporaryDirectory() as upload_dir:
@@ -496,10 +496,10 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             await bot._handle_files(
                 {"user": "U1", "channel": "C1"}, files, "",
             )
-            with open(attachments[0].local_path, "rb") as f:
-                self.assertEqual(f.read(), b"https://files.example/first")
-            with open(attachments[1].local_path, "rb") as f:
-                self.assertEqual(f.read(), b"https://files.example/second")
+            with open(attachments[0].local_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"https://files.example/first")
+            with open(attachments[1].local_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"https://files.example/second")
 
         self.assertEqual([att.filename for att in attachments], [
             "report.txt", "report.txt",
@@ -558,10 +558,10 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
         ):
             await bot._on_file(update_for("first"), None)
             await bot._on_file(update_for("second"), None)
-            with open(attachments[0].local_path, "rb") as f:
-                self.assertEqual(f.read(), b"first")
-            with open(attachments[1].local_path, "rb") as f:
-                self.assertEqual(f.read(), b"second")
+            with open(attachments[0].local_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"first")
+            with open(attachments[1].local_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"second")
 
         self.assertEqual([att.filename for att in attachments], [
             "report.txt", "report.txt",
@@ -576,10 +576,10 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             source_two = os.path.join(tmp, "source-two.txt")
             upload_dir = os.path.join(tmp, "uploads")
             os.mkdir(upload_dir)
-            with open(source_one, "wb") as f:
-                f.write(b"first")
-            with open(source_two, "wb") as f:
-                f.write(b"second")
+            with open(source_one, "wb") as file_handle:
+                file_handle.write(b"first")
+            with open(source_two, "wb") as file_handle:
+                file_handle.write(b"second")
 
             bot = SignalBot(
                 ["https://signal.group/#test"],
@@ -599,10 +599,10 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first.filename, "report.txt")
             self.assertEqual(second.filename, "report.txt")
             self.assertNotEqual(first.local_path, second.local_path)
-            with open(first.local_path, "rb") as f:
-                self.assertEqual(f.read(), b"first")
-            with open(second.local_path, "rb") as f:
-                self.assertEqual(f.read(), b"second")
+            with open(first.local_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"first")
+            with open(second.local_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"second")
 
 
 class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
@@ -682,8 +682,8 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "photo.png")
-            with open(path, "wb") as f:
-                f.write(b"fake-png-bytes")
+            with open(path, "wb") as file_handle:
+                file_handle.write(b"fake-png-bytes")
             bot = TelegramBot("token", ["user"])
             sent: list[str] = []
 
@@ -715,8 +715,8 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "report.txt")
-            with open(path, "wb") as f:
-                f.write(b"data")
+            with open(path, "wb") as file_handle:
+                file_handle.write(b"data")
             bot = SlackBot("bot-token", "app-token", ["C1"])
             response = SimpleNamespace(
                 data={"ok": True},
@@ -754,8 +754,8 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "report.txt")
-            with open(path, "wb") as f:
-                f.write(b"data")
+            with open(path, "wb") as file_handle:
+                file_handle.write(b"data")
             bot = SlackBot("bot-token", "app-token", ["C1"])
             response = SimpleNamespace(
                 data={"error": "channel_not_found"},

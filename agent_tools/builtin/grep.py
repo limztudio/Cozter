@@ -116,8 +116,8 @@ class GrepTool(AgentTool):
                     or metadata.st_size > _GREP_MAX_FILE_BYTES
                 ):
                     continue
-                with open(fpath, "rb") as f:
-                    raw = f.read()
+                with open(fpath, "rb") as file_handle:
+                    raw = file_handle.read()
             except OSError:
                 continue
             if b"\x00" in raw[:8192]:

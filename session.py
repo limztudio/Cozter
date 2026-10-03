@@ -182,7 +182,7 @@ def _normalize_session_data(value: object, *, path: str = "") -> dict | None:
     messages = data.get("messages", [])
     if isinstance(messages, list):
         data["messages"] = [
-            msg for msg in (_normalize_message(m) for m in messages)
+            msg for msg in (_normalize_message(message) for message in messages)
             if msg is not None
         ]
     else:
@@ -293,7 +293,7 @@ def format_context_blocks(
 
     messages = data.get("messages") or []
     if isinstance(messages, list) and messages:
-        valid_messages = [m for m in messages if isinstance(m, dict)]
+        valid_messages = [message for message in messages if isinstance(message, dict)]
         if valid_messages:
             parts.append("[Recent Messages]")
             parts.extend(format_msg_line(message) for message in valid_messages)
@@ -325,8 +325,8 @@ def _load_session_path(
 ) -> dict | None:
     """Read, normalize, and identity-check one durable session file."""
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        with open(path, encoding="utf-8") as file_handle:
+            data = json.load(file_handle)
     except (json.JSONDecodeError, OSError):
         if log_corrupt:
             logger.warning("Corrupt session file, ignoring: %s", path)
@@ -384,7 +384,7 @@ def _list_sessions_with_data(
     sdir = _sessions_dir(workspace)
     if not os.path.isdir(sdir):
         return ([], 0) if limit is not None else []
-    fnames = [f for f in os.listdir(sdir) if f.endswith(".json")]
+    fnames = [fname for fname in os.listdir(sdir) if fname.endswith(".json")]
     total = len(fnames)
     if limit is not None:
         fnames = _newest_first(sdir, fnames, limit)
@@ -413,24 +413,24 @@ def _newest_first(sdir: str, fnames: list[str], limit: int) -> list[str]:
         return []
     try:
         stamped = [
-            (os.stat(os.path.join(sdir, f)).st_mtime_ns, f) for f in fnames
+            (os.stat(os.path.join(sdir, fname)).st_mtime_ns, fname) for fname in fnames
         ]
     except OSError:
         return fnames[:limit]
     stamped.sort(key=lambda item: item[0], reverse=True)
-    return [f for _, f in stamped[:limit]]
+    return [fname for _, fname in stamped[:limit]]
 
 
 def list_sessions(workspace: str) -> list[dict]:
     """Return [{id, name, created, message_count}] sorted by created desc."""
     return [
         {
-            "id": d["id"],
-            "name": d.get("name", d["id"][:8]),
-            "created": d.get("created", ""),
-            "message_count": total_message_count(d),
+            "id": session["id"],
+            "name": session.get("name", session["id"][:8]),
+            "created": session.get("created", ""),
+            "message_count": total_message_count(session),
         }
-        for d in list_sessions_with_data(workspace)
+        for session in list_sessions_with_data(workspace)
     ]
 
 
@@ -510,7 +510,7 @@ def is_default_name(name: str | None) -> bool:
     return (
         len(parts) == 3
         and len(parts[0]) == 4
-        and all(p.isdigit() for p in parts)
+        and all(part.isdigit() for part in parts)
     )
 
 

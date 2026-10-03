@@ -102,10 +102,10 @@ def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
             )
             continue
         if mark_as_plugin:
-            before_ids = {id(t) for t in before}
-            for t in AgentTool.registry:
-                if id(t) not in before_ids:
-                    t.is_plugin = True
+            before_ids = {id(tool) for tool in before}
+            for tool in AgentTool.registry:
+                if id(tool) not in before_ids:
+                    tool.is_plugin = True
 
 
 _load_subpackage("builtin", mark_as_plugin=False)
@@ -119,7 +119,7 @@ if not sys.argv or sys.argv[0] != "-m":
 _TOOLS: tuple[AgentTool, ...] = tuple(
     sorted(AgentTool.registry, key=lambda t: (t.order, t.name))
 )
-_BY_NAME: dict[str, AgentTool] = {t.name: t for t in _TOOLS}
+_BY_NAME: dict[str, AgentTool] = {tool.name: tool for tool in _TOOLS}
 
 # Read-only surface for "confirm" mode (no prompts per call on chat bots):
 # anything unlisted (mutating builtins, bash, all plugins) is withheld.
@@ -171,7 +171,7 @@ def _filtered_tool_schema(
 
 
 TOOL_SCHEMA: list[dict[str, Any]] = [
-    {"type": "function", "function": t.schema} for t in _TOOLS
+    {"type": "function", "function": tool.schema} for tool in _TOOLS
 ]
 
 AUTO_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
@@ -188,7 +188,7 @@ READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
 
 # Internal: signature alias for the per-event emit callback that
 # every backend gives us so tools can stream status updates back.
-_EmitFn = Callable[[dict], None]
+_EmitFunc = Callable[[dict], None]
 
 
 def parse_openai_call(call: dict) -> tuple[str, dict]:
@@ -221,7 +221,7 @@ def parse_openai_call(call: dict) -> tuple[str, dict]:
     return name, args
 
 
-def _emit_tool_result(emit: _EmitFn, name: str, result: str) -> str:
+def _emit_tool_result(emit: _EmitFunc, name: str, result: str) -> str:
     """Emit and return one model-facing tool result consistently."""
     emit({"type": "tool_result", "name": name, "output": result})
     return result
@@ -232,7 +232,7 @@ async def execute_tool(
     args: dict,
     workspace_path: str,
     approval: str,
-    emit: _EmitFn,
+    emit: _EmitFunc,
 ) -> str:
     """Run a tool by name; emit status events; return the result string."""
     # Provider output may be malformed: normalize before emitting events.
@@ -355,7 +355,7 @@ def cli_plugin_prelude() -> str:
     receive typed tool definitions can still call plugins through
     their built-in ``bash`` / shell tool.
     """
-    plugins = [t for t in _TOOLS if t.is_plugin]
+    plugins = [tool for tool in _TOOLS if tool.is_plugin]
     if not plugins:
         return ""
 
@@ -365,8 +365,8 @@ def cli_plugin_prelude() -> str:
         required = set(tool.parameters.get("required", []))
         args_summary = (
             ", ".join(
-                f"{k}{'' if k in required else '?'}"
-                for k in props
+                f"{prop_key}{'' if prop_key in required else '?'}"
+                for prop_key in props
             )
             or "no args"
         )

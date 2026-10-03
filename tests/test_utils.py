@@ -240,14 +240,14 @@ class JsonHelperTests(unittest.TestCase):
 
             utils.save_json_object(path, {"ok": True})
 
-            with open(path, encoding="utf-8") as f:
-                self.assertEqual(json.load(f), {"ok": True})
+            with open(path, encoding="utf-8") as file_handle:
+                self.assertEqual(json.load(file_handle), {"ok": True})
 
     def test_load_json_object_ignores_non_utf8_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "state.json")
-            with open(path, "wb") as f:
-                f.write(b"\xff")
+            with open(path, "wb") as file_handle:
+                file_handle.write(b"\xff")
 
             with self.assertLogs(utils.logger, level="WARNING"):
                 self.assertEqual(
@@ -263,8 +263,8 @@ class JsonHelperTests(unittest.TestCase):
                 utils.atomic_write(path, {"ok": True}, tmp)
 
             sync_dir.assert_called_once_with(os.path.abspath(tmp))
-            with open(path, encoding="utf-8") as f:
-                self.assertEqual(json.load(f), {"ok": True})
+            with open(path, encoding="utf-8") as file_handle:
+                self.assertEqual(json.load(file_handle), {"ok": True})
 
     def test_fsync_directory_closes_its_descriptor(self) -> None:
         with (
@@ -396,8 +396,8 @@ class PathBoundaryTests(unittest.TestCase):
             os.makedirs(root)
             os.makedirs(sibling)
             inside = os.path.join(root, "file.txt")
-            with open(inside, "w", encoding="utf-8") as f:
-                f.write("inside")
+            with open(inside, "w", encoding="utf-8") as file_handle:
+                file_handle.write("inside")
 
             self.assertTrue(utils.is_path_within(inside, root))
             self.assertFalse(utils.is_path_within(sibling, root))

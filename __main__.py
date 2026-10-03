@@ -301,10 +301,10 @@ def log_crash(exc: BaseException) -> str:
         LOG_DIR, f"crash_{now.strftime('%Y%m%d_%H%M%S')}.log"
     )
     tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
-    with open(crash_file, "w", encoding="utf-8") as f:
-        f.write(f"Crash at {now.isoformat()}\n")
-        f.write(f"Exception: {type(exc).__name__}: {exc}\n\n")
-        f.writelines(tb)
+    with open(crash_file, "w", encoding="utf-8") as file_handle:
+        file_handle.write(f"Crash at {now.isoformat()}\n")
+        file_handle.write(f"Exception: {type(exc).__name__}: {exc}\n\n")
+        file_handle.writelines(tb)
     return crash_file
 
 
@@ -349,58 +349,58 @@ def dump_runtime_diagnostics(
     from contexts that only want the task/thread dump.
     """
     label = f" ({reason})" if reason else ""
-    f = _get_dump_file()
-    f.write(f"\n===== diagnostics dump{label} @ {datetime.now().isoformat()} =====\n")
-    f.flush()
+    dump_file = _get_dump_file()
+    dump_file.write(f"\n===== diagnostics dump{label} @ {datetime.now().isoformat()} =====\n")
+    dump_file.flush()
 
     # asyncio tasks: each Task carries its own stack; print_stack writes
-    # to *f*. Capture names too for a quick at-a-glance summary.
+    # to *dump_file*. Capture names too for a quick at-a-glance summary.
     try:
-        tasks = [t for t in asyncio.all_tasks() if not t.done()]
-        f.write(
+        tasks = [task for task in asyncio.all_tasks() if not task.done()]
+        dump_file.write(
             f"-- asyncio tasks ({len(tasks)} pending) --\n"
         )
-        for t in tasks:
+        for task in tasks:
             try:
-                t.print_stack(file=f)
+                task.print_stack(file=dump_file)
             except Exception as exc:  # pragma: no cover - defensive
-                f.write(f"  (failed to print task {t}: {exc})\n")
+                dump_file.write(f"  (failed to print task {task}: {exc})\n")
     except Exception as exc:  # pragma: no cover - defensive
-        f.write(f"  (failed to enumerate tasks: {exc})\n")
-    f.flush()
+        dump_file.write(f"  (failed to enumerate tasks: {exc})\n")
+    dump_file.flush()
 
     # Native threads (codex/zai subprocess readers, signal threads, etc.).
     threads = threading.enumerate()
     frames = sys._current_frames()
-    f.write(f"-- active threads ({len(threads)}) --\n")
+    dump_file.write(f"-- active threads ({len(threads)}) --\n")
     for thread in threads:
-        f.write(
+        dump_file.write(
             f"\n--- thread {thread.name} "
             f"(ident={thread.ident}, daemon={thread.daemon}) ---\n"
         )
         if thread.ident is None:
-            f.write("  (thread has no ident)\n")
+            dump_file.write("  (thread has no ident)\n")
             continue
         frame = frames.get(thread.ident)
         if frame is None:
-            f.write("  (no Python frame available)\n")
+            dump_file.write("  (no Python frame available)\n")
             continue
-        f.writelines(traceback.format_stack(frame))
-    f.flush()
+        dump_file.writelines(traceback.format_stack(frame))
+    dump_file.flush()
 
     # Per-platform turn-tracking state, when platforms are available.
     if bots:
-        f.write("-- bot turn state --\n")
+        dump_file.write("-- bot turn state --\n")
         for bot in bots:
             try:
                 has = bot.has_active_turns()
                 diag = bot.stuck_turn_diagnostics() if has else "<idle>"
             except Exception as exc:  # pragma: no cover - defensive
                 has, diag = None, f"<error: {exc}>"
-            f.write(
+            dump_file.write(
                 f"  {_bot_label(bot)}: has_active_turns={has} {diag}\n"
             )
-        f.flush()
+        dump_file.flush()
 
     logger.info("Runtime diagnostics dumped to diagnostics.log%s", label)
 

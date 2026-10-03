@@ -69,7 +69,7 @@ def _build_session_block(data: dict) -> str:
         )
     long_term = data.get("long_term") if isinstance(data, dict) else None
     if isinstance(long_term, list):
-        str_items = [i for i in long_term if isinstance(i, str) and i]
+        str_items = [item for item in long_term if isinstance(item, str) and item]
         items = [
             _truncate_router_text(item, ROUTER_PER_SESSION_CHARS)
             for item in str_items[:5]
@@ -111,8 +111,8 @@ def _build_router_prompt(
     else:
         parts.append(f"Existing sessions ({len(sessions_data)}, newest first):")
     parts.append("")
-    for s in sessions_data:
-        parts.append(_build_session_block(s))
+    for existing in sessions_data:
+        parts.append(_build_session_block(existing))
         parts.append("")
     parts.append(
         "One line: a session id above, or NEW."
@@ -191,7 +191,7 @@ async def select_or_create_session(
         data = session.create_session(workspace_path)
         return (data["id"], data)
 
-    valid_ids = {s["id"] for s in sessions_data if isinstance(s.get("id"), str)}
+    valid_ids = {session["id"] for session in sessions_data if isinstance(session.get("id"), str)}
     decision = _parse_router_output(raw, valid_ids) if raw else None
     if decision and decision != "NEW":
         loaded = session.load_session(workspace_path, decision)

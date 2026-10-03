@@ -27,8 +27,8 @@ def _load_main_module():
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
     sys.path = [
-        p for p in sys.path
-        if os.path.abspath(p) not in {
+        entry for entry in sys.path
+        if os.path.abspath(entry) not in {
             os.path.abspath(workspace_pkg_parent),
             "/home/utilities/AutoStart",
         }
@@ -236,8 +236,8 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
     def _read_dump(self) -> str:
         with open(
             os.path.join(self._tmp, "diagnostics.log"), encoding="utf-8",
-        ) as f:
-            return f.read()
+        ) as file_handle:
+            return file_handle.read()
 
     def test_dump_writes_header_reason_tasks_and_threads(self):
         # A real event loop keeps the "asyncio tasks" section non-empty.

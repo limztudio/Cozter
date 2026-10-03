@@ -23,7 +23,7 @@ from ..base import (
 from ...utils import clip_status_value
 from ._git_common import (
     MAX_OUTPUT_CHARS,
-    GitFailed as _GitFailed,
+    GitFailedError as _GitFailedError,
     add_common_git_flags,
     append_stderr_note as _append_stderr_note,
     bounded as _bounded,
@@ -100,7 +100,7 @@ class GitInfoTool(AgentTool):
             return "Error: git is not installed or not on PATH"
         except TimeoutError:
             return f"Error: git {action} timed out after 15s"
-        except _GitFailed as exc:
+        except _GitFailedError as exc:
             return f"Error: git {action}: {exc}"
 
         text = stdout.strip()
@@ -224,7 +224,7 @@ class GitInfoTool(AgentTool):
                     rebuilt, workspace, env,
                 )
         if returncode != 0:
-            raise _GitFailed(first_stderr_line(stderr))
+            raise _GitFailedError(first_stderr_line(stderr))
         return stdout, stderr
 
     def summarize(self, args: dict) -> str:

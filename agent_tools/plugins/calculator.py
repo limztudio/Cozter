@@ -24,7 +24,7 @@ _MAX_EXPONENT = 10_000
 _MAX_FACTORIAL_ARG = 500
 
 
-class _CalcError(Exception):
+class _CalculationError(Exception):
     """A model-facing evaluation refusal."""
 
 
@@ -36,29 +36,29 @@ def _guarded_pow(base: Any, exponent: Any) -> Any:
         and not isinstance(exponent, bool)
     ):
         if not math.isfinite(exponent) or not math.isfinite(base):
-            raise _CalcError("result is not finite (overflow or domain error)")
+            raise _CalculationError("result is not finite (overflow or domain error)")
         if abs(exponent) > _MAX_EXPONENT:
-            raise _CalcError(
+            raise _CalculationError(
                 f"exponent magnitude is capped at {_MAX_EXPONENT:,}",
             )
         magnitude = abs(base)
         if magnitude > 1 and exponent * math.log10(magnitude) > 50_000:
-            raise _CalcError(
+            raise _CalculationError(
                 "result would exceed 50,000 digits; reduce the operands",
             )
     try:
         return base ** exponent
     except OverflowError as exc:
-        raise _CalcError(f"result too large: {exc}") from exc
+        raise _CalculationError(f"result too large: {exc}") from exc
 
 
 def _guarded_factorial(value: Any) -> int:
     if isinstance(value, float) and value.is_integer():
         value = int(value)
     if not isinstance(value, int) or isinstance(value, bool):
-        raise _CalcError("factorial needs a non-negative integer")
+        raise _CalculationError("factorial needs a non-negative integer")
     if not 0 <= value <= _MAX_FACTORIAL_ARG:
-        raise _CalcError(
+        raise _CalculationError(
             f"factorial argument is capped at {_MAX_FACTORIAL_ARG}",
         )
     return math.factorial(value)
@@ -129,55 +129,55 @@ def _evaluate(node: ast.AST) -> Any:
         if isinstance(node.value, bool) or not isinstance(
             node.value, (int, float),
         ):
-            raise _CalcError(
+            raise _CalculationError(
                 f"only numeric literals are allowed, not {node.value!r}",
             )
         return node.value
     if isinstance(node, ast.BinOp):
         operation = _BIN_OPS.get(type(node.op))
         if operation is None:
-            raise _CalcError(
+            raise _CalculationError(
                 f"operator '{type(node.op).__name__}' is not supported",
             )
         left = _evaluate(node.left)
         right = _evaluate(node.right)
         if isinstance(left, bool) or isinstance(right, bool):
-            raise _CalcError("boolean operands are not allowed")
+            raise _CalculationError("boolean operands are not allowed")
         return operation(left, right)
     if isinstance(node, ast.UnaryOp):
         unary_operation = _UNARY_OPS.get(type(node.op))
         if unary_operation is None:
-            raise _CalcError(
+            raise _CalculationError(
                 f"unary operator '{type(node.op).__name__}' is not supported",
             )
         operand = _evaluate(node.operand)
         if isinstance(operand, bool):
-            raise _CalcError("boolean operands are not allowed")
+            raise _CalculationError("boolean operands are not allowed")
         return unary_operation(operand)
     if isinstance(node, ast.Name):
         if node.id in _CONSTANTS:
             return _CONSTANTS[node.id]
-        raise _CalcError(
+        raise _CalculationError(
             f"unknown name '{node.id}'; constants: "
             + _SORTED_CONSTANT_NAMES,
         )
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name):
-            raise _CalcError("only direct math-function calls are supported")
+            raise _CalculationError("only direct math-function calls are supported")
         name = node.func.id
         if name in _CONSTANTS:
-            raise _CalcError(f"'{name}' is a constant, not a function")
+            raise _CalculationError(f"'{name}' is a constant, not a function")
         function = _FUNCTIONS.get(name)
         if function is None:
-            raise _CalcError(
+            raise _CalculationError(
                 f"unknown function '{name}'; supported: "
                 + _SORTED_FUNCTION_NAMES,
             )
         if node.keywords:
-            raise _CalcError("keyword arguments are not supported")
+            raise _CalculationError("keyword arguments are not supported")
         arguments = [_evaluate(arg) for arg in node.args]
         return function(*arguments)
-    raise _CalcError(
+    raise _CalculationError(
         f"syntax '{type(node).__name__}' is not supported; use plain"
         " arithmetic like (2 + 3) * sqrt(16) / 7",
     )
@@ -185,14 +185,14 @@ def _evaluate(node: ast.AST) -> Any:
 
 def _format(value: Any) -> str:
     if isinstance(value, bool):
-        raise _CalcError("result is not a real number")
+        raise _CalculationError("result is not a real number")
     if isinstance(value, complex):
-        raise _CalcError("result is not a real number (complex)")
+        raise _CalculationError("result is not a real number (complex)")
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
         if not math.isfinite(value):
-            raise _CalcError("result is not finite (overflow or domain error)")
+            raise _CalculationError("result is not finite (overflow or domain error)")
         if value.is_integer() and abs(value) < 1e16:
             return str(int(value))
         return repr(value)
@@ -235,7 +235,7 @@ class CalculatorTool(AgentTool):
         try:
             value = _evaluate(tree)
             return _format(value)
-        except _CalcError as exc:
+        except _CalculationError as exc:
             return f"Error: {exc}"
         except ZeroDivisionError:
             return "Error: division by zero"

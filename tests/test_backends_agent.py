@@ -826,7 +826,7 @@ warning: ignored after the catalog
             )
             payload = _json.loads(grok_prompt_json(prompt, paths))
             self.assertEqual(payload[0]["role"], "user")
-            kinds = [b["type"] for b in payload[0]["content"]]
+            kinds = [block["type"] for block in payload[0]["content"]]
             self.assertIn("text", kinds)
             self.assertIn("image", kinds)
             self.assertEqual(
@@ -2241,8 +2241,8 @@ class ZaiBackendTests(unittest.TestCase):
         )
         capped = extract_model_ids({
             "data": [
-                {"id": f"model-{i}"}
-                for i in range(openai_agent_mod._MAX_MODEL_IDS + 1)
+                {"id": f"model-{extra_index}"}
+                for extra_index in range(openai_agent_mod._MAX_MODEL_IDS + 1)
             ],
         })
         self.assertEqual(len(capped), openai_agent_mod._MAX_MODEL_IDS)

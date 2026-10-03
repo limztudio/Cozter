@@ -31,7 +31,7 @@ _FETCH_RETRY_DELAY_SECONDS = 0.4
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 
-class _FetchRefused(Exception):
+class _FetchRefusedError(Exception):
     """A deterministic fetch refusal that a retry cannot fix.
 
     Covers HTTP error statuses, refused content types, refused redirect
@@ -49,7 +49,7 @@ async def _fetch_following_redirects(
 
     Every redirect target is re-validated against the public-address
     policy before it is followed, and deterministic refusals raise
-    :class:`_FetchRefused` so the caller never retries them.
+    :class:`_FetchRefusedError` so the caller never retries them.
     """
     current_url = url
     redirects = 0
@@ -61,13 +61,13 @@ async def _fetch_following_redirects(
             location = response.headers.get("location")
             if response.status in _REDIRECT_STATUSES and location:
                 if redirects >= _MAX_REDIRECTS:
-                    raise _FetchRefused("Fetch failed: too many redirects")
+                    raise _FetchRefusedError("Fetch failed: too many redirects")
                 current_url = urllib.parse.urljoin(
                     str(response.url), location,
                 )
                 validation_error = _validate_public_url(current_url)
                 if validation_error:
-                    raise _FetchRefused(validation_error)
+                    raise _FetchRefusedError(validation_error)
                 redirects += 1
                 continue
 
@@ -76,7 +76,7 @@ async def _fetch_following_redirects(
             normalized_content_type = content_type.casefold()
 
             if response.status >= 400:
-                raise _FetchRefused(
+                raise _FetchRefusedError(
                     f"Fetch failed: HTTP {response.status} for {final_url}",
                 )
 
@@ -87,7 +87,7 @@ async def _fetch_following_redirects(
                 or "xml" in normalized_content_type
                 or content_type == ""
             ):
-                raise _FetchRefused(
+                raise _FetchRefusedError(
                     f"Fetched {final_url}, but content type is "
                     f"'{content_type}', not readable text.",
                 )
@@ -141,7 +141,7 @@ class WebFetchTool(AgentTool):
                             await _fetch_following_redirects(session, url)
                         )
                         break
-                    except _FetchRefused as exc:
+                    except _FetchRefusedError as exc:
                         return str(exc)
                     except aiohttp.ClientError as exc:
                         if attempt + 1 >= _FETCH_ATTEMPTS:

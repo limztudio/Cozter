@@ -145,11 +145,11 @@ def _read_notes_text(target: str) -> str:
     later append sees (a head read would silently drop them).
     """
     try:
-        with open(target, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - (_NOTES_MAX_BYTES + 1)))
-            raw = f.read()
+        with open(target, "rb") as file_handle:
+            file_handle.seek(0, os.SEEK_END)
+            size = file_handle.tell()
+            file_handle.seek(max(0, size - (_NOTES_MAX_BYTES + 1)))
+            raw = file_handle.read()
     except OSError:
         return ""
     return raw.decode("utf-8", errors="replace")

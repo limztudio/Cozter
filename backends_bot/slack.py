@@ -568,25 +568,25 @@ class SlackBot(BotPlatform):
         if upload_dir is None:
             return
 
-        for f in files:
+        for attached_file in files:
             # Use the user-supplied name if meaningful; otherwise fall back
             # to the Slack file id. basename() guards against path chars
             # that would otherwise escape upload_dir.
-            filename = os.path.basename(f.get("name") or "")
+            filename = os.path.basename(attached_file.get("name") or "")
             if not filename:
-                filename = f.get("id") or "file"
+                filename = attached_file.get("id") or "file"
             if upload_size_exceeds_limit(
-                f.get("size"), self.max_upload_bytes,
+                attached_file.get("size"), self.max_upload_bytes,
             ):
                 await ctx_for_reply.reply_text(
                     f"Not downloading {filename}: "
                     f"{upload_limit_message(self.max_upload_bytes)}",
                 )
                 continue
-            url = f.get("url_private_download") or f.get("url_private")
+            url = attached_file.get("url_private_download") or attached_file.get("url_private")
             if not url:
                 continue
-            kind = attachment_kind_from_mime(f.get("mimetype"))
+            kind = attachment_kind_from_mime(attached_file.get("mimetype"))
             try:
                 with reserve_upload_path(upload_dir, filename) as local_path:
                     await _download_private(

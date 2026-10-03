@@ -199,8 +199,8 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
                 claude_home, "jobs", task_id, "state.json",
             )
             os.makedirs(os.path.dirname(state_path))
-            with open(state_path, "w", encoding="utf-8") as f:
-                json.dump({"cwd": "/work", "state": "done"}, f)
+            with open(state_path, "w", encoding="utf-8") as file_handle:
+                json.dump({"cwd": "/work", "state": "done"}, file_handle)
 
             async def fake_run(_cmd: list[str], *, cwd: str):
                 self.assertEqual(cwd, "/work")
@@ -233,20 +233,20 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             )
             os.makedirs(os.path.dirname(state_path))
             os.makedirs(os.path.dirname(transcript_path))
-            with open(state_path, "w", encoding="utf-8") as f:
+            with open(state_path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "cwd": "/work",
                     "state": "done",
                     "sessionId": session_id,
                     "linkScanPath": transcript_path,
                     "output": {"result": "short state summary"},
-                }, f)
-            with open(transcript_path, "w", encoding="utf-8") as f:
-                f.write(json.dumps({"message": {
+                }, file_handle)
+            with open(transcript_path, "w", encoding="utf-8") as file_handle:
+                file_handle.write(json.dumps({"message": {
                     "role": "assistant",
                     "content": [{"type": "text", "text": "First result."}],
                 }}) + "\n")
-                f.write(json.dumps({"message": {
+                file_handle.write(json.dumps({"message": {
                     "role": "assistant",
                     "content": [
                         {"type": "thinking", "thinking": "hidden"},
@@ -274,16 +274,16 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             )
             os.makedirs(os.path.dirname(state_path))
             os.makedirs(os.path.dirname(transcript_path))
-            with open(state_path, "w", encoding="utf-8") as f:
+            with open(state_path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "cwd": "/work",
                     "state": "done",
                     "sessionId": session_id,
                     "linkScanPath": transcript_path,
-                }, f)
-            with open(transcript_path, "w", encoding="utf-8") as f:
+                }, file_handle)
+            with open(transcript_path, "w", encoding="utf-8") as file_handle:
                 for text in ("first", "second"):
-                    f.write(json.dumps({"message": {
+                    file_handle.write(json.dumps({"message": {
                         "role": "assistant",
                         "content": [{"type": "text", "text": text}],
                     }}) + "\n")
@@ -318,20 +318,20 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             )
             os.makedirs(os.path.dirname(state_path))
             os.makedirs(os.path.dirname(transcript_path))
-            with open(state_path, "w", encoding="utf-8") as f:
+            with open(state_path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "cwd": "/work",
                     "state": "done",
                     "sessionId": session_id,
                     "linkScanPath": transcript_path,
                     "output": {"result": "state fallback"},
-                }, f)
-            with open(transcript_path, "w", encoding="utf-8") as f:
-                f.write(json.dumps({"message": {
+                }, file_handle)
+            with open(transcript_path, "w", encoding="utf-8") as file_handle:
+                file_handle.write(json.dumps({"message": {
                     "role": "assistant",
                     "content": [{"type": "text", "text": "x" * 512}],
                 }}) + "\n")
-                f.write(json.dumps({"message": {
+                file_handle.write(json.dumps({"message": {
                     "role": "assistant",
                     "content": [{"type": "text", "text": "usable result"}],
                 }}) + "\n")
@@ -356,13 +356,13 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
                 claude_home, "jobs", task_id, "state.json",
             )
             os.makedirs(os.path.dirname(state_path))
-            with open(state_path, "w", encoding="utf-8") as f:
+            with open(state_path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "cwd": "/work",
                     "state": "done",
                     "sessionId": "048e1065-aaaa-bbbb-cccc-0123456789ab",
                     "output": {"result": "x" * 200},
-                }, f)
+                }, file_handle)
 
             with (
                 mock.patch.object(
@@ -434,8 +434,8 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
                 "child = subprocess.Popen([\n"
                 "    sys.executable, '-c', 'import time; time.sleep(60)'\n"
                 "])\n"
-                "with open(sys.argv[1], 'w', encoding='utf-8') as f:\n"
-                "    f.write(str(child.pid))\n"
+                "with open(sys.argv[1], 'w', encoding='utf-8') as file_handle:\n"
+                "    file_handle.write(str(child.pid))\n"
                 "sys.stdout.buffer.write(b'x' * 1024)\n"
                 "sys.stdout.buffer.flush()\n"
                 "time.sleep(60)\n"
@@ -464,8 +464,8 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
                     )
             finally:
                 try:
-                    with open(pid_path, encoding="utf-8") as f:
-                        child_pid = int(f.read())
+                    with open(pid_path, encoding="utf-8") as file_handle:
+                        child_pid = int(file_handle.read())
                 except (OSError, ValueError):
                     pass
                 if child_pid is not None:
@@ -489,8 +489,8 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
                 "child = subprocess.Popen([\n"
                 "    sys.executable, '-c', 'import time; time.sleep(60)'\n"
                 "])\n"
-                "with open(sys.argv[1], 'w', encoding='utf-8') as f:\n"
-                "    f.write(str(child.pid))\n"
+                "with open(sys.argv[1], 'w', encoding='utf-8') as file_handle:\n"
+                "    file_handle.write(str(child.pid))\n"
                 "print('backgrounded · 048e1065', flush=True)\n"
             )
             child_pid: int | None = None
@@ -515,8 +515,8 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
                 )
             finally:
                 try:
-                    with open(pid_path, encoding="utf-8") as f:
-                        child_pid = int(f.read())
+                    with open(pid_path, encoding="utf-8") as file_handle:
+                        child_pid = int(file_handle.read())
                 except (OSError, ValueError):
                     pass
                 if child_pid is not None:
@@ -545,15 +545,15 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             )
             os.makedirs(os.path.dirname(state_path))
             os.makedirs(projects_dir)
-            with open(state_path, "w", encoding="utf-8") as f:
+            with open(state_path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "cwd": "/work",
                     "state": "done",
                     "sessionId": session_id,
                     "output": {"result": "safe state summary"},
-                }, f)
-            with open(outside_transcript, "w", encoding="utf-8") as f:
-                f.write(json.dumps({"message": {
+                }, file_handle)
+            with open(outside_transcript, "w", encoding="utf-8") as file_handle:
+                file_handle.write(json.dumps({"message": {
                     "role": "assistant",
                     "content": [{"type": "text", "text": "secret"}],
                 }}) + "\n")

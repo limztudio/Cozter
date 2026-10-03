@@ -79,8 +79,8 @@ def _load_config_object() -> dict:
         size = stat_result.st_size
     except OSError:
         # Missing/unstatable: fall through to open() to keep error semantics.
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg = json.load(f)
+        with open(CONFIG_PATH, encoding="utf-8") as file_handle:
+            cfg = json.load(file_handle)
         if not isinstance(cfg, dict):
             raise ValueError("config.json must contain a JSON object") from None
         return cfg
@@ -91,8 +91,8 @@ def _load_config_object() -> dict:
         and size == _CONFIG_CACHE_SIZE
     ):
         return _CONFIG_CACHE_DATA
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        cfg = json.load(f)
+    with open(CONFIG_PATH, encoding="utf-8") as file_handle:
+        cfg = json.load(file_handle)
     if not isinstance(cfg, dict):
         raise ValueError("config.json must contain a JSON object")
     _CONFIG_CACHE_PATH = CONFIG_PATH
@@ -138,8 +138,8 @@ def _create_default_config() -> None:
         os.O_WRONLY | os.O_CREAT | os.O_EXCL,
         0o600,
     )
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(_DEFAULT_CONFIG, f, indent=2)
+    with os.fdopen(fd, "w", encoding="utf-8") as file_handle:
+        json.dump(_DEFAULT_CONFIG, file_handle, indent=2)
     _restrict_config_permissions(CONFIG_PATH, 0o600)
 
 
@@ -507,7 +507,7 @@ def load_config() -> dict:
     has_slack = bool(cfg["slack_bot_token"])
     has_signal = bool(cfg["signal_group_urls"] or cfg["signal_jsonrpc_socket"])
 
-    configured = sum(bool(x) for x in (has_telegram, has_slack, has_signal))
+    configured = sum(bool(flag) for flag in (has_telegram, has_slack, has_signal))
     if configured == 0:
         print(
             f"ERROR: {CONFIG_PATH} must set either 'telegram_bot_tokens'"

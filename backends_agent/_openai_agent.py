@@ -560,16 +560,16 @@ class OpenAIChatBackend(Backend):
 
                     _results: list[str | None] = [None] * len(tool_calls)
                     _to_run_idx: list[int] = [
-                        i for i, _skip in enumerate(_batch_skipped)
+                        batch_index for batch_index, _skip in enumerate(_batch_skipped)
                         if not _skip
                     ]
                     if _to_run_idx:
                         _gathered = await asyncio.gather(
                             *(
                                 _run_one(
-                                    _batch_names[i], _batch_args[i],
+                                    _batch_names[run_index], _batch_args[run_index],
                                 )
-                                for i in _to_run_idx
+                                for run_index in _to_run_idx
                             ),
                         )
                         for _pos, _res in zip(_to_run_idx, _gathered, strict=True):

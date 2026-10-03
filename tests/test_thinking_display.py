@@ -20,7 +20,7 @@ class ThinkingDisplayTests(unittest.TestCase):
         self.assertIn("Here is the answer", out)
 
     def test_keeps_only_last_five_tool_lines(self) -> None:
-        lines = [f"» step {i}" for i in range(8)]
+        lines = [f"» step {step}" for step in range(8)]
         out = BotPlatform._compose_thinking_display(lines, "")
         self.assertIn("» step 7", out)
         self.assertNotIn("» step 0", out)  # oldest dropped

@@ -318,8 +318,8 @@ class TelegramBot(BotPlatform):
         delay = 0.0
         for attempt in range(1, _TELEGRAM_SEND_MAX_ATTEMPTS + 1):
             try:
-                with open(path, "rb") as f:
-                    await sender(f)
+                with open(path, "rb") as file_handle:
+                    await sender(file_handle)
                 return
             except Exception as exc:
                 last_exc = exc

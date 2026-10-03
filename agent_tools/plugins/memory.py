@@ -75,8 +75,8 @@ def _load_sessions(sessions_dir: str) -> list[dict]:
 
 def _load_session_file(path: str, session_id: str) -> dict | None:
     try:
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
+        with open(path, encoding="utf-8") as file_handle:
+            raw = json.load(file_handle)
     except (OSError, ValueError):
         return None
     if not isinstance(raw, dict) or raw.get("id") != session_id:
@@ -120,8 +120,8 @@ def _colony_items(workspace: str) -> list[str]:
     except ValueError:
         return []
     try:
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
+        with open(path, encoding="utf-8") as file_handle:
+            raw = json.load(file_handle)
     except (OSError, ValueError):
         return []
     items = raw.get("items") if isinstance(raw, dict) else None
@@ -385,20 +385,20 @@ def _find_session(
     key = target.strip().casefold()
     if key in _NEWEST_ALIASES:
         return sessions[0], None
-    exact_id = [s for s in sessions if s["id"] == target.strip()]
+    exact_id = [session for session in sessions if session["id"] == target.strip()]
     if exact_id:
         return exact_id[0], None
-    exact_name = [s for s in sessions if s["name"].casefold() == key]
+    exact_name = [session for session in sessions if session["name"].casefold() == key]
     if len(exact_name) == 1:
         return exact_name[0], None
     prefix = [
-        s for s in sessions
-        if s["id"].startswith(key) or s["name"].casefold().startswith(key)
+        session for session in sessions
+        if session["id"].startswith(key) or session["name"].casefold().startswith(key)
     ]
     if len(prefix) == 1:
         return prefix[0], None
     if len(prefix) > 1:
-        shown = ", ".join(s["name"] for s in prefix[:5])
+        shown = ", ".join(session["name"] for session in prefix[:5])
         if len(prefix) > 5:
             shown += f", … [{len(prefix) - 5} more match(es) omitted]"
         return None, (

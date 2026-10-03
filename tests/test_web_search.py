@@ -184,7 +184,7 @@ class WebSearchToolTests(unittest.TestCase):
 
     def test_scan_cap_footnote_marks_preview_and_partial(self) -> None:
         anchors = "".join(
-            f'<a href="//duckduckgo.com/nope{i}">x</a>' for i in range(250)
+            f'<a href="//duckduckgo.com/nope{link_index}">x</a>' for link_index in range(250)
         )
         net = _FakeNet((200, anchors.encode()))
         result = _run_search(net, query="anything")

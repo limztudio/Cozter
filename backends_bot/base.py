@@ -64,8 +64,8 @@ _INLINE_SIZE_LIMIT = 50_000
 
 def _read_inline_text_attachment(path: str) -> str:
     """Read only enough text to decide whether an attachment can be inlined."""
-    with open(path, encoding="utf-8", errors="replace") as f:
-        return f.read(_INLINE_SIZE_LIMIT + 1)
+    with open(path, encoding="utf-8", errors="replace") as file_handle:
+        return file_handle.read(_INLINE_SIZE_LIMIT + 1)
 
 
 UPLOADS_DIR = "uploads"
@@ -391,7 +391,7 @@ class BotPlatform(ABC):
         max_upload_bytes: int = config.DEFAULT_MAX_UPLOAD_BYTES,
     ):
         # Startup-greet + default auth set: Telegram user IDs, Slack channel IDs.
-        self.notify_targets: list[str] = [str(t) for t in notify_targets]
+        self.notify_targets: list[str] = [str(target) for target in notify_targets]
         self.recent_limit = recent_limit
         self.max_queue_size = max_queue_size
         self.max_upload_bytes = (
@@ -774,33 +774,33 @@ class BotPlatform(ABC):
     def _ensure_message_queue(
         self, uid: str, *, min_size: int = 0,
     ) -> asyncio.Queue:
-        q = self._message_queues.get(uid)
+        msg_queue = self._message_queues.get(uid)
         maxsize = max(self.max_queue_size, min_size)
-        if q is None:
-            q = asyncio.Queue(maxsize=maxsize)
-            self._message_queues[uid] = q
-        elif maxsize and q.maxsize != maxsize:
+        if msg_queue is None:
+            msg_queue = asyncio.Queue(maxsize=maxsize)
+            self._message_queues[uid] = msg_queue
+        elif maxsize and msg_queue.maxsize != maxsize:
             # Resize by replacing the queue (race-free under caller's lock).
             replacement: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
-            while not q.empty():
+            while not msg_queue.empty():
                 try:
-                    replacement.put_nowait(q.get_nowait())
+                    replacement.put_nowait(msg_queue.get_nowait())
                 except asyncio.QueueFull:
                     break
             self._message_queues[uid] = replacement
             return replacement
-        return q
+        return msg_queue
 
     @staticmethod
-    def _has_pending_normal_entries(q: asyncio.Queue) -> bool:
-        """True if *q* holds at least one non-ephemeral queued entry.
+    def _has_pending_normal_entries(msg_queue: asyncio.Queue) -> bool:
+        """True if *msg_queue* holds at least one non-ephemeral queued entry.
 
         ``QueueEntry`` is ``(text, chat_id, entry_id, ephemeral)``.
         Used by :meth:`_send_result` to avoid arming a ``[[await]]``
         pause when the user already sent follow-up messages during the
         turn, which would strand that backlog forever.
         """
-        for entry in q._queue:  # type: ignore[attr-defined]
+        for entry in msg_queue._queue:  # type: ignore[attr-defined]
             # In-memory entries are built by our own dispatch paths, but a
             # malformed shape must not crash the await-arm check and strand
             # the turn. Only a well-formed non-ephemeral entry counts.
@@ -814,7 +814,7 @@ class BotPlatform(ABC):
 
     @staticmethod
     def _select_queue_entry(
-        q: asyncio.Queue,
+        msg_queue: asyncio.Queue,
         predicate: Callable[[QueueEntry], bool],
         *,
         requeue_selected: bool = False,
@@ -827,22 +827,22 @@ class BotPlatform(ABC):
         """
         selected: QueueEntry | None = None
         buffered: list[QueueEntry] = []
-        while not q.empty():
-            entry = q.get_nowait()
+        while not msg_queue.empty():
+            entry = msg_queue.get_nowait()
             if selected is None and predicate(entry):
                 selected = entry
             else:
                 buffered.append(entry)
 
         if selected is not None and requeue_selected:
-            q.put_nowait(selected)
+            msg_queue.put_nowait(selected)
         for entry in buffered:
-            q.put_nowait(entry)
+            msg_queue.put_nowait(entry)
         return selected
 
     @staticmethod
     def _pop_next_queue_entry(
-        q: asyncio.Queue, *, ephemeral_only: bool = False,
+        msg_queue: asyncio.Queue, *, ephemeral_only: bool = False,
     ) -> QueueEntry | None:
         """Pop the next runnable queue entry.
 
@@ -851,11 +851,11 @@ class BotPlatform(ABC):
         are independent ephemeral runs and may continue.
         """
         if not ephemeral_only:
-            return q.get_nowait()
+            return msg_queue.get_nowait()
         # Guard the shape: a malformed entry must be skipped, not crash
         # the drain loop with an IndexError.
         return BotPlatform._select_queue_entry(
-            q,
+            msg_queue,
             lambda entry: (
                 isinstance(entry, tuple)
                 and len(entry) == 4
@@ -865,11 +865,11 @@ class BotPlatform(ABC):
 
     @staticmethod
     def _promote_queue_entry(
-        q: asyncio.Queue, entry_id: str,
+        msg_queue: asyncio.Queue, entry_id: str,
     ) -> None:
         """Move a queued entry to the front, preserving all others."""
         BotPlatform._select_queue_entry(
-            q,
+            msg_queue,
             lambda entry: (
                 isinstance(entry, tuple)
                 and len(entry) == 4
@@ -899,14 +899,14 @@ class BotPlatform(ABC):
             self._write_queue_file(data)
 
     async def _resume_awaiting_answer(
-        self, uid: str, q: asyncio.Queue, entry_id: str, *,
+        self, uid: str, msg_queue: asyncio.Queue, entry_id: str, *,
         reason: str,
     ) -> bool:
         """Clear an answer pause and promote the answer before backlog."""
         if uid not in self._awaiting_answer:
             return False
         self._awaiting_answer.discard(uid)
-        self._promote_queue_entry(q, entry_id)
+        self._promote_queue_entry(msg_queue, entry_id)
         await self._persist_promote(uid, entry_id)
         logger.info("User %s answered while %s; queue resumed", uid, reason)
         return True
@@ -1058,8 +1058,8 @@ class BotPlatform(ABC):
         lines = [f"Current workspace: {current or '(none)'}"]
         if recent:
             lines.append("\nRecent workspaces:")
-            for i, r in enumerate(recent, 1):
-                lines.append(f"  {i}. {r}")
+            for recent_index, recent_path in enumerate(recent, 1):
+                lines.append(f"  {recent_index}. {recent_path}")
         else:
             lines.append("\nNo recent workspaces.")
         lines.append(
@@ -1306,8 +1306,8 @@ class BotPlatform(ABC):
     ) -> list[str]:
         """Number a picker's options and mark the active one."""
         return [
-            f"  {i}. {name}{' <-' if name == current else ''}"
-            for i, name in enumerate(options, first_number)
+            f"  {option_index}. {name}{' <-' if name == current else ''}"
+            for option_index, name in enumerate(options, first_number)
         ]
 
     @staticmethod
@@ -1472,10 +1472,10 @@ class BotPlatform(ABC):
         current = workspace.get_permission(ws)
         options = workspace.AVAILABLE_PERMISSIONS
         lines = [f"Current permission: {current}\n", "Available modes:"]
-        for i, p in enumerate(options, 1):
-            marker = " <-" if p == current else ""
-            desc = workspace.PERMISSION_DESCRIPTIONS[p]
-            lines.append(f"  {i}. {p} - {desc}{marker}")
+        for option_index, option in enumerate(options, 1):
+            marker = " <-" if option == current else ""
+            desc = workspace.PERMISSION_DESCRIPTIONS[option]
+            lines.append(f"  {option_index}. {option} - {desc}{marker}")
         ceiling = workspace.permission_ceiling()
         if ceiling != "full":
             lines.append(
@@ -1526,10 +1526,10 @@ class BotPlatform(ABC):
             f"Current interaction style: {current}\n",
             "Available styles:",
         ]
-        for i, s in enumerate(options, 1):
-            marker = " <-" if s == current else ""
-            desc = workspace.STYLE_DESCRIPTIONS[s]
-            lines.append(f"  {i}. {s} - {desc}{marker}")
+        for option_index, option in enumerate(options, 1):
+            marker = " <-" if option == current else ""
+            desc = workspace.STYLE_DESCRIPTIONS[option]
+            lines.append(f"  {option_index}. {option} - {desc}{marker}")
         lines.append(
             "\nCollaborative makes the agent ask before big or ambiguous"
             " actions and pause for your reply; autonomous makes it decide"
@@ -1698,7 +1698,7 @@ class BotPlatform(ABC):
 
         current = workspace.get_compact_interval(ws)
         sessions = session.list_sessions(ws)
-        total_msgs = sum(s.get("message_count", 0) for s in sessions)
+        total_msgs = sum(session.get("message_count", 0) for session in sessions)
         lines = [
             f"Fallback compact interval: {current} messages",
             f"Sessions: {len(sessions)} ({total_msgs} total messages)",
@@ -1780,15 +1780,15 @@ class BotPlatform(ABC):
             return None
         low = choice.lower()
         named = [
-            s for s in sessions
-            if isinstance(s, dict) and isinstance(s.get("name"), str)
+            session for session in sessions
+            if isinstance(session, dict) and isinstance(session.get("name"), str)
         ]
-        for s in named:
-            if s["name"].lower() == low:
-                return s
-        for s in named:
-            if low and low in s["name"].lower():
-                return s
+        for named_session in named:
+            if named_session["name"].lower() == low:
+                return named_session
+        for named_session in named:
+            if low and low in named_session["name"].lower():
+                return named_session
         return None
 
     async def cmd_sessions(self, ctx: BotContext) -> None:
@@ -1807,10 +1807,10 @@ class BotPlatform(ABC):
             return
         current = session.get_last_session(ws, ctx.user_id)
         lines = ["Sessions (newest first):"]
-        for i, s in enumerate(sessions, 1):
-            marker = " <-" if s["id"] == current else ""
+        for session_index, existing in enumerate(sessions, 1):
+            marker = " <-" if existing["id"] == current else ""
             lines.append(
-                f"  {i}. {s['name']} ({s['message_count']} msgs){marker}"
+                f"  {session_index}. {existing['name']} ({existing['message_count']} msgs){marker}"
             )
         lines.append(
             "\nReply with a number or name to switch, /newsession for a"
@@ -1889,8 +1889,8 @@ class BotPlatform(ABC):
         ]
         if items:
             lines.append("Items:")
-            for i, it in enumerate(items, 1):
-                lines.append(f"  {i}. {it}")
+            for item_index, it in enumerate(items, 1):
+                lines.append(f"  {item_index}. {it}")
             lines.append("")
         lines.extend([
             "Usage:",
@@ -2117,13 +2117,13 @@ class BotPlatform(ABC):
             await ctx.reply_text("No schedules.")
             return
         lines = ["Schedules:"]
-        for i, s in enumerate(user_schedules, 1):
-            raw_days = s.get("days", [])
+        for schedule_index, schedule in enumerate(user_schedules, 1):
+            raw_days = schedule.get("days", [])
             days = raw_days if isinstance(raw_days, list) else []
-            days_str = ",".join(d for d in days if isinstance(d, str))
+            days_str = ",".join(day for day in days if isinstance(day, str))
             lines.append(
-                f"  {i}. [{days_str}] {s.get('time', '?')}"
-                f" — {s.get('command', '')}"
+                f"  {schedule_index}. [{days_str}] {schedule.get('time', '?')}"
+                f" — {schedule.get('command', '')}"
             )
         lines.append(
             "\nEnter a number to delete, or /cancel to exit:"
@@ -2170,7 +2170,7 @@ class BotPlatform(ABC):
         raw_days = removed.get("days", [])
         days = raw_days if isinstance(raw_days, list) else []
         await ctx.reply_text(
-            f"Removed: [{','.join(d for d in days if isinstance(d, str))}]"
+            f"Removed: [{','.join(day for day in days if isinstance(day, str))}]"
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
         )
 
@@ -2263,7 +2263,7 @@ class BotPlatform(ABC):
                     data.pop(uid, None)
                     self._write_queue_file(data)
                 return
-            remaining = [e for e in entries if e.get("id") != entry_id]
+            remaining = [entry for entry in entries if entry.get("id") != entry_id]
             if len(remaining) == len(entries):
                 return  # entry already gone
             if remaining:
@@ -2303,12 +2303,12 @@ class BotPlatform(ABC):
             self._ensure_task_lock(uid)
             existing_q = self._message_queues.get(uid)
             existing_size = existing_q.qsize() if existing_q else 0
-            q = self._ensure_message_queue(
+            msg_queue = self._ensure_message_queue(
                 uid, min_size=existing_size + len(entries),
             )
             for entry in entries:
                 # Oldest-first preserves the user's original ordering.
-                q.put_nowait((
+                msg_queue.put_nowait((
                     entry.get("text", ""),
                     entry.get("chat_id", ""),
                     entry.get("id", ""),
@@ -2472,10 +2472,10 @@ class BotPlatform(ABC):
                 record["id"], exc_info=True,
             )
             return False
-        q = self._message_queues.get(record["user_id"])
-        if q is not None:
+        msg_queue = self._message_queues.get(record["user_id"])
+        if msg_queue is not None:
             self._select_queue_entry(
-                q, lambda entry: entry[2] == record["id"],
+                msg_queue, lambda entry: entry[2] == record["id"],
             )
         return True
 
@@ -3148,12 +3148,12 @@ class BotPlatform(ABC):
         # After a fresh bot start the scheduler can fire before the user
         # types anything, so create the per-user lock and queue on demand.
         self._ensure_task_lock(uid)
-        q = self._ensure_message_queue(uid)
+        msg_queue = self._ensure_message_queue(uid)
 
         # Check capacity BEFORE announcing — otherwise a user with a full
         # queue sees "⏰ Scheduled: X" immediately followed by "Queue full
         # — dropped scheduled command: X", which is confusing.
-        if q.full():
+        if msg_queue.full():
             await self._send_text_best_effort(
                 chat_id,
                 f"Queue full — dropped scheduled command: {command}",
@@ -3175,9 +3175,9 @@ class BotPlatform(ABC):
         if self._cancel_generations.get(uid, 0) != generation:
             await self._discard_cancelled_dispatch_entry(uid, entry_id)
             return
-        await q.put((command, chat_id, entry_id, True))
+        await msg_queue.put((command, chat_id, entry_id, True))
         if self._cancel_generations.get(uid, 0) != generation:
-            await self._discard_cancelled_dispatch_entry(uid, entry_id, q)
+            await self._discard_cancelled_dispatch_entry(uid, entry_id, msg_queue)
             return
 
         # Kick the queue drainer in a background task; if a turn is
@@ -3236,9 +3236,9 @@ class BotPlatform(ABC):
                 except OSError:
                     size = 0
                 if dims is not None:
-                    w, h, fmt = dims
+                    width, height, fmt = dims
                     parts.append(
-                        f"[Image: {att.filename} is a {w}x{h} {fmt}"
+                        f"[Image: {att.filename} is a {width}x{height} {fmt}"
                         f" ({size:,} bytes) at {rel_path}."
                         " Vision-capable backends receive these pixels"
                         " natively: describe what is actually in the image."
@@ -3289,7 +3289,7 @@ class BotPlatform(ABC):
         lock.release()
 
     async def _discard_cancelled_dispatch_entry(
-        self, uid: str, entry_id: str, q: asyncio.Queue | None = None,
+        self, uid: str, entry_id: str, msg_queue: asyncio.Queue | None = None,
     ) -> None:
         """Remove an entry whose dispatch began before /cancel or /stop.
 
@@ -3297,9 +3297,9 @@ class BotPlatform(ABC):
         complete by id because a dispatch can persist after that clear while
         it was suspended waiting on the queue-file lock.
         """
-        if q is not None:
+        if msg_queue is not None:
             self._select_queue_entry(
-                q,
+                msg_queue,
                 lambda entry: (
                     isinstance(entry, tuple)
                     and len(entry) == 4
@@ -3320,7 +3320,7 @@ class BotPlatform(ABC):
         text: str,
         chat_id: str,
         generation: int,
-        q: asyncio.Queue,
+        msg_queue: asyncio.Queue,
     ) -> str | None:
         """Persist and enqueue a dispatch unless cancellation made it stale."""
         entry_id = await self._persist_admitted_dispatch_entry(
@@ -3331,9 +3331,9 @@ class BotPlatform(ABC):
         if self._cancel_generations.get(uid, 0) != generation:
             await self._discard_cancelled_dispatch_entry(uid, entry_id)
             return None
-        await q.put((text, chat_id, entry_id, False))
+        await msg_queue.put((text, chat_id, entry_id, False))
         if self._cancel_generations.get(uid, 0) != generation:
-            await self._discard_cancelled_dispatch_entry(uid, entry_id, q)
+            await self._discard_cancelled_dispatch_entry(uid, entry_id, msg_queue)
             return None
         return entry_id
 
@@ -3343,42 +3343,42 @@ class BotPlatform(ABC):
         generation = self._cancel_generations.get(uid, 0)
         if self._update_restart_pending:
             self._ensure_task_lock(uid)
-            q = self._ensure_message_queue(uid)
-            if q.full():
+            msg_queue = self._ensure_message_queue(uid)
+            if msg_queue.full():
                 await ctx.reply_text("Queue full. Try again after restart.")
             else:
                 entry_id = await self._persist_and_queue_dispatch(
-                    uid, text, chat_id, generation, q,
+                    uid, text, chat_id, generation, msg_queue,
                 )
                 if entry_id is None:
                     return
                 await self._resume_awaiting_answer(
-                    uid, q, entry_id, reason="update was pending",
+                    uid, msg_queue, entry_id, reason="update was pending",
                 )
                 await ctx.reply_text(
-                    f"Queued ({q.qsize()}/{self.max_queue_size})."
+                    f"Queued ({msg_queue.qsize()}/{self.max_queue_size})."
                 )
             return
 
         lock = self._ensure_task_lock(uid)
 
         if lock.locked() or uid in self._pending_reply_delivery_users:
-            q = self._ensure_message_queue(uid)
-            if q.full():
+            msg_queue = self._ensure_message_queue(uid)
+            if msg_queue.full():
                 await ctx.reply_text("Queue full. Wait or /stop first.")
             else:
                 was_awaiting = uid in self._awaiting_answer
                 entry_id = await self._persist_and_queue_dispatch(
-                    uid, text, chat_id, generation, q,
+                    uid, text, chat_id, generation, msg_queue,
                 )
                 if entry_id is None:
                     return
                 if was_awaiting:
                     await self._resume_awaiting_answer(
-                        uid, q, entry_id, reason="turn was finishing",
+                        uid, msg_queue, entry_id, reason="turn was finishing",
                     )
                 await ctx.reply_text(
-                    f"Queued ({q.qsize()}/{self.max_queue_size})."
+                    f"Queued ({msg_queue.qsize()}/{self.max_queue_size})."
                 )
                 # Race guard: kick a drain so the new entry isn't orphaned
                 # (a no-op if one is already active).
@@ -3405,16 +3405,16 @@ class BotPlatform(ABC):
         if self._update_restart_pending:
             lock.release()
             queued = self._message_queues.get(uid)
-            q = self._ensure_message_queue(
+            msg_queue = self._ensure_message_queue(
                 uid,
                 min_size=(queued.qsize() if queued is not None else 0) + 1,
             )
-            q.put_nowait((text, chat_id, entry_id, False))
+            msg_queue.put_nowait((text, chat_id, entry_id, False))
             await self._resume_awaiting_answer(
-                uid, q, entry_id, reason="update became pending",
+                uid, msg_queue, entry_id, reason="update became pending",
             )
             await ctx.reply_text(
-                f"Queued ({q.qsize()}/{max(self.max_queue_size, q.qsize())})."
+                f"Queued ({msg_queue.qsize()}/{max(self.max_queue_size, msg_queue.qsize())})."
             )
             # Normally this returns immediately while the update is pending.
             # Starting it still covers a no-update/cancel race that resumes
@@ -3956,8 +3956,8 @@ class BotPlatform(ABC):
     def _arm_awaiting_answer(self, uid: str) -> None:
         """Honor a delivered ``[[await]]`` reply without stranding backlog."""
         # [[await]] parks new messages as the answer; already-queued turn messages still drain.
-        q = self._message_queues.get(uid)
-        if q is not None and self._has_pending_normal_entries(q):
+        msg_queue = self._message_queues.get(uid)
+        if msg_queue is not None and self._has_pending_normal_entries(msg_queue):
             logger.info(
                 "User %s reply ended with [[await]] but messages sent "
                 "earlier are queued; skipping answer pause",
@@ -3970,8 +3970,8 @@ class BotPlatform(ABC):
         )
 
     async def _drain_message_queue(self, uid: str) -> None:
-        q = self._message_queues.get(uid)
-        if not q:
+        msg_queue = self._message_queues.get(uid)
+        if not msg_queue:
             return
         # Preserve conversational order: a completed answer that the
         # platform has not accepted yet must be retried before another user
@@ -3982,7 +3982,7 @@ class BotPlatform(ABC):
         # so a missing lock doesn't crash the drain task.
         lock = self._ensure_task_lock(uid)
 
-        while not q.empty():
+        while not msg_queue.empty():
             if uid in self._pending_reply_delivery_users:
                 break
             if self._update_restart_pending:
@@ -3992,7 +3992,7 @@ class BotPlatform(ABC):
             await lock.acquire()
             try:
                 entry = self._pop_next_queue_entry(
-                    q,
+                    msg_queue,
                     ephemeral_only=uid in self._awaiting_answer,
                 )
             except asyncio.QueueEmpty:

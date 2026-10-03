@@ -46,19 +46,19 @@ class EditFileTool(AgentTool):
         if isinstance(loaded, str):
             return f"Error: {loaded}"
         original, uses_crlf = loaded
-        updated, count, n = apply_string_replacement(
+        updated, count, replacement_total = apply_string_replacement(
             original, old, new, replace_all=replace_all,
         )
         if count == 0:
             return f"old_string not found in {args.get('path')}"
-        if n == 0:
+        if replacement_total == 0:
             return (
                 f"old_string appears {count} times in {args.get('path')};"
                 " include more context or set replace_all=true."
             )
         write_text_after_edit(target, updated, uses_crlf=uses_crlf)
-        suffix = "s" if n != 1 else ""
-        return f"Replaced {n} occurrence{suffix} in {args.get('path')}"
+        suffix = "s" if replacement_total != 1 else ""
+        return f"Replaced {replacement_total} occurrence{suffix} in {args.get('path')}"
 
     def summarize(self, args: dict) -> str:
         return summarize_path("edit_file", args)

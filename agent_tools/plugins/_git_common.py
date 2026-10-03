@@ -28,7 +28,7 @@ _REF_MARKERS = (
 )
 
 
-class GitFailed(Exception):
+class GitFailedError(Exception):
     """Git exited non-zero; carries the model-facing stderr excerpt."""
 
 
@@ -171,5 +171,5 @@ async def run_git(argv: list[str], workspace: str) -> tuple[str, str]:
     except TimeoutError:  # asyncio.TimeoutError is the same class on 3.11+
         raise
     if returncode != 0:
-        raise GitFailed(first_stderr_line(stderr))
+        raise GitFailedError(first_stderr_line(stderr))
     return stdout, stderr

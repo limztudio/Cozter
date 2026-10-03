@@ -32,7 +32,7 @@ def create_platforms(config: dict) -> list[BotPlatform]:
         tg_tokens = [tg_tokens]
     if not isinstance(tg_tokens, list):
         tg_tokens = []
-    tg_tokens = [t for t in tg_tokens if isinstance(t, str) and t.strip()]
+    tg_tokens = [token for token in tg_tokens if isinstance(token, str) and token.strip()]
     slack_bot = config.get("slack_bot_token") or ""
     if not isinstance(slack_bot, str):
         slack_bot = ""
@@ -41,7 +41,7 @@ def create_platforms(config: dict) -> list[BotPlatform]:
         signal_groups = [signal_groups]
     if not isinstance(signal_groups, list):
         signal_groups = []
-    signal_groups = [g for g in signal_groups if isinstance(g, str) and g.strip()]
+    signal_groups = [group for group in signal_groups if isinstance(group, str) and group.strip()]
     signal_socket = config.get("signal_jsonrpc_socket") or ""
     if not isinstance(signal_socket, str):
         signal_socket = ""
@@ -64,8 +64,8 @@ def create_platforms(config: dict) -> list[BotPlatform]:
         if not isinstance(raw_ids, list):
             raw_ids = []
         user_ids = [
-            str(t) for t in raw_ids
-            if isinstance(t, (str, int)) and not isinstance(t, bool)
+            str(raw_id) for raw_id in raw_ids
+            if isinstance(raw_id, (str, int)) and not isinstance(raw_id, bool)
         ]
         bots.extend(
             TelegramBot(
@@ -85,7 +85,7 @@ def create_platforms(config: dict) -> list[BotPlatform]:
         if not isinstance(raw_channels, list):
             raw_channels = []
         channel_ids = [
-            c for c in raw_channels if isinstance(c, str) and c.strip()
+            channel for channel in raw_channels if isinstance(channel, str) and channel.strip()
         ]
         bots.append(
             SlackBot(

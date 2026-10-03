@@ -107,7 +107,7 @@ class WebSearchTool(AgentTool):
             return host, [], local_failures, saw_local_page
 
         gathered = await asyncio.gather(
-            *(_try_endpoint(t) for t in _SEARCH_ENDPOINTS),
+            *(_try_endpoint(endpoint) for endpoint in _SEARCH_ENDPOINTS),
         )
         failures: list[str] = []
         saw_page = False
@@ -121,7 +121,7 @@ class WebSearchTool(AgentTool):
                 ) and results[-1].startswith("(…parser"):
                     pass  # scan-cap footnote already appended
                 elif len(
-                    [r for r in results if r[:1].isdigit()]
+                    [result for result in results if result[:1].isdigit()]
                 ) >= max_results:
                     results.append(
                         "(showing first"

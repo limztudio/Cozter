@@ -261,15 +261,15 @@ class AgentProcessCleanupTests(unittest.TestCase):
                         ),
                         timeout=2,
                     )
-                    with open(pid_path, encoding="utf-8") as f:
-                        child_pid = int(f.read())
+                    with open(pid_path, encoding="utf-8") as file_handle:
+                        child_pid = int(file_handle.read())
                     completed = True
                     return result, restarting, child_pid
                 finally:
                     # Normally already dead; keep the regression leak-safe on mid-failure.
                     if not completed and os.path.exists(pid_path):
-                        with open(pid_path, encoding="utf-8") as f:
-                            child_pid = int(f.read())
+                        with open(pid_path, encoding="utf-8") as file_handle:
+                            child_pid = int(file_handle.read())
                         kill_process(child_pid)
 
         _result, restarting, child_pid = asyncio.run(run())
@@ -327,14 +327,14 @@ class AgentProcessCleanupTests(unittest.TestCase):
                         ),
                         timeout=2,
                     )
-                    with open(pid_path, encoding="utf-8") as f:
-                        child_pid = int(f.read())
+                    with open(pid_path, encoding="utf-8") as file_handle:
+                        child_pid = int(file_handle.read())
                     completed = True
                     return restarting, child_pid
                 finally:
                     if not completed and os.path.exists(pid_path):
-                        with open(pid_path, encoding="utf-8") as f:
-                            child_pid = int(f.read())
+                        with open(pid_path, encoding="utf-8") as file_handle:
+                            child_pid = int(file_handle.read())
                         kill_process(child_pid)
 
         restarting, child_pid = asyncio.run(run())
@@ -432,8 +432,8 @@ class AgentProcessCleanupTests(unittest.TestCase):
                         ),
                         timeout=3.5,
                     )
-                    with open(pid_path, encoding="utf-8") as f:
-                        child_pid = int(f.read())
+                    with open(pid_path, encoding="utf-8") as file_handle:
+                        child_pid = int(file_handle.read())
                     completed = True
                     return (
                         result,
@@ -443,8 +443,8 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     )
                 finally:
                     if not completed and os.path.exists(pid_path):
-                        with open(pid_path, encoding="utf-8") as f:
-                            child_pid = int(f.read())
+                        with open(pid_path, encoding="utf-8") as file_handle:
+                            child_pid = int(file_handle.read())
                         kill_process(child_pid)
 
         result, restarting, child_pid, elapsed = asyncio.run(run())
@@ -502,14 +502,14 @@ class AgentProcessCleanupTests(unittest.TestCase):
                         ),
                         timeout=2,
                     )
-                    with open(pid_path, encoding="utf-8") as f:
-                        child_pid = int(f.read())
+                    with open(pid_path, encoding="utf-8") as file_handle:
+                        child_pid = int(file_handle.read())
                     completed = True
                     return restarting, child_pid
                 finally:
                     if not completed and os.path.exists(pid_path):
-                        with open(pid_path, encoding="utf-8") as f:
-                            child_pid = int(f.read())
+                        with open(pid_path, encoding="utf-8") as file_handle:
+                            child_pid = int(file_handle.read())
                         kill_process(child_pid)
 
         restarting, child_pid = asyncio.run(run())
@@ -556,14 +556,14 @@ class AgentProcessCleanupTests(unittest.TestCase):
                         ),
                         timeout=2,
                     )
-                    with open(pid_path, encoding="utf-8") as f:
-                        child_pid = int(f.read())
+                    with open(pid_path, encoding="utf-8") as file_handle:
+                        child_pid = int(file_handle.read())
                     completed = True
                     return text, child_pid
                 finally:
                     if not completed and os.path.exists(pid_path):
-                        with open(pid_path, encoding="utf-8") as f:
-                            child_pid = int(f.read())
+                        with open(pid_path, encoding="utf-8") as file_handle:
+                            child_pid = int(file_handle.read())
                         kill_process(child_pid)
 
         text, child_pid = asyncio.run(run())
@@ -617,14 +617,14 @@ class AgentProcessCleanupTests(unittest.TestCase):
                         ),
                         timeout=2.5,
                     )
-                    with open(pid_path, encoding="utf-8") as f:
-                        child_pid = int(f.read())
+                    with open(pid_path, encoding="utf-8") as file_handle:
+                        child_pid = int(file_handle.read())
                     completed = True
                     return time.monotonic() - started, child_pid
                 finally:
                     if not completed and os.path.exists(pid_path):
-                        with open(pid_path, encoding="utf-8") as f:
-                            child_pid = int(f.read())
+                        with open(pid_path, encoding="utf-8") as file_handle:
+                            child_pid = int(file_handle.read())
                         kill_process(child_pid)
 
         elapsed, child_pid = asyncio.run(run())

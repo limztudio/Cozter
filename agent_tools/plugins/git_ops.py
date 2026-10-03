@@ -26,7 +26,7 @@ from ..base import (
 )
 from ...utils import clip_status_value
 from ._git_common import (
-    GitFailed as _GitFailed,
+    GitFailedError as _GitFailedError,
     clean_ref as _clean_ref,
     finish_git_output as _finish_git_output,
     finish_git_run_error as _finish_git_run_error,
@@ -145,7 +145,7 @@ class GitOpsTool(AgentTool):
             return argv  # model-facing "Error: ..." from builder
         try:
             stdout, stderr = await _run_git(argv, workspace_path)
-        except (FileNotFoundError, TimeoutError, _GitFailed) as exc:
+        except (FileNotFoundError, TimeoutError, _GitFailedError) as exc:
             return _finish_git_run_error(action, exc)
         return _finish_git_output(stdout, stderr)
 

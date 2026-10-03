@@ -20,8 +20,8 @@ class EditFileReadLimitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "note.txt")
             raw = "one\r\ntwo café\r\n".encode()
-            with open(path, "wb") as f:
-                f.write(raw)
+            with open(path, "wb") as file_handle:
+                file_handle.write(raw)
 
             with mock.patch.object(base, "_MAX_EDIT_FILE_BYTES", len(raw)):
                 self.assertEqual(
@@ -72,8 +72,8 @@ class EditFileReadLimitTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "note.txt")
                 original = b"alpha beta"
-                with open(path, "wb") as f:
-                    f.write(original)
+                with open(path, "wb") as file_handle:
+                    file_handle.write(original)
 
                 with mock.patch.object(base, "_MAX_EDIT_FILE_BYTES", 8):
                     edit_result = await EditFileTool().run(
@@ -100,8 +100,8 @@ class EditFileReadLimitTests(unittest.TestCase):
                 )
                 self.assertEqual(edit_result, expected)
                 self.assertEqual(multi_result, expected)
-                with open(path, "rb") as f:
-                    self.assertEqual(f.read(), original)
+                with open(path, "rb") as file_handle:
+                    self.assertEqual(file_handle.read(), original)
 
         asyncio.run(run())
 
@@ -134,8 +134,8 @@ class ReadFileBoundValidationTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "f.txt")
-                with open(path, "w") as f:
-                    f.write("a\nb\nc\n")
+                with open(path, "w") as file_handle:
+                    file_handle.write("a\nb\nc\n")
                 tool = ReadFileTool()
                 self.assertEqual(
                     await tool.run(

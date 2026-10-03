@@ -132,8 +132,8 @@ class NotesToolTests(unittest.TestCase):
     def test_append_creates_timestamped_entry(self) -> None:
         result = self.invoke("append", "Investigated grep; found timeout bug")
         self.assertIn("Noted", result)
-        with open(self.notes_path(), encoding="utf-8") as f:
-            content = f.read()
+        with open(self.notes_path(), encoding="utf-8") as file_handle:
+            content = file_handle.read()
         self.assertIn("## ", content)
         self.assertIn("Investigated grep", content)
 
@@ -163,8 +163,8 @@ class NotesToolTests(unittest.TestCase):
         # Write enough entries that the 64 KiB ceiling forces a trim.
         for index in range(400):
             self.invoke("append", f"entry {index} " + "x" * 300)
-        with open(self.notes_path(), "rb") as f:
-            size = len(f.read())
+        with open(self.notes_path(), "rb") as file_handle:
+            size = len(file_handle.read())
         notes = self.invoke("read")
         self.assertLessEqual(size, 64 * 1024 + 16 * 1024)
         self.assertIn("entry 399", notes)  # newest entry always kept
@@ -182,13 +182,13 @@ class NotesToolTests(unittest.TestCase):
     def test_oversized_legacy_file_keeps_newest_entries(self) -> None:
         # An oversized legacy file must not evict the newest entries.
         os.makedirs(os.path.dirname(self.notes_path()), exist_ok=True)
-        with open(self.notes_path(), "w", encoding="utf-8") as f:
-            f.write("## 2000-01-01 00:00:00\n" + "old " * 30_000 + "\n")
-            f.write("## 2099-01-01 00:00:00\nnewest entry\n\n")
+        with open(self.notes_path(), "w", encoding="utf-8") as file_handle:
+            file_handle.write("## 2000-01-01 00:00:00\n" + "old " * 30_000 + "\n")
+            file_handle.write("## 2099-01-01 00:00:00\nnewest entry\n\n")
         result = self.invoke("append", "fresh append")
         self.assertIn("Noted", result)
-        with open(self.notes_path(), encoding="utf-8") as f:
-            content = f.read()
+        with open(self.notes_path(), encoding="utf-8") as file_handle:
+            content = file_handle.read()
         self.assertIn("newest entry", content)
         self.assertIn("fresh append", content)
 
@@ -228,15 +228,15 @@ class GitInfoToolTests(unittest.TestCase):
         return _run(self.tool.run(self.workspace, args))
 
     def _commit(self, filename: str, content: str, message: str) -> None:
-        with open(os.path.join(self.workspace, filename), "w") as f:
-            f.write(content)
+        with open(os.path.join(self.workspace, filename), "w") as file_handle:
+            file_handle.write(content)
         self._git("add", filename)
         self._git("commit", "-q", "-m", message)
 
     def test_status_shows_branch_and_changes(self) -> None:
         self._commit("a.txt", "hello\n", "initial commit")
-        with open(os.path.join(self.workspace, "a.txt"), "a") as f:
-            f.write("more\n")
+        with open(os.path.join(self.workspace, "a.txt"), "a") as file_handle:
+            file_handle.write("more\n")
         status = self.invoke(action="status")
         self.assertIn("##", status)  # branch line
         self.assertIn("a.txt", status)
@@ -250,8 +250,8 @@ class GitInfoToolTests(unittest.TestCase):
 
     def test_diff_summary_and_patch(self) -> None:
         self._commit("a.txt", "one\n", "initial commit")
-        with open(os.path.join(self.workspace, "a.txt"), "a") as f:
-            f.write("two\n")
+        with open(os.path.join(self.workspace, "a.txt"), "a") as file_handle:
+            file_handle.write("two\n")
         summary = self.invoke(action="diff")
         self.assertIn("a.txt", summary)
         patch = self.invoke(action="diff", patch=True)
@@ -259,8 +259,8 @@ class GitInfoToolTests(unittest.TestCase):
 
     def test_diff_without_head_falls_back_to_index(self) -> None:
         # Zero-commit repository: no HEAD exists yet.
-        with open(os.path.join(self.workspace, "a.txt"), "w") as f:
-            f.write("staged\n")
+        with open(os.path.join(self.workspace, "a.txt"), "w") as file_handle:
+            file_handle.write("staged\n")
         self._git("add", "a.txt")
         result = self.invoke(action="diff")
         self.assertFalse(result.startswith("Error:"))
@@ -279,8 +279,8 @@ class GitInfoToolTests(unittest.TestCase):
 
     def test_diff_truncation_marks_preview_and_partial(self) -> None:
         self._commit("big.txt", "y" * 20_000 + "\n", "big commit")
-        with open(os.path.join(self.workspace, "big.txt"), "a") as f:
-            f.write("z" * 20_000 + "\n")
+        with open(os.path.join(self.workspace, "big.txt"), "a") as file_handle:
+            file_handle.write("z" * 20_000 + "\n")
         result = self.invoke(action="diff", patch=True)
         self.assertIn("truncated", result)
         self.assertIn("never treat this preview as full content", result)
@@ -312,8 +312,8 @@ class GitInfoToolTests(unittest.TestCase):
 
     def test_stash_push_and_list(self) -> None:
         self._commit("a.txt", "hello\n", "initial commit")
-        with open(os.path.join(self.workspace, "a.txt"), "a") as f:
-            f.write("more\n")
+        with open(os.path.join(self.workspace, "a.txt"), "a") as file_handle:
+            file_handle.write("more\n")
         self._git("stash", "push", "-m", "wip")
         result = self.invoke(action="stashes")
         self.assertIn("wip", result)
@@ -375,12 +375,12 @@ class _GitRepoMixin(unittest.TestCase):
         return _run(self.tool.run(self.workspace, args))
 
     def write(self, filename: str, content: str) -> None:
-        with open(os.path.join(self.workspace, filename), "w") as f:
-            f.write(content)
+        with open(os.path.join(self.workspace, filename), "w") as file_handle:
+            file_handle.write(content)
 
     def append(self, filename: str, content: str) -> None:
-        with open(os.path.join(self.workspace, filename), "a") as f:
-            f.write(content)
+        with open(os.path.join(self.workspace, filename), "a") as file_handle:
+            file_handle.write(content)
 
 
 class GitOpsToolTests(_GitRepoMixin):
@@ -482,8 +482,8 @@ class GitOpsToolTests(_GitRepoMixin):
         self.assertEqual(
             self.invoke(action="discard", paths=["a.txt"]), "OK",
         )
-        with open(os.path.join(self.workspace, "a.txt")) as f:
-            content = f.read()
+        with open(os.path.join(self.workspace, "a.txt")) as file_handle:
+            content = file_handle.read()
         self.assertEqual(content, "hello\n")
 
     def test_stash_round_trip(self) -> None:
@@ -623,16 +623,16 @@ class MemoryToolTests(unittest.TestCase):
             os.path.join(sessions, f"{session_id}.json"),
             "w",
             encoding="utf-8",
-        ) as f:
-            json.dump(data, f)
+        ) as file_handle:
+            json.dump(data, file_handle)
 
     def write_colony(self, items: list[str]) -> None:
         cozter = os.path.join(self.ws, ".cozter")
         os.makedirs(cozter, exist_ok=True)
         with open(
             os.path.join(cozter, "colony.json"), "w", encoding="utf-8",
-        ) as f:
-            json.dump({"items": items, "compact_count": 0}, f)
+        ) as file_handle:
+            json.dump({"items": items, "compact_count": 0}, file_handle)
 
     def test_list_orders_sessions_newest_first(self) -> None:
         self.write_session(
@@ -745,8 +745,8 @@ class MemoryToolTests(unittest.TestCase):
             name="Long",
             created="2025-06-01T08:00:00",
             messages=[
-                {"role": "user", "content": f"msg {i} " + "y" * 400}
-                for i in range(30)
+                {"role": "user", "content": f"msg {index} " + "y" * 400}
+                for index in range(30)
             ],
         )
         result = self.invoke(action="read", session="Long", limit=3)
@@ -757,7 +757,7 @@ class MemoryToolTests(unittest.TestCase):
         self.assertIn("[line clipped]", result)
 
     def test_colony_cap_marks_preview_and_partial(self) -> None:
-        self.write_colony([f"item {i}" for i in range(120)])
+        self.write_colony([f"item {index}" for index in range(120)])
         result = self.invoke(action="search", query="older colony", limit=20)
         self.assertIn("older colony item(s)", result)
         self.assertIn("PARTIAL + remainder", result)
@@ -778,10 +778,10 @@ class MemoryToolTests(unittest.TestCase):
         self.assertIn("matches 2 sessions", ambiguous)
 
     def test_read_ambiguous_many_matches_marks_remainder(self) -> None:
-        for i in range(7):
+        for index in range(7):
             self.write_session(
-                f"5555{i:04d}-7777", name=f"Amb{i}",
-                created=f"2025-06-0{(i % 9) + 1}T08:00:00",
+                f"5555{index:04d}-7777", name=f"Amb{index}",
+                created=f"2025-06-0{(index % 9) + 1}T08:00:00",
             )
         ambiguous = self.invoke(action="read", session="5555")
         self.assertIn("matches 7 sessions", ambiguous)
@@ -802,8 +802,8 @@ class MemoryToolTests(unittest.TestCase):
         os.makedirs(sessions, exist_ok=True)
         with open(
             os.path.join(sessions, "badfile.json"), "w", encoding="utf-8",
-        ) as f:
-            f.write("{not json")
+        ) as file_handle:
+            file_handle.write("{not json")
         self.write_session(
             "55555555-4444", name="Good", created="2025-06-01T08:00:00",
             messages=[{"role": "user", "content": "survivor"}],
@@ -1009,12 +1009,12 @@ class HttpRequestToolTests(unittest.TestCase):
         responses = [
             _FakeResponse(
                 status=302,
-                url=f"https://api.example.com/hop{i}",
+                url=f"https://api.example.com/hop{index}",
                 headers={
-                    "Location": f"https://api.example.com/hop{i + 1}",
+                    "Location": f"https://api.example.com/hop{index + 1}",
                 },
             )
-            for i in range(6)
+            for index in range(6)
         ]
         result, _ = self.run_with(
             responses, url="https://api.example.com/hop0",

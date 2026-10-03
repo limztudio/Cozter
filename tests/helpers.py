@@ -56,8 +56,8 @@ def temporary_config(body: object) -> Iterator[str]:
     """Point the runtime config reader at a temporary JSON configuration."""
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "config.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(body, f)
+        with open(path, "w", encoding="utf-8") as file_handle:
+            json.dump(body, file_handle)
         old_path = config.CONFIG_PATH
         config.CONFIG_PATH = path
         try:
@@ -87,8 +87,8 @@ def process_is_running(pid: int) -> bool:
         return True
     # A reparented zombie can't hold a pipe or mutate; kill(0) suffices off Linux.
     try:
-        with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
-            parts = f.read().split()
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as file_handle:
+            parts = file_handle.read().split()
             return len(parts) <= 2 or parts[2] != "Z"
     except OSError:
         return True

@@ -220,10 +220,10 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
             first_pic = os.path.join(tmp, "first.png")
             second_pic = os.path.join(tmp, "second.png")
-            with open(first_pic, "wb") as f:
-                f.write(b"first-picture")
-            with open(second_pic, "wb") as f:
-                f.write(b"second-picture")
+            with open(first_pic, "wb") as file_handle:
+                file_handle.write(b"first-picture")
+            with open(second_pic, "wb") as file_handle:
+                file_handle.write(b"second-picture")
 
             class _UploadBot(_ReplyDeliveryBot):
                 def __init__(self, workspace_path: str) -> None:
@@ -282,8 +282,8 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             workspace.CONFIG_DIR = tmp
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
             pic = os.path.join(tmp, "pic.png")
-            with open(pic, "wb") as f:
-                f.write(b"picture")
+            with open(pic, "wb") as file_handle:
+                file_handle.write(b"picture")
 
             class _StuckUploadBot(_ReplyDeliveryBot):
                 def __init__(self, workspace_path: str) -> None:

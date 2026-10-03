@@ -110,49 +110,49 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
     tool, and the signal adapter.
     """
     try:
-        with open(path, "rb") as f:
-            head = f.read(64 * 1024)
+        with open(path, "rb") as file_handle:
+            head = file_handle.read(64 * 1024)
     except OSError:
         return None
     if len(head) < 16:
         return None
     try:
-        # PNG: 8-byte signature + IHDR chunk with big-endian w/h.
+        # PNG: 8-byte signature + IHDR chunk with big-endian width/height.
         if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
-            w, h = struct.unpack(">II", head[16:24])
-            if 0 < w <= 100000 and 0 < h <= 100000:
-                return (w, h, "PNG")
-        # GIF: "GIF87a"/"GIF89a" + little-endian w/h.
+            width, height = struct.unpack(">II", head[16:24])
+            if 0 < width <= 100000 and 0 < height <= 100000:
+                return (width, height, "PNG")
+        # GIF: "GIF87a"/"GIF89a" + little-endian width/height.
         elif head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
-            w, h = struct.unpack("<HH", head[6:10])
-            if w and h:
-                return (w, h, "GIF")
-        # JPEG: scan for SOF0-SOF3 markers carrying big-endian h/w.
+            width, height = struct.unpack("<HH", head[6:10])
+            if width and height:
+                return (width, height, "GIF")
+        # JPEG: scan for SOF0-SOF3 markers carrying big-endian height/width.
         elif head[:2] == b"\xff\xd8":
-            i = 2
-            while i + 9 < len(head):
-                if head[i] != 0xFF:
-                    i += 1
+            offset = 2
+            while offset + 9 < len(head):
+                if head[offset] != 0xFF:
+                    offset += 1
                     continue
-                marker = head[i + 1]
+                marker = head[offset + 1]
                 if marker in (0xC0, 0xC1, 0xC2, 0xC3):
-                    h = (head[i + 5] << 8) | head[i + 6]
-                    w = (head[i + 7] << 8) | head[i + 8]
-                    if w and h:
-                        return (w, h, "JPEG")
+                    height = (head[offset + 5] << 8) | head[offset + 6]
+                    width = (head[offset + 7] << 8) | head[offset + 8]
+                    if width and height:
+                        return (width, height, "JPEG")
                     return None
                 if marker in (0xD8, 0xD9, 0x00, 0x01) or 0xD0 <= marker <= 0xD7:
-                    i += 2
+                    offset += 2
                     continue
-                seg_len = (head[i + 2] << 8) | head[i + 3]
+                seg_len = (head[offset + 2] << 8) | head[offset + 3]
                 if seg_len < 2:
                     return None
-                i += 2 + seg_len
-        # BMP: "BM" + little-endian w/h at offset 18.
+                offset += 2 + seg_len
+        # BMP: "BM" + little-endian width/height at offset 18.
         elif head[:2] == b"BM" and len(head) >= 26:
-            w, h = struct.unpack("<ii", head[18:26])
-            if w and h:
-                return (abs(w), abs(h), "BMP")
+            width, height = struct.unpack("<ii", head[18:26])
+            if width and height:
+                return (abs(width), abs(height), "BMP")
     except (OSError, struct.error):
         return None
     return None
@@ -189,12 +189,12 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
     """
     fd, tmp_path = tempfile.mkstemp(dir=tmp_dir, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        with os.fdopen(fd, "w", encoding="utf-8") as file_handle:
+            json.dump(data, file_handle, indent=2)
             # fsync before rename: a torn write otherwise reads as
             # "absent" and resets to defaults.
-            f.flush()
-            os.fsync(f.fileno())
+            file_handle.flush()
+            os.fsync(file_handle.fileno())
         os.replace(tmp_path, target)  # atomic on same filesystem
         _fsync_directory(os.path.dirname(os.path.abspath(target)) or ".")
     except Exception:
@@ -565,8 +565,8 @@ def load_json_object(
     if not os.path.exists(path):
         return {}
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        with open(path, encoding="utf-8") as file_handle:
+            data = json.load(file_handle)
     except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         (log or logger).warning(
             "Corrupt or unreadable %s (%s): %s", label, path, e,
@@ -848,14 +848,14 @@ def _marker_block_slices(text: str, tag: str) -> tuple[slice, slice] | None:
         return None
     open_tag = f"[{tag}]"
     close_tag = f"[/{tag}]"
-    i = text.find(open_tag)
-    if i == -1:
+    open_index = text.find(open_tag)
+    if open_index == -1:
         return None
-    body_start = i + len(open_tag)
-    j = text.find(close_tag, body_start)
-    if j == -1:
+    body_start = open_index + len(open_tag)
+    close_index = text.find(close_tag, body_start)
+    if close_index == -1:
         return None
-    return slice(i, j + len(close_tag)), slice(body_start, j)
+    return slice(open_index, close_index + len(close_tag)), slice(body_start, close_index)
 
 
 def extract_marker_block(text: str, tag: str) -> str | None:

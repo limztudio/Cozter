@@ -265,7 +265,7 @@ def migrate_current_workspace(
         path = source_current.get(str(bot_id))
     if not path and source_bot_prefixes:
         for bot_id, candidate in source_current.items():
-            if any(str(bot_id).startswith(p) for p in source_bot_prefixes):
+            if any(str(bot_id).startswith(prefix) for prefix in source_bot_prefixes):
                 path = candidate
                 break
     if not isinstance(path, str) or not path:
@@ -655,28 +655,28 @@ def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
     differ from the chat backend - users may want, say, codex to run
     chat turns while a cheap local llama handles compaction.
     """
-    s = _load_settings(workspace_path)
-    backend_name = _coerce_backend_name(s.get("backend"))
+    settings = _load_settings(workspace_path)
+    backend_name = _coerce_backend_name(settings.get("backend"))
     summary_backend = _coerce_backend_name(
-        s.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
+        settings.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
         allowed=DIRECT_BACKENDS,
     )
     return (
         backend_name,
-        _resolve_model(s, backend_name, workspace_path=workspace_path),
+        _resolve_model(settings, backend_name, workspace_path=workspace_path),
         _resolve_model(
-            s, summary_backend, SUMMARY_SCOPE, workspace_path=workspace_path,
+            settings, summary_backend, SUMMARY_SCOPE, workspace_path=workspace_path,
         ),
-        _clamp_permission(_coerce_permission(s.get("permission"))),
+        _clamp_permission(_coerce_permission(settings.get("permission"))),
         summary_backend,
     )
 
 
 def get_model(workspace_path: str) -> str:
-    s = _load_settings(workspace_path)
+    settings = _load_settings(workspace_path)
     return _resolve_model(
-        s,
-        _coerce_backend_name(s.get("backend")),
+        settings,
+        _coerce_backend_name(settings.get("backend")),
         workspace_path=workspace_path,
     )
 
@@ -696,13 +696,13 @@ def set_model(workspace_path: str, model: str) -> None:
 
 def get_summary_model(workspace_path: str) -> str:
     """Summary model scoped to the summary backend (not the chat backend)."""
-    s = _load_settings(workspace_path)
+    settings = _load_settings(workspace_path)
     summary_backend = _coerce_backend_name(
-        s.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
+        settings.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
         allowed=DIRECT_BACKENDS,
     )
     return _resolve_model(
-        s, summary_backend, SUMMARY_SCOPE, workspace_path=workspace_path,
+        settings, summary_backend, SUMMARY_SCOPE, workspace_path=workspace_path,
     )
 
 
@@ -757,10 +757,10 @@ def set_flexible_backend_name(
 
 def get_flexible_model(workspace_path: str, tier: str) -> str:
     _validate_tier(tier)
-    s = _load_settings(workspace_path)
+    settings = _load_settings(workspace_path)
     return _resolve_model(
-        s,
-        _resolve_flexible_backend(s, tier),
+        settings,
+        _resolve_flexible_backend(settings, tier),
         _flexible_scope(tier),
         workspace_path=workspace_path,
     )
@@ -786,14 +786,14 @@ def get_flexible_run_config(
     workspace_path: str,
 ) -> dict[str, tuple[str, str]]:
     """Return ``{tier: (agent, model)}`` for every flexible tier."""
-    s = _load_settings(workspace_path)
+    settings = _load_settings(workspace_path)
     resolved: dict[str, tuple[str, str]] = {}
     for tier in FLEXIBLE_TIERS:
-        backend_name = _resolve_flexible_backend(s, tier)
+        backend_name = _resolve_flexible_backend(settings, tier)
         resolved[tier] = (
             backend_name,
             _resolve_model(
-                s,
+                settings,
                 backend_name,
                 _flexible_scope(tier),
                 workspace_path=workspace_path,

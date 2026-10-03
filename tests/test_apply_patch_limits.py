@@ -55,16 +55,16 @@ class ApplyPatchLimitsTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "data.txt")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("old value\n")
+            with open(path, "w", encoding="utf-8") as file_handle:
+                file_handle.write("old value\n")
 
             with mock.patch.object(
                 apply_patch_module, "_MAX_FILE_BYTES", 8,
             ):
                 out = self._run(tmp, patch)
 
-            with open(path, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "old value\n")
+            with open(path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "old value\n")
 
         self.assertIn("file exceeds the 8-byte limit", out)
 
@@ -75,16 +75,16 @@ class ApplyPatchLimitsTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "data.txt")
-            with open(path, "wb") as f:
-                f.write(b"old\r\n")
+            with open(path, "wb") as file_handle:
+                file_handle.write(b"old\r\n")
 
             with mock.patch.object(
                 apply_patch_module, "_MAX_FILE_BYTES", 3,
             ):
                 out = self._run(tmp, patch)
 
-            with open(path, "rb") as f:
-                self.assertEqual(f.read(), b"old\r\n")
+            with open(path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"old\r\n")
 
         self.assertIn("file exceeds the 3-byte limit", out)
 
@@ -95,16 +95,16 @@ class ApplyPatchLimitsTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "data.txt")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("one\ntwo\nthree\n")
+            with open(path, "w", encoding="utf-8") as file_handle:
+                file_handle.write("one\ntwo\nthree\n")
 
             with mock.patch.object(
                 apply_patch_module, "_MAX_FILE_LINES", 2,
             ):
                 out = self._run(tmp, patch)
 
-            with open(path, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "one\ntwo\nthree\n")
+            with open(path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "one\ntwo\nthree\n")
 
         self.assertIn("file exceeds the 2-line limit", out)
 

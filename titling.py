@@ -77,7 +77,7 @@ async def maybe_auto_title(
         if not isinstance(msgs, list):
             return
         if not any(
-            isinstance(m, dict) and m.get("role") == "assistant" for m in msgs
+            isinstance(msg, dict) and msg.get("role") == "assistant" for msg in msgs
         ):
             return
         title = await generate(

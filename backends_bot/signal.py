@@ -854,7 +854,7 @@ class SignalBot(BotPlatform):
         sender_id: str, group_id: str, account_id: str,
     ) -> list[str]:
         return list(
-            dict.fromkeys(x for x in (sender_id, account_id, group_id) if x)
+            dict.fromkeys(source_id for source_id in (sender_id, account_id, group_id) if source_id)
         )
 
     def _group_workspace(self, group_id: str) -> tuple[str, str] | None:
@@ -1076,8 +1076,8 @@ class SignalBot(BotPlatform):
                     duplicate = (
                         bool(entry_id)
                         and any(
-                            isinstance(e, dict) and e.get("id") == entry_id
-                            for e in target_entries
+                            isinstance(entry, dict) and entry.get("id") == entry_id
+                            for entry in target_entries
                         )
                     )
                     if not duplicate:
@@ -1303,30 +1303,30 @@ def _md_to_signal_body_and_spans(
         if length > 0:
             spans.append((start, length, style))
 
-    def parse_inline(src: str) -> None:
-        i = 0
-        while i < len(src):
-            marker = _signal_inline_marker_at(src, i)
+    def parse_inline(inline_src: str) -> None:
+        offset = 0
+        while offset < len(inline_src):
+            marker = _signal_inline_marker_at(inline_src, offset)
             if marker is None:
-                append(src[i])
-                i += 1
+                append(inline_src[offset])
+                offset += 1
                 continue
 
             open_marker, close_marker, style, parse_nested = marker
-            close_at = _find_signal_inline_close(src, close_marker, i)
+            close_at = _find_signal_inline_close(inline_src, close_marker, offset)
             if close_at < 0:
-                append(src[i])
-                i += 1
+                append(inline_src[offset])
+                offset += 1
                 continue
 
             start = pos
-            content = src[i + len(open_marker):close_at]
+            content = inline_src[offset + len(open_marker):close_at]
             if parse_nested:
                 parse_inline(content)
             else:
                 append(content)
             add_span(start, style)
-            i = close_at + len(close_marker)
+            offset = close_at + len(close_marker)
 
     need_newline = False
 
@@ -1387,11 +1387,11 @@ def _find_signal_inline_close(
 ) -> int:
     start = open_index + len(marker)
     if marker in ("*", "_"):
-        i = text.find(marker, start)
-        while i >= 0:
-            if _single_marker_can_close(text, i):
-                return i
-            i = text.find(marker, i + 1)
+        found = text.find(marker, start)
+        while found >= 0:
+            if _single_marker_can_close(text, found):
+                return found
+            found = text.find(marker, found + 1)
         return -1
     return text.find(marker, start)
 
@@ -1429,9 +1429,9 @@ def _signal_style_strings_for_chunk(
     need = max(end for _, end, _ in relevant)
     prefix: list[int] = [0] * (need - chunk_start + 1)
     total = 0
-    for i in range(chunk_start, need):
-        total += 2 if ord(body[i]) > 0xFFFF else 1
-        prefix[i - chunk_start + 1] = total
+    for body_index in range(chunk_start, need):
+        total += 2 if ord(body[body_index]) > 0xFFFF else 1
+        prefix[body_index - chunk_start + 1] = total
     styles: list[str] = []
     for overlap_start, overlap_end, style in relevant:
         utf16_start = prefix[overlap_start - chunk_start]
@@ -1535,12 +1535,12 @@ def _dedupe_group_urls(group_urls: list[str]) -> list[str]:
 
 def _coerce_json_items(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
-        return [x for x in value if isinstance(x, dict)]
+        return [item for item in value if isinstance(item, dict)]
     if isinstance(value, dict):
         for key in ("envelopes", "messages", "results", "groups"):
             nested = value.get(key)
             if isinstance(nested, list):
-                return [x for x in nested if isinstance(x, dict)]
+                return [item for item in nested if isinstance(item, dict)]
         return [value]
     return []
 
@@ -1636,7 +1636,7 @@ def _normalize_group_id(value: Any) -> str:
         isinstance(value, list)
         and value
         and all(
-            isinstance(x, int) and not isinstance(x, bool) for x in value
+            isinstance(item, int) and not isinstance(item, bool) for item in value
         )
     ):
         try:

@@ -29,14 +29,14 @@ class AwaitMarkerTests(unittest.TestCase):
 class AttachmentGuardTests(unittest.TestCase):
     @staticmethod
     def _write_png(path: str) -> None:
-        with open(path, "wb") as f:
-            f.write(b"\x89PNG\r\n\x1a\nplaceholder")
+        with open(path, "wb") as file_handle:
+            file_handle.write(b"\x89PNG\r\n\x1a\nplaceholder")
 
     def test_workspace_file_is_attachable(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             path = os.path.join(ws, "foo.txt")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("hi")
+            with open(path, "w", encoding="utf-8") as file_handle:
+                file_handle.write("hi")
             real = os.path.realpath(path)
             self.assertEqual(agent.attachment_source_path("foo.txt", ws), real)
             self.assertEqual(
@@ -47,8 +47,8 @@ class AttachmentGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as ws, \
                 tempfile.TemporaryDirectory() as outside:
             evil = os.path.join(outside, "evil.txt")
-            with open(evil, "w", encoding="utf-8") as f:
-                f.write("secret")
+            with open(evil, "w", encoding="utf-8") as file_handle:
+                file_handle.write("secret")
             # Outside workspace / untrusted image root -> must be refused.
             self.assertIsNone(agent.attachment_source_path(evil, ws))
             self.assertIsNone(agent.prepare_attachment_path(evil, ws))
@@ -61,11 +61,11 @@ class AttachmentGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as ws, \
                 tempfile.TemporaryDirectory() as outside:
             good = os.path.join(ws, "good.txt")
-            with open(good, "w", encoding="utf-8") as f:
-                f.write("ok")
+            with open(good, "w", encoding="utf-8") as file_handle:
+                file_handle.write("ok")
             evil = os.path.join(outside, "evil.txt")
-            with open(evil, "w", encoding="utf-8") as f:
-                f.write("secret")
+            with open(evil, "w", encoding="utf-8") as file_handle:
+                file_handle.write("secret")
 
             text = f"see [[attach: good.txt]] and [[attach: {evil}]] done"
             cleaned, paths = agent.extract_attachment_sources(text, ws)
@@ -112,8 +112,8 @@ class AttachmentGuardTests(unittest.TestCase):
                 os.environ, {"COZTER_ATTACHMENT_ROOTS": external}, clear=False,
             ):
                 before = agent._snapshot_attachment_images(ws)
-                with open(external_image, "ab") as f:
-                    f.write(b"updated after snapshot")
+                with open(external_image, "ab") as file_handle:
+                    file_handle.write(b"updated after snapshot")
                 detected = agent._collect_new_attachment_images(before, ws)
 
             self.assertEqual(detected, [])
@@ -159,8 +159,8 @@ class AttachmentGuardTests(unittest.TestCase):
                 call_count += 1
                 if call_count == 1:
                     first_destination = destination
-                    with open(destination, "wb") as f:
-                        f.write(b"concurrent image")
+                    with open(destination, "wb") as file_handle:
+                        file_handle.write(b"concurrent image")
                 return original_copy(src, destination)
 
             with (
@@ -176,8 +176,8 @@ class AttachmentGuardTests(unittest.TestCase):
             self.assertIsNotNone(copied)
             assert copied is not None
             self.assertTrue(copied.endswith("-2.png"))
-            with open(first_destination, "rb") as f:
-                self.assertEqual(f.read(), b"concurrent image")
+            with open(first_destination, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"concurrent image")
 
 
 if __name__ == "__main__":

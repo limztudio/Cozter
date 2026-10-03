@@ -82,7 +82,7 @@ class SessionPickerTests(unittest.TestCase):
             "id": "sid",
             "name": "n",
             "summary": "",
-            "long_term": [f"L{i}" for i in range(8)],
+            "long_term": [f"L{line_index}" for line_index in range(8)],
         })
         self.assertLessEqual(len(block), router.ROUTER_PER_SESSION_CHARS)
         self.assertIn("more long-term item(s)", block)

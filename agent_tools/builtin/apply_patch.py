@@ -155,8 +155,8 @@ class ApplyPatchTool(AgentTool):
             return "apply_patch"
         if utf8_byte_limit_exceeded(patch, _MAX_PATCH_BYTES):
             return "apply_patch (patch too large)"
-        n = patch.count("\n+++ ") + (1 if patch.startswith("+++ ") else 0)
-        return f"apply_patch ({n} file{'s' if n != 1 else ''})"
+        file_count = patch.count("\n+++ ") + (1 if patch.startswith("+++ ") else 0)
+        return f"apply_patch ({file_count} file{'s' if file_count != 1 else ''})"
 
 
 # Parsing
@@ -384,8 +384,8 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     # Creation: --- /dev/null
     if fp.old_path is None:
         new_lines: list[str] = []
-        for h in fp.hunks:
-            new_lines.extend(h.new)
+        for hunk in fp.hunks:
+            new_lines.extend(hunk.new)
         out = "\n".join(new_lines)
         if new_lines and _new_file_ends_with_newline(fp.hunks, default=True):
             out += "\n"
@@ -439,9 +439,9 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
         raise _FileLimitError(
             f"file exceeds the {_MAX_FILE_BYTES:,}-byte limit",
         )
-    with open(path, "rb") as f:
+    with open(path, "rb") as file_handle:
         # stat() races growth: keep the read itself bounded.
-        raw = f.read(_MAX_FILE_BYTES + 1)
+        raw = file_handle.read(_MAX_FILE_BYTES + 1)
     if len(raw) > _MAX_FILE_BYTES:
         raise _FileLimitError(
             f"file exceeds the {_MAX_FILE_BYTES:,}-byte limit",
@@ -507,10 +507,10 @@ def _locate(lines: list[str], hunk: _Hunk) -> int | None:
     if not old:
         # Pure insertion: start hint, clamped in-range.
         return min(max(hunk.start - 1, 0), len(lines))
-    n, m = len(lines), len(old)
-    if m > n:
+    line_total, old_total = len(lines), len(old)
+    if old_total > line_total:
         return None
-    hint = min(max(hunk.start - 1, 0), n - m)
+    hint = min(max(hunk.start - 1, 0), line_total - old_total)
     # Exact match: hint first, then a full scan.
     if _matches_at(lines, old, hint):
         return hint
@@ -518,7 +518,7 @@ def _locate(lines: list[str], hunk: _Hunk) -> int | None:
     if exact is not None:
         return exact
     # Fuzzy match: ignore trailing whitespace.
-    old_stripped = [s.rstrip() for s in old]
+    old_stripped = [line_text.rstrip() for line_text in old]
     if _matches_at(lines, old_stripped, hint, strip_trailing=True):
         return hint
     return _find_first(lines, old_stripped, strip_trailing=True)

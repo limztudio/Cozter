@@ -26,7 +26,7 @@ def _run(backend, events: list[dict]) -> AgentResult:
 
 
 def _kinds(result: AgentResult) -> list[str]:
-    return [e.kind for e in result.events]
+    return [event.kind for event in result.events]
 
 
 class ErrorResultTests(unittest.TestCase):
@@ -44,53 +44,53 @@ class CodexParseTests(unittest.TestCase):
         self.backend = CodexBackend()
 
     def test_agent_message_becomes_text(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "item.completed",
              "item": {"type": "agent_message", "text": "hello world"}},
         ])
-        self.assertEqual(r.text, "hello world")
-        self.assertIn("text", _kinds(r))
+        self.assertEqual(result.text, "hello world")
+        self.assertIn("text", _kinds(result))
 
     def test_agent_message_non_string_text_is_skipped(self) -> None:
-        r = _run(self.backend, [{
+        result = _run(self.backend, [{
             "type": "item.completed",
             "item": {"type": "agent_message", "text": {"bad": "shape"}},
         }])
-        self.assertEqual(r.text, "")
-        self.assertEqual(r.events, [])
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.events, [])
 
     def test_command_execution_becomes_tool(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "item.completed", "item": {
                 "type": "command_execution",
                 "command": "ls -la", "exit_code": 0,
                 "aggregated_output": "file.txt",
             }},
         ])
-        self.assertIn("tool", _kinds(r))
-        self.assertIn("ls -la", r.events[0].content)
+        self.assertIn("tool", _kinds(result))
+        self.assertIn("ls -la", result.events[0].content)
 
     def test_file_change_becomes_file(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "item.completed", "item": {
                 "type": "file_change",
                 "changes": [{"path": "a.py", "kind": "modified"}],
             }},
         ])
-        self.assertIn("file", _kinds(r))
-        self.assertIn("a.py", r.events[0].content)
+        self.assertIn("file", _kinds(result))
+        self.assertIn("a.py", result.events[0].content)
 
     def test_file_change_malformed_changes_are_skipped(self) -> None:
         """Schema drift in ``changes`` must not abort the whole turn."""
         for changes in (None, "unexpected", {"path": "a.py"}):
             with self.subTest(changes=changes):
-                r = _run(self.backend, [{
+                result = _run(self.backend, [{
                     "type": "item.completed",
                     "item": {"type": "file_change", "changes": changes},
                 }])
-                self.assertEqual(r.events, [])
+                self.assertEqual(result.events, [])
 
-        r = _run(self.backend, [{
+        result = _run(self.backend, [{
             "type": "item.completed",
             "item": {
                 "type": "file_change",
@@ -99,26 +99,26 @@ class CodexParseTests(unittest.TestCase):
                 }],
             },
         }])
-        self.assertEqual(len(r.events), 1)
-        self.assertIn("a.py", r.events[0].content)
+        self.assertEqual(len(result.events), 1)
+        self.assertIn("a.py", result.events[0].content)
 
     def test_turn_failed_sets_error(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "turn.failed", "error": {"message": "boom"}},
         ])
-        self.assertEqual(r.error, "boom")
+        self.assertEqual(result.error, "boom")
         self.assertTrue(
-            any(e.kind == "text" and "boom" in e.content for e in r.events)
+            any(event.kind == "text" and "boom" in event.content for event in result.events)
         )
 
     def test_late_turn_failed_never_overwrites_the_answer(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "item.completed",
              "item": {"type": "agent_message", "text": "hello world"}},
             {"type": "turn.failed", "error": {"message": "boom"}},
         ])
-        self.assertEqual(r.text, "hello world")
-        self.assertEqual(r.error, "boom")
+        self.assertEqual(result.text, "hello world")
+        self.assertEqual(result.error, "boom")
 
     def test_extract_agent_text_ignores_non_string_payloads(self) -> None:
         self.assertIsNone(self.backend.extract_agent_text({
@@ -135,67 +135,67 @@ class CodexParseTests(unittest.TestCase):
 
     def test_stream_error_sets_error(self) -> None:
         """Codex can emit this and still exit 0, so nothing else catches it."""
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "error", "message": "usage limit reached"},
         ])
-        self.assertEqual(r.error, "usage limit reached")
-        self.assertIn("usage limit reached", r.text)
+        self.assertEqual(result.error, "usage limit reached")
+        self.assertIn("usage limit reached", result.text)
 
     def test_a_recovered_stream_error_still_yields_the_answer(self) -> None:
         """A retried error must not bury the reply the model went on to give."""
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "error", "message": "transient hiccup"},
             {"type": "item.completed",
              "item": {"type": "agent_message", "text": "hello world"}},
         ])
-        self.assertEqual(r.text, "hello world")
+        self.assertEqual(result.text, "hello world")
 
     def test_a_late_stream_error_never_overwrites_the_answer(self) -> None:
         """An error trailing the reply is recorded, not shown in its place."""
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "item.completed",
              "item": {"type": "agent_message", "text": "hello world"}},
             {"type": "error", "message": "disconnected while closing"},
         ])
-        self.assertEqual(r.text, "hello world")
-        self.assertEqual(r.error, "disconnected while closing")
+        self.assertEqual(result.text, "hello world")
+        self.assertEqual(result.error, "disconnected while closing")
 
     def test_late_malformed_stream_error_is_normalized(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "item.completed",
              "item": {"type": "agent_message", "text": "hello world"}},
             {"type": "error", "message": {"detail": "disconnected"}},
         ])
-        self.assertEqual(r.text, "hello world")
-        self.assertEqual(r.error, "Unknown error")
+        self.assertEqual(result.text, "hello world")
+        self.assertEqual(result.error, "Unknown error")
 
     def test_turn_completed_captures_usage(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "turn.completed", "usage": {
                 "input_tokens": 12470, "cached_input_tokens": 9600,
                 "output_tokens": 28,
             }},
         ])
-        assert r.usage is not None
-        self.assertEqual(r.usage["input_tokens"], 12470)
-        self.assertEqual(r.usage["output_tokens"], 28)
+        assert result.usage is not None
+        self.assertEqual(result.usage["input_tokens"], 12470)
+        self.assertEqual(result.usage["output_tokens"], 28)
 
     def test_malformed_item_null_does_not_crash(self) -> None:
         """A present-but-null ``item`` must not raise AttributeError."""
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "item.completed", "item": None},
         ])
         # No text captured, no crash; the malformed line is simply ignored.
-        self.assertEqual(r.text, "")
-        self.assertEqual(r.events, [])
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.events, [])
 
     def test_malformed_item_non_dict_does_not_crash(self) -> None:
         """A non-object ``item`` must be tolerated, not crash the turn."""
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "item.completed", "item": "unexpected"},
         ])
-        self.assertEqual(r.text, "")
-        self.assertEqual(r.events, [])
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.events, [])
 
 
 class ClaudeCodeParseTests(unittest.TestCase):
@@ -203,30 +203,30 @@ class ClaudeCodeParseTests(unittest.TestCase):
         self.backend = ClaudeCodeBackend()
 
     def test_assistant_text_block(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant", "message": {"content": [
                 {"type": "text", "text": "hi there"},
             ]}},
         ])
-        self.assertEqual(r.text, "hi there")
+        self.assertEqual(result.text, "hi there")
 
     def test_assistant_text_block_non_string_text_is_skipped(self) -> None:
-        r = _run(self.backend, [{
+        result = _run(self.backend, [{
             "type": "assistant",
             "message": {"content": [{"type": "text", "text": []}]},
         }])
-        self.assertEqual(r.text, "")
-        self.assertEqual(r.events, [])
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.events, [])
 
     def test_assistant_non_dict_block_is_skipped(self) -> None:
         """A bare-string content entry must not raise during parsing."""
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant", "message": {"content": [
                 "raw string block",
                 {"type": "text", "text": "ok"},
             ]}},
         ])
-        self.assertEqual(r.text, "ok")
+        self.assertEqual(result.text, "ok")
 
     def test_assistant_malformed_message_shapes_are_skipped(self) -> None:
         """Unexpected assistant envelopes must not abort the stream."""
@@ -239,32 +239,32 @@ class ClaudeCodeParseTests(unittest.TestCase):
         )
         for message in malformed_messages:
             with self.subTest(message=message):
-                r = _run(self.backend, [{
+                result = _run(self.backend, [{
                     "type": "assistant", "message": message,
                 }])
-                self.assertEqual(r.events, [])
+                self.assertEqual(result.events, [])
                 self.assertIsNone(self.backend.extract_agent_text({
                     "type": "assistant", "message": message,
                 }))
 
     def test_assistant_bare_string_content_is_text(self) -> None:
         event = {"type": "assistant", "message": {"content": "hello"}}
-        r = _run(self.backend, [event])
-        self.assertEqual(r.text, "hello")
+        result = _run(self.backend, [event])
+        self.assertEqual(result.text, "hello")
         self.assertEqual(self.backend.extract_agent_text(event), "hello")
 
     def test_assistant_tool_use_bash(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "name": "Bash",
                  "input": {"command": "pytest"}},
             ]}},
         ])
-        self.assertIn("tool", _kinds(r))
-        self.assertIn("pytest", r.events[0].content)
+        self.assertIn("tool", _kinds(result))
+        self.assertIn("pytest", result.events[0].content)
 
     def test_paired_background_bash_result_records_task(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant", "message": {"content": [{
                 "type": "tool_use", "id": "tool-bg", "name": "Bash",
                 "input": {"command": 'claude --bg "run checks"'},
@@ -276,12 +276,12 @@ class ClaudeCodeParseTests(unittest.TestCase):
             }]}},
         ])
         self.assertEqual(
-            [(task.backend_name, task.task_id) for task in r.detached_tasks],
+            [(task.backend_name, task.task_id) for task in result.detached_tasks],
             [("claude_code", "048e1065")],
         )
 
     def test_unpaired_background_marker_is_not_trusted(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant", "message": {"content": [{
                 "type": "tool_use", "id": "ordinary", "name": "Bash",
                 "input": {"command": "echo backgrounded"},
@@ -291,27 +291,27 @@ class ClaudeCodeParseTests(unittest.TestCase):
                 "content": "backgrounded · 048e1065",
             }]}},
         ])
-        self.assertEqual(r.detached_tasks, [])
+        self.assertEqual(result.detached_tasks, [])
 
     def test_assistant_tool_use_file(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "name": "Write",
                  "input": {"file_path": "/ws/x.py"}},
             ]}},
         ])
-        self.assertIn("file", _kinds(r))
-        self.assertIn("x.py", r.events[0].content)
+        self.assertIn("file", _kinds(result))
+        self.assertIn("x.py", result.events[0].content)
 
     def test_assistant_file_tool_non_string_path_does_not_crash(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "name": "Write",
                  "input": {"file_path": ["/ws/x.py"]}},
             ]}},
         ])
-        self.assertEqual(_kinds(r), ["file"])
-        self.assertIn("?", r.events[0].content)
+        self.assertEqual(_kinds(result), ["file"])
+        self.assertIn("?", result.events[0].content)
 
     def test_extract_agent_text_joins_multiple_text_blocks(self) -> None:
         event = {"type": "assistant", "message": {"content": [
@@ -324,43 +324,43 @@ class ClaudeCodeParseTests(unittest.TestCase):
         )
 
     def test_result_terminal_text_fallback(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "result", "subtype": "success", "result": "done"},
         ])
-        self.assertEqual(r.text, "done")
+        self.assertEqual(result.text, "done")
 
     def test_result_error_sets_error(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "result", "is_error": True, "error": "nope"},
         ])
-        self.assertEqual(r.error, "nope")
+        self.assertEqual(result.error, "nope")
 
     def test_late_result_error_preserves_streamed_text(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant", "message": {"content": [
                 {"type": "text", "text": "hi there"},
             ]}},
             {"type": "result", "is_error": True, "error": "nope"},
         ])
-        self.assertEqual(r.text, "hi there")
-        self.assertEqual(r.error, "nope")
+        self.assertEqual(result.text, "hi there")
+        self.assertEqual(result.error, "nope")
 
     def test_result_error_with_non_text_message_is_normalized(self) -> None:
-        r = _run(self.backend, [{
+        result = _run(self.backend, [{
             "type": "result", "is_error": True,
             "error": {"detail": "nope"},
         }])
-        self.assertEqual(r.error, "Unknown error")
+        self.assertEqual(result.error, "Unknown error")
 
     def test_result_captures_usage_and_cost(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "result", "subtype": "success", "result": "done",
              "usage": {"input_tokens": 100, "output_tokens": 50},
              "total_cost_usd": 0.0123},
         ])
-        assert r.usage is not None
-        self.assertEqual(r.usage["input_tokens"], 100)
-        self.assertEqual(r.usage["total_cost_usd"], 0.0123)
+        assert result.usage is not None
+        self.assertEqual(result.usage["input_tokens"], 100)
+        self.assertEqual(result.usage["total_cost_usd"], 0.0123)
 
 
 class CopilotParseTests(unittest.TestCase):
@@ -368,25 +368,25 @@ class CopilotParseTests(unittest.TestCase):
         self.backend = CopilotBackend()
 
     def test_tool_use_event(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "tool_use", "name": "bash",
              "input": {"command": "echo hi"}},
         ])
-        self.assertIn("tool", _kinds(r))
+        self.assertIn("tool", _kinds(result))
 
     def test_file_change_event(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "file_change", "path": "b.py", "action": "modified"},
         ])
-        self.assertIn("file", _kinds(r))
-        self.assertIn("b.py", r.events[0].content)
+        self.assertIn("file", _kinds(result))
+        self.assertIn("b.py", result.events[0].content)
 
     def test_assistant_text(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant_message", "role": "assistant",
              "text": "answer"},
         ])
-        self.assertEqual(r.text, "answer")
+        self.assertEqual(result.text, "answer")
 
     def test_current_cli_nested_assistant_message(self) -> None:
         """Copilot CLI 1.0.70 wraps final output under ``data.content``."""
@@ -394,40 +394,40 @@ class CopilotParseTests(unittest.TestCase):
             "type": "assistant.message",
             "data": {"content": "answer"},
         }
-        r = _run(self.backend, [event])
-        self.assertEqual(r.text, "answer")
+        result = _run(self.backend, [event])
+        self.assertEqual(result.text, "answer")
         # Internal calls (plan/merge/compact) use this path instead of parse_event.
         self.assertEqual(self.backend.extract_agent_text(event), "answer")
 
     def test_current_cli_uses_final_message_not_partial_deltas(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant.message_delta",
              "data": {"deltaContent": "ans"}},
             {"type": "assistant.message", "data": {"content": "answer"}},
         ])
-        self.assertEqual(r.text, "answer")
-        self.assertEqual([event.content for event in r.events], ["answer"])
+        self.assertEqual(result.text, "answer")
+        self.assertEqual([event.content for event in result.events], ["answer"])
 
     def test_error_sets_error(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "error", "message": "bad"},
         ])
-        self.assertEqual(r.error, "bad")
+        self.assertEqual(result.error, "bad")
 
     def test_late_error_preserves_streamed_text(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant_message", "role": "assistant",
              "text": "answer"},
             {"type": "error", "message": "bad"},
         ])
-        self.assertEqual(r.text, "answer")
-        self.assertEqual(r.error, "bad")
+        self.assertEqual(result.text, "answer")
+        self.assertEqual(result.error, "bad")
 
     def test_error_with_non_text_message_is_normalized(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "error", "message": ["bad"]},
         ])
-        self.assertEqual(r.error, "Unknown error")
+        self.assertEqual(result.error, "Unknown error")
 
 
 
@@ -439,31 +439,31 @@ class GrokParseTests(unittest.TestCase):
         event = {"type": "assistant", "message": {"content": [
             {"type": "text", "text": "answer"},
         ]}}
-        r = _run(self.backend, [event])
-        self.assertEqual(r.text, "answer")
+        result = _run(self.backend, [event])
+        self.assertEqual(result.text, "answer")
         self.assertEqual(self.backend.extract_agent_text(event), "answer")
 
     def test_tool_use_and_file_change(self) -> None:
-        r = _run(self.backend, [{
+        result = _run(self.backend, [{
             "type": "assistant", "message": {"content": [{
                 "type": "tool_use", "name": "search_replace",
                 "input": {"path": "src/main.py"},
             }]},
         }])
-        self.assertEqual(_kinds(r), ["tool", "file"])
-        self.assertIn("src/main.py", r.events[0].content)
-        self.assertIn("src/main.py", r.events[1].content)
+        self.assertEqual(_kinds(result), ["tool", "file"])
+        self.assertIn("src/main.py", result.events[0].content)
+        self.assertIn("src/main.py", result.events[1].content)
 
     def test_write_tool_is_a_file_change(self) -> None:
-        r = _run(self.backend, [{
+        result = _run(self.backend, [{
             "type": "assistant", "message": {"content": [{
                 "type": "tool_use", "name": "write",
                 "input": {"path": "README.md"},
             }]},
         }])
-        self.assertEqual(_kinds(r), ["tool", "file"])
-        self.assertIn("README.md", r.events[0].content)
-        self.assertIn("README.md", r.events[1].content)
+        self.assertEqual(_kinds(result), ["tool", "file"])
+        self.assertIn("README.md", result.events[0].content)
+        self.assertIn("README.md", result.events[1].content)
 
     def test_terminal_result_fallback_captures_usage_and_cost(self) -> None:
         event = {
@@ -471,16 +471,16 @@ class GrokParseTests(unittest.TestCase):
             "usage": {"input_tokens": 100, "output_tokens": 50},
             "total_cost_usd": 0.0123,
         }
-        r = _run(self.backend, [event])
-        self.assertEqual(r.text, "done")
-        assert r.usage is not None
-        self.assertEqual(r.usage["input_tokens"], 100)
-        self.assertEqual(r.usage["total_cost_usd"], 0.0123)
+        result = _run(self.backend, [event])
+        self.assertEqual(result.text, "done")
+        assert result.usage is not None
+        self.assertEqual(result.usage["input_tokens"], 100)
+        self.assertEqual(result.usage["total_cost_usd"], 0.0123)
         self.assertEqual(self.backend.extract_agent_text(event), "done")
 
     def test_terminal_errors_list_is_shown_to_the_user(self) -> None:
         """Grok Build uses ``errors``, not ``error``, on turn failures."""
-        r = _run(self.backend, [{
+        result = _run(self.backend, [{
             "type": "result",
             "subtype": "error_during_execution",
             "is_error": True,
@@ -489,35 +489,35 @@ class GrokParseTests(unittest.TestCase):
             ],
         }])
         self.assertEqual(
-            r.error,
+            result.error,
             "Couldn't set model 'gpt-5.4': unknown model id.",
         )
-        self.assertIn("unknown model id", r.text)
+        self.assertIn("unknown model id", result.text)
 
     def test_terminal_errors_without_text_stay_normalized(self) -> None:
-        r = _run(self.backend, [{
+        result = _run(self.backend, [{
             "type": "result", "is_error": True,
             "errors": [{"message": "not a supported shape"}],
         }])
-        self.assertEqual(r.error, "Unknown error")
+        self.assertEqual(result.error, "Unknown error")
 
     def test_late_error_preserves_streamed_text(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant", "message": {"content": [
                 {"type": "text", "text": "answer"},
             ]}},
             {"type": "error", "message": "stream closed"},
         ])
-        self.assertEqual(r.text, "answer")
-        self.assertEqual(r.error, "stream closed")
+        self.assertEqual(result.text, "answer")
+        self.assertEqual(result.error, "stream closed")
 
     def test_malformed_assistant_message_is_skipped(self) -> None:
         for message in (None, "bad", [], {"content": None}):
             with self.subTest(message=message):
-                r = _run(self.backend, [{
+                result = _run(self.backend, [{
                     "type": "assistant", "message": message,
                 }])
-                self.assertEqual(r.events, [])
+                self.assertEqual(result.events, [])
                 self.assertIsNone(self.backend.extract_agent_text({
                     "type": "assistant", "message": message,
                 }))
@@ -528,39 +528,39 @@ class LlamaParseTests(unittest.TestCase):
         self.backend = LlamaBackend()
 
     def test_assistant_text(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant_text", "text": "yo"},
         ])
-        self.assertEqual(r.text, "yo")
+        self.assertEqual(result.text, "yo")
 
     def test_tool_use_with_file_action(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "tool_use", "name": "write_file",
              "input": {"path": "c.py"}, "file_action": "write"},
         ])
-        self.assertIn("tool", _kinds(r))
-        self.assertIn("file", _kinds(r))
-        self.assertTrue(any("c.py" in e.content for e in r.events))
+        self.assertIn("tool", _kinds(result))
+        self.assertIn("file", _kinds(result))
+        self.assertTrue(any("c.py" in event.content for event in result.events))
 
     def test_tool_result_is_suppressed(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "tool_result", "name": "read_file", "output": "x"},
         ])
-        self.assertEqual(r.events, [])
+        self.assertEqual(result.events, [])
 
     def test_error_sets_error(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "error", "message": "explode"},
         ])
-        self.assertEqual(r.error, "explode")
+        self.assertEqual(result.error, "explode")
 
     def test_late_error_preserves_streamed_text(self) -> None:
-        r = _run(self.backend, [
+        result = _run(self.backend, [
             {"type": "assistant_text", "text": "yo"},
             {"type": "error", "message": "explode"},
         ])
-        self.assertEqual(r.text, "yo")
-        self.assertEqual(r.error, "explode")
+        self.assertEqual(result.text, "yo")
+        self.assertEqual(result.error, "explode")
 
 
 class NonDictEventTests(unittest.TestCase):

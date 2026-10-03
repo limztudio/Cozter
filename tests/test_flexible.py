@@ -34,7 +34,7 @@ class PlanParsingTests(unittest.TestCase):
         self.assertEqual(plan.understanding, "User wants the retry bug fixed.")
         self.assertIsNone(plan.question)
         self.assertEqual(
-            [(t.tier, t.instruction) for t in plan.subtasks],
+            [(subtask.tier, subtask.instruction) for subtask in plan.subtasks],
             [
                 ("low", "add a validation check"),
                 ("mid", "write unit tests for the helper"),
@@ -46,12 +46,12 @@ class PlanParsingTests(unittest.TestCase):
         plan = flexible.parse_plan(
             "- [high] do the hard thing\n* [low] do the easy thing\n", "req",
         )
-        self.assertEqual([t.tier for t in plan.subtasks], ["high", "low"])
+        self.assertEqual([subtask.tier for subtask in plan.subtasks], ["high", "low"])
 
     def test_subtask_count_is_capped(self) -> None:
         raw = "[PLAN]\n" + "".join(
-            f"{i}. [low] task {i}\n"
-            for i in range(1, flexible.MAX_SUBTASKS + 8)
+            f"{index}. [low] task {index}\n"
+            for index in range(1, flexible.MAX_SUBTASKS + 8)
         ) + "[/PLAN]"
         plan = flexible.parse_plan(raw, "req")
         self.assertEqual(len(plan.subtasks), flexible.MAX_SUBTASKS)
@@ -72,7 +72,7 @@ class PlanParsingTests(unittest.TestCase):
             "[PLAN]\n1. [urgent] nope\n2. [low] yep\n[/PLAN]", "req",
         )
         self.assertEqual(
-            [(t.tier, t.instruction) for t in plan.subtasks], [("low", "yep")],
+            [(subtask.tier, subtask.instruction) for subtask in plan.subtasks], [("low", "yep")],
         )
 
     def test_unparseable_output_falls_back_to_one_strong_task(self) -> None:
@@ -257,12 +257,12 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
         # The workers' own text is internal — it feeds the merge step, and
         # would otherwise be posted to the chat as extra messages.
-        texts = [e.content for e in result.events if e.kind == "text"]
+        texts = [event.content for event in result.events if event.kind == "text"]
         self.assertEqual(texts, ["merged answer"])
         self.assertEqual(result.text, "merged answer")
         # Their tool events still stream through as the turn's visible trace.
         self.assertEqual(
-            len([e for e in result.events if e.kind == "tool"]), 2,
+            len([event for event in result.events if event.kind == "tool"]), 2,
         )
 
     async def test_worker_usage_is_summed_into_one_total(self) -> None:
@@ -589,8 +589,8 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         # Both the planned task and the discovered follow-up ran.
         self.assertEqual(len(calls), 2)
         # Progress shows the growing total, never a stuck denominator.
-        self.assertTrue(any("[1/1]" in s for s in statuses))
-        self.assertTrue(any("[2/2]" in s for s in statuses))
+        self.assertTrue(any("[1/1]" in status for status in statuses))
+        self.assertTrue(any("[2/2]" in status for status in statuses))
         self.assertIn("plan grew to 2 sub-tasks", " ".join(statuses))
         self.assertIn("merged answer", result.text)
 
@@ -600,7 +600,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             "[followup:high] handle edge",
         )
         self.assertEqual(
-            [(s.tier, s.instruction) for s in found],
+            [(subtask.tier, subtask.instruction) for subtask in found],
             [("low", "fix leftover"), ("high", "handle edge")],
         )
         self.assertEqual(flexible.parse_followups("nothing new"), [])
@@ -755,8 +755,8 @@ class CoveragePromptTests(unittest.TestCase):
 
     def test_plan_cap_surfaces_partial_remainder(self) -> None:
         lines = [
-            f"{i + 1}. [{['low', 'mid', 'high'][i % 3]}] task {i + 1}"
-            for i in range(1, flexible.MAX_SUBTASKS + 5)
+            f"{index + 1}. [{['low', 'mid', 'high'][index % 3]}] task {index + 1}"
+            for index in range(1, flexible.MAX_SUBTASKS + 5)
         ]
         plan = flexible.parse_plan(
             "[UNDERSTANDING]\nbig\n[/UNDERSTANDING]\n"
@@ -810,7 +810,7 @@ class CoveragePromptTests(unittest.TestCase):
             (read_file_mod, "ReadFileTool"),
         ):
             tool_cls = getattr(mod, name, None) or getattr(
-                mod, next(k for k in dir(mod) if k.endswith("Tool")),
+                mod, next(key for key in dir(mod) if key.endswith("Tool")),
             )
             self.assertIn("page", tool_cls.description.lower())
 

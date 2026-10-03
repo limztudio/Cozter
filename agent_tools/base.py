@@ -109,7 +109,7 @@ class AgentTool(ABC):
         instance = cls()
         # Idempotent: same-name re-registration replaces (hot-reload safe).
         AgentTool.registry[:] = [
-            t for t in AgentTool.registry if t.name != instance.name
+            tool for tool in AgentTool.registry if tool.name != instance.name
         ]
         AgentTool.registry.append(instance)
 
@@ -504,7 +504,7 @@ def iter_workspace_files(
     skip_dirs = _discovery_skip_dirs(pattern)
 
     for dirpath, dirnames, filenames in os.walk(abs_root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        dirnames[:] = [dirname for dirname in dirnames if dirname not in skip_dirs]
         for filename in filenames:
             fpath = os.path.join(dirpath, filename)
             real = os.path.realpath(fpath)
@@ -520,8 +520,8 @@ def iter_workspace_files(
 def _discovery_skip_dirs(pattern: str) -> set[str]:
     explicit_segments = set(_glob_segments(pattern))
     return {
-        d for d in DISCOVERY_SKIP_DIRS
-        if d not in explicit_segments
+        dirname for dirname in DISCOVERY_SKIP_DIRS
+        if dirname not in explicit_segments
     }
 
 
@@ -620,12 +620,12 @@ def read_text_for_edit(path: str) -> tuple[str, bool] | str:
     corrupt untouched bytes).
     """
     try:
-        with open(path, "rb") as f:
-            if os.fstat(f.fileno()).st_size > _MAX_EDIT_FILE_BYTES:
+        with open(path, "rb") as file_handle:
+            if os.fstat(file_handle.fileno()).st_size > _MAX_EDIT_FILE_BYTES:
                 return _edit_file_too_large_error()
             # stat() races growth: keep the read itself bounded (+1 byte
             # distinguishes an exact-limit file).
-            raw = f.read(_MAX_EDIT_FILE_BYTES + 1)
+            raw = file_handle.read(_MAX_EDIT_FILE_BYTES + 1)
     except OSError as exc:
         return f"could not read file: {exc}"
     if len(raw) > _MAX_EDIT_FILE_BYTES:
@@ -712,10 +712,10 @@ def _write_text_to_fd(fd: int, text: str) -> None:
     call sites report a model-facing message, not a codec traceback.
     """
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as file_handle:
+            file_handle.write(text)
+            file_handle.flush()
+            os.fsync(file_handle.fileno())
     except UnicodeEncodeError as exc:
         raise OSError(f"cannot encode file content as UTF-8: {exc}") from exc
 

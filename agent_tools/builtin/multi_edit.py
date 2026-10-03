@@ -52,14 +52,14 @@ class MultiEditTool(AgentTool):
             return f"File not found: {raw_path}"
 
         # Validate all edits first: no partial application on a late malformed edit.
-        for i, edit in enumerate(edits):
+        for edit_index, edit in enumerate(edits):
             if not isinstance(edit, dict):
-                return f"Edit {i}: must be an object"
+                return f"Edit {edit_index}: must be an object"
             replacement = validate_replacement_strings(
                 edit.get("old_string"), edit.get("new_string"),
             )
             if isinstance(replacement, str):
-                return f"Edit {i}: {replacement}"
+                return f"Edit {edit_index}: {replacement}"
 
         loaded = read_text_for_edit(target)
         if isinstance(loaded, str):
@@ -67,7 +67,7 @@ class MultiEditTool(AgentTool):
         content, uses_crlf = loaded
 
         total_replacements = 0
-        for i, edit in enumerate(edits):
+        for edit_index, edit in enumerate(edits):
             old = edit["old_string"]
             new = edit["new_string"]
             # Same fail-safe as edit_file: only JSON true broadens replacement.
@@ -76,25 +76,25 @@ class MultiEditTool(AgentTool):
                 content, old, new, replace_all=replace_all,
             )
             if count == 0:
-                return f"Edit {i}: old_string not found"
+                return f"Edit {edit_index}: old_string not found"
             if replacements == 0:
                 return (
-                    f"Edit {i}: old_string appears {count} times;"
+                    f"Edit {edit_index}: old_string appears {count} times;"
                     " include more context or set replace_all=true."
                 )
             total_replacements += replacements
 
         write_text_after_edit(target, content, uses_crlf=uses_crlf)
 
-        n = total_replacements
-        rsuffix = "s" if n != 1 else ""
+        replacement_total = total_replacements
+        rsuffix = "s" if replacement_total != 1 else ""
         esuffix = "s" if len(edits) != 1 else ""
         return (
             f"Applied {len(edits)} edit{esuffix}"
-            f" ({n} replacement{rsuffix}) in {raw_path}"
+            f" ({replacement_total} replacement{rsuffix}) in {raw_path}"
         )
 
     def summarize(self, args: dict) -> str:
         edits = args.get("edits") or []
-        n = len(edits) if isinstance(edits, list) else 0
-        return f"{summarize_path('multi_edit', args)} ({n} edits)"
+        edit_total = len(edits) if isinstance(edits, list) else 0
+        return f"{summarize_path('multi_edit', args)} ({edit_total} edits)"

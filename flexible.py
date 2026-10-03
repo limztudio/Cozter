@@ -342,10 +342,10 @@ def build_plan_prompt(context: str, *, collaborative: bool) -> str:
 
 def _render_plan(plan: Plan, *, current: int | None = None) -> str:
     lines = []
-    for i, task in enumerate(plan.subtasks):
-        marker = "  <- your task" if i == current else ""
+    for task_index, task in enumerate(plan.subtasks):
+        marker = "  <- your task" if task_index == current else ""
         lines.append(
-            f"  {i + 1}. [{task.tier}] {task.instruction}{marker}"
+            f"  {task_index + 1}. [{task.tier}] {task.instruction}{marker}"
         )
     return "\n".join(lines)
 
@@ -374,9 +374,9 @@ def build_subtask_prompt(
 
     if results:
         parts.append("\nEarlier reports:")
-        for i, text in enumerate(results):
+        for result_index, text in enumerate(results):
             parts.append(
-                f"\n--- report {i + 1} ---\n"
+                f"\n--- report {result_index + 1} ---\n"
                 f"{_truncate_report(text)}"
             )
 
@@ -433,15 +433,15 @@ def build_merge_prompt(
     parts.append("\n--- reports ---")
     # Lengths may differ (follow-ups append mid-loop); index both sides instead of zip().
     report_count = max(len(plan.subtasks), len(results))
-    for i in range(report_count):
-        task = plan.subtasks[i] if i < len(plan.subtasks) else None
-        text = results[i] if i < len(results) else ""
-        tag = " [BLOCKED]" if i in blocked else ""
+    for report_index in range(report_count):
+        task = plan.subtasks[report_index] if report_index < len(plan.subtasks) else None
+        text = results[report_index] if report_index < len(results) else ""
+        tag = " [BLOCKED]" if report_index in blocked else ""
         header = (
-            f"\n--- {i + 1} [{task.tier}]:"
+            f"\n--- {report_index + 1} [{task.tier}]:"
             f" {task.instruction}{tag} ---\n"
             if task is not None
-            else f"\n--- {i + 1} [unknown]: (no sub-task){tag} ---\n"
+            else f"\n--- {report_index + 1} [unknown]: (no sub-task){tag} ---\n"
         )
         parts.append(
             header + (_truncate_report(text) if text else "(no report)"),
@@ -462,15 +462,15 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
     parts: list[str] = []
     # See build_merge_prompt: index, don't zip, so a length mismatch
     # cannot silently drop reports.
-    for i in range(max(len(plan.subtasks), len(results))):
-        text = results[i] if i < len(results) else ""
+    for coverage_index in range(max(len(plan.subtasks), len(results))):
+        text = results[coverage_index] if coverage_index < len(results) else ""
         if not text:
             continue
-        if i < len(plan.subtasks):
-            instruction = plan.subtasks[i].instruction
+        if coverage_index < len(plan.subtasks):
+            instruction = plan.subtasks[coverage_index].instruction
         else:
             instruction = "(no sub-task)"
-        parts.append(f"**{i + 1}. {instruction}**\n\n{text}")
+        parts.append(f"**{coverage_index + 1}. {instruction}**\n\n{text}")
     return "\n\n".join(parts)
 
 

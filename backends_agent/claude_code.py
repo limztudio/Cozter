@@ -244,8 +244,8 @@ def _local_background_state(
         return None
     path = os.path.join(_claude_home(), "jobs", task_id, "state.json")
     try:
-        with open(path, "rb") as f:
-            raw_state = f.read(_MAX_DETACHED_STATE_BYTES + 1)
+        with open(path, "rb") as file_handle:
+            raw_state = file_handle.read(_MAX_DETACHED_STATE_BYTES + 1)
         if len(raw_state) > _MAX_DETACHED_STATE_BYTES:
             return None
         state = json.loads(raw_state)
@@ -311,8 +311,8 @@ def _transcript_text_from_content(content: object) -> str:
 
 def _iter_bounded_transcript_lines(path: str):
     """Yield complete JSONL records without retaining an unbounded line."""
-    with open(path, "rb") as f:
-        while line := f.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1):
+    with open(path, "rb") as file_handle:
+        while line := file_handle.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1):
             if len(line) <= _MAX_DETACHED_TRANSCRIPT_LINE_BYTES:
                 yield line
                 continue
@@ -321,7 +321,7 @@ def _iter_bounded_transcript_lines(path: str):
             # line.  Discard the rest in equally bounded chunks so a malformed
             # no-newline record cannot make the next fragment look like JSON.
             while not line.endswith(b"\n"):
-                line = f.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1)
+                line = file_handle.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1)
                 if not line:
                     break
 

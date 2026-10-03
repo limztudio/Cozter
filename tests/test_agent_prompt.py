@@ -17,10 +17,10 @@ from Cozter import agent, compaction, session, workspace
 def _messages(n: int) -> list[dict]:
     return [
         {
-            "role": "user" if i % 2 == 0 else "assistant",
-            "content": f"message number {i} " + "x" * 100,
+            "role": "user" if index % 2 == 0 else "assistant",
+            "content": f"message number {index} " + "x" * 100,
         }
-        for i in range(n)
+        for index in range(n)
     ]
 
 
@@ -93,7 +93,7 @@ class ContextBudgetTests(unittest.TestCase):
         """take_recent_lines drops are marked; the model must not see full coverage."""
         data = {
             "summary": "",
-            "long_term": [f"item-{i} " + ("x" * 200) for i in range(20)],
+            "long_term": [f"item-{index} " + ("x" * 200) for index in range(20)],
             "messages": [],
         }
         out = agent._build_contextual_prompt(

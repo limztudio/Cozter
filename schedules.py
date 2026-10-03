@@ -82,9 +82,9 @@ def add_schedule(
     if isinstance(schedule, dict):
         raw_id = schedule.get("id")
         taken = {
-            s.get("id")
-            for s in schedules
-            if isinstance(s, dict) and isinstance(s.get("id"), str)
+            schedule.get("id")
+            for schedule in schedules
+            if isinstance(schedule, dict) and isinstance(schedule.get("id"), str)
         }
         # Duplicate ids strand a stale twin due forever; mint a fresh id per record.
         if not isinstance(raw_id, str) or not raw_id or raw_id in taken:
@@ -104,8 +104,8 @@ def remove_schedule(
     key = str(user_id)
     schedules = _schedule_list(data, key)
     kept = [
-        s for s in schedules
-        if not (isinstance(s, dict) and s.get("id") == schedule_id)
+        schedule for schedule in schedules
+        if not (isinstance(schedule, dict) and schedule.get("id") == schedule_id)
     ]
     if len(kept) == len(schedules):
         return False
@@ -121,8 +121,8 @@ def list_schedules(
     workspace: str, user_id: str | int,
 ) -> list[dict]:
     return [
-        s for s in _schedule_list(_load_all(workspace), user_id)
-        if isinstance(s, dict)
+        schedule for schedule in _schedule_list(_load_all(workspace), user_id)
+        if isinstance(schedule, dict)
     ]
 
 
@@ -152,11 +152,11 @@ def migrate_schedules(
     # Persisted IDs may be hand-edited: never let one malformed record
     # abort the whole migration.
     seen_ids = {
-        schedule_id
-        for s in target
-        if isinstance(s, dict)
-        and isinstance((schedule_id := s.get("id")), str)
-        and schedule_id
+        found_id
+        for schedule in target
+        if isinstance(schedule, dict)
+        and isinstance((found_id := schedule.get("id")), str)
+        and found_id
     }
 
     moved = 0
@@ -228,15 +228,15 @@ def update_schedule_fired(
     key = str(user_id)
     schedules = _schedule_list(data, key)
     claimed: dict | None = None
-    for s in schedules:
-        if not isinstance(s, dict):
+    for schedule in schedules:
+        if not isinstance(schedule, dict):
             continue
-        if s.get("id") == schedule_id:
+        if schedule.get("id") == schedule_id:
             # Stamp every twin: heals legacy duplicates (new ones are
             # already blocked in add_schedule).
-            s["last_fired"] = fired_at
+            schedule["last_fired"] = fired_at
             if claimed is None:
-                claimed = dict(s)
+                claimed = dict(schedule)
     if claimed is None:
         return None
     _save_all(workspace, data)
@@ -256,20 +256,20 @@ def parse_days(text: object) -> list[str]:
     text = text.strip().lower()
     if text == "all":
         return list(DAY_ABBREV)
-    parts = [p.strip() for p in text.split(",") if p.strip()]
+    parts = [part.strip() for part in text.split(",") if part.strip()]
     if not parts:
         return []
     days: list[str] = []
-    for p in parts:
-        if p.isdecimal():
-            n = parse_decimal_int(p)
-            if n is None:
+    for part in parts:
+        if part.isdecimal():
+            day_number = parse_decimal_int(part)
+            if day_number is None:
                 return []
-            if not (1 <= n <= 7):
+            if not (1 <= day_number <= 7):
                 return []
-            days.append(DAY_ABBREV[n - 1])
+            days.append(DAY_ABBREV[day_number - 1])
         else:
-            abbr = p[:3]
+            abbr = part[:3]
             if abbr not in DAY_ABBREV:
                 return []
             days.append(abbr)
@@ -284,13 +284,13 @@ def parse_time(text: object) -> str | None:
     parts = text.split(":")
     if len(parts) != 2:
         return None
-    h = try_parse_int(parts[0])
-    m = try_parse_int(parts[1])
-    if h is None or m is None:
+    hour = try_parse_int(parts[0])
+    minute = try_parse_int(parts[1])
+    if hour is None or minute is None:
         return None
-    if not (0 <= h <= 23 and 0 <= m <= 59):
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
-    return f"{h:02d}:{m:02d}"
+    return f"{hour:02d}:{minute:02d}"
 
 
 def parse_iso(value: object) -> datetime | None:
@@ -323,8 +323,8 @@ def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
     parsed = parse_time(sched.get("time", ""))
     if parsed is None:
         return None
-    h, m = map(int, parsed.split(":"))
-    target = dt_time(h, m)
+    hour, minute = map(int, parsed.split(":"))
+    target = dt_time(hour, minute)
     raw_days = sched.get("days", [])
     if not isinstance(raw_days, list):
         return None

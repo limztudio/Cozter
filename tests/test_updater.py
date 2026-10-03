@@ -39,7 +39,7 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
         return calls
 
     def _pulled(self, calls: list[tuple[str, ...]]) -> bool:
-        return any(c and c[0] == "pull" for c in calls)
+        return any(call and call[0] == "pull" for call in calls)
 
     def test_dirty_tree_skips_pull(self) -> None:
         calls = self._run_fetch_and_pull({

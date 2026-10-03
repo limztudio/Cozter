@@ -59,7 +59,7 @@ _TEXTUAL_TYPE_RE = re.compile(
 )
 
 
-class _RequestRefused(Exception):
+class _RequestRefusedError(Exception):
     """A deterministic refusal (bad target, redirect policy, content)."""
 
 
@@ -127,7 +127,7 @@ async def _request_following_redirects(
             location = response.headers.get("location")
             if status in _REDIRECT_STATUSES and location:
                 if redirects >= _MAX_REDIRECTS:
-                    raise _RequestRefused(
+                    raise _RequestRefusedError(
                         "Error: too many redirects (more than"
                         f" {_MAX_REDIRECTS})",
                     )
@@ -136,7 +136,7 @@ async def _request_following_redirects(
                 )
                 validation_error = validate_public_url(next_url)
                 if validation_error:
-                    raise _RequestRefused(validation_error)
+                    raise _RequestRefusedError(validation_error)
                 # 303 -> GET; browsers also downgrade 301/302 non-GETs.
                 if status == 303 or (
                     status in (301, 302) and current_method != "GET"
@@ -238,7 +238,7 @@ class HttpRequestTool(AgentTool):
                         session, method, url, headers, body,
                     )
                 )
-        except _RequestRefused as exc:
+        except _RequestRefusedError as exc:
             return str(exc)
         except (aiohttp.ClientError, TimeoutError, OSError) as exc:
             return f"Request failed: {exc}"

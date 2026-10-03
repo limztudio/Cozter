@@ -22,7 +22,7 @@ _READ_FILE_SKIP_CHUNK_CHARS = 64 * 1024
 _READ_FILE_MAX_SKIP_CHARS = 16 * 1024 * 1024
 
 
-class _OffsetScanLimitExceeded(Exception):
+class _OffsetScanLimitExceededError(Exception):
     """The requested line offset needs an excessive sequential scan."""
 
 
@@ -106,7 +106,7 @@ class ReadFileTool(AgentTool):
             text, truncated = await asyncio.to_thread(
                 _read_text_range, target, start, count,
             )
-        except _OffsetScanLimitExceeded:
+        except _OffsetScanLimitExceededError:
             return (
                 "Error: offset requires scanning more than "
                 f"{_READ_FILE_MAX_SKIP_CHARS:,} characters; use a smaller "
@@ -138,9 +138,9 @@ def _describe_image_file(target: str, shown_path: object) -> str:
         return f"Read failed: {exc}"
     dims = probe_image_dimensions(target)
     if dims is not None:
-        w, h, fmt = dims
+        width, height, fmt = dims
         return (
-            f"[Image: {shown} is a {w}x{h} {fmt} ({size:,} bytes)."
+            f"[Image: {shown} is a {width}x{height} {fmt} ({size:,} bytes)."
             " Vision-capable backends receive these pixels natively —"
             " describe what is actually in the image.]"
         )
@@ -164,12 +164,12 @@ def _read_text_range(
     if count == 0:
         return "", False
 
-    with open(path, encoding="utf-8", errors="replace") as f:
-        if not _skip_lines(f, start):
+    with open(path, encoding="utf-8", errors="replace") as file_handle:
+        if not _skip_lines(file_handle, start):
             return "", False
 
         if count is None:
-            text = f.read(_READ_FILE_MAX_CHARS + 1)
+            text = file_handle.read(_READ_FILE_MAX_CHARS + 1)
             return (
                 text[:_READ_FILE_MAX_CHARS],
                 len(text) > _READ_FILE_MAX_CHARS,
@@ -179,8 +179,8 @@ def _read_text_range(
         remaining = _READ_FILE_MAX_CHARS
         for _ in range(count):
             if remaining == 0:
-                return "".join(chunks), bool(f.read(1))
-            line = f.readline(remaining + 1)
+                return "".join(chunks), bool(file_handle.read(1))
+            line = file_handle.readline(remaining + 1)
             if not line:
                 break
             if len(line) > remaining:
@@ -195,14 +195,14 @@ def _skip_lines(file, count: int) -> bool:
     """Discard *count* lines without materializing or scanning too much.
 
     Returns False at EOF before the requested offset. Raises
-    :class:`_OffsetScanLimitExceeded` when reaching the offset would require
+    :class:`_OffsetScanLimitExceededError` when reaching the offset would require
     reading more than the bounded skip budget.
     """
     remaining = _READ_FILE_MAX_SKIP_CHARS
     for _ in range(count):
         while True:
             if remaining <= 0:
-                raise _OffsetScanLimitExceeded
+                raise _OffsetScanLimitExceededError
             chunk = file.readline(
                 min(_READ_FILE_SKIP_CHUNK_CHARS, remaining),
             )

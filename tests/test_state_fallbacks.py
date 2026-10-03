@@ -63,7 +63,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 os.path.join(tmp, ".cozter", "settings.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
+            ) as file_handle:
                 json.dump({
                     # "flexible" is a chat agent, never a summary agent (no CLI for that).
                     "backend": "missing",
@@ -71,7 +71,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                     "permission": "bad",
                     "codex_model": 123,
                     "codex_summary_model": "",
-                }, f)
+                }, file_handle)
 
             self.assertEqual(workspace.get_backend_name(tmp), "flexible")
             self.assertEqual(workspace.get_summary_backend_name(tmp), "codex")
@@ -94,12 +94,12 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 os.path.join(tmp, ".cozter", "settings.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
+            ) as file_handle:
                 json.dump({
                     "backend": "codex",
                     "codex_model": 123,
                     "codex_summary_model": "",
-                }, f)
+                }, file_handle)
 
             self.assertEqual(workspace.get_model(tmp), "gpt-5.6-sol")
             self.assertEqual(workspace.get_summary_model(tmp), "gpt-5.6-luna")
@@ -107,8 +107,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
     def test_workspace_index_ignores_non_object_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "workspaces.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump([], f)
+            with open(path, "w", encoding="utf-8") as file_handle:
+                json.dump([], file_handle)
 
             old_path = workspace.WORKSPACE_STATE_PATH
             workspace.WORKSPACE_STATE_PATH = path
@@ -141,13 +141,13 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
     def test_iter_current_workspaces_ignores_malformed_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "workspaces.json")
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "u1": "not-object",
                     "u2": {"current": "not-object"},
                     "u3": {"current": {"bot": "/tmp/ws"}},
                     "u4": {"current": {"bot": ""}},
-                }, f)
+                }, file_handle)
 
             old_path = workspace.WORKSPACE_STATE_PATH
             workspace.WORKSPACE_STATE_PATH = path
@@ -162,11 +162,11 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
     def test_workspace_migration_normalizes_target_current(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "workspaces.json")
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "source": {"current": {"bot": "/tmp/ws"}},
                     "target": {"current": "not-object", "recent": []},
-                }, f)
+                }, file_handle)
 
             old_path = workspace.WORKSPACE_STATE_PATH
             workspace.WORKSPACE_STATE_PATH = path
@@ -176,8 +176,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                         "source", "target", "bot",
                     )
                 )
-                with open(path, encoding="utf-8") as f:
-                    data = json.load(f)
+                with open(path, encoding="utf-8") as file_handle:
+                    data = json.load(file_handle)
                 self.assertEqual(
                     data["target"]["current"]["bot"], "/tmp/ws",
                 )
@@ -193,11 +193,11 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
     def test_max_permission_parsing(self) -> None:
         with temporary_config({"max_permission": "auto"}) as path:
             self.assertEqual(config.get_max_permission(), "auto")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"max_permission": " deny "}, f)
+            with open(path, "w", encoding="utf-8") as file_handle:
+                json.dump({"max_permission": " deny "}, file_handle)
             self.assertEqual(config.get_max_permission(), "deny")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"max_permission": "nonsense"}, f)
+            with open(path, "w", encoding="utf-8") as file_handle:
+                json.dump({"max_permission": "nonsense"}, file_handle)
             self.assertEqual(config.get_max_permission(), "deny")
 
     def test_invalid_max_permission_blocks_daemon_start(self) -> None:
@@ -215,8 +215,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
     def test_non_utf8_config_blocks_daemon_start_cleanly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "config.json")
-            with open(path, "wb") as f:
-                f.write(b"\xff")
+            with open(path, "wb") as file_handle:
+                file_handle.write(b"\xff")
             old_path = config.CONFIG_PATH
             config.CONFIG_PATH = path
             try:
@@ -326,11 +326,11 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             config_dir = os.path.join(tmp, "config")
             path = os.path.join(config_dir, "config.json")
             os.makedirs(config_dir, mode=0o755)
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "telegram_bot_tokens": ["token"],
                     "user_ids": [1],
-                }, f)
+                }, file_handle)
             os.chmod(config_dir, 0o755)
             os.chmod(path, 0o644)
             old_path = config.CONFIG_PATH
@@ -363,8 +363,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                     os.path.join(tmp, ".cozter", "settings.json"),
                     "w",
                     encoding="utf-8",
-                ) as f:
-                    json.dump({"permission": "full"}, f)
+                ) as file_handle:
+                    json.dump({"permission": "full"}, file_handle)
                 self.assertEqual(workspace.get_permission(tmp), "auto")
             finally:
                 config.get_max_permission = orig
@@ -381,8 +381,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 os.path.join(tmp, ".cozter", "settings.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
-                json.dump({"style": "chatty"}, f)
+            ) as file_handle:
+                json.dump({"style": "chatty"}, file_handle)
             self.assertEqual(
                 workspace.get_interaction_style(tmp), "collaborative",
             )
@@ -477,8 +477,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 os.path.join(tmp, ".cozter", "settings.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
-                json.dump({"history_budget": "lots"}, f)
+            ) as file_handle:
+                json.dump({"history_budget": "lots"}, file_handle)
             self.assertEqual(
                 workspace.get_history_budget(tmp),
                 workspace.DEFAULT_HISTORY_BUDGET,
@@ -615,8 +615,8 @@ class ColonyStateFallbackTests(unittest.TestCase):
                 os.path.join(tmp, ".cozter", "colony.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
-                json.dump({"items": "not-list", "compact_count": True}, f)
+            ) as file_handle:
+                json.dump({"items": "not-list", "compact_count": True}, file_handle)
 
             self.assertEqual(colony.get_items(tmp), [])
             self.assertEqual(colony.get_compact_count(tmp), 0)
@@ -629,11 +629,11 @@ class ColonyStateFallbackTests(unittest.TestCase):
                 os.path.join(tmp, ".cozter", "colony.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
+            ) as file_handle:
                 json.dump({
-                    "items": [f"i{i}" for i in range(150)],
+                    "items": [f"i{item_index}" for item_index in range(150)],
                     "compact_count": 0,
-                }, f)
+                }, file_handle)
             got = colony.get_items(tmp)
             self.assertEqual(len(got), colony.COLONY_CAP)
             self.assertEqual(got[0], "i50")
@@ -802,12 +802,12 @@ class ScheduleParserTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, ".cozter"))
             path = os.path.join(tmp, ".cozter", "schedules.json")
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "u1": "not-list",
                     "u2": [{"id": "ok"}, "not-object"],
                     "u3": {"id": "not-list"},
-                }, f)
+                }, file_handle)
 
             self.assertEqual(schedules.list_schedules(tmp, "u1"), [])
             self.assertEqual(schedules.list_schedules(tmp, "u2"), [{"id": "ok"}])
@@ -820,8 +820,8 @@ class ScheduleParserTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, ".cozter"))
             path = os.path.join(tmp, ".cozter", "schedules.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"u1": ["not-object", {"id": "a"}]}, f)
+            with open(path, "w", encoding="utf-8") as file_handle:
+                json.dump({"u1": ["not-object", {"id": "a"}]}, file_handle)
 
             claimed = schedules.update_schedule_fired(
                 tmp, "u1", "a", "2026-01-01T00:00:00",
@@ -844,14 +844,14 @@ class ScheduleParserTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, ".cozter"))
             path = os.path.join(tmp, ".cozter", "schedules.json")
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "legacy": [
                         {"id": ["bad"], "chat_id": "old"},
                         {"id": "valid", "chat_id": "old"},
                     ],
                     "target": [{"id": {"bad": "target"}}],
-                }, f)
+                }, file_handle)
 
             moved = schedules.migrate_schedules(
                 tmp, ["legacy"], "target",
@@ -873,7 +873,7 @@ class ScheduleParserTests(unittest.TestCase):
                 os.path.join(ws, ".cozter", "schedules.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
+            ) as file_handle:
                 json.dump({
                     "u1": [{
                         "days": list(schedules.DAY_ABBREV),
@@ -883,7 +883,7 @@ class ScheduleParserTests(unittest.TestCase):
                         "chat_id": "u1",
                         "user_id": "u1",
                     }],
-                }, f)
+                }, file_handle)
 
             old_path = workspace.WORKSPACE_STATE_PATH
             workspace.WORKSPACE_STATE_PATH = os.path.join(
@@ -905,7 +905,7 @@ class ScheduleParserTests(unittest.TestCase):
                 os.path.join(ws, ".cozter", "schedules.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
+            ) as file_handle:
                 json.dump({
                     "u1": [
                         {
@@ -925,7 +925,7 @@ class ScheduleParserTests(unittest.TestCase):
                             "user_id": "u1",
                         },
                     ],
-                }, f)
+                }, file_handle)
 
             old_path = workspace.WORKSPACE_STATE_PATH
             workspace.WORKSPACE_STATE_PATH = os.path.join(
@@ -995,7 +995,7 @@ class SessionStateFallbackTests(unittest.TestCase):
                 os.path.join(sessions_dir, "abc123.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
+            ) as file_handle:
                 json.dump({
                     "id": "abc123",
                     "name": 7,
@@ -1007,7 +1007,7 @@ class SessionStateFallbackTests(unittest.TestCase):
                     "summary": ["bad"],
                     "long_term": ["keep", 5, ""],
                     "compacted_count": True,
-                }, f)
+                }, file_handle)
 
             loaded = session.load_session(tmp, "abc123")
             self.assertIsNotNone(loaded)
@@ -1036,8 +1036,8 @@ class SessionStateFallbackTests(unittest.TestCase):
                 os.path.join(sessions_dir, "missing-id.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
-                json.dump({"messages": []}, f)
+            ) as file_handle:
+                json.dump({"messages": []}, file_handle)
 
             with self.assertLogs(session.logger, level="WARNING"):
                 self.assertEqual(session.list_sessions(tmp), [])
@@ -1048,13 +1048,13 @@ class SessionStateFallbackTests(unittest.TestCase):
             os.makedirs(sessions_dir)
             with open(
                 os.path.join(tmp, "outside.json"), "w", encoding="utf-8",
-            ) as f:
-                json.dump({"id": "outside", "messages": []}, f)
+            ) as file_handle:
+                json.dump({"id": "outside", "messages": []}, file_handle)
             with open(
                 os.path.join(sessions_dir, "mismatch.json"), "w",
                 encoding="utf-8",
-            ) as f:
-                json.dump({"id": "another", "messages": []}, f)
+            ) as file_handle:
+                json.dump({"id": "another", "messages": []}, file_handle)
 
             # A corrupted pointer must not traverse out of sessions/.
             session.set_last_session(tmp, "user", "safe-id")
@@ -1087,7 +1087,7 @@ class SessionStateFallbackTests(unittest.TestCase):
             data = session.create_session(tmp)
             session.append_messages(
                 tmp, data["id"],
-                [{"role": "user", "content": str(i)} for i in range(5)],
+                [{"role": "user", "content": str(index)} for index in range(5)],
             )
             # Negative retain-count behaves as 0; never inflates compacted_count.
             session.set_summary(tmp, data["id"], "s", keep_recent=-3)
@@ -1099,36 +1099,36 @@ class SessionStateFallbackTests(unittest.TestCase):
 
 class QueueStateFallbackTests(unittest.TestCase):
     def test_queue_entry_selection_and_promotion_preserve_order(self) -> None:
-        q: asyncio.Queue = asyncio.Queue()
+        msg_queue = asyncio.Queue()
         first = ("first", "chat", "first-id", False)
         scheduled = ("scheduled", "chat", "scheduled-id", True)
         last = ("last", "chat", "last-id", False)
         for entry in (first, scheduled, last):
-            q.put_nowait(entry)
+            msg_queue.put_nowait(entry)
 
         self.assertEqual(
-            BotPlatform._pop_next_queue_entry(q, ephemeral_only=True),
+            BotPlatform._pop_next_queue_entry(msg_queue, ephemeral_only=True),
             scheduled,
         )
-        BotPlatform._promote_queue_entry(q, "last-id")
-        self.assertEqual(q.get_nowait(), last)
-        self.assertEqual(q.get_nowait(), first)
+        BotPlatform._promote_queue_entry(msg_queue, "last-id")
+        self.assertEqual(msg_queue.get_nowait(), last)
+        self.assertEqual(msg_queue.get_nowait(), first)
 
     def test_queue_predicates_skip_malformed_entries(self) -> None:
-        q: asyncio.Queue = asyncio.Queue()
-        q.put_nowait(("normal", "chat", "normal-id", False))
-        q.put_nowait(("short",))
-        q.put_nowait(("sched", "chat", "sched-id", True))
+        msg_queue = asyncio.Queue()
+        msg_queue.put_nowait(("normal", "chat", "normal-id", False))
+        msg_queue.put_nowait(("short",))
+        msg_queue.put_nowait(("sched", "chat", "sched-id", True))
         # Well-formed entries resolve; malformed shapes neither match nor crash.
-        self.assertTrue(BotPlatform._has_pending_normal_entries(q))
+        self.assertTrue(BotPlatform._has_pending_normal_entries(msg_queue))
         self.assertEqual(
-            BotPlatform._pop_next_queue_entry(q, ephemeral_only=True),
+            BotPlatform._pop_next_queue_entry(msg_queue, ephemeral_only=True),
             ("sched", "chat", "sched-id", True),
         )
-        self.assertEqual(q.qsize(), 2)
-        BotPlatform._promote_queue_entry(q, "normal-id")
+        self.assertEqual(msg_queue.qsize(), 2)
+        BotPlatform._promote_queue_entry(msg_queue, "normal-id")
         self.assertEqual(
-            q.get_nowait(), ("normal", "chat", "normal-id", False),
+            msg_queue.get_nowait(), ("normal", "chat", "normal-id", False),
         )
 
     def test_platform_state_paths_share_safe_platform_id(self) -> None:
@@ -1167,7 +1167,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                         "already queued", "chat", "existing-id", False,
                     ))
                     path = bot._queue_file_path()
-                    with open(path, "w", encoding="utf-8") as f:
+                    with open(path, "w", encoding="utf-8") as file_handle:
                         json.dump({
                             "u1": [
                                 {
@@ -1182,7 +1182,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                                     "ephemeral": True,
                                 },
                             ],
-                        }, f)
+                        }, file_handle)
 
                     await bot.restore_queues()
                     await asyncio.sleep(0)
@@ -1214,7 +1214,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 workspace.CONFIG_DIR = tmp
                 try:
                     bot = QueueRestoreBot(["u1"])
-                    with open(bot._queue_file_path(), "w", encoding="utf-8") as f:
+                    with open(bot._queue_file_path(), "w", encoding="utf-8") as file_handle:
                         json.dump({
                             "u1": [{
                                 "id": "entry-id",
@@ -1222,7 +1222,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                                 "chat_id": "chat",
                                 "ephemeral": "false",
                             }],
-                        }, f)
+                        }, file_handle)
 
                     await bot.restore_queues()
                     await asyncio.sleep(0)
@@ -1243,14 +1243,14 @@ class QueueStateFallbackTests(unittest.TestCase):
                 workspace.CONFIG_DIR = tmp
                 try:
                     bot = QueueDrainBot()
-                    q = bot._ensure_message_queue("u1")
-                    q.put_nowait((
+                    msg_queue = bot._ensure_message_queue("u1")
+                    msg_queue.put_nowait((
                         "chat waits", "chat", "chat-id", False,
                     ))
-                    q.put_nowait((
+                    msg_queue.put_nowait((
                         "scheduled runs", "chat", "sched-id", True,
                     ))
-                    q.put_nowait((
+                    msg_queue.put_nowait((
                         "chat still waits", "chat", "chat-2-id", False,
                     ))
                     bot._awaiting_answer.add("u1")
@@ -1261,13 +1261,13 @@ class QueueStateFallbackTests(unittest.TestCase):
                         bot.ran, [("scheduled", "scheduled runs")],
                     )
                     self.assertIn("u1", bot._awaiting_answer)
-                    self.assertEqual(q.qsize(), 2)
+                    self.assertEqual(msg_queue.qsize(), 2)
                     self.assertEqual(
-                        q.get_nowait(),
+                        msg_queue.get_nowait(),
                         ("chat waits", "chat", "chat-id", False),
                     )
                     self.assertEqual(
-                        q.get_nowait(),
+                        msg_queue.get_nowait(),
                         ("chat still waits", "chat", "chat-2-id", False),
                     )
                     self.assertFalse(bot._ensure_task_lock("u1").locked())
@@ -1283,11 +1283,11 @@ class QueueStateFallbackTests(unittest.TestCase):
                 workspace.CONFIG_DIR = tmp
                 try:
                     bot = QueueDrainBot()
-                    q = bot._ensure_message_queue("u1")
+                    msg_queue = bot._ensure_message_queue("u1")
                     old_id = await bot._persist_enqueue(
                         "u1", "old queued", "chat",
                     )
-                    q.put_nowait(("old queued", "chat", old_id, False))
+                    msg_queue.put_nowait(("old queued", "chat", old_id, False))
                     lock = bot._ensure_task_lock("u1")
                     await lock.acquire()
                     bot._awaiting_answer.add("u1")
@@ -1305,13 +1305,13 @@ class QueueStateFallbackTests(unittest.TestCase):
                     await asyncio.sleep(0)
 
                     self.assertNotIn("u1", bot._awaiting_answer)
-                    self.assertEqual(q.qsize(), 2)
-                    first = q.get_nowait()
-                    second = q.get_nowait()
+                    self.assertEqual(msg_queue.qsize(), 2)
+                    first = msg_queue.get_nowait()
+                    second = msg_queue.get_nowait()
                     self.assertEqual(first[0], "answer")
                     self.assertEqual(second[0], "old queued")
-                    q.put_nowait(first)
-                    q.put_nowait(second)
+                    msg_queue.put_nowait(first)
+                    msg_queue.put_nowait(second)
 
                     lock.release()
                     await bot._drain_message_queue("u1")
@@ -1335,11 +1335,11 @@ class QueueStateFallbackTests(unittest.TestCase):
                 workspace.CONFIG_DIR = tmp
                 try:
                     bot = QueueDrainBot()
-                    q = bot._ensure_message_queue("u1")
+                    msg_queue = bot._ensure_message_queue("u1")
                     old_id = await bot._persist_enqueue(
                         "u1", "old queued", "chat",
                     )
-                    q.put_nowait(("old queued", "chat", old_id, False))
+                    msg_queue.put_nowait(("old queued", "chat", old_id, False))
                     bot._awaiting_answer.add("u1")
                     bot._update_restart_pending = True
                     ctx = BotContext(
@@ -1355,9 +1355,9 @@ class QueueStateFallbackTests(unittest.TestCase):
                     await bot._dispatch_ai(ctx, "answer")
 
                     self.assertNotIn("u1", bot._awaiting_answer)
-                    self.assertEqual(q.qsize(), 2)
-                    first = q.get_nowait()
-                    second = q.get_nowait()
+                    self.assertEqual(msg_queue.qsize(), 2)
+                    first = msg_queue.get_nowait()
+                    second = msg_queue.get_nowait()
                     self.assertEqual(first[0], "answer")
                     self.assertEqual(second[0], "old queued")
                     persisted = bot._read_queue_file()["u1"]
@@ -1365,8 +1365,8 @@ class QueueStateFallbackTests(unittest.TestCase):
                         [entry["text"] for entry in persisted],
                         ["answer", "old queued"],
                     )
-                    q.put_nowait(first)
-                    q.put_nowait(second)
+                    msg_queue.put_nowait(first)
+                    msg_queue.put_nowait(second)
 
                     bot._update_restart_pending = False
                     await bot._drain_message_queue("u1")
@@ -1592,11 +1592,11 @@ class QueueStateFallbackTests(unittest.TestCase):
                 workspace.CONFIG_DIR = tmp
                 try:
                     bot = QueueDrainBot()
-                    q = bot._ensure_message_queue("u1")
+                    msg_queue = bot._ensure_message_queue("u1")
                     entry_id = await bot._persist_enqueue(
                         "u1", "queued work", "chat",
                     )
-                    q.put_nowait(("queued work", "chat", entry_id, False))
+                    msg_queue.put_nowait(("queued work", "chat", entry_id, False))
                     if pause == "await":
                         bot._awaiting_answer.add("u1")
                     else:
@@ -1605,7 +1605,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     await bot.cmd_stop(bot.make_context("u1", "chat"))
 
                     self.assertNotIn("u1", bot._awaiting_answer)
-                    self.assertTrue(q.empty())
+                    self.assertTrue(msg_queue.empty())
                     self.assertNotIn("u1", bot._read_queue_file())
                     await asyncio.sleep(0)
                     self.assertEqual(bot.ran, [])
@@ -1732,32 +1732,32 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
 
 class RemainderBatchRegressionTests(unittest.TestCase):
     def test_queue_predicates_require_strict_bool_flags(self) -> None:
-        q: asyncio.Queue = asyncio.Queue()
-        q.put_nowait(("t", "c", "id-1", 1))
-        q.put_nowait(("t", "c", "id-2", 0))
-        self.assertFalse(BotPlatform._has_pending_normal_entries(q))
+        msg_queue = asyncio.Queue()
+        msg_queue.put_nowait(("t", "c", "id-1", 1))
+        msg_queue.put_nowait(("t", "c", "id-2", 0))
+        self.assertFalse(BotPlatform._has_pending_normal_entries(msg_queue))
         self.assertIsNone(
-            BotPlatform._pop_next_queue_entry(q, ephemeral_only=True),
+            BotPlatform._pop_next_queue_entry(msg_queue, ephemeral_only=True),
         )
         # Both junk-flag entries stay queued; nothing matched.
-        self.assertEqual(q.qsize(), 2)
+        self.assertEqual(msg_queue.qsize(), 2)
 
     def test_discard_cancelled_entry_ignores_malformed_shapes(self) -> None:
         async def run() -> None:
             bot = QueueRestoreBot(["u1"])
-            q: asyncio.Queue = asyncio.Queue()
-            q.put_nowait(("short",))
-            q.put_nowait(("t", "c", "keep-id", False))
+            msg_queue = asyncio.Queue()
+            msg_queue.put_nowait(("short",))
+            msg_queue.put_nowait(("t", "c", "keep-id", False))
             with mock.patch.object(
                 BotPlatform, "_persist_complete", return_value=None,
             ):
                 await bot._discard_cancelled_dispatch_entry(
-                    "u1", "keep-id", q,
+                    "u1", "keep-id", msg_queue,
                 )
             # The malformed shape survives; only the matching id is gone.
             rest = []
-            while not q.empty():
-                rest.append(q.get_nowait())
+            while not msg_queue.empty():
+                rest.append(msg_queue.get_nowait())
             self.assertEqual(rest, [("short",)])
 
         asyncio.run(run())
@@ -1776,7 +1776,7 @@ class RemainderBatchRegressionTests(unittest.TestCase):
             {"id": "good-id", "created": "2024-01-01"},
             {"id": 7, "created": "2024-01-02"},
         ]
-        valid = {s["id"] for s in sessions_data if isinstance(s.get("id"), str)}
+        valid = {session["id"] for session in sessions_data if isinstance(session.get("id"), str)}
         self.assertEqual(valid, {"good-id"})
 
     def test_colony_bump_never_goes_negative(self) -> None:
@@ -1786,8 +1786,8 @@ class RemainderBatchRegressionTests(unittest.TestCase):
                 os.path.join(tmp, ".cozter", "colony.json"),
                 "w",
                 encoding="utf-8",
-            ) as f:
-                json.dump({"items": [], "compact_count": -5}, f)
+            ) as file_handle:
+                json.dump({"items": [], "compact_count": -5}, file_handle)
             self.assertEqual(colony.bump_compact_count(tmp), 1)
 
     def test_ddg_unwrap_rejects_non_string_values(self) -> None:

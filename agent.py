@@ -309,7 +309,7 @@ def _external_attachment_roots() -> list[str]:
     """Roots where trusted agents may save generated preview images."""
     roots = [_codex_generated_images_dir()]
     extra = os.environ.get(_EXTERNAL_ATTACHMENT_ROOTS_ENV, "")
-    roots.extend(p for p in extra.split(os.pathsep) if p.strip())
+    roots.extend(path_entry for path_entry in extra.split(os.pathsep) if path_entry.strip())
 
     resolved: list[str] = []
     seen: set[str] = set()
@@ -326,8 +326,8 @@ def _external_attachment_roots() -> list[str]:
 
 def _image_extension(path: str) -> str | None:
     try:
-        with open(path, "rb") as f:
-            head = f.read(16)
+        with open(path, "rb") as file_handle:
+            head = file_handle.read(16)
     except OSError:
         return None
     for magic, ext in _IMAGE_MAGIC:
@@ -478,7 +478,7 @@ def _iter_image_files(root: str, *, skip_dirs: bool) -> list[str]:
         for dirpath, dirnames, filenames in os.walk(root):
             if skip_dirs:
                 dirnames[:] = [
-                    d for d in dirnames if d not in _ATTACHMENT_SCAN_SKIP_DIRS
+                    dirname for dirname in dirnames if dirname not in _ATTACHMENT_SCAN_SKIP_DIRS
                 ]
             for filename in filenames:
                 ext = os.path.splitext(filename)[1].lower()
@@ -655,7 +655,7 @@ def _context_quotas(lengths: list[int], budget: int) -> list[int]:
     """Distribute a context budget fairly without wasting unused capacity."""
     quotas = [0] * len(lengths)
     remaining = max(0, budget)
-    active = {i for i, length in enumerate(lengths) if length > 0}
+    active = {index for index, length in enumerate(lengths) if length > 0}
     while remaining and active:
         share = max(1, remaining // len(active))
         progressed = False
@@ -696,11 +696,11 @@ def _relevance_last(items: list, keywords: set[str]) -> list:
     # least one keyword's first character (either case). Non-matching
     # items skip the lowercase copy + regex scan entirely.
     firsts = {kw[0] for kw in keywords if kw}
-    firsts |= {c.swapcase() for c in firsts}
+    firsts |= {char.swapcase() for char in firsts}
     scored = []
     for index, item in enumerate(items):
         text = item if isinstance(item, str) else session.format_msg_line(item)
-        if not any(c in text for c in firsts):
+        if not any(char in text for char in firsts):
             scored.append((0, index, item))
             continue
         words = set(_KEYWORD_RE.findall(text.lower()))
@@ -740,17 +740,17 @@ def _build_contextual_prompt(
         summary = None
     raw_long_term = data.get("long_term") or []
     long_term: list[str] = (
-        [i for i in raw_long_term if isinstance(i, str) and i]
+        [item for item in raw_long_term if isinstance(item, str) and item]
         if isinstance(raw_long_term, list) else []
     )
     raw_messages = data.get("messages", [])
     messages: list[dict] = (
-        [m for m in raw_messages if isinstance(m, dict)]
+        [message for message in raw_messages if isinstance(message, dict)]
         if isinstance(raw_messages, list) else []
     )
     raw_colony = colony_items or []
     colony_list: list[str] = (
-        [i for i in raw_colony if isinstance(i, str) and i]
+        [item for item in raw_colony if isinstance(item, str) and item]
         if isinstance(raw_colony, list) else []
     )
 
@@ -838,7 +838,7 @@ def _build_contextual_prompt(
 
 # Backend execution
 
-class BackendUnavailable(Exception):
+class BackendUnavailableError(Exception):
     """A backend's CLI is not installed on this machine."""
 
     def __init__(self, backend) -> None:
@@ -886,7 +886,7 @@ def _error_result(
     message: str,
     inject_queue: asyncio.Queue[str] | None,
 ) -> AgentResult:
-    """Build a terminal BackendUnavailable result with the queue drained."""
+    """Build a terminal BackendUnavailableError result with the queue drained."""
     result = AgentResult()
     set_error_result(result, message)
     result.session_id = session_id
@@ -966,14 +966,14 @@ async def _drive_backend(
     message appended to *injected*, and the caller should rebuild the
     prompt and drive the backend again.
 
-    Raises :exc:`BackendUnavailable` when the CLI isn't installed.
+    Raises :exc:`BackendUnavailableError` when the CLI isn't installed.
     """
     try:
         proc = await backend.launch(
             workspace_path, full_prompt, model, approval, effort=effort,
         )
     except FileNotFoundError as e:
-        raise BackendUnavailable(backend) from e
+        raise BackendUnavailableError(backend) from e
     except (OSError, RuntimeError) as exc:
         # Surface launch failures as a normal chat result (don't strand
         # queued work).
@@ -1212,7 +1212,7 @@ def _split_attach_markers(text: str) -> tuple[str, list[str]]:
     """
     if not isinstance(text, str):
         return "", []
-    markers = [m.group(0) for m in _ATTACH_RE.finditer(text)]
+    markers = [match.group(0) for match in _ATTACH_RE.finditer(text)]
     if not markers:
         return text, []
     cleaned = _ATTACH_RE.sub("", text)
@@ -1363,9 +1363,9 @@ async def _run_flexible(
     logger.info(
         "Flexible plan: %s",
         ", ".join(
-            f"[{t.tier}] {t.instruction[:60 - len('… [clipped]')]}… [clipped]"
-            if len(t.instruction) > 60 else f"[{t.tier}] {t.instruction}"
-            for t in plan.subtasks
+            f"[{subtask.tier}] {subtask.instruction[:60 - len('… [clipped]')]}… [clipped]"
+            if len(subtask.instruction) > 60 else f"[{subtask.tier}] {subtask.instruction}"
+            for subtask in plan.subtasks
         ),
     )
 
@@ -1378,11 +1378,11 @@ async def _run_flexible(
     queue: list[flexible.Subtask] = list(plan.subtasks)
     done = 0
     total = len(queue)
-    i = -1
+    queue_index = -1
 
     while done < len(queue):
-        i += 1
-        task = queue[i]
+        queue_index += 1
+        task = queue[queue_index]
         tier_backend_name, tier_model = tiers[task.tier]
         tier_backend = backends_agent.get_backend(tier_backend_name)
         await status(
@@ -2070,7 +2070,7 @@ async def _run_turn_impl(
                     injected=injected,
                     close_inject_on_completion=True,
                 )
-        except BackendUnavailable as e:
+        except BackendUnavailableError as e:
             return _error_result(session_id, str(e), inject_queue)
 
         # If we're restarting due to inject, drain pipes and any extra
@@ -2174,7 +2174,7 @@ async def _run_turn_impl(
                         injected=injected,
                         close_inject_on_completion=True,
                     )
-            except BackendUnavailable as e:
+            except BackendUnavailableError as e:
                 return _error_result(session_id, str(e), inject_queue)
             if restarting:
                 await _announce_restart(

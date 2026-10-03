@@ -667,13 +667,13 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 "choices": [{
                     "delta": {
                         "tool_calls": [{
-                            "index": i,
+                            "index": attempt,
                             "function": {"name": "read_file"},
                         }],
                     },
                 }],
             }
-            for i in range(3)
+            for attempt in range(3)
         ]
         with (
             mock.patch.object(oa, "_MAX_TOOL_CALLS_PER_COMPLETION", 2),
@@ -794,7 +794,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
             calls[1]["messages"][-1]["content"],
         )
         self.assertEqual(
-            [e for e in proc.events if e.get("type") == "assistant_text"],
+            [event for event in proc.events if event.get("type") == "assistant_text"],
             [{"type": "assistant_text", "text": "done"}],
         )
 
@@ -823,9 +823,9 @@ class OpenAIToolLimitTests(unittest.TestCase):
         self.assertIn("tools", calls[0])
         self.assertNotIn("tools", calls[1])
         self.assertTrue(any(
-            e.get("type") == "error"
-            and "exceeded 1 tool-call turns" in e.get("message", "")
-            for e in proc.events
+            event.get("type") == "error"
+            and "exceeded 1 tool-call turns" in event.get("message", "")
+            for event in proc.events
         ))
 
     def test_tool_request_fields_apply_only_to_tool_turns(self) -> None:
@@ -1021,13 +1021,13 @@ class OpenAIParallelToolTests(unittest.TestCase):
         # Overlap proves gather (sequential would never exceed 1).
         self.assertGreaterEqual(peak, 2)
         tool_msgs = [
-            m for m in payloads[1]["messages"] if m.get("role") == "tool"
+            msg for msg in payloads[1]["messages"] if msg.get("role") == "tool"
         ]
         self.assertEqual(
-            [m.get("tool_call_id") for m in tool_msgs], ["c1", "c2"],
+            [msg.get("tool_call_id") for msg in tool_msgs], ["c1", "c2"],
         )
         self.assertEqual(
-            [m.get("content") for m in tool_msgs],
+            [msg.get("content") for msg in tool_msgs],
             ["a.txt ok", "b.txt ok"],
         )
 
@@ -1040,9 +1040,9 @@ class OpenAIParallelToolTests(unittest.TestCase):
             if len(payloads) == 1:
                 dup = _tool_call("c-base", "x.txt")
                 batch = []
-                for i in range(4):
+                for attempt in range(4):
                     one = copy.deepcopy(dup)
-                    one["id"] = f"c{i}"
+                    one["id"] = f"c{attempt}"
                     batch.append(one)
                 return "", "", batch
             return "done", "", []
@@ -1063,7 +1063,7 @@ class OpenAIParallelToolTests(unittest.TestCase):
         # Repeat limit is 3: the 4th identical call is skipped, not run.
         self.assertEqual(ran, 3)
         tool_msgs = [
-            m for m in payloads[1]["messages"] if m.get("role") == "tool"
+            msg for msg in payloads[1]["messages"] if msg.get("role") == "tool"
         ]
         self.assertEqual(len(tool_msgs), 4)
         self.assertIn("Skipped", tool_msgs[3].get("content", ""))

@@ -129,8 +129,8 @@ class AgentToolHelperTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "note.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("hello\n")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("hello\n")
 
                 result = await ReadFileTool().run(
                     tmp, {"path": "note.txt", "offset": float("inf")},
@@ -243,7 +243,7 @@ class AgentToolHelperTests(unittest.TestCase):
 
     def test_path_glob_handles_many_repeated_globstars(self) -> None:
         """Repeated ``**`` patterns must not cause exponential matching."""
-        path = "/".join([*(f"part{i}" for i in range(40)), "target.py"])
+        path = "/".join([*(f"part{part_index}" for part_index in range(40)), "target.py"])
         pattern = "/".join([*("**" for _ in range(40)), "target.py"])
 
         self.assertTrue(_path_matches_glob(path, pattern))
@@ -255,8 +255,8 @@ class BuiltinEditToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "note.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("alpha beta")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("alpha beta")
 
                 result = await EditFileTool().run(
                     tmp,
@@ -268,8 +268,8 @@ class BuiltinEditToolTests(unittest.TestCase):
                 )
 
                 self.assertEqual(result, "Replaced 1 occurrence in note.txt")
-                with open(path, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "alpha gamma")
+                with open(path, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "alpha gamma")
 
         asyncio.run(run())
 
@@ -280,8 +280,8 @@ class BuiltinEditToolTests(unittest.TestCase):
                 edit_path = os.path.join(tmp, "edit.txt")
                 multi_path = os.path.join(tmp, "multi.txt")
                 for path in (edit_path, multi_path):
-                    with open(path, "wb") as f:
-                        f.write(b"a\r\n")
+                    with open(path, "wb") as file_handle:
+                        file_handle.write(b"a\r\n")
 
                 edit_result = await EditFileTool().run(
                     tmp,
@@ -305,8 +305,8 @@ class BuiltinEditToolTests(unittest.TestCase):
                 self.assertIn("Replaced", edit_result)
                 self.assertIn("Applied", multi_result)
                 for path in (edit_path, multi_path):
-                    with open(path, "rb") as f:
-                        self.assertEqual(f.read(), b"b\r\nc\r\n")
+                    with open(path, "rb") as file_handle:
+                        self.assertEqual(file_handle.read(), b"b\r\nc\r\n")
 
         asyncio.run(run())
 
@@ -317,8 +317,8 @@ class BuiltinEditToolTests(unittest.TestCase):
                 edit_path = os.path.join(tmp, "edit.txt")
                 multi_path = os.path.join(tmp, "multi.txt")
                 for path in (edit_path, multi_path):
-                    with open(path, "w", encoding="utf-8") as f:
-                        f.write("alpha alpha")
+                    with open(path, "w", encoding="utf-8") as file_handle:
+                        file_handle.write("alpha alpha")
 
                 edit_result = await EditFileTool().run(
                     tmp,
@@ -344,16 +344,16 @@ class BuiltinEditToolTests(unittest.TestCase):
                 self.assertIn("appears 2 times", edit_result)
                 self.assertIn("appears 2 times", multi_result)
                 for path in (edit_path, multi_path):
-                    with open(path, encoding="utf-8") as f:
-                        self.assertEqual(f.read(), "alpha alpha")
+                    with open(path, encoding="utf-8") as file_handle:
+                        self.assertEqual(file_handle.read(), "alpha alpha")
 
         asyncio.run(run())
 
     def test_edit_write_keeps_original_when_atomic_replace_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "note.txt")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("original")
+            with open(path, "w", encoding="utf-8") as file_handle:
+                file_handle.write("original")
 
             with mock.patch(
                 "Cozter.agent_tools.base.os.replace",
@@ -361,8 +361,8 @@ class BuiltinEditToolTests(unittest.TestCase):
             ), self.assertRaisesRegex(OSError, "simulated"):
                 write_text_after_edit(path, "replacement", uses_crlf=False)
 
-            with open(path, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "original")
+            with open(path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "original")
 
 
 class MoveFileToolTests(unittest.TestCase):
@@ -371,8 +371,8 @@ class MoveFileToolTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 source = os.path.join(tmp, "source.txt")
                 destination = os.path.join(tmp, "destination.txt")
-                with open(source, "w", encoding="utf-8") as f:
-                    f.write("contents")
+                with open(source, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("contents")
 
                 result = await MoveFileTool().run(tmp, {
                     "source": "source.txt", "destination": "destination.txt",
@@ -380,8 +380,8 @@ class MoveFileToolTests(unittest.TestCase):
 
                 self.assertEqual(result, "Moved: source.txt -> destination.txt")
                 self.assertFalse(os.path.exists(source))
-                with open(destination, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "contents")
+                with open(destination, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "contents")
 
         asyncio.run(run())
 
@@ -391,8 +391,8 @@ class MoveFileToolTests(unittest.TestCase):
                 target = os.path.join(tmp, "target.txt")
                 source = os.path.join(tmp, "source-link.txt")
                 destination = os.path.join(tmp, "moved-link.txt")
-                with open(target, "w", encoding="utf-8") as f:
-                    f.write("target contents")
+                with open(target, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("target contents")
                 try:
                     os.symlink("target.txt", source)
                 except (NotImplementedError, OSError) as exc:
@@ -409,8 +409,8 @@ class MoveFileToolTests(unittest.TestCase):
                 self.assertFalse(os.path.lexists(source))
                 self.assertTrue(os.path.islink(destination))
                 self.assertEqual(os.readlink(destination), "target.txt")
-                with open(target, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "target contents")
+                with open(target, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "target contents")
 
         asyncio.run(run())
 
@@ -438,15 +438,15 @@ class MoveFileToolTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 source = os.path.join(tmp, "source.txt")
                 destination = os.path.join(tmp, "destination.txt")
-                with open(source, "w", encoding="utf-8") as f:
-                    f.write("source contents")
+                with open(source, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("source contents")
 
                 original_ensure_parent_dir = move_file_mod.ensure_parent_dir
 
                 def create_competing_destination(path: str) -> None:
                     original_ensure_parent_dir(path)
-                    with open(destination, "w", encoding="utf-8") as f:
-                        f.write("concurrent contents")
+                    with open(destination, "w", encoding="utf-8") as file_handle:
+                        file_handle.write("concurrent contents")
 
                 with mock.patch.object(
                     move_file_mod,
@@ -462,10 +462,10 @@ class MoveFileToolTests(unittest.TestCase):
                     result,
                     "Destination already exists: destination.txt",
                 )
-                with open(source, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "source contents")
-                with open(destination, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "concurrent contents")
+                with open(source, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "source contents")
+                with open(destination, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "concurrent contents")
 
         asyncio.run(run())
 
@@ -474,8 +474,8 @@ class MoveFileToolTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 source = os.path.join(tmp, "source.txt")
                 destination = os.path.join(tmp, "destination.txt")
-                with open(source, "w", encoding="utf-8") as f:
-                    f.write("source contents")
+                with open(source, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("source contents")
                 try:
                     os.symlink("missing-target.txt", destination)
                 except (NotImplementedError, OSError) as exc:
@@ -504,8 +504,8 @@ class MoveFileToolTests(unittest.TestCase):
                 source = os.path.join(tmp, "source")
                 destination = os.path.join(tmp, "destination")
                 if source_kind == "file":
-                    with open(source, "w", encoding="utf-8") as f:
-                        f.write("contents")
+                    with open(source, "w", encoding="utf-8") as file_handle:
+                        file_handle.write("contents")
                 else:
                     try:
                         os.symlink("target", source)
@@ -542,8 +542,8 @@ class DeleteFileToolTests(unittest.TestCase):
                     target = os.path.join(tmp, "target")
                     link = os.path.join(tmp, "link")
                     if target_kind == "file":
-                        with open(target, "w", encoding="utf-8") as f:
-                            f.write("target contents")
+                        with open(target, "w", encoding="utf-8") as file_handle:
+                            file_handle.write("target contents")
                     elif target_kind == "directory":
                         os.mkdir(target)
                     try:
@@ -556,8 +556,8 @@ class DeleteFileToolTests(unittest.TestCase):
                     self.assertEqual(result, "Deleted: link")
                     self.assertFalse(os.path.lexists(link))
                     if target_kind == "file":
-                        with open(target, encoding="utf-8") as f:
-                            self.assertEqual(f.read(), "target contents")
+                        with open(target, encoding="utf-8") as file_handle:
+                            self.assertEqual(file_handle.read(), "target contents")
                     elif target_kind == "directory":
                         self.assertTrue(os.path.isdir(target))
                     else:
@@ -573,8 +573,8 @@ class DeleteFileToolTests(unittest.TestCase):
             ):
                 outside_file = os.path.join(outside_path, "outside.txt")
                 link = os.path.join(workspace_path, "escape")
-                with open(outside_file, "w", encoding="utf-8") as f:
-                    f.write("outside contents")
+                with open(outside_file, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("outside contents")
                 try:
                     os.symlink(outside_file, link)
                 except (NotImplementedError, OSError) as exc:
@@ -586,8 +586,8 @@ class DeleteFileToolTests(unittest.TestCase):
                 self.assertIn("escapes workspace", result)
 
                 self.assertTrue(os.path.lexists(link))
-                with open(outside_file, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "outside contents")
+                with open(outside_file, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "outside contents")
 
         asyncio.run(run())
 
@@ -601,15 +601,15 @@ class CopyFileToolTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 source = os.path.join(tmp, "source.txt")
                 destination = os.path.join(tmp, "destination.txt")
-                with open(source, "w", encoding="utf-8") as f:
-                    f.write("source contents")
+                with open(source, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("source contents")
 
                 original_ensure_parent_dir = copy_file_mod.ensure_parent_dir
 
                 def create_competing_destination(path: str) -> None:
                     original_ensure_parent_dir(path)
-                    with open(destination, "w", encoding="utf-8") as f:
-                        f.write("concurrent contents")
+                    with open(destination, "w", encoding="utf-8") as file_handle:
+                        file_handle.write("concurrent contents")
 
                 with mock.patch.object(
                     copy_file_mod,
@@ -625,8 +625,8 @@ class CopyFileToolTests(unittest.TestCase):
                     result,
                     "Destination already exists: destination.txt",
                 )
-                with open(destination, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "concurrent contents")
+                with open(destination, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "concurrent contents")
 
         asyncio.run(run())
 
@@ -654,16 +654,16 @@ class WriteFileToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "note.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("original")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("original")
 
                 result = await WriteFileTool().run(tmp, {
                     "path": "note.txt", "content": "replacement",
                 })
 
                 self.assertEqual(result, "Wrote 11 chars to note.txt")
-                with open(path, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "replacement")
+                with open(path, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "replacement")
 
         asyncio.run(run())
 
@@ -671,8 +671,8 @@ class WriteFileToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "note.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("original")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("original")
 
                 with mock.patch(
                     "Cozter.agent_tools.base.os.replace",
@@ -682,8 +682,8 @@ class WriteFileToolTests(unittest.TestCase):
                         "path": "note.txt", "content": "replacement",
                     })
 
-                with open(path, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "original")
+                with open(path, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "original")
 
         asyncio.run(run())
 
@@ -691,8 +691,8 @@ class WriteFileToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "special")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("unchanged")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("unchanged")
 
                 with mock.patch(
                     "Cozter.agent_tools.builtin.write_file.os.path.isfile",
@@ -703,8 +703,8 @@ class WriteFileToolTests(unittest.TestCase):
                     })
 
                 self.assertIn("not a regular file", result)
-                with open(path, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "unchanged")
+                with open(path, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "unchanged")
 
         asyncio.run(run())
 
@@ -714,8 +714,8 @@ class ReadFileToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "large.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("abcdefghijk")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("abcdefghijk")
 
                 with mock.patch(
                     "Cozter.agent_tools.builtin.read_file"
@@ -740,8 +740,8 @@ class ReadFileToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "large-line.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("skip\n" + "x" * 20 + "\n")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("skip\n" + "x" * 20 + "\n")
 
                 with mock.patch(
                     "Cozter.agent_tools.builtin.read_file"
@@ -764,8 +764,8 @@ class ReadFileToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "many-lines.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("one\ntwo\nthree\n")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("one\ntwo\nthree\n")
 
                 with mock.patch(
                     "Cozter.agent_tools.builtin.read_file"
@@ -801,8 +801,8 @@ class BashToolTests(unittest.TestCase):
                     await task
                 except asyncio.CancelledError:
                     pass
-                with open(pid_path, encoding="utf-8") as f:
-                    child_pid = int(f.read().strip())
+                with open(pid_path, encoding="utf-8") as file_handle:
+                    child_pid = int(file_handle.read().strip())
                 assert wait_for_process_exit(child_pid), (
                     f"child process {child_pid} survived bash tool cancel"
                 )
@@ -829,8 +829,8 @@ class BashToolTests(unittest.TestCase):
                     await task
                 except asyncio.CancelledError:
                     pass
-                with open(pid_path, encoding="utf-8") as f:
-                    child_pid = int(f.read().strip())
+                with open(pid_path, encoding="utf-8") as file_handle:
+                    child_pid = int(file_handle.read().strip())
                 try:
                     assert wait_for_process_exit(child_pid), (
                         f"child process {child_pid} survived after shell exit"
@@ -971,14 +971,14 @@ class DiscoveryToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 os.makedirs(os.path.join(tmp, ".venv", "pkg"))
-                with open(os.path.join(tmp, "app.py"), "w", encoding="utf-8") as f:
-                    f.write("print('app')\n")
+                with open(os.path.join(tmp, "app.py"), "w", encoding="utf-8") as file_handle:
+                    file_handle.write("print('app')\n")
                 with open(
                     os.path.join(tmp, ".venv", "pkg", "hidden.py"),
                     "w",
                     encoding="utf-8",
-                ) as f:
-                    f.write("print('hidden')\n")
+                ) as file_handle:
+                    file_handle.write("print('hidden')\n")
 
                 result = await GlobTool().run(tmp, {"pattern": "**/*.py"})
                 self.assertIn("app.py", result.splitlines())
@@ -995,14 +995,14 @@ class DiscoveryToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 os.makedirs(os.path.join(tmp, ".cozter", "sessions"))
-                with open(os.path.join(tmp, "app.py"), "w", encoding="utf-8") as f:
-                    f.write("needle in app\n")
+                with open(os.path.join(tmp, "app.py"), "w", encoding="utf-8") as file_handle:
+                    file_handle.write("needle in app\n")
                 with open(
                     os.path.join(tmp, ".cozter", "sessions", "state.json"),
                     "w",
                     encoding="utf-8",
-                ) as f:
-                    f.write("needle in state\n")
+                ) as file_handle:
+                    file_handle.write("needle in state\n")
 
                 result = await GrepTool().run(tmp, {"pattern": "needle"})
                 self.assertIn("app.py:1: needle in app", result)
@@ -1021,8 +1021,8 @@ class DiscoveryToolTests(unittest.TestCase):
     def test_grep_skips_non_regular_files_before_opening_them(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "special")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("needle\n")
+            with open(path, "w", encoding="utf-8") as file_handle:
+                file_handle.write("needle\n")
 
             class FifoStat:
                 st_mode = stat.S_IFIFO
@@ -1045,8 +1045,8 @@ class DiscoveryToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "slow.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("a" * 30_000 + "!")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("a" * 30_000 + "!")
                 task = asyncio.create_task(GrepTool().run(
                     tmp, {"pattern": "(a+)+$"},
                 ))
@@ -1064,8 +1064,8 @@ class DiscoveryToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "note.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("needle in a haystack\n")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("needle in a haystack\n")
                 result = await GrepTool().run(
                     tmp, {"pattern": "needle"},
                 )
@@ -1080,8 +1080,8 @@ class DiscoveryToolTests(unittest.TestCase):
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 path = os.path.join(tmp, "note.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("alpha beta beta")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("alpha beta beta")
 
                 result = await MultiEditTool().run(
                     tmp,
@@ -1105,8 +1105,8 @@ class DiscoveryToolTests(unittest.TestCase):
                     "Edit 1: old_string appears 2 times;"
                     " include more context or set replace_all=true.",
                 )
-                with open(path, encoding="utf-8") as f:
-                    self.assertEqual(f.read(), "alpha beta beta")
+                with open(path, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "alpha beta beta")
 
         asyncio.run(run())
 
@@ -1157,8 +1157,8 @@ class ConfirmPermissionGateTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "note.txt")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("builtin content")
+            with open(path, "w", encoding="utf-8") as file_handle:
+                file_handle.write("builtin content")
 
             builtin_result = self._execute(
                 "read_file", {"path": "note.txt"}, "confirm", tmp,
@@ -1246,8 +1246,8 @@ class ConfirmPermissionGateTests(unittest.TestCase):
 
     def test_read_only_schema_excludes_mutating_tools(self) -> None:
         names = {
-            e["function"]["name"]
-            for e in agent_tools.READ_ONLY_TOOL_SCHEMA
+            tool_entry["function"]["name"]
+            for tool_entry in agent_tools.READ_ONLY_TOOL_SCHEMA
         }
         self.assertTrue(names.issubset(agent_tools.READ_ONLY_TOOL_NAMES))
         self.assertIn("read_file", names)
@@ -1432,29 +1432,29 @@ class TreeToolTests(unittest.TestCase):
 class ApplyPatchToolTests(unittest.TestCase):
     @staticmethod
     def _write(path: str, text: str) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
+        with open(path, "w", encoding="utf-8") as file_handle:
+            file_handle.write(text)
 
     def _run(self, ws: str, patch: str) -> str:
         return asyncio.run(ApplyPatchTool().run(ws, {"patch": patch}))
 
     def test_modify(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "foo.txt")
-            self._write(p, "line1\nline2\nline3\n")
+            target_path = os.path.join(tmp, "foo.txt")
+            self._write(target_path, "line1\nline2\nline3\n")
             out = self._run(tmp, (
                 "--- a/foo.txt\n+++ b/foo.txt\n@@ -1,3 +1,3 @@\n"
                 " line1\n-line2\n+line2-changed\n line3\n"
             ))
             self.assertIn("applied", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "line1\nline2-changed\nline3\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "line1\nline2-changed\nline3\n")
 
     def test_modify_preserves_crlf_line_endings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "windows.txt")
-            with open(p, "wb") as f:
-                f.write(b"line1\r\nline2\r\n")
+            target_path = os.path.join(tmp, "windows.txt")
+            with open(target_path, "wb") as file_handle:
+                file_handle.write(b"line1\r\nline2\r\n")
 
             out = self._run(tmp, (
                 "--- a/windows.txt\n+++ b/windows.txt\n"
@@ -1462,14 +1462,14 @@ class ApplyPatchToolTests(unittest.TestCase):
             ))
 
             self.assertIn("applied", out)
-            with open(p, "rb") as f:
-                self.assertEqual(f.read(), b"line1\r\nchanged\r\n")
+            with open(target_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"line1\r\nchanged\r\n")
 
     def test_modify_applies_requested_final_newline_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "newline.txt")
-            with open(p, "wb") as f:
-                f.write(b"old\n")
+            target_path = os.path.join(tmp, "newline.txt")
+            with open(target_path, "wb") as file_handle:
+                file_handle.write(b"old\n")
 
             out = self._run(tmp, (
                 "--- a/newline.txt\n+++ b/newline.txt\n"
@@ -1478,14 +1478,14 @@ class ApplyPatchToolTests(unittest.TestCase):
             ))
 
             self.assertIn("applied", out)
-            with open(p, "rb") as f:
-                self.assertEqual(f.read(), b"tail")
+            with open(target_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"tail")
 
     def test_modify_can_restore_a_final_newline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "newline.txt")
-            with open(p, "wb") as f:
-                f.write(b"old")
+            target_path = os.path.join(tmp, "newline.txt")
+            with open(target_path, "wb") as file_handle:
+                file_handle.write(b"old")
 
             out = self._run(tmp, (
                 "--- a/newline.txt\n+++ b/newline.txt\n"
@@ -1494,8 +1494,8 @@ class ApplyPatchToolTests(unittest.TestCase):
             ))
 
             self.assertIn("applied", out)
-            with open(p, "rb") as f:
-                self.assertEqual(f.read(), b"tail\n")
+            with open(target_path, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"tail\n")
 
     def test_create(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1505,8 +1505,8 @@ class ApplyPatchToolTests(unittest.TestCase):
             ))
             self.assertIn("created", out)
             created = os.path.join(tmp, "new", "dir", "created.txt")
-            with open(created, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "hello\nworld\n")
+            with open(created, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "hello\nworld\n")
 
     def test_create_rejects_an_old_side_for_dev_null(self) -> None:
         """Malformed creation diffs must not silently discard old-side text."""
@@ -1531,24 +1531,24 @@ class ApplyPatchToolTests(unittest.TestCase):
             ))
 
             self.assertIn("created", out)
-            with open(created, "rb") as f:
-                self.assertEqual(f.read(), b"tail")
+            with open(created, "rb") as file_handle:
+                self.assertEqual(file_handle.read(), b"tail")
 
     def test_create_does_not_overwrite_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "existing.txt")
-            self._write(p, "keep me\n")
+            target_path = os.path.join(tmp, "existing.txt")
+            self._write(target_path, "keep me\n")
             out = self._run(tmp, (
                 "--- /dev/null\n+++ b/existing.txt\n"
                 "@@ -0,0 +1 @@\n+replacement\n"
             ))
             self.assertIn("already exists", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "keep me\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "keep me\n")
 
     def test_create_keeps_target_absent_when_atomic_create_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "new.txt")
+            target_path = os.path.join(tmp, "new.txt")
             patch = (
                 "--- /dev/null\n+++ b/new.txt\n"
                 "@@ -0,0 +1 @@\n+new content\n"
@@ -1560,7 +1560,7 @@ class ApplyPatchToolTests(unittest.TestCase):
             ), self.assertRaisesRegex(OSError, "simulated link"):
                 self._run(tmp, patch)
 
-            self.assertFalse(os.path.exists(p))
+            self.assertFalse(os.path.exists(target_path))
 
     @unittest.skipIf(os.name == "nt", "POSIX mode/umask semantics")
     def test_create_uses_normal_file_creation_mode(self) -> None:
@@ -1582,7 +1582,7 @@ class ApplyPatchToolTests(unittest.TestCase):
 
     def test_create_falls_back_when_hard_links_are_unsupported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "new.txt")
+            target_path = os.path.join(tmp, "new.txt")
             with mock.patch(
                 "Cozter.agent_tools.base.os.link",
                 side_effect=OSError(errno.EOPNOTSUPP, "unsupported"),
@@ -1593,20 +1593,20 @@ class ApplyPatchToolTests(unittest.TestCase):
                 ))
 
             self.assertIn("created", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "fallback content\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "fallback content\n")
 
     def test_create_does_not_clobber_concurrent_creator(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "new.txt")
+            target_path = os.path.join(tmp, "new.txt")
             patch = (
                 "--- /dev/null\n+++ b/new.txt\n"
                 "@@ -0,0 +1 @@\n+patch content\n"
             )
 
             def concurrent_create(_source: str, destination: str) -> None:
-                with open(destination, "w", encoding="utf-8") as f:
-                    f.write("other writer\n")
+                with open(destination, "w", encoding="utf-8") as file_handle:
+                    file_handle.write("other writer\n")
                 raise FileExistsError(destination)
 
             with mock.patch(
@@ -1616,64 +1616,64 @@ class ApplyPatchToolTests(unittest.TestCase):
                 out = self._run(tmp, patch)
 
             self.assertIn("already exists", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "other writer\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "other writer\n")
 
     def test_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "gone.txt")
-            self._write(p, "bye\n")
+            target_path = os.path.join(tmp, "gone.txt")
+            self._write(target_path, "bye\n")
             out = self._run(
                 tmp, "--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n",
             )
             self.assertIn("deleted", out)
-            self.assertFalse(os.path.exists(p))
+            self.assertFalse(os.path.exists(target_path))
 
     def test_delete_requires_matching_hunk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "keep.txt")
-            self._write(p, "actual content\n")
+            target_path = os.path.join(tmp, "keep.txt")
+            self._write(target_path, "actual content\n")
             out = self._run(tmp, (
                 "--- a/keep.txt\n+++ /dev/null\n"
                 "@@ -1 +0,0 @@\n-expected content\n"
             ))
             self.assertIn("did not apply", out)
             self.assertIn("not deleted", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "actual content\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "actual content\n")
 
     def test_multi_hunk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "m.txt")
-            self._write(p, "\n".join(f"L{i}" for i in range(1, 11)) + "\n")
+            target_path = os.path.join(tmp, "m.txt")
+            self._write(target_path, "\n".join(f"L{line_index}" for line_index in range(1, 11)) + "\n")
             out = self._run(tmp, (
                 "--- a/m.txt\n+++ b/m.txt\n"
                 "@@ -1,2 +1,2 @@\n L1\n-L2\n+L2x\n"
                 "@@ -9,2 +9,2 @@\n L9\n-L10\n+L10x\n"
             ))
             self.assertIn("2 hunk", out)
-            with open(p, encoding="utf-8") as f:
-                content = f.read()
+            with open(target_path, encoding="utf-8") as file_handle:
+                content = file_handle.read()
             self.assertIn("L2x", content)
             self.assertIn("L10x", content)
             self.assertNotIn("\nL2\n", content)
 
     def test_context_not_found_leaves_file_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "c.txt")
-            self._write(p, "alpha\nbeta\n")
+            target_path = os.path.join(tmp, "c.txt")
+            self._write(target_path, "alpha\nbeta\n")
             out = self._run(tmp, (
                 "--- a/c.txt\n+++ b/c.txt\n@@ -1,2 +1,2 @@\n"
                 " nonexistent-context\n-beta\n+gamma\n"
             ))
             self.assertIn("did not apply", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "alpha\nbeta\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "alpha\nbeta\n")
 
     def test_incomplete_hunk_is_rejected_without_partial_edit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "partial.txt")
-            self._write(p, "old\nsecond\n")
+            target_path = os.path.join(tmp, "partial.txt")
+            self._write(target_path, "old\nsecond\n")
 
             out = self._run(tmp, (
                 "--- a/partial.txt\n+++ b/partial.txt\n"
@@ -1682,13 +1682,13 @@ class ApplyPatchToolTests(unittest.TestCase):
 
             self.assertIn("could not parse patch", out)
             self.assertIn("line counts", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "old\nsecond\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "old\nsecond\n")
 
     def test_overlong_hunk_is_rejected_without_dropping_body_lines(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "overlong.txt")
-            self._write(p, "old\n")
+            target_path = os.path.join(tmp, "overlong.txt")
+            self._write(target_path, "old\n")
 
             out = self._run(tmp, (
                 "--- a/overlong.txt\n+++ b/overlong.txt\n"
@@ -1697,14 +1697,14 @@ class ApplyPatchToolTests(unittest.TestCase):
 
             self.assertIn("could not parse patch", out)
             self.assertIn("more body lines", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "old\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "old\n")
 
     def test_overlong_hunk_rejects_header_like_deleted_content(self) -> None:
         """An extra deletion must not be mistaken for a new file header."""
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "overlong.txt")
-            self._write(p, "keep\n-- extra\n")
+            target_path = os.path.join(tmp, "overlong.txt")
+            self._write(target_path, "keep\n-- extra\n")
 
             out = self._run(tmp, (
                 "--- a/overlong.txt\n+++ b/overlong.txt\n"
@@ -1713,14 +1713,14 @@ class ApplyPatchToolTests(unittest.TestCase):
 
             self.assertIn("could not parse patch", out)
             self.assertIn("more body lines", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "keep\n-- extra\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "keep\n-- extra\n")
 
     def test_overlong_hunk_rejects_header_like_added_content(self) -> None:
         """An extra addition must not be mistaken for a new file header."""
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "overlong.txt")
-            self._write(p, "keep\n")
+            target_path = os.path.join(tmp, "overlong.txt")
+            self._write(target_path, "keep\n")
 
             out = self._run(tmp, (
                 "--- a/overlong.txt\n+++ b/overlong.txt\n"
@@ -1729,14 +1729,14 @@ class ApplyPatchToolTests(unittest.TestCase):
 
             self.assertIn("could not parse patch", out)
             self.assertIn("more body lines", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "keep\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "keep\n")
 
     def test_overlong_hunk_rejects_header_like_body_pair(self) -> None:
         """A fake paired header without a hunk must not be discarded."""
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "overlong.txt")
-            self._write(p, "keep\n-- old marker\n++ new marker\n")
+            target_path = os.path.join(tmp, "overlong.txt")
+            self._write(target_path, "keep\n-- old marker\n++ new marker\n")
 
             out = self._run(tmp, (
                 "--- a/overlong.txt\n+++ b/overlong.txt\n"
@@ -1746,8 +1746,8 @@ class ApplyPatchToolTests(unittest.TestCase):
 
             self.assertIn("could not parse patch", out)
             self.assertIn("missing a hunk", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "keep\n-- old marker\n++ new marker\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "keep\n-- old marker\n++ new marker\n")
 
     def test_completed_hunk_allows_a_following_file_header_pair(self) -> None:
         """A genuine second-file diff remains valid after a completed hunk."""
@@ -1765,10 +1765,10 @@ class ApplyPatchToolTests(unittest.TestCase):
             ))
 
             self.assertEqual(out.count("applied 1 hunk"), 2)
-            with open(first, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "new first\n")
-            with open(second, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "new second\n")
+            with open(first, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "new first\n")
+            with open(second, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "new second\n")
 
     def test_overlong_hunk_number_is_reported_as_invalid_patch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1783,20 +1783,20 @@ class ApplyPatchToolTests(unittest.TestCase):
 
     def test_fuzzy_trailing_whitespace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "w.txt")
+            target_path = os.path.join(tmp, "w.txt")
             # Fuzzy fallback still applies when context omits trailing spaces.
-            self._write(p, "keep  \ndrop\n")
+            self._write(target_path, "keep  \ndrop\n")
             out = self._run(tmp, (
                 "--- a/w.txt\n+++ b/w.txt\n@@ -1,2 +1,1 @@\n keep\n-drop\n"
             ))
             self.assertIn("applied", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "keep\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "keep\n")
 
     def test_file_header_markers_inside_hunk_are_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = os.path.join(tmp, "markers.txt")
-            self._write(p, "-- old marker\nplain\n")
+            target_path = os.path.join(tmp, "markers.txt")
+            self._write(target_path, "-- old marker\nplain\n")
             out = self._run(tmp, (
                 "--- a/markers.txt\n+++ b/markers.txt\n"
                 "@@ -1,2 +1,2 @@\n"
@@ -1805,8 +1805,8 @@ class ApplyPatchToolTests(unittest.TestCase):
                 " plain\n"
             ))
             self.assertIn("applied", out)
-            with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read(), "++ new marker\nplain\n")
+            with open(target_path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "++ new marker\nplain\n")
 
 
 if __name__ == "__main__":
