@@ -349,6 +349,11 @@ class AgentResult:
     detached_task_tool_use_ids: set[str] = field(
         default_factory=set, repr=False,
     )
+    # Set when the turn's capped continue-judge loop exhausts while the
+    # judge still says CONTINUE: the draft shipped as PARTIAL with known
+    # remainder. The bot layer auto-chains one continuation turn from
+    # this instruction instead of stopping. Empty = nothing to continue.
+    continue_instruction: str = ""
 
 
 def append_text_result(result: AgentResult, text: str) -> None:

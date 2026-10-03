@@ -947,3 +947,97 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(result.text, "full answer")
         self.assertEqual(calls["drive"], 2)
+
+    async def test_exhausted_judge_flags_auto_chain(self) -> None:
+        calls = {"drive": 0}
+
+        async def fast_drive(*_args, **_kwargs):
+            calls["drive"] += 1
+            return AgentResult(text="PARTIAL + remainder: still going"), False
+
+        async def always_continue(*_args, **_kwargs):
+            return flexible.JudgeVerdict(
+                should_continue=True,
+                missing="rest",
+                next_instruction="keep going",
+            ), False
+
+        with tempfile.TemporaryDirectory() as ws:
+            from Cozter import session
+            data = session.create_session(ws, name="Work")
+            backend = type(
+                "B", (),
+                {
+                    "name": "judge-test",
+                    "default_summary_model": "m",
+                    "supports_typed_plugins": True,
+                    "supports_plugin_prelude": False,
+                    "supports_detached_tasks": False,
+                },
+            )()
+            with (
+                mock.patch.object(
+                    agent.backends_agent, "get_backend", return_value=backend,
+                ),
+                mock.patch.object(agent, "_drive_backend", fast_drive),
+                mock.patch.object(agent, "_judge_draft", always_continue),
+                mock.patch.object(
+                    agent.compaction, "maybe_compact",
+                    new_callable=mock.AsyncMock,
+                ),
+                mock.patch.object(
+                    agent.titling, "maybe_auto_title",
+                    new_callable=mock.AsyncMock,
+                ),
+            ):
+                result = await agent.run(
+                    "finish it", ws, 1,
+                    backend_name="judge-test", session_id=data["id"],
+                )
+        # Capped in-turn loop exhausts (drive + JUDGE_MAX_CONTINUES
+        # follow-ups) and flags the remainder instead of stopping silently.
+        self.assertEqual(calls["drive"], 1 + flexible.JUDGE_MAX_CONTINUES)
+        self.assertTrue(result.continue_instruction)
+        self.assertIn("keep going", result.continue_instruction)
+
+    async def test_done_draft_carries_no_chain_flag(self) -> None:
+        async def fast_drive(*_args, **_kwargs):
+            return AgentResult(text="all done"), False
+
+        async def always_done(*_args, **_kwargs):
+            return flexible.JudgeVerdict(should_continue=False), False
+
+        with tempfile.TemporaryDirectory() as ws:
+            from Cozter import session
+            data = session.create_session(ws, name="Work")
+            backend = type(
+                "B", (),
+                {
+                    "name": "judge-test",
+                    "default_summary_model": "m",
+                    "supports_typed_plugins": True,
+                    "supports_plugin_prelude": False,
+                    "supports_detached_tasks": False,
+                },
+            )()
+            with (
+                mock.patch.object(
+                    agent.backends_agent, "get_backend", return_value=backend,
+                ),
+                mock.patch.object(agent, "_drive_backend", fast_drive),
+                mock.patch.object(agent, "_judge_draft", always_done),
+                mock.patch.object(
+                    agent.compaction, "maybe_compact",
+                    new_callable=mock.AsyncMock,
+                ),
+                mock.patch.object(
+                    agent.titling, "maybe_auto_title",
+                    new_callable=mock.AsyncMock,
+                ),
+            ):
+                result = await agent.run(
+                    "finish it", ws, 1,
+                    backend_name="judge-test", session_id=data["id"],
+                )
+        self.assertEqual(result.text, "all done")
+        self.assertFalse(result.continue_instruction)

@@ -49,6 +49,12 @@ MERGE_TIMEOUT: float | None = 3600.0
 JUDGE_MAX_CONTINUES = 3
 JUDGE_TIMEOUT: float | None = 3600.0
 
+# Auto-chain bounds: when the capped judge loop exhausts while the judge
+# still says CONTINUE, the bot layer chains hands-free continuation turns
+# (same session, no user message) instead of shipping PARTIAL as final.
+# /stop or a new message still cancels instantly; [[await]] never chains.
+MAX_AUTO_CHAIN_TURNS = 3
+
 # The user-facing rubric the planner grades each sub-task against.
 _RUBRIC = (
     "low  - straightforward, well-scoped work.\n"

@@ -2192,6 +2192,39 @@ async def _run_turn_impl(
             )
             for path in new_attachment_paths:
                 result.events.append(ChatEvent(kind="attachment", content=path))
+            # Cap exhausted while the judge still says CONTINUE: keep the
+            # pending verdict on the result so the bot layer auto-chains a
+            # continuation turn instead of shipping PARTIAL as final.
+            if judged_rounds >= flexible.JUDGE_MAX_CONTINUES:
+                _draft_tail, _tail_awaiting = extract_await(result.text or "")
+                if _tail_awaiting or not _draft_tail.strip():
+                    break
+                _tail_verdict, _tail_restarting = await _judge_draft(
+                    effective_prompt, result.text or "", workspace_path,
+                    summary_backend_name=summary_backend,
+                    summary_model=summary_model,
+                    inject_queue=inject_queue,
+                    injected=injected,
+                    on_event=_stream_event,
+                    round_no=judged_rounds + 1,
+                )
+                if _tail_restarting:
+                    await _announce_restart(
+                        backend.name, injected, inject_queue, _stream_event,
+                    )
+                    break
+                if _tail_verdict.should_continue:
+                    _tail_next = (_tail_verdict.next_instruction or "").strip()
+                    if _tail_next:
+                        result.continue_instruction = (
+                            f"[Auto-continued remainder"
+                            f" ({judged_rounds + 1}):"
+                            f" {_tail_verdict.missing} -- {_tail_next}]"
+                            if _tail_verdict.missing
+                            else f"[Auto-continued remainder"
+                            f" ({judged_rounds + 1}): {_tail_next}]"
+                        )
+                break
         if restarting:
             continue  # restart loop
 

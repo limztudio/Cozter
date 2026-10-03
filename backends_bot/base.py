@@ -3648,6 +3648,59 @@ class BotPlatform(ABC):
                     log=logger,
                 )
 
+        # Auto-chain: the capped continue-judge loop exhausted while the
+        # judge still said CONTINUE, so the draft shipped as PARTIAL with
+        # known remainder. Chain hands-free continuation turns in the same
+        # session (no user message) instead of stopping. /stop or a new
+        # message cancels instantly via the per-turn inject queue;
+        # [[await]] drafts never carry a continuation. Bounded by
+        # MAX_AUTO_CHAIN_TURNS so a stubborn remainder still terminates.
+        chained = 0
+        try:
+            from .. import flexible as _flexible_mod
+            _chain_cap = _flexible_mod.MAX_AUTO_CHAIN_TURNS
+        except Exception:
+            _chain_cap = 0
+        while (
+            chained < _chain_cap
+            and getattr(result, "continue_instruction", "")
+            and not self._update_restart_pending
+        ):
+            _next_instruction = result.continue_instruction.strip()
+            if not _next_instruction:
+                break
+            result.continue_instruction = ""
+            chained += 1
+            await on_event(agent.ChatEvent(
+                kind="tool",
+                content=f"Auto-continuing remainder {chained}/{_chain_cap}...",
+            ))
+            try:
+                result = await agent.run(
+                    f"{text}\n\n{_next_instruction}", ws, user_id=uid,
+                    model=model, summary_model=summary_model,
+                    approval=perm,
+                    on_event=on_event, inject_queue=inject_q,
+                    backend_name=backend_name,
+                    summary_backend_name=summary_backend,
+                    session_id=(
+                        session_id if session_id is not None
+                        else result.session_id
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Auto-chained continuation turn failed")
+                break
+            if not getattr(result, "continue_instruction", ""):
+                break
+        if chained:
+            await on_event(agent.ChatEvent(
+                kind="tool",
+                content=f"Auto-continue finished after {chained} turn(s).",
+            ))
+
         # Only opt into the [[await]] pause for interactive turns —
         # ephemeral schedule turns (session_id is set) get their session
         # deleted right after, so there's nothing to resume into.
