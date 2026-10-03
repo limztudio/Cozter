@@ -51,7 +51,7 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 # Discovery fallback: documented CLI models + capabilities (verified
-# 2026-10-02, grok 1.0.13).
+# 2026-10-03, grok 1.0.13).
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high")
 _FALLBACK_MODEL_SPECS = (
     ("grok-4.7", (*_COMMON_EFFORT_LEVELS, "xhigh"), 500_000),
