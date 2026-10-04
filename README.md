@@ -1068,6 +1068,12 @@ requests are never accepted from first/last-few coverage alone.
 Build/verify requests are claimed clean only when every report lists its
 commands + exit codes + error/warning counts from full (not preview) logs
 with zero remaining; missing evidence means PARTIAL + remainder.
+Each turn also runs a capped continue-judge loop (up to 3 follow-ups per
+turn): when the judge still says CONTINUE after the cap is exhausted, the
+turn ships its draft with an auto-continued remainder note and chains up
+to 3 hands-free continuation turns in the same session instead of stopping
+at PARTIAL. `/stop` or a new message cancels the chain instantly, and an
+`[[await]]` draft never chains.
 
 Two behaviors are worth knowing. Under `/style collaborative`, the turn can
 stop and wait for you (`[[await]]`) at either end of the pipeline: the
