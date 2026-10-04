@@ -1959,31 +1959,67 @@ class BotPlatform(ABC):
             await ctx.reply_text("Usage: /inject <message>")
             return
         inject_q = self._inject_queues.get(ctx.user_id)
-        if inject_q is None:
+        if inject_q is not None:
+            outcome = inject_q.put_if_active(text)
+            if outcome == "accepted":
+                # Ack is cosmetic (already queued); bound it so a slow send can't stall the handler.
+                try:
+                    await asyncio.wait_for(
+                        ctx.reply_text("Injected."),
+                        timeout=_INJECT_ACK_TIMEOUT_SEC,
+                    )
+                except (asyncio.TimeoutError, TimeoutError):
+                    logger.warning(
+                        "Inject ack send timed out after %.1fs (message queued)",
+                        _INJECT_ACK_TIMEOUT_SEC,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning("Inject ack send failed", exc_info=True)
+                return
+            if outcome == "full":
+                await ctx.reply_text("Inject queue full.")
+                return
+            # outcome == "finished": agent.run already returned and the
+            # inject window closed, but reply delivery may still hold the
+            # turn lock. Fall through and queue as a follow-up turn
+            # instead of dropping the message.
+        uid = ctx.user_id
+        lock = self._task_locks.get(uid)
+        running = self._running_tasks.get(uid)
+        turn_active = (
+            inject_q is not None
+            or (lock is not None and lock.locked())
+            or (running is not None and not running.done())
+            or uid in self._pending_reply_delivery_users
+        )
+        if not turn_active:
             await ctx.reply_text("No task is running.")
             return
-        outcome = inject_q.put_if_active(text)
-        if outcome == "finished":
-            await ctx.reply_text("The task has already finished.")
+        generation = self._cancel_generations.get(uid, 0)
+        msg_queue = self._ensure_message_queue(uid)
+        if msg_queue.full():
+            await ctx.reply_text("Queue full. Wait or /stop first.")
             return
-        if outcome == "full":
-            await ctx.reply_text("Inject queue full.")
+        was_awaiting = uid in self._awaiting_answer
+        entry_id = await self._persist_and_queue_dispatch(
+            uid, text, ctx.chat_id, generation, msg_queue,
+        )
+        if entry_id is None:
             return
-        # Ack is cosmetic (already queued); bound it so a slow send can't stall the handler.
-        try:
-            await asyncio.wait_for(
-                ctx.reply_text("Injected."),
-                timeout=_INJECT_ACK_TIMEOUT_SEC,
+        if was_awaiting:
+            await self._resume_awaiting_answer(
+                uid, msg_queue, entry_id,
+                reason="inject arrived after turn finished",
             )
-        except (asyncio.TimeoutError, TimeoutError):
-            logger.warning(
-                "Inject ack send timed out after %.1fs (message queued)",
-                _INJECT_ACK_TIMEOUT_SEC,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning("Inject ack send failed", exc_info=True)
+        await ctx.reply_text(
+            f"Queued ({msg_queue.qsize()}/{self.max_queue_size})."
+            " Running next.",
+        )
+        # Race guard: kick a drain so the new entry isn't orphaned
+        # (a no-op if one is already active).
+        self._start_queue_drain(uid)
 
     # /reserve (recurring schedule wizard)
 

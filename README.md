@@ -693,8 +693,9 @@ are visible without guessing.
 truncates the current user message: it trims saved context first and, if
 needed, omits the continuation cue and sends the message alone.
 
-An accepted `/inject` is either folded into a restarted turn or rejected once
-the final reply has closed its injection window. This applies to every
+An accepted `/inject` is either folded into a restarted turn or, once the
+final reply has closed its injection window, queued as a follow-up turn
+("Queued ... Running next.") instead of being dropped. This applies to every
 `flexible` phase—including planning and merge calls as well as workers—so
 context sent while the meta-agent is working cannot be silently lost between
 phases. A failed planner still keeps a pending `/inject` for the fallback

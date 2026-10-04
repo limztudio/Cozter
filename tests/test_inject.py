@@ -40,17 +40,22 @@ class _InjectRaceBot(TestBot):
 
 
 class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
-    async def test_inject_is_rejected_once_final_reply_delivery_starts(
+    async def test_inject_queues_followup_once_final_reply_delivery_starts(
         self,
     ) -> None:
-        """Never acknowledge an inject after the agent's final phase ends."""
+        """Queue a late inject as a follow-up instead of dropping it."""
         async def completed_run(*_args, **_kwargs) -> AgentResult:
             return AgentResult(events=[
                 ChatEvent(kind="text", content="final reply"),
             ])
 
-        with tempfile.TemporaryDirectory() as ws:
+        with tempfile.TemporaryDirectory() as ws, tempfile.TemporaryDirectory() as cfg:
+            from Cozter import workspace as workspace_mod
+            old_config_dir = workspace_mod.CONFIG_DIR
+            workspace_mod.CONFIG_DIR = cfg
+            self.addCleanup(setattr, workspace_mod, "CONFIG_DIR", old_config_dir)
             bot = _InjectRaceBot(ws)
+            bot.notify_targets = ["u1"]
             with (
                 mock.patch.object(agent, "run", new=completed_run),
                 mock.patch.object(
@@ -69,8 +74,40 @@ class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
                     args="late requirement", attachment=None, platform=bot,
                 ))
 
-                self.assertIn("The task has already finished.", bot.sent)
+                # A late inject must never be dropped: the live window is
+                # closed, so it queues as a follow-up turn instead.
+                self.assertNotIn("The task has already finished.", bot.sent)
                 self.assertNotIn("Injected.", bot.sent)
+                self.assertTrue(
+                    any(text.startswith("Queued (") for text in bot.sent),
+                    bot.sent,
+                )
+
+                # The background drain may already have consumed the
+                # in-memory entry, so verify via the queued reply plus the
+                # durable ledger instead of racing the queue.
+                queued_entry = None
+                try:
+                    queued_entry = bot._message_queues["u1"].get_nowait()
+                except Exception:
+                    queued_entry = None
+                if queued_entry is not None:
+                    self.assertEqual(queued_entry[0], "late requirement")
+                    self.assertEqual(queued_entry[1], "chat")
+                else:
+                    data = bot._read_queue_file()
+                    entries = bot._queue_entries(data.get("u1"))
+                    self.assertTrue(
+                        any(
+                            isinstance(entry, dict)
+                            and entry.get("text") == "late requirement"
+                            and entry.get("chat_id") == "chat"
+                            for entry in entries
+                        ) or any(
+                            text == "late requirement" for text in bot.sent
+                        ),
+                        bot.sent,
+                    )
 
                 bot.release_final_reply.set()
                 await asyncio.wait_for(turn, timeout=1)
