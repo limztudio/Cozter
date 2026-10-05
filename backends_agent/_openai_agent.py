@@ -40,31 +40,28 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# One SSE event can exceed aiohttp's readline limit (whole tool arg in one delta); cap it.
+# One SSE event can exceed aiohttp's readline limit; cap it.
 _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
-# SSE allows many data: lines per event; cap the aggregate so no-newline peers can't bypass the line cap.
+# SSE allows many data: lines per event; cap the aggregate.
 _MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
-# Bound retained completion state: dribbled fragments must not grow the
-# process; tool args get their own cap.
+# Bound retained completion state; tool args get their own cap.
 _MAX_COMPLETION_TEXT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_REASONING_BYTES = 4 * 1024 * 1024
 _MAX_TOOL_ARGUMENT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_BUFFER_BYTES = 8 * 1024 * 1024
-# Cap call ids/names too: metadata must stay inside the buffer budget.
+# Cap call ids/names too.
 _MAX_TOOL_CALL_ID_CHARS = 512
 _MAX_TOOL_NAME_CHARS = 512
-# Cap the retained conversation: per-completion limits alone still allow
-# unbounded growth across turns.
+# Cap the retained conversation across turns.
 _MAX_AGENT_MESSAGE_BYTES = 32 * 1024 * 1024
-# Models batch few calls per turn; this also bounds bookkeeping for malformed index-spam streams.
+# This also bounds bookkeeping for malformed index-spam streams.
 _MAX_TOOL_CALLS_PER_COMPLETION = 128
-# Bound discovery responses (1 MiB fits thousands of model IDs).
+# Bound discovery responses.
 _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
-# Picker/payload-bound IDs: reject absurd lengths instead of carrying attacker MB strings.
+# Reject absurd ID lengths.
 _MAX_MODEL_ID_CHARS = 512
 _MAX_MODEL_IDS = 4_096
-# 3600s real-work cap (cancel still stops instantly); bound error bodies
-# (their messages are trimmed before reaching the model).
+# 3600s real-work cap; bound error bodies.
 _MAX_HTTP_ERROR_BODY_BYTES = 8 * 1024
 _EOF_SUCCESS_FINISH_REASONS = frozenset({
     "stop", "length", "tool_calls", "function_call", "content_filter",
@@ -133,7 +130,7 @@ def fetch_model_ids(
     if headers:
         request = urllib.request.Request(url, method="GET")
         for name, value in headers.items():
-            # Auth must never follow redirects (urllib copies headers).
+            # Auth must never follow redirects.
             request.add_unredirected_header(name, value)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         body = response.read(_MAX_MODEL_DISCOVERY_BYTES + 1)
@@ -205,8 +202,7 @@ def discover_bearer_models(
 
 def _message_payload_bytes(message: dict[str, Any]) -> int:
     """Return the approximate UTF-8 JSON size retained for one chat message."""
-    # Match the default JSON escaping used by aiohttp's request serializer so
-    # non-ASCII strings cannot evade the aggregate wire/memory budget.
+    # Match aiohttp's JSON escaping so non-ASCII can't evade the budget.
     return len(json.dumps(message).encode("utf-8"))
 
 
@@ -217,15 +213,14 @@ class OpenAIChatBackend(Backend):
     streaming client are inherited.
     """
 
-    # OpenAI-shape tools list is consumed directly, so plugins become typed
-    # tool entries in TOOL_SCHEMA the same way the built-ins do.
+    # OpenAI-shape tools list is consumed directly, like the built-ins.
     supports_typed_plugins = True
     supports_vision = True
     vision_mode = "openai_parts"
-    # OpenAI Chat Completions supports the standard 4-level effort words.
+    # Standard 4-level effort words.
     effort_levels: tuple[str, ...] = ("minimal", "low", "medium", "high")
 
-    # hooks a concrete backend overrides
+    # hooks for concrete backends
 
     def _chat_endpoint(self) -> str:
         """Full URL of the chat/completions endpoint."""
@@ -317,7 +312,7 @@ class OpenAIChatBackend(Backend):
         return 8
 
     def _socket_timeout(self) -> int | None:
-        # Real-work cap hook: subclass socket timeout (default 3600s); cancel still stops instantly.
+        # Real-work cap hook: subclass socket timeout.
         return 3600
 
     def _socket_timeout_setting(self) -> str:
@@ -327,7 +322,7 @@ class OpenAIChatBackend(Backend):
     def _max_retries(self) -> int:
         return 2
 
-    # shared API-key readiness probe
+    # shared API-key readiness probe (no real request; that would bill).
 
     def _api_key(self) -> str:
         """Configured Bearer key, or ``""`` when unset. Providers override."""
@@ -338,8 +333,7 @@ class OpenAIChatBackend(Backend):
         return "api_key"
 
     def health_check(self) -> tuple[bool, str]:
-        # HTTP backend: readiness is "is an API key configured?". We don't
-        # spend a real request here (that would bill the account).
+        # Readiness is "is an API key configured?".
         if not self._api_key():
             return False, (
                 f"no API key set (set {self._api_key_setting()}"
@@ -381,15 +375,13 @@ class OpenAIChatBackend(Backend):
         sock_read = self._socket_timeout()
         timeout_setting = self._socket_timeout_setting()
         max_retries = self._max_retries()
-        # Per-AI-turn safety caps. Read fresh each turn so a config edit
-        # takes effect on the next message without a restart.
+        # Per-turn safety caps, read fresh each turn.
         max_agent_turns = self._max_agent_turns()
         max_segments = self._max_segments()
         tool_repeat_limit = self._tool_repeat_limit()
         request_model = self._request_model(model)
 
-        # Approval -> tools: deny/compaction none, confirm read-only,
-        # auto/full all.
+        # Approval -> tools: deny/compaction none, confirm read-only, else all.
         tools_schema = _tools_for_approval(approval, compaction)
         if tools_schema and not self._supports_tools_for_model(request_model):
             tools_schema = None
@@ -397,12 +389,11 @@ class OpenAIChatBackend(Backend):
             entry["function"]["name"] for entry in tools_schema
         ) if tools_schema else ()
 
-        # Translate the 0-100 effort into provider-native request fields. An
-        # empty mapping means "do not override the server default".
+        # Translate 0-100 effort into provider fields (empty = server default).
         effort_fields = self._effort_fields(effort, request_model)
         preserve_reasoning = self._preserve_reasoning_content(request_model)
 
-        # Vision backends attach image bytes too (pixels, not only a path).
+        # Vision backends attach image bytes too.
         user_content: str | list[dict[str, Any]] = prompt
         if getattr(self, "supports_vision", False):
             vision_parts = _vision_parts_for_prompt(
@@ -411,7 +402,7 @@ class OpenAIChatBackend(Backend):
             if vision_parts is not None:
                 user_content = vision_parts
 
-        # Stateless endpoint: workspace goes in the prompt (rebuilt per turn).
+        # Stateless endpoint: workspace goes in the prompt.
         messages: list[dict] = [
             {
                 "role": "system",
@@ -448,8 +439,7 @@ class OpenAIChatBackend(Backend):
             return
         tool_repeat_counts: dict[str, int] = {}
         has_preserved_reasoning = False
-        # One HTTP session per turn: tool loops (and their retries) reuse
-        # the connector/SSL context instead of opening a new one per POST.
+        # One HTTP session per turn; reuse the connector/SSL context.
 
         def completion_payload(
             tools_schema: list[dict] | None,
@@ -458,7 +448,7 @@ class OpenAIChatBackend(Backend):
             payload = _completion_payload(
                 messages, request_model, effort_fields, tools_schema,
             )
-            # Preserve reasoning once the transcript carries it.
+            # Preserve reasoning once present.
             if preserve_reasoning and (
                 tools_schema is not None or has_preserved_reasoning
             ):
@@ -488,7 +478,7 @@ class OpenAIChatBackend(Backend):
                         await stream_completion(payload)
                     )
 
-                    # OpenAI wants content null (not "") with tool_calls; strict servers reject "".
+                    # OpenAI wants content null with tool_calls.
                     assistant_msg: dict[str, Any] = {
                         "role": "assistant",
                         "content": assistant_text if assistant_text else None,
@@ -496,12 +486,12 @@ class OpenAIChatBackend(Backend):
                     if tool_calls:
                         assistant_msg["tool_calls"] = tool_calls
                         if preserve_reasoning and reasoning_content:
-                            # Opaque Z.ai provider state (validated verbatim).
+                            # Opaque Z.ai provider state.
                             assistant_msg["reasoning_content"] = (
                                 reasoning_content
                             )
                             has_preserved_reasoning = True
-                    # Emit per-turn commentary, not only the final turn.
+                    # Emit per-turn commentary.
                     if assistant_text:
                         proc.emit({
                             "type": "assistant_text",
@@ -511,14 +501,12 @@ class OpenAIChatBackend(Backend):
                     if not tool_calls:
                         return
 
-                    # Refuse before running if retaining it would break the
-                    # run-wide bound.
+                    # Refuse before running if retaining it breaks the run bound.
                     if not append_message(assistant_msg):
                         emit_message_limit_error()
                         return
 
-                    # Run one turn's tool_calls concurrently (results
-                    # re-ordered); approval is re-enforced inside execute_tool.
+                    # Run one turn's tool_calls concurrently.
                     _batch_names: list[str] = []
                     _batch_args: list[dict] = []
                     _batch_skipped: list[bool] = []
@@ -537,7 +525,7 @@ class OpenAIChatBackend(Backend):
                     async def _run_one(
                         _name: str, _args: dict,
                     ) -> str:
-                        # execute_tool owns permissions, status events, truncation, per-tool timeout.
+                        # execute_tool owns permissions, status, truncation, timeout.
                         return await tools.execute_tool(
                             _name, _args, workspace_path, approval,
                             proc.emit,
@@ -581,8 +569,7 @@ class OpenAIChatBackend(Backend):
                             )
                             result = _res_str
 
-                        # Include ``name`` alongside tool_call_id; strict
-                        # servers reject tool messages without it.
+                        # Include ``name`` alongside tool_call_id.
                         tool_message = {
                             "role": "tool",
                             "tool_call_id": call.get("id", ""),
@@ -596,7 +583,7 @@ class OpenAIChatBackend(Backend):
                 if not self._auto_continue_after_tool_limit():
                     break
                 if segment >= max_segments:
-                    # Ceiling hit: fall through to a final no-tools answer.
+                    # Ceiling hit: fall through to a no-tools answer.
                     logger.warning(
                         "%s hit the %d-segment cap (%d tool turns each);"
                         " forcing a final answer",
@@ -620,8 +607,7 @@ class OpenAIChatBackend(Backend):
                     emit_message_limit_error()
                     return
 
-            # If we fall out of the loop, force one final no-tools response
-            # instead of returning only an error.
+            # Fall out of the loop: force one final no-tools response.
             final_request_message = {
                 "role": "user",
                 "content": (
@@ -647,7 +633,7 @@ class OpenAIChatBackend(Backend):
                     ),
                 })
 
-    # event parsing
+    # events
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
         if not isinstance(event, dict):
@@ -657,7 +643,7 @@ class OpenAIChatBackend(Backend):
         if etype == "assistant_text":
             text = event.get("text") or ""
             if text:
-                # Last text wins for result.text (matches codex/copilot).
+                # Last text wins for result.text.
                 append_text_result(result, text)
             return
 
@@ -667,8 +653,7 @@ class OpenAIChatBackend(Backend):
             content = tools.summarize_tool_use(tool, inp)
             result.events.append(ChatEvent(kind="tool", content=content))
             if event.get("file_action"):
-                # write/edit/delete - also surface as kind="file" so the
-                # status display routes it through the file UX.
+                # write/edit/delete also surface as kind="file".
                 path = inp.get("path", "?")
                 action = event["file_action"]
                 result.events.append(ChatEvent(
@@ -677,8 +662,7 @@ class OpenAIChatBackend(Backend):
             return
 
         if etype == "tool_result":
-            # Already covered by the preceding tool_use event; suppress
-            # duplicate noise.
+            # Already covered by the preceding tool_use event; skip duplicates.
             return
 
         if record_error_event(event, result):
@@ -709,7 +693,7 @@ class CachedOpenAIChatBackend(CachedModelCatalog, OpenAIChatBackend):
         return self._live_model_catalog()
 
 
-# Streaming chat-completions client
+# Streaming client
 
 
 def _completion_payload(
@@ -727,7 +711,7 @@ def _completion_payload(
     payload.update(effort_fields)
     if tools_schema is not None:
         payload["tools"] = tools_schema
-        # One turn's tool_calls run via gather (ordered), so the model may batch independent calls.
+        # One turn's tool_calls run via gather (ordered).
         payload["parallel_tool_calls"] = True
     return payload
 
@@ -784,7 +768,7 @@ def _backoff_delay(
         ):
             retry_after = None
         elif not math.isfinite(retry_after):
-            # Never sleep nan/inf: cap +inf, drop nan/-inf.
+            # Never sleep nan/inf.
             retry_after = cap if retry_after == float("inf") else None
         elif retry_after < 0:
             retry_after = None
@@ -800,15 +784,13 @@ def _backoff_delay(
 def _parse_retry_after(value: str | None) -> float | None:
     """Parse a Retry-After header (delta-seconds form); ignore HTTP dates."""
     if not value or isinstance(value, bool):
-        # A bool is not a duration (float(True) == 1.0 would sleep a
-        # full second on junk); fail fast instead of throttling on it.
+        # A bool is not a duration; fail fast instead of throttling.
         return None
     try:
         parsed = float(value)
     except (TypeError, ValueError, OverflowError):
         return None
-    # Reject nan/-inf (fail fast on a meaningless throttle); callers cap
-    # +inf via _backoff_delay.
+    # Reject nan/-inf (fail fast); callers cap +inf via _backoff_delay.
     if not math.isfinite(parsed) and parsed != float("inf"):
         return None
     return max(parsed, 0.0)
@@ -898,10 +880,9 @@ async def _post_completion_stream(
     reasoning_parts: list[str] = []
     reasoning_bytes = 0
     tool_argument_bytes = 0
-    # Tool calls arrive in pieces: we accumulate by index because the
-    # OpenAI streaming protocol fragments name/arguments across deltas.
+    # Tool calls fragment across deltas: accumulate by index.
     tool_buffers: dict[int, dict[str, Any]] = {}
-    # EOF alone isn't completion: dropped connections leave partial buffers.
+    # EOF alone isn't completion.
     saw_terminal_marker = False
     terminal_finish_reason: str | None = None
 
@@ -939,7 +920,7 @@ async def _post_completion_stream(
                 except json.JSONDecodeError:
                     logger.debug("Non-JSON SSE line: %r", data)
                     continue
-                # Ignore malformed non-completion events on the stream; still surface explicit errors.
+                # Ignore malformed events; still surface explicit errors.
                 if not isinstance(obj, dict):
                     continue
                 if "error" in obj:
@@ -973,7 +954,7 @@ async def _post_completion_stream(
                         saw_terminal_marker = True
                         terminal_finish_reason = finish_reason
                     else:
-                        # Never run a partial call closed by an error + [DONE].
+                        # Never run a partial call closed by error + [DONE].
                         raise RuntimeError(
                             f"{label} stream ended with {finish_reason}; "
                             "response was incomplete",
@@ -1024,8 +1005,7 @@ async def _post_completion_stream(
     ) as exc:
         raise _RetryableError(f"{label}: {exc}") from exc
     except (_SSEEventTooLargeError, _CompletionTooLargeError) as exc:
-        # Never continue after dropped deltas/caps (retry is safe: nothing
-        # buffered runs until this succeeds).
+        # Never continue after dropped deltas/caps (retry is safe).
         raise _RetryableError(f"{label}: {exc}") from exc
 
     if not saw_terminal_marker:
@@ -1033,13 +1013,13 @@ async def _post_completion_stream(
             f"{label} stream ended before a completion marker",
         )
 
-    # ``length`` = output cap: never run a possibly-truncated tool call.
+    # ``length`` = output cap: never run a truncated tool call.
     if terminal_finish_reason == "length" and tool_buffers:
         raise _RetryableError(
             f"{label} stream ended with length while a tool call was pending",
         )
 
-    # Normalize tool_buffers into the OpenAI tool_calls list shape.
+    # Normalize tool_buffers into tool_calls shape.
     tool_calls: list[dict] = []
     for idx in sorted(tool_buffers.keys()):
         buf = tool_buffers[idx]
@@ -1112,11 +1092,10 @@ async def _iter_sse_events(
         if not line.startswith("data:"):
             continue
         data = line[len("data:"):]
-        # SSE permits one optional space after the colon; preserve all other
-        # whitespace because it may be part of a multiline JSON string.
+        # SSE permits one space after the colon; keep other whitespace.
         if data.startswith(" "):
             data = data[1:]
-        # Newline counts too; replacement chars only grow UTF-8, so the bound stays conservative.
+        # Newline counts too; replacements only grow UTF-8.
         event_bytes += len(data.encode("utf-8")) + (1 if data_lines else 0)
         if event_bytes > _MAX_SSE_EVENT_BYTES:
             raise _SSEEventTooLargeError(
@@ -1125,7 +1104,7 @@ async def _iter_sse_events(
             )
         data_lines.append(data)
     if data_lines:
-        # Tolerate a server closing right after a complete event (terminal-marker check stays in _stream_once).
+        # Tolerate a server closing right after a complete event.
         yield "\n".join(data_lines)
 
 
@@ -1143,16 +1122,16 @@ def _merge_tool_call(
         return 0
 
     idx = delta.get("index", 0)
-    # Indices become sorted dict keys; reject non-int/negative so malformed events can't break the turn.
+    # Reject non-int/negative indices.
     if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
         return 0
 
     fn = delta.get("function")
-    # Id may precede function name/args; a non-object function field is an invalid delta.
+    # A non-object function field is an invalid delta.
     if fn is not None and not isinstance(fn, dict):
         return 0
 
-    # Pre-seed a synthetic id (servers reject empty tool_call_ids); the real id overrides below.
+    # Pre-seed a synthetic id; the real id overrides below.
     buf = buffers.get(idx)
     if buf is None:
         if len(buffers) >= _MAX_TOOL_CALLS_PER_COMPLETION:
@@ -1196,8 +1175,7 @@ def _merge_tool_call(
     if not isinstance(previous_bytes, int):
         previous_bytes = 0
     if isinstance(args_frag, str):
-        # Arguments stream in as JSON-string fragments. Keep fragments until
-        # the response is complete, so repeated small deltas stay linear.
+        # Arguments stream as fragments; keep them until complete.
         fragment_bytes = len(args_frag.encode("utf-8", errors="replace"))
         next_bytes = previous_bytes + fragment_bytes
         if next_bytes > _MAX_TOOL_ARGUMENT_BYTES:
@@ -1209,13 +1187,11 @@ def _merge_tool_call(
         buf["_argument_bytes"] = next_bytes
         return fragment_bytes
     if isinstance(args_frag, dict):
-        # Some servers (GLM / Z.ai, some local runtimes) send the whole
-        # arguments object in one delta instead of string fragments.
+        # Some servers send the whole arguments object in one delta.
         try:
             serialized = json.dumps(args_frag)
         except (TypeError, ValueError):
-            # This cannot arise from decoded JSON, but keeps this boundary
-            # safe for custom providers that call it directly.
+            # Keeps this boundary safe for direct custom-provider calls.
             logger.debug("Ignoring non-serializable tool-call arguments")
             return 0
         serialized_bytes = len(serialized.encode("utf-8", errors="replace"))
@@ -1230,7 +1206,7 @@ def _merge_tool_call(
     return 0
 
 
-# Vision attachments
+# Vision
 
 
 def _vision_parts_for_prompt(
@@ -1251,7 +1227,7 @@ def _vision_parts_for_prompt(
     return [{"type": "text", "text": prompt}, *images]
 
 
-# Tool exposure + system prompt
+# Tools + system prompt
 
 
 def _tools_for_approval(
@@ -1267,7 +1243,7 @@ def _tools_for_approval(
     - auto: workspace-bounded tools; direct host-access tools require full.
     - full: the full tool set.
     """
-    # Malformed approval must never widen tools: only explicit write-capable modes get full schema.
+    # Malformed approval must never widen tools.
     if compaction or approval not in {"auto", "full", "confirm"}:
         return None
     if approval == "confirm":

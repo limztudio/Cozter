@@ -19,22 +19,22 @@ from ..base import (
 )
 
 
-# Two DDG frontends, independent limits: chain as per-query retry, not failover-once.
+# Two DDG frontends: chain as per-query retry, not failover-once.
 _SEARCH_ENDPOINTS = (
     "https://html.duckduckgo.com/html/?{qs}",
     "https://lite.duckduckgo.com/lite/?{qs}",
 )
-# Empty 200 shells are common under load: try each endpoint twice.
+# Empty 200s are common under load: try each endpoint twice.
 _ATTEMPTS_PER_ENDPOINT = 2
 _RETRY_DELAY_SECONDS = 0.5
 
-# Bound the anchor scan against pathological responses.
+# Bound the anchor scan.
 _MAX_ANCHORS_SCANNED = 200
 _ANCHOR_RE = re.compile(
     r'<a\b[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
     re.IGNORECASE | re.DOTALL,
 )
-# Sponsored-link markers on DDG's own /l/ redirector; real results lack them.
+# Sponsored markers live on DDG's /l/ redirector; real results lack them.
 _AD_PARAMS = frozenset({"ad_provider", "ad_domain", "ad_tool"})
 _DDG_HOST_SUFFIX = "duckduckgo.com"
 
@@ -111,7 +111,7 @@ class WebSearchTool(AgentTool):
         )
         failures: list[str] = []
         saw_page = False
-        # Both already ran concurrently; chain order (html first) wins.
+        # Both ran concurrently; chain order (html first) wins.
         for _host, results, endpoint_failures, page in gathered:
             failures.extend(endpoint_failures)
             saw_page = saw_page or page
@@ -134,7 +134,7 @@ class WebSearchTool(AgentTool):
                 return "\n".join(results)
 
         if saw_page:
-            # A 200 with no parseable results means genuinely no results.
+            # A 200 with no parseable results means no results.
             return "No search results found."
         return "Search failed: " + "; ".join(dict.fromkeys(failures))
 

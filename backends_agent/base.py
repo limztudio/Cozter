@@ -21,15 +21,14 @@ from ..utils import (
     mark_process_group_leader,
 )
 
-# Shared catalog refresh cadence (responsive pickers without per-request probes).
+# Shared catalog refresh cadence.
 MODEL_CATALOG_TTL_SEC = 60.0
-# Shared detached-task stub suffix (per-method tracebacks keep their caller).
+# Shared detached-task stub suffix.
 _DETACHED_UNSUPPORTED_SUFFIX = "does not support detached tasks"
-# CLI probe timeouts: codex/grok use this; copilot/HTTP use their own.
+# CLI probe timeouts (copilot/HTTP use their own).
 CLI_MODEL_DISCOVERY_TIMEOUT_SEC = 15
 
-# Shared turn-preamble wording
-# Canonical turn-preamble wording (single source of truth; agent.py re-exports).
+# Canonical turn-preamble wording (agent.py re-exports).
 WHOLE_SCOPE_RULE = (
     "Whole-scope: all/entire/every/whole = list every target first,"
     " do each, re-check leftovers; never sample; never claim done"
@@ -53,8 +52,7 @@ VISION_RULE = (
     " of guessing."
 )
 
-# One curated CLI fallback row: model id, reasoning-effort vocabulary, and the
-# published active context window used before a live catalog is available.
+# One curated CLI fallback row (pre-live-catalog).
 FallbackModelSpec = tuple[str, tuple[str, ...], int]
 
 
@@ -190,9 +188,9 @@ class ProcessResourceMap:
             return self._items.pop(id(proc), None)
 
 
-# Shared native-vision plumbing
+# Native vision
 
-# Cap image bytes per vision turn (base64 inflates ~4/3 against a capped transcript).
+# Cap image bytes per vision turn.
 VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 VISION_MIME_BY_EXT = {
     ".jpg": "image/jpeg",
@@ -206,7 +204,7 @@ VISION_MAX_IMAGES_PER_TURN = 4
 _ATTACHMENT_SAVED_PATTERN = (
     r"\[[^\]\n]*attachment saved to:\s*([^\]\n]+?)\s*\]"
 )
-# Compiled once (module-constant pattern; per-call compile burned CPU every turn).
+# Compiled once.
 _ATTACHMENT_SAVED_RE = re.compile(_ATTACHMENT_SAVED_PATTERN, re.IGNORECASE)
 
 
@@ -318,8 +316,7 @@ class DetachedTaskStatus:
     waiting_for: str = ""
 
 
-# Presentation-only empty-reply fallback: never stored, so "no text"
-# stays distinct and worker placeholders can't echo verbatim.
+# Presentation-only empty-reply fallback: never stored.
 NO_RESPONSE_TEXT = "(no response)"
 
 
@@ -333,21 +330,21 @@ class AgentResult:
     events: list[ChatEvent] = field(default_factory=list)
     text: str = ""
     error: str | None = None
-    # Backend-shaped usage dict; None when unreported. See agent.format_usage.
+    # Backend-shaped usage dict; None when unreported.
     usage: dict | None = None
-    # Provider jobs outliving the CLI stream; tracked in a durable ledger, not as ChatEvents.
+    # Provider jobs outliving the stream; tracked in a durable ledger.
     detached_tasks: list[DetachedTaskRef] = field(default_factory=list)
-    # Requests for Cozter to launch provider tasks post-stream (no provider id yet).
+    # Requests to launch provider tasks post-stream.
     detached_task_requests: list[DetachedTaskRequest] = field(
         default_factory=list,
     )
-    # Set by agent.run after routing; later completions append here.
+    # Set by agent.run after routing.
     session_id: str | None = None
-    # Per-run parser correlation ids (on the result, so concurrent turns can't cross-wire).
+    # Per-run parser correlation ids.
     detached_task_tool_use_ids: set[str] = field(
         default_factory=set, repr=False,
     )
-    # Set when the judge loop exhausts mid-CONTINUE: PARTIAL draft + instruction for one auto-chained turn.
+    # Set when the judge loop exhausts mid-CONTINUE.
     continue_instruction: str = ""
 
 
@@ -584,8 +581,7 @@ def truncate_status_text(text: object, *, limit: int = 200) -> str:
     if len(value) <= limit:
         return value
     if limit <= len(_TRUNCATED_PREVIEW_SUFFIX):
-        # Too tight for the full honesty marker: keep a visible cut
-        # indicator so the preview is never mistaken for full content.
+        # Too tight for the full marker: keep a visible cut indicator.
         if limit <= 1:
             return "…"[:limit]
         return value[:limit - 1] + "…"
@@ -630,8 +626,7 @@ async def create_prompt_subprocess(
         cmd,
         stdin=asyncio.subprocess.PIPE,
         cwd=cwd,
-        # On POSIX, a new session lets /stop or /inject kill the whole process
-        # group. Windows uses taskkill /T in utils.terminate_process_group.
+        # New session lets /stop or /inject kill the whole process group.
         start_new_session=os.name != "nt",
     )
     if proc.stdin is None:
@@ -715,7 +710,7 @@ async def _reap_failed_prompt_subprocess(
         else:
             await proc.wait()
     finally:
-        # No readers here; an escaped descendant can hold descriptors, so release them explicitly.
+        # No readers here; release descriptors explicitly.
         close_subprocess_pipe(proc, 1)
         close_subprocess_pipe(proc, 2)
 
@@ -731,44 +726,38 @@ class Backend(ABC):
         (used only by the compaction code path)
     """
 
-    # Class-level metadata -------------------------------------------------
+    # Class-level metadata
     name: str = ""
     executable: str = ""  # binary name used in "CLI not found" messages
     available_models: tuple[str, ...] = ()
-    # Curated catalogs accept ``config.extra_models``; account-authoritative
-    # discovery can opt out so unverified IDs never re-enter the picker.
+    # Curated catalogs accept ``config.extra_models``.
     allow_unverified_extra_models: bool = True
     default_model: str = ""
     default_summary_model: str = ""
     effort_levels: tuple[str, ...] = ()
 
-    # Per-tier defaults for flexible ("low"/"mid"/"high"); empty falls back
-    # to default_model for every tier.
+    # Per-tier defaults for flexible.
     tier_models: dict[str, str] = {}
 
-    # True = consumes TOOL_SCHEMA directly (OpenAI-shape HTTP); False = CLI
-    # whose tools are baked into the binary (plugins via bash prelude).
+    # True = consumes TOOL_SCHEMA directly (OpenAI-shape HTTP).
     supports_typed_plugins: bool = False
 
-    # Untyped bash/plugin prelude: True for CLIs (model can shell-invoke), False for shell-less HTTP.
+    # Untyped bash/plugin prelude for CLIs.
     supports_plugin_prelude: bool = True
 
-    # Native image pixels (False = dimensions-only path, never send droppable bytes).
+    # Native image pixels.
     supports_vision: bool = False
 
-    # Delivery form when supports_vision: openai_parts | cli_file_flag |
-    # prompt_file | stdin_text (see agent photo handoff); text-only = none.
+    # Delivery form when supports_vision (text-only = none).
     vision_mode: str = "none"
 
-    # Provider-owned jobs queryable after our subprocess exits (e.g.
-    # ``claude --bg``). Default false: don't promise what a CLI can't do.
+    # Provider-owned jobs queryable after our subprocess exits.
     supports_detached_tasks: bool = False
 
-    # CLI permission flags (shared selection). HTTP backends leave None:
-    # no permission-aware subprocess command line.
+    # CLI permission flags (HTTP backends leave None).
     permission_arg_sets: dict[str, tuple[str, ...]] | None = None
 
-    # Behavior -------------------------------------------------------------
+    # Behavior
 
     def health_check(self) -> tuple[bool, str]:
         """Report whether this backend is ready to run a turn.

@@ -185,7 +185,7 @@ class CodexParseTests(unittest.TestCase):
         result = _run(self.backend, [
             {"type": "item.completed", "item": None},
         ])
-        # Malformed line ignored: no text, no crash.
+        # Malformed line ignored.
         self.assertEqual(result.text, "")
         self.assertEqual(result.events, [])
 
@@ -396,7 +396,7 @@ class CopilotParseTests(unittest.TestCase):
         }
         result = _run(self.backend, [event])
         self.assertEqual(result.text, "answer")
-        # Internal calls (plan/merge/compact) use this path instead of parse_event.
+        # Internal calls use this path.
         self.assertEqual(self.backend.extract_agent_text(event), "answer")
 
     def test_current_cli_uses_final_message_not_partial_deltas(self) -> None:

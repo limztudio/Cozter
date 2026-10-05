@@ -23,29 +23,27 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-# A reply can finish while a previous post-turn compaction is still running.
-# Do not let both snapshots race to summarize and rewrite the same session.
+# One compaction per session: no racing snapshots.
 _in_flight: set[tuple[str, str]] = set()
 
 
 KEEP_RECENT_AFTER_COMPACT = 5
-MAX_SUMMARY_CHARS = 80_000  # ~20K tokens - safe for most models
-COMPACT_TIMEOUT: float | None = 3600.0  # work cap; cancel still stops instantly
+MAX_SUMMARY_CHARS = 80_000  # ~20K tokens
+COMPACT_TIMEOUT: float | None = 3600.0  # work cap
 
-# Trigger before stored material crowds out system instructions/tools/reply space.
+# Trigger before stored material crowds out the reply.
 _MODEL_CONTEXT_COMPACT_FRACTION = 0.60
-# ``/context`` remains a per-workspace character ceiling for saved context.
-# Summarize before its truncation logic has to discard much raw history.
+# ``/context`` is the per-workspace ceiling for saved context.
+# Summarize before truncation discards raw history.
 _HISTORY_BUDGET_COMPACT_FRACTION = 0.75
 
-# Old summaries are model output: reserve most of the prompt for raw
-# messages so one oversized summary can't block every later pass.
+# Reserve most of the prompt for raw messages.
 _PREVIOUS_SUMMARY_FRACTION = 4
 _PREVIOUS_SUMMARY_TRUNCATION_MARKER = (
     "\n… [previous summary truncated: remainder omitted — this is a preview,"
     " not full coverage; say PARTIAL + remainder when coverage is unclear]\n"
 )
-# Oversized-first-message marker: shared so consumed-char accounting matches the rendered line.
+# Shared oversized-first-message marker.
 _OVERSIZED_MESSAGE_MARKER = (
     "… [message truncated for budget — preview only;"
     " summarize only shown prefix; say PARTIAL + remainder]"
@@ -116,7 +114,7 @@ def _parse_output(
         titling.clean_title(title_block) if title_block else None
     )
     if summary is None:
-        # Fallback: treat full text as summary, stripping the other blocks.
+        # Fallback: treat full text as summary.
         fallback = text
         for tag in ("LONG_TERM", "TITLE"):
             fallback = strip_marker_block(fallback, tag)
@@ -140,8 +138,7 @@ def _bounded_previous_summary(summary: str) -> str:
         return summary
     marker = _PREVIOUS_SUMMARY_TRUNCATION_MARKER
     if budget <= len(marker):
-        # Too tight for the full honesty marker: keep a visible cut
-        # indicator so the preview is never mistaken for full content.
+        # Too tight for the full marker: keep a visible cut indicator.
         if budget <= 1:
             return "…"[:budget]
         return summary[:budget - 1] + "…"
@@ -156,8 +153,7 @@ def _compaction_prompt_parts(
     """Build the fixed prefix of a compaction prompt before raw messages."""
     parts: list[str] = []
     if existing_long_term:
-        # Show up to 15% of the budget for the existing list so the model
-        # knows what to rewrite. With a target of <=30 items this is plenty.
+        # Show 15% of the budget for the existing list.
         lt_max = int(MAX_SUMMARY_CHARS * 0.15)
         lt_lines = take_recent_lines(
             existing_long_term, lt_max, lambda x: f"- {x}",
@@ -171,7 +167,7 @@ def _compaction_prompt_parts(
                     " say PARTIAL + remainder when coverage is unclear]",
                     *lt_lines,
                 ]
-                # Drop oldest lines to fit (newest retained last).
+                # Drop oldest lines to fit.
                 lt_total = sum(len(line) + 1 for line in lt_lines)
                 while len(lt_lines) > 1 and lt_total > lt_max:
                     lt_total -= len(lt_lines[1]) + 1
@@ -193,8 +189,7 @@ def _compaction_prompt_parts(
 
 def _compaction_message_budget(parts: list[str]) -> int:
     """Return the remaining raw-message budget for a prompt prefix."""
-    # Reserve a little extra for join separators and the backend's response
-    # envelope. This matches the existing conservative prompt accounting.
+    # Reserve extra for separators and the response envelope.
     overhead = len(SUMMARY_PROMPT) + sum(len(part) for part in parts) + 200
     return max(0, MAX_SUMMARY_CHARS - overhead)
 
@@ -233,7 +228,7 @@ def _oversized_first_message_prefix(
     prefix = session.format_msg_line(
         {"role": first.get("role"), "content": ""}, cap=None,
     )
-    # Leave room for the oversized-message marker carried by the partial line.
+    # Leave room for the oversized-message marker.
     if budget - len(prefix) == 1:
         marker_len = 1
     elif budget - len(prefix) <= len(_OVERSIZED_MESSAGE_MARKER):
@@ -426,7 +421,7 @@ async def _maybe_compact_under_maintenance_lock(
         return
     keep_recent = KEEP_RECENT_AFTER_COMPACT
     if oversized_first is not None:
-        # Retain the exact unseen suffix so unsent messages never look covered.
+        # Retain the unseen suffix.
         if covered_count != 1:
             logger.error(
                 "Oversized-message compaction covered an unsafe number of "
@@ -435,7 +430,7 @@ async def _maybe_compact_under_maintenance_lock(
             )
             return
     elif covered_count <= KEEP_RECENT_AFTER_COMPACT:
-        # Keep one fewer than covered so the pass still shrinks history.
+        # Keep one fewer than covered.
         if covered_count < 1:
             logger.error(
                 "Compaction did not cover enough messages for session %s "
@@ -449,7 +444,7 @@ async def _maybe_compact_under_maintenance_lock(
             "keeping %d so history can still shrink",
             session_id, covered_count, keep_recent,
         )
-    # Reject suspiciously short summaries (truncated/failed responses).
+    # Reject suspiciously short summaries.
     # Compare against the truncated stored summary so recovery can succeed.
     min_len = (
         100

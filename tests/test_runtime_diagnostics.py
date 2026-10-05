@@ -22,7 +22,7 @@ from unittest import mock
 
 def _load_main_module():
     """Import ``Cozter.__main__`` with the import-time pip install disabled."""
-    # Workspace checkout must win over the live AutoStart install on sys.path.
+    # Checkout must win over the live install on sys.path.
     workspace_pkg_parent = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
@@ -215,7 +215,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
         self._main = _load_main_module()
-        # Point LOG_DIR at temp; reset the handle so a fresh diagnostics.log opens there.
+        # Point LOG_DIR at temp for a fresh diagnostics.log.
         self._orig_log_dir = self._main.LOG_DIR
         self._orig_dump_file = self._main._dump_file
         self._faulthandler_was_enabled = faulthandler.is_enabled()
@@ -240,7 +240,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
             return file_handle.read()
 
     def test_dump_writes_header_reason_tasks_and_threads(self):
-        # A real event loop keeps the "asyncio tasks" section non-empty.
+        # A real loop keeps the tasks section non-empty.
         async def _driver():
             self._main.dump_runtime_diagnostics(None, reason="unit-test")
         asyncio.run(_driver())
@@ -269,7 +269,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
             def has_active_turns(self):
                 raise RuntimeError("boom")
 
-        # Should not raise; the error is captured inline.
+        # Should not raise; error captured inline.
         self._main.dump_runtime_diagnostics([_BrokenBot()])
         body = self._read_dump()
         self.assertIn("test:broken", body)
@@ -279,13 +279,13 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         class _NoId:
             pass
 
-        # platform_id access raises, so we fall back to the class name.
+        # platform_id raises; fall back to the class name.
         self.assertEqual(
             self._main._bot_label(_NoId()), _NoId().__class__.__name__,
         )
 
     def test_enable_faulthandler_is_best_effort_and_silent(self):
-        # Interval 0 must still enable the crash handler without raising.
+        # Interval 0 must still enable the handler.
         self._main._enable_faulthandler()
 
     def test_update_idle_diagnostic_keeps_waiting_for_active_turn(self):
@@ -340,8 +340,7 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
                 restart_started.set()
 
             def has_active_turns(self):
-                # ``BotPlatform`` keeps this true until its final reply I/O
-                # returns and its turn cleanup runs.
+                # True until final reply I/O and cleanup run.
                 return not reply_delivered.is_set()
 
             def stuck_turn_diagnostics(self):
@@ -433,7 +432,7 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
             await main.update_loop([bot], interval=1)
 
         check_mock.assert_called_once_with()
-        # No update found, so intake must not be paused for a restart.
+        # No update: intake must not pause.
         self.assertEqual(bot.restart_calls, 0)
 
 

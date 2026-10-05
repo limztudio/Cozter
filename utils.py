@@ -15,21 +15,18 @@ from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
-COZTER_DIR = ".cozter"  # name of the per-workspace dotfile directory
+COZTER_DIR = ".cozter"  # per-workspace dotfile directory
 CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.)
     os.path.dirname(os.path.abspath(__file__)), ".config",
 )
 _STDERR_CAPTURE_BYTES = 64 * 1024
-# Malformed CLIs can emit endless lines; keep a generous cap against decoder OOM.
+# Malformed CLIs can emit endless lines; cap them.
 _MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024
-# A CLI spawned with ``start_new_session=True`` leads the group: snapshot
-# the id at spawn, before the parent can exit.
+# A spawned CLI leads the group: snapshot the id at spawn.
 _PROCESS_GROUP_ID_ATTR = "_cozter_process_group_id"
-# After signalling the group, allow a short pipe-shutdown grace before
-# abandoning the reader.
+# After signalling the group, allow a short pipe-shutdown grace.
 _POST_EXIT_STREAM_DRAIN_TIMEOUT = 1.0
-# Exited-parent stdout is untrusted: cap what is parsed during the backlog
-# grace so an inheriting child can't grow memory.
+# Exited-parent stdout is untrusted: cap the backlog parse.
 _POST_EXIT_STREAM_DRAIN_BYTES = 8 * 1024 * 1024
 _PROCESS_EXIT_POLL_INTERVAL = 0.05
 _BackgroundResult = TypeVar("_BackgroundResult")
@@ -117,17 +114,17 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
     if len(head) < 16:
         return None
     try:
-        # PNG: 8-byte signature + IHDR chunk with big-endian width/height.
+        # PNG: signature + IHDR width/height.
         if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
             width, height = struct.unpack(">II", head[16:24])
             if 0 < width <= 100000 and 0 < height <= 100000:
                 return (width, height, "PNG")
-        # GIF: "GIF87a"/"GIF89a" + little-endian width/height.
+        # GIF: header + width/height.
         elif head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
             width, height = struct.unpack("<HH", head[6:10])
             if width and height:
                 return (width, height, "GIF")
-        # JPEG: scan for SOF0-SOF3 markers carrying big-endian height/width.
+        # JPEG: scan SOF markers for height/width.
         elif head[:2] == b"\xff\xd8":
             offset = 2
             while offset + 9 < len(head):
@@ -148,7 +145,7 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
                 if seg_len < 2:
                     return None
                 offset += 2 + seg_len
-        # BMP: "BM" + little-endian width/height at offset 18.
+        # BMP: width/height at offset 18.
         elif head[:2] == b"BM" and len(head) >= 26:
             width, height = struct.unpack("<ii", head[18:26])
             if width and height:
@@ -158,7 +155,7 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
     return None
 
 
-# Canonical image extensions (by name). agent.py sniffs by content instead.
+# Canonical image extensions (agent.py sniffs by content).
 IMAGE_EXTENSIONS = frozenset({
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp",
 })
@@ -191,8 +188,7 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as file_handle:
             json.dump(data, file_handle, indent=2)
-            # fsync before rename: a torn write otherwise reads as
-            # "absent" and resets to defaults.
+            # fsync before rename: a torn write reads as "absent".
             file_handle.flush()
             os.fsync(file_handle.fileno())
         os.replace(tmp_path, target)  # atomic on same filesystem
@@ -305,8 +301,7 @@ def mark_process_group_leader(proc: asyncio.subprocess.Process) -> None:
     pid = getattr(proc, "pid", None)
     if not isinstance(pid, int) or pid <= 0:
         return
-    # asyncio's Process permits custom attributes.  Keep this defensive for
-    # process-like adapters supplied by tests or future in-process backends.
+    # asyncio's Process permits custom attributes; stay defensive.
     with contextlib.suppress(AttributeError, TypeError):
         setattr(proc, _PROCESS_GROUP_ID_ATTR, pid)
 
@@ -346,12 +341,11 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
     """
     pid = getattr(proc, "pid", None)
     if os.name == "nt":
-        # No POSIX groups on Windows: ``taskkill /T`` walks the child tree
-        # (falls back to a single-process kill).
+        # No POSIX groups on Windows: ``taskkill /T`` walks the tree.
         if terminate_windows_process_tree(pid):
             return
     elif has_managed_process_group(proc):
-        # Use the stored group: the parent may already have exited.
+        # Use the stored group (parent may have exited).
         if _kill_process_group(getattr(proc, _PROCESS_GROUP_ID_ATTR)):
             return
     elif isinstance(pid, int) and pid > 0:
@@ -451,7 +445,7 @@ async def finish_process_stderr(
         if proc.returncode is None:
             await kill_and_wait(proc)
 
-        # One scheduling turn for buffered stderr before judging an inherited descriptor live.
+        # One scheduling turn for buffered stderr first.
         await asyncio.sleep(0)
         if stderr_task.done():
             return await stderr_task
@@ -487,8 +481,7 @@ async def finish_process_stderr(
             await abandon_subprocess_stream_task(proc, 2, stderr_task)
             return ""
     except asyncio.CancelledError:
-        # A second cancellation during a turn's finally block must not leave
-        # a background reader attached to a leaked pipe.
+        # A second cancellation must not leak a background reader.
         if not stderr_task.done():
             await abandon_subprocess_stream_task(proc, 2, stderr_task)
         raise
@@ -707,8 +700,7 @@ async def iter_process_json_events(
     def _account_event_line(line: str) -> None:
         nonlocal post_exit_bytes
         if parent_exited:
-            # ``line`` is decoded with replacement, so its re-encoded size
-            # is a safe close approximation for a post-exit byte budget.
+            # Re-encoded size approximates the post-exit byte budget.
             post_exit_bytes += len(line.encode("utf-8", errors="replace"))
 
     events = iter_json_events(
@@ -744,8 +736,7 @@ async def iter_process_json_events(
                 getattr(proc, "pid", "?"),
             )
             terminate_process_group(proc)
-        # A preserved provider task may intentionally outlive this process,
-        # but Cozter must not retain its inherited read end forever.
+        # Preserved provider tasks may outlive us; don't retain the read end.
         close_subprocess_pipe(proc, 1)
         if not next_event_task.done():
             next_event_task.cancel()
@@ -754,8 +745,7 @@ async def iter_process_json_events(
     try:
         while True:
             if parent_exited:
-                # Let a finite parent-authored backlog reach the parser, but
-                # never let an inherited child continue the turn forever.
+                # Let the parent-authored backlog through, not an inherited child.
                 assert post_exit_deadline is not None
                 if not next_event_task.done():
                     remaining = post_exit_deadline - loop.time()
@@ -773,7 +763,7 @@ async def iter_process_json_events(
                         await _abandon_post_exit_stream()
                         return
                 if post_exit_bytes >= _POST_EXIT_STREAM_DRAIN_BYTES:
-                    # Preserve a pending EOF, but drop further events past the post-exit allowance.
+                    # Preserve a pending EOF; drop events past the allowance.
                     try:
                         await next_event_task
                     except StopAsyncIteration:
@@ -1062,7 +1052,7 @@ async def drain_llm_subprocess(
             if proc.returncode is None:
                 await kill_and_wait(proc)
             stderr = await finish_process_stderr(proc, stderr_task)
-            # Internal LLM calls own no detached work: end the group with the foreground response.
+            # Internal LLM calls own no detached work.
             if has_managed_process_group(proc):
                 terminate_process_group(proc)
         finally:

@@ -86,8 +86,7 @@ def _signal_rate_limit_delay(exc: BaseException) -> float | None:
         return None
     return min(delay, _SIGNAL_ATTACH_RETRY_MAX_DELAY_SEC)
 
-# Send-methods are not retried on transport error: a duplicate is worse
-# than a rare lost reply. (``remoteDelete`` is idempotent, so omitted.)
+# Send-methods aren't retried: a duplicate is worse than a lost reply.
 _NON_IDEMPOTENT_RPC_METHODS = frozenset({"send"})
 
 
@@ -147,7 +146,7 @@ class SignalBot(BotPlatform):
     def authorized(self, user_id: str, chat_id: str) -> bool:
         return str(chat_id) in self._group_ids
 
-    # send/edit primitives
+    # send/edit
 
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -210,10 +209,10 @@ class SignalBot(BotPlatform):
         )
 
     async def send_status(self, chat_id: str, text: str) -> None:
-        # No cheap transient status on Signal; skip per-tool spam, deliver the final reply.
+        # No transient status on Signal; deliver the final reply.
         return None
 
-    # lifecycle
+    # startup/shutdown
 
     async def start(self) -> None:
         self._stop_requested.clear()
@@ -269,7 +268,7 @@ class SignalBot(BotPlatform):
         await self._stop_jsonrpc()
         logger.info("Signal bot stopped.")
 
-    # JSON-RPC transport
+    # transport
 
     async def _start_jsonrpc(self) -> None:
         await self._connect_jsonrpc(resubscribe=False)
@@ -468,21 +467,20 @@ class SignalBot(BotPlatform):
         """
         subscription = await self._subscribe_receive()
 
-        # Keep this transition await-free so EOF races still reconnect.
+        # Keep this transition await-free.
         self._receive_subscription = subscription
         self._receive_started = True
         self._receive_subscribed = True
         if self._jsonrpc_connected():
             return
 
-        # Stale subscription from the closed connection; clear before the reconnect path remakes it.
+        # Clear the stale subscription before reconnect remakes it.
         self._receive_subscription = None
         self._receive_subscribed = False
         try:
             await self._connect_jsonrpc(resubscribe=True)
         except BaseException:
-            # Match failed-startup semantics: a caller that retries start()
-            # must not inherit a partially enabled receive state.
+            # A retrying caller must not inherit partial receive state.
             self._receive_started = False
             raise
 
@@ -533,11 +531,10 @@ class SignalBot(BotPlatform):
                 )
             except Exception as exc:
                 if attempt == 0 and _is_jsonrpc_transport_error(exc):
-                    # Close so the next request reconnects, regardless of
-                    # whether we retry this one.
+                    # Close so the next request reconnects.
                     await self._close_jsonrpc_transport()
                     if method in _NON_IDEMPOTENT_RPC_METHODS:
-                        # Dispatched-before-drop: retrying duplicates, so surface the error.
+                        # Dispatched-before-drop: surface the error.
                         raise
                     logger.warning(
                         "Signal JSON-RPC request %s failed; reconnecting: %s",
@@ -577,7 +574,7 @@ class SignalBot(BotPlatform):
                 await writer.drain()
             response = await asyncio.wait_for(fut, timeout=timeout)
         except BaseException:
-            # CancelledError is BaseException: pop it, or stale requests linger for a healthy socket's life.
+            # CancelledError is BaseException: pop it.
             self._jsonrpc_pending.pop(request_id, None)
             raise
         if not isinstance(response, dict):
@@ -720,7 +717,7 @@ class SignalBot(BotPlatform):
 
         with reserve_upload_path(upload_dir, filename) as local_path:
             if source_path:
-                # Large local attachments: bounded copy off the event loop (like Telegram's local-API path).
+                # Large local attachments: bounded copy off the event loop.
                 await asyncio.to_thread(
                     copy_file_with_limit,
                     source_path,
@@ -765,7 +762,7 @@ class SignalBot(BotPlatform):
             attachment=attachment,
         )
 
-    # signal-cli helpers
+    # helpers
 
     async def _resolve_group_ids(self) -> dict[str, str]:
         resolved: dict[str, str] = {}
@@ -1415,7 +1412,7 @@ def _signal_style_strings_for_chunk(
     ]
     if not relevant:
         return []
-    # One UTF-16 prefix sum (astral = 2 units); avoids per-span re-encode (was quadratic).
+    # One UTF-16 prefix sum (astral = 2).
     need = max(end for _, end, _ in relevant)
     prefix: list[int] = [0] * (need - chunk_start + 1)
     total = 0

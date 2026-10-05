@@ -28,7 +28,7 @@ from aiohttp.resolver import DefaultResolver
 from ..utils import clip_status_value, is_path_within
 
 
-# Bound raw HTTP bodies per web call: a pathological URL must not OOM the bot.
+# Bound raw HTTP bodies per web call.
 _MAX_FETCH_BYTES = 5 * 1024 * 1024  # 5 MB
 HTTP_USER_AGENT_HEADERS = {
     "User-Agent": (
@@ -93,8 +93,7 @@ class AgentTool(ABC):
     order: ClassVar[int] = 100
     requires_full_permission: ClassVar[bool] = False
 
-    # Set by the loader per instance (not on the class): CLI backends use
-    # it to enumerate plugins in their bash prelude.
+    # Set per instance by the loader for CLI plugin enumeration.
     is_plugin: bool = False
 
     # Populated by __init_subclass__. Read by the package's __init__.
@@ -102,8 +101,7 @@ class AgentTool(ABC):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        # Skip abstract intermediates: check run()'s own flag, which is set
-        # at definition time (ABCMeta fills __abstractmethods__ later).
+        # Skip abstract intermediates: run()'s flag is set at definition time.
         if getattr(cls.run, "__isabstractmethod__", False):
             return
         instance = cls()
@@ -171,7 +169,7 @@ class AgentTool(ABC):
         print(result)
 
 
-# Helpers shared across tools
+# Shared helpers
 
 
 def resolve_workspace_entry(workspace: str, path: str) -> str:
@@ -219,7 +217,7 @@ def coerce_int_arg(
 ) -> int:
     """Return an int argument clamped to the provided bounds."""
     try:
-        # Wrong-typed args fall back to the default, never a coerced neighbor.
+        # Wrong-typed args fall back to the default.
         if isinstance(value, bool):
             raise TypeError("bool is not an int arg")
         if isinstance(value, float) and not value.is_integer():
@@ -623,8 +621,7 @@ def read_text_for_edit(path: str) -> tuple[str, bool] | str:
         with open(path, "rb") as file_handle:
             if os.fstat(file_handle.fileno()).st_size > _MAX_EDIT_FILE_BYTES:
                 return _edit_file_too_large_error()
-            # stat() races growth: keep the read itself bounded (+1 byte
-            # distinguishes an exact-limit file).
+            # stat() races growth: bound the read (+1 byte flags exact-limit).
             raw = file_handle.read(_MAX_EDIT_FILE_BYTES + 1)
     except OSError as exc:
         return f"could not read file: {exc}"
@@ -700,7 +697,7 @@ def create_text_file_atomically(
         _write_text_to_fd(fd, text)
         return _publish_new_file_no_clobber(tmp_path, path)
     finally:
-        # Target holds the inode after a successful link; unlink is safe.
+        # Target holds the inode after linking; unlink is safe.
         with suppress(OSError):
             os.unlink(tmp_path)
 
@@ -731,7 +728,7 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
     os.close(fd)
     try:
-        # copy2 keeps metadata on the hard-link path; fsync before publishing.
+        # copy2 keeps metadata; fsync before publishing.
         shutil.copy2(source_path, tmp_path)
         with open(tmp_path, "rb") as tmp_file:
             os.fsync(tmp_file.fileno())
@@ -739,7 +736,7 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
             tmp_path, target_path, preserve_metadata=True,
         )
     finally:
-        # Ours in every case (link owns the inode; fallback copied it).
+        # Temp is ours in every case (link owns the inode; fallback copied).
         with suppress(OSError):
             os.unlink(tmp_path)
 
@@ -791,8 +788,7 @@ def _hard_link_unsupported(exc: OSError) -> bool:
     }
     if exc.errno in unsupported_errnos:
         return True
-    # Windows reports these when the volume or share does not support hard
-    # links. Do not fall back for arbitrary access or I/O failures.
+    # Hard links unsupported on this volume/share; other I/O errors still raise.
     return getattr(exc, "winerror", None) in {1, 50}
 
 
@@ -850,7 +846,7 @@ def _copy_file_metadata_to_fd(source_path: str, target_fd: int) -> None:
             ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
         )
     except (AttributeError, OSError):
-        # Bytes + no-clobber matter more than metadata on this fallback.
+        # Bytes + no-clobber matter more than metadata here.
         return
 
 
@@ -893,16 +889,16 @@ def _move_regular_file_no_clobber(source_path: str, target_path: str) -> bool:
     """Publish a regular file at a new name before unlinking its old name."""
     source_stat = os.stat(source_path, follow_symlinks=False)
     try:
-        # Atomic create (unlike rename): refuses a destination that raced in.
+        # Atomic create (unlike rename): refuses a raced-in destination.
         os.link(source_path, target_path, follow_symlinks=False)
-        # Same inode as source at publish: identity survives later rewrites.
+        # Same inode as source at publish.
         target_stat = source_stat
     except FileExistsError:
         return False
     except OSError as exc:
         if not _hard_link_unsupported(exc):
             raise
-        # No-link filesystem/mount: finished-copy publish instead; unlink source after.
+        # No-link filesystem: finished-copy publish instead.
         if not copy_file_atomically(source_path, target_path):
             return False
         target_stat = os.stat(target_path, follow_symlinks=False)
@@ -952,7 +948,7 @@ def _complete_no_clobber_move(
     try:
         os.unlink(source_path)
     except OSError:
-        # Roll back only our target; a replaced-by-other target is left alone.
+        # Roll back only our target.
         _unlink_if_same_file(target_path, target_stat)
         raise
 
@@ -960,8 +956,7 @@ def _complete_no_clobber_move(
 def _rename_path_no_clobber(source_path: str, target_path: str) -> bool:
     """Use a platform-native no-replace rename for non-file paths."""
     if os.name == "nt":
-        # Python documents Windows os.rename as failing when the destination
-        # exists, unlike POSIX's replacement behavior.
+        # Windows os.rename fails when the destination exists (unlike POSIX).
         try:
             os.rename(source_path, target_path)
         except FileExistsError:
@@ -1026,14 +1021,14 @@ async def read_bounded_text(
     remaining = _MAX_FETCH_BYTES
     truncated = False
     while remaining:
-        # read(n) may short-return before EOF: loop, don't trust one big read.
+        # read(n) may short-return: loop to EOF.
         chunk = await resp.content.read(min(64 * 1024, remaining))
         if not chunk:
             break
         chunks.append(chunk)
         remaining -= len(chunk)
         if remaining <= 0:
-            # Probe one byte: capped or exact without buffering the firehose.
+            # Probe one byte: capped or exact without buffering.
             extra = await resp.content.read(1)
             if extra:
                 truncated = True
@@ -1129,7 +1124,7 @@ def _is_public_ip(value: str) -> bool:
     except ValueError:
         return False
 
-    # Scoped IPv6 is never a valid public target.
+    # Scoped IPv6 is never public.
     if isinstance(address, ipaddress.IPv6Address) and address.scope_id:
         return False
 
@@ -1191,13 +1186,12 @@ def validate_public_url(url: str) -> str | None:
     if host is None or not _is_valid_host(host):
         return "Error: invalid URL host"
 
-    # aiohttp skips resolvers for numeric hosts: check every numeric
-    # spelling locally (incl. legacy IPv4 forms) before connecting.
+    # aiohttp skips resolvers for numeric hosts: check them locally first.
     default_port = 443 if parsed.scheme == "https" else 80
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        # Same IDNA handling as aiohttp/yarl before the numeric probe.
+        # Same IDNA handling as aiohttp/yarl.
         numeric_host = host.encode("idna").decode("ascii")
     else:
         numeric_host = host
@@ -1224,7 +1218,7 @@ async def open_public_http_session() -> AsyncIterator[aiohttp.ClientSession]:
     resolver = PublicResolver()
     connector = aiohttp.TCPConnector(
         resolver=resolver,
-        # Re-resolve per connection: cache must not outlive DNS validation.
+        # Re-resolve per connection; cache must not outlive validation.
         use_dns_cache=False,
     )
     try:
@@ -1235,7 +1229,7 @@ async def open_public_http_session() -> AsyncIterator[aiohttp.ClientSession]:
         ) as session:
             yield session
     finally:
-        # Caller-owned resolver: close only if we created it.
+        # Close only a resolver we created.
         await resolver.close()
 
 
@@ -1372,8 +1366,7 @@ def html_to_text(value: str) -> str:
             index = next_markup
             continue
 
-        # Keep a bare '<' visible; on unfinished markup stop instead of
-        # rescanning the same malformed suffix.
+        # Keep a bare '<' visible; don't rescan a malformed suffix.
         if not _is_html_tag_start(value, index) and not (
             index + 1 < length and value[index + 1] in "!?"
         ):

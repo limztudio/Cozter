@@ -20,8 +20,8 @@ ROUTER_PROMPT = (
     "- One line: bare session id, or NEW.\n"
     "- No tools; decide from the input.\n"
 )
-ROUTER_TIMEOUT: float | None = 3600.0  # work cap; cancel still stops instantly
-ROUTER_MAX_SESSIONS = 12  # cap input size; sessions are listed newest-first
+ROUTER_TIMEOUT: float | None = 3600.0  # work cap
+ROUTER_MAX_SESSIONS = 12  # cap input size
 ROUTER_PER_SESSION_CHARS = 400
 ROUTER_PROMPT_PREVIEW_CHARS = 600
 
@@ -34,7 +34,7 @@ def _truncate_router_text(text: str, limit: int) -> str:
         return "…"[:limit]
     marker = "… [truncated preview]"
     if limit <= len(marker):
-        # Too tight for the full marker: keep a visible cut indicator.
+        # Too tight for the full marker: keep a cut indicator.
         return text[:limit - 1] + "…" if limit > 1 else "…"[:limit]
     return text[:limit - len(marker)] + marker
 
@@ -136,7 +136,7 @@ def _parse_router_output(raw: str, valid_ids: set[str]) -> str | None:
             continue
         if token.upper() == "NEW":
             return "NEW"
-        # IDs may carry punctuation: membership is the check.
+        # IDs may carry punctuation.
         if token in valid_ids:
             return token
     return None
@@ -156,7 +156,7 @@ async def select_or_create_session(
     """
     backend = backends_agent.get_backend(backend_name)
 
-    # Parse only the newest files; the prompt caps at ROUTER_MAX_SESSIONS anyway.
+    # Parse only the newest files.
     sessions_data, total_sessions = session.list_newest_sessions_with_data(
         workspace_path, ROUTER_MAX_SESSIONS,
     )

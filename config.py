@@ -12,7 +12,7 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 DEFAULT_UPDATE_CHECK_INTERVAL = 300
 DEFAULT_RECENT_WORKSPACE_LIMIT = 10
 DEFAULT_MESSAGE_QUEUE_SIZE = 50
-# Bound one attachment below stream/platform quotas; raise only with justification.
+# Bound one attachment below stream/platform quotas.
 DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _PERMISSION_LEVELS = frozenset({"full", "auto", "confirm", "deny"})
 
@@ -37,21 +37,21 @@ _DEFAULT_CONFIG = {
     "meta_base_url": "https://api.meta.ai/v1",
     "meta_socket_timeout": 3600,
     "meta_max_retries": 2,
-    # Real-work cap: slow work finishes; cancel still stops instantly.
+    # Real-work cap.
     "tool_timeout": 3600,
-    # Stuck-turn diagnostic interval: emits diagnostics, never cancels work.
+    # Stuck-turn diagnostic interval.
     "update_idle_timeout": 1200,
-    # Periodic faulthandler dump interval (0 disables; SIGUSR1 always works).
+    # Periodic faulthandler dump interval (0 disables).
     "dump_traceback_interval": 0,
-    # Five minutes avoids needless churn for a long-running service.
+    # Five minutes avoids churn.
     "update_check_interval": DEFAULT_UPDATE_CHECK_INTERVAL,
     "recent_workspace_limit": DEFAULT_RECENT_WORKSPACE_LIMIT,
     "message_queue_size": DEFAULT_MESSAGE_QUEUE_SIZE,
     "max_upload_bytes": DEFAULT_MAX_UPLOAD_BYTES,
     "extra_models": {},
-    # Explicit capacities for undiscoverable models: {backend: {model_or_*: tokens}}.
+    # Explicit capacities for undiscoverable models.
     "model_context_windows": {},
-    # CLI bypass needs explicit operator opt-in via config.json.
+    # CLI bypass needs operator opt-in via config.json.
     "max_permission": "auto",
     "show_usage": True,
 }
@@ -78,7 +78,7 @@ def _load_config_object() -> dict:
         mtime_ns = stat_result.st_mtime_ns
         size = stat_result.st_size
     except OSError:
-        # Missing/unstatable: fall through to open() to keep error semantics.
+        # Missing/unstatable: fall through to open().
         with open(CONFIG_PATH, encoding="utf-8") as file_handle:
             cfg = json.load(file_handle)
         if not isinstance(cfg, dict):
@@ -132,7 +132,7 @@ def _create_default_config() -> None:
     os.makedirs(config_dir, mode=0o700, exist_ok=True)
     _restrict_config_permissions(config_dir, 0o700)
 
-    # os.open's explicit mode guarantees no group/other read bits (open() honors umask).
+    # os.open's mode guarantees no group/other read bits.
     fd = os.open(
         CONFIG_PATH,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -401,7 +401,7 @@ def load_config() -> dict:
         try:
             _create_default_config()
         except FileExistsError:
-            # Raced by another startup; continue through normal validation.
+            # Raced by another startup; continue validation.
             pass
         except (OSError, RuntimeError) as exc:
             print(f"ERROR: could not create a private config file: {exc}")
@@ -449,7 +449,7 @@ def load_config() -> dict:
         sys.exit(1)
     cfg["max_permission"] = normalized_max_permission
 
-    # Constructor-consumed (not via getters): normalize so bad JSON can't crash startup.
+    # Constructor-consumed: normalize so bad JSON can't crash startup.
     for key in (
         "update_check_interval",
         "recent_workspace_limit",
@@ -464,7 +464,7 @@ def load_config() -> dict:
         ):
             cfg[key] = _DEFAULT_CONFIG[key]
 
-    # Filter blank tokens so placeholders fail as "not configured", not runtime auth.
+    # Filter blank tokens.
     cfg["telegram_bot_tokens"] = normalize_string_list(
         cfg.get("telegram_bot_tokens") or []
     )
@@ -485,7 +485,7 @@ def load_config() -> dict:
         if isinstance(signal_socket_raw, str) else ""
     )
 
-    # Coerce IDs to strings: bare ints crash the constructor, bare strings iterate chars.
+    # Coerce IDs to strings.
     raw_user_ids = cfg.get("user_ids")
     if isinstance(raw_user_ids, (str, int)) and not isinstance(
         raw_user_ids, bool,
@@ -527,7 +527,7 @@ def load_config() -> dict:
                 f" Socket Mode in {CONFIG_PATH}."
             )
             sys.exit(1)
-        # Drop non-string/blank entries so placeholders fail the populated check.
+        # Drop non-string/blank entries.
         slack_channels = normalize_string_list(
             cfg.get("slack_channel_ids") or []
         )

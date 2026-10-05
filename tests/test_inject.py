@@ -74,8 +74,7 @@ class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
                     args="late requirement", attachment=None, platform=bot,
                 ))
 
-                # A late inject must never be dropped: the live window is
-                # closed, so it queues as a follow-up turn instead.
+                # A late inject queues as a follow-up turn.
                 self.assertNotIn("The task has already finished.", bot.sent)
                 self.assertNotIn("Injected.", bot.sent)
                 self.assertTrue(
@@ -83,9 +82,8 @@ class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
                     bot.sent,
                 )
 
-                # The background drain may already have consumed the
-                # in-memory entry, so verify via the queued reply plus the
-                # durable ledger instead of racing the queue.
+                # The drain may have consumed the entry; verify via the reply
+                # plus the durable ledger instead of racing the queue.
                 queued_entry = None
                 try:
                     queued_entry = bot._message_queues["u1"].get_nowait()
@@ -112,7 +110,7 @@ class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
                 bot.release_final_reply.set()
                 await asyncio.wait_for(turn, timeout=1)
 
-            # Direct unit call skips _dispatch_ai cleanup; pop the closed queue here.
+            # Direct unit call skips cleanup; pop the closed queue.
             bot._inject_queues.pop("u1", None)
 
 

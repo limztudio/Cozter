@@ -21,7 +21,7 @@ class TestBot(BotPlatform):
     keeping the abstract-platform plumbing in one place.
     """
 
-    # Reusable fake (Test* name predates pytest): mark to silence collection warnings.
+    # Reusable fake: mark to silence collection warnings.
     __test__ = False
 
     @property
@@ -85,7 +85,7 @@ def process_is_running(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    # A reparented zombie can't hold a pipe or mutate; kill(0) suffices off Linux.
+    # A reparented zombie can't mutate; kill(0) suffices off Linux.
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as file_handle:
             parts = file_handle.read().split()

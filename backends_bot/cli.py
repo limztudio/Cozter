@@ -32,7 +32,7 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Faux local-user id: keeps CLI state files from colliding with Telegram/Slack ids.
+# Faux local-user id: no collision with Telegram/Slack ids.
 _LOCAL_ID = "local"
 
 
@@ -55,41 +55,36 @@ class CliBot(BotPlatform):
 
     @property
     def platform_id(self) -> str:
-        # Stable string so workspace/session state persists across CLI
-        # sessions. Prefixed to keep it disjoint from Slack/Telegram ids.
+        # Stable, prefixed: persists across sessions, disjoint from chat ids.
         return f"cli:{_LOCAL_ID}"
 
     def authorized(self, user_id: str, _chat_id: str) -> bool:
-        # Anyone running this binary already has shell access; authorize
-        # the lone local user unconditionally.
+        # Local binary implies shell access; authorize unconditionally.
         return True
 
-    # send/edit primitives
+    # send/edit
 
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
     ) -> MessageHandle | None:
         if not text:
             return None
-        # Trailing newline so successive prints don't run together with
-        # the next input prompt.
+        # Trailing newline: don't run into the next prompt.
         print(text)
-        # Returning None disables the editable-status code path in base
-        # so on_event prints each event as it arrives.
+        # Returning None prints each event as it arrives.
         return None
 
     async def edit_text(
         self, handle: MessageHandle, text: str, *, rich: bool = False,
     ) -> None:
-        # No-op: we never hand out MessageHandles, so this path is
-        # unreachable for the CLI. Kept for the abstract-method contract.
+        # No-op: unreachable for the CLI; kept for the contract.
         pass
 
     async def delete_message(self, handle: MessageHandle) -> None:
         pass
 
     async def send_file(self, chat_id: str, path: str) -> None:
-        # Local-only files: point at the absolute path.
+        # Local-only files: absolute path.
         print(f"[Attached file: {os.path.abspath(path)}]")
 
     async def send_status(self, chat_id: str, text: str) -> None:
@@ -101,12 +96,12 @@ class CliBot(BotPlatform):
         if not text:
             return
         if _ANSI_ENABLED:
-            # ESC[2m = dim, ESC[90m = bright black ("gray").
+            # ESC[2m = dim, ESC[90m = gray.
             print(f"\x1b[2;90m{text}\x1b[0m")
         else:
             print(text)
 
-    # lifecycle
+    # startup/shutdown
 
     async def start(self) -> None:
         _prepare_console()
@@ -118,7 +113,7 @@ class CliBot(BotPlatform):
         )
         print("Plain text goes to the AI. Ctrl-D or Ctrl-C exits.")
         print()
-        # Load the staged reply first so delivery order survives restarts.
+        # Load the staged reply first.
         await self.restore_reply_deliveries()
         self.start_detached_task_watcher()
         self._input_task = asyncio.create_task(self._input_loop())
@@ -139,11 +134,11 @@ class CliBot(BotPlatform):
     async def send_startup_messages(
         self, version: str, commit_date: str,
     ) -> None:
-        # start() banner suffices; skip the per-platform greeting to reduce clutter.
+        # start() banner suffices; skip the greeting.
         return
 
     async def _input_loop(self) -> None:
-        # Daemon-thread stdin: never blocks loop shutdown.
+        # Daemon-thread stdin.
         loop = asyncio.get_running_loop()
         line_q: asyncio.Queue[str | None] = asyncio.Queue()
 
@@ -153,12 +148,11 @@ class CliBot(BotPlatform):
                 loop.call_soon_threadsafe(line_q.put_nowait, value)
                 return True
             except RuntimeError:
-                # Loop was closed (process exiting); nothing left to do.
+                # Loop closed; nothing left to do.
                 return False
 
         def _reader() -> None:
-            # Bare ``input()``: prompt prints from the asyncio side so it
-            # lands after the previous turn's output.
+            # Prompt prints from the asyncio side.
             while True:
                 try:
                     line = input()
@@ -166,7 +160,7 @@ class CliBot(BotPlatform):
                     _safe_post(None)
                     return
                 except Exception:
-                    # Unexpected (e.g. stdin closed). Treat as EOF.
+                    # Unexpected: treat as EOF.
                     _safe_post(None)
                     return
                 if not _safe_post(line):
@@ -176,7 +170,7 @@ class CliBot(BotPlatform):
 
         try:
             while not self._stop_requested.is_set():
-                # Reprint the prompt each turn so it sits below the last output in scrollback.
+                # Reprint the prompt below the last output.
                 print("> ", end="", flush=True)
                 line = await line_q.get()
                 if line is None:  # EOF / Ctrl-D
@@ -204,8 +198,7 @@ class CliBot(BotPlatform):
             ctx = self._ctx(command=cmd, args=args)
             await self.dispatch_command(ctx)
         else:
-            # Fire-and-forget dispatch: busy turns queue with feedback
-            # instead of stalling the input loop.
+            # Fire-and-forget dispatch: don't stall the input loop.
             create_background_task(
                 self.dispatch_text(self._ctx(text=line)),
                 name="cli-dispatch",
@@ -228,7 +221,7 @@ class CliBot(BotPlatform):
         )
 
 
-# Module helpers
+# Helpers
 
 def _prepare_console() -> None:
     """Make stdout/stderr UTF-8 so tool/file emojis don't crash cp1252."""
@@ -238,7 +231,7 @@ def _prepare_console() -> None:
 
     _enable_ansi()
 
-    # Console: WARNING+ only (file handler keeps the rest); avoids interleaving with chat.
+    # Console: WARNING+ only.
     root = logging.getLogger()
     for handler in root.handlers:
         if isinstance(handler, logging.StreamHandler) and not isinstance(
@@ -247,7 +240,7 @@ def _prepare_console() -> None:
             handler.setLevel(logging.WARNING)
 
 
-# ANSI status colors: enabled for TTYs only, so logs never contain raw escape codes.
+# ANSI status colors: TTYs only.
 _ANSI_ENABLED = False
 
 
@@ -264,10 +257,10 @@ def _enable_ansi() -> None:
         _ANSI_ENABLED = False
         return
     if sys.platform != "win32":
-        # POSIX terminals universally honor ANSI for tty output.
+        # POSIX terminals honor ANSI.
         _ANSI_ENABLED = True
         return
-    # Windows: try to enable VT processing via SetConsoleMode.
+    # Windows: enable VT processing via SetConsoleMode.
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
@@ -300,8 +293,7 @@ def _install_force_exit_on_sigint() -> None:
     _force_exit_installed = True
 
     def _force_exit() -> None:
-        # Newline-prefixed so the message doesn't run into the prompt;
-        # flush=True because os._exit skips the normal stdout flush.
+        # Newline-prefixed; flush (os._exit skips the flush).
         with contextlib.suppress(Exception):
             print("\n(interrupted)", flush=True)
         os._exit(130)  # 128 + SIGINT
@@ -310,6 +302,5 @@ def _install_force_exit_on_sigint() -> None:
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(signal.SIGINT, _force_exit)
     except (NotImplementedError, RuntimeError):
-        # Windows: add_signal_handler is unsupported. Fall back to the
-        # synchronous signal API, which is enough for SIGINT here.
+        # Windows: fall back to the synchronous signal API.
         signal.signal(signal.SIGINT, lambda *_: _force_exit())

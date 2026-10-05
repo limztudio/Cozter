@@ -46,29 +46,27 @@ from ..utils import terminate_windows_process_tree
 
 logger = logging.getLogger(__name__)
 
-# Prompt caps: Windows argv 32767 (whole line); Linux MAX_ARG_STRLEN 131072
-# per arg (plus NUL). Same conservative limit everywhere.
+# Prompt caps: Windows argv 32767; Linux MAX_ARG_STRLEN 131072.
 _WINDOWS_PROMPT_CHARS = 28_000
-# Linux per-arg cap (MAX_ARG_STRLEN 131072, plus NUL); same limit on POSIX.
+# Same per-arg cap on POSIX.
 _POSIX_PROMPT_ARG_BYTES = 128_000
 _ACP_PROTOCOL_VERSION = 1
 _MODEL_DISCOVERY_TIMEOUT_SEC = 12
 _MODEL_FAILURE_RETRY_SEC = 15
 _MAX_ACP_MESSAGES_PER_REQUEST = 100
-# Provider-controlled catalog data: bound IDs/options like HTTP backends.
+# Bound provider-controlled catalog data like HTTP backends.
 _MAX_ACP_MODEL_ID_CHARS = 512
 _MAX_ACP_MODEL_OPTIONS = 4_096
-# Also bound node count/depth: dup/overlong/invalid entries alone could
-# otherwise monopolize the synchronous picker.
+# Also bound node count/depth.
 _MAX_ACP_OPTION_NODES = _MAX_ACP_MODEL_OPTIONS * 4
 _MAX_ACP_OPTION_GROUP_DEPTH = 16
-# Bound one JSON-RPC line: a verbose/malformed CLI can't grow the picker thread.
+# Bound one JSON-RPC line.
 _MAX_ACP_LINE_CHARS = 1 * 1024 * 1024
 _COPILOT_HOME_FILES = ("config.json", "settings.json")
-# Short-lived discovery caches (not durable): bounded for long-running bots.
+# Short-lived discovery caches, bounded.
 _MAX_WORKSPACE_MODEL_CACHE_ENTRIES = 64
 
-# ``auto`` always works; generic `copilot help` names may be account-disabled — don't fall back.
+# ``auto`` always works; don't fall back to help names.
 _FALLBACK_MODELS = ("auto",)
 
 def _max_prompt_chars() -> int:
@@ -103,8 +101,7 @@ def _prompt_argv_units(prompt: str) -> int:
     if not isinstance(prompt, str):
         return 0
     if sys.platform == "win32":
-        # ``list2cmdline`` quoting: quotes can't evade the cap; astral
-        # chars count as two UTF-16 units.
+        # Astral chars count as two UTF-16 units.
         encoded = subprocess.list2cmdline([prompt])
         return len(encoded.encode("utf-16-le", errors="replace")) // 2
     return len(prompt.encode("utf-8", errors="replace"))
@@ -123,8 +120,7 @@ def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
     if budget <= 0:
         return "", True
     if sys.platform == "win32":
-        # Quoted command-line length has no cheap per-character model;
-        # keep the bounded binary search for that platform only.
+        # No cheap per-character model: binary search on Windows only.
         if _prompt_argv_units(text) <= budget:
             return text, False
         lower, upper = 0, len(text)
@@ -135,8 +131,7 @@ def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
             else:
                 lower = middle + 1
         return text[lower:], True
-    # Encode once and walk back to a UTF-8 char boundary: the old form
-    # re-encoded one character per step (one encode call per char).
+    # Encode once and walk back to a UTF-8 char boundary (single pass).
     encoded = text.encode("utf-8", errors="replace")
     if len(encoded) <= budget:
         return text, False
@@ -157,11 +152,10 @@ def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     if limit <= 0:
         return ""
 
-    # Tail holds the request; dropping head context is preview-only — mark PARTIAL + remainder.
+    # Tail holds the request; dropping head is preview-only.
     marker = "… [older prompt context dropped to fit argv cap — preview only]"
     if _prompt_argv_units(marker) >= limit:
-        # Too tight for the full marker: keep a visible cut indicator
-        # so the preview is never mistaken for full content.
+        # Too tight for the full marker: keep a visible cut indicator.
         if limit <= 1:
             return "…"[:limit]
         tail, _ = _truncate_utf8_tail(prompt, limit - _prompt_argv_units("…"))
@@ -172,7 +166,7 @@ def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     return tail + marker if truncated else tail
 
 
-# Marker for argv-clipped middle context: keeps the completeness rule visible.
+# Marker for argv-clipped middle context.
 _ARGV_MIDDLE_DROPPED_MARKER = (
     "\n… [Copilot argv cap: middle context dropped to fit; "
     "head preamble kept — never treat this preview as full content; "
@@ -196,7 +190,7 @@ def _truncate_prompt_preserving_head(prompt: str, limit: int) -> str:
     if not found or not head.startswith("[System:"):
         return _truncate_prompt_for_argv(prompt, limit)
     head_with_sep = head + sep
-    # Single backward scan over the tail (was quadratic re-encode per probe).
+    # Single backward scan over the tail.
     prefix_units = _prompt_argv_units(head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER)
     if prefix_units >= limit:
         return _truncate_prompt_for_argv(prompt, limit)
@@ -211,8 +205,7 @@ def _truncate_prompt_preserving_head(prompt: str, limit: int) -> str:
                 lower = middle + 1
         return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[lower:]
     tail_budget = limit - prefix_units
-    # Encode once and walk back to a UTF-8 char boundary (single pass;
-    # the old form re-encoded one character per step).
+    # Encode once and walk back to a UTF-8 char boundary.
     tail_encoded = prompt.encode("utf-8", errors="replace")
     if len(tail_encoded) <= tail_budget:
         return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt
@@ -262,27 +255,24 @@ class CopilotBackend(Backend):
     executable = "copilot"
     supports_vision = True
     vision_mode = "cli_file_flag"
-    # Auto retains Copilot's normal path/URL checks; restricted modes expose
-    # no tools, so they cannot inherit a permissive session setting.
+    # Restricted modes expose no tools.
     permission_arg_sets = {
         "full": ("--yolo",),
         "auto": ("--allow-all-tools",),
         "restricted": ("--available-tools", ""),
     }
-    # ``auto`` is policy-aware (account-allowed models); only safe pre-catalog default.
+    # ``auto`` is the policy-aware pre-catalog default.
     default_model = "auto"
     default_summary_model = "auto"
-    # No static tiers: unset tiers use policy-aware default_model (never a forbidden enterprise model).
+    # No static tiers: unset tiers use the policy-aware default.
     tier_models: dict[str, str] = {}
-    # An ACP list is authoritative for this account, so ``extra_models`` must
-    # not inject arbitrary, unverified names back into a picker.
+    # An ACP list is authoritative; ignore unverified ``extra_models``.
     allow_unverified_extra_models = False
-    # effort=0 omits the flag; never map nonzero effort to ``none``.
+    # effort=0 omits the flag.
     effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
 
     def __init__(self) -> None:
-        # Policies are per-workspace: cache ACP results per workspace,
-        # never failed probes; refresh periodically (fail-closed to auto).
+        # Cache ACP results per workspace; fail closed to auto.
         self._workspace_model_catalogs: dict[
             str, tuple[tuple[str, ...], float],
         ] = {}
@@ -301,7 +291,7 @@ class CopilotBackend(Backend):
             return ()
         return self.effort_levels
 
-    # model discovery
+    # discovery
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
@@ -386,8 +376,7 @@ class CopilotBackend(Backend):
                 return cached
 
             self._prune_workspace_model_caches(now, keep_key=workspace_key)
-            # Failed refresh falls back to ``auto`` (stale names may be
-            # policy-removed).
+            # Failed refresh falls back to ``auto`` (stale policy-removed names).
             self._workspace_model_catalogs.pop(workspace_key, None)
             models = self._discover_models(workspace_key)
             if models is not None:
@@ -396,7 +385,7 @@ class CopilotBackend(Backend):
                 )
                 self._workspace_fallback_expires_at.pop(workspace_key, None)
                 return models
-            # Short retry throttle (not a cache): avoid per-input spawns, still recover fast after sign-in.
+            # Short retry throttle: avoid per-input spawns.
             self._workspace_fallback_expires_at[workspace_key] = (
                 time.monotonic() + _MODEL_FAILURE_RETRY_SEC
             )
@@ -460,7 +449,7 @@ class CopilotBackend(Backend):
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                # ACP speaks on stdout only; DEVNULL stderr so verbose failures can't block the probe.
+                # ACP speaks on stdout only; DEVNULL stderr.
                 stderr=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
@@ -522,7 +511,7 @@ class CopilotBackend(Backend):
                 )
                 return None
 
-            # Catalog-only session: free session resources when this ACP build supports it.
+            # Catalog-only session: free session resources when supported.
             _close_acp_session_if_supported(
                 proc,
                 messages,
@@ -553,7 +542,7 @@ class CopilotBackend(Backend):
         max_prompt_chars = _max_prompt_chars()
         prompt_units = _prompt_argv_units(prompt)
         if prompt_units > max_prompt_chars:
-            # Keep the tail (current message is last); head preamble/old context drops cheapest.
+            # Keep the tail; drop head preamble/old context.
             logger.warning(
                 "Copilot prompt %d argv units exceeds %d-unit cap; "
                 "dropping oldest context",
@@ -567,14 +556,12 @@ class CopilotBackend(Backend):
             "--output-format",
             "json",
             "--no-color",
-            # Cozter stores the durable chat locally. Do not let a user-level
-            # Copilot setting export this private subprocess session remotely.
+            # Keep this private session local; never export it remotely.
             "--no-remote-export",
         ]
         self.append_launch_options(cmd, model, effort, approval)
 
-        # Native vision via --attachment flags; resolve before argv
-        # truncation so paths match the tail-kept prompt.
+        # Native vision via --attachment flags; resolve before truncation.
         _vision_image_paths: list[str] = []
         if self.supports_vision and not compaction:
             _vision_image_paths = attachment_image_paths(prompt, workspace_path)
@@ -590,15 +577,14 @@ class CopilotBackend(Backend):
                 cmd,
                 cwd=workspace_path,
                 env=env,
-                # Own process group on POSIX so /stop//inject kills the tree (Windows: taskkill /T).
+                # Own process group on POSIX so /stop//inject kills the tree.
                 start_new_session=os.name != "nt",
             )
         except BaseException:
             _remove_isolated_copilot_home(isolated_home)
             raise
 
-        # Key by Process, not PID: concurrent turns + PID reuse could
-        # delete another run's private home.
+        # Key by Process, not PID (PID reuse).
         self._process_homes.remember(proc, isolated_home)
         return proc
 
@@ -627,8 +613,7 @@ class CopilotBackend(Backend):
             return
         etype = event.get("type") or event.get("event") or ""
 
-        # Typed branches first so a tool event with an "output"/"content"
-        # field doesn't get misrouted as assistant text by _extract_text.
+        # Typed branches first.
         if etype in self._TOOL_USE_TYPES:
             tool = (
                 event.get("name")
@@ -679,7 +664,7 @@ class CopilotBackend(Backend):
             record_backend_error(result, msg)
             return
 
-        # Fall through: treat as assistant text if it looks like one.
+        # Fall through on assistant-like text.
         text = self._assistant_text(event, etype)
         if text:
             append_text_result(result, text)
@@ -692,12 +677,12 @@ class CopilotBackend(Backend):
         if not isinstance(event, dict):
             return None
         etype = event.get("type") or event.get("event") or ""
-        # Typed tool/file/error events never carry the agent's final reply.
+        # Tool/file/error events never carry the final reply.
         if etype in self._NON_AGENT_TYPES:
             return None
         return self._assistant_text(event, etype)
 
-    # helpers
+    # event helpers
 
     def _assistant_text(self, event: dict, etype: str) -> str | None:
         """Return the event's text content if it looks like assistant output."""
@@ -716,7 +701,7 @@ class CopilotBackend(Backend):
     @staticmethod
     def _extract_text(event: dict) -> str | None:
         """Pull text content from an event using best-effort key probing."""
-        # Accept both pre/post-1.0.70 assistant event shapes.
+        # Accept both pre/post-1.0.70 shapes.
         payloads = [event]
         data = event.get("data")
         if isinstance(data, dict):
@@ -800,8 +785,7 @@ def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
     models: list[str] = []
     seen: set[str] = set()
     inspected = 0
-    # Iterative DFS: preserves order without copying huge lists or
-    # risking recursion limits.
+    # Iterative DFS: preserves order without copying lists or recursing.
     pending: list[tuple[list, int, int]] = [(values, 0, 0)]
     while pending and len(models) < _MAX_ACP_MODEL_OPTIONS:
         options, index, depth = pending[-1]
@@ -834,11 +818,11 @@ def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
                     models.append(model)
 
         # ACP's grouped-select form nests another list under ``options``.
-        # An ordinary option has no such list, so this is a no-op there.
+        # No-op on ordinary options.
         nested = value.get("options")
         if isinstance(nested, list) and depth < _MAX_ACP_OPTION_GROUP_DEPTH:
             pending.append((nested, 0, depth + 1))
-    # ``auto`` stays available even when catalogs list concrete models only.
+    # ``auto`` stays available.
     return ("auto", *models) if models or "auto" in seen else ()
 
 
@@ -846,8 +830,7 @@ def _read_acp_stdout(
     stdout: object, messages: queue.Queue[str | None],
 ) -> None:
     """Move ACP's line-delimited stdout into a timeout-capable queue."""
-    # ``stdout`` is a TextIOWrapper from Popen. Keep this tiny adapter loosely
-    # typed so tests can provide an in-memory stream without a subprocess.
+    # Loosely typed so tests can stub the stream.
     try:
         readline = getattr(stdout, "readline", None)
         if not callable(readline):
@@ -868,8 +851,7 @@ def _read_acp_stdout(
                     return
                 messages.put(line)
     finally:
-        # EOF lets the requester fail immediately instead of waiting out the
-        # whole discovery timeout after a CLI startup error.
+        # EOF fails fast instead of waiting out the discovery timeout.
         messages.put(None)
 
 
@@ -935,7 +917,7 @@ def _acp_request(
         if message.get("id") == request_id:
             result = message.get("result")
             return result if isinstance(result, dict) else None
-        # Handshake needs no client request; reject explicitly instead of blocking the probe.
+        # Handshake needs no request; reject explicitly.
         if "method" in message and "id" in message:
             _reject_acp_request(proc, message.get("id"))
     return None
@@ -999,7 +981,7 @@ def _stop_acp_process(
         except OSError:
             pass
     if kill_tree:
-        # .cmd shims run under cmd.exe; kill the whole tree or the Copilot/Node child survives.
+        # .cmd shims run under cmd.exe; kill the whole tree.
         terminate_windows_process_tree(proc.pid)
     try:
         if proc.poll() is None:

@@ -20,8 +20,7 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
-# Discovery fallback: curated IDs + capabilities (verified 2026-10-05,
-# 0.160.1). Live catalog preferred.
+# Discovery fallback: curated IDs + capabilities (0.160.1).
 _FALLBACK_MODEL_SPECS = (
     ("gpt-6.1-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-astra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
@@ -30,7 +29,7 @@ _FALLBACK_MODEL_SPECS = (
     ("gpt-5.6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-terra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
-    # Retired 2026-08-31 (5.4 line, codex-spark preview): ends at gpt-5.5.
+    # Retired 2026-08-31: ends at gpt-5.5.
     ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
 )
 (
@@ -92,11 +91,10 @@ def _parse_debug_models_metadata(
                 if effort and effort not in seen_efforts:
                     seen_efforts.add(effort)
                     efforts.append(effort)
-        # Empty level list = send no reasoning override for this model.
+        # Empty level list = no reasoning override.
         efforts_by_model[slug] = tuple(efforts)
 
-        # Only the explicit context_window is the session input limit
-        # (not max_context_window or effective percent).
+        # Only explicit context_window is the session input limit.
         context_window = entry.get("context_window")
         if (
             isinstance(context_window, int)
@@ -125,8 +123,7 @@ class CodexBackend(Backend):
     executable = "codex"
     supports_vision = True
     vision_mode = "cli_file_flag"
-    # No non-interactive no-tools mode: read-only sandbox is the strongest
-    # restriction for confirm/deny.
+    # No no-tools mode: read-only sandbox is the confirm/deny fallback.
     permission_arg_sets = {
         "full": ("--dangerously-bypass-approvals-and-sandbox",),
         "auto": ("--sandbox", "workspace-write"),
@@ -134,8 +131,7 @@ class CodexBackend(Backend):
     }
     default_model = "gpt-5.6-sol"
     default_summary_model = "gpt-5.6-luna"
-    # Cheap/everyday/strong 5.6 family; default stays Sol (older CLIs may
-    # lack Astra: a pinned Astra default would fail closed).
+    # 5.6 family; default stays Sol (older CLIs may lack Astra).
     tier_models = {
         "low": "gpt-5.6-luna",
         "mid": "gpt-5.6-terra",
@@ -145,7 +141,7 @@ class CodexBackend(Backend):
     effort_levels = (*common_effort_levels, "max", "ultra")
 
     def __init__(self) -> None:
-        # Singletons: short-interval refresh (probing every picker is too slow).
+        # Singletons: short-interval refresh.
         self._cached_model_catalog: (
             tuple[tuple[str, ...], dict[str, tuple[str, ...]]] | None
         ) = None
@@ -153,7 +149,7 @@ class CodexBackend(Backend):
         self._catalog_expires_at = 0.0
         self._model_catalog_lock = threading.Lock()
 
-    # model discovery
+    # discovery
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
@@ -255,8 +251,7 @@ class CodexBackend(Backend):
                 _FALLBACK_MODEL_CONTEXT_WINDOWS,
             )
         if proc.returncode != 0:
-            # Stale reasoning config can block the catalog probe: retry with a
-            # temp override (no user config change); genuine failures use fallback.
+            # Stale reasoning config can block the probe: retry with a temp override.
             try:
                 recovered = subprocess.run(
                     [
@@ -338,12 +333,12 @@ class CodexBackend(Backend):
             approval,
             model_flag="-m",
             effort_flag="-c",
-            # Effort rides the generic config-override flag; CLI rejects unknown levels.
+            # Effort rides the config-override flag.
             effort_template="model_reasoning_effort={effort}",
         )
         cmd.append("-")  # read prompt from stdin
 
-        # Vision: repeatable -i/--image flags ride as real pixels with stdin text.
+        # Vision: repeatable -i/--image flags ride as real pixels.
         if self.supports_vision and not compaction:
             for _image_path in attachment_image_paths(prompt, workspace_path):
                 cmd += ["--image", _image_path]
@@ -354,7 +349,7 @@ class CodexBackend(Backend):
         if not isinstance(event, dict):
             return
         etype = event.get("type", "")
-        # `or {}` guards present-but-null `"item"` (default covers absent only).
+        # `or {}` guards present-but-null `"item"`.
         item = event.get("item") or {}
         if not isinstance(item, dict):
             item = {}
@@ -402,15 +397,14 @@ class CodexBackend(Backend):
                 err = err_obj
             else:
                 err = "Unknown error"
-            # Record, but never replace an already-streamed reply.
+            # Record, but never replace a streamed reply.
             record_backend_error(result, err)
 
         elif etype == "error":
-            # Stream failure without turn.failed (codex may still exit 0):
-            # record it, else the turn silently says nothing.
+            # Stream failure without turn.failed: record it.
             msg = event.get("message", "Unknown error")
             logger.warning("Codex stream error: %s", msg)
-            # Never let a late error overwrite the reply already owed.
+            # Never let a late error overwrite the owed reply.
             record_backend_error(result, msg)
 
     def extract_agent_text(self, event: dict) -> str | None:

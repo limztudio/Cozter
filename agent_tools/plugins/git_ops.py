@@ -33,7 +33,7 @@ from ._git_common import (
     run_git as _run_git,
 )
 
-# Real-work cap (tool runner); shared limits/validation live in ._git_common.
+# Real-work cap; shared limits/validation live in ._git_common.
 _MAX_MESSAGE_CHARS = 2_000
 _ACTIONS = (
     "add",
@@ -289,7 +289,7 @@ class GitOpsTool(AgentTool):
                 if err is not None:
                     return err
                 assert spec is not None
-                # Path-scoped reset unstages those paths to <ref>.
+                # Path-scoped reset unstages those paths.
                 return base + ["reset", ref_name, "--", *spec]
             return base + ["reset", f"--{mode}", ref_name]
         if action == "merge":
@@ -311,7 +311,7 @@ class GitOpsTool(AgentTool):
         if action == "rebase":
             upstream, err = _clean_ref(args.get("branch"), what="branch")
             if err is not None:
-                # Accept "ref" as an alias for the upstream.
+                # Accept "ref" as the upstream alias.
                 upstream, err = _clean_ref(args.get("ref"), what="ref")
             if err is not None:
                 return err

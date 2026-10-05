@@ -28,7 +28,7 @@ from ._git_common import (
     run_git as _run_git,
 )
 
-# Real-work cap (tool runner); shared limits/validation live in ._git_common.
+# Real-work cap; shared limits/validation live in ._git_common.
 _ACTIONS = ("fetch", "pull", "push", "remotes")
 
 
@@ -116,12 +116,12 @@ class GitSyncTool(AgentTool):
             elif branch is not None:
                 return "Error: 'branch' needs 'remote' for pull"
             return ("pull", tail)
-        # action == "push"
+        # push
         tail = ["push"]
         if args.get("upstream") is True:
             tail.append("-u")
         if args.get("force") is True:
-            # Never plain --force; --force-with-lease refuses when upstream moved.
+            # Never plain --force; --force-with-lease refuses on moved upstream.
             tail.append("--force-with-lease")
         if remote is not None:
             tail.append(remote)

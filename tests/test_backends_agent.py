@@ -1096,7 +1096,7 @@ warning: ignored after the catalog
                 {
                     "slug": "company-fixed",
                     "visibility": "list",
-                    # Booleans are ints in Python, but never valid capacities.
+                    # Booleans are ints, but never valid capacities.
                     "context_window": True,
                     "supported_reasoning_levels": [],
                 },
@@ -1568,7 +1568,7 @@ warning: ignored after the catalog
             self.assertEqual(
                 backend.available_models_for_workspace(workspace_path), ("auto",),
             )
-            # Short throttle: an unavailable CLI must not respawn ACP per picker open.
+            # Short throttle: unavailable CLI must not respawn per picker.
             self.assertEqual(
                 backend.available_models_for_workspace(workspace_path), ("auto",),
             )
@@ -1631,7 +1631,7 @@ warning: ignored after the catalog
                 backend.available_models_for_workspace(allowed_workspace),
                 ("auto", "project-allowed"),
             )
-            # Per-project throttles: failures/revivals must not leak across projects.
+            # Per-project throttles must not leak across projects.
             self.assertEqual(
                 backend.available_models_for_workspace(blocked_workspace),
                 ("auto",),
@@ -1881,8 +1881,7 @@ warning: ignored after the catalog
         """
         models = ClaudeCodeBackend.available_models
         for model in (
-            # No dated snapshot is published from Opus/Sonnet 4.6 on, so a
-            # date suffix here 404s.
+            # No dated snapshot from Opus/Sonnet 4.6 on.
             "claude-opus-4-6-20251101",
             "claude-sonnet-4-6-20251114",
             # Fast mode is the /fast session toggle, not a model ID.
@@ -1907,7 +1906,7 @@ class CopilotPromptCapTests(unittest.TestCase):
         cap = copilot_mod._max_prompt_chars()
         self.assertIsInstance(cap, int)
         # Never below the Windows floor, never absurdly large. On POSIX
-        # (ARG_MAX ~2 MB) this lands well above the old fixed 28K cap.
+        # (ARG_MAX ~2 MB) well above the old 28K cap.
         self.assertGreaterEqual(cap, 28_000)
         self.assertLessEqual(cap, 1_000_000)
 
@@ -1924,7 +1923,7 @@ class CopilotPromptCapTests(unittest.TestCase):
             )
 
     def test_windows_prompt_cap_counts_utf16_units_not_code_points(self) -> None:
-        # Astral chars cost 2 UTF-16 units: char counts alone would undercount the Windows cap.
+        # Astral chars cost 2 UTF-16 units.
         with mock.patch.object(copilot_mod.sys, "platform", "win32"):
             out = copilot_mod._truncate_prompt_for_argv("x😀😀😀", 4)
             self.assertEqual(out, "😀…")
@@ -1964,7 +1963,7 @@ class BackendHealthCheckTests(unittest.TestCase):
         self.assertIn("not found", detail)
 
     def test_present_executable_reports_healthy(self) -> None:
-        # The interpreter running this test exists on every supported OS.
+        # The test interpreter exists on every supported OS.
         ok, _ = self._dummy(sys.executable).health_check()
         self.assertTrue(ok)
 
@@ -2391,7 +2390,7 @@ class ZaiBackendTests(unittest.TestCase):
             )
 
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
-        # Z.ai's base already carries /api/paas/v4, so no extra /v1.
+        # Z.ai's base already carries /api/paas/v4.
         endpoint = ZaiBackend()._chat_endpoint()
         self.assertTrue(endpoint.endswith("/chat/completions"))
         self.assertNotIn("/v1/chat/completions", endpoint)
@@ -2728,8 +2727,7 @@ class MetaBackendTests(unittest.TestCase):
                 ),
             ) as fetch,
         ):
-            # Order is preserved; contributor pricing variants stay
-            # selectable because they are valid chat-completion models.
+            # Order preserved; pricing variants stay selectable.
             self.assertEqual(
                 MetaModelApiBackend().available_models,
                 (
@@ -2789,7 +2787,7 @@ class MetaBackendTests(unittest.TestCase):
             )
 
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
-        # Meta's base already carries /v1, so no extra version segment.
+        # Meta's base already carries /v1.
         endpoint = MetaModelApiBackend()._chat_endpoint()
         self.assertEqual(
             endpoint, "https://api.meta.ai/v1/chat/completions",

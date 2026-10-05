@@ -160,7 +160,7 @@ class NotesToolTests(unittest.TestCase):
         self.assertIn("already empty", self.invoke("clear"))
 
     def test_trim_keeps_newest_entries_within_budget(self) -> None:
-        # Write enough entries that the 64 KiB ceiling forces a trim.
+        # Enough entries that the ceiling forces a trim.
         for index in range(400):
             self.invoke("append", f"entry {index} " + "x" * 300)
         with open(self.notes_path(), "rb") as file_handle:
@@ -180,7 +180,7 @@ class NotesToolTests(unittest.TestCase):
         self.assertIn("PARTIAL + remainder", clipped)
 
     def test_oversized_legacy_file_keeps_newest_entries(self) -> None:
-        # An oversized legacy file must not evict the newest entries.
+        # An oversized legacy file must not evict newest entries.
         os.makedirs(os.path.dirname(self.notes_path()), exist_ok=True)
         with open(self.notes_path(), "w", encoding="utf-8") as file_handle:
             file_handle.write("## 2000-01-01 00:00:00\n" + "old " * 30_000 + "\n")
@@ -258,7 +258,7 @@ class GitInfoToolTests(unittest.TestCase):
         self.assertIn("+two", patch)
 
     def test_diff_without_head_falls_back_to_index(self) -> None:
-        # Zero-commit repository: no HEAD exists yet.
+        # Zero-commit repository: no HEAD yet.
         with open(os.path.join(self.workspace, "a.txt"), "w") as file_handle:
             file_handle.write("staged\n")
         self._git("add", "a.txt")
@@ -836,7 +836,7 @@ class _FakeResponse:
     ) -> None:
         self.status = status
         self.url = url
-        # aiohttp headers are case-insensitive (CIMultiDict); emulate that.
+        # aiohttp headers are case-insensitive; emulate that.
         self.headers = {
             key.lower(): value for key, value in (headers or {}).items()
         }

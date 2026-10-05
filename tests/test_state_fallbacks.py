@@ -65,7 +65,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 encoding="utf-8",
             ) as file_handle:
                 json.dump({
-                    # "flexible" is a chat agent, never a summary agent (no CLI for that).
+                    # "flexible" is never a summary agent.
                     "backend": "missing",
                     "summary_backend": "flexible",
                     "permission": "bad",
@@ -81,7 +81,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 workspace.get_run_config(tmp)
             )
             self.assertEqual(backend, "flexible")
-            # Flexible carries a model per tier, not one of its own.
+            # Flexible carries a model per tier.
             self.assertEqual(model, "")
             self.assertEqual(summary_model, "gpt-5.6-luna")
             self.assertEqual(permission, "auto")
@@ -352,13 +352,13 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             orig = config.get_max_permission
             config.get_max_permission = _auto_ceiling
             try:
-                # Setting above the ceiling is rejected.
+                # Above the ceiling is rejected.
                 with self.assertRaises(ValueError):
                     workspace.set_permission(tmp, "full")
-                # At/below the ceiling is allowed.
+                # At/below allowed.
                 workspace.set_permission(tmp, "auto")
                 self.assertEqual(workspace.get_permission(tmp), "auto")
-                # An already-stored higher value is clamped on read.
+                # Stored higher values clamp on read.
                 with open(
                     os.path.join(tmp, ".cozter", "settings.json"),
                     "w",
@@ -371,11 +371,11 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
 
     def test_interaction_style_falls_back_to_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            # Missing setting -> default.
+            # Missing -> default.
             self.assertEqual(
                 workspace.get_interaction_style(tmp), "collaborative",
             )
-            # Invalid value -> default.
+            # Invalid -> default.
             os.makedirs(os.path.join(tmp, ".cozter"))
             with open(
                 os.path.join(tmp, ".cozter", "settings.json"),
@@ -401,7 +401,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
     def test_extra_models_parsing_tolerates_malformed(self) -> None:
         with temporary_config({
             "extra_models": {
-                # non-string entries are dropped.
+                # Non-string entries dropped.
                 "codex": ["private-codex-model", "", 123],
                 "copilot": "not-a-list",         # wrong type -> []
             },
@@ -414,14 +414,14 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             self.assertEqual(config.get_extra_models("missing"), [])
 
     def test_extra_models_missing_or_non_object_returns_empty(self) -> None:
-        # No config file (CLI mode) -> [].
+        # No config file -> [].
         old = config.CONFIG_PATH
         config.CONFIG_PATH = "/nonexistent/config.json"
         try:
             self.assertEqual(config.get_extra_models("codex"), [])
         finally:
             config.CONFIG_PATH = old
-        # extra_models present but not an object -> [].
+        # extra_models not an object -> [].
         with temporary_config({"extra_models": ["oops"]}):
             self.assertEqual(config.get_extra_models("codex"), [])
 

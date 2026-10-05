@@ -8,8 +8,7 @@ import math
 import os
 import re
 
-# Opt into PTB's timedelta API: silences deprecation warnings and
-# future-proofs flood control (operator override still wins).
+# Opt into PTB's timedelta API.
 os.environ.setdefault("PTB_TIMEDELTA", "1")
 
 from telegram import Update
@@ -75,7 +74,7 @@ def _telegram_message_id(handle: MessageHandle) -> int:
             f"invalid Telegram message id: {raw!r}",
         ) from exc
 
-# Reply-line regexes (hot path): module-level so patterns compile once.
+# Reply-line regexes: module-level.
 _TELEGRAM_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
 _TELEGRAM_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
 _TELEGRAM_BOLD_UNDER_RE = re.compile(r"__(.+?)__")
@@ -94,8 +93,7 @@ def _telegram_retry_delay(exc: BaseException) -> float | None:
     """
     retry_after = getattr(exc, "retry_after", None)
     if isinstance(retry_after, bool) or retry_after is None:
-        # A bool is not a duration (float(True) == 1.0 would sleep 1.5s
-        # on junk); fall through to the NetworkError check below.
+        # A bool is not a duration; fall through.
         pass
     else:
         try:
@@ -104,7 +102,7 @@ def _telegram_retry_delay(exc: BaseException) -> float | None:
             ) else float(retry_after)
         except (TypeError, ValueError, OverflowError):
             return None
-        # Non-finite throttles: cap +inf, reject nan/-inf.
+        # Non-finite throttles: cap +inf.
         if not math.isfinite(seconds):
             if seconds == float("inf"):
                 return _TELEGRAM_SEND_MAX_DELAY_SEC
@@ -134,7 +132,7 @@ def _rich_telegram_chunks(text: str) -> list[str]:
     return chunks
 
 
-# Markdown -> Telegram HTML
+# Markdown -> HTML
 
 def _md_to_html(text: str) -> str:
     """Convert common Markdown to Telegram-compatible HTML."""
@@ -147,8 +145,7 @@ def _md_to_html(text: str) -> str:
 
 def _html_line(line: str) -> str:
     line = escape_html_entities(line)
-    # Cheap substring guards: most chat lines carry no Markdown, so skip
-    # the regex engine unless the marker characters are present.
+    # Substring guards skip the regex for plain lines.
     if line[:1] == "#":
         line = _TELEGRAM_HEADING_RE.sub(r"<b>\1</b>", line)
     if "**" in line:
@@ -171,7 +168,7 @@ def _html_code_block(lines: list[str]) -> list[str]:
     return [f"<pre>{escaped}</pre>"]
 
 
-# Telegram platform adapter
+# Platform adapter
 
 class TelegramBot(BotPlatform):
     """One-to-one adapter around a python-telegram-bot Application."""
@@ -196,13 +193,12 @@ class TelegramBot(BotPlatform):
 
     @property
     def platform_id(self) -> str:
-        # Use the numeric Telegram bot id so workspace state stays
-        # compatible with installations that pre-date the platform split.
+        # Numeric bot id keeps old workspace state compatible.
         if self.app is None:
             raise RuntimeError("platform_id is only valid after start()")
         return str(self.app.bot.id)
 
-    # send/edit primitives
+    # send/edit
 
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -210,7 +206,7 @@ class TelegramBot(BotPlatform):
         if not text:
             return None
         if not rich:
-            # Plain replies can also exceed the API cap: split losslessly.
+            # Plain replies can exceed the cap: split losslessly.
             last: MessageHandle | None = None
             for chunk in split_text_chunks(text, _TELEGRAM_TEXT_LIMIT):
                 msg = await self.app.bot.send_message(
@@ -221,7 +217,7 @@ class TelegramBot(BotPlatform):
                 )
             return last
 
-        # Rich path: convert markdown → HTML in Telegram-sized pieces.
+        # Rich path: markdown → HTML in Telegram-sized pieces.
         last: MessageHandle | None = None
         for chunk in _rich_telegram_chunks(text):
             if not chunk.strip():
@@ -340,7 +336,7 @@ class TelegramBot(BotPlatform):
         assert last_exc is not None
         raise last_exc
 
-    # lifecycle
+    # startup/shutdown
 
     async def start(self) -> None:
         self.app = (
@@ -363,8 +359,7 @@ class TelegramBot(BotPlatform):
             | filters.VOICE
             | filters.VIDEO_NOTE
         )
-        # Restrict to new messages: edited ones carry no ``update.message``
-        # and would crash the handlers.
+        # New messages only: edited ones carry no ``update.message``.
         self.app.add_handler(
             MessageHandler(
                 attachment_filter & filters.UpdateType.MESSAGE,
@@ -391,7 +386,7 @@ class TelegramBot(BotPlatform):
                 )
                 await asyncio.sleep(5 * attempt)
         await self.app.start()
-        # Restore the backlog before polling so new messages can't race it.
+        # Restore the backlog before polling.
         await self._start_daemon_services()
         await self.app.updater.start_polling(drop_pending_updates=True)
         logger.info("Telegram bot started polling.")
@@ -404,7 +399,7 @@ class TelegramBot(BotPlatform):
             await self.app.shutdown()
             logger.info("Telegram bot stopped.")
 
-    # event handlers
+    # events
 
     def _make_command_handler(self, name: str):
         async def handler(
@@ -441,8 +436,7 @@ class TelegramBot(BotPlatform):
     async def _on_file(
         self, update: Update, _context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
-        # Early auth check: refuse to download files for non-whitelisted
-        # users or for events without an effective_user (channel posts).
+        # Early auth check before downloading files.
         if not self._precheck(update):
             return
         uid = str(update.effective_user.id)
@@ -495,7 +489,7 @@ class TelegramBot(BotPlatform):
 
         tg_file = await media.get_file()
         try:
-            # getFile may supply a size the update omitted; reject before downloading.
+            # getFile may supply the missing size; reject before downloading.
             self._check_upload_size(getattr(tg_file, "file_size", None))
         except UploadTooLargeError:
             await self._reply_file_error(
@@ -504,8 +498,7 @@ class TelegramBot(BotPlatform):
             return
 
         caption = (message.caption or "").strip()
-        # Strip any path components to prevent traversal from malicious
-        # filenames like "../../etc/passwd".
+        # Strip path components to prevent traversal.
         filename = os.path.basename(filename) or f"file_{tg_file.file_id}"
 
         if not ws or not os.path.isdir(ws):

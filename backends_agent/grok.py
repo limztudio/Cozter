@@ -50,8 +50,7 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Discovery fallback: documented CLI models + capabilities (verified
-# 2026-10-05, grok 1.0.13).
+# Discovery fallback: documented CLI models + capabilities (grok 1.0.13).
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high")
 _FALLBACK_MODEL_SPECS = (
     ("grok-4.7", (*_COMMON_EFFORT_LEVELS, "xhigh"), 500_000),
@@ -84,7 +83,7 @@ def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
     reading_models = False
     for line in output.splitlines():
         stripped = line.strip()
-        # Case-insensitive heading match, cheap identity check first.
+        # Case-insensitive heading match.
         if (
             len(stripped) == len("Available models:")
             and stripped.casefold() == "available models:"
@@ -95,8 +94,7 @@ def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
             continue
         match = _MODEL_LINE_RE.match(line)
         if match is None:
-            # The list is a contiguous block. A blank separator or another
-            # diagnostic heading ends it without interpreting later output.
+            # The list is contiguous; a blank/another heading ends it.
             if not line.strip() or not line.startswith((" ", "\t")):
                 break
             continue
@@ -139,14 +137,13 @@ class GrokBackend(CachedModelCatalog, Backend):
     vision_mode = "prompt_file"
     default_model = "grok-4.7"
     default_summary_model = "grok-4.7"
-    # Default-model vocabulary; per-model narrowing in effort_levels_for_model.
+    # Default-model vocabulary.
     effort_levels = (*_COMMON_EFFORT_LEVELS, "xhigh")
-    # Account-dependent catalog: leave tiers unset (policy-safe default_model).
+    # Account-dependent catalog: leave tiers unset.
     tier_models: dict[str, str] = {}
     permission_arg_sets = {
         "full": ("--always-approve",),
-        # Headless Grok ignores `--permission-mode auto`: always-approve keeps
-        # turns from hanging; the sandbox still confines writes.
+        # Headless Grok ignores auto: always-approve keeps turns from hanging.
         "auto": ("--always-approve", "--sandbox", "workspace"),
         "restricted": (
             "--permission-mode",
@@ -155,7 +152,7 @@ class GrokBackend(CachedModelCatalog, Backend):
             "read-only",
             "--tools",
             "read_file,grep,list_dir",
-            # Allowlist still exposes MCP discovery/execution: deny those names.
+            # Allowlist still exposes MCP names: deny them.
             "--disallowed-tools",
             "search_tool,use_tool",
         ),
@@ -165,7 +162,7 @@ class GrokBackend(CachedModelCatalog, Backend):
         super().__init__()
         self._prompt_files = ProcessResourceMap()
 
-    # model discovery
+    # discovery
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
@@ -232,7 +229,7 @@ class GrokBackend(CachedModelCatalog, Backend):
             "streaming-messages-json",
         ]
         self.append_launch_options(cmd, model, effort, approval)
-        # Vision: JSON content blocks via --prompt-json, else --prompt-file.
+        # Vision: JSON blocks via --prompt-json, else --prompt-file.
         prompt_json: str | None = None
         if self.supports_vision and not compaction:
             _image_paths = attachment_image_paths(prompt, workspace_path)
@@ -242,22 +239,22 @@ class GrokBackend(CachedModelCatalog, Backend):
             cmd += ["--prompt-json", prompt_json]
             prompt_path = ""
         else:
-            # Prompt arg last (flags can't parse as prompt text); file avoids argv caps.
+            # Prompt arg last; file avoids argv caps.
             prompt_path = _write_prompt_file(prompt)
             cmd += ["--prompt-file", prompt_path]
         try:
             proc = await create_captured_subprocess(
                 cmd,
                 cwd=workspace_path,
-                # Owned process group: /stop and /inject stop the whole tree.
+                # Own process group so /stop//inject kills the tree.
                 start_new_session=os.name != "nt",
             )
         except BaseException:
             if prompt_path:
                 _remove_prompt_file(prompt_path)
             raise
-        # Key by Process (not PID): concurrent turns survive PID reuse.
-        # Empty path (prompt-json) still registers for symmetric cleanup.
+        # Key by Process, not PID.
+        # Empty path still registers for symmetric cleanup.
         self._prompt_files.remember(proc, prompt_path)
         return proc
 
@@ -269,7 +266,7 @@ class GrokBackend(CachedModelCatalog, Backend):
         if path is not None:
             _remove_prompt_file(path)
 
-    # streaming event parsing
+    # events
 
     _FILE_TOOL_NAMES = frozenset(
         {
@@ -306,11 +303,11 @@ class GrokBackend(CachedModelCatalog, Backend):
             return
 
         if etype == "error":
-            # Record, but never erase an already-streamed reply.
+            # Record, but never erase a streamed reply.
             record_backend_error(result, self._error_message(event))
             return
 
-        # Transcript-only events: skip the compact live status display.
+        # Transcript-only events: skip the status display.
         if etype not in {
             "system",
             "user",

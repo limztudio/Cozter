@@ -46,9 +46,9 @@ from .formatting import escape_html_entities, render_fenced_markdown
 logger = logging.getLogger(__name__)
 
 
-# Markdown -> Slack mrkdwn
+# Markdown -> mrkdwn
 
-# PUA placeholders: collision-free, re.sub-safe (bold-first rewriting with _bold_sub).
+# PUA placeholders: collision-free, re.sub-safe.
 _BOLD_OPEN = ""
 _BOLD_CLOSE = ""
 
@@ -76,39 +76,38 @@ def _md_to_mrkdwn(text: str) -> str:
 
 def _mrkdwn_line(line: str) -> str:
     line = escape_html_entities(line)
-    # Bold first (into placeholders) so italic can't mis-match it.
-    # Substring guards skip the regex for plain lines.
+    # Bold first so italic can't mis-match it.
+    # Substring guards skip the regex.
     if line[:1] == "#":
         line = _SLACK_HEADING_RE.sub(_bold_sub, line)
     if "**" in line:
         line = _SLACK_BOLD_STAR_RE.sub(_bold_sub, line)
     if "__" in line:
         line = _SLACK_BOLD_UNDER_RE.sub(_bold_sub, line)
-    # Italic: single `*text*` -> `_text_`; leave `_text_` as-is since
-    # that's already valid mrkdwn.
+    # Italic: single `*text*` -> `_text_`.
     if "*" in line:
         line = _SLACK_ITALIC_STAR_RE.sub(r"_\1_", line)
-    # Strikethrough: `~~text~~` -> `~text~`.
+    # Strikethrough to `~text~`.
     if "~~" in line:
         line = _SLACK_STRIKE_RE.sub(r"~\1~", line)
-    # Swap bold placeholders back to Slack's single-asterisk bold.
+    # Swap bold placeholders back.
     if _BOLD_OPEN in line:
         line = line.replace(_BOLD_OPEN, "*").replace(_BOLD_CLOSE, "*")
     return line
 
 
 def _mrkdwn_code_block(lines: list[str]) -> list[str]:
-    # Emit the accumulated block as-is, escaped for safety.
+    # Emit the accumulated block escaped.
     return ["```", *(escape_html_entities(line) for line in lines), "```"]
 
 
-_SLACK_MAX_CHARS = 39_000  # Slack hard-caps around 40K; stay under.
-_SLACK_MARKDOWN_LIMIT = 12_000  # Cumulative Markdown-block text per payload.
+_SLACK_MAX_CHARS = 39_000  # Slack caps around 40K.
+_SLACK_MARKDOWN_LIMIT = 12_000  # Markdown-block text per payload.
 _SLACK_SEND_MAX_ATTEMPTS = 5
 _SLACK_SEND_MAX_DELAY_SEC = 60.0
 _FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,}).*$")
 
-# Precompiled mrkdwn line patterns (hot path: one call per reply line).
+# Precompiled mrkdwn patterns.
 _SLACK_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
 _SLACK_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
 _SLACK_BOLD_UNDER_RE = re.compile(r"__(.+?)__")
@@ -129,7 +128,7 @@ def _slack_retry_delay(error: SlackApiError) -> float | None:
     data = response.data if hasattr(response, "data") else None
     if isinstance(data, dict):
         code = data.get("error")
-        # Throttle = error ratelimited, or bare Retry-After without an error key (test doubles).
+        # Throttle = ratelimited error or bare Retry-After.
         headers = getattr(response, "headers", None) or {}
         has_retry_after = (
             "Retry-After" in headers or "retry-after" in headers
@@ -146,7 +145,7 @@ def _slack_retry_delay(error: SlackApiError) -> float | None:
         delay = float(raw)
     except (TypeError, ValueError, OverflowError):
         delay = 1.0
-    # Never sleep nan/inf: cap +inf, fail fast on nan/-inf.
+    # Never sleep nan/inf.
     if not math.isfinite(delay):
         if delay == float("inf"):
             return _SLACK_SEND_MAX_DELAY_SEC
@@ -190,8 +189,7 @@ async def _call_slack_with_retry(description: str, method, **kwargs):
 
 def _fence_open(line: str) -> tuple[str, str] | None:
     """Return the original opener and marker for a fenced code block."""
-    # Hot path: most reply lines are not fences — a plain prefix scan
-    # rejects them before the regex engine runs.
+    # Hot path: prefix scan rejects non-fences before the regex.
     stripped = line.lstrip()
     if not stripped or stripped[0] not in ("`", "~"):
         return None
@@ -205,8 +203,7 @@ def _fence_closes(line: str, marker: str) -> bool:
     """Whether *line* is a valid close for the active fenced block."""
     if not marker:
         return False
-    # A close is only whitespace plus a run of the marker character at
-    # least as long as the opener — no regex needed on this hot path.
+    # A close is whitespace plus a marker run; no regex needed.
     stripped = line.strip()
     return (
         len(stripped) >= len(marker)
@@ -227,8 +224,7 @@ def _split_slack_markdown(
     if len(text) <= limit:
         return [text]
 
-    # Split chunks reopen/close fences independently: reserve each maximum
-    # separately so mixed fences still fit.
+    # Split chunks reopen/close fences independently.
     max_opener = 0
     max_marker = 0
     # One pre-scan for reserves; the chunk loop replays fence state with the same cheap helpers.
@@ -444,7 +440,7 @@ class SlackBot(BotPlatform):
         self.app.event("app_mention")(self._on_app_mention)
 
         self._handler = AsyncSocketModeHandler(self.app, self.app_token)
-        # Restore the backlog before connecting so new events can't race it.
+        # Restore the backlog before connecting.
         await self._start_daemon_services()
         await self._handler.connect_async()
         logger.info(
@@ -463,9 +459,9 @@ class SlackBot(BotPlatform):
         self.app = None
         logger.info("Slack bot stopped.")
 
-    # event handlers
+    # events
 
-    # Plain messages + file uploads only; all other subtypes are discarded as non-input.
+    # Plain messages + file uploads only.
     _ALLOWED_SUBTYPES = frozenset({None, "file_share"})
 
     def _make_command_handler(self, name: str):
@@ -501,12 +497,12 @@ class SlackBot(BotPlatform):
             or not channel
         ):
             return
-        # Channel allowlist first: no download work for unauthorized senders.
+        # Channel allowlist first.
         if not self.authorized(uid, channel):
             return
 
         text = (event.get("text") or "").strip()
-        # message + app_mention for one post: the latter owns it (strips marker, dispatches once).
+        # message + app_mention: the latter owns it.
         marker = (
             f"<@{self._bot_user_id}>" if self._bot_user_id is not None else ""
         )
@@ -544,7 +540,7 @@ class SlackBot(BotPlatform):
     async def _handle_files(
         self, event: dict, files: list[dict], caption: str,
     ) -> None:
-        # Caller (_on_message) has already verified channel authorization.
+        # Caller already verified channel authorization.
         uid = str(event["user"])
         channel = str(event["channel"])
         ctx_for_reply = self.make_context(uid, channel, text=caption)
@@ -553,7 +549,7 @@ class SlackBot(BotPlatform):
             return
 
         for attached_file in files:
-            # Prefer the user name, else the file id; basename() confines it to upload_dir.
+            # Prefer the user name, else the file id.
             filename = os.path.basename(attached_file.get("name") or "")
             if not filename:
                 filename = attached_file.get("id") or "file"
@@ -603,7 +599,7 @@ async def _download_private(
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
 ) -> None:
     """Download a bounded ``url_private`` file using the bot token."""
-    # Slack private URLs require Authorization: Bearer <bot-token>.
+    # Slack private URLs need Authorization: Bearer.
     headers = {"Authorization": f"Bearer {bot_token}"}
     await download_http_file(
         url, local_path, max_upload_bytes, headers=headers,

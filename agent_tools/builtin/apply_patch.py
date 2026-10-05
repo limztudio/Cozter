@@ -24,12 +24,12 @@ from ..base import (
 )
 
 
-# Patch + target both materialize: bound them so one call can't OOM the bot.
+# Patch + target both materialize: bound them.
 _MAX_PATCH_BYTES = 1 * 1024 * 1024
 _MAX_PATCH_LINES = 20_000
 _MAX_FILE_BYTES = 1 * 1024 * 1024
 _MAX_FILE_LINES = 50_000
-# Compiled per-hunk (avoids recompiling on every hunk header).
+# Precompiled per-hunk header.
 _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 
@@ -53,8 +53,7 @@ class _Hunk:
         self.new_count = new_count
         self.old: list[str] = []  # context + deleted lines (content only)
         self.new: list[str] = []  # context + added lines (content only)
-        # "No newline" marker belongs to the preceding body line: remember
-        # which output side owns the EOF newline.
+        # "No newline" marker owns the EOF newline of the preceding body line.
         self.last_marker: str | None = None
         self.new_ends_with_newline: bool | None = None
 
@@ -98,8 +97,7 @@ class _FilePatch:
         if self.old_path is not None:
             return
         for hunk in self.hunks:
-            # A creation diff has no old side: reject context/deletion lines
-            # instead of silently writing a different file.
+            # A creation diff has no old side: reject old/context lines.
             if hunk.old:
                 raise _PatchError(
                     "creation hunk contains old/context lines for /dev/null",
@@ -159,7 +157,7 @@ class ApplyPatchTool(AgentTool):
         return f"apply_patch ({file_count} file{'s' if file_count != 1 else ''})"
 
 
-# Parsing
+# Parse
 
 
 def _validate_patch_limits(text: str) -> None:
@@ -258,15 +256,13 @@ def _parse_patch(
                 raise _PatchError(
                     "no-newline marker does not follow a hunk body line",
                 )
-            # Marker after a deletion => replacement ends with newline, else not.
+            # Marker after a deletion keeps the newline, else drops it.
             hunk.new_ends_with_newline = hunk.last_marker == "-"
             hunk.last_marker = None
             continue
-        # ``---``/``+++`` lines are legal hunk content (e.g. deleting ``-- x``):
-        # only treat them as headers once declared counts are full.
+        # ``---``/``+++`` lines can be hunk content: headers only when counts are full.
         if hunk is not None and hunk.complete:
-            # Lone header-looking line = overlong hunk body (e.g. ``--- value``
-            # deletes ``-- value``): reject, don't silently discard the edit.
+            # Lone header-looking line = overlong body: reject, don't discard.
             next_line = lines[index + 1] if index + 1 < len(lines) else None
             if (
                 not line
@@ -314,7 +310,7 @@ def _parse_patch(
         if hunk is None:
             continue  # preamble / "diff --git" / "index" lines
         if not line:
-            # Bare empty line = empty context line (space dropped by emitter).
+            # Bare empty line = empty context line.
             hunk.old.append("")
             hunk.new.append("")
             hunk.last_marker = " "

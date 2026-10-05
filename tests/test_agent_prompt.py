@@ -53,10 +53,10 @@ class ContextBudgetTests(unittest.TestCase):
             "NEW MESSAGE", dict(data), budget=3_000,
         )
 
-        # The new user message survives at any budget.
+        # The new message survives at any budget.
         self.assertIn("NEW MESSAGE", big)
         self.assertIn("NEW MESSAGE", small)
-        # A tight budget drops older messages, so the prompt is shorter...
+        # A tight budget drops older messages...
         self.assertLess(len(small), len(big))
         # ...but the newest message is retained in both.
         self.assertIn("message number 49", big)
@@ -171,7 +171,7 @@ class VerifyEvidenceReachesEveryAgentTests(unittest.TestCase):
     def test_every_selectable_agent_gets_verify_with_evidence(self) -> None:
         from Cozter.backends_agent import AVAILABLE_BACKENDS, get_backend
 
-        # Every chat-selectable agent: flexible + all 7 direct backends.
+        # Every chat-selectable agent.
         self.assertEqual(
             sorted(AVAILABLE_BACKENDS),
             sorted([
@@ -371,7 +371,7 @@ class SessionResponseTests(unittest.TestCase):
         return result
 
     def test_await_marker_is_not_logged_to_session_history(self) -> None:
-        # Logged as-is, the marker replays as assistant speech and teaches false emits.
+        # Logged as-is, the marker replays as assistant speech.
         with tempfile.TemporaryDirectory() as tmp:
             saved = agent._format_session_response(
                 self._result("Which retry path?\n\n[[await]]"), tmp,

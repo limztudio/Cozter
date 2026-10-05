@@ -32,10 +32,10 @@ from ._git_common import (
     git_once as _git_once,
 )
 
-# Test-visible alias (tests/test_titling.py reads _MAX_OUTPUT_CHARS).
+# Test-visible alias.
 _MAX_OUTPUT_CHARS = MAX_OUTPUT_CHARS
 
-# Real-work cap (tool runner); shared limits/validation live in ._git_common.
+# Real-work cap; shared limits/validation live in ._git_common.
 _ACTIONS = (
     "status",
     "log",
@@ -138,7 +138,7 @@ class GitInfoTool(AgentTool):
             if args.get("patch") is True:
                 tail.append("HEAD")
             else:
-                # ``--stat HEAD`` covers staged and unstaged work.
+                # ``--stat`` covers staged and unstaged work.
                 tail += ["--stat", "HEAD"]
             pathspec = args.get("path")
             if isinstance(pathspec, str) and pathspec.strip():
@@ -166,7 +166,7 @@ class GitInfoTool(AgentTool):
                 else "HEAD"
             )
             return argv + ["show", "--stat", "--oneline", revision]
-        # action == "blame"
+        # blame
         pathspec = args.get("path")
         if not isinstance(pathspec, str) or not pathspec.strip():
             raise ValueError("'blame' needs 'path' (a workspace file)")
@@ -208,7 +208,7 @@ class GitInfoTool(AgentTool):
                 argv, workspace, env,
             )
         except TimeoutError:
-            # Same class as asyncio.TimeoutError on 3.11+; run() reports it.
+            # Same class as asyncio.TimeoutError on 3.11+.
             raise
         if returncode != 0 and "HEAD" in argv:
             head_failure = any(
@@ -216,7 +216,7 @@ class GitInfoTool(AgentTool):
                 for marker in ("unknown revision", "ambiguous argument 'head'")
             )
             if head_failure:
-                # Zero-commit repo has no HEAD; diff against the index (empty tree) instead of failing.
+                # Zero-commit repo has no HEAD; diff against the index instead.
                 rebuilt = [
                     "--cached" if arg == "HEAD" else arg for arg in argv
                 ]

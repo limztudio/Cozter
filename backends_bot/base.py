@@ -69,13 +69,13 @@ def _read_inline_text_attachment(path: str) -> str:
 
 
 UPLOADS_DIR = "uploads"
-# Status previews must never block the model stream or final answer.
+# Status previews must never block the stream or answer.
 _STATUS_OPERATION_TIMEOUT_SEC = 4.0
-# Ack is cosmetic (message already queued); bound it so a slow platform send can't stall the handler.
+# Ack is cosmetic; bound it.
 _INJECT_ACK_TIMEOUT_SEC = 8.0
 _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
 _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
-# Precompiled: used on every state save/load.
+# Precompiled for state save/load.
 _UNSAFE_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 NO_WORKSPACE_TEXT = (
     "No workspace selected (or it was deleted). Use /new or /open."
@@ -300,7 +300,7 @@ def write_bytes_atomically(local_path: str, data: bytes) -> None:
         output.write(data)
 
 
-# Message handle + attachment info
+# Message handle + attachments
 
 @dataclass
 class MessageHandle:
@@ -318,7 +318,7 @@ class AttachmentInfo:
     caption: str = ""
 
 
-# BotContext - per-event facade handed to every command handler.
+# Per-event facade for command handlers.
 
 @dataclass
 class BotContext:
@@ -334,7 +334,7 @@ class BotContext:
     args: str
     attachment: AttachmentInfo | None
     platform: BotPlatform
-    # Set when this command cleared a pending input flow; /cancel won't treat it as AI-work clear.
+    # Set when this command cleared a pending input flow.
     had_pending: bool = False
 
     async def reply_text(
@@ -345,7 +345,7 @@ class BotContext:
         )
 
 
-# Handler signature: callback taking a BotContext.
+# Handler: callback taking a BotContext.
 Handler = Callable[[BotContext], Awaitable[None]]
 QueueEntry = tuple[str, str, str, bool]
 
@@ -377,7 +377,7 @@ class _InjectQueue(asyncio.Queue[str]):
         self._accepting = False
 
 
-# BotPlatform - shared state and command logic.
+# Shared state and command logic.
 
 class BotPlatform(ABC):
     """Base class: holds all command logic, leaves I/O to subclasses."""
@@ -390,7 +390,7 @@ class BotPlatform(ABC):
         max_queue_size: int = config.DEFAULT_MESSAGE_QUEUE_SIZE,
         max_upload_bytes: int = config.DEFAULT_MAX_UPLOAD_BYTES,
     ):
-        # Startup-greet + default auth set: Telegram user IDs, Slack channel IDs.
+        # Startup-greet + default auth set.
         self.notify_targets: list[str] = [str(target) for target in notify_targets]
         self.recent_limit = recent_limit
         self.max_queue_size = max_queue_size
@@ -402,43 +402,37 @@ class BotPlatform(ABC):
             else config.DEFAULT_MAX_UPLOAD_BYTES
         )
 
-        # Per-user runtime state (all keyed by str user_id).
+        # Per-user runtime state.
         self._running_tasks: dict[str, asyncio.Task] = {}
         self._task_locks: dict[str, asyncio.Lock] = {}
         self._message_queues: dict[str, asyncio.Queue] = {}
         self._inject_queues: dict[str, _InjectQueue] = {}
-        # Users whose last agent reply ended with [[await]] — their queue
-        # drain is paused until the next message from them arrives.
+        # Users awaiting an answer: queue drain paused.
         self._awaiting_answer: set[str] = set()
-        # Multi-step flow state: maps user_id -> next text-input callback.
+        # Multi-step flow state.
         self._pending_input: dict[str, Handler] = {}
-        # Scheduler state. Persisted last_fired prevents double-fire and enables catch-up.
+        # Scheduler state.
         self._scheduler_task: asyncio.Task | None = None
-        # Set when an auto-update has been pulled and the process is
-        # waiting for active AI replies to finish before restarting.
+        # Update pulled; waiting for active replies before restart.
         self._update_restart_pending = False
-        # Serializes read-modify-write on the persistent-queue file so
-        # concurrent enqueue/complete calls don't clobber each other.
+        # Serializes persistent-queue read-modify-write.
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
-        # Staged final text (separate from inbound queue) so retries resend without rerunning.
+        # Staged final text for retry without rerunning.
         self._reply_delivery_file_lock: asyncio.Lock = asyncio.Lock()
-        # Per-user delivery-vs-cancel lock: one slow platform must not block everyone.
+        # Per-user delivery-vs-cancel lock.
         self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
         self._pending_reply_delivery_users: set[str] = set()
-        # Pipelined attachment uploads: per-chat tails keep pictures ahead
-        # of later texts (order) while agent work overlaps.
+        # Pipelined attachment uploads: per-chat tails.
         self._attachment_tasks: dict[str, set[asyncio.Task]] = {}
         self._attachment_tails: dict[str, asyncio.Task] = {}
-        # Detached tasks are computed results awaiting delivery, not
-        # prompts: kept separate from the inbound queue.
+        # Detached tasks: results awaiting delivery, not prompts.
         self._detached_task_file_lock: asyncio.Lock = asyncio.Lock()
         self._detached_task_watcher: asyncio.Task | None = None
-        # Users whose running task was already acknowledged by /cancel
-        # or /stop, so the cancelled task should not send a second reply.
+        # Users already acknowledged by /cancel or /stop.
         self._cancel_acknowledged: set[str] = set()
-        # Per-user epochs: a pre-/stop admission must not run post-/stop.
+        # Per-user epochs.
         self._cancel_generations: dict[str, int] = {}
-        # Per-user admission lock: closes the cancel-clear vs persist race window.
+        # Per-user admission lock.
         self._dispatch_admission_locks: dict[str, asyncio.Lock] = {}
 
     def _check_upload_size(self, size: object) -> None:
@@ -483,7 +477,7 @@ class BotPlatform(ABC):
             platform=self,
         )
 
-    # platform identity + I/O primitives (abstract)
+    # identity + I/O primitives
 
     @property
     @abstractmethod
@@ -651,7 +645,7 @@ class BotPlatform(ABC):
         }
         parts: list[str] = []
         if tasks:
-            # Report uid + task name + done/cancelled state.
+            # Report uid + task state.
             names = [
                 f"{uid}(cancelled={task.cancelled()})"
                 for uid, task in tasks.items()
@@ -675,7 +669,7 @@ class BotPlatform(ABC):
             parts.append("held_locks=[" + ", ".join(sorted(locks)) + "]")
         return "; ".join(parts) or "<no stuck state found>"
 
-    # event dispatch hooks (called by platform adapters)
+    # dispatch hooks
 
     def authorized(self, user_id: str, _chat_id: str) -> bool:
         """Return True if an event from *(user_id, chat_id)* is allowed.
@@ -709,8 +703,7 @@ class BotPlatform(ABC):
                 f" Available: /{' /'.join(sorted(self._COMMANDS))}"
             )
             return
-        # Any new command cancels a pending text-input flow. /cancel
-        # uses ctx.had_pending to decide its reply.
+        # Any new command cancels a pending text-input flow.
         ctx.had_pending = (
             self._pending_input.pop(ctx.user_id, None) is not None
         )
@@ -723,8 +716,7 @@ class BotPlatform(ABC):
         if not ctx.text or not ctx.text.strip():
             return
 
-        # Accept ``\open`` etc. as slash-command aliases (known names only;
-        # backslash text is otherwise valid chat input).
+        # Accept ``\open`` etc. as aliases (known names only).
         text = ctx.text.strip()
         if text.startswith("\\"):
             parts = text[1:].split(None, 1)
@@ -738,8 +730,7 @@ class BotPlatform(ABC):
 
         pending = self._pending_input.pop(ctx.user_id, None)
         if pending is not None:
-            # Multi-step flow continuation; handler decides whether to
-            # re-arm itself by calling self._expect_input.
+            # Multi-step flow continuation.
             await pending(ctx)
             return
         await self._ai_chat(ctx)
@@ -750,7 +741,7 @@ class BotPlatform(ABC):
             return
         if ctx.attachment is None:
             return
-        # File uploads cancel any pending text-input flow to avoid surprises.
+        # File uploads cancel pending text-input flows.
         self._pending_input.pop(ctx.user_id, None)
         await self._ai_file(ctx)
 
@@ -774,7 +765,7 @@ class BotPlatform(ABC):
             msg_queue = asyncio.Queue(maxsize=maxsize)
             self._message_queues[uid] = msg_queue
         elif maxsize and msg_queue.maxsize != maxsize:
-            # Resize by replacing the queue (race-free under caller's lock).
+            # Resize by replacing the queue.
             replacement: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
             while not msg_queue.empty():
                 try:
@@ -795,7 +786,7 @@ class BotPlatform(ABC):
         turn, which would strand that backlog forever.
         """
         for entry in msg_queue._queue:  # type: ignore[attr-defined]
-            # Only well-formed non-ephemeral entries count; malformed shapes must not strand the turn.
+            # Only well-formed non-ephemeral entries count.
             if (
                 isinstance(entry, tuple)
                 and len(entry) == 4
@@ -844,8 +835,7 @@ class BotPlatform(ABC):
         """
         if not ephemeral_only:
             return msg_queue.get_nowait()
-        # Guard the shape: a malformed entry must be skipped, not crash
-        # the drain loop with an IndexError.
+        # Guard the shape: skip malformed entries.
         return BotPlatform._select_queue_entry(
             msg_queue,
             lambda entry: (
@@ -903,7 +893,7 @@ class BotPlatform(ABC):
         logger.info("User %s answered while %s; queue resumed", uid, reason)
         return True
 
-    # simple commands
+    # commands
 
     async def cmd_start(self, ctx: BotContext) -> None:
         await ctx.reply_text("Cozter bot is running.")
@@ -918,7 +908,7 @@ class BotPlatform(ABC):
     async def cmd_doctor(self, ctx: BotContext) -> None:
         """Report readiness of every backend (CLI on PATH / server up)."""
         lines = ["Backend readiness:"]
-        # Only the direct backends have anything to probe — flexible is a
+        # Only direct backends have anything to probe.
         # meta-agent whose readiness is exactly its tiers' readiness.
         for name in backends_agent.DIRECT_BACKENDS:
             backend = backends_agent.get_backend(name)
@@ -1118,8 +1108,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
         backend_name = workspace.get_backend_name(ws)
-        # Flexible carries one model per difficulty tier rather than one
-        # of its own, so there is nothing here to pick from.
+        # Flexible has per-tier models; nothing to pick here.
         if backend_name == workspace.FLEXIBLE_BACKEND:
             await ctx.reply_text(self._flexible_summary(ws))
             return
@@ -1208,7 +1197,7 @@ class BotPlatform(ABC):
         _, model, summary_model, _, summary_backend = (
             workspace.get_run_config(ws)
         )
-        # Always show the summary agent: the Summary-model line belongs to summary_backend, not *name*.
+        # Always show the summary agent.
         await ctx.reply_text(
             f"Agent set to: {name}\n"
             f"Model: {model}\n"
@@ -1346,8 +1335,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
         current = workspace.get_flexible_backend_name(ws, tier)
-        # Flexible itself is excluded: a tier pointing back at the
-        # meta-agent would plan and split forever.
+        # Exclude flexible itself: a tier loop would recurse forever.
         options = workspace.DIRECT_BACKENDS
         await ctx.reply_text("\n".join([
             f"Flexible {tier} tier —"
@@ -1424,8 +1412,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
         current = workspace.get_summary_backend_name(ws)
-        # The summary agent runs compaction, titling, and flexible's plan
-        # and merge steps — all real turns, which flexible cannot serve.
+        # The summary agent runs compaction/titling/plan/merge.
         options = workspace.DIRECT_BACKENDS
         await ctx.reply_text("\n".join([
             f"Current summary agent: {current}\n",
@@ -1865,7 +1852,7 @@ class BotPlatform(ABC):
         items = colony.get_items(ws)
         count = colony.get_compact_count(ws)
         interval = workspace.get_colony_interval(ws)
-        # Countdown in [1, interval]; exact multiples still owe a full interval.
+        # Countdown in [1, interval].
         until = interval - (count % interval) if interval > 0 else 0
         lines = [
             f"Colony items: {len(items)}",
@@ -1888,8 +1875,7 @@ class BotPlatform(ABC):
     # /stop
 
     async def cmd_stop(self, ctx: BotContext) -> None:
-        # /stop abandons a pending question and every queued prompt,
-        # including queues that are paused without a foreground turn.
+        # /stop abandons pending questions and queued prompts.
         task_running, cancelled_work = await self._cancel_user_work(ctx.user_id)
         if task_running or cancelled_work:
             await ctx.reply_text("Cancelled.")
@@ -1962,7 +1948,7 @@ class BotPlatform(ABC):
         if inject_q is not None:
             outcome = inject_q.put_if_active(text)
             if outcome == "accepted":
-                # Ack is cosmetic (already queued); bound it so a slow send can't stall the handler.
+                # Ack is cosmetic; bound it.
                 try:
                     await asyncio.wait_for(
                         ctx.reply_text("Injected."),
@@ -1981,10 +1967,8 @@ class BotPlatform(ABC):
             if outcome == "full":
                 await ctx.reply_text("Inject queue full.")
                 return
-            # outcome == "finished": agent.run already returned and the
-            # inject window closed, but reply delivery may still hold the
-            # turn lock. Fall through and queue as a follow-up turn
-            # instead of dropping the message.
+            # "finished": turn done but delivery may hold the lock; queue a
+            # follow-up turn instead of dropping the message.
         uid = ctx.user_id
         lock = self._task_locks.get(uid)
         running = self._running_tasks.get(uid)
@@ -2017,8 +2001,7 @@ class BotPlatform(ABC):
             f"Queued ({msg_queue.qsize()}/{self.max_queue_size})."
             " Running next.",
         )
-        # Race guard: kick a drain so the new entry isn't orphaned
-        # (a no-op if one is already active).
+        # Race guard: kick a drain so the entry isn't orphaned.
         self._start_queue_drain(uid)
 
     # /reserve (recurring schedule wizard)
@@ -2117,8 +2100,7 @@ class BotPlatform(ABC):
             "chat_id": ctx.chat_id,
             "user_id": ctx.user_id,
         }
-        # Hold the workspace lock so a concurrent scheduler tick
-        # writing last_fired can't clobber this insert.
+        # Hold the workspace lock against concurrent scheduler ticks.
         async with workspace.get_lock(ws):
             schedules.add_schedule(ws, ctx.user_id, schedule)
         await ctx.reply_text(
@@ -2196,12 +2178,12 @@ class BotPlatform(ABC):
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
         )
 
-    # Durable queue: persist-then-enqueue; complete after the turn settles (shutdown keeps, /stop clears).
+    # Durable queue: persist-then-enqueue.
 
     def _platform_state_file_path(self, stem: str) -> str:
         """Return a durable per-platform state path with a safe file name."""
         os.makedirs(workspace.CONFIG_DIR, exist_ok=True)
-        # Sanitize platform_id: strip the Windows-reserved filename set.
+        # Sanitize platform_id for filenames.
         safe = _UNSAFE_FILENAME_CHARS_RE.sub('_', self.platform_id)
         return os.path.join(workspace.CONFIG_DIR, f"{stem}_{safe}.json")
 
@@ -2308,7 +2290,7 @@ class BotPlatform(ABC):
         persisted entries, refill the in-memory queue and spawn a drain
         task so the oldest entry runs first.
         """
-        # Park prompts with staged replies: restore must not rerun the agent.
+        # Park prompts with staged replies; don't rerun the agent.
         await self.restore_reply_deliveries()
         async with self._queue_file_lock:
             data = self._read_queue_file()
@@ -2327,12 +2309,12 @@ class BotPlatform(ABC):
                 uid, min_size=existing_size + len(entries),
             )
             for entry in entries:
-                # Oldest-first preserves the user's original ordering.
+                # Oldest-first preserves ordering.
                 msg_queue.put_nowait((
                     entry.get("text", ""),
                     entry.get("chat_id", ""),
                     entry.get("id", ""),
-                    # Malformed flags must not turn chat into ephemeral turns.
+                    # Malformed flags must not make ephemeral turns.
                     entry.get("ephemeral") is True,
                 ))
             drained_users.append(uid)
@@ -2471,8 +2453,7 @@ class BotPlatform(ABC):
             data["deliveries"] = records
             self._write_reply_deliveries_file(data)
         self._pending_reply_delivery_users.add(uid)
-        # Daemon bots already have this watcher. Starting is idempotent and
-        # also covers a reply that fails shortly after platform startup.
+        # Starting is idempotent.
         self.start_detached_task_watcher()
         return record
 
@@ -2558,7 +2539,7 @@ class BotPlatform(ABC):
         """
         record_id = record["id"]
         uid = record["user_id"]
-        # Delivery works from a snapshot; re-read under the per-user lock so a stale one can't send.
+        # Re-read under the per-user lock; stale snapshots can't send.
         async with self._reply_delivery_lock(uid):
             record = await self._get_reply_delivery_record(record_id)
             if record is None:
@@ -2601,7 +2582,7 @@ class BotPlatform(ABC):
             try:
                 await self._remove_reply_delivery_record(record_id)
             except Exception:
-                # Chat may have accepted the reply; keep the ledger for at-least-once recovery.
+                # Keep the ledger for at-least-once recovery.
                 logger.warning(
                     "Delivered completed reply %s but could not clear its "
                     "ledger", record_id, exc_info=True,
@@ -2904,14 +2885,13 @@ class BotPlatform(ABC):
         result = agent.AgentResult()
         agent.append_text_result(result, message)
         try:
-            # Uploads stay user-owned (cancellable); provider [[await]] text must not pause the queue.
+            # Uploads stay user-owned; provider [[await]] must not pause the queue.
             await self._send_detached_result(
                 record["chat_id"], record["workspace_path"], result,
                 record["user_id"],
             )
         except Exception:
-            # Keep the staged payload for at-least-once delivery after a
-            # transient platform outage or a Cozter restart.
+            # Keep the staged payload for at-least-once delivery.
             logger.warning(
                 "Failed to deliver detached task %s",
                 record["task_id"], exc_info=True,
@@ -3029,8 +3009,7 @@ class BotPlatform(ABC):
         for record in await self._list_detached_task_records():
             if record["user_id"] != uid:
                 continue
-            # A terminal payload is already staged; /cancel means the user
-            # does not want this delayed message any more.
+            # A staged terminal payload: /cancel drops the delayed message.
             if isinstance(record.get("delivery_text"), str):
                 await self._remove_detached_task_record(record["id"])
                 cancelled += 1
@@ -3067,7 +3046,7 @@ class BotPlatform(ABC):
 
     async def _scheduler_loop(self) -> None:
         """Poll every 30s; fire schedules whose day+time match 'now'."""
-        # Give the platform a moment to fully start.
+        # Let the platform start.
         await asyncio.sleep(5)
         while True:
             try:
@@ -3092,11 +3071,10 @@ class BotPlatform(ABC):
         """
         now = datetime.now()
 
-        # Creation-ordered (uid, ws, sched, slot) tuples: same-slot fires run in creation order.
+        # Same-slot fires run in creation order.
         to_fire: list[tuple[str, str, dict, datetime]] = []
 
-        # Iterate workspace state (not notify_targets) so Slack — where
-        # notify_targets are channels — correctly finds user sessions.
+        # Iterate workspace state (Slack notify_targets are channels).
         for uid, ws in workspace.iter_current_workspaces(self.platform_id):
             if not os.path.isdir(ws):
                 continue
@@ -3111,7 +3089,7 @@ class BotPlatform(ABC):
                 baseline = last_fired or schedules.parse_iso(
                     sched.get("created"),
                 )
-                # Never fire at/before creation time (no instant fire on create).
+                # Never fire at/before creation time.
                 if baseline is not None and slot <= baseline:
                     continue
                 to_fire.append((uid, ws, sched, slot))
@@ -3122,7 +3100,7 @@ class BotPlatform(ABC):
             schedule_id = sched.get("id")
             if not isinstance(schedule_id, str) or not schedule_id:
                 continue
-            # Persist last_fired first: a mid-fire crash drops once rather than firing twice.
+            # Persist last_fired first.
             async with workspace.get_lock(ws):
                 claimed_schedule = schedules.update_schedule_fired(
                     ws, uid, schedule_id, slot.isoformat(),
@@ -3558,14 +3536,13 @@ class BotPlatform(ABC):
                         action="sending a progress status",
                     )
                 return
-            # One Thinking message, edited in place (flush coalesces edits).
+            # One Thinking message, edited in place.
             pending_status = self._compose_thinking_display(
                 status_lines, latest_text,
             )
             now = asyncio.get_running_loop().time()
             if now - last_edit < 1.5:
-                # Throttled: ensure a flush task is scheduled so this
-                # update still reaches the single Thinking message.
+                # Throttled: schedule a flush so this update lands.
                 if status_edit_task is None or status_edit_task.done():
                     status_edit_task = create_background_task(
                         flush_status_edits(),
@@ -3591,8 +3568,7 @@ class BotPlatform(ABC):
                 summary_backend_name=summary_backend,
                 session_id=session_id,
             )
-            # Start durable provider jobs here: foreground closed, reply
-            # not yet acked; interactive turns only.
+            # Start durable provider jobs here (interactive turns only).
             if session_id is None:
                 try:
                     await self._launch_result_detached_tasks(
@@ -3607,14 +3583,12 @@ class BotPlatform(ABC):
                         summary_backend_name=summary_backend,
                     )
                 except Exception:
-                    # The foreground reply is still owed if an optional
-                    # detached-job handoff itself breaks unexpectedly.
+                    # The foreground reply is still owed on handoff failure.
                     logger.exception("Could not launch detached task request")
                     agent.append_text_result(
                         result, "Could not start the requested background task.",
                     )
-            # Register Claude bg ids before the parent reply so fast
-            # completions can't race the callback ledger.
+            # Register Claude bg ids before the parent reply.
             try:
                 await self._register_result_detached_tasks(
                     uid,
@@ -3626,16 +3600,15 @@ class BotPlatform(ABC):
                     ),
                 )
             except Exception:
-                # A filesystem failure in the optional completion ledger must
-                # never hide the foreground answer the user is already owed.
+                # Ledger failures must never hide the owed foreground answer.
                 logger.exception("Could not register detached task callback")
         finally:
-            # Idempotent window close before status/reply I/O can yield.
+            # Idempotent window close before I/O can yield.
             inject_q.close()
             if status_edit_task is not None and not status_edit_task.done():
                 status_edit_task.cancel()
             if thinking_handle is not None:
-                # Never let stale-status cleanup hold the answer hostage (bounded best-effort).
+                # Stale-status cleanup must not hold the answer hostage.
                 create_background_task(
                     self._run_status_operation(
                         self.delete_message(thinking_handle),
@@ -3645,7 +3618,7 @@ class BotPlatform(ABC):
                     log=logger,
                 )
 
-        # Auto-chain: judge exhausted mid-CONTINUE, so chain hands-free same-session turns (bounded).
+        # Auto-chain judge-exhausted CONTINUE hands-free (bounded).
         chained = 0
         try:
             from .. import flexible as _flexible_mod
@@ -3692,7 +3665,7 @@ class BotPlatform(ABC):
                 content=f"Auto-continue finished after {chained} turn(s).",
             ))
 
-        # [[await]] pause is interactive-only; ephemeral schedule sessions are deleted right after.
+        # [[await]] pause is interactive-only.
         if queue_entry_id is None:
             await self._send_result(
                 chat_id, ws, result,
@@ -3700,8 +3673,7 @@ class BotPlatform(ABC):
             )
             return
 
-        # Preserve the reply before send: a failed send must not rerun
-        # the agent (and its tools) after restart.
+        # Preserve the reply: a failed send must not rerun the agent.
         record = await self._stage_reply_delivery(
             uid, queue_entry_id, chat_id, ws, result,
             allow_await=session_id is None,
@@ -3728,7 +3700,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
 
-        # Distinctive name: keeps the auto-title task from racing the delete.
+        # Distinctive name: avoids the auto-title race.
         stripped = text.strip()
         label = stripped.splitlines()[0] if stripped else "scheduled"
         if len(label) > 40:
@@ -3741,8 +3713,7 @@ class BotPlatform(ABC):
                 queue_entry_id=queue_entry_id,
             )
         finally:
-            # Always tear down the throwaway session (name avoids the
-            # auto-title race).
+            # Always tear down the throwaway session.
             try:
                 session.delete_session(ws, sid)
             except Exception:
@@ -3812,7 +3783,7 @@ class BotPlatform(ABC):
                     raise
                 except Exception:
                     pass
-            # Parallel uploads: clients serialize the HTTP sends themselves.
+            # Parallel uploads: clients serialize the sends.
             await asyncio.gather(*(_send_one(path) for path in paths))
 
         task: asyncio.Task[None] = create_background_task(
@@ -3924,8 +3895,7 @@ class BotPlatform(ABC):
             for path in attach_paths:
                 collect_attachment(path)
 
-        # Compact per-turn token/cost footer, when the backend reported
-        # usage and the operator hasn't disabled it.
+        # Compact per-turn token/cost footer.
         if result.usage and config.get_show_usage():
             footer = agent.format_usage(result.usage)
             if footer:
@@ -3942,7 +3912,7 @@ class BotPlatform(ABC):
 
     def _arm_awaiting_answer(self, uid: str) -> None:
         """Honor a delivered ``[[await]]`` reply without stranding backlog."""
-        # [[await]] parks new messages as the answer; already-queued turn messages still drain.
+        # [[await]] parks new messages; queued turns still drain.
         msg_queue = self._message_queues.get(uid)
         if msg_queue is not None and self._has_pending_normal_entries(msg_queue):
             logger.info(
@@ -3960,11 +3930,10 @@ class BotPlatform(ABC):
         msg_queue = self._message_queues.get(uid)
         if not msg_queue:
             return
-        # Conversational order: retry the unaccepted answer before starting a new turn.
+        # Retry the unaccepted answer before a new turn.
         if uid in self._pending_reply_delivery_users:
             return
-        # Defensive: if a queue exists, a lock must too. Create on demand
-        # so a missing lock doesn't crash the drain task.
+        # Defensive: create a missing lock on demand.
         lock = self._ensure_task_lock(uid)
 
         while not msg_queue.empty():
@@ -3984,11 +3953,10 @@ class BotPlatform(ABC):
                 lock.release()
                 break
             if entry is None:
-                # [[await]] pause: chat waits for the answer; ephemeral
-                # entries still drain.
+                # [[await]] pause: chat waits; ephemeral entries still drain.
                 lock.release()
                 break
-            # Drop malformed in-memory shapes; never wedge the drain loop on an unpack error.
+            # Drop malformed shapes; never wedge the drain loop.
             if (
                 not isinstance(entry, tuple)
                 or len(entry) != 4
@@ -4005,8 +3973,7 @@ class BotPlatform(ABC):
                 continue
             text, msg_chat_id, entry_id, ephemeral = entry
 
-            # Drop entries de-authorized since persist; completion is
-            # best-effort so a full disk can't wedge the user.
+            # Drop de-authorized entries; completion is best-effort.
             if not self.authorized(uid, msg_chat_id):
                 logger.warning(
                     "Dropping queued entry for unauthorized user=%s chat=%s",
@@ -4022,7 +3989,7 @@ class BotPlatform(ABC):
                     lock.release()
                 continue
 
-            # Register before first yield so /stop cancels even during the "Thinking..." send.
+            # Register before first yield so /stop cancels early.
             self._running_tasks[uid] = asyncio.current_task()
             try:
                 if ephemeral:
@@ -4034,7 +4001,7 @@ class BotPlatform(ABC):
                         uid, msg_chat_id, text, queue_entry_id=entry_id,
                     )
             except asyncio.CancelledError:
-                # Keep on disk for restart resume (/stop clears via cmd_stop).
+                # Keep on disk for restart resume.
                 if uid not in self._cancel_acknowledged:
                     await self._send_text_best_effort(
                         msg_chat_id, "Cancelled.",
@@ -4051,7 +4018,7 @@ class BotPlatform(ABC):
             finally:
                 self._cleanup_turn(uid, lock)
 
-    # helpers
+    # internal helpers
 
     @staticmethod
     def _pick_option(
@@ -4075,8 +4042,7 @@ class BotPlatform(ABC):
             return text
         return None
 
-    # Command registry --------------------------------------------------
-    # Populated at class body end to avoid forward-reference issues.
+    # Command registry (populated at class body end).
     _COMMANDS: ClassVar[dict[str, Handler]] = {}
 
 

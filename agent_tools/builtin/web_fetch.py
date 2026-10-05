@@ -27,7 +27,7 @@ _MAX_REDIRECTS = 10
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _FETCH_ATTEMPTS = 2
 _FETCH_RETRY_DELAY_SECONDS = 0.4
-# Precompiled: run() executes per fetch.
+# Precompiled for per-fetch run().
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 
@@ -129,7 +129,7 @@ class WebFetchTool(AgentTool):
             maximum=30_000,
         )
 
-        # One retry for transient transport failures; one shared session.
+        # One retry for transient failures; one shared session.
         final_url = url
         content_type = ""
         body = ""

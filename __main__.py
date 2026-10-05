@@ -64,8 +64,7 @@ def _validate_launch_args(args: list[str]) -> None:
 if __name__ == "__main__":
     _validate_launch_args(sys.argv[1:])
 
-# Re-launch as module if run as `python Cozter` (no package context).
-# Forward any CLI args (e.g. -cli) so flags survive the re-exec.
+# Re-launch as module if run as `python Cozter`; forward CLI args.
 if __name__ == "__main__" and not __package__:
     module_dir = os.path.dirname(os.path.abspath(__file__))
     module_name = os.path.basename(module_dir)
@@ -78,8 +77,7 @@ if __name__ == "__main__" and not __package__:
     )
 
 
-# Make ``Cozter`` importable from spawned CLIs/bash (inherited env;
-# no manual PYTHONPATH needed).
+# Make ``Cozter`` importable from spawned CLIs/bash.
 _pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _existing_pythonpath = os.environ.get("PYTHONPATH", "")
 if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
@@ -91,7 +89,7 @@ if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
 
 _VENV_REEXEC_ENV = "COZTER_VENV_REEXEC"
 _WINDOWS_CHILD_RESTART_DELAY_SEC = 1
-# Fresh-venv recovery only; 3600s cap so slow installs finish.
+# Fresh-venv recovery only; 3600s cap.
 _DEPENDENCY_INSTALL_TIMEOUT_SEC = 3600
 _REQUIRED_RUNTIME_MODULES = (
     "aiohttp",
@@ -194,8 +192,7 @@ def _ensure_venv_and_reexec() -> None:
     env = {**os.environ, _VENV_REEXEC_ENV: "1"}
     args = [python, "-m", "Cozter", *sys.argv[1:]]
     if os.name == "nt":
-        # 3.13 Windows execve can crash: keep one supervisor for the venv
-        # child so self-updates don't orphan parents.
+        # 3.13 Windows execve can crash: keep one supervisor.
         from . import updater as _windows_updater  # pylint: disable=redefined-outer-name
 
         env[_windows_updater.WINDOWS_SUPERVISOR_ENV] = "1"
@@ -262,7 +259,7 @@ from .utils import await_cancelled  # noqa: E402
 MODULE_ROOT = os.path.dirname(__file__)
 LOG_DIR = os.path.join(MODULE_ROOT, ".log")
 
-# Crash-respawn delay: slow enough to keep crash loops readable, fast enough to recover promptly.
+# Crash-respawn delay: readable crash loops, prompt recovery.
 _CRASH_RESTART_DELAY_SEC = 5
 _UPDATE_IDLE_POLL_SEC = 1
 _UPDATE_IDLE_LOG_SEC = 30
@@ -310,7 +307,7 @@ def log_crash(exc: BaseException) -> str:
 logger = logging.getLogger(__name__)
 
 
-# Dump target: opened lazily so imports/tests need no writable .log/ dir.
+# Dump target: opened lazily.
 _dump_file: TextIO | None = None
 
 
@@ -325,8 +322,7 @@ def _get_dump_file() -> TextIO:
     global _dump_file
     if _dump_file is None:
         os.makedirs(LOG_DIR, exist_ok=True)
-        # SIM115 does not apply: this handle is intentionally opened once
-        # and kept for the process lifetime (diagnostics dump target).
+        # SIM115 does not apply: kept for the process lifetime.
         _dump_file = open(  # noqa: SIM115
             os.path.join(LOG_DIR, "diagnostics.log"), "a", encoding="utf-8",
         )
@@ -352,8 +348,7 @@ def dump_runtime_diagnostics(
     dump_file.write(f"\n===== diagnostics dump{label} @ {datetime.now().isoformat()} =====\n")
     dump_file.flush()
 
-    # asyncio tasks: each Task carries its own stack; print_stack writes
-    # to *dump_file*. Capture names too for a quick at-a-glance summary.
+    # Each Task carries its own stack; capture names too.
     try:
         tasks = [task for task in asyncio.all_tasks() if not task.done()]
         dump_file.write(
@@ -368,7 +363,7 @@ def dump_runtime_diagnostics(
         dump_file.write(f"  (failed to enumerate tasks: {exc})\n")
     dump_file.flush()
 
-    # Native threads (codex/zai subprocess readers, signal threads, etc.).
+    # Native threads.
     threads = threading.enumerate()
     frames = sys._current_frames()
     dump_file.write(f"-- active threads ({len(threads)}) --\n")
@@ -387,7 +382,7 @@ def dump_runtime_diagnostics(
         dump_file.writelines(traceback.format_stack(frame))
     dump_file.flush()
 
-    # Per-platform turn-tracking state, when platforms are available.
+    # Per-platform turn-tracking state.
     if bots:
         dump_file.write("-- bot turn state --\n")
         for bot in bots:
@@ -425,7 +420,7 @@ def _enable_faulthandler() -> None:
     interval = cfg.get_dump_traceback_interval()
     if interval > 0:
         try:
-            # Repeat for process life; a one-shot dump rarely catches a transient wedge.
+            # Repeat for process life; one shot rarely catches a wedge.
             faulthandler.dump_traceback_later(
                 interval, repeat=True, file=_get_dump_file(),
             )
@@ -464,8 +459,7 @@ async def _wait_for_update_idle(
                 cfg.get_update_idle_timeout(), waited,
                 {bot.platform_id: bot.stuck_turn_diagnostics() for bot in active},
             )
-            # Full task/thread dump so a stuck wait leaves the evidence
-            # needed to root-cause it, while preserving active work.
+            # Full task/thread dump for root-causing stuck waits.
             dump_runtime_diagnostics(active, reason="update-idle-still-waiting")
             last_diag = now
         if now - last_log >= _UPDATE_IDLE_LOG_SEC:
@@ -493,7 +487,7 @@ async def _restart_after_update(
                 "Update ready; waiting for active turn(s) before restart"
             ),
         )
-        # Safe to mutate the checkout now: new turns are blocked, earlier turns done.
+        # Safe to mutate the checkout now.
         changed = await asyncio.to_thread(updater.fetch_and_pull)
         if not changed:
             logger.info("Update no longer requires a restart; resuming intake")
@@ -552,8 +546,7 @@ def _cli_mode_requested() -> bool:
     return any(arg in _CLI_MODE_FLAGS for arg in sys.argv[1:])
 
 
-# Two-phase CLI lifecycle via one env var: launcher (respawn loop) vs
-# bot child (exits with CLI_RESTART_EXIT_CODE to relaunch in place).
+# Two-phase CLI lifecycle: launcher vs bot child.
 _CLI_CHILD_ENV = "COZTER_CLI_CHILD"
 
 
@@ -585,7 +578,7 @@ async def main_cli() -> None:
     """
     from .backends_bot.cli import CliBot
 
-    # CLI reads no config: avoids a spurious config.json and misleading token prompts.
+    # CLI reads no config.
     cli_interval = cfg.DEFAULT_UPDATE_CHECK_INTERVAL
 
     updater.init_startup_commit()
@@ -611,11 +604,11 @@ async def main_cli() -> None:
 
 async def main() -> None:
     if _cli_mode_requested():
-        # Launcher (respawn loop) vs bot child spawned by it.
+        # Launcher vs bot child.
         if _cli_child_mode():
             await main_cli()
             return
-        # Sync subprocess loop; exit cleanly through asyncio.
+        # Sync subprocess loop.
         sys.exit(_cli_respawner_loop())
 
     config = cfg.load_config()
@@ -639,7 +632,7 @@ async def main() -> None:
         except NotImplementedError:
             signal.signal(sig, lambda *_: _signal_handler())
 
-    # SIGUSR1 dumps tasks/threads/turn state on demand (POSIX only).
+    # SIGUSR1 dumps tasks/threads/turn state (POSIX).
     if hasattr(signal, "SIGUSR1"):
         try:
             loop.add_signal_handler(
@@ -647,14 +640,13 @@ async def main() -> None:
                 lambda: dump_runtime_diagnostics(bots, reason="SIGUSR1"),
             )
         except (NotImplementedError, ValueError):
-            # NotImplementedError on Windows; ValueError if the signal
-            # can't be registered in this context. Neither is fatal.
+            # Neither platform failure here is fatal.
             pass
 
     for bot in bots:
         await bot.start()
 
-    # Each platform decides how to greet its notify targets on startup.
+    # Each platform greets its notify targets on startup.
     for bot in bots:
         try:
             await bot.send_startup_messages(version, commit_date)
@@ -680,8 +672,7 @@ async def main() -> None:
 
 def run() -> None:
     setup_logging()
-    # faulthandler before anything else: if the daemon segfaults or
-    # wedges in C, this is the only thing that emits where it stuck.
+    # faulthandler first: emits where a C wedge stuck.
     _enable_faulthandler()
     try:
         asyncio.run(main())
@@ -690,7 +681,7 @@ def run() -> None:
     except Exception as exc:
         crash_path = log_crash(exc)
         if _cli_mode_requested():
-            # CLI mode is interactive; auto-restarting would be jarring.
+            # CLI mode is interactive; don't auto-restart.
             logger.critical(
                 "Cozter crashed - crash log written to %s", crash_path,
             )

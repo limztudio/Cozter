@@ -36,9 +36,9 @@ class _FallbackModelSpec(NamedTuple):
     context_window: int
 
 
-# Offline discovery fallback: curated chat IDs + beside-ID capabilities (picker/compaction can't drift).
+# Offline discovery fallback: curated chat IDs + capabilities.
 _FALLBACK_MODEL_SPECS = (
-    # Current flagship on the Model API.
+    # Current flagship.
     _FallbackModelSpec("muse-spark-1.3", 1_048_576),
     _FallbackModelSpec("muse-spark-1.2", 1_048_576),
     _FallbackModelSpec("muse-spark-1.1", 1_048_576),
@@ -47,8 +47,7 @@ _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _MODEL_CONTEXT_WINDOWS = {
     spec.name: spec.context_window for spec in _FALLBACK_MODEL_SPECS
 }
-# Non-chat endpoints (image/voice/SAM): excluded from chat fallback.
-# Kept small and exact; unknown IDs stay selectable for operators.
+# Non-chat endpoints (image/voice/SAM): unknown IDs stay selectable.
 _NON_CHAT_COMPLETION_MODEL_PREFIXES = (
     "muse-image",
     "muse-voice",
@@ -82,13 +81,13 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
     name = "meta"
     executable = "meta"  # HTTP backend; never spawns a subprocess
 
-    # Documented multimodal: photo uploads ride as real image parts.
+    # Photo uploads ride as real image parts.
     supports_vision = True
     vision_mode = "openai_parts"
 
     default_model = "muse-spark-1.3"
     default_summary_model = "muse-spark-1.2"
-    # Tier variants sit beside canonical IDs; discovery supersedes this.
+    # Tier variants sit beside canonical IDs.
     tier_models = {
         "low": "muse-spark-1.2",
         "mid": "muse-spark-1.3",
@@ -100,7 +99,7 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         selected = _capability_model_id(model or self.default_model)
         return _MODEL_CONTEXT_WINDOWS.get(selected)
 
-    # model discovery
+    # discovery
 
     def _fetch_models(self) -> tuple[str, ...]:
         return discover_bearer_models(
@@ -116,11 +115,10 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
             fetch=fetch_model_ids,
         )
 
-    # OpenAIChatBackend hooks
+    # hooks
 
     def _chat_endpoint(self) -> str:
-        # base_url already carries the /v1 version segment, so we append
-        # /chat/completions directly (NOT /v1/chat/completions).
+        # base_url already carries /v1: append /chat/completions directly.
         return cfg.get_meta_base_url().rstrip("/") + "/chat/completions"
 
     def _auth_headers(self) -> dict[str, str]:
@@ -128,7 +126,7 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         return {"Authorization": f"Bearer {key}"} if key else {}
 
     def _request_model(self, model: str | None) -> str:
-        # The Model API requires a model field; fall back to the default.
+        # The Model API requires a model field.
         return model or self.default_model
 
     def _auto_continue_after_tool_limit(self) -> bool:

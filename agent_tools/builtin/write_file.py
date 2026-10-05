@@ -36,11 +36,11 @@ class WriteFileTool(AgentTool):
         content = args.get("content")
         if not isinstance(content, str):
             return "Error: 'content' must be a string"
-        # Refuse FIFOs/devices: opening them for writing can block the loop.
+        # Refuse FIFOs/devices: opening them can block the loop.
         if os.path.exists(target) and not os.path.isfile(target):
             return f"Error: not a regular file: {args.get('path')}"
         ensure_parent_dir(target)
-        # Atomic replace keeps the old file (and its perms) on write failure.
+        # Atomic replace keeps the old file on write failure.
         write_text_after_edit(target, content, uses_crlf=False)
         return f"Wrote {len(content)} chars to {args.get('path')}"
 

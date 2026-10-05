@@ -24,8 +24,7 @@ from .utils import stat_mtime_size
 logger = logging.getLogger(__name__)
 
 LONG_TERM_CAP = 50
-# Cap each message's content when including it in a prompt so a single
-# long AI response cannot consume the entire token budget.
+# Cap each message's content in prompts.
 MSG_CONTENT_MAX = 800
 
 SESSIONS_DIR = "sessions"
@@ -63,7 +62,7 @@ def _last_session_path(workspace: str) -> str:
     return workspace_mod.workspace_state_path(workspace, LAST_SESSION_FILE)
 
 
-# Last-session pointer (per workspace, keyed by user)
+# Last-session pointer
 
 
 def _load_last_session_map(workspace: str) -> dict:
@@ -139,7 +138,7 @@ def migrate_last_session(
     return False
 
 
-# Session CRUD
+# CRUD
 
 def _safe_text(value: object, default: str = "") -> str:
     """Return a string for persisted free-text fields."""
@@ -239,8 +238,7 @@ def format_msg_line(msg: dict, cap: int | None = MSG_CONTENT_MAX) -> str:
     role = role.capitalize()
     content = _safe_text(msg.get("content"))
     if cap is not None and cap <= 0:
-        # A non-positive cap affords no content characters; return the
-        # role label alone rather than a trailing-space line.
+        # Non-positive cap: return the role label alone.
         return f"{role}:"
     if cap is not None and len(content) > cap:
         _suffix = (
@@ -527,7 +525,7 @@ def set_session_name(
     save_session(workspace, session_id, data)
 
 
-# Message persistence
+# Persistence
 
 def append_messages(
     workspace: str, session_id: str, messages: list[dict],
@@ -541,7 +539,7 @@ def append_messages(
     return len(data["messages"])
 
 
-# Summary and compaction
+# Summary/compaction
 
 def set_summary(
     workspace: str,
@@ -584,7 +582,7 @@ def set_summary(
     if not isinstance(msgs, list):
         msgs = []
         data["messages"] = msgs
-    # keep_recent is a retain-count: negatives clamp to 0, never "drop all + inflate tally".
+    # keep_recent is a retain-count: negatives clamp to 0.
     if isinstance(keep_recent, bool) or not isinstance(keep_recent, int):
         keep_recent = 0
     keep_recent = max(0, keep_recent)
@@ -599,7 +597,7 @@ def set_summary(
     )
     trimmed = max(0, basis - keep_recent)
     data["compacted_count"] = data.get("compacted_count", 0) + trimmed
-    # Keep the trim point onward: summarized tail + messages appended since.
+    # Keep the trim point onward.
     data["messages"] = msgs[trimmed:]
     if first_message_tail is not None and data["messages"]:
         first = data["messages"][0]
@@ -627,4 +625,4 @@ def set_summary(
     save_session(workspace, session_id, data)
 
 
-# Schedules live in ``schedules.py`` (``.cozter/schedules.json``).
+# Schedules live in ``schedules.py``.

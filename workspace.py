@@ -15,7 +15,7 @@ from .utils import stat_mtime_size
 logger = logging.getLogger(__name__)
 
 WORKSPACE_STATE_PATH = os.path.join(CONFIG_DIR, "workspaces.json")
-MAX_RECENT = 50  # cap on stored recent-workspaces list
+MAX_RECENT = 50  # cap on the recent-workspaces list
 
 
 def canonicalize_workspace_path(path: str) -> str:
@@ -70,7 +70,7 @@ def workspace_state_path(workspace_path: str, *parts: str) -> str:
         or "\x00" in part
         or os.path.isabs(part)
         or part in {".", ".."}
-        # One path component only: reject both separators so state can't escape.
+        # One path component only: reject both separators.
         or "/" in part
         or "\\" in part
         for part in parts
@@ -219,7 +219,7 @@ def select_workspace(
     recent = user_state.get("recent", [])
     if not isinstance(recent, list):
         recent = []
-    # Rebuild (not string-remove) so legacy aliases (``/work/.``) normalize and dedupe too.
+    # Rebuild so legacy aliases normalize and dedupe too.
     user_state["recent"] = _merge_recent(path, recent)
 
     all_state[uid] = user_state
@@ -341,17 +341,17 @@ def ensure_cozter_dir(path: str) -> None:
     _workspace_state_dir(path, create=True)
 
 
-# Workspace settings (stored in .cozter/settings.json)
+# Settings (``.cozter/settings.json``)
 
 AVAILABLE_BACKENDS = backends_agent.AVAILABLE_BACKENDS
-# Real-turn backends; ``flexible`` routes to these and can't be its own tier (recursion).
+# Real-turn backends; ``flexible`` can't be its own tier.
 DIRECT_BACKENDS = backends_agent.DIRECT_BACKENDS
 DEFAULT_BACKEND = backends_agent.DEFAULT_BACKEND
 FLEXIBLE_BACKEND = backends_agent.FLEXIBLE_BACKEND
-# Compaction/titling default to codex (cheapest summarizer).
+# Compaction/titling default to codex.
 DEFAULT_SUMMARY_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
 
-# Difficulty tiers; all default so fresh workspaces work unset-up.
+# Difficulty tiers; all default.
 FLEXIBLE_TIERS = flexible.TIERS
 FLEXIBLE_TIER_DESCRIPTIONS = flexible.TIER_DESCRIPTIONS
 DEFAULT_FLEXIBLE_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
@@ -375,8 +375,7 @@ PERMISSION_DESCRIPTIONS = {
     ),
 }
 
-# Interaction style: picks the shared prompt policy for chat turns.
-# Scheduled/ephemeral turns always run autonomously.
+# Interaction style: picks the shared prompt policy.
 AVAILABLE_STYLES = ["collaborative", "autonomous"]
 DEFAULT_STYLE = "collaborative"
 STYLE_DESCRIPTIONS = {
@@ -387,8 +386,7 @@ STYLE_DESCRIPTIONS = {
     "autonomous": "Decide and proceed without asking (full-auto)",
 }
 
-# Reasoning effort 0-100: one number, each backend maps to its native
-# scale. 0 = backend default.
+# Reasoning effort 0-100 (0 = backend default).
 DEFAULT_REASONING_EFFORT = 0
 
 
@@ -478,7 +476,7 @@ def _coerce_permission(permission: object) -> str:
     )
 
 
-# Privilege rank (low -> high); config.max_permission caps it bot-wide.
+# Privilege rank (low -> high).
 _PERMISSION_RANK = {"deny": 0, "confirm": 1, "auto": 2, "full": 3}
 
 
@@ -600,7 +598,7 @@ def get_available_summary_models(workspace_path: str) -> list[str]:
     )
 
 
-# Per-(backend, role) model memory: switching agents restores each model.
+# Per-(backend, role) model memory.
 CHAT_SCOPE = ""
 SUMMARY_SCOPE = "summary"
 
@@ -712,7 +710,7 @@ def set_summary_model(workspace_path: str, model: str) -> None:
     )
 
 
-# Flexible agent — one (agent, model) pair per difficulty tier
+# Flexible agent: one (agent, model) pair per tier
 
 def _validate_tier(tier: str) -> None:
     if tier not in FLEXIBLE_TIERS:
@@ -843,7 +841,7 @@ def get_reasoning_effort(workspace_path: str) -> int:
 
 def set_reasoning_effort(workspace_path: str, effort: int) -> None:
     """Clamp to 0-100 and persist."""
-    # Strict int-only (like _set_minimum_int_setting): reject floats/strings loudly, never truncate.
+    # Strict int-only: reject floats/strings loudly.
     if isinstance(effort, bool) or not isinstance(effort, int):
         raise ValueError("reasoning effort must be an integer 0-100")
     clamped = max(0, min(effort, 100))
@@ -870,8 +868,7 @@ def _set_minimum_int_setting(
     _set_setting(workspace_path, key, value)
 
 
-# Turn-counter defaults live here so colony/compaction can import them
-# without a cycle.
+# Turn-counter defaults live here to avoid an import cycle.
 DEFAULT_COLONY_INTERVAL = 3
 DEFAULT_COMPACT_INTERVAL = 10
 
@@ -898,8 +895,7 @@ def set_compact_interval(workspace_path: str, interval: int) -> None:
     _set_minimum_int_setting(workspace_path, "compact_interval", interval)
 
 
-# Char budget for the prepended context block (provider-agnostic token
-# proxy). Oldest messages drop first to fit.
+# Char budget for the prepended context block.
 DEFAULT_HISTORY_BUDGET = 20_000
 MIN_HISTORY_BUDGET = 2_000
 
@@ -917,7 +913,7 @@ def set_history_budget(workspace_path: str, budget: int) -> None:
     )
 
 
-# Per-workspace lock: serializes all workspace file access
+# Per-workspace lock
 
 _locks: dict[str, asyncio.Lock] = {}
 

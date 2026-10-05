@@ -81,7 +81,7 @@ class BashTool(AgentTool):
             else:
                 await proc.wait()
         except asyncio.CancelledError:
-            await _kill_command_tree(proc)  # /stop must not leak the shell.
+            await _kill_command_tree(proc)  # /stop must not leak it.
             raise
 
         output = stdout.decode("utf-8", errors="replace")

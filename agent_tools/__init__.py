@@ -47,7 +47,7 @@ from .base import truncate_with_marker
 
 logger = logging.getLogger(__name__)
 
-# Bound tool results: huge outputs blow up the prompt, rarely help.
+# Bound tool results: huge outputs blow up the prompt.
 _TOOL_RESULT_MAX = 4_000
 
 
@@ -70,7 +70,7 @@ def _tool_timeout_seconds() -> float | None:
     return seconds if seconds > 0 else 3600.0
 
 
-# Tool discovery: import every sibling module to trigger self-registration
+# Tool discovery: import siblings to trigger self-registration
 
 
 def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
@@ -94,8 +94,7 @@ def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
         try:
             importlib.import_module(f"{pkg_name}.{_mod_info.name}")
         except Exception:
-            # Class definition may already have self-registered before the
-            # failure: roll back the whole registry to the pre-import state.
+            # May have self-registered before failing: roll back the registry.
             AgentTool.registry[:] = before
             logger.exception(
                 "Failed to load %s.%s", pkg_name, _mod_info.name,
@@ -110,19 +109,17 @@ def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
 
 _load_subpackage("builtin", mark_as_plugin=False)
 
-# Defer plugin imports under ``python -m``: preloading there makes runpy
-# warn about unpredictable execution. Normal startup still loads them.
+# Defer plugin imports under ``python -m`` (runpy warns on preload).
 if not sys.argv or sys.argv[0] != "-m":
     _load_subpackage("plugins", mark_as_plugin=True)
 
-# Deterministic order: explicit ``order`` then name.
+# Deterministic order: ``order`` then name.
 _TOOLS: tuple[AgentTool, ...] = tuple(
     sorted(AgentTool.registry, key=lambda t: (t.order, t.name))
 )
 _BY_NAME: dict[str, AgentTool] = {tool.name: tool for tool in _TOOLS}
 
-# Read-only surface for "confirm" mode (no prompts per call on chat bots):
-# anything unlisted (mutating builtins, bash, all plugins) is withheld.
+# Read-only surface for "confirm" mode: unlisted tools are withheld.
 READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
     "read_file",
     "list_dir",
@@ -183,11 +180,7 @@ READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
 )
 
 
-# Public API
-
-
-# Internal: signature alias for the per-event emit callback that
-# every backend gives us so tools can stream status updates back.
+# Public API + internal emit-callback alias.
 _EmitFunc = Callable[[dict], None]
 
 
@@ -235,7 +228,7 @@ async def execute_tool(
     emit: _EmitFunc,
 ) -> str:
     """Run a tool by name; emit status events; return the result string."""
-    # Provider output may be malformed: normalize before emitting events.
+    # Normalize malformed provider output before emitting.
     if not isinstance(name, str):
         name = ""
     if not isinstance(args, dict):
@@ -250,8 +243,7 @@ async def execute_tool(
     })
 
     if approval not in {"auto", "full", "confirm"}:
-        # Schemas omit tools here, but a stray provider call could still
-        # arrive: stay fail-closed against workspace mutation.
+        # Schemas omit tools here; stay fail-closed on stray calls.
         logger.info("%s mode blocked tool: %s", approval, name)
         result = (
             f"Blocked: '{name}' cannot run because permission mode "
@@ -260,7 +252,7 @@ async def execute_tool(
         return _emit_tool_result(emit, name, result)
 
     if approval == "confirm" and not _is_confirm_read_only(tool):
-        # "confirm" is a read-only gate (ask-before-write lives at turn level).
+        # "confirm" is a read-only gate.
         logger.info("confirm mode blocked state-changing tool: %s", name)
         result = (
             f"Blocked: '{name}' can change state, and confirm mode only "

@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 COLONY_FILE = "colony.json"
 
-COLONY_CAP = 100  # hard cap on items so the prompt context stays bounded
+COLONY_CAP = 100  # hard cap so the prompt stays bounded
 
 
 def _path(workspace: str) -> str:
@@ -78,8 +78,7 @@ def _load(workspace: str) -> dict:
     cleaned = normalize_string_list(items)
     cleaned, dropped = _cap_to_newest(cleaned)
     if dropped:
-        # Match set_items: keep the newest entries and log the drop
-        # rather than silently keeping the oldest.
+        # Match set_items: keep newest, log the drop.
         logger.warning(
             "Colony exceeds cap (%d); dropping %d oldest item(s)",
             COLONY_CAP, dropped,
@@ -146,7 +145,7 @@ def bump_compact_count(workspace: str) -> int:
     return data["compact_count"]
 
 
-# Consolidation: promote recurring items, prune stale colony ones
+# Consolidation: promote recurring items, prune stale ones
 
 CONSOLIDATE_PROMPT = (
     "Consolidate a workspace's shared memory ('colony') from every"
@@ -179,10 +178,9 @@ CONSOLIDATE_PROMPT = (
     "- <remaining session-specific item>\n"
     "[/SESSION]\n"
 )
-CONSOLIDATE_TIMEOUT: float | None = 3600.0  # work cap; cancel still stops instantly
+CONSOLIDATE_TIMEOUT: float | None = 3600.0  # work cap
 CONSOLIDATE_MAX_INPUT_CHARS = 100_000
-# Reserve most of the prompt for session evidence: persisted colony text
-# can otherwise crowd every session out.
+# Reserve most of the prompt for session evidence.
 CONSOLIDATE_COLONY_CHARS = CONSOLIDATE_MAX_INPUT_CHARS // 4
 
 _SESSION_BLOCK_RE = re.compile(
@@ -196,7 +194,7 @@ _CONSOLIDATE_TRUNCATION_NOTE = (
     " is unclear]"
 )
 
-# Per-workspace guard: one colony pass at a time.
+# Per-workspace guard: one pass at a time.
 _consolidate_in_flight: set[str] = set()
 
 
@@ -247,7 +245,7 @@ def _bounded_colony_lines(items: list[str], budget: int) -> tuple[list[str], boo
             if remaining == 1:
                 lines.append("…")
             elif remaining <= len(marker):
-                # Keep a visible cut indicator, never a silent prefix.
+                # Keep a visible cut indicator.
                 lines.append(
                     line[:remaining - 1] + "…" if remaining > 1 else "…"
                 )
@@ -275,7 +273,7 @@ def _build_bounded_session_block(
     name_space = budget - len("Session: ") - len(header_suffix) - len(closing)
     if name_space < 1:
         return ""
-    # Titles are display hints only: clip them so they never crowd out memory.
+    # Titles are display hints only: clip them.
     rendered_name = name[:min(name_space, 2_000)]
     if len(name) > len(rendered_name):
         marker = "… [name clipped]"
@@ -309,7 +307,7 @@ def _build_bounded_session_block(
         if item_lines:
             body = "\n".join(item_lines) + "\n" + note
         else:
-            # Keep a marked prefix of the truncation note so the omission stays visible.
+            # Keep a marked prefix of the truncation note.
             suffix = "… [preview]"
             if item_budget <= 0:
                 body = ""
@@ -395,8 +393,7 @@ async def _consolidate_inner(
     backend = backends_agent.get_backend(backend_name)
     existing_colony = get_items(workspace_path)
 
-    # Include empty sessions too: otherwise a colony item can never retire
-    # once compaction clears every session-local list.
+    # Include empty sessions too, or items can never retire.
     inputs: list[tuple[str, str, list[str]]] = []
     for data in session.list_sessions_with_data(workspace_path):
         lt = data.get("long_term") or []
@@ -408,7 +405,7 @@ async def _consolidate_inner(
         if not existing_colony:
             logger.info("Colony pass: no sessions in %s", workspace_path)
             return False
-        # No sessions left: drop workspace memory deterministically (never inject stale facts).
+        # No sessions left: drop workspace memory deterministically.
         async with workspace_mod.get_lock(workspace_path):
             set_items(workspace_path, [])
         logger.info(
@@ -433,7 +430,7 @@ async def _consolidate_inner(
         parts.append("(empty)")
     parts.append("")
 
-    # Greedy, newest-first: skip sessions that no longer fit.
+    # Greedy, newest-first.
     used = sum(len(part) + 1 for part in parts)
     included: list[str] = []
     for sid, name, lt in inputs:
@@ -477,13 +474,13 @@ async def _consolidate_inner(
         logger.warning("Colony output missing [COLONY] block; aborting")
         return False
 
-    # Ignore model-invented sessions we never sent.
+    # Ignore model-invented sessions.
     included_set = set(included)
     per_session = {
         sid: lt for sid, lt in per_session.items() if sid in included_set
     }
 
-    # Apply atomically so concurrent appends aren't clobbered.
+    # Apply atomically.
     async with workspace_mod.get_lock(workspace_path):
         set_items(workspace_path, new_colony)
         for sid, new_lt in per_session.items():

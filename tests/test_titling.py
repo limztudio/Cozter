@@ -66,7 +66,7 @@ class AutoTitlingTests(unittest.IsolatedAsyncioTestCase):
                 ))
                 await asyncio.wait_for(started.wait(), timeout=1)
 
-                # Same write a compaction/manual rename performs mid-fallback.
+                # Same write a rename performs mid-fallback.
                 async with workspace.get_lock(workspace_path):
                     session.set_session_name(
                         workspace_path, data["id"], "Compaction Title",
@@ -182,8 +182,7 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
             + len("… [message preview truncated]"),
         )
         self.assertIn("…", user_section)
-        # preview block (600 chars incl. marker) + "User message:\n" header
-        # + blank separators around the section.
+        # preview block + header + separators.
         self.assertLessEqual(
             len(user_section),
             len("User message:\n")

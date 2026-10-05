@@ -36,7 +36,7 @@ _COLONY_RELPATH = ".cozter/colony.json"
 _COLONY_ITEMS_CAP = 100
 _ACTIONS = ("search", "list", "read")
 
-# Bounds sized to execute_tool's 4,000-character result cap.
+# Bounds sized to the 4,000-char result cap.
 _MATCH_LIMIT_DEFAULT = 8
 _MATCH_LIMIT_MAX = 20
 _EXCERPT_CHARS = 160
@@ -68,7 +68,7 @@ def _load_sessions(sessions_dir: str) -> list[dict]:
         data = _load_session_file(os.path.join(sessions_dir, fname), session_id)
         if data is not None:
             sessions.append(data)
-    # Missing timestamps sort as oldest rather than jumping to the front.
+    # Missing timestamps sort as oldest.
     sessions.sort(key=lambda d: d["created"] or "0000", reverse=True)
     return sessions
 
@@ -163,7 +163,7 @@ def _excerpt(text: str, index: int, needle_len: int) -> str:
     full = f"{prefix}{snippet}{suffix}"
     if len(full) <= cap:
         return full
-    # Outer cap could drop the tail/suffix marker; keep edge markers honest.
+    # Outer cap could drop the marker; keep edge markers honest.
     if suffix:
         budget = max(0, cap - len(prefix) - len(suffix))
         return f"{prefix}{snippet[:budget]}{suffix}"
@@ -182,7 +182,7 @@ def _iter_search_texts(data: dict):
 
 def _fit_output(lines: list[str], header: str) -> str:
     """Join *lines* under the result budget, dropping from the end."""
-    # Track joined size incrementally (was quadratic re-sum per pop).
+    # Track joined size incrementally.
     total = len(header) + sum(len(line) + 1 for line in lines)
     omitted_len = len("(…more omitted)")
     dropped = 0
@@ -260,7 +260,7 @@ class MemoryTool(AgentTool):
             for kind, text in _iter_search_texts(data):
                 if not isinstance(text, str) or not text:
                     continue
-                # First-char pre-check skips the lowered copy on non-matches.
+                # First-char pre-check skips the lowered copy.
                 first = needle[0]
                 if first not in text and first.swapcase() not in text:
                     continue

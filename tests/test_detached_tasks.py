@@ -53,7 +53,7 @@ class _DetachedBot(TestBot):
         return "test:detached"
 
     def start_detached_task_watcher(self) -> None:
-        # Unit tests drive each polling pass explicitly.
+        # Tests drive each polling pass explicitly.
         return
 
     async def send_text(self, _chat_id: str, text: str, *, rich: bool = False):
@@ -298,7 +298,7 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             ):
                 output = await backend.get_detached_task_output("/work", task_id)
 
-        # Separator counts toward budget; tight budgets keep a visible cut indicator.
+        # Separator counts toward budget.
         self.assertEqual(output, "first…")
         self.assertIn("…", output)
         self.assertLessEqual(len(output.encode("utf-8")), 8)

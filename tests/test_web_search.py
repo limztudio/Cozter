@@ -121,7 +121,7 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertIn("1. Lite One", result)
         self.assertIn("https://lite.example/one", result)
         self.assertIn("2. Lite Two", result)
-        # Concurrent race; empty html shell means lite wins regardless of order.
+        # Empty html shell means lite wins.
         self.assertTrue(
             any(
                 url.startswith("https://lite.duckduckgo.com")

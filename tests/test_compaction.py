@@ -135,7 +135,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 release.set()
                 await first
 
-                # The guard is released after the first compaction finishes.
+                # Guard released after the first compaction.
                 await compaction.maybe_compact(
                     workspace_path, data["id"], "model", backend_name="backend",
                 )

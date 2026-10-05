@@ -35,11 +35,11 @@ from ..base import (
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 5
-# Real-work cap (tool runner).
+# Real-work cap.
 _DEFAULT_MAX_CHARS = 3_500
-# Tool-call arg, not a file upload: keep bodies modest.
+# Tool-call arg, not a file upload.
 _MAX_BODY_CHARS = 100_000
-# Transport-managed: never echoed or proxied.
+# Transport-managed; never echoed or proxied.
 _HOP_BY_HOP_HEADERS = frozenset({
     "host",
     "content-length",
@@ -53,7 +53,7 @@ _HOP_BY_HOP_HEADERS = frozenset({
 _TEXTUAL_TYPE_MARKERS = (
     "json", "xml", "html", "csv", "yaml", "javascript", "text", "x-www-form",
 )
-# Single alternation scan, not a per-marker probe loop.
+# Single alternation scan.
 _TEXTUAL_TYPE_RE = re.compile(
     "|".join(re.escape(marker) for marker in _TEXTUAL_TYPE_MARKERS),
 )
@@ -137,7 +137,7 @@ async def _request_following_redirects(
                 validation_error = validate_public_url(next_url)
                 if validation_error:
                     raise _RequestRefusedError(validation_error)
-                # 303 -> GET; browsers also downgrade 301/302 non-GETs.
+                # 303 -> GET; browsers also downgrade 301/302.
                 if status == 303 or (
                     status in (301, 302) and current_method != "GET"
                 ):

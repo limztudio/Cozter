@@ -245,8 +245,7 @@ class BotCommandTests(unittest.TestCase):
         )
 
     def test_no_workspace_replies_gracefully(self) -> None:
-        # A user with no selected workspace gets the no-workspace message,
-        # not a crash.
+        # No workspace: expect the no-workspace message, not a crash.
         ctx = self.bot.make_context("nobody", "c1")
         self._run(self.bot.cmd_permission(ctx))
         self.assertTrue(self.bot.replies)  # replied rather than raised

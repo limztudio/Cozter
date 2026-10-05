@@ -20,11 +20,10 @@ from .utils import extract_marker_block
 
 BACKEND_NAME = "flexible"
 
-# Difficulty tiers, cheapest first. Each is bound to its own agent+model
-# pair via /agent_flexible_<tier> and /model_flexible_<tier>.
+# Difficulty tiers, cheapest first (bound via tier commands).
 TIERS: tuple[str, ...] = ("low", "mid", "high")
 
-# Plan-failure tier: strongest, so a botched split never under-spends on a hard task.
+# Plan-failure tier: strongest.
 FALLBACK_TIER = "high"
 
 TIER_DESCRIPTIONS = {
@@ -35,22 +34,21 @@ TIER_DESCRIPTIONS = {
     ),
 }
 
-# Cap fan-out: each sub-task is a full agent turn.
+# Cap fan-out: each sub-task is a full turn.
 MAX_SUBTASKS = 12
 
-# Work cap: 3600s on planner/merge/judge; cancel (/stop, new message)
-# still stops instantly. Shared constants so call sites stay in sync.
+# Work cap: 3600s on planner/merge/judge.
 PLAN_TIMEOUT: float | None = 3600.0
 MERGE_TIMEOUT: float | None = 3600.0
 
-# Continue-judge bounds: capped DONE/CONTINUE loop per backend per turn.
+# Continue-judge bounds per backend per turn.
 JUDGE_MAX_CONTINUES = 3
 JUDGE_TIMEOUT: float | None = 3600.0
 
-# Auto-chain bounds: judge-exhausted CONTINUE chains hands-free turns instead of shipping PARTIAL.
+# Auto-chain bounds for judge-exhausted CONTINUE.
 MAX_AUTO_CHAIN_TURNS = 3
 
-# The user-facing rubric the planner grades each sub-task against.
+# The rubric the planner grades each sub-task against.
 _RUBRIC = (
     "low  - straightforward, well-scoped work.\n"
     "mid  - some reasoning, but bounded.\n"
@@ -133,20 +131,19 @@ _MERGE_RULES = (
     "- User's language. No tool calls; work is done.\n"
 )
 
-# The merge writes the visible reply: it alone can stop the turn and wait.
+# The merge writes the visible reply; it alone can stop and wait.
 _MERGE_QUESTION_RULE = (
     "- \"[[await]]\" on its own line only for a blocking question."
     " Optional offers: no marker.\n"
 )
 
-# Workers run autonomously; a BLOCKED one needs a user answer — say so in the merge rule.
+# Workers run autonomously; BLOCKED needs a user answer.
 _MERGE_BLOCKED_RULE = (
     "- A BLOCKED report needs a user answer: end with its question"
     " plus \"[[await]]\" on its own line.\n"
 )
 
-# Continue-judge: names the one missing item + next step, or DONE.
-# No tools; decides from the text.
+# Continue-judge: names the missing item + next step, or DONE.
 _JUDGE_RULES = (
     "Continue-judge: decide whether the draft below fully answers the"
     " user's request.\n\n"
@@ -173,7 +170,7 @@ _JUDGE_RULES = (
 )
 
 
-# Reports are re-sent downstream; cap each so N workers cost at most N * cap.
+# Reports are re-sent downstream; cap each.
 _REPORT_MAX_CHARS = 6_000
 _REPORT_TRUNCATION_MARKER = (
     "\n… [report truncated: remainder omitted — never treat this preview"
@@ -291,8 +288,7 @@ def parse_plan(raw: str, request: str) -> Plan:
             question=question,
         )
 
-    # Scan the whole reply when the planner forgot the wrapper - the
-    # numbered "[tier] instruction" lines are distinctive enough.
+    # Scan the whole reply when the planner forgot the wrapper.
     block = extract_marker_block(raw, "PLAN") or raw
     subtasks: list[Subtask] = []
     capped = False
@@ -426,7 +422,7 @@ def build_merge_prompt(
     parts.append("\nPlan:")
     parts.append(_render_plan(plan))
     parts.append("\n--- reports ---")
-    # Lengths may differ (follow-ups append mid-loop); index both sides instead of zip().
+    # Lengths may differ; index both sides instead of zip().
     report_count = max(len(plan.subtasks), len(results))
     for report_index in range(report_count):
         task = plan.subtasks[report_index] if report_index < len(plan.subtasks) else None
@@ -455,8 +451,7 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
     if len(results) == 1:
         return results[0]
     parts: list[str] = []
-    # See build_merge_prompt: index, don't zip, so a length mismatch
-    # cannot silently drop reports.
+    # Index, don't zip, so mismatches can't drop reports.
     for coverage_index in range(max(len(plan.subtasks), len(results))):
         text = results[coverage_index] if coverage_index < len(results) else ""
         if not text:

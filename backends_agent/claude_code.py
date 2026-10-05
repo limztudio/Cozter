@@ -40,7 +40,7 @@ from ..utils import (
 
 logger = logging.getLogger(__name__)
 
-# Effort support is model-specific; pinned exceptions stay separate (aliases follow the installed default).
+# Effort support is model-specific; pinned exceptions stay separate.
 _FOUR_LEVEL_EFFORT_MODELS = frozenset({
     "claude-opus-4-5",
     "claude-opus-4-5-20251101",
@@ -56,12 +56,10 @@ _NO_EFFORT_MODELS = frozenset({
 })
 _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 
-# No safe non-interactive catalog: keep only explicit ``[1m]`` selections
-# (bare IDs/aliases stay unknown so compaction keeps its safeguard).
+# No safe non-interactive catalog: keep explicit ``[1m]`` selections only.
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
-    # Capacity attaches to explicit ``[1m]`` selections only: aliases can
-    # resolve through smaller-window providers/tiers.
+    # Capacity attaches to explicit ``[1m]`` selections only.
     "sonnet[1m]",
     "opus[1m]",
     "fable[1m]",
@@ -88,19 +86,16 @@ _BACKGROUND_BASH_RE = re.compile(
 _SAFE_BACKGROUND_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _DETACHED_COMMAND_TIMEOUT_SEC = 30
 _BACKGROUND_GUARD_TIMEOUT_SEC = 5
-# A supervisor may keep inherited pipes open: keep the drained prefix but
-# release the transports promptly.
+# A supervisor may keep pipes open: keep the prefix, release transports.
 _DETACHED_COMMAND_STREAM_DRAIN_TIMEOUT_SEC = 1.0
 _DETACHED_COMMAND_EXIT_CLEANUP_TIMEOUT_SEC = 1.0
-# Small metadata commands: keep each stream well below a chat reply
-# (per-stream, so diagnostics can't starve stdout).
+# Small metadata commands: keep each stream well below a chat reply.
 _MAX_DETACHED_COMMAND_OUTPUT_BYTES = 1 * 1024 * 1024
 _DETACHED_COMMAND_READ_BYTES = 64 * 1024
-# Durable JSONL can dwarf the needed text: bound physical lines and kept
-# visible text separately (framing overhead needs the larger record cap).
+# Durable JSONL can dwarf the needed text: bound lines and text separately.
 _MAX_DETACHED_TRANSCRIPT_LINE_BYTES = 8 * 1024 * 1024
 _MAX_DETACHED_OUTPUT_TEXT_BYTES = 4 * 1024 * 1024
-# ``state.json`` also carries the result; cap it before the result-text cap applies.
+# ``state.json`` also carries the result; cap it first.
 _MAX_DETACHED_STATE_BYTES = 8 * 1024 * 1024
 _DETACHED_OUTPUT_TRUNCATION_MARKER = (
     "\n… [truncated: remainder omitted — never treat this preview as full"
@@ -113,14 +108,14 @@ def _background_guard_settings() -> str:
         os.path.dirname(__file__), "claude_background_guard.py",
     )
     return json.dumps({
-        # CLI settings win; a lower-priority disableAllHooks must not drop this session's guard.
+        # CLI settings win; disableAllHooks must not drop this session's guard.
         "disableAllHooks": False,
         "hooks": {
             "PreToolUse": [{
                 "matcher": "Bash",
                 "hooks": [{
                     "type": "command",
-                    # Exec form: verbatim interpreter + path (Windows, spaced workspaces safe).
+                    # Exec form: verbatim interpreter + path.
                     "command": sys.executable,
                     "args": [guard_path],
                     "timeout": _BACKGROUND_GUARD_TIMEOUT_SEC,
@@ -163,8 +158,7 @@ def _truncate_utf8_text(
     if marker_bytes and len(marker_bytes) <= limit:
         prefix_limit -= len(marker_bytes)
     elif marker_bytes:
-        # Too tight for the full marker: keep a visible cut indicator so
-        # the preview is never mistaken for full content.
+        # Too tight for the full marker: keep a visible cut indicator.
         ellipsis = "…".encode("utf-8", errors="replace")
         if limit < len(ellipsis):
             text = ellipsis[:limit].decode("utf-8", errors="ignore")
@@ -172,7 +166,7 @@ def _truncate_utf8_text(
         prefix_limit = limit - len(ellipsis)
         text = encoded[:prefix_limit].decode("utf-8", errors="ignore") + "…"
         return text, True, len(text.encode("utf-8", errors="replace"))
-    # Lone surrogates possible: decode a complete UTF-8 prefix only (JSON/state safe, in budget).
+    # Lone surrogates possible: decode a complete UTF-8 prefix only.
     text = (
         encoded[:prefix_limit].decode("utf-8", errors="ignore")
         + (marker if prefix_limit != limit else "")
@@ -307,7 +301,7 @@ def _iter_bounded_transcript_lines(path: str):
                 yield line
                 continue
 
-            # readline(limit) may split oversized lines; drain the rest so fragments can't parse as JSON.
+            # readline(limit) may split lines; drain the rest.
             while not line.endswith(b"\n"):
                 line = file_handle.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1)
                 if not line:
@@ -338,7 +332,7 @@ def _local_background_output(workspace_path: str, task_id: str) -> str:
     pattern = os.path.join(_claude_home(), "projects", "*", f"{session_id}.jsonl")
     candidates.extend(glob.glob(pattern))
 
-    # ``glob`` skips intermediate symlinks; normalize every candidate (like linkScanPath).
+    # ``glob`` skips intermediate symlinks; normalize every candidate.
     paths: list[str] = []
     for candidate in candidates:
         real_path = os.path.realpath(candidate)
@@ -442,8 +436,7 @@ async def _capture_claude_command_output(
     )
     readers = (stdout_task, stderr_task)
     try:
-        # Unlike ``Process.wait()``, this observes the child watcher return
-        # code without waiting for pipe EOF from a detached supervisor.
+        # Unlike ``Process.wait()``, don't wait for pipe EOF.
         await wait_for_process_exit(proc)
         _done, pending = await asyncio.wait(
             readers, timeout=_DETACHED_COMMAND_STREAM_DRAIN_TIMEOUT_SEC,
@@ -455,15 +448,14 @@ async def _capture_claude_command_output(
             )
             await _abandon_command_readers(proc, readers)
         else:
-            # Propagate a genuine read failure rather than silently parsing a
-            # partial response as an agent list or launch acknowledgement.
+            # Propagate read failures; don't parse partial responses.
             await asyncio.gather(*readers)
         return (
             (bytes(stdout.data), stdout.truncated),
             (bytes(stderr.data), stderr.truncated),
         )
     except BaseException:
-        # wait_for cancels on timeout; an exited launcher's descendant may hold pipes, so abandon readers.
+        # wait_for cancels on timeout; abandon readers on held pipes.
         await _abandon_command_readers(proc, readers)
         raise
 
@@ -479,12 +471,12 @@ async def _run_claude_command(
             timeout=_DETACHED_COMMAND_TIMEOUT_SEC,
         )
     except TimeoutError as exc:
-        # Don't kill the group: ``claude --bg`` workers belong to Claude's supervisor, not the slow launcher.
+        # Don't kill the group: ``claude --bg`` workers aren't ours.
         if proc.returncode is None:
             try:
                 proc.kill()
             except ProcessLookupError:
-                # Launcher may exit between the returncode check and kill; bounded cleanup still observes it.
+                # Launcher may exit between check and kill; cleanup still observes it.
                 pass
         close_subprocess_pipe(proc, 1)
         close_subprocess_pipe(proc, 2)
@@ -514,15 +506,14 @@ class ClaudeCodeBackend(Backend):
     executable = "claude"
     supports_vision = True
     vision_mode = "stdin_text"
-    # acceptEdits keeps outside checks; plan is the safest fallback for confirm/deny.
+    # acceptEdits keeps outside checks; plan is the confirm/deny fallback.
     permission_arg_sets = {
         "full": ("--dangerously-skip-permissions",),
         "auto": ("--permission-mode", "acceptEdits"),
         "restricted": ("--permission-mode", "plan"),
     }
     supports_detached_tasks = True
-    # Curated fallback (+ config.extra_models): dated snapshots only where
-    # published, `[1m]` only on exposed variants, fast = session toggle.
+    # Curated fallback (+ config.extra_models).
     available_models = (
         "default",
         "sonnet",
@@ -579,8 +570,7 @@ class ClaudeCodeBackend(Backend):
             return ()
         if selected in _FOUR_LEVEL_EFFORT_MODELS:
             return _FOUR_LEVEL_EFFORTS
-        # Keep existing gateway/private model behavior: unknown IDs receive
-        # the current full scale rather than being silently downgraded.
+        # Unknown IDs keep the current full scale.
         return self.effort_levels
 
     def context_window_tokens(self, model: str | None) -> int | None:
@@ -590,8 +580,7 @@ class ClaudeCodeBackend(Backend):
             return _LONG_CONTEXT_WINDOW_TOKENS
         return None
 
-    # File-editing tools whose tool_use blocks we surface as kind="file"
-    # ChatEvents (the rest of the tool name is kept as the action label).
+    # File-editing tools surface as kind="file" ChatEvents.
     _FILE_TOOLS = frozenset({
         "Write", "Edit", "MultiEdit", "NotebookEdit",
     })
@@ -611,14 +600,14 @@ class ClaudeCodeBackend(Backend):
             *prefix,
             "--print",
             "--output-format", "stream-json",
-            "--verbose",  # required by claude when stream-json is set
-            "--no-session-persistence",  # we manage sessions ourselves
-            # Claude's Bash is outside our tree; session hook blocks untracked background jobs.
+            "--verbose",  # required with stream-json
+            "--no-session-persistence",  # we manage sessions
+            # Claude's Bash is outside our tree; the hook blocks background jobs.
             "--settings", _background_guard_settings(),
         ]
         self.append_launch_options(cmd, model, effort, approval)
 
-        # Native vision: no CLI flag needed; marker + prompt hint deliver.
+        # Native vision: marker + prompt hint deliver.
         if self.supports_vision and not compaction:
             _vision_hint_paths = attachment_image_paths(prompt, workspace_path)
             if _vision_hint_paths:
@@ -652,7 +641,7 @@ class ClaudeCodeBackend(Backend):
             "--settings", _background_guard_settings(),
         ]
         self.append_launch_options(cmd, model, effort, approval)
-        # ``--bg`` takes a positional prompt, not ``--print``/stdin.
+        # ``--bg`` takes a positional prompt.
         cmd.append(prompt)
 
         returncode, stdout, stderr = await _run_claude_command(
@@ -690,7 +679,7 @@ class ClaudeCodeBackend(Backend):
                 "Claude Code background task listing failed for %s: %s",
                 task_id, stderr or stdout,
             )
-            # Transient supervisor errors aren't disappearance; retired tasks live in durable local state.
+            # Transient supervisor errors aren't disappearance.
             local = _local_background_status(workspace_path, task_id)
             if local is not None:
                 return local
@@ -730,8 +719,7 @@ class ClaudeCodeBackend(Backend):
                 state=state,
                 waiting_for=waiting_for if isinstance(waiting_for, str) else "",
             )
-        # Claude's daemon can retire a completed worker before the next poll.
-        # The persisted state keeps the callback restart-safe across that gap.
+        # Claude's daemon can retire a worker before the next poll.
         return _local_background_status(workspace_path, task_id)
 
     async def get_detached_task_output(
@@ -744,7 +732,7 @@ class ClaudeCodeBackend(Backend):
         if local:
             return local
 
-        # Fallback for old CLIs without the job/transcript layout (new ones render a full screen here).
+        # Fallback for old CLIs without the job/transcript layout.
         cmd = [*executable_command(self.executable), "logs", task_id]
         returncode, stdout, stderr = await _run_claude_command(
             cmd, cwd=workspace_path,
@@ -791,17 +779,16 @@ class ClaudeCodeBackend(Backend):
             return
 
         if etype == "result":
-            # Terminal event: streamed text already captured, else fall back to cumulative 'result'.
+            # Terminal event: streamed text else cumulative 'result'.
             apply_terminal_result_event(event, result)
             return
 
         if etype == "user":
-            # Only paired ``claude --bg`` Bash results (carry task id for monitoring).
+            # Only paired ``claude --bg`` Bash results.
             self._handle_user_tool_results(event, result)
             return
 
-        # System/init events are noisy for the status display and don't
-        # contribute new info; skip.
+        # System/init events carry no new info for the status display; skip.
         if etype == "system":
             return
 

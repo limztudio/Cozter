@@ -86,7 +86,7 @@ def add_schedule(
             for schedule in schedules
             if isinstance(schedule, dict) and isinstance(schedule.get("id"), str)
         }
-        # Duplicate ids strand a stale twin due forever; mint a fresh id per record.
+        # Duplicate ids strand a twin; mint a fresh id per record.
         if not isinstance(raw_id, str) or not raw_id or raw_id in taken:
             fresh = uuid.uuid4().hex[:12]
             while fresh in taken:
@@ -149,8 +149,7 @@ def migrate_schedules(
     target = data.get(target_key, [])
     if not isinstance(target, list):
         target = []
-    # Persisted IDs may be hand-edited: never let one malformed record
-    # abort the whole migration.
+    # Persisted IDs may be hand-edited; never abort the whole migration.
     seen_ids = {
         found_id
         for schedule in target
@@ -232,8 +231,7 @@ def update_schedule_fired(
         if not isinstance(schedule, dict):
             continue
         if schedule.get("id") == schedule_id:
-            # Stamp every twin: heals legacy duplicates (new ones are
-            # already blocked in add_schedule).
+            # Stamp every twin: heals legacy duplicates.
             schedule["last_fired"] = fired_at
             if claimed is None:
                 claimed = dict(schedule)
@@ -243,7 +241,7 @@ def update_schedule_fired(
     return claimed
 
 
-# Schedule field parsers + time-slot computation (pure functions)
+# Field parsers + time-slot computation
 
 def parse_days(text: object) -> list[str]:
     """Parse a days spec into ordered, de-duplicated abbreviations.
@@ -273,7 +271,7 @@ def parse_days(text: object) -> list[str]:
             if abbr not in DAY_ABBREV:
                 return []
             days.append(abbr)
-    # dict.fromkeys dedups while preserving insertion order (Python 3.7+).
+    # dict.fromkeys dedups, preserving order.
     return list(dict.fromkeys(days))
 
 
@@ -313,7 +311,7 @@ def parse_iso(value: object) -> datetime | None:
         try:
             return parsed.astimezone().replace(tzinfo=None)
         except (OverflowError, OSError, ValueError):
-            # Clamp edge timestamps: one bad schedule must not abort the tick.
+            # Clamp edge timestamps.
             return None
     return parsed
 
@@ -334,8 +332,7 @@ def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
     ]
     if not days:
         return None
-    # Walk back up to 7 days; the first day-match whose datetime
-    # is <= now is the most recent slot.
+    # Walk back 7 days; the first day-match <= now is most recent.
     for offset in range(8):
         candidate_date = (now - timedelta(days=offset)).date()
         day_name = DAY_ABBREV[candidate_date.weekday()]

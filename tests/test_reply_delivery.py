@@ -24,7 +24,7 @@ class _ReplyDeliveryBot(TestBot):
         return "test:reply-delivery"
 
     def start_detached_task_watcher(self) -> None:
-        # This test drives retry passes explicitly.
+        # This test drives retry passes.
         return
 
     async def send_text(
@@ -74,7 +74,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertLogs("Cozter.backends_bot.base", level="WARNING"):
                     await bot._dispatch_ai(ctx, "prompt")
 
-                # Recovery uses the persisted reply, never another agent invocation.
+                # Recovery uses the persisted reply.
                 self.assertEqual(
                     [entry["text"] for entry in bot._read_queue_file()["u1"]],
                     ["later prompt"],
@@ -83,11 +83,10 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(records), 1)
                 self.assertEqual(records[0]["messages"], ["final response"])
                 run_agent.assert_awaited_once()
-                # A later prompt must not overtake the undelivered answer.
+                # A later prompt must not overtake the answer.
                 self.assertEqual(queue.qsize(), 1)
 
-                # Simulate a restart: a fresh platform instance loads the
-                # ledger and sends the already-computed payload directly.
+                # Simulate a restart via a fresh platform instance.
                 retry_bot = _ReplyDeliveryBot(tmp, fail_final=False)
                 await retry_bot.restore_reply_deliveries()
                 await retry_bot._check_reply_deliveries()
@@ -114,7 +113,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 ChatEvent(kind="text", content="final response"),
             ])
 
-            # Stop after the durable write: simulates a crash before inbound completion.
+            # Stop after the durable write (crash before completion).
             await before_crash._stage_reply_delivery(
                 "u1", entry_id, "chat", tmp, result, allow_await=True,
             )
@@ -157,8 +156,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 allow_await=True,
             )
 
-            # Queue /cancel ahead of a delivery retry which already holds a
-            # stale record object, simulating the poller snapshot race.
+            # Queue /cancel ahead of a stale-record retry.
             delivery_lock = bot._reply_delivery_lock("u1")
             await delivery_lock.acquire()
             cancel_ctx = BotContext(
@@ -249,8 +247,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 ChatEvent(kind="attachment", content=first_pic),
             ])
             await bot._send_result("chat", tmp, first, uid="u1")
-            # Texts are out while the picture is still uploading: the turn
-            # already returned, so the next turn can start immediately.
+            # Texts out while the picture uploads: next turn starts.
             self.assertEqual(bot.sent, ["first answer"])
             self.assertEqual(bot.files, [])
             self.assertTrue(bot.has_active_turns())
@@ -263,11 +260,11 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 bot._send_result("chat", tmp, second, uid="u1"),
             )
             await asyncio.sleep(0.05)
-            # Text waits for the first picture: order holds despite overlapping work.
+            # Text waits for the first picture.
             self.assertNotIn("second answer", bot.sent)
             bot.release_uploads.set()
             await second_task
-            # Yield so background upload tasks drain their callbacks.
+            # Yield so background uploads drain.
             for _ in range(20):
                 await asyncio.sleep(0)
             self.assertEqual(bot.sent, ["first answer", "second answer"])

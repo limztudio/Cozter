@@ -120,7 +120,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
 
             self.assertTrue(restarting)
             self.assertEqual(injected, ["also check the tests"])
-            # A restart owns the same queue, so another inject remains valid.
+            # A restart owns the same queue.
             self.assertEqual(pending_queue.put_if_active("one more"), "accepted")
 
             terminal_queue = _InjectQueue(maxsize=1)
@@ -266,7 +266,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     completed = True
                     return result, restarting, child_pid
                 finally:
-                    # Normally already dead; keep the regression leak-safe on mid-failure.
+                    # Normally already dead; keep leak-safe on failure.
                     if not completed and os.path.exists(pid_path):
                         with open(pid_path, encoding="utf-8") as file_handle:
                             child_pid = int(file_handle.read())
@@ -314,8 +314,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
 
                     @staticmethod
                     def parse_event(_event: dict, _result) -> None:
-                        # Deliberately retain nothing: this isolates stream
-                        # termination from any backend-specific event limits.
+                        # Retain nothing: isolates stream termination.
                         return
 
                 completed = False
@@ -372,8 +371,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     ))
 
             async def slow_delivery(_event: ChatEvent) -> None:
-                # The parent exits during this sequence, leaving the rest of
-                # its legitimate JSON lines buffered in stdout.
+                # The parent exits mid-sequence; its lines stay buffered.
                 await asyncio.sleep(0.12)
 
             result, restarting = await asyncio.wait_for(

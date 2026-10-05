@@ -61,7 +61,7 @@ class OpenAIRetryLoopTests(unittest.TestCase):
 
     def _run(self, once) -> tuple:
         oa._stream_once = once
-        # max_retries=2 -> initial attempt + 2 retries.
+        # max_retries=2: attempt + 2 retries.
         return asyncio.run(oa._stream_completion(
             "http://x/chat/completions", {}, {}, 300, 2, "test",
         ))
@@ -1018,7 +1018,7 @@ class OpenAIParallelToolTests(unittest.TestCase):
             proc, "/tmp", "work", None, "auto", False, 0,
         ))
 
-        # Overlap proves gather (sequential would never exceed 1).
+        # Overlap proves gather.
         self.assertGreaterEqual(peak, 2)
         tool_msgs = [
             msg for msg in payloads[1]["messages"] if msg.get("role") == "tool"
@@ -1060,7 +1060,7 @@ class OpenAIParallelToolTests(unittest.TestCase):
             proc, "/tmp", "work", None, "auto", False, 0,
         ))
 
-        # Repeat limit is 3: the 4th identical call is skipped, not run.
+        # Repeat limit 3: the 4th identical call is skipped.
         self.assertEqual(ran, 3)
         tool_msgs = [
             msg for msg in payloads[1]["messages"] if msg.get("role") == "tool"

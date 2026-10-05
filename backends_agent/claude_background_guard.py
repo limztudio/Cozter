@@ -123,7 +123,7 @@ def _without_heredoc_bodies(command: str) -> str:
             body_line = line.rstrip("\r\n")
             if strip_tabs:
                 body_line = body_line.lstrip("\t")
-            # Preserve line count without letting body text mimic control operators.
+            # Preserve line count; body text must not mimic operators.
             kept.append("\n" if line.endswith("\n") else "")
             if body_line == delimiter:
                 pending.popleft()
@@ -207,8 +207,7 @@ def _shell_tokens(command: str) -> list[str]:
         lexer.commenters = "#"
         return list(lexer)
     except ValueError:
-        # The shell will reject many malformed forms itself.  The direct
-        # background-operator scan still protects the important case.
+        # The shell rejects most malformed forms; the scan covers the rest.
         return []
 
 
@@ -246,7 +245,7 @@ def _skip_command_wrappers(segment: list[str]) -> int:
                     index += 1
                     continue
                 if token.startswith("-"):
-                    # ``env -u NAME`` takes an argument; other options fall through.
+                    # ``env -u NAME`` takes an argument.
                     if token in {"-u", "--unset"} and index + 1 < len(segment):
                         index += 2
                     else:

@@ -119,7 +119,7 @@ class FlexibleSettingsTests(unittest.TestCase):
             workspace.set_flexible_backend_name(ws, "high", "claude_code")
 
             self.assertEqual(workspace.get_flexible_model(ws, "high"), "opus")
-            # Rebinding one tier leaves the others alone.
+            # Rebinding one tier leaves the others.
             self.assertEqual(
                 workspace.get_flexible_model(ws, "low"), "gpt-5.6-luna",
             )
@@ -141,7 +141,7 @@ class FlexibleSettingsTests(unittest.TestCase):
             workspace.set_flexible_model(ws, "mid", "sonnet")
             self.assertEqual(workspace.get_flexible_model(ws, "mid"), "sonnet")
 
-            # Switching back restores the model codex was last set to.
+            # Switching back restores the last model.
             workspace.set_flexible_backend_name(ws, "mid", "codex")
             self.assertEqual(workspace.get_flexible_model(ws, "mid"), "gpt-5.5")
 
@@ -255,12 +255,11 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             workspace.ensure_cozter_dir(ws)
             result, _ = await self._run(ws)
 
-        # The workers' own text is internal — it feeds the merge step, and
-        # would otherwise be posted to the chat as extra messages.
+        # Worker text is internal; it feeds the merge step.
         texts = [event.content for event in result.events if event.kind == "text"]
         self.assertEqual(texts, ["merged answer"])
         self.assertEqual(result.text, "merged answer")
-        # Their tool events still stream through as the turn's visible trace.
+        # Their tool events still stream through.
         self.assertEqual(
             len([event for event in result.events if event.kind == "tool"]), 2,
         )
@@ -302,15 +301,14 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             workspace.ensure_cozter_dir(ws)
             result, _ = await self._run(ws, collaborative=False)
 
-        # A scheduled turn has nobody to answer, so the question degrades
-        # into the fallback plan: one worker on the strongest tier.
+        # A scheduled turn degrades into the fallback plan.
         self.assertNotIn("[[await]]", result.text)
         self.assertEqual(self.driven, [("codex", "gpt-5.6-sol")])
 
     async def test_a_merged_answer_may_end_on_a_blocking_question(
         self,
     ) -> None:
-        # Only the merge (post-planner) can stop the turn: the marker must reach _send_result.
+        # Only the merge can stop the turn.
         self.merge_output = "Fixed the check.\n\nWhich retry path?\n\n[[await]]"
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
@@ -336,8 +334,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_unattended_merge_cannot_strand_the_turn_on_a_question(
         self,
     ) -> None:
-        # Nobody is there to answer a scheduled run, so a marker the merge
-        # model emits anyway is dropped rather than left to pause nothing.
+        # Scheduled runs drop stray merge markers.
         self.merge_output = "Done, but which retry path?\n\n[[await]]"
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
@@ -349,8 +346,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_blocked_worker_pauses_the_turn_without_the_marker(
         self,
     ) -> None:
-        # A worker that still asks is stuck: the pause must not depend on
-        # the cheap merge model relaying the marker.
+        # A stuck worker's pause must not depend on the merge relay.
         self.worker_texts = [
             "Blocked. Which retry path?\n\n[[await]]", "high report",
         ]
@@ -361,11 +357,9 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
         _, awaiting = agent.extract_await(result.text)
         self.assertTrue(awaiting)
-        # The merge is told which sub-task blocked, so it can surface the
-        # right question out of several reports.
+        # The merge is told which sub-task blocked.
         self.assertIn("BLOCKED", self.merge_prompt)
-        # The worker's own marker stays internal; only the merged reply
-        # carries the one the bot acts on.
+        # Worker markers stay internal; only the merged reply acts.
         self.assertEqual(result.text.count("[[await]]"), 1)
 
     async def test_a_blocked_worker_cannot_pause_an_unattended_turn(

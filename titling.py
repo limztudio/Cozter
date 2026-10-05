@@ -21,11 +21,11 @@ TITLE_PROMPT = (
     " punctuation/quotes. Dominant topic. Output only the title.\n\n"
     "No tools; the input below is everything."
 )
-TITLE_TIMEOUT: float | None = 3600.0  # work cap; cancel still stops instantly
+TITLE_TIMEOUT: float | None = 3600.0  # work cap
 TITLE_MAX_CHARS = 60
 TITLE_CONTEXT_CHARS = 4_000
 
-# Per-session guard against concurrent title passes (don't rely on the bot's per-user lock).
+# Per-session guard against concurrent title passes.
 _in_flight: set[tuple[str, str]] = set()
 
 
@@ -72,7 +72,7 @@ async def maybe_auto_title(
             return
         if not session.is_default_name(data.get("name")):
             return
-        # Need at least one assistant reply before titling makes sense.
+        # Need at least one assistant reply.
         msgs = data.get("messages", [])
         if not isinstance(msgs, list):
             return
@@ -87,7 +87,7 @@ async def maybe_auto_title(
         if not title:
             return
         async with workspace_mod.get_lock(workspace_path):
-            # A rename may land mid-request; re-check under the writer lock so this fallback never wins.
+            # A rename may land mid-request; re-check under the writer lock.
             latest = session.load_session(workspace_path, session_id)
             if latest is None or not session.is_default_name(
                 latest.get("name"),
@@ -118,7 +118,7 @@ async def generate(
     if data is None:
         return None
 
-    # Bound the whole input; reserve half the room so a huge summary can't hide the current exchange.
+    # Bound the input; reserve half so a huge summary can't hide the exchange.
     prompt_prefix = f"{TITLE_PROMPT}\n\n"
     context_budget = max(0, TITLE_CONTEXT_CHARS - len(prompt_prefix))
     recent_reserve = context_budget // 2
@@ -127,12 +127,11 @@ async def generate(
     parts_len = 0  # joined length of parts (newline between items)
     summary = data.get("summary")
     if summary:
-        # Best-effort title: coerce hand-edited/legacy values (same prompt cap), never crash.
+        # Best-effort title: coerce legacy values, never crash.
         summary_text = summary if isinstance(summary, str) else str(summary)
         summary_prefix = "Previous summary:\n"
         recent_header = "Recent messages:"
-        # The summary block ends with a newline and ``join`` supplies one
-        # more before the recent-message header.
+        # The summary block and ``join`` each supply a newline.
         summary_overhead = len(summary_prefix) + 2 + len(recent_header)
         summary_budget = max(
             0, context_budget - recent_reserve - summary_overhead,
@@ -160,7 +159,7 @@ async def generate(
     parts.append("Recent messages:")
     parts_len += (1 if parts_len else 0) + len("Recent messages:")
 
-    # Newest-first: gist only (reserve one char for the join newline).
+    # Newest-first: gist only.
     message_budget = max(0, context_budget - parts_len - 1)
     msg_lines = session.take_recent_messages(
         data.get("messages", []), message_budget,

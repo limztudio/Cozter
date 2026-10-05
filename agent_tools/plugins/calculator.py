@@ -117,7 +117,7 @@ _CONSTANTS: dict[str, float] = {
     "phi": (1 + math.sqrt(5)) / 2,
 }
 
-# Pre-sorted for error messages (avoid re-sorting per rejected call).
+# Pre-sorted for error messages.
 _SORTED_CONSTANT_NAMES = ", ".join(sorted(_CONSTANTS))
 _SORTED_FUNCTION_NAMES = ", ".join(sorted(_FUNCTIONS))
 

@@ -9,15 +9,15 @@ logger = logging.getLogger(__name__)
 MODULE_ROOT = os.path.dirname(__file__)
 REQUIREMENTS_PATH = os.path.join(MODULE_ROOT, "requirements.txt")
 
-# Commit hash captured at import time - the version this process is running.
+# Commit hash at import time.
 _STARTUP_COMMIT: str | None = None
 
 
-_GIT_TIMEOUT = 3600  # seconds — real-work cap so slow fetches finish; cancel still stops the turn
-# Installs run only on requirement changes (or fresh-venv repair); 3600s real-work cap.
+_GIT_TIMEOUT = 3600  # seconds; real-work cap
+# Installs run on requirement changes; 3600s cap.
 _PIP_INSTALL_TIMEOUT = 3600
 
-# Non-zero so both the ps1 supervisor and Task Scheduler recovery restart on it.
+# Non-zero so supervisors restart on it.
 WINDOWS_SUPERVISOR_RESTART_EXIT_CODE = 75
 WINDOWS_SUPERVISOR_ENV = "COZTER_WINDOWS_SUPERVISED"
 
@@ -77,7 +77,7 @@ def _local_ahead_of_upstream() -> bool:
         )
     except (OSError, subprocess.TimeoutExpired):
         return True
-    # No upstream configured: a bare `git pull` can't choose a branch — skip it.
+    # No upstream configured: skip pull.
     if upstream_result.returncode != 0:
         return True
     upstream = upstream_result.stdout.strip()
@@ -89,7 +89,7 @@ def _local_ahead_of_upstream() -> bool:
         )
     except (OSError, subprocess.TimeoutExpired):
         return True
-    # Indeterminate compare state: treat as ahead so auto-update never mutates blindly.
+    # Indeterminate compare: treat as ahead.
     if count_result.returncode != 0:
         return True
     count = count_result.stdout.strip()
@@ -125,8 +125,7 @@ def _head_changed() -> bool:
     return False
 
 
-# One wording for every git-transport failure path below so the three
-# except-handlers cannot drift apart.
+# One wording for every git-transport failure path.
 _GIT_UNAVAILABLE_MSG = "git not available or timed out, skipping update check"
 
 
@@ -319,7 +318,7 @@ def restart_script(exit_code: int = 0) -> None:
                     "the bootstrap supervisor",
                     WINDOWS_SUPERVISOR_ENV,
                 )
-            # No os.execv() (unreliable handoff here); the supervisor relaunches without this ancestor.
+            # No os.execv(); the supervisor relaunches.
             os._exit(WINDOWS_SUPERVISOR_RESTART_EXIT_CODE)
             return  # pylint: disable=unreachable  # reachable when os._exit is mocked in tests
         parent_dir = os.path.dirname(MODULE_ROOT)
@@ -335,5 +334,5 @@ def restart_script(exit_code: int = 0) -> None:
     os._exit(exit_code)
 
 
-# Respawn-me exit code; other non-zero codes stop the loop (tracebacks stay visible).
+# Respawn-me exit code; other non-zero codes stop the loop.
 CLI_RESTART_EXIT_CODE = 99

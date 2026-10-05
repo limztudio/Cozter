@@ -15,10 +15,10 @@ from ..base import (
 )
 
 
-# Cap the read itself: one request must not allocate multi-GB logs/images.
+# Cap the read: one request must not allocate multi-GB files.
 _READ_FILE_MAX_CHARS = 128 * 1024
 _READ_FILE_SKIP_CHUNK_CHARS = 64 * 1024
-# Line-based offsets scan data; a cancelled await won't stop the worker thread — bound the skip.
+# Line offsets scan data; bound the skip (cancel won't stop the worker).
 _READ_FILE_MAX_SKIP_CHARS = 16 * 1024 * 1024
 
 
@@ -80,7 +80,7 @@ class ReadFileTool(AgentTool):
         if not os.path.isfile(target):
             return f"File not found: {args.get('path')}"
 
-        # Binary images: return metadata, not decoded noise.
+        # Binary images: return metadata, not noise.
         if os.path.splitext(target)[1].lower() in {
             ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
         }:

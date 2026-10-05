@@ -82,7 +82,7 @@ class TreeTool(AgentTool):
                             continue
                         yield is_dir, entry.name, entry.path
 
-            # Cap per-directory entries; keep one extra for the truncation marker.
+            # Cap per-directory entries; keep one extra for the marker.
             selected = heapq.nsmallest(
                 remaining + 1,
                 entries(),

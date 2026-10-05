@@ -53,7 +53,6 @@ class DetachedTaskLaunch:
     task_id: str
     session_id: str
 
-# Prompt preamble: Cozter markers + working policy. Scheduled/ephemeral turns are always autonomous.
 _ATTACH_HINT = (
     'Send created files via "[[attach: PATH]]" on its own line.'
 )
@@ -357,8 +356,7 @@ def _copy_to_unique_path(source: str, directory: str, filename: str) -> str | No
             directory,
             filename if index == 1 else f"{stem}-{index}{ext}",
         )
-        # Fast path only (publisher below is authoritative): skip known
-        # collisions to avoid recopied image data.
+        # Fast path only (publisher below is authoritative): skip known collisions.
         if os.path.lexists(candidate):
             continue
         if copy_file_atomically(source, candidate):
@@ -384,8 +382,7 @@ def _copy_generated_image_into_workspace(
         return src_real
 
     try:
-        # Re-resolve after create: a symlink here must not redirect the
-        # copy outside the workspace.
+        # Re-resolve after create: symlinks must not redirect the copy outside.
         dest_dir = workspace_mod.ensure_workspace_state_dir(
             workspace_path, "generated_images",
         )
@@ -543,8 +540,6 @@ def _collect_new_attachment_images(
         copied.append(dest)
     return copied
 
-
-# Contextual prompt building
 
 _CONTEXT_TRUNCATION_MARKER = (
     "\n… [truncated to fit budget; older context omitted — never treat"
@@ -754,8 +749,7 @@ def _build_contextual_prompt(
 
     full = "\n".join(parts)
 
-    # Bound durable blocks too: malformed/large memory must not unbound
-    # the prompt.
+    # Bound durable blocks too: oversized memory must not unbound the prompt.
     if len(full) > budget:
         keywords = _request_keywords(prompt)
         colony_list = _relevance_last(list(colony_list), keywords)
@@ -799,8 +793,7 @@ def _build_contextual_prompt(
         continuation = (
             "New message:"
         )
-        # Never exceed the cap to fit context: drop wrapper + history, keep
-        # the request intact.
+        # Fit context: drop wrapper + history, keep the request intact.
         fixed_length = len(continuation) + 1 + len(prompt)
         if fixed_length > budget:
             return prompt
@@ -823,8 +816,6 @@ def _build_contextual_prompt(
 
     return full
 
-
-# Backend execution
 
 class BackendUnavailableError(Exception):
     """A backend's CLI is not installed on this machine."""
@@ -963,12 +954,10 @@ async def _drive_backend(
     except FileNotFoundError as e:
         raise BackendUnavailableError(backend) from e
     except (OSError, RuntimeError) as exc:
-        # Surface launch failures as a normal chat result (don't strand
-        # queued work).
+        # Surface launch failures as a chat result (don't strand queued work).
         result = AgentResult()
         set_error_result(result, f"{backend.name} could not start: {exc}")
-        # A pre-failure /inject still counts: carry it into the restart
-        # path instead of discarding it.
+        # A pre-failure /inject still counts: carry it into the restart path.
         if _take_pending_injections(inject_queue, injected):
             return result, True
         if close_inject_on_completion:
@@ -984,7 +973,7 @@ async def _drive_backend(
     def _log_non_json_line(line: str) -> None:
         logger.debug("Non-JSON line: %s", line)
 
-    # Watch inject_queue - kill subprocess when a message arrives
+    # Watch inject_queue: kill the subprocess on message arrival.
     async def _watch_inject(
         active_proc: asyncio.subprocess.Process = proc,
     ) -> None:
@@ -994,7 +983,7 @@ async def _drive_backend(
         if injected is not None:
             injected.append(msg)
         restarting = True
-        # Kill the whole process group so shelled-out grandchildren can't keep mutating the workspace.
+        # Kill the process group so grandchildren stop mutating the workspace.
         terminate_process_group(active_proc)
 
     inject_task: asyncio.Task | None = None
@@ -1025,9 +1014,9 @@ async def _drive_backend(
         )
         raise
     finally:
-        # No exceptional stream exit may leak the backend/drain task.
+        # No exceptional stream exit may leak the drain task.
         try:
-            # No durable provider task here: tear down the whole tree now.
+            # No durable provider task here: tear down the whole tree.
             if (
                 proc.returncode is None
                 or cancelled
@@ -1044,13 +1033,12 @@ async def _drive_backend(
                 preserve_process_tree=lambda: bool(result.detached_tasks),
             )
         except BaseException:
-            # Late reader/teardown failure: foreground already done, still not a clean turn.
+            # Late reader/teardown failure is still not a clean turn.
             if has_managed_process_group(proc):
                 terminate_process_group(proc)
             raise
         finally:
-            # A second cancellation can interrupt the awaited teardown above.
-            # Never leave either reader/watcher behind in that case.
+            # A second cancellation can interrupt teardown; never leak readers/watchers.
             if inject_task and not inject_task.done():
                 inject_task.cancel()
                 await await_cancelled(inject_task)
@@ -1063,18 +1051,16 @@ async def _drive_backend(
     if restarting:
         return result, True
 
-    # Final sync drain: an accepted message must not vanish in the
-    # watcher-teardown gap.
+    # Final sync drain: accepted messages must survive the teardown gap.
     if _take_pending_injections(inject_queue, injected):
-        # Watcher already stopped in teardown; terminate before rebuilding the restart prompt.
+        # Watcher already stopped; terminate before rebuilding the restart prompt.
         if has_managed_process_group(proc):
             terminate_process_group(proc)
         return result, True
     if close_inject_on_completion:
         _close_inject_queue(inject_queue)
 
-    # Completed turn: stop same-group children, preserve ledger-tracked
-    # provider tasks.
+    # Completed turn: stop same-group children, keep ledger-tracked tasks.
     if has_managed_process_group(proc) and not result.detached_tasks:
         terminate_process_group(proc)
 
@@ -1124,8 +1110,7 @@ async def _run_with_inject_watch(
         await await_cancelled(watch_task)
         raise
     if watch_task.done() and not watch_task.cancelled():
-        # Inject arrived first (or in the same tick): abandon the call and
-        # signal a restart so the new message is folded into a replanned turn.
+        # Inject arrived first: abandon the call, restart with the new message.
         msg = watch_task.result()
         if injected is not None:
             injected.append(msg)
@@ -1135,20 +1120,18 @@ async def _run_with_inject_watch(
         except asyncio.CancelledError:
             pass
         except Exception:
-            # Same-tick race: the injected message wins; the completed
-            # failure belongs to the abandoned attempt.
+            # Same-tick race: injected message wins; failure belongs to the old attempt.
             logger.debug(
                 "Discarding internal backend failure after an inject",
                 exc_info=True,
             )
         return None, True
-    # The call finished first; stop watching without consuming a message.
+    # Call finished first: stop watching without consuming a message.
     watch_task.cancel()
     await await_cancelled(watch_task)
-    # A message can arrive after watcher cancel but before return; collect it and restart.
+    # A message can arrive after watcher cancel; collect it and restart.
     if _take_pending_injections(inject_queue, injected):
-        # Retrieve the result (no unobserved exceptions); late injects
-        # still win over finished failures.
+        # Retrieve the result; late injects still win over finished failures.
         try:
             call_task.result()
         except asyncio.CancelledError:
@@ -1160,15 +1143,12 @@ async def _run_with_inject_watch(
             )
         return None, True
     if close_inject_on_completion:
-        # Terminal planner/merge phase: close before reply/session I/O so late /inject is rejected.
+        # Terminal planner/merge phase: close before I/O so late /inject is rejected.
         _close_inject_queue(inject_queue)
     return call_task.result(), False
 
 
-# Flexible agent — plan, route by difficulty, merge
-
-# Usage fields format_usage knows how to display; summed across the
-# workers so a flexible turn reports one total rather than N partials.
+# Flexible agent: plan, route by difficulty, merge. Usage is summed to one total.
 _USAGE_TOTAL_FIELDS = ("input_tokens", "output_tokens", "total_cost_usd")
 
 
@@ -1256,8 +1236,7 @@ async def _judge_draft(
             injected,
         )
     except (AttributeError, TypeError) as exc:
-        # Test doubles / misconfigured summary backends without launch():
-        # judge is advisory, so ship the draft rather than failing the turn.
+        # Judge is advisory (test doubles may lack launch()): ship the draft.
         logger.warning("Continue judge unavailable (%s) - shipping draft", exc)
         return flexible.JudgeVerdict(should_continue=False), False
     if restarting:
@@ -1327,8 +1306,7 @@ async def _run_flexible(
         return AgentResult(), True
     plan = flexible.parse_plan(raw_plan or "", request)
 
-    # The planner is the only step allowed to stop the turn and ask: the
-    # workers run mid-pipeline, where nobody is reading their questions.
+    # Only the planner may stop and ask; workers run mid-pipeline unread.
     if plan.question:
         if collaborative:
             # A planner question ends the turn pre-merge; same terminal injection boundary.
@@ -1375,8 +1353,7 @@ async def _run_flexible(
             _build_backend_prompt(
                 tier_backend,
                 flexible.build_subtask_prompt(
-                    # Bare request only: planner instructions are already
-                    # self-contained; history would be pure cost.
+                    # Bare request only: planner instructions are self-contained.
                     request, plan, done, reports,
                 ),
                 collaborative=False,
@@ -1409,8 +1386,7 @@ async def _run_flexible(
         attach_markers.extend(markers)
         report = report.strip()
 
-        # An empty worker report is a failure: name the tier so it
-        # reaches the user either way.
+        # An empty worker report is a failure: name the tier for the user.
         if not report:
             report = (
                 f"(no output: {tier_backend_name}/{tier_model} ended the"
@@ -1419,13 +1395,11 @@ async def _run_flexible(
                 + ")"
             )
         elif sub_result.error:
-            # Half an answer and a failure. The merge step has to be told,
-            # or it presents the half it got as the finished job.
+            # Half an answer plus a failure: tell the merge, or it ships the half.
             report += f"\n\n(the agent then failed: {sub_result.error})"
         reports.append(report)
 
-        # A worker that asks is stuck: merge must end on its question
-        # and pause the queue.
+        # A stuck (asking) worker: merge ends on its question, pauses queue.
         if worker_awaiting:
             blocked.append(done)
 
@@ -1492,8 +1466,7 @@ async def _run_flexible(
         return AgentResult(), True
     final = (merged or "").strip() or flexible.merge_fallback(plan, reports)
 
-    # Only the merge may end on a question: normalize the marker to last
-    # (unattended turns never pause).
+    # Only the merge may end on a question: normalize the marker to last.
     final, merge_awaiting = extract_await(final)
     final = final.strip()
 
@@ -1520,8 +1493,6 @@ async def _run_flexible(
     result.usage = usage_totals or None
     return result, False
 
-
-# Main run function
 
 async def run(
     prompt: str,
@@ -1590,8 +1561,7 @@ async def _resolve_or_create_user_session(
             backend_name=summary_backend,
         )
     assert isinstance(session_id, str) and session_id
-    # Explicit session choice during routing wins for the next message
-    # (read/compare/write has no await point).
+    # Explicit routing-time session choice wins for the next message.
     if session.get_last_session(workspace_path, user_id) == last_session_id:
         session.set_last_session(workspace_path, user_id, session_id)
     return session_id, session_data
@@ -1751,10 +1721,9 @@ async def _run_post_turn_maintenance(
     )
 
 
-# Interrupted-turn digest bounds: show what the stopped attempt reached without bloating context.
 INTERRUPTED_TURN_MAX_CHARS = 1200
 INTERRUPTED_TURN_ACTIVITY_CHARS = 300
-# Events retained for that digest; the digest keeps the newest material.
+# Digest keeps the newest material.
 INTERRUPTED_TURN_EVENT_KEEP = 100
 
 
@@ -1921,13 +1890,11 @@ async def _run_turn_impl(
     backend = backends_agent.get_backend(backend_name)
     is_flexible = backend.name == flexible.BACKEND_NAME
 
-    # Router/compaction/titling/planner/merge run on the summary backend
-    # (flexible has no CLI: fall back to a real backend).
+    # Router/compaction/titling/planner/merge run on the summary backend.
     summary_backend = summary_backend_name or (
         backends_agent.DEFAULT_DIRECT_BACKEND if is_flexible else backend.name
     )
-    # Default the summary model to the summary backend's intent, not the
-    # chat-model fallback.
+    # Default the summary model to the summary backend's intent.
     summary_model = _resolve_summary_model(summary_model, summary_backend)
     compaction_context_targets = _compaction_context_targets(
         workspace_path,
@@ -1937,17 +1904,15 @@ async def _run_turn_impl(
         summary_model,
     )
 
-    # Pinned (ephemeral) sessions never clobber the user's last_session.
+    # Pinned sessions never clobber last_session.
     explicit_session = session_id is not None
 
-    # session_data is reused on every inject restart so the session file
-    # is not re-read for each iteration of the restart loop.
+    # session_data is reused across inject restarts (no re-read per iteration).
     if explicit_session:
         assert session_id is not None  # explicit_session == (session_id set)
         session_data = session.load_session(workspace_path, session_id)
         if session_data is None:
-            # The pinned session was deleted out from under us; bail
-            # rather than silently writing into a fresh one.
+            # Pinned session deleted underneath us; bail instead of rewriting fresh.
             result = AgentResult()
             set_error_result(
                 result,
@@ -1963,19 +1928,18 @@ async def _run_turn_impl(
             summary_backend,
         )
 
-    # session_id is set by both resolution branches by this point.
+    # session_id is set by both resolution branches here.
     assert session_id is not None
     turn.session_id = session_id
-    # Shared workspace memory loads once; reused across inject restarts like session_data.
+    # Workspace memory loads once; reused across inject restarts.
     colony_items = colony.get_items(workspace_path)
 
-    # Scheduled/ephemeral turns always run autonomous (no [[await]]).
+    # Scheduled/ephemeral turns always run autonomous.
     collaborative = _is_collaborative_turn(
         workspace_path, explicit_session=explicit_session,
     )
 
-    # Character budget for the prepended context block; configurable per
-    # workspace so large-context models can keep more history.
+    # Prepended context-block budget; configurable per workspace.
     history_budget = workspace_mod.get_history_budget(workspace_path)
 
     injected: list[str] = []
@@ -2044,8 +2008,7 @@ async def _run_turn_impl(
         except BackendUnavailableError as e:
             return _error_result(session_id, str(e), inject_queue)
 
-        # If we're restarting due to inject, drain pipes and any extra
-        # injects that arrived while we were shutting down.
+        # Inject restart: drain pipes and extra injects from shutdown.
         if restarting:
             await _announce_restart(
                 backend.name, injected, inject_queue, _stream_event,
@@ -2199,8 +2162,7 @@ async def _run_turn_impl(
 
     # Defensive close for direct callers / unusual non-error paths, before session/reply yields.
     _close_inject_queue(inject_queue)
-    # Discard any messages from a plain programmatic Queue after the final
-    # answer. Bot-owned queues reject them before this point.
+    # Discard programmatic-Queue messages after the final answer.
     _drain_queue(inject_queue)
 
     # Detached-task requests: consume the control marker before session history / chat delivery.
@@ -2236,8 +2198,6 @@ async def _run_turn_impl(
     result.session_id = session_id
     return result
 
-
-# Session logging
 
 def _log_to_session(
     workspace_path: str, session_id: str, prompt: str, result: AgentResult,

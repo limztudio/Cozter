@@ -44,7 +44,7 @@ class AttachmentGuardTests(unittest.TestCase):
             evil = os.path.join(outside, "evil.txt")
             with open(evil, "w", encoding="utf-8") as file_handle:
                 file_handle.write("secret")
-            # Outside workspace / untrusted image root -> must be refused.
+            # Outside workspace -> must be refused.
             self.assertIsNone(agent.attachment_source_path(evil, ws))
             self.assertIsNone(agent.prepare_attachment_path(evil, ws))
 

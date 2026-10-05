@@ -38,16 +38,15 @@ class _FallbackModelSpec(NamedTuple):
     streams_tools: bool
 
 
-# Discovery fallback: curated chat IDs + capabilities (published windows
-# only; 4.5V lacks function tools).
+# Discovery fallback: curated chat IDs + capabilities.
 _FALLBACK_MODEL_SPECS = (
-    # General endpoint flagship: 1M context, mandatory reasoning, functions.
+    # General endpoint flagship.
     _FallbackModelSpec("glm-5.3", 1_000_000, True, True),
-    # Flash/FlashX share the endpoint, context, reasoning, and streaming.
+    # Flash/FlashX share the endpoint.
     _FallbackModelSpec("glm-5.3-flash", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.3-flashx", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.2", 1_000_000, True, True),
-    # Vision: no text-only ``tool_stream`` extension in its schema.
+    # Vision: no text-only ``tool_stream`` extension.
     _FallbackModelSpec("glm-5v-turbo", 200_000, True, False),
     _FallbackModelSpec("glm-5.1", 200_000, True, True),
     _FallbackModelSpec("glm-5-turbo", 200_000, True, True),
@@ -56,7 +55,7 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4.7-flash", 200_000, True, True),
     _FallbackModelSpec("glm-4.7-flashx", 200_000, True, True),
     _FallbackModelSpec("glm-4.6", 200_000, True, True),
-    # Vision variants: text + native functions, no ``tool_stream`` extension.
+    # Vision variants: native functions, no ``tool_stream`` extension.
     _FallbackModelSpec("glm-4.6v", 128_000, True, False),
     _FallbackModelSpec("glm-4.6v-flashx", 128_000, True, False),
     _FallbackModelSpec("glm-4.6v-flash", 128_000, True, False),
@@ -68,8 +67,7 @@ _FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-4.5-flash", 200_000, True, False),
     _FallbackModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
 )
-# Coding-Plan-only IDs (rejected by the general endpoint): keep the
-# ``[1m]`` long-context pin out of the default fallback.
+# Coding-Plan-only IDs: keep the ``[1m]`` pin out of the fallback.
 _CODING_PLAN_FALLBACK_MODEL_SPECS = (
     _FallbackModelSpec("glm-5.3[1m]", 1_000_000, True, True),
     _FallbackModelSpec("glm-5.3-flash[1m]", 1_000_000, True, True),
@@ -96,20 +94,18 @@ _PRESERVED_THINKING_MODELS = frozenset(
 _TOOL_STREAM_MODELS = frozenset(
     spec.name for spec in _ALL_FALLBACK_MODEL_SPECS if spec.streams_tools
 )
-# Non-chat API paths (image/OCR/audio): small and exact; unknown IDs stay
-# selectable for operators.
+# Non-chat API paths (image/OCR/audio): unknown IDs stay selectable.
 _NON_CHAT_COMPLETION_MODEL_IDS = frozenset({
     "glm-ocr",
     "glm-image",
     "cogview-4-250304",
     "glm-asr-2512",
-    # Phone-use agent, not a general workspace chat model.
+    # Phone-use agent, not a workspace chat model.
     "autoglm-phone-multilingual",
 })
-# 4.6V family documents native functions (not 4.5V): keep 4.5V text-only,
-# never send it an unsupported tool schema. Unknown IDs keep the normal path.
+# 4.6V has native functions (not 4.5V): keep 4.5V text-only.
 _NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
-# These two always reason: never send a contradictory disabled setting.
+# These two always reason.
 _COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
 _GLM_5_3_REASONING_MODELS = frozenset({"glm-5.3", "glm-5.3-flash", "glm-5.3-flashx"})
 _GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
@@ -215,7 +211,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
             return {}
         selected = _capability_model_id(model or self.default_model)
         if selected in _GLM_5_3_REASONING_MODELS:
-            # Reasoning-only family: only these three levels; map percentage onto them.
+            # Reasoning-only family: map percentage onto three levels.
             levels = self.effort_levels_for_model(model)
             index = min(
                 percent * len(levels) // 100,
@@ -285,11 +281,11 @@ class ZaiBackend(CachedOpenAIChatBackend):
         return {"tool_stream": True} if selected in _TOOL_STREAM_MODELS else {}
 
     def _auto_continue_after_tool_limit(self) -> bool:
-        # Long coding runs may need more tool turns: continue in a fresh segment.
+        # Long runs may need more tool turns: continue in a fresh segment.
         return True
 
     def _socket_timeout(self) -> int | None:
-        # Real-work cap (zai_socket_timeout); cancel stops instantly.
+        # Real-work cap; cancel stops instantly.
         try:
             return cfg.get_zai_socket_timeout()
         except Exception:

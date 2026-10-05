@@ -28,13 +28,13 @@ from ...utils import clip_status_value
 
 _NOTES_RELPATH = ".cozter/notes.md"
 
-# Size ceiling: appending past it trims oldest entries (never "notes full").
+# Size ceiling: appending past it trims oldest entries.
 _NOTES_MAX_BYTES = 64 * 1024
-# Keep roughly this much newest material after a trim.
+# Newest material kept after a trim.
 _NOTES_KEEP_BYTES = 32 * 1024
-# Per-entry cap so one runaway argument can't bypass the trim budget.
+# Per-entry cap so one runaway argument can't bypass the budget.
 _MAX_ENTRY_CHARS = 2_000
-# Tail sized to fit execute_tool's 4,000-char result cap.
+# Tail sized to the 4,000-char result cap.
 _READ_TAIL_CHARS = 3_500
 
 
@@ -170,7 +170,7 @@ def _fit_entries(parts: list[str]) -> str:
     if len(combined_bytes) <= _NOTES_MAX_BYTES:
         return combined
 
-    # Byte-split: one encode gives every entry size.
+    # Byte-split: one encode sizes every entry.
     entries: list[tuple[str, int]] = []
     current_lines: list[bytes] = []
     current_size = 0
