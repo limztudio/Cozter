@@ -144,10 +144,11 @@ def _runtime_dependency_issues(req_file: str) -> list[str]:
     still imports an older dependency after requirements tightened its safe
     version range.
     """
-    issues: list[str] = []
-    for module in _REQUIRED_RUNTIME_MODULES:
-        if find_spec(module) is None:
-            issues.append(f"missing module {module}")
+    issues: list[str] = [
+        f"missing module {module}"
+        for module in _REQUIRED_RUNTIME_MODULES
+        if find_spec(module) is None
+    ]
 
     try:
         requirements = tuple(_iter_runtime_requirements(req_file))

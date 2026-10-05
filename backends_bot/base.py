@@ -1968,7 +1968,7 @@ class BotPlatform(ABC):
                         ctx.reply_text("Injected."),
                         timeout=_INJECT_ACK_TIMEOUT_SEC,
                     )
-                except (asyncio.TimeoutError, TimeoutError):
+                except TimeoutError:  # == asyncio.TimeoutError on 3.11+
                     logger.warning(
                         "Inject ack send timed out after %.1fs (message queued)",
                         _INJECT_ACK_TIMEOUT_SEC,

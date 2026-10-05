@@ -76,12 +76,16 @@ def _collect_pathspecs(
     workspace_path: str, args: dict,
 ) -> tuple[list[str] | None, str | None]:
     """Resolve ``paths``/``path`` inside the workspace for ``--`` use."""
-    raw_paths: list[str] = []
     paths = args.get("paths")
-    if isinstance(paths, list):
-        for entry in paths:
-            if isinstance(entry, str) and entry.strip():
-                raw_paths.append(entry.strip())
+    raw_paths: list[str] = (
+        [
+            entry.strip()
+            for entry in paths
+            if isinstance(entry, str) and entry.strip()
+        ]
+        if isinstance(paths, list)
+        else []
+    )
     single = args.get("path")
     if isinstance(single, str) and single.strip():
         raw_paths.append(single.strip())

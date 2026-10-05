@@ -988,10 +988,7 @@ def text_chunk_ranges(text: str, limit: int) -> list[tuple[int, int]]:
     text_len = len(text)
     while text_len - start > limit:
         split_at = text.rfind("\n", start, start + limit)
-        if split_at >= 0:
-            end = split_at + 1
-        else:
-            end = start + limit
+        end = split_at + 1 if split_at >= 0 else start + limit
         ranges.append((start, end))
         start = end
     ranges.append((start, text_len))
