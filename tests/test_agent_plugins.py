@@ -29,27 +29,27 @@ class CalculatorToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tool = CalculatorTool()
 
-    def eval(self, expression: str) -> str:
+    def evaluate_expression(self, expression: str) -> str:
         return _run(self.tool.run(".", {"expression": expression}))
 
     def test_arithmetic_precedence_and_parentheses(self) -> None:
-        self.assertEqual(self.eval("2 + 3 * 4"), "14")
-        self.assertEqual(self.eval("(2 + 3) * 4"), "20")
-        self.assertEqual(self.eval("2 ** 10"), "1024")
-        self.assertEqual(self.eval("7 // 2"), "3")
-        self.assertEqual(self.eval("7 % 3"), "1")
-        self.assertEqual(self.eval("-5 + 2"), "-3")
-        self.assertEqual(self.eval("10 / 4"), "2.5")
+        self.assertEqual(self.evaluate_expression("2 + 3 * 4"), "14")
+        self.assertEqual(self.evaluate_expression("(2 + 3) * 4"), "20")
+        self.assertEqual(self.evaluate_expression("2 ** 10"), "1024")
+        self.assertEqual(self.evaluate_expression("7 // 2"), "3")
+        self.assertEqual(self.evaluate_expression("7 % 3"), "1")
+        self.assertEqual(self.evaluate_expression("-5 + 2"), "-3")
+        self.assertEqual(self.evaluate_expression("10 / 4"), "2.5")
 
     def test_functions_and_constants(self) -> None:
-        self.assertEqual(self.eval("sqrt(16)"), "4")
-        self.assertEqual(self.eval("floor(2.7) + ceil(2.1)"), "5")
-        self.assertEqual(self.eval("min(3, 1, 2) + max(3, 1, 2)"), "4")
-        self.assertEqual(self.eval("round(0.12345, 3)"), "0.123")
-        self.assertEqual(self.eval("factorial(5)"), "120")
-        self.assertEqual(self.eval("round(pi, 5)"), "3.14159")
-        self.assertEqual(self.eval("round(e, 3)"), "2.718")
-        self.assertEqual(self.eval("gcd(12, 18)"), "6")
+        self.assertEqual(self.evaluate_expression("sqrt(16)"), "4")
+        self.assertEqual(self.evaluate_expression("floor(2.7) + ceil(2.1)"), "5")
+        self.assertEqual(self.evaluate_expression("min(3, 1, 2) + max(3, 1, 2)"), "4")
+        self.assertEqual(self.evaluate_expression("round(0.12345, 3)"), "0.123")
+        self.assertEqual(self.evaluate_expression("factorial(5)"), "120")
+        self.assertEqual(self.evaluate_expression("round(pi, 5)"), "3.14159")
+        self.assertEqual(self.evaluate_expression("round(e, 3)"), "2.718")
+        self.assertEqual(self.evaluate_expression("gcd(12, 18)"), "6")
 
     def test_rejects_non_numeric_and_unknown_syntax(self) -> None:
         for expression in (
@@ -67,25 +67,25 @@ class CalculatorToolTests(unittest.TestCase):
         ):
             with self.subTest(expression=expression):
                 self.assertTrue(
-                    self.eval(expression).startswith("Error:"),
+                    self.evaluate_expression(expression).startswith("Error:"),
                     msg=expression,
                 )
 
     def test_rejects_dangerous_magnitudes(self) -> None:
-        self.assertIn("Error", self.eval("9 ** 9 ** 9"))
-        self.assertIn("Error", self.eval("factorial(5000)"))
-        self.assertIn("Error", self.eval("2 ** 999999999"))
+        self.assertIn("Error", self.evaluate_expression("9 ** 9 ** 9"))
+        self.assertIn("Error", self.evaluate_expression("factorial(5000)"))
+        self.assertIn("Error", self.evaluate_expression("2 ** 999999999"))
 
     def test_error_cases(self) -> None:
-        self.assertEqual(self.eval("1 / 0"), "Error: division by zero")
-        self.assertEqual(self.eval("1 // 0"), "Error: division by zero")
-        self.assertIn("Error", self.eval("sqrt(-1)"))
-        self.assertIn("Error", self.eval("(2+"))
-        self.assertIn("Error", self.eval("sqrt(1, 2, 3)"))
+        self.assertEqual(self.evaluate_expression("1 / 0"), "Error: division by zero")
+        self.assertEqual(self.evaluate_expression("1 // 0"), "Error: division by zero")
+        self.assertIn("Error", self.evaluate_expression("sqrt(-1)"))
+        self.assertIn("Error", self.evaluate_expression("(2+"))
+        self.assertIn("Error", self.evaluate_expression("sqrt(1, 2, 3)"))
 
     def test_complex_results_are_rejected(self) -> None:
-        self.assertIn("complex", self.eval("(-1) ** 0.5"))
-        self.assertEqual(self.eval("2 + 3"), "5")
+        self.assertIn("complex", self.evaluate_expression("(-1) ** 0.5"))
+        self.assertEqual(self.evaluate_expression("2 + 3"), "5")
 
     def test_missing_expression_arg(self) -> None:
         result = _run(self.tool.run(".", {}))
