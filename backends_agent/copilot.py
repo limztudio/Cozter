@@ -739,7 +739,7 @@ def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
         if models:
             return models
 
-    # Compat: old ACP SDKs put SessionModelState on session/new; both forms are provider-authoritative.
+    # Compat: old ACP SDKs put SessionModelState on session/new.
     models = _catalog_model_ids(payload.get("availableModels"), key="modelId")
     if models:
         return models
@@ -817,8 +817,7 @@ def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
                 if model != "auto":
                     models.append(model)
 
-        # ACP's grouped-select form nests another list under ``options``.
-        # No-op on ordinary options.
+        # Grouped-select form nests a list under ``options``.
         nested = value.get("options")
         if isinstance(nested, list) and depth < _MAX_ACP_OPTION_GROUP_DEPTH:
             pending.append((nested, 0, depth + 1))

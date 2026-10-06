@@ -517,8 +517,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             workspace.set_backend_name(tmp, "codex")
 
             def _fake_extras(name: str) -> list[str]:
-                # "base-model" is already supplied by the backend; the
-                # private id is new.
+                # "base-model" comes from the backend; the private id is new.
                 if name == "codex":
                     return ["private-codex-model", "base-model"]
                 return []
@@ -709,8 +708,7 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
         try:
             self.assertEqual(config.get_tool_timeout(), 3600)
             self.assertEqual(config.get_update_idle_timeout(), 1200)
-            # 0 means "disabled": the periodic dump is off by default,
-            # but SIGUSR1 still works. Must be a valid return.
+            # 0 means "disabled": periodic dump off, SIGUSR1 still works.
             self.assertEqual(config.get_dump_traceback_interval(), 0)
         finally:
             config.CONFIG_PATH = old
@@ -767,8 +765,7 @@ class ScheduleParserTests(unittest.TestCase):
         self.assertIsNone(parsed.tzinfo)
 
     def test_parse_iso_ignores_offset_values_that_overflow_local_time(self) -> None:
-        # Conversion depends on the host timezone, so force the exceptional
-        # branch rather than relying on one particular local UTC offset.
+        # Timezone-dependent: force the exceptional branch explicitly.
         parsed = SimpleNamespace(
             tzinfo=object(),
             utcoffset=lambda: 0,
@@ -1065,8 +1062,7 @@ class SessionStateFallbackTests(unittest.TestCase):
             self.assertFalse(session._is_safe_session_id("   "))
             self.assertFalse(session._is_safe_session_id(""))
 
-            # Listing must preserve the file-name/id invariant used by
-            # subsequent load/save operations.
+            # Listing must preserve the file-name/id invariant.
             self.assertEqual(session.list_sessions(tmp), [])
 
     def test_session_helpers_tolerate_bad_runtime_shapes(self) -> None:
@@ -1711,8 +1707,7 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
                     )
                     await asyncio.sleep(0)
                     await asyncio.sleep(0)
-                    # Sent before the question existed; must not be parked
-                    # behind an answer pause that arms only after the reply.
+                    # Sent before the question; must not park behind the later pause.
                     await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
                     self.assertEqual(bot.ran, ["first"])
                     bot.gate.set()

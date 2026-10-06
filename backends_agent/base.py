@@ -344,7 +344,7 @@ class AgentResult:
     detached_task_tool_use_ids: set[str] = field(
         default_factory=set, repr=False,
     )
-    # Set when the judge loop exhausts mid-CONTINUE.
+    # Set when the judge loop exhausts.
     continue_instruction: str = ""
 
 

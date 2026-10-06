@@ -139,8 +139,7 @@ class WebSearchToolTests(unittest.TestCase):
         )
         result = _run_search(net, query="anything")
         self.assertIn("Lite One", result)
-        # The 503 endpoint is retried (same URL requested twice across
-        # the concurrent race), then the healthy endpoint's results win.
+        # The 503 endpoint is retried, then the healthy results win.
         html_urls = [
             url for url in net.urls
             if url.startswith("https://html.duckduckgo.com")

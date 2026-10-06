@@ -93,10 +93,10 @@ class AgentTool(ABC):
     order: ClassVar[int] = 100
     requires_full_permission: ClassVar[bool] = False
 
-    # Set per instance by the loader for CLI plugin enumeration.
+    # Set per instance by the loader.
     is_plugin: bool = False
 
-    # Populated by __init_subclass__. Read by the package's __init__.
+    # Populated by __init_subclass__.
     registry: ClassVar[list[AgentTool]] = []
 
     def __init_subclass__(cls, **kwargs: Any) -> None:

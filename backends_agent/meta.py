@@ -130,13 +130,11 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         return model or self.default_model
 
     def _auto_continue_after_tool_limit(self) -> bool:
-        # Muse Spark is trained for long agentic coding runs; keep going in
-        # a fresh segment instead of forcing a no-tools final answer.
+        # Muse Spark handles long runs; continue in a fresh segment.
         return True
 
     def _socket_timeout(self) -> int | None:
-        # Real-work cap: slow generation streams keep running up to
-        # meta_socket_timeout (default 3600s). Cancel still stops instantly.
+        # Slow streams run up to meta_socket_timeout (default 3600s).
         try:
             return cfg.get_meta_socket_timeout()
         except Exception:

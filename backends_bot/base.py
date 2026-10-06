@@ -909,7 +909,6 @@ class BotPlatform(ABC):
         """Report readiness of every backend (CLI on PATH / server up)."""
         lines = ["Backend readiness:"]
         # Only direct backends have anything to probe.
-        # meta-agent whose readiness is exactly its tiers' readiness.
         for name in backends_agent.DIRECT_BACKENDS:
             backend = backends_agent.get_backend(name)
             ok, detail = await asyncio.to_thread(backend.health_check)
@@ -954,7 +953,7 @@ class BotPlatform(ABC):
             self._cancel_generations.get(uid, 0) + 1
         )
 
-        # Signal foreground agents first; admission-barrier ownership must not delay cancellation.
+        # Signal foreground agents before touching the admission barrier.
         task = self._running_tasks.get(uid)
         task_running = task is not None and not task.done()
         if task_running:
@@ -968,12 +967,11 @@ class BotPlatform(ABC):
             self._awaiting_answer.discard(uid)
             drained: list = []
             _drain_queue(self._message_queues.get(uid), collect=drained)
-            # Keep cancelled work from returning after a restart, including
-            # work that was paused in memory without a foreground task.
+            # Dropped in-memory + persisted work must not return after restart.
             persisted = await self._clear_persistent_queue(uid)
         delayed_replies = await self._clear_reply_deliveries(uid)
         detached_cancelled = await self._cancel_detached_tasks(uid)
-        # Cancel uploads first: the tail shield would otherwise wedge delivery behind the cancelled upload.
+        # Cancel uploads before delivery: the tail shield would wedge behind them.
         cancelled_uploads = await self._cancel_attachment_uploads(uid)
         cleared = max(len(drained), persisted, delayed_replies)
         return task_running, bool(
@@ -1967,8 +1965,7 @@ class BotPlatform(ABC):
             if outcome == "full":
                 await ctx.reply_text("Inject queue full.")
                 return
-            # "finished": turn done but delivery may hold the lock; queue a
-            # follow-up turn instead of dropping the message.
+            # "finished": delivery may hold the lock; queue a follow-up, don't drop.
         uid = ctx.user_id
         lock = self._task_locks.get(uid)
         running = self._running_tasks.get(uid)
@@ -3074,7 +3071,7 @@ class BotPlatform(ABC):
         # Same-slot fires run in creation order.
         to_fire: list[tuple[str, str, dict, datetime]] = []
 
-        # Iterate workspace state (Slack notify_targets are channels).
+        # Iterate workspace state.
         for uid, ws in workspace.iter_current_workspaces(self.platform_id):
             if not os.path.isdir(ws):
                 continue
@@ -3131,12 +3128,11 @@ class BotPlatform(ABC):
             )
             return
 
-        # After a fresh bot start the scheduler can fire before the user
-        # types anything, so create the per-user lock and queue on demand.
+        # Scheduler can fire before the user types; create lock/queue on demand.
         self._ensure_task_lock(uid)
         msg_queue = self._ensure_message_queue(uid)
 
-        # Capacity before announcement: avoids "Scheduled: X" + "Queue full — dropped" confusion.
+        # Check capacity before announcing.
         if msg_queue.full():
             await self._send_text_best_effort(
                 chat_id,
@@ -3164,7 +3160,7 @@ class BotPlatform(ABC):
             await self._discard_cancelled_dispatch_entry(uid, entry_id, msg_queue)
             return
 
-        # Kick the drainer; a running turn's own drain-after-turn picks up if one is already active.
+        # Kick the drainer (no-op if one is already active).
         self._start_queue_drain(uid)
 
     # AI chat + file
@@ -3361,12 +3357,11 @@ class BotPlatform(ABC):
                 await ctx.reply_text(
                     f"Queued ({msg_queue.qsize()}/{self.max_queue_size})."
                 )
-                # Race guard: kick a drain so the new entry isn't orphaned
-                # (a no-op if one is already active).
+                # Race guard: kick a drain so the entry isn't orphaned.
                 self._start_queue_drain(uid)
             return
 
-        # Persist before locking: a mid-path crash still leaves the entry for restart resume.
+        # Persist before locking: a mid-path crash still leaves the entry for resume.
         entry_id = await self._persist_admitted_dispatch_entry(
             uid, text, chat_id, generation,
         )
@@ -3379,8 +3374,7 @@ class BotPlatform(ABC):
             finally:
                 lock.release()
             return
-        # Park the accepted entry in RAM too so an aborted update can
-        # resume it without a restart (room forced: already persisted).
+        # Park in RAM too so an aborted update can resume it without restart.
         if self._update_restart_pending:
             lock.release()
             queued = self._message_queues.get(uid)
@@ -3395,11 +3389,10 @@ class BotPlatform(ABC):
             await ctx.reply_text(
                 f"Queued ({msg_queue.qsize()}/{max(self.max_queue_size, msg_queue.qsize())})."
             )
-            # Start anyway: covers the no-update/cancel race resuming intake after in-memory placement.
+            # Start anyway: covers the no-update/cancel race after placement.
             self._start_queue_drain(uid)
             return
-        # [[await]] answer: clear the flag only after lock acquisition so
-        # racing drains still see it and yield.
+        # [[await]]: clear only after lock acquisition so racing drains yield.
         self._awaiting_answer.discard(uid)
         # Register early so /stop finds the task even if startup yields on greeting sends.
         self._running_tasks[uid] = asyncio.current_task()
@@ -3408,14 +3401,12 @@ class BotPlatform(ABC):
                 uid, chat_id, text, queue_entry_id=entry_id,
             )
         except asyncio.CancelledError:
-            # Shutdown keeps the entry for resume; a tearing-down platform
-            # must not mask the clean cancel.
+            # Shutdown keeps the entry for resume; don't mask the clean cancel.
             if uid not in self._cancel_acknowledged:
                 await self._send_text_best_effort(chat_id, "Cancelled.")
             return
         except Exception as e:
-            # Consume before replying so a failed reply can't leave a
-            # replayable stale entry.
+            # Consume before replying so a failed reply leaves no stale entry.
             logger.exception("AI turn failed")
             await self._persist_complete(uid, entry_id)
             await self._send_text_best_effort(chat_id, f"Error: {e}")
@@ -3528,8 +3519,7 @@ class BotPlatform(ABC):
             else:
                 return
             if thinking_handle is None:
-                # No editable status here: progress as fresh messages, skip
-                # the answer text (arrives whole in the final reply).
+                # No editable status: progress as fresh messages; skip answer text.
                 if ev.kind != "text":
                     await self._run_status_operation(
                         self.send_status(chat_id, status_lines[-1]),

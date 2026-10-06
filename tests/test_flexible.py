@@ -489,8 +489,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         """
         async def silent_worker(*_args, **_kwargs):
             result = AgentResult()
-            # Tool events but no text - the shape a backend leaves behind
-            # when it dies partway through a turn.
+            # Tool events but no text: a backend dying mid-turn.
             result.events.append(ChatEvent(kind="tool", content="ran a tool"))
             return result, False
 
@@ -514,8 +513,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertNotIn("(no response)", result.text)
-        # The reply names the agent+model that went quiet, so the user knows
-        # which tier to go fix rather than staring at a blank answer.
+        # The reply names the quiet agent+model so the user knows which tier to fix.
         self.assertIn(f"{low_agent}/{low_model}", result.text)
 
     async def test_a_failing_worker_reports_why_it_went_quiet(self) -> None:
@@ -988,8 +986,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
                     "finish it", ws, 1,
                     backend_name="judge-test", session_id=data["id"],
                 )
-        # Capped in-turn loop exhausts (drive + JUDGE_MAX_CONTINUES
-        # follow-ups) and flags the remainder instead of stopping silently.
+        # Capped loop exhausts (drive + follow-ups) and flags the remainder.
         self.assertEqual(calls["drive"], 1 + flexible.JUDGE_MAX_CONTINUES)
         self.assertTrue(result.continue_instruction)
         self.assertIn("keep going", result.continue_instruction)

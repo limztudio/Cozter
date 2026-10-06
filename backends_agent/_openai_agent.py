@@ -54,7 +54,7 @@ _MAX_TOOL_CALL_ID_CHARS = 512
 _MAX_TOOL_NAME_CHARS = 512
 # Cap the retained conversation across turns.
 _MAX_AGENT_MESSAGE_BYTES = 32 * 1024 * 1024
-# This also bounds bookkeeping for malformed index-spam streams.
+# Also bounds bookkeeping for malformed index-spam streams.
 _MAX_TOOL_CALLS_PER_COMPLETION = 128
 # Bound discovery responses.
 _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024

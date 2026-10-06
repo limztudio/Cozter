@@ -854,8 +854,7 @@ class ClaudeCodeBackend(Backend):
         if not isinstance(inp, dict):
             inp = {}
 
-        # File-editing tools: emit kind="file" with the touched path so
-        # the bot's "Thinking..." status renders them under the file UX.
+        # File tools surface as kind="file" for the Thinking status UX.
         if tool in ClaudeCodeBackend._FILE_TOOLS:
             path = inp.get("file_path") or inp.get("notebook_path") or "?"
             if not isinstance(path, str) or not path:

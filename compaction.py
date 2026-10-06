@@ -33,8 +33,7 @@ COMPACT_TIMEOUT: float | None = 3600.0  # work cap
 
 # Trigger before stored material crowds out the reply.
 _MODEL_CONTEXT_COMPACT_FRACTION = 0.60
-# ``/context`` is the per-workspace ceiling for saved context.
-# Summarize before truncation discards raw history.
+# ``/context`` is the per-workspace ceiling; summarize before truncation.
 _HISTORY_BUDGET_COMPACT_FRACTION = 0.75
 
 # Reserve most of the prompt for raw messages.
@@ -444,8 +443,7 @@ async def _maybe_compact_under_maintenance_lock(
             "keeping %d so history can still shrink",
             session_id, covered_count, keep_recent,
         )
-    # Reject suspiciously short summaries.
-    # Compare against the truncated stored summary so recovery can succeed.
+    # Reject suspiciously short summaries (compare against truncated stored).
     min_len = (
         100
         if len(existing_summary) > _previous_summary_budget()
@@ -487,14 +485,13 @@ async def _maybe_compact_under_maintenance_lock(
                 or not isinstance(messages[0], dict)
                 or messages[0].get("content") != original_content
             ):
-                # Concurrent non-append write won the race; keeping raw state is safer than a stale suffix.
+                # A concurrent write won the race; keep raw state over a stale suffix.
                 logger.warning(
                     "Skipping stale oversized-message compaction for "
                     "session %s", session_id,
                 )
                 return
-            # Store the summary and unseen tail in one durable write. No raw
-            # entry is trimmed: the same oldest message becomes its suffix.
+            # One durable write; no raw entry is trimmed.
             session.set_summary(
                 workspace_path, session_id, new_summary,
                 keep_recent=KEEP_RECENT_AFTER_COMPACT,
@@ -537,15 +534,13 @@ def _take_oldest_message_lines(messages: list[dict], budget: int) -> list[str]:
                 if budget == 1:
                     lines.append("…")
                 elif budget <= len(marker):
-                    # No room for the full marker: keep a visible cut
-                    # indicator rather than a silent prefix.
+                    # Too tight for the full marker: keep a cut indicator.
                     lines.append(line[:budget - 1] + "…" if budget > 1 else "…")
                 else:
                     lines.append(line[:budget - len(marker)] + marker)
             break
         lines.append(line)
-        # Match utils.take_recent_lines' conservative accounting for the
-        # newline that joins adjacent lines.
+        # Match take_recent_lines' accounting for the joining newline.
         used += len(line) + 1
     return lines
 
@@ -582,8 +577,7 @@ async def compact_session(
     if not messages:
         return ("", None, None, 0)
 
-    # Build the content to summarize, staying within a token budget.
-    # Large prompts cause the summary model to return truncated/empty output.
+    # Large prompts cause truncated/empty summary output; stay in budget.
     parts = _compaction_prompt_parts(existing_summary, existing_long_term)
 
     # Oldest contiguous prefix only, uncapped; caller removes exactly this.

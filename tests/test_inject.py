@@ -82,8 +82,7 @@ class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
                     bot.sent,
                 )
 
-                # The drain may have consumed the entry; verify via the reply
-                # plus the durable ledger instead of racing the queue.
+                # The drain may have consumed the entry; verify via reply + ledger.
                 queued_entry = None
                 try:
                     queued_entry = bot._message_queues["u1"].get_nowait()

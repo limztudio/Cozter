@@ -1893,7 +1893,7 @@ warning: ignored after the catalog
             "claude-opus-4-1",
             # Sonnet 4.5 has a 200K window; it never exposed a 1M variant.
             "claude-sonnet-4-5-20250929[1m]",
-            # Fable 5/5.1 are 1M-native; the CLI migrates those IDs away and hides them from the picker.
+            # Fable 5/5.1 are 1M-native; the CLI migrates them out of the picker.
             "claude-fable-5[1m]",
             "claude-fable-5-1[1m]",
         ):
@@ -1905,8 +1905,7 @@ class CopilotPromptCapTests(unittest.TestCase):
     def test_max_prompt_chars_is_platform_sane(self) -> None:
         cap = copilot_mod._max_prompt_chars()
         self.assertIsInstance(cap, int)
-        # Never below the Windows floor, never absurdly large. On POSIX
-        # (ARG_MAX ~2 MB) well above the old 28K cap.
+        # Sanity bounds: never below the Windows floor, never absurd.
         self.assertGreaterEqual(cap, 28_000)
         self.assertLessEqual(cap, 1_000_000)
 

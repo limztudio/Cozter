@@ -562,8 +562,7 @@ def _truncate_context_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     if limit <= len(_CONTEXT_TRUNCATION_MARKER):
-        # Too tight for the full honesty marker: keep a visible cut
-        # indicator so the preview is never mistaken for full content.
+        # Too tight for the full marker: keep a cut indicator, not a silent prefix.
         if limit <= 1:
             return "…"[:limit]
         return text[:limit - 1] + "…"
@@ -677,7 +676,7 @@ def _request_keywords(text: str, limit: int = 64) -> set[str]:
 def _relevance_last(items: list, keywords: set[str]) -> list:
     if not keywords:
         return items
-    # First-char probe: skip items lacking any keyword initial (avoids lowercase copy + regex).
+    # First-char probe: skip items without a keyword initial.
     firsts = {kw[0] for kw in keywords if kw}
     firsts |= {char.swapcase() for char in firsts}
     scored = []
@@ -2027,7 +2026,7 @@ async def _run_turn_impl(
         for path in new_attachment_paths:
             result.events.append(ChatEvent(kind="attachment", content=path))
 
-        # Continue-judge: CONTINUE re-drives same backend (capped); inject/cancel/await/failure break out.
+        # CONTINUE re-drives the backend (capped); inject/cancel/await/failure exit.
         judged_rounds = 0
         while judged_rounds < flexible.JUDGE_MAX_CONTINUES:
             draft = result.text
@@ -2124,7 +2123,7 @@ async def _run_turn_impl(
             )
             for path in new_attachment_paths:
                 result.events.append(ChatEvent(kind="attachment", content=path))
-            # Cap exhausted mid-CONTINUE: keep verdict so the bot layer auto-chains instead of shipping PARTIAL.
+            # Cap exhausted: keep the verdict so the bot layer chains instead of PARTIAL.
             if judged_rounds >= flexible.JUDGE_MAX_CONTINUES:
                 _draft_tail, _tail_awaiting = extract_await(result.text or "")
                 if _tail_awaiting or not _draft_tail.strip():
@@ -2160,12 +2159,12 @@ async def _run_turn_impl(
 
         break  # normal completion
 
-    # Defensive close for direct callers / unusual non-error paths, before session/reply yields.
+    # Close for direct callers before session/reply yields.
     _close_inject_queue(inject_queue)
     # Discard programmatic-Queue messages after the final answer.
     _drain_queue(inject_queue)
 
-    # Detached-task requests: consume the control marker before session history / chat delivery.
+    # Detached-task requests: consume the marker before session/chat delivery.
     _consume_detached_task_requests(result)
 
     # Log the original prompt (including injected context) to session.

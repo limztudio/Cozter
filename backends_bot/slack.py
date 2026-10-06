@@ -77,7 +77,6 @@ def _md_to_mrkdwn(text: str) -> str:
 def _mrkdwn_line(line: str) -> str:
     line = escape_html_entities(line)
     # Bold first so italic can't mis-match it.
-    # Substring guards skip the regex.
     if line[:1] == "#":
         line = _SLACK_HEADING_RE.sub(_bold_sub, line)
     if "**" in line:
@@ -227,7 +226,7 @@ def _split_slack_markdown(
     # Split chunks reopen/close fences independently.
     max_opener = 0
     max_marker = 0
-    # One pre-scan for reserves; the chunk loop replays fence state with the same cheap helpers.
+    # One pre-scan for reserves; the chunk loop replays fence state below.
     for line in text.splitlines():
         fence = _fence_open(line)
         if fence is None:
@@ -244,8 +243,7 @@ def _split_slack_markdown(
         # Over-long fences can't be preserved; still send bounded chunks, not an error.
         return split_text_chunks(text, limit)
 
-    # Keep raw chunks deliberately below Slack's limit. That leaves enough
-    # room to close/reopen even the longest fence in the response.
+    # Keep raw chunks below the limit to leave room for fence open/close.
     raw_chunks = split_text_chunks(text, limit - fence_wrap_reserve)
     chunks: list[str] = []
     active_fence: tuple[str, str] | None = None
@@ -346,8 +344,7 @@ class SlackBot(BotPlatform):
 
     @property
     def platform_id(self) -> str:
-        # Prefix with "slack:" so Slack state never collides with a
-        # Telegram bot id that happens to be numerically identical.
+        # Prefix avoids collision with a numerically identical Telegram id.
         if self._bot_user_id is None:
             raise RuntimeError("platform_id is only valid after start()")
         return f"slack:{self._bot_user_id}"
@@ -400,7 +397,7 @@ class SlackBot(BotPlatform):
             await _update_rich_markdown(self.app.client, handle, chunks[0])
             return
 
-        # One handle updates one message; chunks post separately, so keep old mrkdwn for oversized status.
+        # One handle updates one message; extra chunks post separately.
         await self.app.client.chat_update(
             channel=handle.chat_id,
             ts=handle.message_id,

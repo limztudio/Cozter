@@ -33,8 +33,7 @@ class RunLockTests(unittest.TestCase):
             await asyncio.gather(worker(lock, "A"), worker(lock, "B"))
 
         asyncio.run(scenario())
-        # Whichever acquires first fully completes before the other starts:
-        # no interleaving.
+        # First acquirer fully completes before the other starts: no interleaving.
         self.assertIn(order, [
             ["A-start", "A-end", "B-start", "B-end"],
             ["B-start", "B-end", "A-start", "A-end"],

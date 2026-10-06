@@ -267,8 +267,7 @@ async def execute_tool(
         and tool is not None
         and not _is_auto_allowed(tool)
     ):
-        # Re-check at execution: a stray/hallucinated call must not turn
-        # ``auto`` into a back door to the host shell.
+        # Re-check at execution: block hallucinated full-only calls in auto mode.
         logger.info("auto mode blocked full-only tool: %s", name)
         result = (
             f"Blocked: '{name}' requires full permission because it can "

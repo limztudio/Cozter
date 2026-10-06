@@ -253,8 +253,7 @@ class GrokBackend(CachedModelCatalog, Backend):
             if prompt_path:
                 _remove_prompt_file(prompt_path)
             raise
-        # Key by Process, not PID.
-        # Empty path still registers for symmetric cleanup.
+        # Key by Process, not PID, for symmetric cleanup.
         self._prompt_files.remember(proc, prompt_path)
         return proc
 

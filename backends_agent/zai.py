@@ -149,8 +149,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
         "mid": "glm-4.7",
         "high": "glm-5.3",
     }
-    # GLM-5.2: seven levels; GLM-5.3 family: constrained three-level scale;
-    # other text models: thinking switch only (see _effort_fields).
+    # GLM-5.2: seven levels; 5.3 family: three; others: switch only.
     effort_levels = (
         "none", "minimal", "low", "medium", "high", "xhigh", "max",
     )
