@@ -253,9 +253,13 @@ def get_max_permission() -> str:
     (clamps the effective permission and rejects setting a higher one via
     ``/permission``).
     """
-    val = _read_config_value("max_permission")
-    if val is None:
+    if not os.path.exists(CONFIG_PATH):
         return cast(str, _DEFAULT_CONFIG["max_permission"])
+    # A missing key retains the default; an explicit JSON null is malformed
+    # and must not widen a previously restrictive ceiling.
+    val = _load_config_object().get(
+        "max_permission", _DEFAULT_CONFIG["max_permission"],
+    )
     if isinstance(val, str):
         normalized = val.strip()
         if normalized in _PERMISSION_LEVELS:

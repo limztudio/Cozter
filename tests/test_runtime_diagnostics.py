@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -434,6 +435,65 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
         check_mock.assert_called_once_with()
         # No update: intake must not pause.
         self.assertEqual(bot.restart_calls, 0)
+
+
+class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def _bot(self):
+        return SimpleNamespace(
+            start=mock.AsyncMock(), stop=mock.AsyncMock(),
+            send_startup_messages=mock.AsyncMock(), notify_users=mock.AsyncMock(),
+        )
+
+    async def _run_daemon(self, main, bots) -> None:
+        stop_event = asyncio.Event()
+        stop_event.set()
+        with (
+            mock.patch.object(main, "_cli_mode_requested", return_value=False),
+            mock.patch.object(main.cfg, "load_config", return_value={"update_check_interval": 300}),
+            mock.patch.object(main, "create_platforms", return_value=bots),
+            mock.patch.object(main.updater, "init_startup_commit"),
+            mock.patch.object(main.updater, "get_current_version", return_value="test"),
+            mock.patch.object(main.updater, "get_last_commit_date", return_value="test"),
+            mock.patch.object(main.asyncio, "Event", return_value=stop_event),
+            mock.patch.object(asyncio.get_running_loop(), "add_signal_handler"),
+        ):
+            await main.main()
+
+    async def test_failed_start_cleans_started_and_partially_started_platforms(self) -> None:
+        main = _load_main_module()
+        first, failed, untouched = self._bot(), self._bot(), self._bot()
+        failed.start.side_effect = RuntimeError("startup failed")
+        with self.assertRaisesRegex(RuntimeError, "startup failed"):
+            await self._run_daemon(main, [first, failed, untouched])
+        first.stop.assert_awaited_once()
+        failed.stop.assert_awaited_once()
+        untouched.start.assert_not_awaited()
+
+    async def test_shutdown_failures_do_not_skip_other_platform_cleanup(self) -> None:
+        main = _load_main_module()
+        first, second = self._bot(), self._bot()
+        first.notify_users.side_effect = RuntimeError("send failed")
+        second.stop.side_effect = RuntimeError("stop failed")
+        with self.assertLogs(main.logger, level="ERROR"):
+            await self._run_daemon(main, [first, second])
+        first.stop.assert_awaited_once()
+        second.stop.assert_awaited_once()
+
+    async def test_cli_failed_start_still_stops_partial_platform(self) -> None:
+        from Cozter.backends_bot import cli
+
+        main = _load_main_module()
+        bot = self._bot()
+        bot.start.side_effect = RuntimeError("CLI startup failed")
+        with (
+            mock.patch.object(cli, "CliBot", return_value=bot),
+            mock.patch.object(main.updater, "init_startup_commit"),
+            mock.patch.object(main.updater, "get_current_version", return_value="test"),
+            mock.patch.object(main.updater, "get_last_commit_date", return_value="test"),
+            self.assertRaisesRegex(RuntimeError, "CLI startup failed"),
+        ):
+            await main.main_cli()
+        bot.stop.assert_awaited_once()
 
 
 if __name__ == "__main__":

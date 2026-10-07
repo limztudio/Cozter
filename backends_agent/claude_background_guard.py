@@ -199,6 +199,9 @@ def _has_background_operator(command: str) -> bool:
 
 def _shell_tokens(command: str) -> list[str]:
     """Best-effort shell tokenization without executing the command."""
+    # Launcher-looking text inside a here-document is data, just as its '&'
+    # characters are data to the operator scanner.
+    command = _without_heredoc_bodies(command)
     try:
         lexer = shlex.shlex(
             command, posix=True, punctuation_chars="|&;()<>",

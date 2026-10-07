@@ -277,16 +277,14 @@ def vision_image_url_parts(image_paths: list[str]) -> list[dict]:
 
 
 def grok_prompt_json(prompt: str, image_paths: list[str]) -> str:
-    """Build a grok --prompt-json payload carrying text + image parts."""
+    """Build Grok's ACP content blocks for a JSON prompt file."""
     content: list[dict] = [{"type": "text", "text": prompt}]
     for part in vision_image_url_parts(image_paths):
         url = part.get("image_url", {}).get("url", "")
-        if url:
-            content.append({"type": "image", "source": {"url": url}})
-    return json.dumps([{
-        "role": "user",
-        "content": content,
-    }])
+        mime, separator, encoded = url.removeprefix("data:").partition(";base64,")
+        if separator:
+            content.append({"type": "image", "data": encoded, "mimeType": mime})
+    return json.dumps(content)
 
 
 @dataclass
@@ -503,6 +501,7 @@ def apply_messages_assistant_content(
         return
     if not isinstance(content, list):
         return
+    texts: list[str] = []
     for block in content:
         if not isinstance(block, dict):
             continue
@@ -510,9 +509,14 @@ def apply_messages_assistant_content(
         if block_type == "text":
             text = block.get("text")
             if isinstance(text, str) and text:
+                texts.append(text)
                 append_text_result(result, text)
         elif block_type == "tool_use" and on_tool_use is not None:
             on_tool_use(block)
+    if texts:
+        # A whole assistant message may contain several text blocks. Keep all
+        # of them in its reply while preserving individual status event order.
+        result.text = "\n".join(texts)
 
 
 def apply_terminal_result_event(

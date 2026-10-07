@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable
@@ -81,10 +82,22 @@ class HttpAgentProcess:
                 logger.exception("%s loop crashed", self._label)
                 self.emit({"type": "error", "message": str(exc)})
                 self.returncode = 1
-            finally:
-                self.stdout.feed_eof()
+
+        def _finalize(task: asyncio.Task[None]) -> None:
+            # Cancellation can happen before _driver takes its first step,
+            # so its exception handlers cannot finalize that launch. Close
+            # the unstarted coroutine and publish cancellation/EOF here too.
+            if task.cancelled():
+                if inspect.iscoroutine(coro):
+                    coro.close()
+                elif isinstance(coro, asyncio.Future):
+                    coro.cancel()
+                if self.returncode is None:
+                    self.returncode = 130
+            self.stdout.feed_eof()
 
         self._task = asyncio.create_task(_driver())
+        self._task.add_done_callback(_finalize)
 
 
 @contextlib.asynccontextmanager

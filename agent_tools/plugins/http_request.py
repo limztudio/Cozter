@@ -35,6 +35,7 @@ from ..base import (
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 5
+_CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie"})
 # Real-work cap.
 _DEFAULT_MAX_CHARS = 3_500
 # Tool-call arg, not a file upload.
@@ -98,6 +99,18 @@ def _is_textual_content_type(content_type: str) -> bool:
     )
 
 
+def _url_origin(url: str) -> tuple[str, str | None, int]:
+    """Return the origin tuple used to scope custom request credentials."""
+    parsed = urllib.parse.urlsplit(url)
+    return (
+        parsed.scheme.casefold(),
+        parsed.hostname,
+        parsed.port if parsed.port is not None else (
+            443 if parsed.scheme.casefold() == "https" else 80
+        ),
+    )
+
+
 async def _request_following_redirects(
     session: aiohttp.ClientSession,
     method: str,
@@ -113,6 +126,7 @@ async def _request_following_redirects(
     current_url = url
     current_method = method
     current_body = body
+    current_headers = dict(headers)
     redirects = 0
     while True:
         kwargs: dict[str, Any] = {
@@ -121,7 +135,7 @@ async def _request_following_redirects(
         if current_body is not None:
             kwargs["data"] = current_body
         async with session.request(
-            current_method, current_url, headers=headers, **kwargs,
+            current_method, current_url, headers=current_headers, **kwargs,
         ) as response:
             status = response.status
             location = response.headers.get("location")
@@ -137,12 +151,23 @@ async def _request_following_redirects(
                 validation_error = validate_public_url(next_url)
                 if validation_error:
                     raise _RequestRefusedError(validation_error)
+                if _url_origin(str(response.url)) != _url_origin(next_url):
+                    # Manual redirects bypass aiohttp's Authorization stripping.
+                    # Never forward explicit credentials to a different origin.
+                    current_headers = {
+                        key: value for key, value in current_headers.items()
+                        if key.casefold() not in _CREDENTIAL_HEADERS
+                    }
                 # 303 -> GET; browsers also downgrade 301/302.
                 if status == 303 or (
                     status in (301, 302) and current_method != "GET"
                 ):
                     current_method = "GET"
                     current_body = None
+                    current_headers = {
+                        key: value for key, value in current_headers.items()
+                        if key.casefold() != "content-type"
+                    }
                 current_url = next_url
                 redirects += 1
                 continue

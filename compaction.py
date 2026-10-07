@@ -145,6 +145,28 @@ def _bounded_previous_summary(summary: str) -> str:
     return summary[:keep] + marker + summary[-(budget - len(marker) - keep):]
 
 
+def _bounded_long_term(
+    items: list[str],
+) -> tuple[list[str], list[str]]:
+    """Return prompt lines and untouched items omitted from the rewrite."""
+    budget = int(MAX_SUMMARY_CHARS * 0.15)
+    lines = take_recent_lines(items, budget, lambda item: f"- {item}")
+    shown = len(lines)
+    if shown < len(items):
+        marker = (
+            "… [older long-term items omitted — preview only; rewrite only the"
+            " items shown and carry the rest forward unchanged;"
+            " say PARTIAL + remainder when coverage is unclear]"
+        )
+        while lines and len("\n".join([marker, *lines])) > budget:
+            lines.pop(0)
+        shown = len(lines)
+        if budget < len(marker):
+            marker = marker[:max(0, budget - 1)] + ("…" if budget else "")
+        lines.insert(0, marker)
+    return lines, items[:len(items) - shown]
+
+
 def _compaction_prompt_parts(
     existing_summary: str | None,
     existing_long_term: list[str],
@@ -152,25 +174,8 @@ def _compaction_prompt_parts(
     """Build the fixed prefix of a compaction prompt before raw messages."""
     parts: list[str] = []
     if existing_long_term:
-        # Show 15% of the budget for the existing list.
-        lt_max = int(MAX_SUMMARY_CHARS * 0.15)
-        lt_lines = take_recent_lines(
-            existing_long_term, lt_max, lambda x: f"- {x}",
-        )
+        lt_lines, _omitted = _bounded_long_term(existing_long_term)
         if lt_lines:
-            if len(lt_lines) < len(existing_long_term):
-                lt_lines = [
-                    "… [older long-term items omitted — preview only;"
-                    " rewrite only the"
-                    " items shown and carry the rest forward unchanged;"
-                    " say PARTIAL + remainder when coverage is unclear]",
-                    *lt_lines,
-                ]
-                # Drop oldest lines to fit.
-                lt_total = sum(len(line) + 1 for line in lt_lines)
-                while len(lt_lines) > 1 and lt_total > lt_max:
-                    lt_total -= len(lt_lines[1]) + 1
-                    lt_lines.pop(1)
             parts.append(
                 "Existing long-term items (rewrite this list per the "
                 "instructions above):"
@@ -228,16 +233,12 @@ def _oversized_first_message_prefix(
         {"role": first.get("role"), "content": ""}, cap=None,
     )
     # Leave room for the oversized-message marker.
-    if budget - len(prefix) == 1:
+    if budget <= len(_OVERSIZED_MESSAGE_MARKER):
         marker_len = 1
-    elif budget - len(prefix) <= len(_OVERSIZED_MESSAGE_MARKER):
-        marker_len = 0
     else:
         marker_len = len(_OVERSIZED_MESSAGE_MARKER)
     content_chars = budget - len(prefix) - marker_len
-    if content_chars <= 0:
-        return None
-    return content, content_chars
+    return content, max(0, content_chars)
 
 
 def _session_context_text(data: dict, colony_items: list[str]) -> str:
@@ -315,6 +316,14 @@ def _token_trigger(
     if model_window is None:
         return None
 
+    return _context_trigger(data, workspace_path, model_window)
+
+
+def _context_trigger(
+    data: dict, workspace_path: str, model_window: int,
+) -> tuple[str, int, int, int] | None:
+    """Measure a context whose model capacity has already been resolved."""
+
     context_text = _session_context_text(data, colony.get_items(workspace_path))
     estimated_tokens = _estimate_context_tokens(context_text)
     token_threshold = max(
@@ -380,7 +389,11 @@ async def _maybe_compact_under_maintenance_lock(
     if data is None:
         return
     msgs = data.get("messages", [])
-    trigger = _token_trigger(data, workspace_path, context_targets)
+    model_window = _context_window_tokens(context_targets)
+    trigger = (
+        _context_trigger(data, workspace_path, model_window)
+        if model_window is not None else None
+    )
     if trigger is not None:
         reason, measured, threshold, model_window = trigger
         if reason == "tokens":
@@ -396,6 +409,9 @@ async def _maybe_compact_under_maintenance_lock(
                 measured, threshold, model_window,
             )
     else:
+        if model_window is not None:
+            # Known capacities use context size; /compact is only a fallback.
+            return
         interval = workspace_mod.get_compact_interval(workspace_path)
         if len(msgs) < interval:
             return
@@ -405,6 +421,12 @@ async def _maybe_compact_under_maintenance_lock(
             len(msgs), interval,
         )
     oversized_first = _oversized_first_message_prefix(data)
+    if oversized_first is not None and oversized_first[1] == 0:
+        logger.warning(
+            "Session %s oldest message label exceeds compaction budget; "
+            "preserving raw history", session_id,
+        )
+        return
     existing_summary = data.get("summary") or ""
     new_summary, new_long_term, new_title, covered_count = await compact_session(
         workspace_path, session_id, summary_model,
@@ -614,4 +636,8 @@ async def compact_session(
         return ("", None, None, 0)
 
     summary, long_term, title = _parse_output(new_summary)
+    if long_term is not None:
+        _lines, omitted = _bounded_long_term(existing_long_term)
+        # The model cannot carry forward facts it never received.
+        long_term = list(dict.fromkeys([*omitted, *long_term]))
     return (summary, long_term, title, len(msg_lines))

@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 import os
 from collections.abc import Callable
@@ -96,7 +97,7 @@ def ensure_workspace_state_dir(workspace_path: str, *parts: str) -> str:
     return workspace_state_path(workspace_path, *parts)
 
 
-_STATE_CACHE: tuple[int | None, int | None, dict] | None = None
+_STATE_CACHE: tuple[str, int | None, int | None, dict] | None = None
 
 
 def _load_all() -> dict:
@@ -108,12 +109,15 @@ def _load_all() -> dict:
     """
     global _STATE_CACHE
     mtime_ns, size = stat_mtime_size(WORKSPACE_STATE_PATH)
-    if _STATE_CACHE is not None and _STATE_CACHE[0] == mtime_ns and _STATE_CACHE[1] == size:
-        return dict(_STATE_CACHE[2])
+    if (
+        _STATE_CACHE is not None
+        and _STATE_CACHE[:3] == (WORKSPACE_STATE_PATH, mtime_ns, size)
+    ):
+        return copy.deepcopy(_STATE_CACHE[3])
     data = load_json_object(
         WORKSPACE_STATE_PATH, "workspace state file", logger,
     )
-    _STATE_CACHE = (mtime_ns, size, dict(data))
+    _STATE_CACHE = (WORKSPACE_STATE_PATH, mtime_ns, size, copy.deepcopy(data))
     return data
 
 
@@ -124,7 +128,7 @@ def _save_all(data: dict) -> None:
     if mtime_ns is None:
         _STATE_CACHE = None
         return
-    _STATE_CACHE = (mtime_ns, size, dict(data))
+    _STATE_CACHE = (WORKSPACE_STATE_PATH, mtime_ns, size, copy.deepcopy(data))
 
 
 def _get_user(user_id: int | str) -> dict:

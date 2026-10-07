@@ -155,7 +155,10 @@ class GitInfoTool(AgentTool):
             limit = coerce_int_arg(
                 args.get("limit", 50), default=50, minimum=1, maximum=50,
             )
-            return argv + ["tag", "--list", "-n1", "--sort=-creatordate"]
+            return argv + [
+                "for-each-ref", f"--count={limit}", "--sort=-creatordate",
+                "--format=%(refname:strip=2) %(contents:subject)", "refs/tags/",
+            ]
         if action == "stashes":
             return argv + ["stash", "list"]
         if action == "show":

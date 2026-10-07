@@ -3558,6 +3558,62 @@ class BotPlatform(ABC):
                 summary_backend_name=summary_backend,
                 session_id=session_id,
             )
+            # Auto-chain judge-exhausted CONTINUE hands-free (bounded).
+            chained = 0
+            try:
+                from .. import flexible as _flexible_mod
+                _chain_cap = _flexible_mod.MAX_AUTO_CHAIN_TURNS
+            except Exception:
+                _chain_cap = 0
+            while (
+                chained < _chain_cap
+                and getattr(result, "continue_instruction", "")
+                and not self._update_restart_pending
+                and not result.error
+            ):
+                _next_instruction = result.continue_instruction.strip()
+                if not _next_instruction:
+                    break
+                chained += 1
+                await on_event(agent.ChatEvent(
+                    kind="tool",
+                    content=f"Auto-continuing remainder {chained}/{_chain_cap}...",
+                ))
+                previous_result = result
+                inject_q = _InjectQueue(maxsize=self.max_queue_size)
+                self._inject_queues[uid] = inject_q
+                try:
+                    result = await agent.run(
+                        f"{text}\n\n{_next_instruction}", ws, user_id=uid,
+                        model=model, summary_model=summary_model,
+                        approval=perm,
+                        on_event=on_event, inject_queue=inject_q,
+                        backend_name=backend_name,
+                        summary_backend_name=summary_backend,
+                        session_id=(
+                            session_id if session_id is not None
+                            else result.session_id
+                        ),
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Auto-chained continuation turn failed")
+                    break
+                agent.carry_forward_turn_output(previous_result, result, ws)
+                if not getattr(result, "continue_instruction", ""):
+                    break
+            if chained:
+                await on_event(agent.ChatEvent(
+                    kind="tool",
+                    content=f"Auto-continue finished after {chained} turn(s).",
+                ))
+
+            if result.continue_instruction and not result.error:
+                agent.append_text_result(
+                    result, "PARTIAL — remaining work:\n" + result.continue_instruction,
+                )
+
             # Start durable provider jobs here (interactive turns only).
             if session_id is None:
                 try:
@@ -3607,53 +3663,6 @@ class BotPlatform(ABC):
                     name=f"{self.platform_id}:status-delete:{uid}",
                     log=logger,
                 )
-
-        # Auto-chain judge-exhausted CONTINUE hands-free (bounded).
-        chained = 0
-        try:
-            from .. import flexible as _flexible_mod
-            _chain_cap = _flexible_mod.MAX_AUTO_CHAIN_TURNS
-        except Exception:
-            _chain_cap = 0
-        while (
-            chained < _chain_cap
-            and getattr(result, "continue_instruction", "")
-            and not self._update_restart_pending
-        ):
-            _next_instruction = result.continue_instruction.strip()
-            if not _next_instruction:
-                break
-            result.continue_instruction = ""
-            chained += 1
-            await on_event(agent.ChatEvent(
-                kind="tool",
-                content=f"Auto-continuing remainder {chained}/{_chain_cap}...",
-            ))
-            try:
-                result = await agent.run(
-                    f"{text}\n\n{_next_instruction}", ws, user_id=uid,
-                    model=model, summary_model=summary_model,
-                    approval=perm,
-                    on_event=on_event, inject_queue=inject_q,
-                    backend_name=backend_name,
-                    summary_backend_name=summary_backend,
-                    session_id=(
-                        session_id if session_id is not None
-                        else result.session_id
-                    ),
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Auto-chained continuation turn failed")
-                break
-            if not getattr(result, "continue_instruction", ""):
-                break
-        if chained:
-            await on_event(agent.ChatEvent(
-                kind="tool",
-                content=f"Auto-continue finished after {chained} turn(s).",
-            ))
 
         # [[await]] pause is interactive-only.
         if queue_entry_id is None:

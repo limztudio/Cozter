@@ -619,6 +619,10 @@ newest entries with a warning rather than silently keeping the oldest. Session
 auto-titles likewise reserve their clip markers inside the 4,000-character
 request and mark tight-budget cuts with a visible ellipsis. These limits affect only the internal maintenance prompt;
 compaction and colony state are rewritten only after a successful response.
+Maintenance calls discard responses from timed-out or failed backends.
+Compaction preserves long-term items omitted from its input; a partial colony
+pass preserves existing shared and session facts whose evidence was clipped,
+so a preview cannot silently erase memory the model never received.
 
 For a direct agent turn, automatic compaction follows that selected model's
 known input window. For a flexible turn, it follows the smallest known window
@@ -752,8 +756,8 @@ Photo uploads carry the saved path plus verified dimensions, format, and
 size, and every direct backend can see the pixels natively: `llama`,
 `meta`, and `zai` receive them as OpenAI-style `image_url` parts,
 `codex` via repeatable `--image` flags, `copilot` via repeatable
-`--attachment` flags, `grok` via `--prompt-json` image blocks (falling
-back to `--prompt-file` text when no image is referenced), and
+`--attachment` flags, `grok` via a private `--prompt-file` containing
+JSON text/image blocks (plain text when no image is referenced), and
 `claude_code` via a prompt hint telling the model to open the saved path
 with its own Read tool. The shared helper keeps only in-workspace images
 referenced by `[… attachment saved to: …]` markers (up to 4 per turn,
@@ -1459,9 +1463,11 @@ Regression coverage for these paths lives in
 
 CLI JSONL and OpenAI-compatible HTTP SSE use the same bounded line reader in
 `utils.iter_bounded_lines()`. Each transport retains at most 4 MiB for one
-physical line; if a malformed peer never terminates a line, Cozter discards
-that line and resumes at the next newline rather than allowing the bot's
-memory use to grow without bound. A later valid event can still be processed.
+physical line. CLI JSONL discards an oversized line and resumes at the next
+newline, so a later valid event can still be processed. An oversized HTTP SSE
+line discards the entire completion and uses the configured retry budget,
+before any buffered tool calls execute, so losing an argument fragment cannot
+change a tool call's meaning.
 
 OpenAI-compatible backends also bound the retained state for one streamed
 completion: 4 MiB of assistant text, 4 MiB of retained reasoning content,

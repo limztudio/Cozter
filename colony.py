@@ -266,13 +266,22 @@ def _build_bounded_session_block(
     budget: int,
 ) -> str:
     """Build one complete [SESSION] block within its remaining prompt budget."""
+    return _session_block_with_coverage(
+        session_id, name, long_term, budget,
+    )[0]
+
+
+def _session_block_with_coverage(
+    session_id: str, name: object, long_term: object, budget: int,
+) -> tuple[str, bool]:
+    """Build a block and report whether all its memory was shown."""
     if not isinstance(name, str) or not name:
         name = session_id[:8]
     closing = "[/SESSION]\n"
     header_suffix = f"\n[SESSION:{session_id}]\n"
     name_space = budget - len("Session: ") - len(header_suffix) - len(closing)
     if name_space < 1:
-        return ""
+        return "", False
     # Titles are display hints only: clip them.
     rendered_name = name[:min(name_space, 2_000)]
     if len(name) > len(rendered_name):
@@ -287,9 +296,8 @@ def _build_bounded_session_block(
                 rendered_name[:len(rendered_name) - len(marker)] + marker
             )
     prefix = f"Session: {rendered_name}{header_suffix}"
-    item_budget = budget - len(prefix) - len(closing)
-    if item_budget < 0:
-        return ""
+    # Reserve the body's trailing newline too.
+    item_budget = max(0, budget - len(prefix) - len(closing) - 1)
     raw_items = long_term if isinstance(long_term, list) else []
     items = [item for item in raw_items if isinstance(item, str) and item]
     item_lines, truncated = _bounded_colony_lines(items, item_budget)
@@ -321,7 +329,7 @@ def _build_bounded_session_block(
                 body = note[:item_budget - len(suffix)] + suffix
             else:
                 body = note
-    return prefix + (body + "\n" if body else "") + closing
+    return prefix + (body + "\n" if body else "") + closing, not truncated
 
 
 def maybe_trigger(
@@ -433,9 +441,10 @@ async def _consolidate_inner(
     # Greedy, newest-first.
     used = sum(len(part) + 1 for part in parts)
     included: list[str] = []
+    fully_shown: set[str] = set()
     for sid, name, lt in inputs:
-        block = _build_bounded_session_block(
-            sid, name, lt, CONSOLIDATE_MAX_INPUT_CHARS - used,
+        block, complete = _session_block_with_coverage(
+            sid, name, lt, CONSOLIDATE_MAX_INPUT_CHARS - used - 1,
         )
         if not block:
             logger.warning(
@@ -447,6 +456,8 @@ async def _consolidate_inner(
         parts.append(block)
         used += len(block) + 1
         included.append(sid)
+        if complete:
+            fully_shown.add(sid)
 
     if not included:
         logger.info("Colony pass: no sessions fit in budget, skipping")
@@ -479,6 +490,9 @@ async def _consolidate_inner(
     per_session = {
         sid: lt for sid, lt in per_session.items() if sid in included_set
     }
+    if colony_truncated or len(fully_shown) != len(inputs):
+        # Partial evidence cannot retire unseen shared facts reliably.
+        new_colony = list(dict.fromkeys([*existing_colony, *new_colony]))
 
     # Apply atomically.
     async with workspace_mod.get_lock(workspace_path):
@@ -487,7 +501,12 @@ async def _consolidate_inner(
             sess_data = session.load_session(workspace_path, sid)
             if sess_data is None:
                 continue
-            cleaned = [item for item in new_lt if item][:session.LONG_TERM_CAP]
+            if sid not in fully_shown:
+                # Preserve the original list when only a preview was shown.
+                new_lt = [*sess_data["long_term"], *new_lt]
+            cleaned = list(dict.fromkeys(
+                item for item in new_lt if item
+            ))[-session.LONG_TERM_CAP:]
             sess_data["long_term"] = cleaned
             session.save_session(workspace_path, sid, sess_data)
 

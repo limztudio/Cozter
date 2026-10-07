@@ -461,7 +461,12 @@ class CopilotBackend(Backend):
                 logger.debug("copilot ACP started without stdout")
                 return None
 
-            messages: queue.Queue[str | None] = queue.Queue()
+            # The reader runs independently of the request consumer. Bound
+            # queued output as well as each line so a noisy probe cannot
+            # retain an unlimited number of otherwise valid messages.
+            messages: queue.Queue[str | None] = queue.Queue(
+                maxsize=_MAX_ACP_MESSAGES_PER_REQUEST,
+            )
             reader = threading.Thread(
                 target=_read_acp_stdout,
                 args=(proc.stdout, messages),
@@ -539,6 +544,12 @@ class CopilotBackend(Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
+        # Resolve attachments from the full prompt: their markers can occur
+        # in old context removed to fit Copilot's single argv value.
+        image_paths = (
+            attachment_image_paths(prompt, workspace_path)
+            if self.supports_vision and not compaction else []
+        )
         max_prompt_chars = _max_prompt_chars()
         prompt_units = _prompt_argv_units(prompt)
         if prompt_units > max_prompt_chars:
@@ -561,11 +572,8 @@ class CopilotBackend(Backend):
         ]
         self.append_launch_options(cmd, model, effort, approval)
 
-        # Native vision via --attachment flags; resolve before truncation.
-        _vision_image_paths: list[str] = []
-        if self.supports_vision and not compaction:
-            _vision_image_paths = attachment_image_paths(prompt, workspace_path)
-        for _image_path in _vision_image_paths:
+        # Native vision via --attachment flags.
+        for _image_path in image_paths:
             cmd += ["--attachment", _image_path]
 
         cmd += ["-p", prompt]
@@ -612,6 +620,8 @@ class CopilotBackend(Backend):
         if not isinstance(event, dict):
             return
         etype = event.get("type") or event.get("event") or ""
+        if not isinstance(etype, str):
+            return
 
         # Typed branches first.
         if etype in self._TOOL_USE_TYPES:
@@ -677,6 +687,8 @@ class CopilotBackend(Backend):
         if not isinstance(event, dict):
             return None
         etype = event.get("type") or event.get("event") or ""
+        if not isinstance(etype, str):
+            return None
         # Tool/file/error events never carry the final reply.
         if etype in self._NON_AGENT_TYPES:
             return None
@@ -836,7 +848,7 @@ def _read_acp_stdout(
             return
         while True:
             try:
-                line = readline()
+                line = readline(_MAX_ACP_LINE_CHARS + 1)
             except (OSError, ValueError):
                 return
             if not line:
@@ -848,10 +860,19 @@ def _read_acp_stdout(
                         _MAX_ACP_LINE_CHARS,
                     )
                     return
-                messages.put(line)
+                try:
+                    messages.put_nowait(line)
+                except queue.Full:
+                    logger.debug("copilot ACP stdout queue exceeded its limit")
+                    return
     finally:
         # EOF fails fast instead of waiting out the discovery timeout.
-        messages.put(None)
+        try:
+            messages.put_nowait(None)
+        except queue.Full:
+            # A request consumes at most this queue's capacity, then fails.
+            # Never block the reader after discovery has already stopped.
+            pass
 
 
 def _acp_notification(

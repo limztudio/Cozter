@@ -105,9 +105,9 @@ def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
     return tuple(models)
 
 
-def _write_prompt_file(prompt: str) -> str:
+def _write_prompt_file(prompt: str, *, suffix: str = "") -> str:
     """Write *prompt* to a private temp file and return its path."""
-    fd, path = tempfile.mkstemp(prefix=_PROMPT_FILE_PREFIX)
+    fd, path = tempfile.mkstemp(prefix=_PROMPT_FILE_PREFIX, suffix=suffix)
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(prompt.encode("utf-8"))
@@ -229,19 +229,19 @@ class GrokBackend(CachedModelCatalog, Backend):
             "streaming-messages-json",
         ]
         self.append_launch_options(cmd, model, effort, approval)
-        # Vision: JSON blocks via --prompt-json, else --prompt-file.
+        # Grok parses .json prompt files as ACP blocks. Keeping image bytes in
+        # a file also avoids the OS argv limit for ordinary photo uploads.
         prompt_json: str | None = None
         if self.supports_vision and not compaction:
             _image_paths = attachment_image_paths(prompt, workspace_path)
             if _image_paths:
                 prompt_json = grok_prompt_json(prompt, _image_paths)
         if prompt_json is not None:
-            cmd += ["--prompt-json", prompt_json]
-            prompt_path = ""
+            prompt_path = _write_prompt_file(prompt_json, suffix=".json")
         else:
             # Prompt arg last; file avoids argv caps.
             prompt_path = _write_prompt_file(prompt)
-            cmd += ["--prompt-file", prompt_path]
+        cmd += ["--prompt-file", prompt_path]
         try:
             proc = await create_captured_subprocess(
                 cmd,
@@ -281,6 +281,8 @@ class GrokBackend(CachedModelCatalog, Backend):
         if not isinstance(event, dict):
             return
         etype = event.get("type", "")
+        if not isinstance(etype, str):
+            return
 
         if etype == "assistant":
             message = event.get("message") or {}

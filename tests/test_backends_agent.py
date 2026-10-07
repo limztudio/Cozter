@@ -185,7 +185,7 @@ class BackendSharedHelperTests(unittest.TestCase):
             result,
             on_tool_use=lambda block: tools.append(str(block.get("name"))),
         )
-        self.assertEqual(result.text, "world")
+        self.assertEqual(result.text, "hello\nworld")
         self.assertEqual(
             [event.content for event in result.events if event.kind == "text"],
             ["hello", "world"],
@@ -822,10 +822,14 @@ warning: ignored after the catalog
                 )
             )
             payload = _json.loads(grok_prompt_json(prompt, paths))
-            self.assertEqual(payload[0]["role"], "user")
-            kinds = [block["type"] for block in payload[0]["content"]]
+            self.assertEqual(payload[0], {"type": "text", "text": prompt})
+            kinds = [block["type"] for block in payload]
             self.assertIn("text", kinds)
             self.assertIn("image", kinds)
+            self.assertEqual(payload[1]["mimeType"], "image/png")
+            import base64
+            with open(local_path, "rb") as handle:
+                self.assertEqual(base64.b64decode(payload[1]["data"]), handle.read())
             self.assertEqual(
                 attachment_image_paths(
                     "x\n[Photo attachment saved to: ../../etc/passwd]", ws,
@@ -834,7 +838,7 @@ warning: ignored after the catalog
             )
             self.assertEqual(attachment_image_paths("hello", ws), [])
 
-    def test_grok_vision_uses_prompt_json_without_temp_file(self) -> None:
+    def test_grok_vision_uses_private_json_prompt_file(self) -> None:
         async def run() -> None:
             backend = GrokBackend()
             with tempfile.TemporaryDirectory() as ws:
@@ -866,9 +870,38 @@ warning: ignored after the catalog
                         ws, prompt, "grok-4.6", "auto",
                     )
                     command = tuple(create_process.await_args.args[0])
-                    self.assertIn("--prompt-json", command)
-                    self.assertNotIn("--prompt-file", command)
+                    self.assertNotIn("--prompt-json", command)
+                    self.assertIn("--prompt-file", command)
+                    path = command[command.index("--prompt-file") + 1]
+                    self.assertTrue(path.endswith(".json"))
+                    with open(path, encoding="utf-8") as handle:
+                        blocks = json.load(handle)
+                    self.assertEqual(blocks[0], {"type": "text", "text": prompt})
+                    self.assertEqual(blocks[1]["type"], "image")
+                    self.assertEqual(blocks[1]["mimeType"], "image/png")
                 await backend.cleanup_process(proc)
+                self.assertFalse(os.path.exists(path))
+        asyncio.run(run())
+
+    def test_grok_large_vision_payload_never_rides_argv(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as workspace:
+                image = os.path.join(workspace, "photo.png")
+                with open(image, "wb") as handle:
+                    handle.write(b"x" * 200_000)
+                backend = GrokBackend()
+                prompt = "[Photo attachment saved to: photo.png]"
+                with mock.patch.object(
+                    grok_mod, "create_captured_subprocess", new=mock.AsyncMock(),
+                ) as create:
+                    proc = await backend.launch(workspace, prompt, None, "auto")
+                command = create.await_args.args[0]
+                self.assertTrue(all(len(arg.encode()) < 128_000 for arg in command))
+                path = command[command.index("--prompt-file") + 1]
+                self.assertGreater(os.path.getsize(path), 128_000)
+                await backend.cleanup_process(proc)
+                self.assertFalse(os.path.exists(path))
+
         asyncio.run(run())
 
     def test_codex_launch_attaches_vision_images(self) -> None:
@@ -1308,13 +1341,30 @@ warning: ignored after the catalog
                     '{"id": 1}\n',
                 ]
 
-            def readline(self) -> str:
-                return self._lines.pop(0) if self._lines else ""
+            def readline(self, size: int) -> str:
+                return self._lines.pop(0)[:size] if self._lines else ""
 
         messages: queue.Queue[str | None] = queue.Queue()
         copilot_mod._read_acp_stdout(FakeStdout(), messages)
         self.assertIsNone(messages.get_nowait())
         self.assertTrue(messages.empty())
+
+    def test_copilot_acp_reader_bounds_reads_before_retaining_a_line(self) -> None:
+        stream = mock.Mock()
+        stream.readline.side_effect = ["x" * 11, "must not be read"]
+        messages: queue.Queue[str | None] = queue.Queue()
+        with mock.patch.object(copilot_mod, "_MAX_ACP_LINE_CHARS", 10):
+            copilot_mod._read_acp_stdout(stream, messages)
+        stream.readline.assert_called_once_with(11)
+        self.assertIsNone(messages.get_nowait())
+
+    def test_copilot_acp_reader_never_blocks_on_full_queue(self) -> None:
+        messages: queue.Queue[str | None] = queue.Queue(maxsize=2)
+        stream = io.StringIO("first\nsecond\nthird\n")
+        copilot_mod._read_acp_stdout(stream, messages)
+        self.assertEqual(messages.qsize(), 2)
+        self.assertEqual(messages.get_nowait(), "first\n")
+        self.assertEqual(messages.get_nowait(), "second\n")
 
     def test_copilot_acp_parser_extracts_account_model_values(self) -> None:
         payload = {
@@ -1899,6 +1949,35 @@ warning: ignored after the catalog
 
 
 class CopilotPromptCapTests(unittest.TestCase):
+    def test_upload_in_dropped_context_keeps_native_attachment(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as workspace:
+                image = os.path.join(workspace, "photo.png")
+                with open(image, "wb") as handle:
+                    handle.write(b"small photo")
+                prompt = (
+                    "[System: preamble]\n\n"
+                    "[Photo attachment saved to: photo.png]\n"
+                    + "old context " * 1_000 + "Describe this photo"
+                )
+                backend = CopilotBackend()
+                with (
+                    mock.patch.object(copilot_mod, "_max_prompt_chars", return_value=400),
+                    mock.patch.object(
+                        copilot_mod, "create_captured_subprocess", new=mock.AsyncMock(),
+                    ) as create,
+                ):
+                    proc = await backend.launch(workspace, prompt, None, "auto")
+                command = create.await_args.args[0]
+                sent = command[command.index("-p") + 1]
+                self.assertNotIn("attachment saved to:", sent)
+                self.assertIn("Describe this photo", sent)
+                self.assertIn("--attachment", command)
+                self.assertIn(os.path.realpath(image), command)
+                await backend.cleanup_process(proc)
+
+        asyncio.run(run())
+
     def test_max_prompt_chars_is_platform_sane(self) -> None:
         cap = copilot_mod._max_prompt_chars()
         self.assertIsInstance(cap, int)
@@ -1943,6 +2022,39 @@ class CopilotPromptCapTests(unittest.TestCase):
             copilot_mod._prompt_argv_units(out),
             copilot_mod._WINDOWS_PROMPT_CHARS,
         )
+
+
+class ClaudeControlCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_reaps_the_control_launcher(self) -> None:
+        original_create = claude_code_mod.create_captured_subprocess
+        launched = asyncio.Event()
+        processes: list[asyncio.subprocess.Process] = []
+
+        async def create(*args, **kwargs):
+            proc = await original_create(*args, **kwargs)
+            processes.append(proc)
+            launched.set()
+            return proc
+
+        with mock.patch.object(claude_code_mod, "create_captured_subprocess", new=create):
+            task = asyncio.create_task(claude_code_mod._run_claude_command(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=tempfile.gettempdir(),
+            ))
+            try:
+                await asyncio.wait_for(launched.wait(), timeout=5)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=5)
+                self.assertIsNotNone(processes[0].returncode)
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                for proc in processes:
+                    if proc.returncode is None:
+                        proc.kill()
+                    await proc.wait()
 
 
 class BackendHealthCheckTests(unittest.TestCase):

@@ -1164,6 +1164,30 @@ def _accumulate_usage(totals: dict, usage: dict | None) -> None:
             totals[field] = totals.get(field, 0) + value
 
 
+def carry_forward_turn_output(
+    previous: AgentResult, current: AgentResult, workspace_path: str,
+) -> None:
+    """Retain artifacts and accounting when a continuation replaces a draft."""
+    _consume_detached_task_requests(previous)
+    retained_events = [event for event in previous.events if event.kind != "text"]
+    retained_sources = {
+        attachment_source_path(event.content, workspace_path)
+        for event in retained_events if event.kind == "attachment"
+    }
+    for source in sorted(_explicit_attachment_sources(previous.events, workspace_path)):
+        if source not in retained_sources:
+            retained_events.append(ChatEvent(kind="attachment", content=source))
+    current.events = retained_events + current.events
+    current.detached_tasks = previous.detached_tasks + current.detached_tasks
+    current.detached_task_requests = (
+        previous.detached_task_requests + current.detached_task_requests
+    )
+    usage_totals: dict = {}
+    _accumulate_usage(usage_totals, previous.usage)
+    _accumulate_usage(usage_totals, current.usage)
+    current.usage = usage_totals or None
+
+
 def _split_attach_markers(text: str) -> tuple[str, list[str]]:
     """Pull ``[[attach: ...]]`` markers out of a worker's report.
 
@@ -1259,6 +1283,7 @@ async def _run_flexible(
     on_event: Callable[[ChatEvent], Awaitable[None]] | None,
     inject_queue: asyncio.Queue[str] | None,
     injected: list[str],
+    close_inject_on_completion: bool = True,
 ) -> tuple[AgentResult, bool]:
     """Run one turn of the ``flexible`` meta-agent.
 
@@ -1311,7 +1336,8 @@ async def _run_flexible(
             # A planner question ends the turn pre-merge; same terminal injection boundary.
             if _take_pending_injections(inject_queue, injected):
                 return AgentResult(), True
-            _close_inject_queue(inject_queue)
+            if close_inject_on_completion:
+                _close_inject_queue(inject_queue)
             result = AgentResult()
             append_text_result(result, f"{plan.question}\n\n[[await]]")
             return result, False
@@ -1419,7 +1445,8 @@ async def _run_flexible(
     if len(queue) == 1:
         if _take_pending_injections(inject_queue, injected):
             return AgentResult(), True
-        _close_inject_queue(inject_queue)
+        if close_inject_on_completion:
+            _close_inject_queue(inject_queue)
         final = reports[0].strip()
         if not final:
             final = (
@@ -1459,7 +1486,7 @@ async def _run_flexible(
         ),
         inject_queue,
         injected,
-        close_inject_on_completion=True,
+        close_inject_on_completion=close_inject_on_completion,
     )
     if restarting:
         return AgentResult(), True
@@ -1984,6 +2011,7 @@ async def _run_turn_impl(
                     on_event=_stream_event,
                     inject_queue=inject_queue,
                     injected=injected,
+                    close_inject_on_completion=False,
                 )
             else:
                 logger.info(
@@ -2002,7 +2030,7 @@ async def _run_turn_impl(
                     on_event=_stream_event,
                     inject_queue=inject_queue,
                     injected=injected,
-                    close_inject_on_completion=True,
+                    close_inject_on_completion=False,
                 )
         except BackendUnavailableError as e:
             return _error_result(session_id, str(e), inject_queue)
@@ -2031,7 +2059,7 @@ async def _run_turn_impl(
         while judged_rounds < flexible.JUDGE_MAX_CONTINUES:
             draft = result.text
             _draft_clean, draft_awaiting = extract_await(draft or "")
-            if draft_awaiting or not _draft_clean.strip():
+            if result.error or draft_awaiting or not _draft_clean.strip():
                 break
             verdict, judge_restarting = await _judge_draft(
                 effective_prompt, draft, workspace_path,
@@ -2076,10 +2104,17 @@ async def _run_turn_impl(
             attachment_images_before = await asyncio.to_thread(
                 _snapshot_attachment_images, workspace_path,
             )
+            previous_result = result
+            continuation_prompt = (
+                contextual_prompt
+                + "\n\n[Previous draft — continue its work and return the completed answer]:\n"
+                + _truncate_context_text(draft, history_budget)
+                + followup
+            )
             try:
                 if is_flexible:
                     result, restarting = await _run_flexible(
-                        contextual_prompt + followup,
+                        continuation_prompt,
                         effective_prompt + followup, workspace_path,
                         approval=approval,
                         effort=effort,
@@ -2089,12 +2124,13 @@ async def _run_turn_impl(
                         on_event=_stream_event,
                         inject_queue=inject_queue,
                         injected=injected,
+                        close_inject_on_completion=False,
                     )
                 else:
                     result, restarting = await _drive_backend(
                         backend, workspace_path,
                         _build_backend_prompt(
-                            backend, contextual_prompt + followup,
+                            backend, continuation_prompt,
                             collaborative=collaborative,
                             allow_detached_requests=not explicit_session,
                         ),
@@ -2103,7 +2139,7 @@ async def _run_turn_impl(
                         on_event=_stream_event,
                         inject_queue=inject_queue,
                         injected=injected,
-                        close_inject_on_completion=True,
+                        close_inject_on_completion=False,
                     )
             except BackendUnavailableError as e:
                 return _error_result(session_id, str(e), inject_queue)
@@ -2112,6 +2148,9 @@ async def _run_turn_impl(
                     backend.name, injected, inject_queue, _stream_event,
                 )
                 break
+            # The new draft replaces prior text, but artifacts and accounting
+            # still belong to the same user turn.
+            carry_forward_turn_output(previous_result, result, workspace_path)
             explicit_attachment_sources = _explicit_attachment_sources(
                 result.events, workspace_path,
             )
@@ -2126,7 +2165,7 @@ async def _run_turn_impl(
             # Cap exhausted: keep the verdict so the bot layer chains instead of PARTIAL.
             if judged_rounds >= flexible.JUDGE_MAX_CONTINUES:
                 _draft_tail, _tail_awaiting = extract_await(result.text or "")
-                if _tail_awaiting or not _draft_tail.strip():
+                if result.error or _tail_awaiting or not _draft_tail.strip():
                     break
                 _tail_verdict, _tail_restarting = await _judge_draft(
                     effective_prompt, result.text or "", workspace_path,
@@ -2141,6 +2180,7 @@ async def _run_turn_impl(
                     await _announce_restart(
                         backend.name, injected, inject_queue, _stream_event,
                     )
+                    restarting = True
                     break
                 if _tail_verdict.should_continue:
                     _tail_next = (_tail_verdict.next_instruction or "").strip()
@@ -2157,6 +2197,11 @@ async def _run_turn_impl(
         if restarting:
             continue  # restart loop
 
+        if _take_pending_injections(inject_queue, injected):
+            await _announce_restart(
+                backend.name, injected, inject_queue, _stream_event,
+            )
+            continue
         break  # normal completion
 
     # Close for direct callers before session/reply yields.
@@ -2186,6 +2231,8 @@ async def _run_turn_impl(
         log=logger,
     )
 
+    if result.text and not any(event.kind == "text" for event in result.events):
+        append_text_result(result, result.text)
     has_output = False
     for event in result.events:
         if event.kind == "text" or event.kind == "attachment":

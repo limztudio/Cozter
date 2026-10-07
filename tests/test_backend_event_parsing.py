@@ -564,6 +564,55 @@ class LlamaParseTests(unittest.TestCase):
 
 
 class NonDictEventTests(unittest.TestCase):
+    def test_malformed_type_fields_are_dropped_without_raising(self) -> None:
+        for backend in (CopilotBackend(), GrokBackend()):
+            for bad in (["assistant"], {"type": "assistant"}, 42, True):
+                with self.subTest(backend=backend.name, type=bad):
+                    event = {"type": bad, "text": "not an assistant event"}
+                    result = AgentResult()
+                    backend.parse_event(event, result)
+                    self.assertEqual(result.events, [])
+                    self.assertIsNone(backend.extract_agent_text(event))
+
+    def test_malformed_claude_tool_name_is_safe_status_text(self) -> None:
+        for name in (["Bash"], {"name": "Write"}, 42, True):
+            with self.subTest(name=name):
+                result = _run(ClaudeCodeBackend(), [{
+                    "type": "assistant", "message": {"content": [{
+                        "type": "tool_use", "name": name, "input": {},
+                    }]},
+                }])
+                self.assertEqual(_kinds(result), ["tool"])
+                self.assertEqual(result.events[0].content, "?")
+
+    def test_malformed_http_text_and_tool_fields_preserve_string_contract(self) -> None:
+        for text in (["reply"], {"text": "reply"}, 42, True):
+            with self.subTest(text=text):
+                result = _run(LlamaBackend(), [{"type": "assistant_text", "text": text}])
+                self.assertEqual(result.text, "")
+                self.assertEqual(result.events, [])
+        for tool_input in (["path"], {"path": "x.py"}, "unexpected", 42):
+            with self.subTest(input=tool_input):
+                result = _run(LlamaBackend(), [{
+                    "type": "tool_use", "name": ["write_file"],
+                    "input": tool_input, "file_action": "write",
+                }])
+                self.assertTrue(all(isinstance(event.content, str) for event in result.events))
+
+    def test_messages_style_reply_keeps_all_text_blocks_per_message(self) -> None:
+        for backend in (ClaudeCodeBackend(), GrokBackend()):
+            with self.subTest(backend=backend.name):
+                result = _run(backend, [
+                    {"type": "assistant", "message": {"content": "old commentary"}},
+                    {"type": "assistant", "message": {"content": [
+                        {"type": "text", "text": "first paragraph"},
+                        {"type": "thinking", "thinking": "private"},
+                        {"type": "text", "text": "second paragraph"},
+                    ]}},
+                    {"type": "result", "result": "first paragraph\nsecond paragraph"},
+                ])
+                self.assertEqual(result.text, "first paragraph\nsecond paragraph")
+
     def test_non_dict_events_are_dropped_without_raising(self) -> None:
         backends = [
             ClaudeCodeBackend(),

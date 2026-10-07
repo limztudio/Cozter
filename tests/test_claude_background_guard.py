@@ -44,6 +44,7 @@ class BackgroundLaunchMechanismTests(unittest.TestCase):
             "echo hi # `nohup` and & in a comment",
             "echo $((flags & 1))",
             "cat <<'PY' > generated.py\nvalue = 'a & b'\nPY\n",
+            "cat <<'SH' > script.sh\necho ready; nohup task &\nSH\n",
         ]
         for command in safe_commands:
             with self.subTest(command=command):

@@ -48,6 +48,7 @@ def _is_safe_session_id(session_id: object) -> bool:
         and "\x00" not in session_id
         and "/" not in session_id
         and "\\" not in session_id
+        and ":" not in session_id
         and session_id not in {".", ".."}
     )
 
@@ -55,7 +56,9 @@ def _is_safe_session_id(session_id: object) -> bool:
 def _session_path(workspace: str, session_id: str) -> str:
     if not _is_safe_session_id(session_id):
         raise ValueError("unsafe session id")
-    return os.path.join(_sessions_dir(workspace), f"{session_id}.json")
+    return workspace_mod.workspace_state_path(
+        workspace, SESSIONS_DIR, f"{session_id}.json",
+    )
 
 
 def _last_session_path(workspace: str) -> str:
@@ -325,7 +328,7 @@ def _load_session_path(
     try:
         with open(path, encoding="utf-8") as file_handle:
             data = json.load(file_handle)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         if log_corrupt:
             logger.warning("Corrupt session file, ignoring: %s", path)
         return None
@@ -388,8 +391,12 @@ def _list_sessions_with_data(
         fnames = _newest_first(sdir, fnames, limit)
     out: list[dict] = []
     for fname in fnames:
-        fpath = os.path.join(sdir, fname)
         expected_id = fname[:-len(".json")]
+        try:
+            fpath = _session_path(workspace, expected_id)
+        except ValueError:
+            logger.warning("Ignoring unsafe session file: %s", fname)
+            continue
         data = _load_session_path(
             fpath, expected_id, log_corrupt=False,
         )
@@ -457,7 +464,11 @@ def load_session(workspace: str, session_id: str) -> dict | None:
     if not _is_safe_session_id(session_id):
         logger.warning("Ignoring unsafe session id: %r", session_id)
         return None
-    path = _session_path(workspace, session_id)
+    try:
+        path = _session_path(workspace, session_id)
+    except ValueError:
+        logger.warning("Ignoring unsafe session path: %r", session_id)
+        return None
     if not os.path.exists(path):
         return None
     return _load_session_path(path, session_id, log_corrupt=True)
@@ -479,7 +490,11 @@ def delete_session(workspace: str, session_id: str) -> bool:
     if not _is_safe_session_id(session_id):
         logger.warning("Refusing to delete unsafe session id: %r", session_id)
         return False
-    path = _session_path(workspace, session_id)
+    try:
+        path = _session_path(workspace, session_id)
+    except ValueError:
+        logger.warning("Refusing to delete unsafe session path: %r", session_id)
+        return False
     try:
         os.remove(path)
         return True

@@ -38,6 +38,54 @@ class InternalBackendStub:
 
 
 class ProcessDrainTests(unittest.TestCase):
+    def test_oversized_line_callback_can_abort_a_transport(self) -> None:
+        async def run() -> None:
+            async def chunks():
+                yield b"ok\npartial"
+                yield b" oversized\nnext\n"
+
+            callback = mock.Mock(side_effect=ValueError("completion too large"))
+            iterator = utils.iter_bounded_lines(
+                chunks(), max_line_bytes=8, source="test",
+                on_line_too_long=callback,
+            )
+            self.assertEqual(await anext(iterator), "ok")
+            with self.assertRaisesRegex(ValueError, "completion too large"):
+                await anext(iterator)
+            callback.assert_called_once_with()
+
+        asyncio.run(run())
+
+    def test_timed_out_internal_reply_is_discarded(self) -> None:
+        async def run() -> None:
+            proc = await create_python_script_process(
+                "import json, time\n"
+                "print(json.dumps({'text': 'partial summary'}), flush=True)\n"
+                "time.sleep(10)\n",
+            )
+            backend = CleanupStubBackend()
+            with self.assertLogs(utils.logger, level="WARNING"):
+                text = await utils.drain_llm_subprocess(proc, backend, "test", timeout=0.1)
+            self.assertEqual(text, "")
+            self.assertIsNotNone(proc.returncode)
+            self.assertTrue(backend.cleaned)
+
+        asyncio.run(run())
+
+    def test_failed_internal_reply_is_discarded(self) -> None:
+        async def run() -> None:
+            proc = await create_python_script_process(
+                "import json, sys\n"
+                "print(json.dumps({'text': 'partial summary'}))\n"
+                "sys.exit(1)\n",
+            )
+            with self.assertLogs(utils.logger, level="WARNING"):
+                text = await utils.drain_llm_subprocess(proc, StubBackend(), "test")
+            self.assertEqual(text, "")
+            self.assertEqual(proc.returncode, 1)
+
+        asyncio.run(run())
+
     def test_abandon_subprocess_stream_task_closes_and_cancels_reader(self) -> None:
         async def run() -> None:
             task = asyncio.create_task(asyncio.Event().wait())

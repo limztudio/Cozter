@@ -589,16 +589,18 @@ async def main_cli() -> None:
     )
 
     bot = CliBot()
-    await bot.start()
-    update_task = asyncio.create_task(update_loop(
-        [bot], cli_interval,
-        restart_code=updater.CLI_RESTART_EXIT_CODE,
-    ))
+    update_task: asyncio.Task[None] | None = None
     try:
+        await bot.start()
+        update_task = asyncio.create_task(update_loop(
+            [bot], cli_interval,
+            restart_code=updater.CLI_RESTART_EXIT_CODE,
+        ))
         await bot.wait_until_exit()
     finally:
-        update_task.cancel()
-        await await_cancelled(update_task)
+        if update_task is not None:
+            update_task.cancel()
+            await await_cancelled(update_task)
         await bot.stop()
 
 
@@ -643,31 +645,43 @@ async def main() -> None:
             # Neither platform failure here is fatal.
             pass
 
-    for bot in bots:
-        await bot.start()
+    started: list[BotPlatform] = []
+    update_task: asyncio.Task[None] | None = None
+    try:
+        for bot in bots:
+            # Even a partially failed start may own sockets or child tasks.
+            started.append(bot)
+            await bot.start()
 
-    # Each platform greets its notify targets on startup.
-    for bot in bots:
-        try:
-            await bot.send_startup_messages(version, commit_date)
-        except Exception:
-            logger.exception("Failed to send startup message via bot")
+        # Each platform greets its notify targets on startup.
+        for bot in bots:
+            try:
+                await bot.send_startup_messages(version, commit_date)
+            except Exception:
+                logger.exception("Failed to send startup message via bot")
 
-    logger.info(
-        "Version: %s | Updated: %s | Bots: %d",
-        version, commit_date, len(bots),
-    )
+        logger.info(
+            "Version: %s | Updated: %s | Bots: %d",
+            version, commit_date, len(bots),
+        )
+        update_task = asyncio.create_task(update_loop(bots, interval))
+        await stop_event.wait()
 
-    update_task = asyncio.create_task(update_loop(bots, interval))
-
-    await stop_event.wait()
-
-    logger.info("Shutting down...")
-    update_task.cancel()
-    await await_cancelled(update_task)
-    for bot in bots:
-        await bot.notify_users("Cozter is shutting down.")
-        await bot.stop()
+        logger.info("Shutting down...")
+        for bot in started:
+            try:
+                await bot.notify_users("Cozter is shutting down.")
+            except Exception:
+                logger.exception("Failed to send shutdown message via bot")
+    finally:
+        if update_task is not None:
+            update_task.cancel()
+            await await_cancelled(update_task)
+        for bot in reversed(started):
+            try:
+                await bot.stop()
+            except Exception:
+                logger.exception("Failed to stop bot during shutdown")
 
 
 def run() -> None:

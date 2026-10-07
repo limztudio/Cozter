@@ -10,11 +10,12 @@ contacted.
 
 import asyncio
 import copy
+import inspect
 import json
 import unittest
 from unittest import mock
 
-from Cozter.backends_agent._http_proc import http_error_translator
+from Cozter.backends_agent._http_proc import HttpAgentProcess, http_error_translator
 from Cozter.backends_agent import _openai_agent as oa
 
 
@@ -43,6 +44,21 @@ class HttpErrorTranslatorTests(unittest.TestCase):
             RuntimeError, r"Z\.ai request timed out",
         ):
             asyncio.run(fail())
+
+
+class HttpAgentProcessCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_before_driver_starts_closes_coroutine_and_stdout(self) -> None:
+        async def body() -> None:
+            self.fail("a cancelled launch must not run")
+
+        coro = body()
+        proc = HttpAgentProcess("test")
+        proc.start(coro)
+        proc.kill()
+        self.assertEqual(await proc.wait(), 130)
+        self.assertEqual(proc.returncode, 130)
+        self.assertEqual(inspect.getcoroutinestate(coro), inspect.CORO_CLOSED)
+        self.assertEqual(await asyncio.wait_for(proc.stdout.read(), timeout=1), b"")
 
 
 class OpenAIRetryLoopTests(unittest.TestCase):
@@ -172,18 +188,31 @@ class _SSESession:
 
 
 class OpenAIStreamShapeTests(unittest.TestCase):
-    def test_sse_line_cap_discards_bad_line_and_keeps_following_event(self) -> None:
-        async def collect() -> list[str]:
+    def test_sse_line_cap_aborts_instead_of_accepting_following_events(self) -> None:
+        async def collect() -> None:
             content = _SSEContent([b"x" * 2048, b"\nvalid\n"])
             with (
                 mock.patch.object(oa, "_MAX_SSE_LINE_BYTES", 1024),
-                self.assertLogs(oa.logger, level="WARNING") as captured,
+                self.assertRaisesRegex(oa._SSEEventTooLargeError, "SSE line exceeded"),
             ):
-                lines = [line async for line in oa._iter_sse_lines(content)]
-            self.assertIn("Discarding SSE line", captured.output[0])
-            return lines
+                _ = [line async for line in oa._iter_sse_lines(content)]
 
-        self.assertEqual(asyncio.run(collect()), ["valid"])
+        asyncio.run(collect())
+
+    def test_oversized_argument_delta_never_returns_pending_tool_call(self) -> None:
+        events = [
+            {"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "function": {"name": "write_file", "arguments": "{}"},
+            }]}}]},
+            {"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "function": {"arguments": "x" * 1_000},
+            }]}}]},
+        ]
+        with (
+            mock.patch.object(oa, "_MAX_SSE_LINE_BYTES", 200),
+            self.assertRaisesRegex(oa._RetryableError, "SSE line exceeded"),
+        ):
+            self._stream(events)
 
     def test_stream_once_runs_without_wall_clock_timeout(self) -> None:
         captured: list[object] = []

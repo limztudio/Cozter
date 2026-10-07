@@ -11,6 +11,77 @@ from Cozter import colony, compaction, session, workspace
 
 
 class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_known_capacity_below_threshold_does_not_use_message_fallback(self) -> None:
+        backend = SimpleNamespace(context_window_tokens=lambda _model: 1_000_000)
+        with tempfile.TemporaryDirectory() as ws:
+            data = session.create_session(ws)
+            session.append_messages(ws, data["id"], [
+                {"role": "user", "content": "tiny message"} for _ in range(12)
+            ])
+            with (
+                mock.patch.object(compaction.config, "get_model_context_window", return_value=None),
+                mock.patch.object(compaction.backends_agent, "get_backend", return_value=backend),
+                mock.patch.object(compaction.workspace_mod, "get_compact_interval", return_value=1),
+                mock.patch.object(compaction, "compact_session", new=mock.AsyncMock()) as compact,
+            ):
+                await compaction.maybe_compact(ws, data["id"], context_targets=(("known", "model"),))
+            compact.assert_not_awaited()
+            self.assertEqual(len(session.load_session(ws, data["id"])["messages"]), 12)
+
+    async def test_compaction_preserves_long_term_items_omitted_from_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as ws:
+            data = session.create_session(ws)
+            original = ["Unseen stable fact.", "x" * compaction.MAX_SUMMARY_CHARS]
+            data["long_term"] = original
+            data["messages"] = [{"role": "user", "content": "hello"} for _ in range(6)]
+            session.save_session(ws, data["id"], data)
+            output = "[SUMMARY]" + "s" * 100 + "[/SUMMARY][LONG_TERM]- New fact.[/LONG_TERM]"
+            with (
+                mock.patch.object(compaction.workspace_mod, "get_compact_interval", return_value=1),
+                mock.patch.object(compaction, "run_internal_backend", new=mock.AsyncMock(return_value=output)) as summarize,
+                mock.patch.object(compaction.colony, "maybe_trigger"),
+            ):
+                await compaction.maybe_compact(ws, data["id"], backend_name="codex")
+            saved = session.load_session(ws, data["id"])
+            self.assertEqual(saved["long_term"], [*original, "New fact."])
+            self.assertNotIn(original[0], summarize.await_args.args[2])
+
+    async def test_colony_partial_session_preserves_unseen_local_and_shared_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as ws:
+            data = session.create_session(ws)
+            original = ["x" * colony.CONSOLIDATE_MAX_INPUT_CHARS * 2, "Unseen local fact."]
+            data["long_term"] = original
+            session.save_session(ws, data["id"], data)
+            colony.set_items(ws, ["Shared fact with unseen evidence."])
+            output = f"[COLONY][/COLONY][SESSION:{data['id']}]\n- New local fact.\n[/SESSION]"
+            with mock.patch.object(colony, "run_internal_backend", new=mock.AsyncMock(return_value=output)):
+                self.assertTrue(await colony.consolidate(ws, backend_name="codex"))
+            self.assertEqual(colony.get_items(ws), ["Shared fact with unseen evidence."])
+            self.assertEqual(session.load_session(ws, data["id"])["long_term"], [*original, "New local fact."])
+
+    def test_oversized_prefix_keeps_exact_unseen_suffix_with_tight_budget(self) -> None:
+        data = {"messages": [{"role": "user", "content": "0123456789" * 30}]}
+        with mock.patch.object(compaction, "_compaction_message_budget", return_value=20):
+            original, shown = compaction._oversized_first_message_prefix(data)
+        line = compaction._take_oldest_message_lines(data["messages"], 20)[0]
+        prefix = line[len("User: "):-1]
+        self.assertEqual(original[:shown], prefix)
+
+    async def test_oversized_role_label_cannot_discard_unseen_message_content(self) -> None:
+        with tempfile.TemporaryDirectory() as ws:
+            data = session.create_session(ws)
+            original = {"role": "r" * compaction.MAX_SUMMARY_CHARS, "content": "Unseen body"}
+            data["messages"] = [original]
+            session.save_session(ws, data["id"], data)
+            with (
+                mock.patch.object(compaction.workspace_mod, "get_compact_interval", return_value=1),
+                mock.patch.object(compaction, "compact_session", new=mock.AsyncMock()) as compact,
+                self.assertLogs(compaction.logger, level="WARNING"),
+            ):
+                await compaction.maybe_compact(ws, data["id"], backend_name="codex")
+            compact.assert_not_awaited()
+            self.assertEqual(session.load_session(ws, data["id"])["messages"], [original])
+
     async def test_stale_compaction_title_does_not_overwrite_manual_rename(
         self,
     ) -> None:

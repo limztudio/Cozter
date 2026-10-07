@@ -223,6 +223,8 @@ _PLAN_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_REMAINDER_LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:PARTIAL\b|remainder\b)", re.IGNORECASE)
+
 
 def normalize_tier(value: str) -> str | None:
     """Return the canonical tier name for *value*, or None if unknown."""
@@ -308,6 +310,11 @@ def parse_plan(raw: str, request: str) -> Plan:
     if not subtasks:
         return fallback_plan(request)
     understanding = extract_marker_block(raw, "UNDERSTANDING") or ""
+    # The planner may put its explicit remainder note after the numbered
+    # tasks or outside [PLAN]; keep that obligation in downstream prompts.
+    for line in raw.splitlines():
+        if _REMAINDER_LINE_RE.match(line) and line.strip() not in understanding:
+            understanding = "\n".join(filter(None, (understanding, line.strip())))
     if capped and "PARTIAL" not in understanding:
         note = (
             f"PARTIAL: plan capped at {MAX_SUBTASKS} sub-tasks;"

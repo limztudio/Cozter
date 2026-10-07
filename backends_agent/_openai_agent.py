@@ -641,15 +641,19 @@ class OpenAIChatBackend(Backend):
         etype = event.get("type", "")
 
         if etype == "assistant_text":
-            text = event.get("text") or ""
-            if text:
+            text = event.get("text")
+            if isinstance(text, str) and text:
                 # Last text wins for result.text.
                 append_text_result(result, text)
             return
 
         if etype == "tool_use":
             tool = event.get("name", "?")
+            if not isinstance(tool, str):
+                tool = "?"
             inp = event.get("input") or {}
+            if not isinstance(inp, dict):
+                inp = {}
             content = tools.summarize_tool_use(tool, inp)
             result.events.append(ChatEvent(kind="tool", content=content))
             if event.get("file_action"):
@@ -1058,14 +1062,20 @@ async def _iter_sse_lines(
 
     Raw chunk reads avoid aiohttp's comparatively small ``readline()`` cap,
     which some providers exceed with one complete tool-call argument. A
-    malformed stream that never sends a newline is discarded after a generous
-    hard limit, then normal processing resumes at its next complete line.
+    malformed stream that exceeds the cap aborts this attempt: discarding an
+    argument delta and accepting a later [DONE] could execute a partial call.
     """
+    def line_too_long() -> None:
+        raise _SSEEventTooLargeError(
+            f"SSE line exceeded {_MAX_SSE_LINE_BYTES} byte limit",
+        )
+
     async for line in iter_bounded_lines(
         content.iter_any(),
         max_line_bytes=_MAX_SSE_LINE_BYTES,
         source="SSE",
         log=logger,
+        on_line_too_long=line_too_long,
     ):
         yield line
 

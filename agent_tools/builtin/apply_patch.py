@@ -95,6 +95,11 @@ class _FilePatch:
     def validate(self) -> None:
         """Reject patch forms that cannot apply to their declared source."""
         if self.old_path is not None:
+            if self.new_path is not None and self.new_path != self.old_path:
+                raise _PatchError(
+                    "renaming files is not supported; move the file before "
+                    "patching it",
+                )
             return
         for hunk in self.hunks:
             # A creation diff has no old side: reject old/context lines.
@@ -248,6 +253,7 @@ def _parse_patch(
     current: _FilePatch | None = None
     hunk: _Hunk | None = None
     pending_old: str | None = None
+    has_pending_old = False
 
     lines = text.splitlines()
     for index, line in enumerate(lines):
@@ -286,6 +292,7 @@ def _parse_patch(
                 hunk.last_marker = "-"
                 continue
             pending_old = _header_path(line[4:])
+            has_pending_old = True
             hunk = None
             continue
         if line.startswith("+++ "):
@@ -293,9 +300,12 @@ def _parse_patch(
                 hunk.new.append(line[1:])
                 hunk.last_marker = "+"
                 continue
+            if not has_pending_old:
+                raise _PatchError("file header is missing its --- counterpart")
             current = _FilePatch(pending_old, _header_path(line[4:]))
             patches.append(current)
             pending_old = None
+            has_pending_old = False
             hunk = None
             continue
         if line.startswith("@@"):
@@ -332,7 +342,7 @@ def _parse_patch(
     if hunk is not None:
         hunk.validate()
 
-    if pending_old is not None:
+    if has_pending_old:
         raise _PatchError("file header is missing its +++ counterpart")
     if any(not file_patch.hunks for file_patch in patches):
         raise _PatchError("file header is missing a hunk")
@@ -411,7 +421,9 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
         return f"{fp.new_path}: {applied}"
 
     out = "\n".join(applied)
-    if applied and _new_file_ends_with_newline(fp.hunks, default=had_nl):
+    if applied and _new_file_ends_with_newline(
+        fp.hunks, default=had_nl or not file_lines,
+    ):
         out += "\n"
     output_error = _output_limit_error(
         out, len(applied), uses_crlf=uses_crlf,
@@ -451,7 +463,7 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
             f"file exceeds the {_MAX_FILE_LINES:,}-line limit",
         )
     had_nl = content.endswith("\n")
-    lines = content.split("\n")
+    lines = content.split("\n") if content else []
     if had_nl and lines and lines[-1] == "":
         lines.pop()  # drop the trailing "" left by the final newline
     return lines, had_nl, uses_crlf
@@ -490,23 +502,27 @@ def _new_file_ends_with_newline(hunks: list[_Hunk], *, default: bool) -> bool:
 
 def _apply_hunks(lines: list[str], hunks: list[_Hunk]) -> list[str] | str:
     result = list(lines)
+    line_offset = 0
     for idx, hunk in enumerate(hunks, 1):
-        pos = _locate(result, hunk)
+        pos = _locate(result, hunk, line_offset=line_offset)
         if pos is None:
             return f"hunk {idx} did not apply (context not found)"
         result[pos:pos + len(hunk.old)] = hunk.new
+        line_offset += len(hunk.new) - len(hunk.old)
     return result
 
 
-def _locate(lines: list[str], hunk: _Hunk) -> int | None:
+def _locate(
+    lines: list[str], hunk: _Hunk, *, line_offset: int = 0,
+) -> int | None:
     old = hunk.old
     if not old:
-        # Pure insertion: start hint, clamped in-range.
-        return min(max(hunk.start - 1, 0), len(lines))
+        # With zero old lines, unified diff's start names the preceding line.
+        return min(max(hunk.start + line_offset, 0), len(lines))
     line_total, old_total = len(lines), len(old)
     if old_total > line_total:
         return None
-    hint = min(max(hunk.start - 1, 0), line_total - old_total)
+    hint = min(max(hunk.start - 1 + line_offset, 0), line_total - old_total)
     # Exact match: hint first, then a full scan.
     if _matches_at(lines, old, hint):
         return hint

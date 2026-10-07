@@ -60,6 +60,17 @@ class PlanParsingTests(unittest.TestCase):
             f"task {flexible.MAX_SUBTASKS}",
         )
 
+    def test_explicit_remainder_survives_inside_or_after_the_plan(self) -> None:
+        note = "PARTIAL: remainder is the release deployment."
+        for raw in (
+            f"[PLAN]\n1. [low] verify code\n{note}\n[/PLAN]",
+            f"[PLAN]\n1. [low] verify code\n[/PLAN]\n{note}",
+        ):
+            with self.subTest(raw=raw):
+                plan = flexible.parse_plan(raw, "verify and deploy")
+                self.assertIn(note, plan.understanding)
+                self.assertIn(note, flexible.build_subtask_prompt("request", plan, 0, []))
+
     def test_planner_prompt_advertises_the_expanded_subtask_limit(self) -> None:
         prompt = flexible.build_plan_prompt("context", collaborative=False)
         self.assertIn(
@@ -807,9 +818,6 @@ class CoveragePromptTests(unittest.TestCase):
             self.assertIn("page", tool_cls.description.lower())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class NoHandoffLeakTests(unittest.TestCase):
     def test_merge_rules_ban_handoff_notes(self) -> None:
         self.assertIn("Next turn should:", flexible._MERGE_RULES)
@@ -1032,3 +1040,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(result.text, "all done")
         self.assertFalse(result.continue_instruction)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -596,6 +596,7 @@ async def iter_bounded_lines(
     max_line_bytes: int,
     source: str,
     log: logging.Logger | None = None,
+    on_line_too_long: Callable[[], None] | None = None,
 ) -> AsyncIterator[str]:
     """Decode newline-delimited *chunks* while bounding each retained line.
 
@@ -603,6 +604,8 @@ async def iter_bounded_lines(
     chunked data. Keeping the framing logic here makes their memory cap and
     recovery behavior identical: discard an oversized line, then resume at
     the next newline instead of retaining an unbounded malformed stream.
+    A transport that cannot safely lose a line may supply
+    ``on_line_too_long`` to raise before discarding it.
     """
     buffer = bytearray()
     discarding_long_line = False
@@ -623,6 +626,8 @@ async def iter_bounded_lines(
             segment = chunk[cursor:end]
             remaining = max_line_bytes - len(buffer)
             if len(segment) > remaining:
+                if on_line_too_long is not None:
+                    on_line_too_long()
                 (log or logger).warning(
                     "Discarding %s line larger than %d bytes",
                     source, max_line_bytes,
@@ -1046,6 +1051,9 @@ async def drain_llm_subprocess(
             finished = True
     except TimeoutError:
         finished = True
+        # Maintenance callers replace durable memory from this result.
+        # A reply streamed before timeout is incomplete recovery data.
+        raw = ""
         active_log.warning("%s timed out after %ss", label, timeout)
     finally:
         try:
@@ -1059,6 +1067,12 @@ async def drain_llm_subprocess(
             if not stderr_task.done():
                 await abandon_subprocess_stream_task(proc, 2, stderr_task)
             await cleanup_backend_process(backend, proc, log=active_log)
+        if finished and proc.returncode not in (0, None) and raw:
+            active_log.warning(
+                "%s failed (exit %s); discarding incomplete response%s",
+                label, proc.returncode, f": {stderr}" if stderr else "",
+            )
+            raw = ""
         if finished and not raw:
             suffix = f": {stderr}" if stderr else ""
             active_log.warning(

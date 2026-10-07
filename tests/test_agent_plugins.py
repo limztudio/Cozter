@@ -310,6 +310,14 @@ class GitInfoToolTests(unittest.TestCase):
         result = self.invoke(action="tags")
         self.assertIn("v1", result)
 
+    def test_tags_honors_the_requested_limit(self) -> None:
+        self._commit("a.txt", "hello\n", "initial commit")
+        for tag in ("v1", "v2", "v3"):
+            self._git("tag", tag)
+        result = self.invoke(action="tags", limit=1)
+        self.assertEqual(len(result.splitlines()), 1)
+        self.assertTrue(result.startswith("v"), result)
+
     def test_stash_push_and_list(self) -> None:
         self._commit("a.txt", "hello\n", "initial commit")
         with open(os.path.join(self.workspace, "a.txt"), "a") as file_handle:
@@ -690,6 +698,40 @@ class MemoryToolTests(unittest.TestCase):
         self.assertIn("…", result)  # long content is excerpted
         self.assertIn("port 6379", result)
 
+    def test_search_matches_unicode_casefold_expansions_and_equivalences(self) -> None:
+        self.write_session(
+            "unicode-session", name="Unicode", created="2025-06-03",
+            summary="ß",
+        )
+        self.write_colony(["ς"])
+        self.assertIn("Found 1 match(es)", self.invoke(action="search", query="ss"))
+        self.assertIn("Found 1 match(es)", self.invoke(action="search", query="σ"))
+
+    def test_search_excerpts_use_original_indices_after_casefold_expansion(self) -> None:
+        self.write_session(
+            "unicode-indices", name="Unicode", created="2025-06-03",
+            summary="ß" * 200 + " UNIQUE marker after expansion",
+        )
+        result = self.invoke(action="search", query="unique")
+        self.assertIn("UNIQUE marker after expansion", result)
+
+    def test_session_symlinks_cannot_read_outside_the_memory_directory(self) -> None:
+        sessions = os.path.join(self.ws, ".cozter", "sessions")
+        os.makedirs(sessions)
+        with tempfile.TemporaryDirectory() as outside:
+            source = os.path.join(outside, "outside.json")
+            with open(source, "w", encoding="utf-8") as file_handle:
+                json.dump({
+                    "id": "escape", "name": "Escaped", "summary": "private transcript",
+                }, file_handle)
+            try:
+                os.symlink(source, os.path.join(sessions, "escape.json"))
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+
+            self.assertEqual(self.invoke(action="list"), "No sessions recorded in this workspace yet.")
+            self.assertIn("No matches", self.invoke(action="search", query="private transcript"))
+
     def test_search_limit_and_omission_hint(self) -> None:
         for offset in range(3):
             self.write_session(
@@ -989,7 +1031,54 @@ class HttpRequestToolTests(unittest.TestCase):
         self.assertEqual(session.calls[0]["method"], "POST")
         self.assertEqual(session.calls[1]["method"], "GET")
         self.assertNotIn("data", session.calls[1])
+        self.assertNotIn("Content-Type", session.calls[1]["headers"])
         self.assertEqual(session.calls[1]["url"], "https://api.example.com/new")
+
+    def test_redirect_credentials_are_scoped_to_the_original_origin(self) -> None:
+        for next_url, keep_credentials in (
+            ("https://api.example.com/new", True),
+            ("https://api.example.com:443/new", True),
+            ("https://other.example.com/new", False),
+            ("http://api.example.com/new", False),
+            ("https://api.example.com:8443/new", False),
+        ):
+            with self.subTest(next_url=next_url):
+                _, session = self.run_with(
+                    [
+                        _FakeResponse(
+                            status=307, url="https://api.example.com/old",
+                            headers={"Location": next_url},
+                        ),
+                        _FakeResponse(status=200, url=next_url, body=b"ok"),
+                    ],
+                    url="https://api.example.com/old",
+                    headers={
+                        "aUtHoRiZaTiOn": "Bearer token",
+                        "Cookie": "session=secret",
+                        "Proxy-Authorization": "Basic secret",
+                        "X-Trace": "trace",
+                    },
+                )
+                self.assertEqual(session.calls[0]["headers"]["Cookie"], "session=secret")
+                redirected_headers = session.calls[1]["headers"]
+                self.assertEqual(redirected_headers["X-Trace"], "trace")
+                for credential in ("aUtHoRiZaTiOn", "Cookie", "Proxy-Authorization"):
+                    self.assertEqual(credential in redirected_headers, keep_credentials)
+
+    def test_credentials_are_not_restored_when_redirect_returns_to_original_origin(self) -> None:
+        _, session = self.run_with(
+            [
+                _FakeResponse(status=302, url="https://api.example.com/old",
+                              headers={"Location": "https://other.example.com/middle"}),
+                _FakeResponse(status=302, url="https://other.example.com/middle",
+                              headers={"Location": "https://api.example.com/new"}),
+                _FakeResponse(status=200, url="https://api.example.com/new", body=b"ok"),
+            ],
+            url="https://api.example.com/old", headers={"Authorization": "Bearer token"},
+        )
+        self.assertIn("Authorization", session.calls[0]["headers"])
+        self.assertNotIn("Authorization", session.calls[1]["headers"])
+        self.assertNotIn("Authorization", session.calls[2]["headers"])
 
     def test_redirect_to_private_host_refused(self) -> None:
         result, session = self.run_with(
@@ -1090,4 +1179,3 @@ class HttpRequestToolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

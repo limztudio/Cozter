@@ -11,6 +11,7 @@ from Cozter.backends_bot.slack import (
     _split_slack_markdown,
 )
 from slack_sdk.errors import SlackApiError
+from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
 
 class _Client:
@@ -27,20 +28,26 @@ class _Client:
 
 
 class _MarkdownRejectingClient(_Client):
+    def __init__(self, *, sdk_response: bool = False) -> None:
+        super().__init__()
+        self.sdk_response = sdk_response
+
+    def rejection(self) -> SlackApiError:
+        data = {"ok": False, "error": "invalid_blocks"}
+        response = AsyncSlackResponse(
+            client=None, http_verb="POST", api_url="https://slack.com/api/chat.postMessage",
+            req_args={}, data=data, headers={}, status_code=400,
+        ) if self.sdk_response else data
+        return SlackApiError("Markdown blocks are unavailable", response)
+
     async def chat_postMessage(self, **kwargs):
         if "blocks" in kwargs:
-            raise SlackApiError(
-                "Markdown blocks are unavailable",
-                {"ok": False, "error": "invalid_blocks"},
-            )
+            raise self.rejection()
         return await super().chat_postMessage(**kwargs)
 
     async def chat_update(self, **kwargs):
         if "blocks" in kwargs:
-            raise SlackApiError(
-                "Markdown blocks are unavailable",
-                {"ok": False, "error": "invalid_blocks"},
-            )
+            raise self.rejection()
         await super().chat_update(**kwargs)
 
 
@@ -97,6 +104,17 @@ class SlackFormattingTests(unittest.IsolatedAsyncioTestCase):
             "ts": "10.0",
             "text": markdown,
             "blocks": [{"type": "markdown", "text": markdown}],
+        }])
+
+    async def test_sdk_response_rejections_fall_back_for_posts_and_edits(self):
+        self.client = _MarkdownRejectingClient(sdk_response=True)
+        self.bot.app = SimpleNamespace(client=self.client)
+        with self.assertLogs("Cozter.backends_bot.slack", level="WARNING"):
+            await self.bot.send_text("C1", "# Title", rich=True)
+            await self.bot.edit_text(MessageHandle("C1", "10.0"), "# Working", rich=True)
+        self.assertEqual(self.client.posts, [{"channel": "C1", "text": "*Title*"}])
+        self.assertEqual(self.client.updates, [{
+            "channel": "C1", "ts": "10.0", "text": "*Working*",
         }])
 
     async def test_rich_edit_falls_back_when_markdown_blocks_are_rejected(self):

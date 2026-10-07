@@ -270,7 +270,8 @@ def _split_slack_markdown(
 def _markdown_block_rejected(error: SlackApiError) -> bool:
     """Whether Slack rejected the new Markdown block type for this app."""
     response = getattr(error, "response", None)
-    code = response.get("error") if isinstance(response, dict) else None
+    data = response if isinstance(response, dict) else getattr(response, "data", None)
+    code = data.get("error") if isinstance(data, dict) else None
     return code in {"invalid_arguments", "invalid_blocks"}
 
 

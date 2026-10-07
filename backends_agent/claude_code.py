@@ -471,26 +471,11 @@ async def _run_claude_command(
             _capture_claude_command_output(proc),
             timeout=_DETACHED_COMMAND_TIMEOUT_SEC,
         )
+    except asyncio.CancelledError:
+        await _stop_claude_command_launcher(proc)
+        raise
     except TimeoutError as exc:
-        # Don't kill the group: ``claude --bg`` workers aren't ours.
-        if proc.returncode is None:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                # Launcher may exit between check and kill; cleanup still observes it.
-                pass
-        close_subprocess_pipe(proc, 1)
-        close_subprocess_pipe(proc, 2)
-        try:
-            await asyncio.wait_for(
-                wait_for_process_exit(proc),
-                timeout=_DETACHED_COMMAND_EXIT_CLEANUP_TIMEOUT_SEC,
-            )
-        except TimeoutError:
-            logger.warning(
-                "Claude Code detached-task control launcher did not exit "
-                "after timeout",
-            )
+        await _stop_claude_command_launcher(proc)
         raise RuntimeError("Claude Code detached-task command timed out") from exc
     stdout, stdout_truncated = stdout_result
     stderr, stderr_truncated = stderr_result
@@ -500,6 +485,29 @@ async def _run_claude_command(
             f"{_MAX_DETACHED_COMMAND_OUTPUT_BYTES} byte limit",
         )
     return proc.returncode or 0, _decode_cli_output(stdout), _decode_cli_output(stderr)
+
+
+async def _stop_claude_command_launcher(proc: asyncio.subprocess.Process) -> None:
+    """Reap a cancelled/timed-out control launcher, preserving its workers."""
+    # Don't kill the group: ``claude --bg`` workers aren't ours.
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            # Launcher may exit between check and kill; cleanup still observes it.
+            pass
+    close_subprocess_pipe(proc, 1)
+    close_subprocess_pipe(proc, 2)
+    try:
+        await asyncio.wait_for(
+            wait_for_process_exit(proc),
+            timeout=_DETACHED_COMMAND_EXIT_CLEANUP_TIMEOUT_SEC,
+        )
+    except TimeoutError:
+        logger.warning(
+            "Claude Code detached-task control launcher did not exit "
+            "after cancellation or timeout",
+        )
 
 
 class ClaudeCodeBackend(Backend):
@@ -851,6 +859,8 @@ class ClaudeCodeBackend(Backend):
     @staticmethod
     def _emit_tool_event(block: dict, result: AgentResult) -> None:
         tool = block.get("name", "?")
+        if not isinstance(tool, str) or not tool:
+            tool = "?"
         inp = block.get("input") or {}
         if not isinstance(inp, dict):
             inp = {}

@@ -967,6 +967,22 @@ class PluginLoadingTests(unittest.TestCase):
 
 
 class DiscoveryToolTests(unittest.TestCase):
+    def test_grep_read_stays_bounded_when_a_file_grows_after_stat(self) -> None:
+        reader = mock.mock_open(read_data=b"needle" * 3)
+        metadata = SimpleNamespace(st_mode=stat.S_IFREG, st_size=0)
+        with (
+            mock.patch("Cozter.agent_tools.builtin.grep._GREP_MAX_FILE_BYTES", 8),
+            mock.patch("Cozter.agent_tools.builtin.grep.os.stat", return_value=metadata),
+            mock.patch("Cozter.agent_tools.builtin.grep.iter_workspace_files", return_value=[
+                ("grown.txt", "grown.txt", "grown.txt"),
+            ]),
+            mock.patch("builtins.open", reader),
+        ):
+            results = GrepTool._scan("/workspace", "/workspace", "**/*", re.compile("needle"), 10)
+
+        reader().read.assert_called_once_with(9)
+        self.assertEqual(results, [])
+
     def test_glob_skips_generated_dirs_unless_explicit(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:

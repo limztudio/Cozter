@@ -65,7 +65,11 @@ def _load_sessions(sessions_dir: str) -> list[dict]:
         if not fname.endswith(".json"):
             continue
         session_id = fname[: -len(".json")]
-        data = _load_session_file(os.path.join(sessions_dir, fname), session_id)
+        try:
+            path = resolve_inside_workspace(sessions_dir, fname)
+        except ValueError:
+            continue  # A child symlink must not expose files outside memory.
+        data = _load_session_file(path, session_id)
         if data is not None:
             sessions.append(data)
     # Missing timestamps sort as oldest.
@@ -171,6 +175,30 @@ def _excerpt(text: str, index: int, needle_len: int) -> str:
     return f"{prefix}{snippet[:budget]}…"
 
 
+def _casefold_match(text: str, needle: str) -> tuple[int, int] | None:
+    """Locate a casefolded query, returning offsets in the original text.
+
+    Unicode casefolding can expand characters (ß -> ss), so indices from the
+    folded copy cannot be used directly to select the visible excerpt.
+    """
+    index = text.casefold().find(needle)
+    if index < 0:
+        return None
+    if text.isascii():
+        return index, len(needle)
+    folded_position = 0
+    start = 0
+    end = index + len(needle)
+    for position, character in enumerate(text):
+        next_position = folded_position + len(character.casefold())
+        if folded_position <= index < next_position:
+            start = position
+        if next_position >= end:
+            return start, position + 1 - start
+        folded_position = next_position
+    return None
+
+
 def _iter_search_texts(data: dict):
     if data["summary"]:
         yield "Summary:", data["summary"]
@@ -260,31 +288,24 @@ class MemoryTool(AgentTool):
             for kind, text in _iter_search_texts(data):
                 if not isinstance(text, str) or not text:
                     continue
-                # First-char pre-check skips the lowered copy.
-                first = needle[0]
-                if first not in text and first.swapcase() not in text:
-                    continue
-                index = text.casefold().find(needle)
-                if index < 0:
+                match = _casefold_match(text, needle)
+                if match is None:
                     continue
                 total += 1
                 if len(matches) < limit:
                     matches.append(
-                        f"- {label} {kind} {_excerpt(text, index, len(needle))}"
+                        f"- {label} {kind} {_excerpt(text, *match)}"
                     )
 
         for item in _colony_items(workspace):
             if not isinstance(item, str) or not item:
                 continue
-            first = needle[0]
-            if first not in item and first.swapcase() not in item:
-                continue
-            index = item.casefold().find(needle)
-            if index < 0:
+            match = _casefold_match(item, needle)
+            if match is None:
                 continue
             total += 1
             if len(matches) < limit:
-                matches.append(f"- [Colony] {_excerpt(item, index, len(needle))}")
+                matches.append(f"- [Colony] {_excerpt(item, *match)}")
 
         if not total:
             return (

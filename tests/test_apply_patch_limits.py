@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import os
 import tempfile
 import unittest
@@ -30,6 +31,86 @@ class _NoSliceList(list[str]):
 class ApplyPatchLimitsTests(unittest.TestCase):
     def _run(self, workspace: str, patch: str) -> str:
         return asyncio.run(ApplyPatchTool().run(workspace, {"patch": patch}))
+
+    def test_zero_context_insertions_use_unified_diff_line_positions(self) -> None:
+        original = "one\ntwo\nthree\n"
+        for expected in (
+            "new\none\ntwo\nthree\n",
+            "one\nnew\ntwo\nthree\n",
+            "one\ntwo\nthree\nnew\n",
+            "one\nfirst\ntwo\nsecond\nthree\n",
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "data.txt")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write(original)
+                patch = "".join(difflib.unified_diff(
+                    original.splitlines(keepends=True),
+                    expected.splitlines(keepends=True),
+                    fromfile="a/data.txt", tofile="b/data.txt", n=0,
+                ))
+
+                self.assertIn("applied", self._run(tmp, patch))
+                with open(path, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), expected)
+
+    def test_later_hunks_target_the_correct_duplicate_after_size_changes(self) -> None:
+        for original, expected in (
+            ("header\nsame\ngap\nsame\n", "header\ninserted\nsame\ngap\nchanged\n"),
+            ("discard\nsame\ngap\nsame\nsame\n", "same\ngap\nchanged\nsame\n"),
+        ):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "data.txt")
+                with open(path, "w", encoding="utf-8") as file_handle:
+                    file_handle.write(original)
+                patch = "".join(difflib.unified_diff(
+                    original.splitlines(keepends=True),
+                    expected.splitlines(keepends=True),
+                    fromfile="a/data.txt", tofile="b/data.txt", n=0,
+                ))
+
+                self.assertIn("applied", self._run(tmp, patch))
+                with open(path, encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), expected)
+
+    def test_inserting_into_an_empty_existing_file_adds_no_phantom_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "data.txt")
+            with open(path, "w", encoding="utf-8"):
+                pass
+            out = self._run(tmp, (
+                "--- a/data.txt\n+++ b/data.txt\n"
+                "@@ -0,0 +1 @@\n+one\n"
+            ))
+
+            self.assertIn("applied", out)
+            with open(path, encoding="utf-8") as file_handle:
+                # The hunk adds a terminated line even though the old file is empty.
+                self.assertEqual(file_handle.read(), "one\n")
+
+    def test_incomplete_dev_null_header_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self._run(tmp, "--- /dev/null\n")
+        self.assertIn("missing its +++ counterpart", out)
+
+    def test_new_header_without_old_header_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self._run(tmp, "+++ b/data.txt\n@@ -0,0 +1 @@\n+one\n")
+            self.assertFalse(os.path.exists(os.path.join(tmp, "data.txt")))
+        self.assertIn("missing its --- counterpart", out)
+
+    def test_rename_patch_does_not_modify_an_unrelated_existing_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for filename in ("old.txt", "new.txt"):
+                with open(os.path.join(tmp, filename), "w", encoding="utf-8") as file_handle:
+                    file_handle.write("same\n")
+            out = self._run(tmp, (
+                "--- a/old.txt\n+++ b/new.txt\n@@ -1 +1 @@\n-same\n+changed\n"
+            ))
+            for filename in ("old.txt", "new.txt"):
+                with open(os.path.join(tmp, filename), encoding="utf-8") as file_handle:
+                    self.assertEqual(file_handle.read(), "same\n")
+        self.assertIn("renaming files is not supported", out)
 
     def test_patch_byte_limit_is_reported_before_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(

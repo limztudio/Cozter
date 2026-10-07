@@ -200,6 +200,40 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 json.dump({"max_permission": "nonsense"}, file_handle)
             self.assertEqual(config.get_max_permission(), "deny")
 
+    def test_null_permission_ceiling_fails_closed_but_missing_uses_default(self) -> None:
+        with temporary_config({"max_permission": None}):
+            self.assertEqual(config.get_max_permission(), "deny")
+            with tempfile.TemporaryDirectory() as ws:
+                self.assertEqual(workspace.get_permission(ws), "deny")
+        with temporary_config({}):
+            self.assertEqual(config.get_max_permission(), "auto")
+
+    def test_failed_workspace_selection_does_not_mutate_cached_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            workspace, "WORKSPACE_STATE_PATH", os.path.join(tmp, "state.json"),
+        ):
+            first = os.path.join(tmp, "first")
+            workspace.select_workspace("user", first, "bot")
+            with (
+                mock.patch.object(
+                    workspace, "save_json_object", side_effect=OSError("disk full"),
+                ),
+                self.assertRaises(OSError),
+            ):
+                workspace.select_workspace("user", os.path.join(tmp, "second"), "bot")
+            self.assertEqual(workspace.get_current("user", "bot"), first)
+            self.assertEqual(workspace.get_recent("user"), [first])
+
+    def test_workspace_cache_is_scoped_to_its_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [os.path.join(tmp, name) for name in ("first.json", "second.json")]
+            for path, uid in zip(paths, ("first", "second")):
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump({uid: {"current": {"bot": tmp}}}, handle)
+            with mock.patch.object(workspace, "stat_mtime_size", return_value=(1, 1)):
+                for path, uid in zip(paths, ("first", "second")):
+                    with mock.patch.object(workspace, "WORKSPACE_STATE_PATH", path):
+                        self.assertEqual(workspace.iter_current_workspaces("bot"), [(uid, tmp)])
     def test_invalid_max_permission_blocks_daemon_start(self) -> None:
         with (
             temporary_config({
@@ -984,6 +1018,37 @@ class ScheduleParserTests(unittest.TestCase):
 
 
 class SessionStateFallbackTests(unittest.TestCase):
+    def test_non_utf8_session_is_ignored_during_load_and_listing(self) -> None:
+        with tempfile.TemporaryDirectory() as ws:
+            good = session.create_session(ws)
+            with open(session._session_path(ws, "damaged"), "wb") as handle:
+                handle.write(b"\xff")
+            with self.assertLogs(session.logger, level="WARNING"):
+                self.assertIsNone(session.load_session(ws, "damaged"))
+            self.assertEqual([entry["id"] for entry in session.list_sessions(ws)], [good["id"]])
+
+    def test_session_file_symlink_cannot_expose_external_state(self) -> None:
+        with tempfile.TemporaryDirectory() as ws, tempfile.TemporaryDirectory() as outside:
+            os.makedirs(os.path.join(ws, ".cozter", "sessions"))
+            external = os.path.join(outside, "secret.json")
+            original = {"id": "escape", "messages": [{"role": "user", "content": "secret"}]}
+            with open(external, "w", encoding="utf-8") as handle:
+                json.dump(original, handle)
+            link = os.path.join(ws, ".cozter", "sessions", "escape.json")
+            try:
+                os.symlink(external, link)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"file symlinks unavailable: {exc}")
+            with self.assertLogs(session.logger, level="WARNING"):
+                self.assertIsNone(session.load_session(ws, "escape"))
+                self.assertEqual(session.list_sessions(ws), [])
+                self.assertFalse(session.delete_session(ws, "escape"))
+            with self.assertRaises(ValueError):
+                session.save_session(ws, "escape", {"id": "escape"})
+            with open(external, encoding="utf-8") as handle:
+                self.assertEqual(json.load(handle), original)
+            self.assertFalse(session._is_safe_session_id("session:stream"))
+
     def test_session_loader_normalizes_malformed_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             sessions_dir = os.path.join(tmp, ".cozter", "sessions")

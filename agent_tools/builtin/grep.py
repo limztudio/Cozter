@@ -117,8 +117,11 @@ class GrepTool(AgentTool):
                 ):
                     continue
                 with open(fpath, "rb") as file_handle:
-                    raw = file_handle.read()
+                    # A file may grow after stat(); bound the allocation too.
+                    raw = file_handle.read(_GREP_MAX_FILE_BYTES + 1)
             except OSError:
+                continue
+            if len(raw) > _GREP_MAX_FILE_BYTES:
                 continue
             if b"\x00" in raw[:8192]:
                 continue  # likely binary

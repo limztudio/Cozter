@@ -198,12 +198,19 @@ class CliBot(BotPlatform):
             ctx = self._ctx(command=cmd, args=args)
             await self.dispatch_command(ctx)
         else:
-            # Fire-and-forget dispatch: don't stall the input loop.
-            create_background_task(
-                self.dispatch_text(self._ctx(text=line)),
-                name="cli-dispatch",
-                log=logger,
-            )
+            parts = line[1:].split(None, 1) if line.startswith("\\") else []
+            command = parts[0].split("@", 1)[0].lower() if parts else ""
+            if _LOCAL_ID in self._pending_input or command in self._COMMANDS:
+                # Picker answers and aliases must finish before the next line
+                # can replace their pending handler. Agent turns stay concurrent
+                # so /stop can still interrupt them.
+                await self.dispatch_text(self._ctx(text=line))
+            else:
+                create_background_task(
+                    self.dispatch_text(self._ctx(text=line)),
+                    name="cli-dispatch",
+                    log=logger,
+                )
 
     def _ctx(
         self,
