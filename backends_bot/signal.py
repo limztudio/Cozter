@@ -950,6 +950,7 @@ class SignalBot(BotPlatform):
                     target_uid,
                     source_chat_id=chat_id,
                     target_chat_id=chat_id,
+                    source_platform_id=self.platform_id,
                 )
         if migrated:
             logger.info("Migrated %d legacy Signal schedule(s).", migrated)
@@ -986,6 +987,7 @@ class SignalBot(BotPlatform):
             target_user_id,
             source_chat_id=group_id,
             target_chat_id=group_id,
+            source_platform_id=self.platform_id,
         )
         migrated += self._migrate_legacy_workspace_schedules(
             ws, target_user_id, group_id,
@@ -1025,6 +1027,7 @@ class SignalBot(BotPlatform):
             source_ids,
             target_user_id,
             target_chat_id=group_id,
+            source_platform_id=self.platform_id,
         )
 
     async def _migrate_group_queue_state(self) -> None:

@@ -14,6 +14,7 @@ from unittest import mock
 
 from Cozter import schedules, session, workspace
 from Cozter.backends_bot.base import BotContext
+from Cozter.backends_bot.signal import SignalBot
 from Cozter.tests.helpers import TestBot
 
 
@@ -171,6 +172,76 @@ class BotCommandTests(unittest.TestCase):
         self.assertEqual(entries[0]["days"], ["mon", "wed"])
         self.assertEqual(entries[0]["time"], "09:30")
         self.assertEqual(entries[0]["command"], "run report")
+        self.assertEqual(entries[0]["platform_id"], self.bot.platform_id)
+
+    def test_scheduler_preserves_other_platforms_schedule(self) -> None:
+        for schedule_id, platform_id in (
+            ("foreign", "another:bot"), ("own", self.bot.platform_id), ("legacy", None),
+        ):
+            schedule = {
+                "id": schedule_id, "days": list(schedules.DAY_ABBREV),
+                "time": "00:00", "created": "2000-01-01T00:00:00",
+                "chat_id": "c1", "command": "run",
+            }
+            if platform_id is not None:
+                schedule["platform_id"] = platform_id
+            schedules.add_schedule(self.ws, self.uid, schedule)
+
+        with mock.patch.object(self.bot, "_fire_schedule", new=mock.AsyncMock()) as fire:
+            self._run(self.bot._scheduler_tick())
+
+        self.assertEqual({call.args[1]["id"] for call in fire.await_args_list}, {"own", "legacy"})
+        self.assertNotIn("last_fired", schedules.list_schedules(self.ws, self.uid)[0])
+
+    def test_schedule_picker_lists_and_deletes_only_this_platforms_entries(self):
+        for schedule_id, platform_id in (("foreign", "another:bot"), ("own", self.bot.platform_id)):
+            schedules.add_schedule(self.ws, self.uid, {
+                "id": schedule_id, "platform_id": platform_id,
+                "days": ["mon"], "time": "09:00", "command": schedule_id,
+            })
+
+        self._run(self.bot.cmd_schedules(self._ctx()))
+        self.assertNotIn("foreign", self._last())
+        self._run(self.bot._receive_schedules(self._ctx(text="1")))
+        self.assertEqual([item["id"] for item in schedules.list_schedules(self.ws, self.uid)], ["foreign"])
+
+    def test_concurrent_scheduler_ticks_claim_a_due_slot_once(self):
+        schedules.add_schedule(self.ws, self.uid, {
+            "id": "once", "days": list(schedules.DAY_ABBREV),
+            "time": "00:00", "created": "2000-01-01T00:00:00",
+            "chat_id": "c1", "command": "run",
+        })
+
+        async def run():
+            lock = asyncio.Lock()
+            await lock.acquire()
+            with (
+                mock.patch.object(workspace, "get_lock", return_value=lock),
+                mock.patch.object(self.bot, "_fire_schedule", new=mock.AsyncMock()) as fire,
+            ):
+                ticks = [asyncio.create_task(self.bot._scheduler_tick()) for _ in range(2)]
+                await asyncio.sleep(0)
+                lock.release()
+                await asyncio.gather(*ticks)
+                fire.assert_awaited_once()
+
+        self._run(run())
+
+    def test_signal_legacy_adoption_preserves_other_platforms_schedules(self):
+        bot = SignalBot(["https://signal.group/#test"], jsonrpc_socket="/tmp/signal.sock")
+        bot._group_ids = {"group"}
+        target_uid = "signal-group:group"
+        workspace.select_workspace(target_uid, self.ws, bot.platform_id)
+        schedules.add_schedule(self.ws, self.uid, {"id": "foreign", "platform_id": self.bot.platform_id})
+        schedules.add_schedule(self.ws, self.uid, {"id": "legacy"})
+
+        moved = bot._migrate_legacy_workspace_schedules(self.ws, target_uid, "group")
+
+        self.assertEqual(moved, 1)
+        self.assertEqual([record["id"] for record in schedules.list_schedules(self.ws, self.uid)], ["foreign"])
+        migrated = schedules.list_schedules(self.ws, target_uid)
+        self.assertEqual(migrated[0]["id"], "legacy")
+        self.assertEqual(migrated[0]["platform_id"], "signal")
 
     # /doctor
     def test_doctor_lists_every_direct_backend(self) -> None:

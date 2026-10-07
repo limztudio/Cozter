@@ -93,8 +93,8 @@ are trusted in-process code, not sandboxed extensions.
   `/cancel` and daemon stop cancel in-flight uploads
 - **Platform-safe text delivery**: long replies are split at chat-surface API
   boundaries. Telegram applies its 4,096-character limit to both rich agent
-  replies and plain command/status output, splitting rich Markdown before
-  converting each piece to HTML so tags and entities stay intact; Signal
+  replies and plain command/status output, rendering rich Markdown to HTML
+  before splitting with balanced tags and intact entities; Signal
   preserves rich-text styling as it splits messages at 4,000 characters; and
   Slack keeps plain chunks below 39,000 characters and rich Markdown blocks
   below 12,000 while balancing fenced code blocks
@@ -726,7 +726,10 @@ notifies the chat; use `claude agents` and `claude attach` in the workspace
 to continue that interactive session.
 
 Schedules are stored per workspace in `.cozter/schedules.json` and use
-the host's local time. On Telegram, Slack, and Signal, the scheduler checks
+the host's local time. New schedules retain their creating platform so another
+bot sharing the workspace cannot run, list, or delete them. Legacy untagged
+schedules remain available, and a shared-lock check prevents concurrent ticks
+from firing the same slot twice. On Telegram, Slack, and Signal, the scheduler checks
 every 30 seconds and records `last_fired`, so a missed slot fires once after
 restart instead of being lost. Offset-bearing persisted timestamps are
 normalized to that local basis, and malformed schedule fields are ignored.

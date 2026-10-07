@@ -2096,6 +2096,7 @@ class BotPlatform(ABC):
             "created": datetime.now().isoformat(),
             "chat_id": ctx.chat_id,
             "user_id": ctx.user_id,
+            "platform_id": self.platform_id,
         }
         # Hold the workspace lock against concurrent scheduler ticks.
         async with workspace.get_lock(ws):
@@ -2109,11 +2110,18 @@ class BotPlatform(ABC):
 
     # /schedules (list/delete)
 
+    def _platform_schedules(self, ws: str, uid: str) -> list[dict]:
+        """Keep legacy schedules and records created by this platform."""
+        return [
+            record for record in schedules.list_schedules(ws, uid)
+            if record.get("platform_id") in (None, "", self.platform_id)
+        ]
+
     async def cmd_schedules(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
         if ws is None:
             return
-        user_schedules = schedules.list_schedules(ws, ctx.user_id)
+        user_schedules = self._platform_schedules(ws, ctx.user_id)
         if not user_schedules:
             await ctx.reply_text("No schedules.")
             return
@@ -2136,7 +2144,7 @@ class BotPlatform(ABC):
         ws = await self._require_ws(ctx)
         if ws is None:
             return
-        user_schedules = schedules.list_schedules(ws, ctx.user_id)
+        user_schedules = self._platform_schedules(ws, ctx.user_id)
         text = ctx.text.strip()
         if not text.isdecimal():
             await ctx.reply_text(
@@ -3075,7 +3083,7 @@ class BotPlatform(ABC):
         for uid, ws in workspace.iter_current_workspaces(self.platform_id):
             if not os.path.isdir(ws):
                 continue
-            for sched in schedules.list_schedules(ws, uid):
+            for sched in self._platform_schedules(ws, uid):
                 schedule_id = sched.get("id")
                 if not isinstance(schedule_id, str) or not schedule_id:
                     continue
@@ -3099,6 +3107,20 @@ class BotPlatform(ABC):
                 continue
             # Persist last_fired first.
             async with workspace.get_lock(ws):
+                current = next(
+                    (record for record in self._platform_schedules(ws, uid)
+                     if record.get("id") == schedule_id),
+                    None,
+                )
+                if current is None:
+                    continue
+                baseline = schedules.parse_iso(current.get("last_fired")) or schedules.parse_iso(
+                    current.get("created"),
+                )
+                if baseline is not None and slot <= baseline:
+                    # Another platform/tick may have claimed this snapshot
+                    # while it waited for the shared workspace lock.
+                    continue
                 claimed_schedule = schedules.update_schedule_fired(
                     ws, uid, schedule_id, slot.isoformat(),
                 )
@@ -3117,6 +3139,8 @@ class BotPlatform(ABC):
         command = sched.get("command", "")
         chat_id = sched.get("chat_id", "")
         generation = self._cancel_generations.get(uid, 0)
+        if sched.get("platform_id") not in (None, "", self.platform_id):
+            return
         if not command or not chat_id:
             return
 
@@ -3827,20 +3851,21 @@ class BotPlatform(ABC):
         Uploads stay owned by *uid* so /cancel still finds them; only
         the queue-pause side effect is suppressed, since a provider's
         textual ``[[await]]`` marker must not park the normal queue.
+        A prior interactive question keeps its existing pause.
         """
-        await self._send_result(chat_id, ws, result, uid=uid)
-        self._awaiting_answer.discard(uid)
+        await self._send_result(chat_id, ws, result, uid=uid, allow_await=False)
 
     async def _send_result(
         self, chat_id: str, ws: str, result: agent.AgentResult,
         *, uid: str | None = None,
+        allow_await: bool = True,
     ) -> None:
         """Send the agent's reply (text + attachments) and honor [[await]].
 
         ``uid`` has two jobs: it opts the user's queue into the await
         pause, and it owns the background picture uploads so /cancel can
         find them. Detached callbacks pass the user id with awaiting
-        disabled via ``_send_detached_result`` (their textual ``[[await]]``
+        disabled with ``allow_await=False`` (their textual ``[[await]]``
         marker must not pause the normal queue); ephemeral schedule turns
         omit ``uid`` because their session is deleted right after, so
         ownership falls back to the chat.
@@ -3906,7 +3931,7 @@ class BotPlatform(ABC):
             owner = uid if uid is not None else f"chat:{chat_id}"
             self._track_attachment_upload(owner, chat_id, pending_uploads)
 
-        if awaiting and uid is not None:
+        if awaiting and uid is not None and allow_await:
             self._arm_awaiting_answer(uid)
 
     def _arm_awaiting_answer(self, uid: str) -> None:

@@ -52,6 +52,33 @@ class BackgroundLaunchMechanismTests(unittest.TestCase):
                     guard.background_launch_mechanism({"command": command}),
                 )
 
+    def test_rejects_launchers_after_a_newline_or_comment(self) -> None:
+        for prefix in (
+            "echo ready\n", "echo ready # setup\n",
+            "echo ready;\n", "echo ready &&\n",
+            "cat <<'EOF'\nready\nEOF\n",
+        ):
+            for command, expected in (
+                ("nohup pytest", "the `nohup` launcher"),
+                ("disown", "the `disown` shell builtin"),
+                ("claude --bg 'run checks'", "a nested `claude --bg` launch"),
+            ):
+                with self.subTest(prefix=prefix, command=command):
+                    self.assertEqual(
+                        guard.background_launch_mechanism({"command": prefix + command}),
+                        expected,
+                    )
+
+    def test_quoted_and_escaped_newlines_do_not_start_commands(self) -> None:
+        for command in (
+            "printf '%s' 'ready\nnohup pytest'",
+            'printf "%s" "ready\nclaude --bg task"',
+            "printf '%s' ready\\\nnohup",
+            "echo ready#value\ntrue",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(guard.background_launch_mechanism({"command": command}))
+
 
 class PreToolUseHookTests(unittest.TestCase):
     def test_bash_background_request_returns_claude_deny_shape(self) -> None:

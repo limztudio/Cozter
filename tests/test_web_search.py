@@ -94,6 +94,35 @@ def _run_search(net: _FakeNet, **args: str) -> str:
 
 
 class WebSearchToolTests(unittest.TestCase):
+    def test_parser_skips_navigation_and_non_web_links(self) -> None:
+        body = (
+            '<a href="/lite/?q=other">Next</a>'
+            '<a href="#top">Top</a>'
+            '<a href="javascript:void(0)">Menu</a>'
+            '<a href="mailto:user@example.com">Contact</a>'
+            '<a href="https://valid.example/result">Result</a>'
+        )
+        self.assertEqual(
+            web_search._parse_results(body, 5),
+            ["1. Result\n   https://valid.example/result"],
+        )
+
+    def test_parser_matches_duckduckgo_hosts_at_domain_boundaries(self) -> None:
+        body = (
+            '<a href="https://duckduckgo.com/">Home</a>'
+            '<a href="https://lite.duckduckgo.com/">Lite</a>'
+            '<a href="https://duckduckgo.com./">Trailing dot</a>'
+            '<a href="https://myduckduckgo.com/">External</a>'
+            '<a href="//other.example/result">Relative protocol</a>'
+        )
+        self.assertEqual(
+            web_search._parse_results(body, 5),
+            [
+                "1. External\n   https://myduckduckgo.com/",
+                "2. Relative protocol\n   https://other.example/result",
+            ],
+        )
+
     def test_parses_html_results_and_drops_ads(self) -> None:
         net = _FakeNet((200, _HTML_BODY.encode()))
         result = _run_search(net, query="cozter release notes")

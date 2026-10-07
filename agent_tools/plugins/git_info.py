@@ -128,13 +128,18 @@ class GitInfoTool(AgentTool):
             limit = coerce_int_arg(
                 args.get("limit", 10), default=10, minimum=1, maximum=50,
             )
-            tail: list[str] = ["log", "--oneline", f"-n{limit}"]
+            tail: list[str] = [
+                "log", "--no-ext-diff", "--no-textconv", "--oneline",
+                f"-n{limit}",
+            ]
             ref = args.get("ref")
             if isinstance(ref, str) and ref.strip():
                 tail.append(_checked_ref(ref.strip()))
             return argv + tail
         if action == "diff":
-            tail = ["diff"]
+            # Repository-configured diff/textconv commands can execute arbitrary
+            # programs even for a read-only patch request. Use Git's own diff.
+            tail = ["diff", "--no-ext-diff", "--no-textconv"]
             if args.get("patch") is True:
                 tail.append("HEAD")
             else:
@@ -168,7 +173,10 @@ class GitInfoTool(AgentTool):
                 if isinstance(ref, str) and ref.strip()
                 else "HEAD"
             )
-            return argv + ["show", "--stat", "--oneline", revision]
+            return argv + [
+                "show", "--no-ext-diff", "--no-textconv", "--stat",
+                "--oneline", revision,
+            ]
         # blame
         pathspec = args.get("path")
         if not isinstance(pathspec, str) or not pathspec.strip():

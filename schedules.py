@@ -8,7 +8,7 @@ File shape:
     {"<user_id>": [<schedule_dict>, ...], ...}
 
 Each ``<schedule_dict>``:
-    {id, days, time, command, created, chat_id, user_id, last_fired?}
+    {id, days, time, command, created, chat_id, user_id, platform_id?, last_fired?}
 """
 
 import copy
@@ -142,6 +142,7 @@ def migrate_schedules(
     *,
     source_chat_id: str = "",
     target_chat_id: str = "",
+    source_platform_id: str = "",
 ) -> int:
     """Move legacy schedules to a new user key, returning moved count."""
     data = _load_all(workspace)
@@ -173,6 +174,11 @@ def migrate_schedules(
             if not isinstance(sched, dict):
                 remaining.append(sched)
                 continue
+            if source_platform_id and sched.get("platform_id") not in (
+                None, "", source_platform_id,
+            ):
+                remaining.append(sched)
+                continue
             sched_chat_id = str(sched.get("chat_id") or "")
             if source_chat_id and sched_chat_id != source_chat_id:
                 remaining.append(sched)
@@ -189,6 +195,8 @@ def migrate_schedules(
 
             migrated = dict(sched)
             migrated["user_id"] = target_key
+            if source_platform_id:
+                migrated["platform_id"] = source_platform_id
             if target_chat_id:
                 migrated["chat_id"] = target_chat_id
             target.append(migrated)

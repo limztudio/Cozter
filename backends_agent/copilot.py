@@ -156,10 +156,11 @@ def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     marker = "… [older prompt context dropped to fit argv cap — preview only]"
     if _prompt_argv_units(marker) >= limit:
         # Too tight for the full marker: keep a visible cut indicator.
-        if limit <= 1:
-            return "…"[:limit]
-        tail, _ = _truncate_utf8_tail(prompt, limit - _prompt_argv_units("…"))
-        return tail + "…"
+        cut_marker = "…"
+        if _prompt_argv_units(cut_marker) > limit:
+            cut_marker = "." * limit
+        tail, _ = _truncate_utf8_tail(prompt, limit - _prompt_argv_units(cut_marker))
+        return tail + cut_marker
     tail, truncated = _truncate_utf8_tail(
         prompt, limit - _prompt_argv_units(marker),
     )
@@ -217,7 +218,7 @@ def _truncate_prompt_preserving_head(prompt: str, limit: int) -> str:
         else tail_encoded[cut:].decode("utf-8", errors="replace")
     )
     if not tail:
-        return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt
+        return _truncate_prompt_for_argv(prompt, limit)
     return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + tail
 
 

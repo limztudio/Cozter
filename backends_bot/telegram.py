@@ -56,6 +56,9 @@ _TELEGRAM_PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 _TELEGRAM_TEXT_LIMIT = 4096
 _TELEGRAM_SEND_MAX_ATTEMPTS = 5
 _TELEGRAM_SEND_MAX_DELAY_SEC = 60.0
+_TELEGRAM_HTML_TOKEN_RE = re.compile(
+    r"</?(?:b|i|s|code|pre)>|&(?:amp|lt|gt);|[^<&]+|.", re.DOTALL,
+)
 
 
 def _telegram_message_id(handle: MessageHandle) -> int:
@@ -116,19 +119,63 @@ def _telegram_retry_delay(exc: BaseException) -> float | None:
 
 
 def _rich_telegram_chunks(text: str) -> list[str]:
-    """Convert Markdown to HTML without splitting tags or entities.
-
-    Convert-then-split can bisect ``<pre>``/``<b>`` tags and ``&lt;``. Split
-    the Markdown first; only fall back to an HTML split when conversion
-    itself expanded past Telegram's cap.
-    """
+    """Split rendered HTML, balancing tags and keeping entities intact."""
+    html = _md_to_html(text)
+    if len(html) <= _TELEGRAM_TEXT_LIMIT:
+        return [html]
     chunks: list[str] = []
-    for markdown_chunk in split_text_chunks(text, _TELEGRAM_TEXT_LIMIT):
-        html = _md_to_html(markdown_chunk)
-        if len(html) <= _TELEGRAM_TEXT_LIMIT:
-            chunks.append(html)
-        else:
-            chunks.extend(split_text_chunks(html, _TELEGRAM_TEXT_LIMIT))
+    tags: list[str] = []
+    parts: list[str] = []
+    length = 0
+
+    def closing_tags() -> str:
+        return "".join(f"</{tag}>" for tag in reversed(tags))
+
+    def flush() -> None:
+        nonlocal parts, length
+        chunks.append("".join(parts) + closing_tags())
+        prefix = "".join(f"<{tag}>" for tag in tags)
+        parts = [prefix] if prefix else []
+        length = len(prefix)
+
+    for match in _TELEGRAM_HTML_TOKEN_RE.finditer(html):
+        token = match.group()
+        if token.startswith("<"):
+            closing = token.startswith("</")
+            tag = token[2:-1] if closing else token[1:-1]
+            if closing and (not tags or tags[-1] != tag):
+                # Malformed nested Markdown can render crossing tags. Preserve
+                # its text without carrying invalid tag state across chunks.
+                return [
+                    escape_html_entities(chunk)
+                    for chunk in split_text_chunks(
+                        strip_html_markup(html), _TELEGRAM_TEXT_LIMIT // 5,
+                    )
+                ]
+            reserve = len(closing_tags()) + (-len(token) if closing else len(tag) + 3)
+            if length + len(token) + reserve > _TELEGRAM_TEXT_LIMIT:
+                flush()
+            parts.append(token)
+            length += len(token)
+            if closing:
+                tags.pop()
+            else:
+                tags.append(tag)
+            continue
+
+        offset = 0
+        atomic = token.startswith("&")
+        while offset < len(token):
+            available = _TELEGRAM_TEXT_LIMIT - length - len(closing_tags())
+            if available < (len(token) if atomic else 1):
+                flush()
+                continue
+            piece = token if atomic else token[offset:offset + available]
+            parts.append(piece)
+            length += len(piece)
+            offset += len(piece)
+    if parts:
+        chunks.append("".join(parts) + closing_tags())
     return chunks
 
 

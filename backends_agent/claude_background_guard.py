@@ -21,7 +21,7 @@ _BACKGROUND_HELP = (
     "instead; Cozter will start, persist, and report the provider task."
 )
 _SHELL_COMMANDS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "fish"})
-_COMMAND_SEPARATORS = frozenset({";", "&&", "||", "|", "&", "(", ")"})
+_COMMAND_SEPARATOR_CHARS = frozenset(";|&()")
 _ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 
 
@@ -202,12 +202,32 @@ def _shell_tokens(command: str) -> list[str]:
     # Launcher-looking text inside a here-document is data, just as its '&'
     # characters are data to the operator scanner.
     command = _without_heredoc_bodies(command)
+    # shlex treats newlines as whitespace and consumes comment terminators.
+    # Preserve those shell command boundaries before tokenization, while
+    # leaving quoted/escaped newlines inside their original argument.
+    fragments: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        advanced = _advance_shell_quote_or_escape(command, index, quote)
+        if advanced is not None:
+            next_index, quote = advanced
+            fragments.append(command[index:next_index])
+            index = next_index
+            continue
+        char = command[index]
+        if char == "#" and _starts_shell_comment(command, index):
+            newline = command.find("\n", index + 1)
+            index = len(command) if newline == -1 else newline
+            continue
+        fragments.append(";" if char == "\n" else char)
+        index += 1
     try:
         lexer = shlex.shlex(
-            command, posix=True, punctuation_chars="|&;()<>",
+            "".join(fragments), posix=True, punctuation_chars="|&;()<>",
         )
         lexer.whitespace_split = True
-        lexer.commenters = "#"
+        lexer.commenters = ""
         return list(lexer)
     except ValueError:
         # The shell rejects most malformed forms; the scan covers the rest.
@@ -219,7 +239,9 @@ def _command_segments(tokens: list[str]) -> list[list[str]]:
     segments: list[list[str]] = []
     current: list[str] = []
     for token in tokens:
-        if token in _COMMAND_SEPARATORS:
+        # shlex groups adjacent punctuation (e.g. a semicolon followed by
+        # our preserved newline); every such control group is a boundary.
+        if token and all(char in _COMMAND_SEPARATOR_CHARS for char in token):
             if current:
                 segments.append(current)
                 current = []

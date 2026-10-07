@@ -30,7 +30,7 @@ from typing import Any
 import aiohttp
 
 from .. import agent_tools as tools
-from ..utils import iter_bounded_lines
+from ..utils import clip_status_value, iter_bounded_lines
 from ._http_proc import HttpAgentProcess, http_error_translator
 from .base import (
     DOC_FOLLOWING_RULE, PROGRESS_RULE, VISION_RULE, WHOLE_SCOPE_RULE,
@@ -897,9 +897,7 @@ async def _post_completion_stream(
         ) as resp:
             if resp.status == 429 or resp.status >= 500:
                 body = await _read_error_body(resp)
-                clipped = body[:200 - len("… [clipped]")] + (
-                    "… [clipped]" if len(body) > 200 else ""
-                )
+                clipped = clip_status_value(body, 200)
                 raise _RetryableError(
                     f"{label} returned HTTP {resp.status}: {clipped}",
                     retry_after=_parse_retry_after(
@@ -908,9 +906,7 @@ async def _post_completion_stream(
                 )
             if resp.status != 200:
                 body = await _read_error_body(resp)
-                clipped = body[:500 - len("… [clipped]")] + (
-                    "… [clipped]" if len(body) > 500 else ""
-                )
+                clipped = clip_status_value(body, 500)
                 raise RuntimeError(
                     f"{label} returned HTTP {resp.status}: {clipped}"
                 )
@@ -935,10 +931,7 @@ async def _post_completion_stream(
                     )
                     if not isinstance(message, str) or not message.strip():
                         message = str(error)
-                    clipped_message = message.strip()[:500 - len("… [clipped]")] + (
-                        "… [clipped]"
-                        if len(message.strip()) > 500 else ""
-                    )
+                    clipped_message = clip_status_value(message.strip(), 500)
                     raise RuntimeError(
                         f"{label} stream error: {clipped_message}"
                     )

@@ -1949,6 +1949,24 @@ warning: ignored after the catalog
 
 
 class CopilotPromptCapTests(unittest.TestCase):
+    def test_head_preserving_cap_with_no_room_for_a_multibyte_tail(self) -> None:
+        head = "[System: preamble]\n\n"
+        prompt = head + "😀" * 1_000
+        prefix = head + copilot_mod._ARGV_MIDDLE_DROPPED_MARKER
+        with mock.patch.object(copilot_mod.sys, "platform", "linux"):
+            limit = copilot_mod._prompt_argv_units(prefix) + 1
+            out = copilot_mod._truncate_prompt_preserving_head(prompt, limit)
+            self.assertIn("😀", out)
+            self.assertIn("older prompt context dropped", out)
+            self.assertLessEqual(copilot_mod._prompt_argv_units(out), limit)
+
+    def test_tiny_posix_caps_do_not_exceed_the_byte_budget(self) -> None:
+        with mock.patch.object(copilot_mod.sys, "platform", "linux"):
+            for limit in (0, 1, 2, 3, 4):
+                with self.subTest(limit=limit):
+                    out = copilot_mod._truncate_prompt_for_argv("😀" * 10, limit)
+                    self.assertLessEqual(copilot_mod._prompt_argv_units(out), limit)
+
     def test_upload_in_dropped_context_keeps_native_attachment(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as workspace:

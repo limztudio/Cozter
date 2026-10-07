@@ -455,19 +455,31 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
     caller turns that into a user-facing failure. Minting a placeholder
     here would let "nobody answered" reach the user dressed as an answer.
     """
-    if len(results) == 1:
+    if not any(results):
+        return ""
+    if len(results) == 1 and len(plan.subtasks) <= 1:
         return results[0]
     parts: list[str] = []
+    missing: list[str] = []
     # Index, don't zip, so mismatches can't drop reports.
     for coverage_index in range(max(len(plan.subtasks), len(results))):
         text = results[coverage_index] if coverage_index < len(results) else ""
         if not text:
+            if coverage_index < len(plan.subtasks):
+                missing.append(
+                    f"{coverage_index + 1}. {plan.subtasks[coverage_index].instruction}"
+                )
             continue
         if coverage_index < len(plan.subtasks):
             instruction = plan.subtasks[coverage_index].instruction
         else:
             instruction = "(no sub-task)"
         parts.append(f"**{coverage_index + 1}. {instruction}**\n\n{text}")
+    if missing:
+        parts.append(
+            "PARTIAL: no report for the following task(s); "
+            "their completion remains unverified:\n" + "\n".join(missing)
+        )
     return "\n\n".join(parts)
 
 

@@ -188,6 +188,39 @@ class WebFetchSecurityTests(unittest.TestCase):
 
 
 class WebFetchContentTypeTests(unittest.TestCase):
+    def test_capped_html_keeps_the_marker_when_truncated_in_hidden_content(self) -> None:
+        async def run(tag: str) -> str:
+            session = _ResponseSession([
+                _Response(
+                    status=200,
+                    url="https://public.example/document",
+                    headers={"content-type": "text/html"},
+                    body=("<p>Visible text</p>" + tag + "x" * 100).encode(),
+                ),
+            ])
+
+            @asynccontextmanager
+            async def fake_session():
+                yield session
+
+            with (
+                mock.patch(
+                    "Cozter.agent_tools.builtin.web_fetch."
+                    "_open_public_http_session", fake_session,
+                ),
+                mock.patch("Cozter.agent_tools.base._MAX_FETCH_BYTES", 64),
+            ):
+                return await WebFetchTool().run(
+                    "", {"url": "https://public.example/document"},
+                )
+
+        for tag in ("<script>", "<style>"):
+            with self.subTest(tag=tag):
+                result = asyncio.run(run(tag))
+                self.assertIn("Visible text", result)
+                self.assertIn("fetch capped", result)
+                self.assertIn("PARTIAL + remainder", result)
+
     def test_case_insensitive_textual_content_types_are_readable(self) -> None:
         async def run(content_type: str) -> str:
             session = _ResponseSession([

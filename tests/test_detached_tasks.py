@@ -574,9 +574,9 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DetachedTaskLedgerTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self) -> None:
+    def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.addAsyncCleanup(self._cleanup)
+        self.addCleanup(self._cleanup)
         self.old_config_dir = workspace.CONFIG_DIR
         workspace.CONFIG_DIR = os.path.join(self.temp.name, "config")
         self.bot = _DetachedBot()
@@ -587,7 +587,7 @@ class DetachedTaskLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.backend_patch.start()
         self.addCleanup(self.backend_patch.stop)
 
-    async def _cleanup(self) -> None:
+    def _cleanup(self) -> None:
         workspace.CONFIG_DIR = self.old_config_dir
         self.temp.cleanup()
 

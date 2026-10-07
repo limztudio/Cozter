@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -75,6 +76,14 @@ class CalculatorToolTests(unittest.TestCase):
         self.assertIn("Error", self.evaluate_expression("9 ** 9 ** 9"))
         self.assertIn("Error", self.evaluate_expression("factorial(5000)"))
         self.assertIn("Error", self.evaluate_expression("2 ** 999999999"))
+
+    def test_power_accepts_large_finite_integer_operands(self) -> None:
+        self.assertEqual(
+            self.evaluate_expression("(factorial(500) ** 1) % 1000"), "0",
+        )
+        self.assertEqual(
+            self.evaluate_expression("(10 ** 500) ** 2 % 17"), "16",
+        )
 
     def test_error_cases(self) -> None:
         self.assertEqual(self.evaluate_expression("1 / 0"), "Error: division by zero")
@@ -256,6 +265,37 @@ class GitInfoToolTests(unittest.TestCase):
         self.assertIn("a.txt", summary)
         patch = self.invoke(action="diff", patch=True)
         self.assertIn("+two", patch)
+
+    def test_diff_does_not_execute_repository_diff_helpers(self) -> None:
+        self._commit("a.txt", "one\n", "initial commit")
+        marker = os.path.join(self.workspace, "helper-executed")
+        helper = os.path.join(self.workspace, ".git", "unsafe-diff.py")
+        with open(helper, "w", encoding="utf-8") as file_handle:
+            file_handle.write(
+                "from pathlib import Path\n"
+                f"Path({marker!r}).write_text('executed')\n"
+                "print('custom diff')\n"
+            )
+        command = f'"{sys.executable}" "{helper}"'
+        with open(os.path.join(self.workspace, "a.txt"), "a") as file_handle:
+            file_handle.write("two\n")
+
+        for setting in ("diff.external", "diff.unsafe.textconv"):
+            with self.subTest(setting=setting):
+                if setting.endswith("textconv"):
+                    self._git("config", "--unset", "diff.external")
+                    with open(
+                        os.path.join(self.workspace, ".gitattributes"), "w",
+                        encoding="utf-8",
+                    ) as file_handle:
+                        file_handle.write("a.txt diff=unsafe\n")
+                self._git("config", setting, command)
+
+                patch = self.invoke(action="diff", path="a.txt", patch=True)
+                self.assertIn("+two", patch)
+                self.assertIn("initial commit", self.invoke(action="show"))
+                self.assertIn("initial commit", self.invoke(action="log"))
+                self.assertFalse(os.path.exists(marker))
 
     def test_diff_without_head_falls_back_to_index(self) -> None:
         # Zero-commit repository: no HEAD yet.
@@ -798,11 +838,25 @@ class MemoryToolTests(unittest.TestCase):
         self.assertIn("…", result)  # per-line cap applied
         self.assertIn("[line clipped]", result)
 
-    def test_colony_cap_marks_preview_and_partial(self) -> None:
+    def test_colony_search_covers_items_beyond_the_output_limit(self) -> None:
         self.write_colony([f"item {index}" for index in range(120)])
-        result = self.invoke(action="search", query="older colony", limit=20)
-        self.assertIn("older colony item(s)", result)
+        result = self.invoke(action="search", query="item 119", limit=20)
+        self.assertIn("Found 1 match(es)", result)
+        self.assertIn("[Colony] item 119", result)
+
+        result = self.invoke(action="search", query="item", limit=20)
+        self.assertIn("Found 120 match(es)", result)
         self.assertIn("PARTIAL + remainder", result)
+
+    def test_colony_list_reports_the_actual_count(self) -> None:
+        self.write_colony([f"item {index}" for index in range(120)])
+        self.assertIn("Colony: 120 items", self.invoke(action="list"))
+
+    def test_colony_search_does_not_search_generated_omission_text(self) -> None:
+        self.write_colony([f"item {index}" for index in range(120)])
+        self.assertIn(
+            "No matches", self.invoke(action="search", query="older colony"),
+        )
 
     def test_read_missing_and_ambiguous_targets(self) -> None:
         self.write_session(

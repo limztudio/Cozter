@@ -50,6 +50,18 @@ class SignalFormattingTests(unittest.TestCase):
 
         self.assertEqual(chunks, [("a\nx*y\nb", ["2:3:MONOSPACE"])])
 
+    def test_longer_fence_preserves_short_backtick_content(self):
+        self.assertEqual(
+            _signal_rich_text_chunks("````python\n```literal\n**plain**\n````"),
+            [("```literal\n**plain**", ["0:20:MONOSPACE"])],
+        )
+
+    def test_tilde_fenced_code_keeps_markdown_literal(self):
+        self.assertEqual(
+            _signal_rich_text_chunks("~~~python\n**plain**\n~~~"),
+            [("**plain**", ["0:9:MONOSPACE"])],
+        )
+
     def test_styles_are_clipped_across_chunks(self) -> None:
         chunks = _signal_rich_text_chunks("**abcdef**", limit=3)
 

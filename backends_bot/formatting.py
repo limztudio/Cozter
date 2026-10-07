@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterator
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _INLINE_CODE_RE = re.compile(r"`([^`]+?)`")
+_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 
 
 LineRenderer = Callable[[str], str]
@@ -48,27 +49,34 @@ def iter_fenced_markdown(
     time so callers can apply line-oriented Markdown rules without rebuilding
     the fence state machine.
     """
-    in_code_block = False
+    fence_marker: str | None = None
     code_buf: list[str] = []
 
     if not isinstance(text, str):
         return
     for source_line in text.split("\n"):
-        if source_line.strip().startswith("```"):
-            if in_code_block:
+        stripped = source_line.strip()
+        if fence_marker is not None:
+            if (
+                len(stripped) >= len(fence_marker)
+                and stripped.strip(fence_marker[0]) == ""
+            ):
                 yield True, code_buf
                 code_buf = []
-                in_code_block = False
+                fence_marker = None
             else:
-                in_code_block = True
+                code_buf.append(source_line)
             continue
 
-        if in_code_block:
-            code_buf.append(source_line)
-        else:
-            yield False, [source_line]
+        opener = _FENCE_OPEN_RE.match(source_line)
+        if opener is not None and not (
+            opener.group(1)[0] == "`" and "`" in opener.group(2)
+        ):
+            fence_marker = opener.group(1)
+            continue
+        yield False, [source_line]
 
-    if in_code_block and code_buf:
+    if fence_marker is not None and code_buf:
         yield True, code_buf
 
 

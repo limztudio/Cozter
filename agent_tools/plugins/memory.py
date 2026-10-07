@@ -33,7 +33,6 @@ from ..base import (
 
 _SESSIONS_RELPATH = ".cozter/sessions"
 _COLONY_RELPATH = ".cozter/colony.json"
-_COLONY_ITEMS_CAP = 100
 _ACTIONS = ("search", "list", "read")
 
 # Bounds sized to the 4,000-char result cap.
@@ -131,16 +130,9 @@ def _colony_items(workspace: str) -> list[str]:
     items = raw.get("items") if isinstance(raw, dict) else None
     if not isinstance(items, list):
         return []
-    kept = [
+    return [
         item for item in items if isinstance(item, str) and item.strip()
     ]
-    if len(kept) > _COLONY_ITEMS_CAP:
-        kept = kept[:_COLONY_ITEMS_CAP] + [
-            f"… [{len(kept) - _COLONY_ITEMS_CAP} older colony item(s)"
-            " omitted — preview only; say PARTIAL + remainder"
-            " when coverage is unclear]"
-        ]
-    return kept
 
 
 def _sessions_dir(workspace: str) -> str | None:

@@ -111,6 +111,37 @@ class PlanParsingTests(unittest.TestCase):
         self.assertNotIn("[QUESTION]", autonomous)
 
 
+class MergeFallbackTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.plan = flexible.Plan(
+            understanding="Fix and verify",
+            subtasks=(
+                flexible.Subtask("low", "fix the bug"),
+                flexible.Subtask("mid", "verify the fix"),
+            ),
+        )
+
+    def test_missing_or_empty_report_keeps_remainder_visible(self) -> None:
+        for reports in (["Fixed"], ["Fixed", ""], ["", "Verified"]):
+            with self.subTest(reports=reports):
+                reply = flexible.merge_fallback(self.plan, reports)
+                self.assertIn("PARTIAL", reply)
+                missing = "fix the bug" if not reports[0] else "verify the fix"
+                self.assertIn(missing, reply)
+                self.assertIn("unverified", reply)
+
+    def test_no_reports_remains_a_failure(self) -> None:
+        for reports in ([], [""], ["", ""]):
+            with self.subTest(reports=reports):
+                self.assertEqual(flexible.merge_fallback(self.plan, reports), "")
+
+    def test_complete_reports_have_no_missing_report_notice(self) -> None:
+        reply = flexible.merge_fallback(self.plan, ["Fixed", "Verified"])
+        self.assertIn("Fixed", reply)
+        self.assertIn("Verified", reply)
+        self.assertNotIn("PARTIAL", reply)
+
+
 class FlexibleSettingsTests(unittest.TestCase):
     def test_a_fresh_workspace_has_every_tier_wired_up(self) -> None:
         with tempfile.TemporaryDirectory() as ws:

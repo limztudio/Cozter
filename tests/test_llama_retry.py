@@ -386,6 +386,29 @@ class OpenAIStreamShapeTests(unittest.TestCase):
 
         self.assertLessEqual(len(str(raised.exception)), 535)
 
+    def test_sse_error_preserves_messages_within_the_preview_cap(self) -> None:
+        for length in (489, 490, 500):
+            message = "x" * length
+            with self.subTest(length=length), self.assertRaises(RuntimeError) as raised:
+                self._stream([{"error": {"message": message}}])
+            self.assertEqual(str(raised.exception), f"test stream error: {message}")
+
+    def test_http_errors_preserve_bodies_within_the_preview_cap(self) -> None:
+        async def stream(status: int, body: str) -> None:
+            response = _SSEResponse([])
+            response.status = status
+            response.content = _ReadableContent([body.encode()])
+            with mock.patch.object(
+                oa.aiohttp, "ClientSession", return_value=_SSESession(response),
+            ), self.assertRaises(RuntimeError) as raised:
+                await oa._stream_once("http://x/chat/completions", {}, {}, 30, "test")
+            self.assertEqual(str(raised.exception), f"test returned HTTP {status}: {body}")
+
+        for status, lengths in ((400, (489, 490, 500)), (429, (189, 190, 200))):
+            for length in lengths:
+                with self.subTest(status=status, length=length):
+                    asyncio.run(stream(status, "x" * length))
+
     def test_http_error_body_read_is_bounded(self) -> None:
         async def stream() -> None:
             content = _ReadableContent([

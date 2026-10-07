@@ -44,8 +44,8 @@ class _FetchRefusedError(Exception):
 async def _fetch_following_redirects(
     session: aiohttp.ClientSession,
     url: str,
-) -> tuple[str, str, str]:
-    """GET *url* with per-hop validation; return url/content-type/body.
+) -> tuple[str, str, str, bool]:
+    """GET *url* with per-hop validation; return url/type/body/cap state.
 
     Every redirect target is re-validated against the public-address
     policy before it is followed, and deterministic refusals raise
@@ -93,9 +93,7 @@ async def _fetch_following_redirects(
                 )
 
             body, _fetch_capped = await read_bounded_text(response)
-            return final_url, content_type, with_fetch_cap_marker(
-                body, _fetch_capped,
-            )
+            return final_url, content_type, body, _fetch_capped
 
 
 class WebFetchTool(AgentTool):
@@ -133,11 +131,12 @@ class WebFetchTool(AgentTool):
         final_url = url
         content_type = ""
         body = ""
+        fetch_capped = False
         try:
             async with _open_public_http_session() as session:
                 for attempt in range(_FETCH_ATTEMPTS):
                     try:
-                        final_url, content_type, body = (
+                        final_url, content_type, body, fetch_capped = (
                             await _fetch_following_redirects(session, url)
                         )
                         break
@@ -164,6 +163,9 @@ class WebFetchTool(AgentTool):
         is_html = "html" in content_type.casefold()
         text = html_to_text(body) if is_html else body
         text = text.strip()
+        # Mark after stripping HTML: a capped raw script/style/comment can
+        # otherwise swallow the footer along with its hidden contents.
+        text = with_fetch_cap_marker(text, fetch_capped)
 
         if len(text) > max_chars:
             text = truncate_with_marker(

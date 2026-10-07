@@ -193,10 +193,16 @@ def _is_ad_or_internal(raw_href: str) -> bool:
     if not isinstance(target, str) or not target:
         target = raw_href
     try:
-        target_host = urllib.parse.urlsplit(target).hostname or ""
+        target_url = urllib.parse.urlsplit(target)
+        target_host = (target_url.hostname or "").lower().rstrip(".")
     except ValueError:
         return True
-    return target_host.lower().endswith(_DDG_HOST_SUFFIX)
+    if not target_host or target_url.scheme not in ("", "http", "https"):
+        return True
+    return (
+        target_host == _DDG_HOST_SUFFIX
+        or target_host.endswith("." + _DDG_HOST_SUFFIX)
+    )
 
 
 def _ddg_unwrap_url(url: str) -> str:
@@ -205,5 +211,5 @@ def _ddg_unwrap_url(url: str) -> str:
     unwrapped = qs.get("uddg")
     if unwrapped:
         first = unwrapped[0]
-        return first if isinstance(first, str) and first else url
-    return url
+        url = first if isinstance(first, str) and first else url
+    return "https:" + url if url.startswith("//") else url

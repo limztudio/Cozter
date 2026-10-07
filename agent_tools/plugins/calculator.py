@@ -35,7 +35,12 @@ def _guarded_pow(base: Any, exponent: Any) -> Any:
         and isinstance(exponent, (int, float))
         and not isinstance(exponent, bool)
     ):
-        if not math.isfinite(exponent) or not math.isfinite(base):
+        # Integers are always finite. Converting large exact integers to float
+        # for isfinite() can overflow before the guarded arithmetic runs.
+        if any(
+            isinstance(value, float) and not math.isfinite(value)
+            for value in (base, exponent)
+        ):
             raise _CalculationError("result is not finite (overflow or domain error)")
         if abs(exponent) > _MAX_EXPONENT:
             raise _CalculationError(

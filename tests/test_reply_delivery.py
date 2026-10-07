@@ -42,6 +42,26 @@ class _ReplyDeliveryBot(TestBot):
 
 
 class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_detached_reply_preserves_an_interactive_answer_pause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bot = _ReplyDeliveryBot(tmp, fail_final=False)
+            bot._awaiting_answer.add("u1")
+            result = AgentResult(events=[ChatEvent(kind="text", content="background done [[await]]")])
+
+            await bot._send_detached_result("chat", tmp, result, "u1")
+
+            self.assertEqual(bot.sent, ["background done"])
+            self.assertIn("u1", bot._awaiting_answer)
+
+    async def test_detached_reply_does_not_create_an_answer_pause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bot = _ReplyDeliveryBot(tmp, fail_final=False)
+            result = AgentResult(events=[ChatEvent(kind="text", content="background done [[await]]")])
+
+            await bot._send_detached_result("chat", tmp, result, "u1")
+
+            self.assertNotIn("u1", bot._awaiting_answer)
+
     async def test_failed_final_send_retains_reply_and_retry_does_not_rerun_agent(
         self,
     ) -> None:
