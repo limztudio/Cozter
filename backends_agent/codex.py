@@ -29,7 +29,7 @@ _FALLBACK_MODEL_SPECS = (
     ("gpt-5.6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-terra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
-    # Retired 2026-08-31: ends at gpt-5.5.
+    # GPT-5.5 remains selectable until its 2026-10-14 Codex retirement.
     ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
 )
 (
@@ -129,13 +129,13 @@ class CodexBackend(Backend):
         "auto": ("--sandbox", "workspace-write"),
         "restricted": ("--sandbox", "read-only"),
     }
-    default_model = "gpt-5.6-sol"
-    default_summary_model = "gpt-5.6-luna"
-    # 5.6 family; default stays Sol (older CLIs may lack Astra).
+    default_model = "gpt-6.1-sol"
+    default_summary_model = "gpt-6-luna"
+    # Keep focused work on Luna and progressively stronger work on Sol.
     tier_models = {
-        "low": "gpt-5.6-luna",
-        "mid": "gpt-5.6-terra",
-        "high": "gpt-5.6-sol",
+        "low": "gpt-6-luna",
+        "mid": "gpt-6-sol",
+        "high": "gpt-6.1-sol",
     }
     common_effort_levels = _COMMON_EFFORT_LEVELS
     effort_levels = (*common_effort_levels, "max", "ultra")

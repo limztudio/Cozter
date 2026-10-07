@@ -107,9 +107,9 @@ class FlexibleSettingsTests(unittest.TestCase):
             self.assertEqual(
                 workspace.get_flexible_run_config(ws),
                 {
-                    "low": ("codex", "gpt-5.6-luna"),
-                    "mid": ("codex", "gpt-5.6-terra"),
-                    "high": ("codex", "gpt-5.6-sol"),
+                    "low": ("codex", "gpt-6-luna"),
+                    "mid": ("codex", "gpt-6-sol"),
+                    "high": ("codex", "gpt-6.1-sol"),
                 },
             )
 
@@ -121,7 +121,7 @@ class FlexibleSettingsTests(unittest.TestCase):
             self.assertEqual(workspace.get_flexible_model(ws, "high"), "opus")
             # Rebinding one tier leaves the others.
             self.assertEqual(
-                workspace.get_flexible_model(ws, "low"), "gpt-5.6-luna",
+                workspace.get_flexible_model(ws, "low"), "gpt-6-luna",
             )
 
     def test_copilot_tier_and_summary_defaults_use_policy_aware_auto(self) -> None:
@@ -244,7 +244,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(restarting)
         self.assertEqual(
-            self.driven, [("codex", "gpt-5.6-luna"), ("claude_code", "opus")],
+            self.driven, [("codex", "gpt-6-luna"), ("claude_code", "opus")],
         )
         self.assertEqual(
             self.internal, ["Flexible planner", "Flexible merge"],
@@ -303,7 +303,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
         # A scheduled turn degrades into the fallback plan.
         self.assertNotIn("[[await]]", result.text)
-        self.assertEqual(self.driven, [("codex", "gpt-5.6-sol")])
+        self.assertEqual(self.driven, [("codex", "gpt-6.1-sol")])
 
     async def test_a_merged_answer_may_end_on_a_blocking_question(
         self,

@@ -25,6 +25,7 @@ from ._openai_agent import (
     discover_bearer_models,
     fetch_model_ids,
 )
+from .base import effort_band
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,26 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         "mid": "muse-spark-1.3",
         "high": "muse-spark-1.3",
     }
+    # https://dev.meta.ai/docs/reasoning: max is Standard-tier 1.3 only.
+    # Muse Spark always reasons, so its vocabulary never includes "none".
+    effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
+
+    def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
+        """Expose only reasoning levels supported by the selected tier."""
+        selected = (model or self.default_model).strip().casefold()
+        if selected == "muse-spark-1.3":
+            return self.effort_levels
+        if _capability_model_id(selected) in _MODEL_CONTEXT_WINDOWS:
+            return self.effort_levels[:-1]
+        return CachedOpenAIChatBackend.effort_levels
+
+    def _effort_fields(
+        self,
+        percent: int,
+        model: str | None = None,
+    ) -> dict[str, str]:
+        native_effort = effort_band(percent, self.effort_levels_for_model(model))
+        return {"reasoning_effort": native_effort} if native_effort else {}
 
     def context_window_tokens(self, model: str | None) -> int | None:
         """Return the published capacity for a curated Muse chat model."""

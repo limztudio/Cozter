@@ -40,14 +40,15 @@ from ..utils import (
 
 logger = logging.getLogger(__name__)
 
-# Effort support is model-specific; pinned exceptions stay separate.
+# Claude Code effort support differs from the API (notably Opus 4.5).
+# https://code.claude.com/docs/en/model-config#adjust-effort-level
 _FOUR_LEVEL_EFFORT_MODELS = frozenset({
-    "claude-opus-4-5",
-    "claude-opus-4-5-20251101",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
 })
 _NO_EFFORT_MODELS = frozenset({
+    "claude-opus-4-5",
+    "claude-opus-4-5-20251101",
     "haiku",
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",

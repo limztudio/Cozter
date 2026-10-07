@@ -94,12 +94,14 @@ _PRESERVED_THINKING_MODELS = frozenset(
 _TOOL_STREAM_MODELS = frozenset(
     spec.name for spec in _ALL_FALLBACK_MODEL_SPECS if spec.streams_tools
 )
-# Non-chat API paths (image/OCR/audio): unknown IDs stay selectable.
+# Non-chat API paths (image/OCR/audio/video): unknown IDs stay selectable.
 _NON_CHAT_COMPLETION_MODEL_IDS = frozenset({
     "glm-ocr",
     "glm-image",
     "cogview-4-250304",
     "glm-asr-2512",
+    # https://docs.z.ai/api-reference/video/generate-video
+    "cogvideox-3",
     # Phone-use agent, not a workspace chat model.
     "autoglm-phone-multilingual",
 })

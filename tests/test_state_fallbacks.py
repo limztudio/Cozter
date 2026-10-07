@@ -83,7 +83,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             self.assertEqual(backend, "flexible")
             # Flexible carries a model per tier.
             self.assertEqual(model, "")
-            self.assertEqual(summary_model, "gpt-5.6-luna")
+            self.assertEqual(summary_model, "gpt-6-luna")
             self.assertEqual(permission, "auto")
             self.assertEqual(summary_backend, "codex")
 
@@ -101,8 +101,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                     "codex_summary_model": "",
                 }, file_handle)
 
-            self.assertEqual(workspace.get_model(tmp), "gpt-5.6-sol")
-            self.assertEqual(workspace.get_summary_model(tmp), "gpt-5.6-luna")
+            self.assertEqual(workspace.get_model(tmp), "gpt-6.1-sol")
+            self.assertEqual(workspace.get_summary_model(tmp), "gpt-6-luna")
 
     def test_workspace_index_ignores_non_object_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -571,10 +571,7 @@ class BackendPermissionCommandTests(unittest.TestCase):
                 opus_45_command = self._claude_command(
                     "auto", model=model, effort=100,
                 )
-                self.assertEqual(
-                    opus_45_command[opus_45_command.index("--effort") + 1],
-                    "max",
-                )
+                self.assertNotIn("--effort", opus_45_command)
 
 
 class BackendModelTests(unittest.TestCase):
@@ -981,9 +978,9 @@ warning: ignored after the catalog
         self.assertEqual(
             CodexBackend.tier_models,
             {
-                "low": "gpt-5.6-luna",
-                "mid": "gpt-5.6-terra",
-                "high": "gpt-5.6-sol",
+                "low": "gpt-6-luna",
+                "mid": "gpt-6-sol",
+                "high": "gpt-6.1-sol",
             },
         )
         self.assertIn(CodexBackend.default_model, models)

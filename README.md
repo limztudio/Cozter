@@ -1029,15 +1029,16 @@ the hard ones:
 
 ```
 /agent_flexible_low     -> claude_code        /model_flexible_low   -> haiku
-/agent_flexible_mid     -> codex              /model_flexible_mid   -> gpt-5.6-luna
+/agent_flexible_mid     -> codex              /model_flexible_mid   -> gpt-6-sol
 /agent_flexible_high    -> claude_code        /model_flexible_high  -> opus
 ```
 
-Defaults put all three tiers on `codex` (`gpt-5.6-luna` / `gpt-5.6-terra` /
-`gpt-5.6-sol`). Codex keeps the high tier and chat default on Sol:
-Astra is now live-listed (verified 2026-10-06 against codex-cli 0.160.1),
-but a pinned `gpt-6-astra` default would still fail closed
-on older/company-managed CLIs whose catalogs have not listed it yet. Pointing a
+Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
+`gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
+These defaults follow the [current Codex model guidance](https://developers.openai.com/codex/models)
+and the installed CLI catalog (verified 2026-10-07 against codex-cli 0.160.1).
+Model access depends on the account and client; select an available model on
+older or company-managed installations. Existing saved model choices are retained. Pointing a
 tier at another agent picks that agent's cheap/mid/strong models
 automatically (its `tier_models` table) — for `zai` that is
 `glm-5.3-flash` / `glm-4.7` / `glm-5.3`, and for `meta`
@@ -1107,7 +1108,7 @@ its own, only the three tiers above.
 
 | Backend | Launch path | Default chat model | Default summary model |
 |---|---|---|---|
-| `codex` | `codex exec --ephemeral --json` | `gpt-5.6-sol` | `gpt-5.6-luna` |
+| `codex` | `codex exec --ephemeral --json` | `gpt-6.1-sol` | `gpt-6-luna` |
 | `claude_code` | `claude --print --output-format stream-json --verbose` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
 | `grok` | `grok --prompt-file … --output-format streaming-messages-json` | `grok-4.7` | `grok-4.7` |
@@ -1245,12 +1246,13 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. That built-in Codex fallback (verified 2026-10-06 against
+authoritative. That built-in Codex fallback (verified 2026-10-07 against
 codex-cli 0.160.1) lists the `gpt-6.1-sol` / `gpt-6-astra` / `gpt-6-sol` / `gpt-6-luna` quartet first in live-listed order — Astra shipped
 on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
 the GPT-5.6 family (Sol is the coding/everyday workhorse, Luna the fast
 affordable tier, both also 272K active) — followed by
-the GPT-5.6 Sol/Terra/Luna family and `gpt-5.5`; `gpt-5.3-codex-spark` is
+the GPT-5.6 Sol/Terra/Luna family and `gpt-5.5` (scheduled to retire from
+Codex with ChatGPT sign-in on October 14, 2026); `gpt-5.3-codex-spark` is
 gone from the live catalog, and `gpt-5.4` and `gpt-5.4-mini` were retired
 from Codex ChatGPT sign-in. Grok's published `grok-4.7`, `grok-4.7-build-fast`,
 `grok-4.6`, and `grok-4.5` IDs use a 500K-token
@@ -1286,8 +1288,9 @@ maps the percentage to its own vocabulary and request shape:
 |---|---|---|
 | `codex` | Model-aware: 4–6 levels | `ultra` (Astra/Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
+| `meta` | Standard Muse Spark 1.3: 6 levels (`minimal` through `max`); older and Contributor models: 5 levels (`minimal` through `xhigh`) | `payload["reasoning_effort"] = "max"` for standard 1.3; `xhigh` for older and Contributor models |
 | `zai` | GLM-5.3/Flash/FlashX: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
-| `claude_code` | Model-aware: current Fable / Sonnet 5.5 / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.5–4.6 and Sonnet 4.6 use 4; Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
+| `claude_code` | Model-aware: current Fable / Sonnet 5.5 / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.6 and Sonnet 4.6 use 4; Opus 4.5, Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
 | `grok` | Model-aware: grok-4.7 / grok-4.7-build-fast / grok-4.6 use 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on 4.7/4.6; `--effort high` otherwise |
 
