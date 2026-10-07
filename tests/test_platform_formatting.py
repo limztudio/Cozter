@@ -11,6 +11,22 @@ from Cozter.backends_bot.telegram import (
 
 
 class PlatformFormattingTests(unittest.TestCase):
+    def test_inline_code_preserves_markdown_characters_and_escapes_html(self):
+        source = "**Run** `**literal** _arg_ ~~value~~ <x & y>`"
+        self.assertEqual(
+            _md_to_html(source),
+            "<b>Run</b> <code>**literal** _arg_ ~~value~~ &lt;x &amp; y&gt;</code>",
+        )
+        self.assertEqual(
+            _md_to_mrkdwn(source),
+            "*Run* `**literal** _arg_ ~~value~~ &lt;x &amp; y&gt;`",
+        )
+
+    def test_inline_code_placeholders_cannot_replace_source_text(self):
+        source = "\x00CODE\x000\x00CODE\x00 `*literal*`"
+        self.assertEqual(_md_to_html(source), "\x00CODE\x000\x00CODE\x00 <code>*literal*</code>")
+        self.assertEqual(_md_to_mrkdwn(source), source)
+
     def test_attachment_kind_from_mime_handles_all_transports(self) -> None:
         self.assertEqual(attachment_kind_from_mime("IMAGE/jpeg"), "photo")
         self.assertEqual(attachment_kind_from_mime("audio/ogg"), "audio")

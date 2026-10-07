@@ -41,7 +41,7 @@ from .base import (
     upload_limit_message,
     upload_size_exceeds_limit,
 )
-from .formatting import escape_html_entities, render_fenced_markdown
+from .formatting import escape_html_entities, render_fenced_markdown, render_inline_code
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,13 @@ def _md_to_mrkdwn(text: str) -> str:
 
 
 def _mrkdwn_line(line: str) -> str:
+    return render_inline_code(
+        line, render_prose=_mrkdwn_prose,
+        render_code=lambda code: f"`{escape_html_entities(code)}`",
+    )
+
+
+def _mrkdwn_prose(line: str) -> str:
     line = escape_html_entities(line)
     # Bold first so italic can't mis-match it.
     if line[:1] == "#":

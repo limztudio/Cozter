@@ -7,10 +7,36 @@ from collections.abc import Callable, Iterator
 
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_INLINE_CODE_RE = re.compile(r"`([^`]+?)`")
 
 
 LineRenderer = Callable[[str], str]
 CodeBlockRenderer = Callable[[list[str]], list[str]]
+
+
+def render_inline_code(
+    text: str, *, render_prose: LineRenderer, render_code: LineRenderer,
+) -> str:
+    """Keep inline code literal while formatting the surrounding Markdown."""
+    if "`" not in text:
+        return render_prose(text)
+    marker = "\x00CODE\x00"
+    while marker in text:
+        marker += "\x00"
+    blocks: list[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        token = f"{marker}{len(blocks)}{marker}"
+        blocks.append(render_code(match.group(1)))
+        return token
+
+    rendered = render_prose(_INLINE_CODE_RE.sub(protect, text))
+    if not blocks:
+        return rendered
+    return re.sub(
+        re.escape(marker) + r"([0-9]+)" + re.escape(marker),
+        lambda match: blocks[int(match.group(1))], rendered,
+    )
 
 
 def iter_fenced_markdown(

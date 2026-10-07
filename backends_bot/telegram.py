@@ -46,6 +46,7 @@ from .base import (
 from .formatting import (
     escape_html_entities,
     render_fenced_markdown,
+    render_inline_code,
     strip_html_markup,
 )
 
@@ -80,7 +81,6 @@ _TELEGRAM_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
 _TELEGRAM_BOLD_UNDER_RE = re.compile(r"__(.+?)__")
 _TELEGRAM_ITALIC_STAR_RE = re.compile(r"(?<!\w)\*([^*]+?)\*(?!\w)")
 _TELEGRAM_ITALIC_UNDER_RE = re.compile(r"(?<!\w)_([^_]+?)_(?!\w)")
-_TELEGRAM_CODE_RE = re.compile(r"`([^`]+?)`")
 _TELEGRAM_STRIKE_RE = re.compile(r"~~(.+?)~~")
 
 
@@ -144,6 +144,13 @@ def _md_to_html(text: str) -> str:
 
 
 def _html_line(line: str) -> str:
+    return render_inline_code(
+        line, render_prose=_html_prose,
+        render_code=lambda code: f"<code>{escape_html_entities(code)}</code>",
+    )
+
+
+def _html_prose(line: str) -> str:
     line = escape_html_entities(line)
     # Substring guards skip the regex for plain lines.
     if line[:1] == "#":
@@ -156,8 +163,6 @@ def _html_line(line: str) -> str:
         line = _TELEGRAM_ITALIC_STAR_RE.sub(r"<i>\1</i>", line)
     if "_" in line:
         line = _TELEGRAM_ITALIC_UNDER_RE.sub(r"<i>\1</i>", line)
-    if "`" in line:
-        line = _TELEGRAM_CODE_RE.sub(r"<code>\1</code>", line)
     if "~~" in line:
         line = _TELEGRAM_STRIKE_RE.sub(r"<s>\1</s>", line)
     return line
