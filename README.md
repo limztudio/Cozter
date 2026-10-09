@@ -1043,7 +1043,9 @@ the hard ones:
 Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
 `gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
 These defaults follow the [current Codex model guidance](https://developers.openai.com/codex/models)
-and the installed CLI catalog (verified 2026-10-07 against codex-cli 0.160.1).
+and the installed CLI catalog (verified 2026-10-09 against codex-cli 0.162.0
+and grok 1.0.50; codex's `gpt-5.5` fallback remains until its 2026-10-14
+retirement).
 Model access depends on the account and client; select an available model on
 older or company-managed installations. Existing saved model choices are retained. Pointing a
 tier at another agent picks that agent's cheap/mid/strong models
@@ -1402,7 +1404,11 @@ Internal LLM jobs (routing, session titling, compaction, and colony
 consolidation) all go through `utils.run_internal_backend()`. The shared
 runner carries the 3600s real-work cap (cancel still stops instantly), consumes
 stdout and stderr without pipe deadlocks, kills cancelled children, and
-logs stderr when a backend exits without an assistant response. HTTP backends expose the same
+logs stderr when a backend exits without an assistant response. Streamed
+backend events prefer an already-buffered event or EOF over arming the
+post-exit drain, so a fast parent that exits with its final lines still
+buffered keeps every event instead of losing the tail to tree teardown.
+HTTP backends expose the same
 process-shaped contract through `backends_agent/_http_proc.py`, so the
 orchestrator uses one cleanup model for CLI and API agents.
 
@@ -1439,8 +1445,11 @@ changing the patch's meaning.
 replacement leaves the prior contents intact, and existing file mode bits are
 preserved.
 `copy_file` only copies files, while `move_file` can move a file or directory
-but refuses to move a directory into its own subtree. `copy_file` completes a
-same-directory temporary copy before atomically publishing a new destination
+but refuses to move a directory into its own subtree. `copy_file` stages
+through a same-directory temporary copy (creating a missing destination
+parent first), fsyncs through a read-write handle so Windows Python builds
+that reject read-only syncs still persist the bytes, then atomically
+publishes a new destination
 (with an exclusive-create fallback where hard links are unavailable), so a
 concurrent file or symlink can never be overwritten. `move_file` publishes
 regular files and symlinks without clobbering a late destination, then removes
