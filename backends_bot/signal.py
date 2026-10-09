@@ -1011,7 +1011,7 @@ class SignalBot(BotPlatform):
             if workspace.get_current(
                 self._state_user_id(candidate_group_id),
                 self.platform_id,
-            ) == ws
+            ) == workspace.canonicalize_workspace_path(ws)
         ]
         if targets_for_workspace != [target_user_id]:
             return 0

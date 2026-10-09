@@ -725,12 +725,21 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
     call created the target.
     """
     parent = os.path.dirname(target_path) or "."
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except OSError:
+        pass
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
     os.close(fd)
+    # mkstemp-created files cannot be overwritten by copy2 on Windows, so
+    # release the reserved name and let copy2 recreate it below.
+    os.unlink(tmp_path)
     try:
-        # copy2 keeps metadata; fsync first.
+        # copy2 keeps metadata; fsync first (read-write handle: read-only
+        # fds cannot be synced on some Windows Python builds).
         shutil.copy2(source_path, tmp_path)
-        with open(tmp_path, "rb") as tmp_file:
+        with open(tmp_path, "r+b") as tmp_file:
+            tmp_file.flush()
             os.fsync(tmp_file.fileno())
         return _publish_new_file_no_clobber(
             tmp_path, target_path, preserve_metadata=True,
@@ -839,8 +848,10 @@ def _copy_file_metadata_to_fd(source_path: str, target_fd: int) -> None:
     a replacement); extended metadata stays hard-link-path-only.
     """
     source_stat = os.stat(source_path, follow_symlinks=False)
+    fchmod = getattr(os, "fchmod", None)
     try:
-        os.fchmod(target_fd, stat.S_IMODE(source_stat.st_mode))
+        if fchmod is not None:
+            fchmod(target_fd, stat.S_IMODE(source_stat.st_mode))
         os.utime(
             target_fd,
             ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),

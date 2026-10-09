@@ -314,9 +314,16 @@ def has_managed_process_group(proc: object) -> bool:
 
 def _kill_process_group(group_id: int) -> bool:
     """Kill one non-current POSIX process group, if it is still reachable."""
+    if os.name == "nt":
+        return False
+    killpg = getattr(os, "killpg", None)
+    getpgid = getattr(os, "getpgid", None)
+    sigkill = getattr(signal, "SIGKILL", None)
+    if killpg is None or getpgid is None or sigkill is None:
+        return False
     try:
-        if group_id != os.getpgid(0):
-            os.killpg(group_id, signal.SIGKILL)
+        if group_id != getpgid(0):
+            killpg(group_id, sigkill)
             return True
     except (ProcessLookupError, PermissionError, OSError):
         pass
@@ -349,8 +356,9 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
         if _kill_process_group(getattr(proc, _PROCESS_GROUP_ID_ATTR)):
             return
     elif isinstance(pid, int) and pid > 0:
+        getpgid = getattr(os, "getpgid", None)
         try:
-            pgid = os.getpgid(pid)
+            pgid = getpgid(pid) if getpgid is not None else None
         except (ProcessLookupError, PermissionError, OSError):
             pgid = None  # already gone or no permission - fall back below
         if pgid is not None and _kill_process_group(pgid):
@@ -780,6 +788,19 @@ async def iter_process_json_events(
                     (next_event_task, exit_task),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
+                # A buffered event/EOF already waiting is parent output;
+                # consume it first rather than arming the post-exit drain.
+                if next_event_task in done:
+                    try:
+                        event = await next_event_task
+                    except StopAsyncIteration:
+                        if not exit_task.done():
+                            exit_task.cancel()
+                            await await_cancelled(exit_task)
+                        return
+                    yield event
+                    next_event_task = asyncio.create_task(_next_event())
+                    continue
                 if exit_task in done:
                     await exit_task
                     parent_exited = True
