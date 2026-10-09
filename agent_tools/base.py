@@ -792,9 +792,11 @@ def _hard_link_unsupported(exc: OSError) -> bool:
         errno.EPERM,
         errno.EXDEV,
         errno.ENOSYS,
-        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
         errno.EOPNOTSUPP,
     }
+    enotsup = getattr(errno, "ENOTSUP", None)
+    if enotsup is not None:
+        unsupported_errnos.add(enotsup)
     if exc.errno in unsupported_errnos:
         return True
     # Hard links unsupported here; other errors raise.
@@ -964,6 +966,12 @@ def _complete_no_clobber_move(
         raise
 
 
+def _rename_unavailable_error(detail: str) -> OSError:
+    """Build the no-clobber-rename-unavailable error for this platform."""
+    enotsup = getattr(errno, "ENOTSUP", errno.EOPNOTSUPP)
+    return OSError(enotsup, f"atomic no-clobber rename is unavailable {detail}")
+
+
 def _rename_path_no_clobber(source_path: str, target_path: str) -> bool:
     """Use a platform-native no-replace rename for non-file paths."""
     if os.name == "nt":
@@ -975,10 +983,7 @@ def _rename_path_no_clobber(source_path: str, target_path: str) -> bool:
         return True
     if sys.platform.startswith("linux"):
         return _linux_rename_no_replace(source_path, target_path)
-    raise OSError(
-        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
-        "atomic no-clobber rename is unavailable for this path type",
-    )
+    raise _rename_unavailable_error("for this path type")
 
 
 def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
@@ -989,10 +994,7 @@ def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
         libc = ctypes.CDLL(None, use_errno=True)
         renameat2 = libc.renameat2
     except (AttributeError, OSError) as exc:
-        raise OSError(
-            getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
-            "atomic no-clobber rename is unavailable on this system",
-        ) from exc
+        raise _rename_unavailable_error("on this system") from exc
     renameat2.argtypes = (
         ctypes.c_int,
         ctypes.c_char_p,
@@ -1008,16 +1010,9 @@ def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
     error = ctypes.get_errno()
     if error == errno.EEXIST:
         return False
-    if error in {
-        errno.EINVAL,
-        errno.ENOSYS,
-        errno.EOPNOTSUPP,
-        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
-    }:
-        raise OSError(
-            getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
-            "atomic no-clobber rename is unavailable for this filesystem",
-        )
+    enotsup = getattr(errno, "ENOTSUP", errno.EOPNOTSUPP)
+    if error in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP, enotsup}:
+        raise _rename_unavailable_error("for this filesystem")
     raise OSError(error, os.strerror(error), target_path)
 
 
