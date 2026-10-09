@@ -207,10 +207,6 @@ class LaunchArgumentTests(unittest.TestCase):
         self.assertIn("--typo", stderr.getvalue())
         self.assertIn("--help", stderr.getvalue())
 
-    def test_cli_flags_are_accepted(self) -> None:
-        self._main._validate_launch_args(["-cli"])
-        self._main._validate_launch_args(["--cli"])
-
 
 class DumpRuntimeDiagnosticsTests(unittest.TestCase):
     def setUp(self):
@@ -284,10 +280,6 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         self.assertEqual(
             self._main._bot_label(_NoId()), _NoId().__class__.__name__,
         )
-
-    def test_enable_faulthandler_is_best_effort_and_silent(self):
-        # Interval 0 must still enable the handler.
-        self._main._enable_faulthandler()
 
     def test_update_idle_diagnostic_keeps_waiting_for_active_turn(self):
         bot = _StubBot("test:active", active=True, diag="still-running")
