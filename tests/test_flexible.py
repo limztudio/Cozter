@@ -297,7 +297,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             workspace.ensure_cozter_dir(ws)
             result, _ = await self._run(ws)
 
-        # Worker text is internal; it feeds the merge step.
+        # Worker text is internal.
         texts = [event.content for event in result.events if event.kind == "text"]
         self.assertEqual(texts, ["merged answer"])
         self.assertEqual(result.text, "merged answer")
@@ -555,7 +555,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertNotIn("(no response)", result.text)
-        # The reply names the quiet agent+model so the user knows which tier to fix.
+        # The reply names the quiet tier.
         self.assertIn(f"{low_agent}/{low_model}", result.text)
 
     async def test_a_failing_worker_reports_why_it_went_quiet(self) -> None:
@@ -620,7 +620,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                     inject_queue=None, injected=[],
                 )
         self.assertFalse(restarting)
-        # Both the planned task and the discovered follow-up ran.
+        # Both the task and follow-up ran.
         self.assertEqual(len(calls), 2)
         # Progress shows the growing total, never a stuck denominator.
         self.assertTrue(any("[1/1]" in status for status in statuses))

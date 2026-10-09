@@ -123,7 +123,7 @@ def _without_heredoc_bodies(command: str) -> str:
             body_line = line.rstrip("\r\n")
             if strip_tabs:
                 body_line = body_line.lstrip("\t")
-            # Preserve line count; body text must not mimic operators.
+            # Preserve line count; bodies must not mimic operators.
             kept.append("\n" if line.endswith("\n") else "")
             if body_line == delimiter:
                 pending.popleft()
@@ -230,7 +230,7 @@ def _shell_tokens(command: str) -> list[str]:
         lexer.commenters = ""
         return list(lexer)
     except ValueError:
-        # The shell rejects most malformed forms; the scan covers the rest.
+        # The shell rejects most malformed forms.
         return []
 
 

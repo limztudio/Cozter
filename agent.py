@@ -285,7 +285,7 @@ def format_usage(usage: dict | None) -> str | None:
         and cost > 0
     ):
         if cost < 0.0001:
-            # Fixed-point (never scientific): sub-cent costs must not display as $0.
+            # Fixed-point: sub-cent costs must not show as $0.
             cost_str = f"{cost:.6f}".rstrip("0").rstrip(".")
         else:
             cost_str = f"{cost:.4f}".rstrip("0").rstrip(".")
@@ -356,7 +356,7 @@ def _copy_to_unique_path(source: str, directory: str, filename: str) -> str | No
             directory,
             filename if index == 1 else f"{stem}-{index}{ext}",
         )
-        # Fast path only (publisher below is authoritative): skip known collisions.
+        # Fast path only; publisher below is authoritative.
         if os.path.lexists(candidate):
             continue
         if copy_file_atomically(source, candidate):
@@ -382,7 +382,7 @@ def _copy_generated_image_into_workspace(
         return src_real
 
     try:
-        # Re-resolve after create: symlinks must not redirect the copy outside.
+        # Re-resolve: symlinks must not escape the workspace.
         dest_dir = workspace_mod.ensure_workspace_state_dir(
             workspace_path, "generated_images",
         )
@@ -478,7 +478,7 @@ def _iter_image_files(root: str, *, skip_dirs: bool) -> list[str]:
                 if ext not in IMAGE_EXTENSIONS:
                     continue
                 path = os.path.realpath(os.path.join(dirpath, filename))
-                # os.walk lists file symlinks too; keep workspace-only scans from escaping via symlink.
+                # os.walk follows file symlinks; stay workspace-only.
                 if is_path_within(path, root_real) and os.path.isfile(path):
                     paths.append(path)
     except OSError:
@@ -562,7 +562,7 @@ def _truncate_context_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     if limit <= len(_CONTEXT_TRUNCATION_MARKER):
-        # Too tight for the full marker: keep a cut indicator, not a silent prefix.
+        # Too tight for the marker: keep a cut indicator.
         if limit <= 1:
             return "…"[:limit]
         return text[:limit - 1] + "…"
@@ -612,7 +612,7 @@ def _bounded_context_list_block(
             "… [older items omitted — never treat this preview as full"
             " coverage; say PARTIAL + remainder when coverage is unclear]"
         )
-        # Drop oldest lines first for the omission marker; track lengths to stay O(n).
+        # Drop oldest first; track lengths to stay O(n).
         line_lengths = [len(line) for line in lines]
         total = sum(line_lengths) + max(0, len(lines) - 1)
         start = 0
@@ -630,7 +630,7 @@ def _bounded_context_list_block(
     if lines:
         body = "\n".join(lines)
     else:
-        # Oversized single item: keep a bounded tail so the block stays visible.
+        # Oversized item: keep a bounded tail.
         body = _truncate_context_text(formatter(items[-1]), body_limit)
     return header + body + footer if body else ""
 
@@ -748,7 +748,7 @@ def _build_contextual_prompt(
 
     full = "\n".join(parts)
 
-    # Bound durable blocks too: oversized memory must not unbound the prompt.
+    # Bound durable blocks too.
     if len(full) > budget:
         keywords = _request_keywords(prompt)
         colony_list = _relevance_last(list(colony_list), keywords)
@@ -792,11 +792,11 @@ def _build_contextual_prompt(
         continuation = (
             "New message:"
         )
-        # Fit context: drop wrapper + history, keep the request intact.
+        # Fit context: keep the request intact.
         fixed_length = len(continuation) + 1 + len(prompt)
         if fixed_length > budget:
             return prompt
-        # Count join separators too; oversized requests still stay intact.
+        # Count separators too.
         context_budget = max(
             0,
             budget - fixed_length - len(descriptors),
@@ -953,10 +953,10 @@ async def _drive_backend(
     except FileNotFoundError as e:
         raise BackendUnavailableError(backend) from e
     except (OSError, RuntimeError) as exc:
-        # Surface launch failures as a chat result (don't strand queued work).
+        # Surface launch failures instead of stranding queued work.
         result = AgentResult()
         set_error_result(result, f"{backend.name} could not start: {exc}")
-        # A pre-failure /inject still counts: carry it into the restart path.
+        # A pre-failure /inject still counts.
         if _take_pending_injections(inject_queue, injected):
             return result, True
         if close_inject_on_completion:
@@ -972,7 +972,7 @@ async def _drive_backend(
     def _log_non_json_line(line: str) -> None:
         logger.debug("Non-JSON line: %s", line)
 
-    # Watch inject_queue: kill the subprocess on message arrival.
+    # Watch inject_queue: kill the subprocess on arrival.
     async def _watch_inject(
         active_proc: asyncio.subprocess.Process = proc,
     ) -> None:
@@ -982,7 +982,7 @@ async def _drive_backend(
         if injected is not None:
             injected.append(msg)
         restarting = True
-        # Kill the process group so grandchildren stop mutating the workspace.
+        # Kill the process group with grandchildren.
         terminate_process_group(active_proc)
 
     inject_task: asyncio.Task | None = None
@@ -1013,9 +1013,9 @@ async def _drive_backend(
         )
         raise
     finally:
-        # No exceptional stream exit may leak the drain task.
+        # Never leak the drain task.
         try:
-            # No durable provider task here: tear down the whole tree.
+            # No durable provider task: tear down the whole tree.
             if (
                 proc.returncode is None
                 or cancelled
@@ -1032,12 +1032,12 @@ async def _drive_backend(
                 preserve_process_tree=lambda: bool(result.detached_tasks),
             )
         except BaseException:
-            # Late reader/teardown failure is still not a clean turn.
+            # Late teardown failure is not a clean turn.
             if has_managed_process_group(proc):
                 terminate_process_group(proc)
             raise
         finally:
-            # A second cancellation can interrupt teardown; never leak readers/watchers.
+            # Teardown can be cancelled; never leak watchers.
             if inject_task and not inject_task.done():
                 inject_task.cancel()
                 await await_cancelled(inject_task)
@@ -1050,20 +1050,20 @@ async def _drive_backend(
     if restarting:
         return result, True
 
-    # Final sync drain: accepted messages must survive the teardown gap.
+    # Final drain: accepted messages survive teardown.
     if _take_pending_injections(inject_queue, injected):
-        # Watcher already stopped; terminate before rebuilding the restart prompt.
+        # Watcher stopped; terminate before rebuilding the prompt.
         if has_managed_process_group(proc):
             terminate_process_group(proc)
         return result, True
     if close_inject_on_completion:
         _close_inject_queue(inject_queue)
 
-    # Completed turn: stop same-group children, keep ledger-tracked tasks.
+    # Completed turn: stop same-group children.
     if has_managed_process_group(proc) and not result.detached_tasks:
         terminate_process_group(proc)
 
-    # Keyed on text: a tool-streaming death still owes an error answer.
+    # A tool-streaming death still owes an error answer.
     if proc.returncode != 0 and not result.text:
         msg = f"{backend.name} exited with code {proc.returncode}"
         if stderr:
@@ -1109,7 +1109,7 @@ async def _run_with_inject_watch(
         await await_cancelled(watch_task)
         raise
     if watch_task.done() and not watch_task.cancelled():
-        # Inject arrived first: abandon the call, restart with the new message.
+        # Inject arrived first: abandon the call.
         msg = watch_task.result()
         if injected is not None:
             injected.append(msg)
@@ -1119,18 +1119,18 @@ async def _run_with_inject_watch(
         except asyncio.CancelledError:
             pass
         except Exception:
-            # Same-tick race: injected message wins; failure belongs to the old attempt.
+            # Same-tick race: inject wins.
             logger.debug(
                 "Discarding internal backend failure after an inject",
                 exc_info=True,
             )
         return None, True
-    # Call finished first: stop watching without consuming a message.
+    # Call finished first: stop watching.
     watch_task.cancel()
     await await_cancelled(watch_task)
-    # A message can arrive after watcher cancel; collect it and restart.
+    # A message can arrive after cancel; collect and restart.
     if _take_pending_injections(inject_queue, injected):
-        # Retrieve the result; late injects still win over finished failures.
+        # Late injects win over finished failures.
         try:
             call_task.result()
         except asyncio.CancelledError:
@@ -1142,12 +1142,12 @@ async def _run_with_inject_watch(
             )
         return None, True
     if close_inject_on_completion:
-        # Terminal planner/merge phase: close before I/O so late /inject is rejected.
+        # Terminal phase: close before I/O.
         _close_inject_queue(inject_queue)
     return call_task.result(), False
 
 
-# Flexible agent: plan, route by difficulty, merge. Usage is summed to one total.
+# Flexible: plan, route, merge; usage summed.
 _USAGE_TOTAL_FIELDS = ("input_tokens", "output_tokens", "total_cost_usd")
 
 
@@ -1259,13 +1259,13 @@ async def _judge_draft(
             injected,
         )
     except (AttributeError, TypeError) as exc:
-        # Judge is advisory (test doubles may lack launch()): ship the draft.
+        # Judge is advisory: ship the draft.
         logger.warning("Continue judge unavailable (%s) - shipping draft", exc)
         return flexible.JudgeVerdict(should_continue=False), False
     if restarting:
         return flexible.JudgeVerdict(should_continue=False), True
     if raw is None:
-        # Judge CLI missing: ship the draft rather than looping or dying.
+        # Judge CLI missing: ship the draft.
         return flexible.JudgeVerdict(should_continue=False), False
     return flexible.parse_judge(raw or ""), False
 
@@ -1302,7 +1302,7 @@ async def _run_flexible(
         if on_event:
             await on_event(ChatEvent(kind="tool", content=text))
 
-    # 1. Understand the request and split it by difficulty.
+    # 1. Plan.
     await status(
         f"flexible: planning with {summary_backend.name}/{summary_model}"
     )
@@ -1330,10 +1330,10 @@ async def _run_flexible(
         return AgentResult(), True
     plan = flexible.parse_plan(raw_plan or "", request)
 
-    # Only the planner may stop and ask; workers run mid-pipeline unread.
+    # Only the planner may ask.
     if plan.question:
         if collaborative:
-            # A planner question ends the turn pre-merge; same terminal injection boundary.
+            # A planner question ends the turn pre-merge.
             if _take_pending_injections(inject_queue, injected):
                 return AgentResult(), True
             if close_inject_on_completion:
@@ -1352,7 +1352,7 @@ async def _run_flexible(
         ),
     )
 
-    # 2. Route each sub-task to the agent+model bound to its tier.
+    # 2. Route sub-tasks to tiers.
     result = AgentResult()
     reports: list[str] = []
     attach_markers: list[str] = []
@@ -1378,7 +1378,7 @@ async def _run_flexible(
             _build_backend_prompt(
                 tier_backend,
                 flexible.build_subtask_prompt(
-                    # Bare request only: planner instructions are self-contained.
+                    # Planner instructions are self-contained.
                     request, plan, done, reports,
                 ),
                 collaborative=False,
@@ -1394,7 +1394,7 @@ async def _run_flexible(
         if restarting:
             return result, True
 
-        # Worker text is internal (feeds the merge, not the chat).
+        # Worker text is internal (feeds the merge).
         result.events.extend(
             ev for ev in sub_result.events if ev.kind != "text"
         )
@@ -1411,7 +1411,7 @@ async def _run_flexible(
         attach_markers.extend(markers)
         report = report.strip()
 
-        # An empty worker report is a failure: name the tier for the user.
+        # Empty worker report: name the tier.
         if not report:
             report = (
                 f"(no output: {tier_backend_name}/{tier_model} ended the"
@@ -1420,15 +1420,15 @@ async def _run_flexible(
                 + ")"
             )
         elif sub_result.error:
-            # Half an answer plus a failure: tell the merge, or it ships the half.
+            # Half answer + failure: tell the merge.
             report += f"\n\n(the agent then failed: {sub_result.error})"
         reports.append(report)
 
-        # A stuck (asking) worker: merge ends on its question, pauses queue.
+        # Stuck worker: merge ends on its question.
         if worker_awaiting:
             blocked.append(done)
 
-        # Worker [followup:<tier>] lines grow the queue live (done/total).
+        # [followup:<tier>] lines grow the queue live.
         for extra in flexible.parse_followups(report):
             if extra not in queue and len(queue) < flexible.MAX_SUBTASKS * 2:
                 queue.append(extra)
@@ -1463,7 +1463,7 @@ async def _run_flexible(
         result.usage = usage_totals or None
         return result, False
 
-    # 3. Merge the reports into the single reply the user sees.
+    # 3. Merge reports into the user reply.
     await status(
         f"flexible: merging with {summary_backend.name}/{summary_model}"
     )
@@ -1492,11 +1492,11 @@ async def _run_flexible(
         return AgentResult(), True
     final = (merged or "").strip() or flexible.merge_fallback(plan, reports)
 
-    # Only the merge may end on a question: normalize the marker to last.
+    # Only the merge may end on a question.
     final, merge_awaiting = extract_await(final)
     final = final.strip()
 
-    # All-empty workers + merge is a failure: say which tier broke.
+    # All-empty workers + merge is a failure.
     if not final:
         logger.warning(
             "Flexible produced no text: %d worker report(s) all empty",
@@ -1888,7 +1888,7 @@ async def _run_turn(
             session_id=session_id,
         )
     except asyncio.CancelledError:
-        # Trace the stopped attempt for later resume; never swallow cancellation.
+# Trace the stopped attempt; never swallow cancellation.
         _log_interrupted_turn(turn)
         raise
 
@@ -1916,11 +1916,11 @@ async def _run_turn_impl(
     backend = backends_agent.get_backend(backend_name)
     is_flexible = backend.name == flexible.BACKEND_NAME
 
-    # Router/compaction/titling/planner/merge run on the summary backend.
+# Router/compaction/titling/planner/merge share the summary backend.
     summary_backend = summary_backend_name or (
         backends_agent.DEFAULT_DIRECT_BACKEND if is_flexible else backend.name
     )
-    # Default the summary model to the summary backend's intent.
+# Default the summary model.
     summary_model = _resolve_summary_model(summary_model, summary_backend)
     compaction_context_targets = _compaction_context_targets(
         workspace_path,
@@ -1930,15 +1930,15 @@ async def _run_turn_impl(
         summary_model,
     )
 
-    # Pinned sessions never clobber last_session.
+# Pinned sessions never clobber last_session.
     explicit_session = session_id is not None
 
-    # session_data is reused across inject restarts (no re-read per iteration).
+# session_data reused across inject restarts.
     if explicit_session:
         assert session_id is not None  # explicit_session == (session_id set)
         session_data = session.load_session(workspace_path, session_id)
         if session_data is None:
-            # Pinned session deleted underneath us; bail instead of rewriting fresh.
+# Pinned session deleted; bail.
             result = AgentResult()
             set_error_result(
                 result,
@@ -1954,18 +1954,18 @@ async def _run_turn_impl(
             summary_backend,
         )
 
-    # session_id is set by both resolution branches here.
+# session_id set by both branches.
     assert session_id is not None
     turn.session_id = session_id
-    # Workspace memory loads once; reused across inject restarts.
+# Workspace memory loads once.
     colony_items = colony.get_items(workspace_path)
 
-    # Scheduled/ephemeral turns always run autonomous.
+# Scheduled/ephemeral turns run autonomous.
     collaborative = _is_collaborative_turn(
         workspace_path, explicit_session=explicit_session,
     )
 
-    # Prepended context-block budget; configurable per workspace.
+# Prepended context-block budget.
     history_budget = workspace_mod.get_history_budget(workspace_path)
 
     injected: list[str] = []
@@ -1979,7 +1979,7 @@ async def _run_turn_impl(
         if on_event is not None:
             await on_event(event)
 
-    # Tee backend phases so a cancelled turn still records what it reached.
+# Tee phases so a cancelled turn records progress.
 
     while True:  # restart loop for inject
         effective_prompt = prompt
@@ -1994,7 +1994,7 @@ async def _run_turn_impl(
             budget=history_budget,
         )
 
-        # Workspace scans can be expensive; keep them off the bot event loop.
+# Workspace scans off the event loop.
         attachment_images_before = await asyncio.to_thread(
             _snapshot_attachment_images, workspace_path,
         )
@@ -2035,7 +2035,7 @@ async def _run_turn_impl(
         except BackendUnavailableError as e:
             return _error_result(session_id, str(e), inject_queue)
 
-        # Inject restart: drain pipes and extra injects from shutdown.
+# Inject restart: drain shutdown pipes and injects.
         if restarting:
             await _announce_restart(
                 backend.name, injected, inject_queue, _stream_event,
@@ -2054,7 +2054,7 @@ async def _run_turn_impl(
         for path in new_attachment_paths:
             result.events.append(ChatEvent(kind="attachment", content=path))
 
-        # CONTINUE re-drives the backend (capped); inject/cancel/await/failure exit.
+# CONTINUE re-drives the backend (capped).
         judged_rounds = 0
         while judged_rounds < flexible.JUDGE_MAX_CONTINUES:
             draft = result.text
@@ -2162,7 +2162,7 @@ async def _run_turn_impl(
             )
             for path in new_attachment_paths:
                 result.events.append(ChatEvent(kind="attachment", content=path))
-            # Cap exhausted: keep the verdict so the bot layer chains instead of PARTIAL.
+# Cap exhausted: keep the verdict for chaining.
             if judged_rounds >= flexible.JUDGE_MAX_CONTINUES:
                 _draft_tail, _tail_awaiting = extract_await(result.text or "")
                 if result.error or _tail_awaiting or not _draft_tail.strip():
@@ -2204,21 +2204,21 @@ async def _run_turn_impl(
             continue
         break  # normal completion
 
-    # Close for direct callers before session/reply yields.
+# Close before session/reply yields.
     _close_inject_queue(inject_queue)
-    # Discard programmatic-Queue messages after the final answer.
+# Discard Queue messages after the final answer.
     _drain_queue(inject_queue)
 
-    # Detached-task requests: consume the marker before session/chat delivery.
+# Consume the marker before session/chat delivery.
     _consume_detached_task_requests(result)
 
-    # Log the original prompt (including injected context) to session.
+# Log the original prompt to session.
     async with workspace_mod.get_lock(workspace_path):
         _log_to_session(workspace_path, session_id, effective_prompt, result)
-        # Only a completed write suppresses the interrupted-turn fallback.
+# Only a completed write suppresses the fallback.
         turn.logged_normally = True
 
-    # Compaction runs post-turn (answer already complete).
+# Compaction runs post-turn.
     create_background_task(
         _run_post_turn_maintenance(
             workspace_path,

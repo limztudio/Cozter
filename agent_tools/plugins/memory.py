@@ -35,7 +35,7 @@ _SESSIONS_RELPATH = ".cozter/sessions"
 _COLONY_RELPATH = ".cozter/colony.json"
 _ACTIONS = ("search", "list", "read")
 
-# Bounds sized to the 4,000-char result cap.
+# Bounds sized to the result cap.
 _MATCH_LIMIT_DEFAULT = 8
 _MATCH_LIMIT_MAX = 20
 _EXCERPT_CHARS = 160
@@ -159,7 +159,7 @@ def _excerpt(text: str, index: int, needle_len: int) -> str:
     full = f"{prefix}{snippet}{suffix}"
     if len(full) <= cap:
         return full
-    # Outer cap could drop the marker; keep edge markers honest.
+    # Outer cap could drop the marker.
     if suffix:
         budget = max(0, cap - len(prefix) - len(suffix))
         return f"{prefix}{snippet[:budget]}{suffix}"

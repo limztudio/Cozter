@@ -96,7 +96,7 @@ def _telegram_retry_delay(exc: BaseException) -> float | None:
     """
     retry_after = getattr(exc, "retry_after", None)
     if isinstance(retry_after, bool) or retry_after is None:
-        # A bool is not a duration; fall through.
+        # A bool is not a duration.
         pass
     else:
         try:
@@ -411,7 +411,7 @@ class TelegramBot(BotPlatform):
             | filters.VOICE
             | filters.VIDEO_NOTE
         )
-        # New messages only: edited ones carry no ``update.message``.
+        # New messages only.
         self.app.add_handler(
             MessageHandler(
                 attachment_filter & filters.UpdateType.MESSAGE,
@@ -488,7 +488,7 @@ class TelegramBot(BotPlatform):
     async def _on_file(
         self, update: Update, _context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
-        # Early auth check before downloading files.
+        # Early auth before downloads.
         if not self._precheck(update):
             return
         uid = str(update.effective_user.id)
@@ -541,7 +541,7 @@ class TelegramBot(BotPlatform):
 
         tg_file = await media.get_file()
         try:
-            # getFile may supply the missing size; reject before downloading.
+            # getFile may supply size; reject first.
             self._check_upload_size(getattr(tg_file, "file_size", None))
         except UploadTooLargeError:
             await self._reply_file_error(
@@ -550,7 +550,7 @@ class TelegramBot(BotPlatform):
             return
 
         caption = (message.caption or "").strip()
-        # Strip path components to prevent traversal.
+        # Strip paths to prevent traversal.
         filename = os.path.basename(filename) or f"file_{tg_file.file_id}"
 
         if not ws or not os.path.isdir(ws):

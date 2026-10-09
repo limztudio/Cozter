@@ -127,7 +127,7 @@ class WebFetchTool(AgentTool):
             maximum=30_000,
         )
 
-        # One retry for transient failures; one shared session.
+        # One retry for transient failures.
         final_url = url
         content_type = ""
         body = ""

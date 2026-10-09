@@ -23,7 +23,7 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-# One compaction per session: no racing snapshots.
+# One compaction per session.
 _in_flight: set[tuple[str, str]] = set()
 
 
@@ -31,7 +31,7 @@ KEEP_RECENT_AFTER_COMPACT = 5
 MAX_SUMMARY_CHARS = 80_000  # ~20K tokens
 COMPACT_TIMEOUT: float | None = 3600.0  # work cap
 
-# Trigger before stored material crowds out the reply.
+# Trigger before stored material crowds the reply.
 _MODEL_CONTEXT_COMPACT_FRACTION = 0.60
 # ``/context`` is the per-workspace ceiling; summarize before truncation.
 _HISTORY_BUDGET_COMPACT_FRACTION = 0.75
@@ -137,7 +137,7 @@ def _bounded_previous_summary(summary: str) -> str:
         return summary
     marker = _PREVIOUS_SUMMARY_TRUNCATION_MARKER
     if budget <= len(marker):
-        # Too tight for the full marker: keep a visible cut indicator.
+        # Too tight for the marker: keep a cut indicator.
         if budget <= 1:
             return "…"[:budget]
         return summary[:budget - 1] + "…"
@@ -479,7 +479,7 @@ async def _maybe_compact_under_maintenance_lock(
         )
         return
     async with workspace_mod.get_lock(workspace_path):
-        # Never let a stale in-flight title overwrite a newer rename.
+        # Never let a stale title overwrite a rename.
         latest = session.load_session(workspace_path, session_id)
         if latest is None:
             return
@@ -507,7 +507,7 @@ async def _maybe_compact_under_maintenance_lock(
                 or not isinstance(messages[0], dict)
                 or messages[0].get("content") != original_content
             ):
-                # A concurrent write won the race; keep raw state over a stale suffix.
+                # Concurrent write won; keep raw over stale suffix.
                 logger.warning(
                     "Skipping stale oversized-message compaction for "
                     "session %s", session_id,

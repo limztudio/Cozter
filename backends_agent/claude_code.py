@@ -57,7 +57,7 @@ _NO_EFFORT_MODELS = frozenset({
 })
 _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 
-# No safe non-interactive catalog: keep explicit ``[1m]`` selections only.
+# No safe catalog: keep explicit ``[1m]`` only.
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
     # Capacity attaches to explicit ``[1m]`` selections only.
@@ -87,13 +87,13 @@ _BACKGROUND_BASH_RE = re.compile(
 _SAFE_BACKGROUND_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _DETACHED_COMMAND_TIMEOUT_SEC = 30
 _BACKGROUND_GUARD_TIMEOUT_SEC = 5
-# A supervisor may keep pipes open: keep the prefix, release transports.
+# A supervisor may keep pipes open.
 _DETACHED_COMMAND_STREAM_DRAIN_TIMEOUT_SEC = 1.0
 _DETACHED_COMMAND_EXIT_CLEANUP_TIMEOUT_SEC = 1.0
-# Small metadata commands: keep each stream well below a chat reply.
+# Small metadata commands: bound each stream.
 _MAX_DETACHED_COMMAND_OUTPUT_BYTES = 1 * 1024 * 1024
 _DETACHED_COMMAND_READ_BYTES = 64 * 1024
-# Durable JSONL can dwarf the needed text: bound lines and text separately.
+# Durable JSONL can dwarf the text: bound both.
 _MAX_DETACHED_TRANSCRIPT_LINE_BYTES = 8 * 1024 * 1024
 _MAX_DETACHED_OUTPUT_TEXT_BYTES = 4 * 1024 * 1024
 # ``state.json`` also carries the result; cap it first.
@@ -109,7 +109,7 @@ def _background_guard_settings() -> str:
         os.path.dirname(__file__), "claude_background_guard.py",
     )
     return json.dumps({
-        # CLI settings win; disableAllHooks must not drop this session's guard.
+        # CLI settings win.
         "disableAllHooks": False,
         "hooks": {
             "PreToolUse": [{
@@ -302,7 +302,7 @@ def _iter_bounded_transcript_lines(path: str):
                 yield line
                 continue
 
-            # readline(limit) may split lines; drain the rest.
+            # readline(limit) may split lines.
             while not line.endswith(b"\n"):
                 line = file_handle.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1)
                 if not line:
@@ -437,7 +437,7 @@ async def _capture_claude_command_output(
     )
     readers = (stdout_task, stderr_task)
     try:
-        # Unlike ``Process.wait()``, don't wait for pipe EOF.
+        # Unlike wait(): don't wait for pipe EOF.
         await wait_for_process_exit(proc)
         _done, pending = await asyncio.wait(
             readers, timeout=_DETACHED_COMMAND_STREAM_DRAIN_TIMEOUT_SEC,
@@ -489,7 +489,7 @@ async def _run_claude_command(
 
 async def _stop_claude_command_launcher(proc: asyncio.subprocess.Process) -> None:
     """Reap a cancelled/timed-out control launcher, preserving its workers."""
-    # Don't kill the group: ``claude --bg`` workers aren't ours.
+        # Don't kill the group: workers aren't ours.
     if proc.returncode is None:
         try:
             proc.kill()
@@ -810,7 +810,7 @@ class ClaudeCodeBackend(Backend):
         )
 
     def extract_agent_text(self, event: dict) -> str | None:
-        # Compaction prefers terminal result.result (aggregated final) over streaming partials.
+        # Compaction prefers terminal result.result.
         return extract_messages_style_agent_text(event)
 
     # helpers

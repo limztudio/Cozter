@@ -47,7 +47,7 @@ from .base import truncate_with_marker
 
 logger = logging.getLogger(__name__)
 
-# Bound tool results: huge outputs blow up the prompt.
+# Bound tool results.
 _TOOL_RESULT_MAX = 4_000
 
 
@@ -70,7 +70,7 @@ def _tool_timeout_seconds() -> float | None:
     return seconds if seconds > 0 else 3600.0
 
 
-# Tool discovery: import siblings to trigger self-registration
+# Import siblings to trigger self-registration.
 
 
 def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
@@ -94,7 +94,7 @@ def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
         try:
             importlib.import_module(f"{pkg_name}.{_mod_info.name}")
         except Exception:
-            # May have self-registered before failing: roll back the registry.
+            # May have self-registered: roll back.
             AgentTool.registry[:] = before
             logger.exception(
                 "Failed to load %s.%s", pkg_name, _mod_info.name,
@@ -109,17 +109,17 @@ def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
 
 _load_subpackage("builtin", mark_as_plugin=False)
 
-# Defer plugin imports under ``python -m`` (runpy warns on preload).
+# Defer plugin imports under ``python -m``.
 if not sys.argv or sys.argv[0] != "-m":
     _load_subpackage("plugins", mark_as_plugin=True)
 
-# Deterministic order: ``order`` then name.
+# Order: ``order`` then name.
 _TOOLS: tuple[AgentTool, ...] = tuple(
     sorted(AgentTool.registry, key=lambda t: (t.order, t.name))
 )
 _BY_NAME: dict[str, AgentTool] = {tool.name: tool for tool in _TOOLS}
 
-# Read-only surface for "confirm" mode: unlisted tools are withheld.
+# Read-only surface for confirm mode.
 READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
     "read_file",
     "list_dir",
@@ -199,7 +199,7 @@ def parse_openai_call(call: dict) -> tuple[str, dict]:
     if not isinstance(name, str):
         name = ""
     raw = fn.get("arguments")
-    # Also accept an already-parsed object (GLM/Z.ai, local runtimes).
+    # Accept an already-parsed object too.
     if isinstance(raw, dict):
         args = raw
     elif isinstance(raw, str) and raw.strip():
@@ -228,7 +228,7 @@ async def execute_tool(
     emit: _EmitFunc,
 ) -> str:
     """Run a tool by name; emit status events; return the result string."""
-    # Normalize malformed provider output before emitting.
+    # Normalize malformed output before emitting.
     if not isinstance(name, str):
         name = ""
     if not isinstance(args, dict):
@@ -243,7 +243,7 @@ async def execute_tool(
     })
 
     if approval not in {"auto", "full", "confirm"}:
-        # Schemas omit tools here; stay fail-closed on stray calls.
+        # Schemas omit tools; fail closed.
         logger.info("%s mode blocked tool: %s", approval, name)
         result = (
             f"Blocked: '{name}' cannot run because permission mode "
@@ -267,7 +267,7 @@ async def execute_tool(
         and tool is not None
         and not _is_auto_allowed(tool)
     ):
-        # Re-check at execution: block hallucinated full-only calls in auto mode.
+        # Re-check at execution: block hallucinated full-only calls.
         logger.info("auto mode blocked full-only tool: %s", name)
         result = (
             f"Blocked: '{name}' requires full permission because it can "
@@ -280,7 +280,7 @@ async def execute_tool(
     if tool is None:
         result = f"Unknown tool: {name}"
     else:
-        # Real-work cap (up to tool_timeout); cancel still stops instantly.
+        # Real-work cap; cancel stops instantly.
         try:
             cap = _tool_timeout_seconds()
             if cap is not None and cap > 0:
@@ -361,7 +361,7 @@ def cli_plugin_prelude() -> str:
             )
             or "no args"
         )
-        # Actual __module__ so the python -m line works when filename != tool name.
+        # Real __module__ so python -m works.
         module_path = tool.__class__.__module__
         lines.append(f"- {tool.name}: {tool.description}")
         lines.append(f"  {args_summary} | python -m {module_path} '<JSON>'")

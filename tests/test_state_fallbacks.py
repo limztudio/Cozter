@@ -1150,7 +1150,7 @@ class SessionStateFallbackTests(unittest.TestCase):
                 tmp, data["id"],
                 [{"role": "user", "content": str(index)} for index in range(5)],
             )
-            # Negative retain-count behaves as 0; never inflates compacted_count.
+            # Negative retain-count clamps to 0.
             session.set_summary(tmp, data["id"], "s", keep_recent=-3)
             loaded = session.load_session(tmp, data["id"])
             assert loaded is not None

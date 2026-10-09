@@ -24,7 +24,7 @@ from ..base import (
 )
 
 
-# Patch + target both materialize: bound them.
+# Bound patch + target.
 _MAX_PATCH_BYTES = 1 * 1024 * 1024
 _MAX_PATCH_LINES = 20_000
 _MAX_FILE_BYTES = 1 * 1024 * 1024
@@ -53,7 +53,7 @@ class _Hunk:
         self.new_count = new_count
         self.old: list[str] = []  # context + deleted lines (content only)
         self.new: list[str] = []  # context + added lines (content only)
-        # "No newline" marker owns the EOF newline of the preceding body line.
+        # "No newline" owns the preceding EOF newline.
         self.last_marker: str | None = None
         self.new_ends_with_newline: bool | None = None
 
@@ -102,7 +102,7 @@ class _FilePatch:
                 )
             return
         for hunk in self.hunks:
-            # A creation diff has no old side: reject old/context lines.
+            # Creation diff has no old side.
             if hunk.old:
                 raise _PatchError(
                     "creation hunk contains old/context lines for /dev/null",
@@ -262,13 +262,13 @@ def _parse_patch(
                 raise _PatchError(
                     "no-newline marker does not follow a hunk body line",
                 )
-            # Marker after a deletion keeps the newline, else drops it.
+            # Marker after deletion keeps the newline.
             hunk.new_ends_with_newline = hunk.last_marker == "-"
             hunk.last_marker = None
             continue
-        # ``---``/``+++`` lines can be hunk content: headers only when counts are full.
+        # ``---``/``+++`` can be content: headers only when full.
         if hunk is not None and hunk.complete:
-            # Lone header-looking line = overlong body: reject, don't discard.
+            # Lone header-like line: reject, don't discard.
             next_line = lines[index + 1] if index + 1 < len(lines) else None
             if (
                 not line
@@ -320,7 +320,7 @@ def _parse_patch(
         if hunk is None:
             continue  # preamble / "diff --git" / "index" lines
         if not line:
-            # Bare empty line = empty context line.
+            # Empty line = empty context.
             hunk.old.append("")
             hunk.new.append("")
             hunk.last_marker = " "
@@ -401,7 +401,7 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
         if output_error is not None:
             return f"{fp.new_path}: skipped ({output_error})"
         ensure_parent_dir(target)
-        # No-clobber: concurrent creators fail, partial writes stay hidden.
+        # No-clobber: partial writes stay hidden.
         if not create_text_file_atomically(target, out, uses_crlf=False):
             return f"{fp.new_path}: skipped (file already exists)"
         return f"{fp.new_path}: created ({len(new_lines)} lines)"
@@ -448,7 +448,7 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
             f"file exceeds the {_MAX_FILE_BYTES:,}-byte limit",
         )
     with open(path, "rb") as file_handle:
-        # stat() races growth: keep the read itself bounded.
+        # stat() races growth: bound the read.
         raw = file_handle.read(_MAX_FILE_BYTES + 1)
     if len(raw) > _MAX_FILE_BYTES:
         raise _FileLimitError(
@@ -517,13 +517,13 @@ def _locate(
 ) -> int | None:
     old = hunk.old
     if not old:
-        # With zero old lines, unified diff's start names the preceding line.
+        # Zero old lines: start names the preceding line.
         return min(max(hunk.start + line_offset, 0), len(lines))
     line_total, old_total = len(lines), len(old)
     if old_total > line_total:
         return None
     hint = min(max(hunk.start - 1 + line_offset, 0), line_total - old_total)
-    # Exact match: hint first, then a full scan.
+    # Exact match: hint first, then scan.
     if _matches_at(lines, old, hint):
         return hint
     exact = _find_first(lines, old)

@@ -51,7 +51,7 @@ class MultiEditTool(AgentTool):
         if not os.path.isfile(target):
             return f"File not found: {raw_path}"
 
-        # Validate all edits first: no partial application.
+        # Validate all first: no partial apply.
         for edit_index, edit in enumerate(edits):
             if not isinstance(edit, dict):
                 return f"Edit {edit_index}: must be an object"

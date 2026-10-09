@@ -229,8 +229,7 @@ class GrokBackend(CachedModelCatalog, Backend):
             "streaming-messages-json",
         ]
         self.append_launch_options(cmd, model, effort, approval)
-        # Grok parses .json prompt files as ACP blocks. Keeping image bytes in
-        # a file also avoids the OS argv limit for ordinary photo uploads.
+# Grok parses .json prompts as ACP blocks; file avoids argv caps.
         prompt_json: str | None = None
         if self.supports_vision and not compaction:
             _image_paths = attachment_image_paths(prompt, workspace_path)
@@ -253,7 +252,7 @@ class GrokBackend(CachedModelCatalog, Backend):
             if prompt_path:
                 _remove_prompt_file(prompt_path)
             raise
-        # Key by Process, not PID, for symmetric cleanup.
+# Key by Process, not PID.
         self._prompt_files.remember(proc, prompt_path)
         return proc
 

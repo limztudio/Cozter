@@ -15,15 +15,15 @@ from ...utils import (
     mark_process_group_leader,
 )
 
-# Real-work cap (tool_timeout, default 3600s); cancel stops instantly.
+# Real-work cap; cancel stops instantly.
 
-# Output ceiling: stop reading + kill the tree past this; don't buffer a firehose.
+# Output ceiling: kill the tree past it.
 _BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024  # 4 MB
 
 
 class BashTool(AgentTool):
     name = "bash"
-    # Unrestricted shell (cwd is only the start dir): full-permission only.
+    # Unrestricted shell: full-permission only.
     requires_full_permission = True
     description = (
         "Run a shell command (cwd = workspace, 3600s real-work cap — runs until done"
@@ -44,7 +44,7 @@ class BashTool(AgentTool):
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string"
-        # Extra args are ignored (real-work cap or turn cancel bounds the run).
+        # Extra args are ignored.
 
         # Pipes/redirection need a real shell.
         shell = _find_shell()
@@ -54,7 +54,7 @@ class BashTool(AgentTool):
         try:
             proc = await asyncio.create_subprocess_exec(
                 *shell, command,
-                # Never inherit interactive stdin (a `cat` could eat the next message).
+                # Never inherit interactive stdin.
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
@@ -76,7 +76,7 @@ class BashTool(AgentTool):
                 proc.stdout, _BASH_MAX_OUTPUT_BYTES,
             )
             if truncated:
-                # Reap the tree: a firehose must not hold memory or keep running.
+                # Reap the tree on firehose output.
                 await _kill_command_tree(proc)
             else:
                 await proc.wait()

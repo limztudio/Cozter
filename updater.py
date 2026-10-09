@@ -14,7 +14,7 @@ _STARTUP_COMMIT: str | None = None
 
 
 _GIT_TIMEOUT = 3600  # seconds; real-work cap
-# Installs run on requirement changes; 3600s cap.
+# Installs run on requirement changes.
 _PIP_INSTALL_TIMEOUT = 3600
 
 # Non-zero so supervisors restart on it.

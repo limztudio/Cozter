@@ -86,7 +86,7 @@ def add_schedule(
             for schedule in schedules
             if isinstance(schedule, dict) and isinstance(schedule.get("id"), str)
         }
-        # Duplicate ids strand a twin; mint a fresh id per record.
+        # Duplicate ids strand a twin; mint fresh ids.
         if not isinstance(raw_id, str) or not raw_id or raw_id in taken:
             fresh = uuid.uuid4().hex[:12]
             while fresh in taken:
@@ -150,7 +150,7 @@ def migrate_schedules(
     target = data.get(target_key, [])
     if not isinstance(target, list):
         target = []
-    # Persisted IDs may be hand-edited; never abort the whole migration.
+    # Persisted IDs may be hand-edited; never abort migration.
     seen_ids = {
         found_id
         for schedule in target
@@ -239,7 +239,7 @@ def update_schedule_fired(
         if not isinstance(schedule, dict):
             continue
         if schedule.get("id") == schedule_id:
-            # Stamp every twin: heals legacy duplicates.
+            # Stamp twins: heal legacy duplicates.
             schedule["last_fired"] = fired_at
             if claimed is None:
                 claimed = dict(schedule)
@@ -340,7 +340,7 @@ def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
     ]
     if not days:
         return None
-    # Walk back 7 days; the first day-match <= now is most recent.
+    # Walk back 7 days for the most recent match.
     for offset in range(8):
         candidate_date = (now - timedelta(days=offset)).date()
         day_name = DAY_ABBREV[candidate_date.weekday()]

@@ -34,7 +34,7 @@ def _truncate_router_text(text: str, limit: int) -> str:
         return "…"[:limit]
     marker = "… [truncated preview]"
     if limit <= len(marker):
-        # Too tight for the full marker: keep a cut indicator.
+        # Too tight for the marker: keep a cut indicator.
         return text[:limit - 1] + "…" if limit > 1 else "…"[:limit]
     return text[:limit - len(marker)] + marker
 

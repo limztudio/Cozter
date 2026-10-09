@@ -40,7 +40,7 @@ class EditFileTool(AgentTool):
         old, new = replacement
         if not os.path.isfile(target):
             return f"File not found: {args.get('path')}"
-        # Model-supplied args: only JSON boolean true widens to whole-file replace.
+        # Only JSON true widens to whole-file replace.
         replace_all = args.get("replace_all") is True
         loaded = read_text_for_edit(target)
         if isinstance(loaded, str):

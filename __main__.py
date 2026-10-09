@@ -64,7 +64,7 @@ def _validate_launch_args(args: list[str]) -> None:
 if __name__ == "__main__":
     _validate_launch_args(sys.argv[1:])
 
-# Re-launch as module if run as `python Cozter`; forward CLI args.
+# Relaunch as module when run as `python Cozter`.
 if __name__ == "__main__" and not __package__:
     module_dir = os.path.dirname(os.path.abspath(__file__))
     module_name = os.path.basename(module_dir)
@@ -77,7 +77,7 @@ if __name__ == "__main__" and not __package__:
     )
 
 
-# Make ``Cozter`` importable from spawned CLIs/bash.
+# Expose Cozter to spawned CLIs/bash.
 _pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _existing_pythonpath = os.environ.get("PYTHONPATH", "")
 if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
@@ -89,7 +89,7 @@ if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
 
 _VENV_REEXEC_ENV = "COZTER_VENV_REEXEC"
 _WINDOWS_CHILD_RESTART_DELAY_SEC = 1
-# Fresh-venv recovery only; 3600s cap.
+# Fresh-venv recovery only.
 _DEPENDENCY_INSTALL_TIMEOUT_SEC = 3600
 _REQUIRED_RUNTIME_MODULES = (
     "aiohttp",
@@ -259,7 +259,7 @@ from .utils import await_cancelled  # noqa: E402
 MODULE_ROOT = os.path.dirname(__file__)
 LOG_DIR = os.path.join(MODULE_ROOT, ".log")
 
-# Crash-respawn delay: readable crash loops, prompt recovery.
+# Crash-respawn delay.
 _CRASH_RESTART_DELAY_SEC = 5
 _UPDATE_IDLE_POLL_SEC = 1
 _UPDATE_IDLE_LOG_SEC = 30
@@ -348,7 +348,6 @@ def dump_runtime_diagnostics(
     dump_file.write(f"\n===== diagnostics dump{label} @ {datetime.now().isoformat()} =====\n")
     dump_file.flush()
 
-    # Each Task carries its own stack; capture names too.
     try:
         tasks = [task for task in asyncio.all_tasks() if not task.done()]
         dump_file.write(
@@ -363,7 +362,6 @@ def dump_runtime_diagnostics(
         dump_file.write(f"  (failed to enumerate tasks: {exc})\n")
     dump_file.flush()
 
-    # Native threads.
     threads = threading.enumerate()
     frames = sys._current_frames()
     dump_file.write(f"-- active threads ({len(threads)}) --\n")
@@ -382,7 +380,6 @@ def dump_runtime_diagnostics(
         dump_file.writelines(traceback.format_stack(frame))
     dump_file.flush()
 
-    # Per-platform turn-tracking state.
     if bots:
         dump_file.write("-- bot turn state --\n")
         for bot in bots:
@@ -420,7 +417,6 @@ def _enable_faulthandler() -> None:
     interval = cfg.get_dump_traceback_interval()
     if interval > 0:
         try:
-            # Repeat for process life; one shot rarely catches a wedge.
             faulthandler.dump_traceback_later(
                 interval, repeat=True, file=_get_dump_file(),
             )
@@ -459,7 +455,6 @@ async def _wait_for_update_idle(
                 cfg.get_update_idle_timeout(), waited,
                 {bot.platform_id: bot.stuck_turn_diagnostics() for bot in active},
             )
-            # Full task/thread dump for root-causing stuck waits.
             dump_runtime_diagnostics(active, reason="update-idle-still-waiting")
             last_diag = now
         if now - last_log >= _UPDATE_IDLE_LOG_SEC:
@@ -487,7 +482,6 @@ async def _restart_after_update(
                 "Update ready; waiting for active turn(s) before restart"
             ),
         )
-        # Safe to mutate the checkout now.
         changed = await asyncio.to_thread(updater.fetch_and_pull)
         if not changed:
             logger.info("Update no longer requires a restart; resuming intake")
@@ -606,11 +600,9 @@ async def main_cli() -> None:
 
 async def main() -> None:
     if _cli_mode_requested():
-        # Launcher vs bot child.
         if _cli_child_mode():
             await main_cli()
             return
-        # Sync subprocess loop.
         sys.exit(_cli_respawner_loop())
 
     config = cfg.load_config()
@@ -642,18 +634,15 @@ async def main() -> None:
                 lambda: dump_runtime_diagnostics(bots, reason="SIGUSR1"),
             )
         except (NotImplementedError, ValueError):
-            # Neither platform failure here is fatal.
             pass
 
     started: list[BotPlatform] = []
     update_task: asyncio.Task[None] | None = None
     try:
         for bot in bots:
-            # Even a partially failed start may own sockets or child tasks.
             started.append(bot)
             await bot.start()
 
-        # Each platform greets its notify targets on startup.
         for bot in bots:
             try:
                 await bot.send_startup_messages(version, commit_date)

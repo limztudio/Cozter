@@ -78,7 +78,7 @@ def _load(workspace: str) -> dict:
     cleaned = normalize_string_list(items)
     cleaned, dropped = _cap_to_newest(cleaned)
     if dropped:
-        # Match set_items: keep newest, log the drop.
+        # Match set_items: keep newest.
         logger.warning(
             "Colony exceeds cap (%d); dropping %d oldest item(s)",
             COLONY_CAP, dropped,
@@ -145,7 +145,7 @@ def bump_compact_count(workspace: str) -> int:
     return data["compact_count"]
 
 
-# Consolidation: promote recurring items, prune stale ones
+# Consolidation: promote recurring, prune stale.
 
 CONSOLIDATE_PROMPT = (
     "Consolidate a workspace's shared memory ('colony') from every"
@@ -282,7 +282,7 @@ def _session_block_with_coverage(
     name_space = budget - len("Session: ") - len(header_suffix) - len(closing)
     if name_space < 1:
         return "", False
-    # Titles are display hints only: clip them.
+    # Titles are hints only: clip them.
     rendered_name = name[:min(name_space, 2_000)]
     if len(name) > len(rendered_name):
         marker = "… [name clipped]"
@@ -401,7 +401,7 @@ async def _consolidate_inner(
     backend = backends_agent.get_backend(backend_name)
     existing_colony = get_items(workspace_path)
 
-    # Include empty sessions too, or items can never retire.
+    # Include empty sessions; items must retire.
     inputs: list[tuple[str, str, list[str]]] = []
     for data in session.list_sessions_with_data(workspace_path):
         lt = data.get("long_term") or []
@@ -413,7 +413,7 @@ async def _consolidate_inner(
         if not existing_colony:
             logger.info("Colony pass: no sessions in %s", workspace_path)
             return False
-        # No sessions left: drop workspace memory deterministically.
+        # No sessions: drop memory deterministically.
         async with workspace_mod.get_lock(workspace_path):
             set_items(workspace_path, [])
         logger.info(

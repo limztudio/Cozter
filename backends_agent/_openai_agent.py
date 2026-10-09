@@ -40,11 +40,11 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# One SSE event can exceed aiohttp's readline limit; cap it.
+# One SSE event can exceed the readline limit.
 _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
-# SSE allows many data: lines per event; cap the aggregate.
+# SSE allows many data: lines; cap the aggregate.
 _MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
-# Bound retained completion state; tool args get their own cap.
+# Bound retained completion state.
 _MAX_COMPLETION_TEXT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_REASONING_BYTES = 4 * 1024 * 1024
 _MAX_TOOL_ARGUMENT_BYTES = 4 * 1024 * 1024
@@ -52,7 +52,7 @@ _MAX_COMPLETION_BUFFER_BYTES = 8 * 1024 * 1024
 # Cap call ids/names too.
 _MAX_TOOL_CALL_ID_CHARS = 512
 _MAX_TOOL_NAME_CHARS = 512
-# Cap the retained conversation across turns.
+# Cap the retained conversation.
 _MAX_AGENT_MESSAGE_BYTES = 32 * 1024 * 1024
 # Also bounds bookkeeping for malformed index-spam streams.
 _MAX_TOOL_CALLS_PER_COMPLETION = 128
@@ -202,7 +202,7 @@ def discover_bearer_models(
 
 def _message_payload_bytes(message: dict[str, Any]) -> int:
     """Return the approximate UTF-8 JSON size retained for one chat message."""
-    # Match aiohttp's JSON escaping so non-ASCII can't evade the budget.
+    # Match aiohttp escaping so non-ASCII can't evade.
     return len(json.dumps(message).encode("utf-8"))
 
 
@@ -213,7 +213,7 @@ class OpenAIChatBackend(Backend):
     streaming client are inherited.
     """
 
-    # OpenAI-shape tools list is consumed directly, like the built-ins.
+    # OpenAI-shape tools consumed directly.
     supports_typed_plugins = True
     supports_vision = True
     vision_mode = "openai_parts"
@@ -322,7 +322,7 @@ class OpenAIChatBackend(Backend):
     def _max_retries(self) -> int:
         return 2
 
-    # shared API-key readiness probe (no real request; that would bill).
+    # No real request; that would bill.
 
     def _api_key(self) -> str:
         """Configured Bearer key, or ``""`` when unset. Providers override."""
@@ -333,7 +333,7 @@ class OpenAIChatBackend(Backend):
         return "api_key"
 
     def health_check(self) -> tuple[bool, str]:
-        # Readiness is "is an API key configured?".
+        # Readiness = "key configured?".
         if not self._api_key():
             return False, (
                 f"no API key set (set {self._api_key_setting()}"
@@ -375,13 +375,13 @@ class OpenAIChatBackend(Backend):
         sock_read = self._socket_timeout()
         timeout_setting = self._socket_timeout_setting()
         max_retries = self._max_retries()
-        # Per-turn safety caps, read fresh each turn.
+        # Per-turn caps, read fresh.
         max_agent_turns = self._max_agent_turns()
         max_segments = self._max_segments()
         tool_repeat_limit = self._tool_repeat_limit()
         request_model = self._request_model(model)
 
-        # Approval -> tools: deny/compaction none, confirm read-only, else all.
+        # Approval -> tools.
         tools_schema = _tools_for_approval(approval, compaction)
         if tools_schema and not self._supports_tools_for_model(request_model):
             tools_schema = None
@@ -402,7 +402,7 @@ class OpenAIChatBackend(Backend):
             if vision_parts is not None:
                 user_content = vision_parts
 
-        # Stateless endpoint: workspace goes in the prompt.
+        # Stateless: workspace goes in the prompt.
         messages: list[dict] = [
             {
                 "role": "system",
@@ -439,7 +439,7 @@ class OpenAIChatBackend(Backend):
             return
         tool_repeat_counts: dict[str, int] = {}
         has_preserved_reasoning = False
-        # One HTTP session per turn; reuse the connector/SSL context.
+        # One session per turn.
 
         def completion_payload(
             tools_schema: list[dict] | None,
@@ -643,7 +643,7 @@ class OpenAIChatBackend(Backend):
         if etype == "assistant_text":
             text = event.get("text")
             if isinstance(text, str) and text:
-                # Last text wins for result.text.
+                # Last text wins.
                 append_text_result(result, text)
             return
 
@@ -657,7 +657,7 @@ class OpenAIChatBackend(Backend):
             content = tools.summarize_tool_use(tool, inp)
             result.events.append(ChatEvent(kind="tool", content=content))
             if event.get("file_action"):
-                # write/edit/delete also surface as kind="file".
+                # write/edit/delete surface as kind="file".
                 path = inp.get("path", "?")
                 action = event["file_action"]
                 result.events.append(ChatEvent(
@@ -666,7 +666,7 @@ class OpenAIChatBackend(Backend):
             return
 
         if etype == "tool_result":
-            # Already covered by the preceding tool_use event; skip duplicates.
+            # Covered by the tool_use event; skip.
             return
 
         if record_error_event(event, result):
@@ -715,7 +715,7 @@ def _completion_payload(
     payload.update(effort_fields)
     if tools_schema is not None:
         payload["tools"] = tools_schema
-        # One turn's tool_calls run via gather (ordered).
+        # One turn's tool_calls via gather.
         payload["parallel_tool_calls"] = True
     return payload
 
@@ -788,13 +788,13 @@ def _backoff_delay(
 def _parse_retry_after(value: str | None) -> float | None:
     """Parse a Retry-After header (delta-seconds form); ignore HTTP dates."""
     if not value or isinstance(value, bool):
-        # A bool is not a duration; fail fast instead of throttling.
+        # A bool is not a duration.
         return None
     try:
         parsed = float(value)
     except (TypeError, ValueError, OverflowError):
         return None
-    # Reject nan/-inf (fail fast); callers cap +inf via _backoff_delay.
+    # Reject nan/-inf; callers cap +inf.
     if not math.isfinite(parsed) and parsed != float("inf"):
         return None
     return max(parsed, 0.0)
@@ -884,7 +884,7 @@ async def _post_completion_stream(
     reasoning_parts: list[str] = []
     reasoning_bytes = 0
     tool_argument_bytes = 0
-    # Tool calls fragment across deltas: accumulate by index.
+    # Tool calls fragment: accumulate by index.
     tool_buffers: dict[int, dict[str, Any]] = {}
     # EOF alone isn't completion.
     saw_terminal_marker = False
@@ -1010,13 +1010,13 @@ async def _post_completion_stream(
             f"{label} stream ended before a completion marker",
         )
 
-    # ``length`` = output cap: never run a truncated tool call.
+    # ``length`` = output cap.
     if terminal_finish_reason == "length" and tool_buffers:
         raise _RetryableError(
             f"{label} stream ended with length while a tool call was pending",
         )
 
-    # Normalize tool_buffers into tool_calls shape.
+    # Normalize buffers into tool_calls.
     tool_calls: list[dict] = []
     for idx in sorted(tool_buffers.keys()):
         buf = tool_buffers[idx]
@@ -1095,10 +1095,10 @@ async def _iter_sse_events(
         if not line.startswith("data:"):
             continue
         data = line[len("data:"):]
-        # SSE permits one space after the colon; keep other whitespace.
+        # SSE permits one space after the colon.
         if data.startswith(" "):
             data = data[1:]
-        # Newline counts too; replacements only grow UTF-8.
+        # Newline counts too.
         event_bytes += len(data.encode("utf-8")) + (1 if data_lines else 0)
         if event_bytes > _MAX_SSE_EVENT_BYTES:
             raise _SSEEventTooLargeError(
@@ -1107,7 +1107,7 @@ async def _iter_sse_events(
             )
         data_lines.append(data)
     if data_lines:
-        # Tolerate a server closing right after a complete event.
+        # Tolerate close right after a complete event.
         yield "\n".join(data_lines)
 
 
@@ -1134,7 +1134,7 @@ def _merge_tool_call(
     if fn is not None and not isinstance(fn, dict):
         return 0
 
-    # Pre-seed a synthetic id; the real id overrides below.
+    # Pre-seed an id; the real id overrides.
     buf = buffers.get(idx)
     if buf is None:
         if len(buffers) >= _MAX_TOOL_CALLS_PER_COMPLETION:
@@ -1178,7 +1178,7 @@ def _merge_tool_call(
     if not isinstance(previous_bytes, int):
         previous_bytes = 0
     if isinstance(args_frag, str):
-        # Arguments stream as fragments; keep them until complete.
+        # Arguments stream as fragments.
         fragment_bytes = len(args_frag.encode("utf-8", errors="replace"))
         next_bytes = previous_bytes + fragment_bytes
         if next_bytes > _MAX_TOOL_ARGUMENT_BYTES:
@@ -1246,7 +1246,7 @@ def _tools_for_approval(
     - auto: workspace-bounded tools; direct host-access tools require full.
     - full: the full tool set.
     """
-    # Malformed approval must never widen tools.
+    # Malformed approval never widens tools.
     if compaction or approval not in {"auto", "full", "confirm"}:
         return None
     if approval == "confirm":

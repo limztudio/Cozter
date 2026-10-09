@@ -158,7 +158,7 @@ async def _request_following_redirects(
                         key: value for key, value in current_headers.items()
                         if key.casefold() not in _CREDENTIAL_HEADERS
                     }
-                # 303 -> GET; browsers also downgrade 301/302.
+                # 303 -> GET; 301/302 downgrade too.
                 if status == 303 or (
                     status in (301, 302) and current_method != "GET"
                 ):

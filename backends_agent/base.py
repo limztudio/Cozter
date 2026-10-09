@@ -514,8 +514,7 @@ def apply_messages_assistant_content(
         elif block_type == "tool_use" and on_tool_use is not None:
             on_tool_use(block)
     if texts:
-        # A whole assistant message may contain several text blocks. Keep all
-        # of them in its reply while preserving individual status event order.
+        # Keep every text block; preserve status order.
         result.text = "\n".join(texts)
 
 
@@ -585,7 +584,7 @@ def truncate_status_text(text: object, *, limit: int = 200) -> str:
     if len(value) <= limit:
         return value
     if limit <= len(_TRUNCATED_PREVIEW_SUFFIX):
-        # Too tight for the full marker: keep a visible cut indicator.
+        # Too tight for the marker: keep a cut indicator.
         if limit <= 1:
             return "…"[:limit]
         return value[:limit - 1] + "…"
@@ -630,7 +629,7 @@ async def create_prompt_subprocess(
         cmd,
         stdin=asyncio.subprocess.PIPE,
         cwd=cwd,
-        # New session lets /stop or /inject kill the whole process group.
+        # New session so /stop or /inject kills the group.
         start_new_session=os.name != "nt",
     )
     if proc.stdin is None:
@@ -714,7 +713,7 @@ async def _reap_failed_prompt_subprocess(
         else:
             await proc.wait()
     finally:
-        # No readers here; release descriptors explicitly.
+        # No readers; release descriptors.
         close_subprocess_pipe(proc, 1)
         close_subprocess_pipe(proc, 2)
 

@@ -703,7 +703,7 @@ class BotPlatform(ABC):
                 f" Available: /{' /'.join(sorted(self._COMMANDS))}"
             )
             return
-        # Any new command cancels a pending text-input flow.
+        # Any new command cancels a pending flow.
         ctx.had_pending = (
             self._pending_input.pop(ctx.user_id, None) is not None
         )
@@ -741,7 +741,7 @@ class BotPlatform(ABC):
             return
         if ctx.attachment is None:
             return
-        # File uploads cancel pending text-input flows.
+        # File uploads cancel pending flows.
         self._pending_input.pop(ctx.user_id, None)
         await self._ai_file(ctx)
 
@@ -948,30 +948,30 @@ class BotPlatform(ABC):
         queued, delayed, or detached work was removed. Both ``/cancel`` and
         ``/stop`` use the same cleanup; only their no-work reply differs.
         """
-        # Advance pre-await so suspended dispatches notice /stop before going runnable.
+        # Advance pre-await so suspended dispatches notice /stop.
         self._cancel_generations[uid] = (
             self._cancel_generations.get(uid, 0) + 1
         )
 
-        # Signal foreground agents before touching the admission barrier.
+        # Signal foreground agents first.
         task = self._running_tasks.get(uid)
         task_running = task is not None and not task.done()
         if task_running:
             self._cancel_acknowledged.add(uid)
             task.cancel()
 
-        # Order the generation bump + clear against in-flight persists.
+        # Order the bump + clear against persists.
         admission_lock = self._ensure_dispatch_admission_lock(uid)
         async with admission_lock:
             was_awaiting = uid in self._awaiting_answer
             self._awaiting_answer.discard(uid)
             drained: list = []
             _drain_queue(self._message_queues.get(uid), collect=drained)
-            # Dropped in-memory + persisted work must not return after restart.
+        # Dropped work must not return after restart.
             persisted = await self._clear_persistent_queue(uid)
         delayed_replies = await self._clear_reply_deliveries(uid)
         detached_cancelled = await self._cancel_detached_tasks(uid)
-        # Cancel uploads before delivery: the tail shield would wedge behind them.
+        # Cancel uploads first: the tail would wedge.
         cancelled_uploads = await self._cancel_attachment_uploads(uid)
         cleared = max(len(drained), persisted, delayed_replies)
         return task_running, bool(
@@ -1106,7 +1106,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
         backend_name = workspace.get_backend_name(ws)
-        # Flexible has per-tier models; nothing to pick here.
+        # Flexible has per-tier models.
         if backend_name == workspace.FLEXIBLE_BACKEND:
             await ctx.reply_text(self._flexible_summary(ws))
             return
@@ -1333,7 +1333,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
         current = workspace.get_flexible_backend_name(ws, tier)
-        # Exclude flexible itself: a tier loop would recurse forever.
+        # Exclude flexible: a tier loop recurses.
         options = workspace.DIRECT_BACKENDS
         await ctx.reply_text("\n".join([
             f"Flexible {tier} tier —"
@@ -1873,7 +1873,7 @@ class BotPlatform(ABC):
     # /stop
 
     async def cmd_stop(self, ctx: BotContext) -> None:
-        # /stop abandons pending questions and queued prompts.
+        # /stop abandons questions and queued prompts.
         task_running, cancelled_work = await self._cancel_user_work(ctx.user_id)
         if task_running or cancelled_work:
             await ctx.reply_text("Cancelled.")
@@ -2098,7 +2098,7 @@ class BotPlatform(ABC):
             "user_id": ctx.user_id,
             "platform_id": self.platform_id,
         }
-        # Hold the workspace lock against concurrent scheduler ticks.
+        # Hold the lock against scheduler ticks.
         async with workspace.get_lock(ws):
             schedules.add_schedule(ws, ctx.user_id, schedule)
         await ctx.reply_text(
@@ -2188,7 +2188,7 @@ class BotPlatform(ABC):
     def _platform_state_file_path(self, stem: str) -> str:
         """Return a durable per-platform state path with a safe file name."""
         os.makedirs(workspace.CONFIG_DIR, exist_ok=True)
-        # Sanitize platform_id for filenames.
+        # Sanitize platform_id for files.
         safe = _UNSAFE_FILENAME_CHARS_RE.sub('_', self.platform_id)
         return os.path.join(workspace.CONFIG_DIR, f"{stem}_{safe}.json")
 
@@ -2295,7 +2295,7 @@ class BotPlatform(ABC):
         persisted entries, refill the in-memory queue and spawn a drain
         task so the oldest entry runs first.
         """
-        # Park prompts with staged replies; don't rerun the agent.
+        # Park prompts with staged replies.
         await self.restore_reply_deliveries()
         async with self._queue_file_lock:
             data = self._read_queue_file()
@@ -2544,7 +2544,7 @@ class BotPlatform(ABC):
         """
         record_id = record["id"]
         uid = record["user_id"]
-        # Re-read under the per-user lock; stale snapshots can't send.
+        # Re-read under lock; stale snapshots can't send.
         async with self._reply_delivery_lock(uid):
             record = await self._get_reply_delivery_record(record_id)
             if record is None:
@@ -2890,13 +2890,13 @@ class BotPlatform(ABC):
         result = agent.AgentResult()
         agent.append_text_result(result, message)
         try:
-            # Uploads stay user-owned; provider [[await]] must not pause the queue.
+            # Uploads stay user-owned.
             await self._send_detached_result(
                 record["chat_id"], record["workspace_path"], result,
                 record["user_id"],
             )
         except Exception:
-            # Keep the staged payload for at-least-once delivery.
+            # Keep the staged payload.
             logger.warning(
                 "Failed to deliver detached task %s",
                 record["task_id"], exc_info=True,
@@ -3076,7 +3076,7 @@ class BotPlatform(ABC):
         """
         now = datetime.now()
 
-        # Same-slot fires run in creation order.
+        # Same-slot fires in creation order.
         to_fire: list[tuple[str, str, dict, datetime]] = []
 
         # Iterate workspace state.
@@ -3094,7 +3094,7 @@ class BotPlatform(ABC):
                 baseline = last_fired or schedules.parse_iso(
                     sched.get("created"),
                 )
-                # Never fire at/before creation time.
+                # Never fire at/before creation.
                 if baseline is not None and slot <= baseline:
                     continue
                 to_fire.append((uid, ws, sched, slot))
@@ -3124,7 +3124,7 @@ class BotPlatform(ABC):
                 claimed_schedule = schedules.update_schedule_fired(
                     ws, uid, schedule_id, slot.isoformat(),
                 )
-            # Claim the record under lock; use it, not the stale snapshot.
+            # Claim under lock, not the stale snapshot.
             if claimed_schedule is not None:
                 await self._fire_schedule(uid, claimed_schedule)
 
@@ -3144,7 +3144,7 @@ class BotPlatform(ABC):
         if not command or not chat_id:
             return
 
-        # Re-check auth: schedule creators may have been deauthorized since.
+        # Re-check auth: creators may be deauthorized.
         if not self.authorized(uid, chat_id):
             logger.warning(
                 "Skipping schedule for unauthorized user=%s chat=%s",
@@ -3152,11 +3152,11 @@ class BotPlatform(ABC):
             )
             return
 
-        # Scheduler can fire before the user types; create lock/queue on demand.
+        # Scheduler can fire before first input.
         self._ensure_task_lock(uid)
         msg_queue = self._ensure_message_queue(uid)
 
-        # Check capacity before announcing.
+        # Check capacity first.
         if msg_queue.full():
             await self._send_text_best_effort(
                 chat_id,
@@ -3184,7 +3184,7 @@ class BotPlatform(ABC):
             await self._discard_cancelled_dispatch_entry(uid, entry_id, msg_queue)
             return
 
-        # Kick the drainer (no-op if one is already active).
+        # Kick the drainer.
         self._start_queue_drain(uid)
 
     # AI chat + file
@@ -3385,7 +3385,7 @@ class BotPlatform(ABC):
                 self._start_queue_drain(uid)
             return
 
-        # Persist before locking: a mid-path crash still leaves the entry for resume.
+        # Persist before locking.
         entry_id = await self._persist_admitted_dispatch_entry(
             uid, text, chat_id, generation,
         )
@@ -3416,9 +3416,9 @@ class BotPlatform(ABC):
             # Start anyway: covers the no-update/cancel race after placement.
             self._start_queue_drain(uid)
             return
-        # [[await]]: clear only after lock acquisition so racing drains yield.
+        # [[await]]: clear only after lock.
         self._awaiting_answer.discard(uid)
-        # Register early so /stop finds the task even if startup yields on greeting sends.
+        # Register early so /stop finds the task.
         self._running_tasks[uid] = asyncio.current_task()
         try:
             await self._run_turn(
@@ -3430,7 +3430,7 @@ class BotPlatform(ABC):
                 await self._send_text_best_effort(chat_id, "Cancelled.")
             return
         except Exception as e:
-            # Consume before replying so a failed reply leaves no stale entry.
+            # Consume before replying.
             logger.exception("AI turn failed")
             await self._persist_complete(uid, entry_id)
             await self._send_text_best_effort(chat_id, f"Error: {e}")

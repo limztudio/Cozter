@@ -28,13 +28,13 @@ from ...utils import clip_status_value
 
 _NOTES_RELPATH = ".cozter/notes.md"
 
-# Size ceiling: appending past it trims oldest entries.
+# Size ceiling: past it trims oldest.
 _NOTES_MAX_BYTES = 64 * 1024
 # Newest material kept after a trim.
 _NOTES_KEEP_BYTES = 32 * 1024
-# Per-entry cap so one runaway argument can't bypass the budget.
+# Per-entry cap.
 _MAX_ENTRY_CHARS = 2_000
-# Tail sized to the 4,000-char result cap.
+# Tail sized to the result cap.
 _READ_TAIL_CHARS = 3_500
 
 
@@ -200,7 +200,7 @@ def _fit_entries(parts: list[str]) -> str:
         kept.append(text)
         used += size
     kept.reverse()
-    # Entries carry trailing blank lines; plain concat reproduces append format.
+    # Entries carry trailing blanks; concat reproduces append format.
     return "".join(kept)
 
 

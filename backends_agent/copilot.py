@@ -120,7 +120,7 @@ def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
     if budget <= 0:
         return "", True
     if sys.platform == "win32":
-        # No cheap per-character model: binary search on Windows only.
+        # No cheap per-char model: binary search on Windows.
         if _prompt_argv_units(text) <= budget:
             return text, False
         lower, upper = 0, len(text)
@@ -131,7 +131,7 @@ def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
             else:
                 lower = middle + 1
         return text[lower:], True
-    # Encode once and walk back to a UTF-8 char boundary (single pass).
+    # Encode once; walk back to a char boundary.
     encoded = text.encode("utf-8", errors="replace")
     if len(encoded) <= budget:
         return text, False
@@ -152,10 +152,10 @@ def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
     if limit <= 0:
         return ""
 
-    # Tail holds the request; dropping head is preview-only.
+    # Tail holds the request; head drop is preview-only.
     marker = "… [older prompt context dropped to fit argv cap — preview only]"
     if _prompt_argv_units(marker) >= limit:
-        # Too tight for the full marker: keep a visible cut indicator.
+        # Too tight for the marker: keep a cut indicator.
         cut_marker = "…"
         if _prompt_argv_units(cut_marker) > limit:
             cut_marker = "." * limit
@@ -273,7 +273,7 @@ class CopilotBackend(Backend):
     effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
 
     def __init__(self) -> None:
-        # Cache ACP results per workspace; fail closed to auto.
+        # Cache ACP per workspace; fail closed to auto.
         self._workspace_model_catalogs: dict[
             str, tuple[tuple[str, ...], float],
         ] = {}
@@ -377,7 +377,7 @@ class CopilotBackend(Backend):
                 return cached
 
             self._prune_workspace_model_caches(now, keep_key=workspace_key)
-            # Failed refresh falls back to ``auto`` (stale policy-removed names).
+            # Failed refresh falls back to ``auto``.
             self._workspace_model_catalogs.pop(workspace_key, None)
             models = self._discover_models(workspace_key)
             if models is not None:
@@ -386,7 +386,7 @@ class CopilotBackend(Backend):
                 )
                 self._workspace_fallback_expires_at.pop(workspace_key, None)
                 return models
-            # Short retry throttle: avoid per-input spawns.
+            # Short throttle: avoid per-input spawns.
             self._workspace_fallback_expires_at[workspace_key] = (
                 time.monotonic() + _MODEL_FAILURE_RETRY_SEC
             )
@@ -593,7 +593,7 @@ class CopilotBackend(Backend):
             _remove_isolated_copilot_home(isolated_home)
             raise
 
-        # Key by Process, not PID (PID reuse).
+        # Key by Process, not PID.
         self._process_homes.remember(proc, isolated_home)
         return proc
 

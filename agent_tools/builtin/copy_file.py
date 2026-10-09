@@ -27,7 +27,7 @@ class CopyFileTool(AgentTool):
         raw_src, raw_dst, src, dst = paths
         try:
             ensure_parent_dir(dst)
-            # Preflight races another writer; the helper publishes no-clobber only.
+            # Preflight can race; helper is no-clobber only.
             if not copy_file_atomically(src, dst):
                 return no_clobber_result(raw_dst)
         except OSError as exc:

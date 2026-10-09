@@ -83,14 +83,14 @@ def _mrkdwn_line(line: str) -> str:
 
 def _mrkdwn_prose(line: str) -> str:
     line = escape_html_entities(line)
-    # Bold first so italic can't mis-match it.
+    # Bold first.
     if line[:1] == "#":
         line = _SLACK_HEADING_RE.sub(_bold_sub, line)
     if "**" in line:
         line = _SLACK_BOLD_STAR_RE.sub(_bold_sub, line)
     if "__" in line:
         line = _SLACK_BOLD_UNDER_RE.sub(_bold_sub, line)
-    # Italic: single `*text*` -> `_text_`.
+    # Italic: `*text*` -> `_text_`.
     if "*" in line:
         line = _SLACK_ITALIC_STAR_RE.sub(r"_\1_", line)
     # Strikethrough to `~text~`.
@@ -134,7 +134,7 @@ def _slack_retry_delay(error: SlackApiError) -> float | None:
     data = response.data if hasattr(response, "data") else None
     if isinstance(data, dict):
         code = data.get("error")
-        # Throttle = ratelimited error or bare Retry-After.
+        # Throttle = ratelimited or bare Retry-After.
         headers = getattr(response, "headers", None) or {}
         has_retry_after = (
             "Retry-After" in headers or "retry-after" in headers
@@ -195,7 +195,7 @@ async def _call_slack_with_retry(description: str, method, **kwargs):
 
 def _fence_open(line: str) -> tuple[str, str] | None:
     """Return the original opener and marker for a fenced code block."""
-    # Hot path: prefix scan rejects non-fences before the regex.
+    # Hot path: prefix scan rejects non-fences.
     stripped = line.lstrip()
     if not stripped or stripped[0] not in ("`", "~"):
         return None
@@ -209,7 +209,7 @@ def _fence_closes(line: str, marker: str) -> bool:
     """Whether *line* is a valid close for the active fenced block."""
     if not marker:
         return False
-    # A close is whitespace plus a marker run; no regex needed.
+    # A close is whitespace + marker run.
     stripped = line.strip()
     return (
         len(stripped) >= len(marker)
@@ -230,7 +230,7 @@ def _split_slack_markdown(
     if len(text) <= limit:
         return [text]
 
-    # Split chunks reopen/close fences independently.
+    # Split chunks reopen/close fences.
     max_opener = 0
     max_marker = 0
     # One pre-scan for reserves; the chunk loop replays fence state below.
@@ -247,10 +247,10 @@ def _split_slack_markdown(
         max_opener + max_marker + 2 if (max_opener or max_marker) else 0
     )
     if limit <= fence_wrap_reserve:
-        # Over-long fences can't be preserved; still send bounded chunks, not an error.
+        # Over-long fences: send bounded chunks.
         return split_text_chunks(text, limit)
 
-    # Keep raw chunks below the limit to leave room for fence open/close.
+    # Keep raw chunks below the limit.
     raw_chunks = split_text_chunks(text, limit - fence_wrap_reserve)
     chunks: list[str] = []
     active_fence: tuple[str, str] | None = None
@@ -337,7 +337,7 @@ class SlackBot(BotPlatform):
         max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
         max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
     ):
-        # channel_ids is the Slack auth set (stored as notify_targets on base).
+        # channel_ids is the auth set.
         super().__init__(
             channel_ids,
             recent_limit=recent_limit,
@@ -405,7 +405,7 @@ class SlackBot(BotPlatform):
             await _update_rich_markdown(self.app.client, handle, chunks[0])
             return
 
-        # One handle updates one message; extra chunks post separately.
+        # One handle per message.
         await self.app.client.chat_update(
             channel=handle.chat_id,
             ts=handle.message_id,
@@ -445,7 +445,7 @@ class SlackBot(BotPlatform):
         self.app.event("app_mention")(self._on_app_mention)
 
         self._handler = AsyncSocketModeHandler(self.app, self.app_token)
-        # Restore the backlog before connecting.
+        # Restore the backlog first.
         await self._start_daemon_services()
         await self._handler.connect_async()
         logger.info(

@@ -223,7 +223,7 @@ def select_workspace(
     recent = user_state.get("recent", [])
     if not isinstance(recent, list):
         recent = []
-    # Rebuild so legacy aliases normalize and dedupe too.
+# Rebuild so legacy aliases normalize too.
     user_state["recent"] = _merge_recent(path, recent)
 
     all_state[uid] = user_state

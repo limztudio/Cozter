@@ -118,7 +118,7 @@ async def generate(
     if data is None:
         return None
 
-    # Bound the input; reserve half so a huge summary can't hide the exchange.
+    # Bound input; reserve half for the exchange.
     prompt_prefix = f"{TITLE_PROMPT}\n\n"
     context_budget = max(0, TITLE_CONTEXT_CHARS - len(prompt_prefix))
     recent_reserve = context_budget // 2
@@ -127,7 +127,7 @@ async def generate(
     parts_len = 0  # joined length of parts (newline between items)
     summary = data.get("summary")
     if summary:
-        # Best-effort title: coerce legacy values, never crash.
+        # Best-effort: coerce legacy values.
         summary_text = summary if isinstance(summary, str) else str(summary)
         summary_prefix = "Previous summary:\n"
         recent_header = "Recent messages:"

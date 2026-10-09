@@ -474,13 +474,13 @@ class SignalBot(BotPlatform):
         if self._jsonrpc_connected():
             return
 
-        # Clear the stale subscription before reconnect remakes it.
+        # Clear the stale subscription first.
         self._receive_subscription = None
         self._receive_subscribed = False
         try:
             await self._connect_jsonrpc(resubscribe=True)
         except BaseException:
-            # A retrying caller must not inherit partial receive state.
+            # A retrying caller must not inherit partial state.
             self._receive_started = False
             raise
 
@@ -534,7 +534,7 @@ class SignalBot(BotPlatform):
                     # Close so the next request reconnects.
                     await self._close_jsonrpc_transport()
                     if method in _NON_IDEMPOTENT_RPC_METHODS:
-                        # Dispatched-before-drop: surface the error.
+                        # Dispatched-before-drop: surface.
                         raise
                     logger.warning(
                         "Signal JSON-RPC request %s failed; reconnecting: %s",
@@ -717,7 +717,7 @@ class SignalBot(BotPlatform):
 
         with reserve_upload_path(upload_dir, filename) as local_path:
             if source_path:
-                # Large local attachments: bounded copy off the event loop.
+                # Large attachments: bounded copy off-loop.
                 await asyncio.to_thread(
                     copy_file_with_limit,
                     source_path,

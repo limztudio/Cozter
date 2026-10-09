@@ -12,7 +12,7 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 DEFAULT_UPDATE_CHECK_INTERVAL = 300
 DEFAULT_RECENT_WORKSPACE_LIMIT = 10
 DEFAULT_MESSAGE_QUEUE_SIZE = 50
-# Bound one attachment below stream/platform quotas.
+# Bound one attachment below quotas.
 DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _PERMISSION_LEVELS = frozenset({"full", "auto", "confirm", "deny"})
 

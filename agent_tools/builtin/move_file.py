@@ -28,7 +28,7 @@ class MoveFileTool(AgentTool):
         if isinstance(paths, str):
             return paths
         raw_src, raw_dst, src, dst = paths
-        # Dir symlinks are single entries; only real dirs risk self-nesting.
+        # Only real dirs risk self-nesting.
         if (
             not os.path.islink(src)
             and os.path.isdir(src)

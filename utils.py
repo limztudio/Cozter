@@ -20,13 +20,13 @@ CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.
     os.path.dirname(os.path.abspath(__file__)), ".config",
 )
 _STDERR_CAPTURE_BYTES = 64 * 1024
-# Malformed CLIs can emit endless lines; cap them.
+# Malformed CLIs can emit endless lines.
 _MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024
-# A spawned CLI leads the group: snapshot the id at spawn.
+# A spawned CLI leads the group.
 _PROCESS_GROUP_ID_ATTR = "_cozter_process_group_id"
 # After signalling the group, allow a short pipe-shutdown grace.
 _POST_EXIT_STREAM_DRAIN_TIMEOUT = 1.0
-# Exited-parent stdout is untrusted: cap the backlog parse.
+# Exited-parent stdout is untrusted.
 _POST_EXIT_STREAM_DRAIN_BYTES = 8 * 1024 * 1024
 _PROCESS_EXIT_POLL_INTERVAL = 0.05
 _BackgroundResult = TypeVar("_BackgroundResult")

@@ -20,7 +20,7 @@ class DeleteFileTool(AgentTool):
 
     async def run(self, workspace_path: str, args: dict) -> str:
         raw_path = args.get("path", "")
-        # Unlink the link itself, not its target; resolver still confines it.
+        # Unlink the link, not its target.
         try:
             target = resolve_workspace_entry(workspace_path, raw_path)
         except ValueError as exc:

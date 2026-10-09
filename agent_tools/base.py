@@ -28,7 +28,7 @@ from aiohttp.resolver import DefaultResolver
 from ..utils import clip_status_value, is_path_within
 
 
-# Bound raw HTTP bodies per web call.
+# Bound raw HTTP bodies.
 _MAX_FETCH_BYTES = 5 * 1024 * 1024  # 5 MB
 HTTP_USER_AGENT_HEADERS = {
     "User-Agent": (
@@ -101,11 +101,11 @@ class AgentTool(ABC):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        # Skip abstract intermediates: run()'s flag is set at definition time.
+        # Skip abstract intermediates.
         if getattr(cls.run, "__isabstractmethod__", False):
             return
         instance = cls()
-        # Idempotent: same-name re-registration replaces (hot-reload safe).
+        # Idempotent re-registration.
         AgentTool.registry[:] = [
             tool for tool in AgentTool.registry if tool.name != instance.name
         ]
@@ -621,7 +621,7 @@ def read_text_for_edit(path: str) -> tuple[str, bool] | str:
         with open(path, "rb") as file_handle:
             if os.fstat(file_handle.fileno()).st_size > _MAX_EDIT_FILE_BYTES:
                 return _edit_file_too_large_error()
-            # stat() races growth: bound the read (+1 byte flags exact-limit).
+            # stat() races growth: bound the read.
             raw = file_handle.read(_MAX_EDIT_FILE_BYTES + 1)
     except OSError as exc:
         return f"could not read file: {exc}"
@@ -697,7 +697,7 @@ def create_text_file_atomically(
         _write_text_to_fd(fd, text)
         return _publish_new_file_no_clobber(tmp_path, path)
     finally:
-        # Target holds the inode after linking; unlink is safe.
+        # Target holds the inode; unlink is safe.
         with suppress(OSError):
             os.unlink(tmp_path)
 
@@ -728,7 +728,7 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
     os.close(fd)
     try:
-        # copy2 keeps metadata; fsync before publishing.
+        # copy2 keeps metadata; fsync first.
         shutil.copy2(source_path, tmp_path)
         with open(tmp_path, "rb") as tmp_file:
             os.fsync(tmp_file.fileno())
@@ -788,7 +788,7 @@ def _hard_link_unsupported(exc: OSError) -> bool:
     }
     if exc.errno in unsupported_errnos:
         return True
-    # Hard links unsupported on this volume/share; other I/O errors still raise.
+    # Hard links unsupported here; other errors raise.
     return getattr(exc, "winerror", None) in {1, 50}
 
 
@@ -889,7 +889,7 @@ def _move_regular_file_no_clobber(source_path: str, target_path: str) -> bool:
     """Publish a regular file at a new name before unlinking its old name."""
     source_stat = os.stat(source_path, follow_symlinks=False)
     try:
-        # Atomic create (unlike rename): refuses a raced-in destination.
+        # Atomic create refuses a raced-in destination.
         os.link(source_path, target_path, follow_symlinks=False)
         # Same inode as source at publish.
         target_stat = source_stat
@@ -956,7 +956,7 @@ def _complete_no_clobber_move(
 def _rename_path_no_clobber(source_path: str, target_path: str) -> bool:
     """Use a platform-native no-replace rename for non-file paths."""
     if os.name == "nt":
-        # Windows os.rename fails when the destination exists (unlike POSIX).
+        # Windows rename fails if the destination exists.
         try:
             os.rename(source_path, target_path)
         except FileExistsError:
@@ -1021,14 +1021,14 @@ async def read_bounded_text(
     remaining = _MAX_FETCH_BYTES
     truncated = False
     while remaining:
-        # read(n) may short-return: loop to EOF.
+        # read(n) may short-return: loop.
         chunk = await resp.content.read(min(64 * 1024, remaining))
         if not chunk:
             break
         chunks.append(chunk)
         remaining -= len(chunk)
         if remaining <= 0:
-            # Probe one byte: capped or exact without buffering.
+            # Probe one byte without buffering.
             extra = await resp.content.read(1)
             if extra:
                 truncated = True
@@ -1186,7 +1186,7 @@ def validate_public_url(url: str) -> str | None:
     if host is None or not _is_valid_host(host):
         return "Error: invalid URL host"
 
-    # aiohttp skips resolvers for numeric hosts: check them locally first.
+    # aiohttp skips resolvers for numeric hosts.
     default_port = 443 if parsed.scheme == "https" else 80
     try:
         ipaddress.ip_address(host)
@@ -1218,7 +1218,7 @@ async def open_public_http_session() -> AsyncIterator[aiohttp.ClientSession]:
     resolver = PublicResolver()
     connector = aiohttp.TCPConnector(
         resolver=resolver,
-        # Re-resolve per connection; cache must not outlive validation.
+        # Re-resolve per connection.
         use_dns_cache=False,
     )
     try:
@@ -1366,7 +1366,7 @@ def html_to_text(value: str) -> str:
             index = next_markup
             continue
 
-        # Keep a bare '<' visible; don't rescan a malformed suffix.
+        # Keep a bare '<' visible.
         if not _is_html_tag_start(value, index) and not (
             index + 1 < length and value[index + 1] in "!?"
         ):

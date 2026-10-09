@@ -139,7 +139,7 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
     # hooks
 
     def _chat_endpoint(self) -> str:
-        # base_url already carries /v1: append /chat/completions directly.
+# base_url carries /v1: append /chat/completions.
         return cfg.get_meta_base_url().rstrip("/") + "/chat/completions"
 
     def _auth_headers(self) -> dict[str, str]:

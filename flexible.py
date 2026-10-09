@@ -20,7 +20,7 @@ from .utils import extract_marker_block
 
 BACKEND_NAME = "flexible"
 
-# Difficulty tiers, cheapest first (bound via tier commands).
+# Difficulty tiers, cheapest first.
 TIERS: tuple[str, ...] = ("low", "mid", "high")
 
 # Plan-failure tier: strongest.
@@ -34,10 +34,10 @@ TIER_DESCRIPTIONS = {
     ),
 }
 
-# Cap fan-out: each sub-task is a full turn.
+# Cap fan-out: each sub-task is a turn.
 MAX_SUBTASKS = 12
 
-# Work cap: 3600s on planner/merge/judge.
+# Work cap: 3600s.
 PLAN_TIMEOUT: float | None = 3600.0
 MERGE_TIMEOUT: float | None = 3600.0
 
@@ -131,7 +131,7 @@ _MERGE_RULES = (
     "- User's language. No tool calls; work is done.\n"
 )
 
-# The merge writes the visible reply; it alone can stop and wait.
+# The merge writes the reply; only it can stop and wait.
 _MERGE_QUESTION_RULE = (
     "- \"[[await]]\" on its own line only for a blocking question."
     " Optional offers: no marker.\n"
@@ -461,7 +461,7 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
         return results[0]
     parts: list[str] = []
     missing: list[str] = []
-    # Index, don't zip, so mismatches can't drop reports.
+# Index both sides so mismatches can't drop reports.
     for coverage_index in range(max(len(plan.subtasks), len(results))):
         text = results[coverage_index] if coverage_index < len(results) else ""
         if not text:

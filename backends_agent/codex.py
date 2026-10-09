@@ -251,7 +251,7 @@ class CodexBackend(Backend):
                 _FALLBACK_MODEL_CONTEXT_WINDOWS,
             )
         if proc.returncode != 0:
-            # Stale reasoning config can block the probe: retry with a temp override.
+            # Stale config can block the probe: retry with override.
             try:
                 recovered = subprocess.run(
                     [
@@ -404,7 +404,7 @@ class CodexBackend(Backend):
             # Stream failure without turn.failed: record it.
             msg = event.get("message", "Unknown error")
             logger.warning("Codex stream error: %s", msg)
-            # Never let a late error overwrite the owed reply.
+            # Never let a late error overwrite the reply.
             record_backend_error(result, msg)
 
     def extract_agent_text(self, event: dict) -> str | None:

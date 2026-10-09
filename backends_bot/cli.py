@@ -32,7 +32,7 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Faux local-user id: no collision with Telegram/Slack ids.
+# Faux id: no collision with chat ids.
 _LOCAL_ID = "local"
 
 
@@ -55,11 +55,11 @@ class CliBot(BotPlatform):
 
     @property
     def platform_id(self) -> str:
-        # Stable, prefixed: persists across sessions, disjoint from chat ids.
+        # Stable, prefixed; disjoint from chat ids.
         return f"cli:{_LOCAL_ID}"
 
     def authorized(self, user_id: str, _chat_id: str) -> bool:
-        # Local binary implies shell access; authorize unconditionally.
+        # Local binary implies shell access.
         return True
 
     # send/edit
@@ -69,15 +69,15 @@ class CliBot(BotPlatform):
     ) -> MessageHandle | None:
         if not text:
             return None
-        # Trailing newline: don't run into the next prompt.
+        # Trailing newline.
         print(text)
-        # Returning None prints each event as it arrives.
+        # None prints each event as it arrives.
         return None
 
     async def edit_text(
         self, handle: MessageHandle, text: str, *, rich: bool = False,
     ) -> None:
-        # No-op: unreachable for the CLI; kept for the contract.
+        # No-op: unreachable; kept for the contract.
         pass
 
     async def delete_message(self, handle: MessageHandle) -> None:
@@ -201,9 +201,7 @@ class CliBot(BotPlatform):
             parts = line[1:].split(None, 1) if line.startswith("\\") else []
             command = parts[0].split("@", 1)[0].lower() if parts else ""
             if _LOCAL_ID in self._pending_input or command in self._COMMANDS:
-                # Picker answers and aliases must finish before the next line
-                # can replace their pending handler. Agent turns stay concurrent
-                # so /stop can still interrupt them.
+                # Picker answers must finish before the next line replaces them.
                 await self.dispatch_text(self._ctx(text=line))
             else:
                 create_background_task(

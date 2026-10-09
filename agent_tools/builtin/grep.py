@@ -20,12 +20,12 @@ from ..base import (
     summarize_arg,
 )
 
-# Skip oversized (usually binary/generated) files.
+# Skip oversized files.
 _GREP_MAX_FILE_BYTES = 1_000_000  # 1 MB
 
-# Truncate match lines so one minified line can't hide the rest.
+# Truncate match lines.
 _GREP_MAX_LINE_CHARS = 200
-# ``re`` has no per-match deadline: scan in a killable process.
+# ``re`` has no deadline: scan in a killable process.
 _GREP_WORKER_JOIN_SECONDS = 0.5
 
 
@@ -78,7 +78,7 @@ class GrepTool(AgentTool):
             maximum=200,
         )
 
-        # CPU-bound regex: isolate in a killable process; poll in 0.1s slices.
+        # CPU-bound regex: killable process, 0.1s polls.
         try:
             results = await _scan_in_subprocess_async(
                 workspace_path, search_root, file_glob, regex, max_results,
@@ -110,14 +110,14 @@ class GrepTool(AgentTool):
         ):
             try:
                 metadata = os.stat(fpath)
-                # Skip non-regular files (FIFOs/sockets/devices block).
+                # Skip non-regular files.
                 if (
                     not stat.S_ISREG(metadata.st_mode)
                     or metadata.st_size > _GREP_MAX_FILE_BYTES
                 ):
                     continue
                 with open(fpath, "rb") as file_handle:
-                    # A file may grow after stat(); bound the allocation too.
+                    # A file may grow after stat(); bound the read.
                     raw = file_handle.read(_GREP_MAX_FILE_BYTES + 1)
             except OSError:
                 continue
@@ -157,7 +157,7 @@ def _scan_worker(
             workspace_path, search_root, file_glob, regex, max_results,
         )))
     except BaseException as exc:
-        # Report scan failures instead of a false empty match set.
+        # Report scan failures, not false empties.
         try:
             result_conn.send((False, f"{type(exc).__name__}: {exc}"))
         except Exception:

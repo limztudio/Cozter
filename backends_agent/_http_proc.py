@@ -45,7 +45,7 @@ class HttpAgentProcess:
         self._label = label
         self.stdout: asyncio.StreamReader = asyncio.StreamReader()
         self.stderr: asyncio.StreamReader = asyncio.StreamReader()
-        # No stderr on the HTTP path: EOF it so readers don't wait.
+        # No stderr on HTTP: EOF readers.
         self.stderr.feed_eof()
         self.returncode: int | None = None
         self._task: asyncio.Task | None = None
@@ -73,12 +73,12 @@ class HttpAgentProcess:
                 self.returncode = 130
                 raise
             except RuntimeError as exc:
-                # Actionable user-facing failure: log briefly, no traceback.
+                # User-facing failure: log briefly.
                 logger.warning("%s: %s", self._label, exc)
                 self.emit({"type": "error", "message": str(exc)})
                 self.returncode = 1
             except Exception as exc:
-                # Unexpected type = real bug: keep the traceback.
+                # Unexpected type = bug: keep traceback.
                 logger.exception("%s loop crashed", self._label)
                 self.emit({"type": "error", "message": str(exc)})
                 self.returncode = 1
