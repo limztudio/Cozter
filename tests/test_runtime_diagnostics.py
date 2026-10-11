@@ -282,6 +282,30 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
             self._main._bot_label(_NoId()), _NoId().__class__.__name__,
         )
 
+    def test_log_crash_retention_caps_crash_files(self):
+        cap = self._main._MAX_CRASH_FILES
+        self.assertGreaterEqual(cap, 1)
+        # Seed cap+5 stale crash files; newest write must prune back to cap.
+        for index in range(cap + 5):
+            with open(
+                os.path.join(self._tmp, f"crash_20261009_0{index:05d}.log"),
+                "w", encoding="utf-8",
+            ) as seed:
+                seed.write("stale\n")
+        crash_path = self._main.log_crash(RuntimeError("unit-test-boom"))
+        self.assertTrue(os.path.isfile(crash_path))
+        remaining = sorted(
+            name for name in os.listdir(self._tmp)
+            if name.startswith("crash_") and name.endswith(".log")
+        )
+        self.assertEqual(len(remaining), cap)
+        self.assertIn(os.path.basename(crash_path), remaining)
+        # Newest file (just written, lexicographically last) is retained.
+        self.assertEqual(remaining[-1], os.path.basename(crash_path))
+        with open(crash_path, encoding="utf-8") as written:
+            body = written.read()
+        self.assertIn("unit-test-boom", body)
+
     def test_update_idle_diagnostic_keeps_waiting_for_active_turn(self):
         bot = _StubBot("test:active", active=True, diag="still-running")
         reasons: list[str] = []

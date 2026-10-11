@@ -1758,7 +1758,8 @@ On Windows, the Python entry process owns a process-lifetime job before it
 spawns module or virtual-environment replacements. Stopping the registered
 Python launcher also terminates those descendants, so a restart replaces the
 old instance instead of leaving it active alongside another one.
-Unhandled exceptions also get timestamped crash files in `.log/`, and
+Unhandled exceptions also get timestamped crash files in `.log/`
+(newest 50 retained; older ones are pruned automatically), and
 asyncio/thread dumps go to `.log/diagnostics.log`. On Unix-like hosts,
 send `SIGUSR1` to the running daemon process to dump tasks, thread
 stacks, and per-platform active-turn state without restarting it.

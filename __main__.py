@@ -268,6 +268,10 @@ LOG_DIR = os.path.join(MODULE_ROOT, ".log")
 
 # Crash-respawn delay.
 _CRASH_RESTART_DELAY_SEC = 5
+# Crash-report retention cap: keep the newest N crash_*.log files so a
+# crash loop (e.g. the 2026-10-09/10-12 open_unix_connection loop that
+# produced 1062 files / ~1.6MB) cannot fill the disk before the fix lands.
+_MAX_CRASH_FILES = 50
 _UPDATE_IDLE_POLL_SEC = 1
 _UPDATE_IDLE_LOG_SEC = 30
 
@@ -313,8 +317,28 @@ def setup_logging() -> None:
     performance.info("stage=runtime outcome=started")
 
 
+def _prune_old_crash_files() -> None:
+    """Delete oldest crash_*.log files beyond _MAX_CRASH_FILES (best-effort)."""
+    try:
+        crash_files = sorted(
+            name for name in os.listdir(LOG_DIR)
+            if name.startswith("crash_") and name.endswith(".log")
+        )
+    except OSError:
+        return
+    for name in crash_files[: max(0, len(crash_files) - _MAX_CRASH_FILES)]:
+        try:
+            os.remove(os.path.join(LOG_DIR, name))
+        except OSError:
+            continue
+
+
 def log_crash(exc: BaseException) -> str:
-    """Write a timestamped crash report to .log/ and return the file path."""
+    """Write a timestamped crash report to .log/ and return the file path.
+
+    Prunes older crash reports to the _MAX_CRASH_FILES retention cap so a
+    crash loop cannot accumulate unbounded files before the fix lands.
+    """
     os.makedirs(LOG_DIR, exist_ok=True)
     now = datetime.now()
     crash_file = os.path.join(
@@ -325,6 +349,7 @@ def log_crash(exc: BaseException) -> str:
         file_handle.write(f"Crash at {now.isoformat()}\n")
         file_handle.write(f"Exception: {type(exc).__name__}: {exc}\n\n")
         file_handle.writelines(tb)
+    _prune_old_crash_files()
     return crash_file
 
 
