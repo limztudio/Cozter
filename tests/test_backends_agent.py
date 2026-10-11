@@ -1633,7 +1633,7 @@ warning: ignored after the catalog
         self.assertEqual(discover.call_count, 2)
         self.assertEqual(
             discover.call_args_list,
-            [mock.call(workspace_key), mock.call(workspace_key)],
+            [mock.call(workspace_path), mock.call(workspace_path)],
         )
 
     def test_copilot_rechecks_cache_after_waiting_for_discovery_lock(self) -> None:
@@ -1663,8 +1663,6 @@ warning: ignored after the catalog
         backend = CopilotBackend()
         blocked_workspace = "/workspaces/blocked"
         allowed_workspace = "/workspaces/allowed"
-        blocked_key = backend._workspace_catalog_key(blocked_workspace)
-        allowed_key = backend._workspace_catalog_key(allowed_workspace)
         with mock.patch.object(
             backend,
             "_discover_models",
@@ -1698,7 +1696,7 @@ warning: ignored after the catalog
 
         self.assertEqual(
             discover.call_args_list,
-            [mock.call(blocked_key), mock.call(allowed_key)],
+            [mock.call(blocked_workspace), mock.call(allowed_workspace)],
         )
 
     def test_copilot_workspace_catalog_caches_stay_bounded(self) -> None:
@@ -2004,6 +2002,8 @@ class CopilotPromptCapTests(unittest.TestCase):
         self.assertLessEqual(cap, 1_000_000)
 
     def test_posix_prompt_cap_respects_single_argument_limit(self) -> None:
+        if not hasattr(copilot_mod.os, "sysconf"):
+            self.skipTest("os.sysconf unavailable on this platform")
         with (
             mock.patch.object(copilot_mod.sys, "platform", "linux"),
             mock.patch.object(

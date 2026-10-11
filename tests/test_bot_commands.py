@@ -242,6 +242,7 @@ class BotCommandTests(unittest.TestCase):
         migrated = schedules.list_schedules(self.ws, target_uid)
         self.assertEqual(migrated[0]["id"], "legacy")
         self.assertEqual(migrated[0]["platform_id"], "signal")
+        self.assertEqual(migrated[0]["chat_id"], "group")
 
     # /doctor
     def test_doctor_lists_every_direct_backend(self) -> None:

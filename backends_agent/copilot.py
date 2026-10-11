@@ -379,7 +379,7 @@ class CopilotBackend(Backend):
             self._prune_workspace_model_caches(now, keep_key=workspace_key)
             # Failed refresh falls back to ``auto``.
             self._workspace_model_catalogs.pop(workspace_key, None)
-            models = self._discover_models(workspace_key)
+            models = self._discover_models(workspace_path)
             if models is not None:
                 self._workspace_model_catalogs[workspace_key] = (
                     models, time.monotonic() + MODEL_CATALOG_TTL_SEC,

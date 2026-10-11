@@ -315,6 +315,8 @@ class JsonHelperTests(unittest.TestCase):
                 self.assertEqual(json.load(file_handle), {"ok": True})
 
     def test_fsync_directory_closes_its_descriptor(self) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX directory fsync is a no-op on Windows")
         with (
             mock.patch.object(utils.os, "open", return_value=123) as open_dir,
             mock.patch.object(utils.os, "fsync") as fsync,

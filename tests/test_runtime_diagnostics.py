@@ -99,16 +99,17 @@ class VenvBootstrapTests(unittest.TestCase):
 
     def test_dependency_check_detects_an_outdated_declared_version(self) -> None:
         main = _load_main_module()
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8") as req_file:
-            req_file.write("aiohttp>=3.14.3,<4\n")
-            req_file.flush()
+        with tempfile.TemporaryDirectory() as tmp:
+            req_path = os.path.join(tmp, "requirements.txt")
+            with open(req_path, "w", encoding="utf-8") as req_file:
+                req_file.write("aiohttp>=3.14.3,<4\n")
             with (
                 mock.patch.object(main, "find_spec", return_value=object()),
                 mock.patch.object(
                     main, "distribution_version", return_value="3.14.1",
                 ),
             ):
-                issues = main._runtime_dependency_issues(req_file.name)
+                issues = main._runtime_dependency_issues(req_path)
 
         self.assertEqual(
             issues, ["aiohttp 3.14.1 does not satisfy <4,>=3.14.3"],

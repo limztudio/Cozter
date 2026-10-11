@@ -154,7 +154,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             try:
                 self.assertEqual(
                     workspace.iter_current_workspaces("bot"),
-                    [("u3", "/tmp/ws")],
+                    [("u3", workspace.canonicalize_workspace_path("/tmp/ws"))],
                 )
             finally:
                 workspace.WORKSPACE_STATE_PATH = old_path
@@ -179,7 +179,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 with open(path, encoding="utf-8") as file_handle:
                     data = json.load(file_handle)
                 self.assertEqual(
-                    data["target"]["current"]["bot"], "/tmp/ws",
+                    data["target"]["current"]["bot"],
+                    workspace.canonicalize_workspace_path("/tmp/ws"),
                 )
             finally:
                 workspace.WORKSPACE_STATE_PATH = old_path
@@ -213,6 +214,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             workspace, "WORKSPACE_STATE_PATH", os.path.join(tmp, "state.json"),
         ):
             first = os.path.join(tmp, "first")
+            canonical_first = workspace.canonicalize_workspace_path(first)
             workspace.select_workspace("user", first, "bot")
             with (
                 mock.patch.object(
@@ -221,8 +223,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 self.assertRaises(OSError),
             ):
                 workspace.select_workspace("user", os.path.join(tmp, "second"), "bot")
-            self.assertEqual(workspace.get_current("user", "bot"), first)
-            self.assertEqual(workspace.get_recent("user"), [first])
+            self.assertEqual(workspace.get_current("user", "bot"), canonical_first)
+            self.assertEqual(workspace.get_recent("user"), [canonical_first])
 
     def test_workspace_cache_is_scoped_to_its_state_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -233,7 +235,10 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             with mock.patch.object(workspace, "stat_mtime_size", return_value=(1, 1)):
                 for path, uid in zip(paths, ("first", "second")):
                     with mock.patch.object(workspace, "WORKSPACE_STATE_PATH", path):
-                        self.assertEqual(workspace.iter_current_workspaces("bot"), [(uid, tmp)])
+                        self.assertEqual(
+                            workspace.iter_current_workspaces("bot"),
+                            [(uid, workspace.canonicalize_workspace_path(tmp))],
+                        )
     def test_invalid_max_permission_blocks_daemon_start(self) -> None:
         with (
             temporary_config({

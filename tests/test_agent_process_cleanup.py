@@ -58,8 +58,8 @@ class AgentProcessCleanupTests(unittest.TestCase):
                 [sys.executable, "-c", script],
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
-            self.assertEqual(stdout.decode(), "stdin-closed=True\n")
-            self.assertEqual(stderr.decode(), "stderr-output\n")
+            self.assertEqual(stdout.decode().replace("\r\n", "\n"), "stdin-closed=True\n")
+            self.assertEqual(stderr.decode().replace("\r\n", "\n"), "stderr-output\n")
 
         asyncio.run(run())
 

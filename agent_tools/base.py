@@ -725,12 +725,21 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
     call created the target.
     """
     parent = os.path.dirname(target_path) or "."
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except OSError:
+        pass
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
     os.close(fd)
+    # mkstemp-created files cannot be overwritten by copy2 on Windows, so
+    # release the reserved name and let copy2 recreate it below.
+    os.unlink(tmp_path)
     try:
-        # copy2 keeps metadata; fsync first.
+        # copy2 keeps metadata; fsync first (read-write handle: read-only
+        # fds cannot be synced on some Windows Python builds).
         shutil.copy2(source_path, tmp_path)
-        with open(tmp_path, "rb") as tmp_file:
+        with open(tmp_path, "r+b") as tmp_file:
+            tmp_file.flush()
             os.fsync(tmp_file.fileno())
         return _publish_new_file_no_clobber(
             tmp_path, target_path, preserve_metadata=True,
@@ -783,9 +792,11 @@ def _hard_link_unsupported(exc: OSError) -> bool:
         errno.EPERM,
         errno.EXDEV,
         errno.ENOSYS,
-        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
         errno.EOPNOTSUPP,
     }
+    enotsup = getattr(errno, "ENOTSUP", None)
+    if enotsup is not None:
+        unsupported_errnos.add(enotsup)
     if exc.errno in unsupported_errnos:
         return True
     # Hard links unsupported here; other errors raise.
@@ -839,8 +850,10 @@ def _copy_file_metadata_to_fd(source_path: str, target_fd: int) -> None:
     a replacement); extended metadata stays hard-link-path-only.
     """
     source_stat = os.stat(source_path, follow_symlinks=False)
+    fchmod = getattr(os, "fchmod", None)
     try:
-        os.fchmod(target_fd, stat.S_IMODE(source_stat.st_mode))
+        if fchmod is not None:
+            fchmod(target_fd, stat.S_IMODE(source_stat.st_mode))
         os.utime(
             target_fd,
             ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
@@ -953,6 +966,12 @@ def _complete_no_clobber_move(
         raise
 
 
+def _rename_unavailable_error(detail: str) -> OSError:
+    """Build the no-clobber-rename-unavailable error for this platform."""
+    enotsup = getattr(errno, "ENOTSUP", errno.EOPNOTSUPP)
+    return OSError(enotsup, f"atomic no-clobber rename is unavailable {detail}")
+
+
 def _rename_path_no_clobber(source_path: str, target_path: str) -> bool:
     """Use a platform-native no-replace rename for non-file paths."""
     if os.name == "nt":
@@ -964,10 +983,7 @@ def _rename_path_no_clobber(source_path: str, target_path: str) -> bool:
         return True
     if sys.platform.startswith("linux"):
         return _linux_rename_no_replace(source_path, target_path)
-    raise OSError(
-        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
-        "atomic no-clobber rename is unavailable for this path type",
-    )
+    raise _rename_unavailable_error("for this path type")
 
 
 def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
@@ -978,10 +994,7 @@ def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
         libc = ctypes.CDLL(None, use_errno=True)
         renameat2 = libc.renameat2
     except (AttributeError, OSError) as exc:
-        raise OSError(
-            getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
-            "atomic no-clobber rename is unavailable on this system",
-        ) from exc
+        raise _rename_unavailable_error("on this system") from exc
     renameat2.argtypes = (
         ctypes.c_int,
         ctypes.c_char_p,
@@ -997,16 +1010,9 @@ def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
     error = ctypes.get_errno()
     if error == errno.EEXIST:
         return False
-    if error in {
-        errno.EINVAL,
-        errno.ENOSYS,
-        errno.EOPNOTSUPP,
-        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
-    }:
-        raise OSError(
-            getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
-            "atomic no-clobber rename is unavailable for this filesystem",
-        )
+    enotsup = getattr(errno, "ENOTSUP", errno.EOPNOTSUPP)
+    if error in {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP, enotsup}:
+        raise _rename_unavailable_error("for this filesystem")
     raise OSError(error, os.strerror(error), target_path)
 
 
