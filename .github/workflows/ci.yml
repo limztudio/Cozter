@@ -12,19 +12,20 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
       # Checkout dir must be named "Cozter" so `from Cozter...` imports resolve.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: Cozter
           # Never push/fetch submodules: keep the workflow token out of git config.
           persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -33,16 +34,17 @@ jobs:
       - name: Install dependencies
         working-directory: Cozter
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt ruff mypy
+          timeout 3600s python -m pip install --upgrade pip
+          timeout 3600s python -m pip install -r requirements.txt ruff mypy
 
       - name: Lint (ruff)
         working-directory: Cozter
-        run: ruff check .
+        run: timeout 3600s ruff check .
 
       - name: Type check (mypy)
         # Run from parent so `Cozter` resolves; pass matrix version (mypy.ini defaults locally).
-        run: PYTHONPATH="$PWD" mypy --config-file Cozter/mypy.ini --python-version ${{ matrix.python-version }} -p Cozter
+        run: PYTHONPATH="$PWD" timeout 3600s mypy --config-file Cozter/mypy.ini --python-version ${{ matrix.python-version }} -p Cozter
 
       - name: Tests (unittest)
-        run: PYTHONPATH="$PWD" python -m unittest discover -s Cozter/tests
+        # Verbose output records every executed and skipped test in the job log.
+        run: PYTHONPATH="$PWD" timeout 3600s python -m unittest discover -s Cozter/tests -v

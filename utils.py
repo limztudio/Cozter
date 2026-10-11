@@ -728,12 +728,13 @@ async def iter_process_json_events(
     A CLI parent can emit its final JSON line, spawn a background child that
     inherits stdout/stderr, and exit.  Waiting only for ``stdout`` EOF then
     hangs forever: EOF arrives only after that child exits.  Race the next
-    stream event against the parent process wait; once the parent has exited
-    and no buffered event/EOF is immediately available, terminate the owned
-    process group and bound the final pipe drain.  A caller that has already
-    recognized a provider-owned detached task can supply a predicate to keep
-    that tree alive; the inherited stdout reader is still abandoned after the
-    same bounded grace.
+    stream event against the parent process wait; once the parent has exited,
+    bound the time spent reading/decoding and the size of its remaining output,
+    including immediately ready events.  Time spent in the caller while an
+    event is yielded does not consume that drain allowance.  A caller that has
+    already recognized a provider-owned detached task can supply a predicate to
+    keep that tree alive; the inherited stdout reader is still abandoned after
+    the same bounded grace.
 
     The caller still owns normal process teardown.  This helper only handles
     the special parent-exited/stream-still-open case that would otherwise
@@ -792,12 +793,10 @@ async def iter_process_json_events(
     try:
         while True:
             if parent_exited:
-                # Let the parent-authored backlog through, not an inherited child.
                 assert post_exit_deadline is not None
                 if not next_event_task.done():
-                    # A slow event consumer can outlive the drain allowance.
-                    # Give the reader one turn to expose already-buffered data
-                    # or EOF before interpreting that elapsed time as a stall.
+                    # Expose buffered output or EOF before abandoning a pipe
+                    # whose read allowance has expired.
                     await asyncio.sleep(0)
                 if not next_event_task.done():
                     remaining = post_exit_deadline - loop.time()
@@ -814,14 +813,6 @@ async def iter_process_json_events(
                     except TimeoutError:
                         await _abandon_post_exit_stream()
                         return
-                if post_exit_bytes >= _POST_EXIT_STREAM_DRAIN_BYTES:
-                    # Preserve a pending EOF; drop events past the allowance.
-                    try:
-                        await next_event_task
-                    except StopAsyncIteration:
-                        return
-                    await _abandon_post_exit_stream()
-                    return
             else:
                 done, _ = await asyncio.wait(
                     (next_event_task, exit_task),
@@ -833,29 +824,29 @@ async def iter_process_json_events(
                     post_exit_deadline = (
                         loop.time() + _POST_EXIT_STREAM_DRAIN_TIMEOUT
                     )
-                # A buffered event/EOF already waiting is parent output;
-                # consume it, while still bounding the remaining backlog once
-                # the parent's exit is known. Ready events must not starve the
-                # exit task and bypass the post-exit byte/time allowance.
-                if next_event_task in done:
-                    try:
-                        event = await next_event_task
-                    except StopAsyncIteration:
-                        if not exit_task.done():
-                            exit_task.cancel()
-                            await await_cancelled(exit_task)
-                        return
-                    yield event
-                    next_event_task = asyncio.create_task(_next_event())
-                    continue
-                if parent_exited:
+                # Observe parent exit even while events are continuously ready.
+                if next_event_task not in done:
                     continue
 
             try:
                 event = await next_event_task
             except StopAsyncIteration:
                 return
+            if parent_exited:
+                assert post_exit_deadline is not None
+                if (
+                    loop.time() >= post_exit_deadline
+                    or post_exit_bytes >= _POST_EXIT_STREAM_DRAIN_BYTES
+                ):
+                    # EOF above still wins at the deadline; a ready event must
+                    # obey both limits just like a stalled inherited pipe.
+                    await _abandon_post_exit_stream()
+                    return
+            consumer_started = loop.time()
             yield event
+            if parent_exited:
+                assert post_exit_deadline is not None
+                post_exit_deadline += loop.time() - consumer_started
             next_event_task = asyncio.create_task(_next_event())
     finally:
         if not next_event_task.done():

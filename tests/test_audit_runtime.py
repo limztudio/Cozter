@@ -5,7 +5,7 @@ from unittest import mock
 
 from Cozter import agent, flexible, workspace
 from Cozter.backends_agent.base import AgentResult, append_text_result
-from tests.test_runtime_diagnostics import _load_main_module
+from Cozter.tests.test_runtime_diagnostics import _load_main_module
 
 
 class LauncherExitTests(unittest.TestCase):

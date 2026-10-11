@@ -39,6 +39,133 @@ class InternalBackendStub:
 
 
 class ProcessDrainTests(unittest.TestCase):
+    def test_exited_parent_ready_json_events_obey_the_drain_deadline(self) -> None:
+        async def run() -> None:
+            reader = asyncio.StreamReader()
+            reader.feed_data(b'{"text":"continuous"}\n' * 20)
+            reader.feed_eof()
+            proc = SimpleNamespace(stdout=reader, returncode=0, pid=0)
+            elapsed = 0.0
+
+            def account_parsing_time(_event: object) -> None:
+                nonlocal elapsed
+                elapsed += 0.25
+
+            # Charge deterministic reader work while each next event remains
+            # immediately ready; no byte cutoff or wall-clock timing is involved.
+            drain_clock = SimpleNamespace(time=lambda: elapsed)
+            with (
+                mock.patch.object(
+                    utils.asyncio, "get_running_loop", return_value=drain_clock,
+                ),
+                mock.patch.object(
+                    utils, "validate_json_nesting", side_effect=account_parsing_time,
+                ),
+                mock.patch.object(utils, "terminate_process_group") as terminate,
+                mock.patch.object(utils, "close_subprocess_pipe") as close,
+                mock.patch.object(utils.logger, "warning"),
+            ):
+                events = [event async for event in utils.iter_process_json_events(proc)]
+
+            self.assertTrue(events)
+            self.assertLessEqual(len(events), 4)
+            self.assertLess(elapsed, 2.0)
+            terminate.assert_called_once_with(proc)
+            close.assert_called_once_with(proc, 1)
+
+        asyncio.run(run())
+
+    def test_exited_parent_drain_deadline_excludes_slow_consumer_time(self) -> None:
+        async def run() -> None:
+            reader = asyncio.StreamReader()
+            reader.feed_data(b"".join(
+                json.dumps({"number": number}).encode() + b"\n"
+                for number in range(10)
+            ))
+            reader.feed_eof()
+            proc = SimpleNamespace(stdout=reader, returncode=0, pid=0)
+            elapsed = 0.0
+
+            def account_parsing_time(_event: object) -> None:
+                nonlocal elapsed
+                elapsed += 0.01
+
+            drain_clock = SimpleNamespace(time=lambda: elapsed)
+            with (
+                mock.patch.object(
+                    utils.asyncio, "get_running_loop", return_value=drain_clock,
+                ),
+                mock.patch.object(
+                    utils, "validate_json_nesting", side_effect=account_parsing_time,
+                ),
+                mock.patch.object(utils, "terminate_process_group") as terminate,
+                mock.patch.object(utils, "close_subprocess_pipe") as close,
+            ):
+                events = []
+                async for event in utils.iter_process_json_events(proc):
+                    events.append(event["number"])
+                    elapsed += 2.0
+
+            self.assertEqual(events, list(range(10)))
+            terminate.assert_not_called()
+            close.assert_not_called()
+
+        asyncio.run(run())
+
+    def test_exited_parent_accepts_ready_eof_at_the_drain_deadline(self) -> None:
+        async def run() -> None:
+            reader = asyncio.StreamReader()
+            reader.feed_data(b'{"text":"final"}\n')
+            reader.feed_eof()
+            proc = SimpleNamespace(stdout=reader, returncode=0, pid=0)
+            elapsed = 0.0
+            read = reader.read
+
+            async def read_with_eof_delay(size: int = -1) -> bytes:
+                nonlocal elapsed
+                chunk = await read(size)
+                if not chunk:
+                    elapsed += utils._POST_EXIT_STREAM_DRAIN_TIMEOUT
+                return chunk
+
+            drain_clock = SimpleNamespace(time=lambda: elapsed)
+            with (
+                mock.patch.object(
+                    utils.asyncio, "get_running_loop", return_value=drain_clock,
+                ),
+                mock.patch.object(reader, "read", side_effect=read_with_eof_delay),
+                mock.patch.object(utils, "terminate_process_group") as terminate,
+                mock.patch.object(utils, "close_subprocess_pipe") as close,
+            ):
+                events = [event async for event in utils.iter_process_json_events(proc)]
+
+            self.assertEqual(events, [{"text": "final"}])
+            terminate.assert_not_called()
+            close.assert_not_called()
+
+        asyncio.run(run())
+
+    def test_cancelled_post_exit_drain_closes_pipe_and_reader_tasks(self) -> None:
+        async def run() -> None:
+            reader = asyncio.StreamReader()
+            proc = SimpleNamespace(stdout=reader, returncode=0, pid=0)
+            tasks_before = asyncio.all_tasks()
+            iterator = utils.iter_process_json_events(proc)
+            task = asyncio.create_task(anext(iterator))
+            with mock.patch.object(utils, "close_subprocess_pipe") as close:
+                # Let the parent exit and start waiting for its inherited pipe.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                await iterator.aclose()
+
+            close.assert_called_once_with(proc, 1)
+            self.assertEqual(asyncio.all_tasks(), tasks_before)
+
+        asyncio.run(run())
+
     def test_exited_parent_cannot_bypass_stdout_budget_with_buffered_events(self) -> None:
         async def run() -> None:
             reader = asyncio.StreamReader()
