@@ -743,7 +743,12 @@ legacy duplicate id cannot leave a stale twin due forever and refiring
 every tick.
 Scheduled prompts run through the same persistent queue as user messages,
 but use a fresh ephemeral session that is deleted after the turn; they do
-not append to the user's current conversation. They run autonomously and can
+not append to the user's current conversation. Each owner runs one turn at a
+time, so scheduled jobs wait behind active work and older queued messages.
+`Queued scheduled task` confirms the prompt has been saved in the queue;
+`Starting scheduled task` appears when that job is selected to run. These
+notices time out after four seconds so a slow chat connection cannot hold
+the scheduler or agent indefinitely. They run autonomously and can
 continue even while normal chat work is paused waiting for a collaborative
 `[[await]]` answer. CLI mode accepts `/reserve` but does not currently run a
 scheduler or restore queued turns after a restart.

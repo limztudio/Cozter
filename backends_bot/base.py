@@ -3162,18 +3162,13 @@ class BotPlatform(ABC):
 
         # Check capacity first.
         if msg_queue.full():
-            await self._send_text_best_effort(
-                chat_id,
-                f"Queue full — dropped scheduled command: {command}",
+            await self._run_status_operation(
+                self.send_text(
+                    chat_id, f"Queue full — dropped scheduled command: {command}",
+                ),
+                action="announcing a dropped scheduled task",
             )
             return
-
-        try:
-            await self.send_text(
-                chat_id, f"⏰ Scheduled: {command}",
-            )
-        except Exception:
-            logger.warning("Failed to announce scheduled command")
 
         entry_id = await self._persist_admitted_dispatch_entry(
             uid, command, chat_id, generation, ephemeral=True,
@@ -3188,8 +3183,15 @@ class BotPlatform(ABC):
             await self._discard_cancelled_dispatch_entry(uid, entry_id, msg_queue)
             return
 
-        # Kick the drainer.
-        self._start_queue_drain(uid)
+        try:
+            await self._run_status_operation(
+                self.send_text(chat_id, f"⏰ Queued scheduled task: {command}"),
+                action="announcing a queued scheduled task",
+            )
+        finally:
+            # Admitted work must wake even if its acknowledgement is cancelled.
+            if self._cancel_generations.get(uid, 0) == generation:
+                self._start_queue_drain(uid)
 
     # AI chat + file
 
@@ -3745,6 +3747,10 @@ class BotPlatform(ABC):
         sess_data = session.create_session(ws, name=f"⏰ {label}")
         sid = sess_data["id"]
         try:
+            await self._run_status_operation(
+                self.send_text(chat_id, f"⏰ Starting scheduled task: {text}"),
+                action="announcing a starting scheduled task",
+            )
             await self._run_turn(
                 uid, chat_id, text, session_id=sid,
                 queue_entry_id=queue_entry_id,
