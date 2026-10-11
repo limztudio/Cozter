@@ -1422,7 +1422,8 @@ identity and delete it in `cleanup_process` after the child is reaped.
 
 Internal LLM jobs (routing, session titling, compaction, and colony
 consolidation) all go through `utils.run_internal_backend()`. The shared
-runner carries the 3600s real-work cap (cancel still stops instantly), consumes
+runner applies a configured positive deadline to startup and response together,
+so a stalled launch cannot escape the helper's budget. It consumes
 stdout and stderr without pipe deadlocks, kills cancelled children, and
 logs stderr when a backend exits without an assistant response. Streamed
 backend events prefer an already-buffered event or EOF over arming the
@@ -1718,6 +1719,19 @@ are excluded. The timing log rotates at 5 MiB with three backups.
 HTTP connection attempts are bounded at 30 seconds (or the shorter configured
 socket timeout). A positive socket timeout also caps the entire completion,
 including retries and backoff; streaming heartbeats cannot extend that budget.
+Recognized successful completion events retain their final content and tool
+arguments before finishing; a stalled trailer cannot turn completed work into
+a full-timeout wait or retry. Requests use equivalent compact JSON, and plain
+text prompts avoid the vision-preparation thread hop.
+Normal completion trailers get a short drain (at most 50 ms and 64 KiB) to
+preserve connection reuse; the drain is skipped near the request deadline.
+Flexible worker prompts retain their full actionable instruction once instead
+of repeating it in the plan overview. Bounded report excerpts keep their opening
+and final evidence; an omitted middle alone does not imply unfinished work,
+and completion still requires retained evidence for the requested scope.
+File discovery matches the requested glob before resolving targets. Bounded
+permission modes still check matching targets for symlink escapes, while full
+mode avoids unused containment work.
 Repeated-only tool rounds and three consecutive entirely blocked rounds force
 a final report from the available evidence, while useful tool work can continue.
 On Windows, the Python entry process owns a process-lifetime job before it

@@ -541,12 +541,13 @@ def iter_workspace_files(
         dirnames[:] = [dirname for dirname in dirnames if dirname not in skip_dirs]
         for filename in filenames:
             fpath = os.path.join(dirpath, filename)
-            real = os.path.realpath(fpath)
-            inside_workspace = is_path_within(real, abs_ws)
-            if not full_access and not inside_workspace:
-                continue
             root_rel = os.path.relpath(fpath, abs_root).replace(os.sep, "/")
             if not _path_matches_glob(root_rel, pattern):
+                continue
+            # Reject by spelling before doing filesystem work. Full mode
+            # does not need a resolved-target containment check; bounded
+            # matches still follow symlinks through is_path_within.
+            if not full_access and not is_path_within(fpath, abs_ws):
                 continue
             # Display containment uses the lexical entry, independently of
             # its target: an external link can point to a different drive

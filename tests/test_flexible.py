@@ -554,6 +554,61 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(long_report, merge_prompt)
         self.assertIn("short", merge_prompt)
 
+    def test_report_excerpt_keeps_final_evidence_and_real_remainder(self) -> None:
+        plan = flexible.Plan(
+            understanding="",
+            subtasks=(flexible.Subtask(tier="mid", instruction="verify remaining targets"),),
+        )
+        for final_evidence in (
+            "FINAL EVIDENCE: all 24 targets checked; exit code 0; warnings 0.",
+            "PARTIAL: target 24 is unverified; remainder: exercise its runtime path.",
+        ):
+            report = "OPENING: changed retry.py.\n" + "detail\n" * 2_000 + final_evidence
+            with self.subTest(final_evidence=final_evidence):
+                excerpt = flexible._truncate_report(report)
+                self.assertEqual(len(excerpt), flexible._REPORT_MAX_CHARS)
+                self.assertTrue(excerpt.startswith("OPENING: changed retry.py."))
+                self.assertTrue(excerpt.endswith(final_evidence))
+                self.assertIn(flexible._REPORT_TRUNCATION_MARKER, excerpt)
+                for downstream in (
+                    flexible.build_subtask_prompt("request", plan, 0, [report]),
+                    flexible.build_merge_prompt("request", plan, [report], collaborative=False),
+                ):
+                    self.assertIn(final_evidence, downstream)
+                    self.assertNotIn(report, downstream)
+        completed = flexible._truncate_report(
+            "OPENING\n" + "detail\n" * 2_000 + "FINAL: complete; exit code 0."
+        )
+        self.assertNotIn("PARTIAL", completed)
+
+    def test_current_task_instruction_is_not_repeated_in_plan_overview(self) -> None:
+        instruction = "Verify these exact targets and report each result: " + "target/" * 600
+        earlier_instruction = "prepare fixtures without changing the production configuration"
+        plan = flexible.Plan(
+            understanding="",
+            subtasks=(
+                flexible.Subtask(tier="low", instruction=earlier_instruction),
+                flexible.Subtask(tier="high", instruction=instruction),
+            ),
+        )
+        prompt = flexible.build_subtask_prompt(
+            "original user request", plan, 1, ["Fixture evidence: exit code 0."],
+        )
+        self.assertEqual(prompt.count(instruction), 1)
+        self.assertIn(f"Your task: {instruction}\n", prompt)
+        self.assertIn(earlier_instruction, prompt)
+        self.assertIn("Fixture evidence: exit code 0.", prompt)
+        overview = flexible._render_plan(plan, current=1)
+        full_overview = flexible._render_plan(plan)
+        self.assertEqual(
+            len(full_overview) + len("  <- your task") - len(overview),
+            len(instruction) - len("(full instruction below)"),
+        )
+        # The final merge still sees every plan instruction in full.
+        self.assertIn(instruction, flexible.build_merge_prompt(
+            "request", plan, ["earlier report", "verified targets"], collaborative=False,
+        ))
+
     async def test_workers_get_the_request_not_the_full_history(self) -> None:
         """Workers are driven with the bare user request as context."""
         seen: list[str] = []
@@ -922,11 +977,13 @@ class CoveragePromptTests(unittest.TestCase):
     def test_merge_checks_doc_rules_and_truncated_previews(self) -> None:
         self.assertIn("every rule/section", flexible._MERGE_RULES)
         self.assertIn("PARTIAL + remainder", flexible._MERGE_RULES)
-        self.assertIn("[report truncated: remainder omitted]", flexible._MERGE_RULES)
+        self.assertIn("bounded report excerpt", flexible._MERGE_RULES)
+        self.assertIn("retained scope and verification evidence", flexible._MERGE_RULES)
 
     def test_report_marker_warns_preview_not_full(self) -> None:
         self.assertIn("never treat this preview", flexible._REPORT_TRUNCATION_MARKER)
-        self.assertIn("PARTIAL + remainder", flexible._REPORT_TRUNCATION_MARKER)
+        self.assertIn("omission alone does not imply unfinished work", flexible._REPORT_TRUNCATION_MARKER)
+        self.assertNotIn("PARTIAL", flexible._REPORT_TRUNCATION_MARKER)
 
     def test_plan_cap_surfaces_partial_remainder(self) -> None:
         lines = [

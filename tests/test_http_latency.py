@@ -2,9 +2,13 @@
 
 import asyncio
 import copy
+import json
 import threading
 import unittest
 from unittest import mock
+
+import aiohttp
+from aiohttp import web
 
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.backends_agent.base import AgentResult
@@ -243,10 +247,21 @@ class VisionPreparationTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(oa, "_stream_completion", return_value=("done", "", [])),
         ):
             await _LongWorkBackend()._run_agent(
-                _CaptureProc(), ".", "image request", "model", "full", False, 0,
+                _CaptureProc(), ".", "[image attachment saved to: image.png]",
+                "model", "full", False, 0,
             )
         self.assertEqual(len(reader_threads), 1)
         self.assertNotEqual(reader_threads[0], owner_thread)
+
+    async def test_plain_text_bypasses_image_preparation(self):
+        with (
+            mock.patch.object(oa, "_vision_parts_for_prompt") as prepare,
+            mock.patch.object(oa, "_stream_completion", return_value=("done", "", [])),
+        ):
+            await _LongWorkBackend()._run_agent(
+                _CaptureProc(), ".", "plain text", "model", "full", False, 0,
+            )
+        prepare.assert_not_called()
 
     def test_prompt_names_actual_host_shell_when_exposed(self):
         with mock.patch.object(oa, "shell_context", return_value="Host shell: PowerShell."):
@@ -254,6 +269,275 @@ class VisionPreparationTests(unittest.IsolatedAsyncioTestCase):
             bounded = oa._system_prompt(".", ("read_file",), "auto")
         self.assertIn("Host shell: PowerShell.", full)
         self.assertNotIn("Host shell:", bounded)
+
+
+class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
+    async def _stream_with_stalled_tail(self, events):
+        tail_read = False
+        response_closed = False
+
+        class Content:
+            async def iter_any(self):
+                nonlocal tail_read
+                yield b": heartbeat\n\n"
+                for event in events:
+                    yield f"data: {json.dumps(event)}\n\n".encode()
+                tail_read = True
+                await asyncio.Event().wait()
+
+            async def read(self, _size):
+                await asyncio.Event().wait()
+
+        class Response(_SSEResponse):
+            async def __aexit__(self, *_args):
+                nonlocal response_closed
+                response_closed = True
+
+        response = Response([])
+        response.content = Content()
+        with mock.patch.object(
+            oa.aiohttp, "ClientSession", return_value=_SSESession(response),
+        ):
+            result = await oa._stream_completion(
+                "http://offline", {}, {}, 0.2, 0, "test",
+            )
+        self.assertFalse(tail_read)
+        self.assertTrue(response_closed)
+        return result
+
+    async def test_terminal_event_preserves_final_text_and_reasoning_without_done(self):
+        result = await self._stream_with_stalled_tail([{
+            "choices": [{"finish_reason": "stop", "delta": {
+                "content": "final answer", "reasoning_content": "final reasoning",
+            }}],
+        }])
+        self.assertEqual(result, ("final answer", "final reasoning", []))
+
+    async def test_terminal_tool_event_preserves_last_argument_fragment(self):
+        result = await self._stream_with_stalled_tail([
+            {"choices": [{"delta": {"tool_calls": [{
+                "index": 0, "id": "call-1", "function": {
+                    "name": "read_file", "arguments": '{"path":',
+                },
+            }]}}]},
+            {"choices": [{"finish_reason": "tool_calls", "delta": {
+                "content": "last text", "tool_calls": [{
+                    "index": 0, "function": {"arguments": '"file.txt"}'},
+                }],
+            }}]},
+        ])
+        self.assertEqual(result[0], "last text")
+        self.assertEqual(result[2][0]["function"]["arguments"], '{"path":"file.txt"}')
+
+    async def test_terminal_event_without_delta_does_not_wait_for_tail(self):
+        result = await self._stream_with_stalled_tail([
+            {"choices": [{"delta": {"content": "answer"}}]},
+            {"choices": [{"finish_reason": "stop"}]},
+        ])
+        self.assertEqual(result[0], "answer")
+
+    async def test_nonterminal_choices_and_heartbeats_do_not_end_completion(self):
+        result = await self._stream_with_stalled_tail([
+            {"choices": [{"finish_reason": None, "delta": {"content": "a"}}]},
+            {"choices": [{"finish_reason": "", "delta": {"content": "b"}}]},
+            {"choices": []},
+            {"choices": [{"delta": {"content": "c"}}, {"finish_reason": "stop"}]},
+            {"choices": [{"finish_reason": "stop", "delta": {"content": "d"}}]},
+        ])
+        self.assertEqual(result[0], "abcd")
+
+    async def test_provider_error_in_terminal_event_takes_priority(self):
+        with self.assertRaisesRegex(RuntimeError, "quota exhausted"):
+            await self._stream_with_stalled_tail([{
+                "error": {"message": "quota exhausted"},
+                "choices": [{"finish_reason": "stop", "delta": {"content": "partial"}}],
+            }])
+
+    async def test_pending_tool_length_terminal_remains_retryable(self):
+        with self.assertRaisesRegex(oa._RetryableError, "length while a tool call was pending"):
+            await self._stream_with_stalled_tail([{
+                "choices": [{"finish_reason": "length", "delta": {"tool_calls": [{
+                    "index": 0, "function": {
+                        "name": "write_file", "arguments": '{"path":',
+                    },
+                }]}}],
+            }])
+
+    async def test_terminal_event_near_request_deadline_skips_trailer_grace(self):
+        response = _SSEResponse([
+            b'data: {"choices":[{"finish_reason":"stop","delta":{"content":"done"}}]}\n\n',
+        ])
+        with mock.patch.object(oa, "_COMPLETION_TAIL_DRAIN_SECONDS", 1):
+            result = await oa._stream_completion(
+                "http://offline", {}, {}, 0.1, 0, "test", session=_SSESession(response),
+            )
+        self.assertEqual(result[0], "done")
+
+    async def test_trailer_drain_is_bounded_in_bytes(self):
+        response = _SSEResponse([])
+        reads = []
+
+        class Content:
+            async def read(self, size):
+                reads.append(size)
+                return b"x" * size
+
+        response.content = Content()
+        await oa._drain_completion_tail(response, None)
+        self.assertEqual(sum(reads), oa._COMPLETION_TAIL_DRAIN_BYTES)
+
+    async def test_cancellation_during_trailer_drain_still_cancels_request(self):
+        started = asyncio.Event()
+        response = _SSEResponse([
+            b'data: {"choices":[{"finish_reason":"stop","delta":{"content":"done"}}]}\n\n',
+        ])
+        original_content = response.content
+
+        class Content:
+            def iter_any(self):
+                return original_content.iter_any()
+
+            async def read(self, _size):
+                started.set()
+                await asyncio.Event().wait()
+
+        response.content = Content()
+        task = asyncio.create_task(oa._stream_completion(
+            "http://offline", {}, {}, None, 0, "test", session=_SSESession(response),
+        ))
+        await started.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+
+class CompletedConnectionReuseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_small_normal_trailer_preserves_connection_reuse(self):
+        transports = set()
+
+        async def handler(request):
+            transports.add(request.transport)
+            await request.read()
+            response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await response.prepare(request)
+            await response.write(
+                b'data: {"choices":[{"finish_reason":"stop","delta":{"content":"ok"}}]}\n\n',
+            )
+            await asyncio.sleep(0.01)
+            await response.write(b'data: [DONE]\n\n')
+            await response.write_eof()
+            return response
+
+        app = web.Application()
+        app.router.add_post("/chat", handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            port = site._server.sockets[0].getsockname()[1]
+            async with aiohttp.ClientSession() as session:
+                for _ in range(2):
+                    result = await oa._stream_completion(
+                        f"http://127.0.0.1:{port}/chat", {}, {}, 5, 0,
+                        "offline", session=session,
+                    )
+                    self.assertEqual(result[0], "ok")
+            self.assertEqual(len(transports), 1)
+        finally:
+            await runner.cleanup()
+
+    async def test_stalled_trailer_connection_is_not_reused_for_next_completion(self):
+        transports = set()
+        release_tail = asyncio.Event()
+        calls = 0
+
+        async def handler(request):
+            nonlocal calls
+            calls += 1
+            number = calls
+            transports.add(request.transport)
+            await request.read()
+            response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await response.prepare(request)
+            await response.write(("data: " + json.dumps({
+                "choices": [{"finish_reason": "stop", "delta": {
+                    "content": f"answer-{number}",
+                }}],
+            }) + "\n\n").encode())
+            if number == 1:
+                await release_tail.wait()
+            try:
+                await response.write(b'data: [DONE]\n\n')
+                await response.write_eof()
+            except ConnectionResetError:
+                pass
+            return response
+
+        app = web.Application()
+        app.router.add_post("/chat", handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            port = site._server.sockets[0].getsockname()[1]
+            async with aiohttp.ClientSession() as session:
+                for number in range(1, 3):
+                    result = await oa._stream_completion(
+                        f"http://127.0.0.1:{port}/chat", {}, {}, 5, 0,
+                        "offline", session=session,
+                    )
+                    self.assertEqual(result[0], f"answer-{number}")
+            self.assertEqual(len(transports), 2)
+        finally:
+            release_tail.set()
+            await runner.cleanup()
+
+
+class CompactRequestTests(unittest.TestCase):
+    def test_compact_json_preserves_payload_and_escaping_with_fewer_bytes(self):
+        payload = oa._completion_payload([
+            {"role": "user", "content": "Unicode: 한글 \ud800\n"},
+            {"role": "assistant", "content": None, "tool_calls": [{
+                "id": "c", "type": "function", "function": {
+                    "name": "read_file", "arguments": '{"path": "x.txt"}',
+                },
+            }]},
+        ], "model", {"reasoning_effort": "high"}, oa.tools.TOOL_SCHEMA)
+        compact = oa._compact_json(payload)
+        self.assertEqual(json.loads(compact), payload)
+        self.assertLess(len(compact.encode()), len(json.dumps(payload).encode()))
+        self.assertIn("\\ud800", compact)
+        self.assertIn("\\ud55c", compact)
+
+    def test_message_size_bound_matches_request_serialization(self):
+        message = {"role": "tool", "name": "read_file", "content": "한글\n" * 20}
+        self.assertEqual(
+            oa._message_payload_bytes(message), len(oa._compact_json(message).encode()),
+        )
+
+    def test_agent_session_uses_compact_serializer_once_for_all_rounds(self):
+        payloads = []
+
+        async def stream(_endpoint, payload, *_args, **_kwargs):
+            payloads.append(copy.deepcopy(payload))
+            if len(payloads) == 1:
+                return "", "", [_tool_call("c", "x.txt")]
+            return "done", "", []
+
+        with (
+            mock.patch.object(oa.aiohttp, "ClientSession", return_value=_SSESession(
+                _SSEResponse([]),
+            )) as factory,
+            mock.patch.object(oa, "_stream_completion", side_effect=stream),
+            mock.patch.object(oa.tools, "execute_tool", return_value="read ok"),
+        ):
+            asyncio.run(_LongWorkBackend()._run_agent(
+                _CaptureProc(), ".", "plain text", "model", "full", False, 100,
+            ))
+        self.assertEqual(len(payloads), 2)
+        factory.assert_called_once_with(json_serialize=oa._compact_json)
 
 
 if __name__ == "__main__":

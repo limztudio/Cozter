@@ -65,6 +65,8 @@ _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
 _MAX_MODEL_ID_CHARS = 512
 _MAX_MODEL_IDS = 4_096
 _HTTP_CONNECT_TIMEOUT = 30.0
+_COMPLETION_TAIL_DRAIN_SECONDS = 0.05
+_COMPLETION_TAIL_DRAIN_BYTES = 64 * 1024
 _BLOCKED_TOOL_ROUND_LIMIT = 3
 # 3600s real-work cap; bound error bodies.
 _MAX_HTTP_ERROR_BODY_BYTES = 8 * 1024
@@ -205,10 +207,15 @@ def discover_bearer_models(
     return chat_models or fallback_models
 
 
+def _compact_json(payload: object) -> str:
+    """Serialize requests without optional JSON whitespace or changed escaping."""
+    return json.dumps(payload, separators=(",", ":"))
+
+
 def _message_payload_bytes(message: dict[str, Any]) -> int:
     """Return the approximate UTF-8 JSON size retained for one chat message."""
     # Match aiohttp escaping so non-ASCII can't evade.
-    return len(json.dumps(message).encode("utf-8"))
+    return len(_compact_json(message).encode("utf-8"))
 
 
 def _is_blocked_tool_result(result: str) -> bool:
@@ -424,7 +431,10 @@ class OpenAIChatBackend(Backend):
 
         # Vision backends attach image bytes too.
         user_content: str | list[dict[str, Any]] = prompt
-        if getattr(self, "supports_vision", False):
+        if (
+            getattr(self, "supports_vision", False)
+            and "attachment saved to:" in prompt
+        ):
             vision_parts = await asyncio.to_thread(
                 _vision_parts_for_prompt, prompt, workspace_path,
             )
@@ -495,7 +505,7 @@ class OpenAIChatBackend(Backend):
                 payload.update(self._tool_request_fields(request_model))
             return payload
 
-        async with aiohttp.ClientSession() as http_session:
+        async with aiohttp.ClientSession(json_serialize=_compact_json) as http_session:
             async def stream_completion(payload: dict[str, Any]) -> tuple[
                 str, str, list[dict],
             ]:
@@ -897,6 +907,7 @@ async def _stream_completion(
     or until the turn is cancelled. Heartbeats cannot extend this budget.
     """
     started = time.monotonic()
+    deadline = started + sock_read if sock_read is not None and sock_read > 0 else None
     retries = 0
     outcome = "error"
 
@@ -906,7 +917,7 @@ async def _stream_completion(
             try:
                 return await _stream_once(
                     endpoint, payload, headers, sock_read, label,
-                    session=session,
+                    session=session, deadline=deadline,
                 )
             except _RetryableError as exc:
                 if retries >= max_retries:
@@ -946,6 +957,7 @@ async def _stream_once(
     sock_read: int | None,
     label: str,
     session: aiohttp.ClientSession | None = None,
+    deadline: float | None = None,
 ) -> tuple[str, str, list[dict]]:
     """One streaming attempt; raise _RetryableError for transient failures.
 
@@ -955,6 +967,8 @@ async def _stream_once(
     until the turn is cancelled; cancel still stops instantly.
     """
     if sock_read is not None and sock_read > 0:
+        if deadline is None:
+            deadline = time.monotonic() + sock_read
         timeout = aiohttp.ClientTimeout(
             total=sock_read, sock_read=sock_read,
             connect=min(_HTTP_CONNECT_TIMEOUT, sock_read),
@@ -966,13 +980,13 @@ async def _stream_once(
             sock_connect=_HTTP_CONNECT_TIMEOUT,
         )
     if session is None:
-        async with aiohttp.ClientSession() as owned_session:
+        async with aiohttp.ClientSession(json_serialize=_compact_json) as owned_session:
             return await _stream_once(
                 endpoint, payload, headers, sock_read, label,
-                session=owned_session,
+                session=owned_session, deadline=deadline,
             )
     return await _post_completion_stream(
-        session, endpoint, payload, headers, timeout, label,
+        session, endpoint, payload, headers, timeout, label, deadline,
     )
 
 
@@ -983,6 +997,7 @@ async def _post_completion_stream(
     headers: dict[str, str],
     timeout: aiohttp.ClientTimeout,
     label: str,
+    deadline: float | None = None,
 ) -> tuple[str, str, list[dict]]:
     """Read one streaming completion from an existing HTTP session."""
     text_parts: list[str] = []
@@ -1051,6 +1066,7 @@ async def _post_completion_stream(
                 if not isinstance(choice, dict):
                     continue
                 finish_reason = choice.get("finish_reason")
+                terminal_event = False
                 if finish_reason == "network_error":
                     raise _RetryableError(
                         f"{label} stream ended with network_error",
@@ -1059,6 +1075,7 @@ async def _post_completion_stream(
                     if finish_reason in _EOF_SUCCESS_FINISH_REASONS:
                         saw_terminal_marker = True
                         terminal_finish_reason = finish_reason
+                        terminal_event = True
                     else:
                         # Never run a partial call closed by error + [DONE].
                         raise RuntimeError(
@@ -1067,6 +1084,9 @@ async def _post_completion_stream(
                         )
                 delta = choice.get("delta")
                 if not isinstance(delta, dict):
+                    if terminal_event:
+                        await _drain_completion_tail(resp, deadline)
+                        break
                     continue
                 if first_delta is None and any(
                     delta.get(key) for key in ("content", "reasoning_content", "tool_calls")
@@ -1107,6 +1127,12 @@ async def _post_completion_stream(
                         _check_completion_buffer_limit(
                             text_bytes, reasoning_bytes, tool_argument_bytes,
                         )
+                # The selected choice has finished. Its final delta is now
+                # retained; later usage trailers are not parsed here. Don't
+                # wait for [DONE]/EOF or retry completed work on a stalled tail.
+                if terminal_event:
+                    await _drain_completion_tail(resp, deadline)
+                    break
             if saw_terminal_marker and not (
                 terminal_finish_reason == "length" and tool_buffers
             ):
@@ -1155,6 +1181,35 @@ async def _post_completion_stream(
             function["arguments"] = "".join(argument_parts)
         tool_calls.append(buf)
     return "".join(text_parts), "".join(reasoning_parts), tool_calls
+
+
+async def _drain_completion_tail(
+    resp: aiohttp.ClientResponse, deadline: float | None,
+) -> None:
+    """Keep normal completed responses reusable without waiting on stalled tails.
+
+    Finishing the small [DONE]/usage trailer permits connection reuse. The
+    completion is already retained, so a slow or broken tail must not spend
+    the real-work timeout or trigger another model request.
+    """
+    if deadline is not None and (
+        deadline - time.monotonic() <= _COMPLETION_TAIL_DRAIN_SECONDS + 0.01
+    ):
+        return
+
+    async def drain() -> None:
+        remaining = _COMPLETION_TAIL_DRAIN_BYTES
+        while remaining > 0:
+            chunk = await resp.content.read(remaining)
+            if not chunk:
+                return
+            remaining -= len(chunk)
+
+    try:
+        await asyncio.wait_for(drain(), timeout=_COMPLETION_TAIL_DRAIN_SECONDS)
+    except (TimeoutError, aiohttp.ClientError):
+        # Closing the response discards this connection when EOF did not arrive.
+        pass
 
 
 async def _read_error_body(resp: aiohttp.ClientResponse) -> str:

@@ -1032,9 +1032,8 @@ async def drain_llm_subprocess(
     """Drain JSON event lines from an internal LLM subprocess and return
     the last agent text emitted, or an empty string on no output.
 
-    No wall-clock timeout by default: the call runs until it finishes or
-    the turn is cancelled (cancel is the only stop). ``timeout`` is kept
-    for compatibility and applied only when explicitly passed positive.
+    A positive ``timeout`` bounds response draining. Without one, the call
+    runs until completion or cancel; the caller owns its launch deadline.
     The subprocess is *always* killed and reaped on exit — including on
     cancellation — so /stop or any other exception path can't leak a
     running subprocess past the cancelled task.
@@ -1125,27 +1124,32 @@ async def run_internal_backend(
     at the least-privileged ``deny`` level instead of treating summarization,
     titling, and routing as a reason to bypass backend safety controls.
 
-    No wall-clock timeout by default: the call runs until it finishes or
-    the turn is cancelled (cancel is the only stop). ``timeout`` is kept
-    for compatibility and applied only when explicitly passed positive.
+    A positive ``timeout`` bounds launch and response together, including
+    backend startup. Without one, the call runs until completion or cancel.
 
     Return ``None`` when the backend executable is missing and an empty
     string when it runs without producing an agent response.
     """
+    async def launch_and_drain() -> str | None:
+        try:
+            proc = await backend.launch(
+                workspace_path, prompt, model, approval="deny", compaction=True,
+            )
+        except FileNotFoundError:
+            log.log(missing_level, missing_executable_message, backend.executable)
+            return None
+        except (OSError, RuntimeError) as exc:
+            log.error("%s could not start: %s", label, exc)
+            return ""
+        return await drain_llm_subprocess(proc, backend, label, log=log)
+
+    if timeout is None or timeout <= 0:
+        return await launch_and_drain()
     try:
-        proc = await backend.launch(
-            workspace_path, prompt, model, approval="deny", compaction=True,
-        )
-    except FileNotFoundError:
-        log.log(missing_level, missing_executable_message, backend.executable)
-        return None
-    except (OSError, RuntimeError) as exc:
-        log.error("%s could not start: %s", label, exc)
+        async with asyncio.timeout(timeout):
+            return await launch_and_drain()
+    except TimeoutError:
+        # The drain's finally reaps a launched child before this returns.
+        # Discard any partial response, as memory jobs may replace durable data.
+        log.warning("%s timed out after %ss (including startup)", label, timeout)
         return ""
-    return await drain_llm_subprocess(
-        proc,
-        backend,
-        label,
-        log=log,
-        timeout=timeout,
-    )

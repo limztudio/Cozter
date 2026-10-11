@@ -24,6 +24,7 @@ class _StatusProbe(TestBot):
         self.editable = editable
         self.sent: list[str] = []
         self.edits: list[tuple[float, str]] = []
+        self.first_dispatch_delay = 0.0
         self.first_edit = asyncio.Event()
         self.second_edit = asyncio.Event()
 
@@ -37,6 +38,8 @@ class _StatusProbe(TestBot):
         return None
 
     async def edit_text(self, handle, text: str, *, rich: bool = False) -> None:
+        if not self.edits and self.first_dispatch_delay:
+            await asyncio.sleep(self.first_dispatch_delay)
         self.edits.append((asyncio.get_running_loop().time(), text))
         self.first_edit.set()
         if len(self.edits) == 2:
@@ -56,6 +59,17 @@ class StatusCoalescingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_burst_is_throttled_and_latest_preview_survives(self) -> None:
         bot = _StatusProbe(self.path)
+        bot.first_dispatch_delay = 0.03
+        real_sleep = asyncio.sleep
+        woke_early = False
+
+        async def early_sleep(delay):
+            nonlocal woke_early
+            if delay > 0 and bot.first_edit.is_set() and not woke_early:
+                woke_early = True
+                await real_sleep(0)
+            else:
+                await real_sleep(delay)
 
         async def run(*args, on_event, **kwargs):
             await on_event(ChatEvent(kind="tool", content="step 0"))
@@ -68,8 +82,10 @@ class StatusCoalescingTests(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch.object(agent, "run", side_effect=run),
             mock.patch.object(bot_base, "_STATUS_EDIT_INTERVAL_SEC", 0.06),
+            mock.patch.object(bot_base.asyncio, "sleep", side_effect=early_sleep),
         ):
             await asyncio.wait_for(bot._run_turn("user", "chat", "work"), timeout=0.5)
+        self.assertTrue(woke_early)
         self.assertEqual(len(bot.edits), 2)
         self.assertGreaterEqual(bot.edits[1][0] - bot.edits[0][0], 0.05)
         self.assertIn("step 8", bot.edits[-1][1])

@@ -134,8 +134,22 @@ class _SSEContent:
         self._chunks = chunks
 
     async def iter_any(self):
-        for chunk in self._chunks:
-            yield chunk
+        while self._chunks:
+            yield self._chunks.pop(0)
+
+    async def read(self, size: int = -1) -> bytes:
+        if size < 0:
+            data = b"".join(self._chunks)
+            self._chunks.clear()
+            return data
+        parts = []
+        while self._chunks and size > 0:
+            chunk = self._chunks.pop(0)
+            parts.append(chunk[:size])
+            if len(chunk) > size:
+                self._chunks.insert(0, chunk[size:])
+            size -= len(parts[-1])
+        return b"".join(parts)
 
 
 class _ReadableContent(_SSEContent):

@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
@@ -3520,13 +3521,18 @@ class BotPlatform(ABC):
             nonlocal pending_status, last_edit
             while pending_status is not None:
                 loop = asyncio.get_running_loop()
-                delay = last_edit + _STATUS_EDIT_INTERVAL_SEC - loop.time()
-                if delay > 0:
-                    await asyncio.sleep(delay)
+                next_edit = last_edit + _STATUS_EDIT_INTERVAL_SEC
+                delay = next_edit - loop.time()
+                while delay > 0:
+                    # Windows timers can wake one clock tick early. Recheck
+                    # the deadline without spinning on sub-tick sleeps.
+                    await asyncio.sleep(max(
+                        delay, 2 * time.get_clock_info("monotonic").resolution,
+                    ))
+                    delay = next_edit - loop.time()
                 # Select after sleeping so superseded previews are discarded.
                 display = pending_status
                 pending_status = None
-                last_edit = loop.time()
                 operation = (
                     self.edit_text(thinking_handle, display)
                     if thinking_handle is not None
@@ -3535,6 +3541,10 @@ class BotPlatform(ABC):
                 await self._run_status_operation(
                     operation, action="updating the progress status",
                 )
+                # The operation may itself be scheduled a tick later. Start
+                # the next interval after it settles, so actual edits cannot
+                # bunch together behind a delayed dispatch.
+                last_edit = loop.time()
 
         async def on_event(ev: agent.ChatEvent) -> None:
             nonlocal latest_text

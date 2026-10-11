@@ -126,8 +126,10 @@ _MERGE_RULES = (
     "- Doc/standard requests: check every rule/section in the plan is"
     " covered by the reports; never accept first/last-few as full — say"
     " PARTIAL + remainder when coverage is unclear.\n"
-    "- A report containing [report truncated: remainder omitted] is a preview,"
-    " not full content; never claim done from it — say PARTIAL + remainder.\n"
+    "- A bounded report excerpt may omit its middle; never treat this preview"
+    " as full content. Omission alone does not imply unfinished work. Claim"
+    " completion only when the retained scope and verification evidence"
+    " support it; missing evidence = PARTIAL + remainder.\n"
     "- Build/verify requests: claim clean only when every report lists its"
     " commands + exit codes + error/warning counts from full (not preview)"
     " logs with zero remaining; missing evidence = PARTIAL + remainder.\n"
@@ -179,8 +181,8 @@ _JUDGE_RULES = (
 # Reports are re-sent downstream; cap each.
 _REPORT_MAX_CHARS = 6_000
 _REPORT_TRUNCATION_MARKER = (
-    "\n… [report truncated: remainder omitted — never treat this preview"
-    " as full content; say PARTIAL + remainder when coverage is unclear]"
+    "\n… [middle omitted from bounded report excerpt — never treat this preview"
+    " as full content; omission alone does not imply unfinished work]\n"
 )
 
 # Judge and continuation excerpts preserve final evidence as well as context.
@@ -202,13 +204,13 @@ def _bounded_draft_excerpt(text: str) -> str:
 
 
 def _truncate_report(text: str) -> str:
-    """Bound one worker report for re-prompting downstream."""
+    """Bound a report while retaining its opening and final evidence."""
     if len(text) <= _REPORT_MAX_CHARS:
         return text
-    return (
-        text[:_REPORT_MAX_CHARS - len(_REPORT_TRUNCATION_MARKER)]
-        + _REPORT_TRUNCATION_MARKER
-    )
+    remaining = _REPORT_MAX_CHARS - len(_REPORT_TRUNCATION_MARKER)
+    head = remaining // 2
+    tail = remaining - head
+    return text[:head] + _REPORT_TRUNCATION_MARKER + text[-tail:]
 
 
 @dataclass(frozen=True)
@@ -370,8 +372,14 @@ def _render_plan(plan: Plan, *, current: int | None = None) -> str:
     lines = []
     for task_index, task in enumerate(plan.subtasks):
         marker = "  <- your task" if task_index == current else ""
+        instruction = task.instruction
+        # The actionable current instruction is repeated after the reports.
+        # Keep it there in full without also amplifying the plan overview.
+        placeholder = "(full instruction below)"
+        if task_index == current and len(instruction) > len(placeholder):
+            instruction = placeholder
         lines.append(
-            f"  {task_index + 1}. [{task.tier}] {task.instruction}{marker}"
+            f"  {task_index + 1}. [{task.tier}] {instruction}{marker}"
         )
     return "\n".join(lines)
 
