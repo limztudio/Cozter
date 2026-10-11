@@ -25,6 +25,10 @@ test:
     matrix:
       - PYTHON_VERSION: ["3.11", "3.12"]
   before_script:
+    # python:*-slim images ship without git, which the Git tool/plugin,
+    # CLI /version, and updater tests need; install it explicitly.
+    - apt-get update && apt-get install -y --no-install-recommends git
+    - git --version
     - COZTER_LINK_DIR="$(mktemp -d)"
     - ln -s "$CI_PROJECT_DIR" "$COZTER_LINK_DIR/Cozter"
     - export PYTHONPATH="$COZTER_LINK_DIR"
