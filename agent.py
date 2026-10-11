@@ -52,10 +52,20 @@ _StageResult = TypeVar("_StageResult")
 async def _run_with_stage_timing(
     call: Awaitable[_StageResult], stage: str, backend_name: str,
     model: str | None,
+    *, worker_index: int | None = None, worker_count: int | None = None,
 ) -> _StageResult:
-    """Record stage duration without logging prompts or provider output."""
+    """Record stage starts and durations without private call content."""
     loop = asyncio.get_running_loop()
     started = loop.time()
+    worker_metadata = ""
+    if worker_index is not None:
+        worker_metadata += f" worker_index={worker_index}"
+    if worker_count is not None:
+        worker_metadata += f" worker_count={worker_count}"
+    performance_logger.info(
+        "stage=%s backend=%s model=%s event=start%s",
+        stage, backend_name, model, worker_metadata,
+    )
     outcome = "ok"
     try:
         value = await call
@@ -73,8 +83,9 @@ async def _run_with_stage_timing(
         raise
     finally:
         performance_logger.info(
-            "stage=%s backend=%s model=%s outcome=%s duration_seconds=%.3f",
+            "stage=%s backend=%s model=%s outcome=%s duration_seconds=%.3f%s",
             stage, backend_name, model, outcome, loop.time() - started,
+            worker_metadata,
         )
 
 
@@ -1439,7 +1450,8 @@ async def _run_flexible(
             on_event=on_event,
             inject_queue=inject_queue,
             injected=injected,
-        ), "flexible_worker", tier_backend_name, tier_model)
+        ), "flexible_worker", tier_backend_name, tier_model,
+            worker_index=done + 1, worker_count=total)
         if restarting:
             return result, True
 

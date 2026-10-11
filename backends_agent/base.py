@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -618,44 +619,43 @@ async def create_prompt_subprocess(
     *,
     cwd: str | None = None,
 ) -> asyncio.subprocess.Process:
-    """Spawn a JSONL CLI backend and write the prompt to stdin.
+    """Spawn a JSONL CLI with the exact UTF-8 prompt available on stdin.
 
-    A CLI can reject its startup arguments or fail authentication before it
-    ever reads stdin.  In that case ``drain()``/``wait_closed()`` raises a
-    broken-pipe error; reap the child here, where it is still in scope, so a
-    failed prompt delivery cannot leak a subprocess.
+    File-backed stdin lets launch return before the child consumes its input.
+    Waiting for a prompt pipe to flush first can deadlock when the child fills
+    stdout or stderr before reading stdin, because our output readers start
+    only after launch returns. The CLI still reads the same bytes and EOF;
+    it must support redirected stdin rather than requiring a terminal.
+
+    TemporaryFile leaves no application-managed prompt path. The child's
+    inherited handle remains valid after we close ours, and the OS removes
+    the backing file when the last handle closes (immediately unlinked on
+    POSIX, delete-on-close on Windows).
     """
-    proc = await _create_piped_subprocess(
-        cmd,
-        stdin=asyncio.subprocess.PIPE,
-        cwd=cwd,
-        # New session so /stop or /inject kills the group.
-        start_new_session=os.name != "nt",
-    )
-    if proc.stdin is None:
-        await _reap_failed_prompt_subprocess(proc)
-        raise RuntimeError("backend subprocess did not provide a stdin pipe")
-    try:
-        proc.stdin.write(prompt.encode("utf-8"))
-        await proc.stdin.drain()
-        proc.stdin.close()
-        await proc.stdin.wait_closed()
-    except asyncio.CancelledError:
-        await _reap_failed_prompt_subprocess(proc)
-        raise
-    except OSError as exc:
-        await _reap_failed_prompt_subprocess(proc)
-        raise RuntimeError(
-            "backend process closed stdin before Cozter could deliver the "
-            "prompt; check its startup error and configuration"
-        ) from exc
-    except Exception as exc:
-        await _reap_failed_prompt_subprocess(proc)
-        raise RuntimeError(
-            "could not deliver the prompt to the backend process; check its "
-            "startup error and configuration"
-        ) from exc
-    return proc
+    with tempfile.TemporaryFile(mode="w+b") as prompt_input:
+        prompt_input.write(prompt.encode("utf-8"))
+        prompt_input.seek(0)
+        launch = asyncio.create_task(_create_piped_subprocess(
+            cmd,
+            stdin=prompt_input.fileno(),
+            cwd=cwd,
+            # New session so /stop or /inject kills the group.
+            start_new_session=os.name != "nt",
+        ))
+        try:
+            return await asyncio.shield(launch)
+        except asyncio.CancelledError:
+            # Cancellation can race OS process creation. Keep stdin alive
+            # until creation settles, then reap any child before returning.
+            cleanup = asyncio.create_task(_reap_cancelled_prompt_launch(launch))
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    # A second /stop must not interrupt ownership cleanup.
+                    continue
+            cleanup.result()
+            raise
 
 
 async def create_captured_subprocess(
@@ -710,12 +710,24 @@ async def _reap_failed_prompt_subprocess(
     try:
         if proc.returncode is None or has_managed_process_group(proc):
             await kill_and_wait(proc)
-        else:
-            await proc.wait()
+        # A populated returncode means the parent was already reaped. Its
+        # inherited output pipes may still be open; close them without waiting.
     finally:
         # No readers; release descriptors.
         close_subprocess_pipe(proc, 1)
         close_subprocess_pipe(proc, 2)
+
+
+async def _reap_cancelled_prompt_launch(
+    launch: asyncio.Task[asyncio.subprocess.Process],
+) -> None:
+    """Reap a cancelled launch once subprocess creation has settled."""
+    try:
+        proc = await launch
+    except (Exception, asyncio.CancelledError):
+        # Failed process creation has no subprocess to transfer to a caller.
+        return
+    await _reap_failed_prompt_subprocess(proc)
 
 
 class Backend(ABC):

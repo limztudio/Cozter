@@ -1400,7 +1400,17 @@ turns drain stderr concurrently with streamed JSON events, and every exit
 path — normal completion, cancellation, an injected restart, event-parse
 failure, or chat-delivery failure — reaps the child process and its drain
 tasks. This prevents a failed callback or `/stop` from leaving an agent CLI
-running in the background. Live chat status streams mark their own trims too: only the newest few
+running in the background. CLI prompts supplied through stdin use an OS-managed
+temporary file, so launch returns without waiting for the CLI to consume the
+prompt before its output readers can start. This avoids a startup deadlock when
+a CLI writes more output than its pipes can hold before reading its input.
+The child receives the same UTF-8 bytes and EOF; the temporary backing disappears
+when its handles close. Shell commands also watch process exit independently
+of output EOF: after the shell exits, they allow one second to drain buffered
+output before closing a pipe still held by a background child and marking the
+captured output as potentially incomplete. Running commands retain their
+configured real-work limit.
+Live chat status streams mark their own trims too: only the newest few
 status lines are kept (older updates flagged omitted), over-long reply
 previews carry a `… [preview]` marker, and long tool-content lines and
 labels use the shared clipped marker rather than a bare cut.
@@ -1698,9 +1708,12 @@ checkout that is about to change.
 
 `__main__.py` writes rotating warning/error logs to `.log/cozter.log`.
 It also writes metadata-only stage timings to `.log/performance.log`:
-planner, worker, merge and judge durations; HTTP completion durations and
+planner, worker, merge and judge starts and durations, including worker position;
+HTTP completion durations and
 retry counts; time to the first content, reasoning or tool delta; and tool
-batch durations and counts. Prompts, responses, tool arguments and API keys
+starts, individual durations/outcomes, and batch durations and counts.
+Tool timeouts identify the configured limit and ask the worker to inspect the
+stall before retrying. Prompts, responses, tool arguments and API keys
 are excluded. The timing log rotates at 5 MiB with three backups.
 HTTP connection attempts are bounded at 30 seconds (or the shorter configured
 socket timeout). A positive socket timeout also caps the entire completion,

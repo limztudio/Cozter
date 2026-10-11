@@ -39,6 +39,7 @@ import json
 import logging
 import pkgutil
 import sys
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -46,6 +47,7 @@ from .base import AgentTool
 from .base import tool_permission_scope, truncate_with_marker
 
 logger = logging.getLogger(__name__)
+performance_logger = logging.getLogger("Cozter.performance")
 
 # Bound tool results.
 _TOOL_RESULT_MAX = 4_000
@@ -281,8 +283,13 @@ async def execute_tool(
         result = f"Unknown tool: {name}"
     else:
         # Real-work cap; cancel stops instantly.
+        cap = _tool_timeout_seconds()
+        started = time.monotonic()
+        outcome = "ok"
+        performance_logger.info(
+            "stage=tool_start tool=%s limit_seconds=%s", name, cap,
+        )
         try:
-            cap = _tool_timeout_seconds()
             with tool_permission_scope(approval):
                 if cap is not None and cap > 0:
                     raw_result: object = await asyncio.wait_for(
@@ -293,6 +300,7 @@ async def execute_tool(
             if isinstance(raw_result, str):
                 result = raw_result
             else:
+                outcome = "error"
                 result_type = type(raw_result).__name__
                 logger.warning(
                     "Tool %s returned %s instead of text",
@@ -304,9 +312,24 @@ async def execute_tool(
                     f"({result_type})."
                 )
         except asyncio.CancelledError:
+            outcome = "cancelled"
             raise  # cancel is the only stop.
+        except TimeoutError:
+            outcome = "timeout"
+            limit_note = f" The configured tool limit is {cap:g}s." if cap else ""
+            result = (
+                f"Tool {name} failed: timed out.{limit_note}"
+                " Inspect the command or service that stalled before retrying;"
+                " preserve completed work and report any unfinished part."
+            )
         except Exception as exc:
+            outcome = "error"
             result = f"Tool {name} failed: {exc}"
+        finally:
+            performance_logger.info(
+                "stage=tool tool=%s seconds=%.3f outcome=%s",
+                name, time.monotonic() - started, outcome,
+            )
 
     if len(result) > _TOOL_RESULT_MAX:
         result = truncate_with_marker(

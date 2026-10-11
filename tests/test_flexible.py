@@ -317,6 +317,47 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             self.internal, ["Flexible planner", "Flexible merge"],
         )
 
+    async def test_pipeline_timings_pair_stage_starts_with_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as ws:
+            with self.assertLogs("Cozter.performance", level="INFO") as captured:
+                result, _ = await self._run(ws)
+                with mock.patch.object(
+                    agent, "run_internal_backend", mock.AsyncMock(return_value="[DONE]"),
+                ):
+                    await agent._judge_draft(
+                        "user message", result.text, ws,
+                        summary_backend_name="codex", summary_model="gpt-5.6-luna",
+                        inject_queue=None, injected=[],
+                    )
+        starts = [record for record in captured.output if "event=start" in record]
+        ends = [record for record in captured.output if "duration_seconds=" in record]
+        self.assertEqual(len(starts), 5)
+        self.assertEqual(len(ends), 5)
+        expected_stages = (
+            "flexible_planner", "flexible_worker", "flexible_worker",
+            "flexible_merge", "judge",
+        )
+        for index, stage in enumerate(expected_stages):
+            with self.subTest(stage=stage, index=index):
+                self.assertIn(f"stage={stage} ", starts[index])
+                self.assertEqual(
+                    starts[index].split(" event=start")[0],
+                    ends[index].split(" outcome=")[0],
+                )
+                self.assertLess(
+                    captured.output.index(starts[index]),
+                    captured.output.index(ends[index]),
+                )
+        for index, worker_index in ((1, 1), (2, 2)):
+            for record in (starts[index], ends[index]):
+                self.assertIn(f"worker_index={worker_index} worker_count=2", record)
+        private_values = (
+            "context + user message", "user message", "low report",
+            "high report", "merged answer", "tweak the check", "debug the race",
+        )
+        for value in private_values:
+            self.assertNotIn(value, "\n".join(captured.output))
+
     async def test_only_the_merged_answer_is_sent_to_the_user(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
@@ -1184,15 +1225,50 @@ class FlexibleLatencyTurnTests(unittest.IsolatedAsyncioTestCase):
                 failed_worker(), "flexible_worker", "meta", "muse-spark-1.3",
             )
         self.assertEqual(result, "private worker output")
-        self.assertEqual(len(captured.output), 4)
-        self.assertIn("stage=flexible_worker backend=meta model=muse-spark-1.3", captured.output[0])
-        self.assertIn("duration_seconds=", captured.output[0])
-        self.assertIn("outcome=ok", captured.output[0])
-        self.assertIn("outcome=cancelled", captured.output[1])
-        self.assertIn("outcome=error", captured.output[2])
-        self.assertIn("outcome=error", captured.output[3])
+        self.assertEqual(len(captured.output), 8)
+        starts = [record for record in captured.output if "event=start" in record]
+        ends = [record for record in captured.output if "duration_seconds=" in record]
+        self.assertEqual(len(starts), 4)
+        self.assertEqual(len(ends), 4)
+        self.assertIn("stage=flexible_worker backend=meta model=muse-spark-1.3", ends[0])
+        self.assertIn("outcome=ok", ends[0])
+        self.assertIn("outcome=cancelled", ends[1])
+        self.assertIn("outcome=error", ends[2])
+        self.assertIn("outcome=error", ends[3])
         self.assertNotIn("private worker output", "\n".join(captured.output))
         self.assertNotIn("private provider error", "\n".join(captured.output))
+
+    async def test_stage_start_is_visible_while_the_call_is_suspended(self) -> None:
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def suspended_stage():
+            entered.set()
+            await release.wait()
+            return "private worker output"
+
+        with self.assertLogs("Cozter.performance", level="INFO") as captured:
+            task = asyncio.create_task(agent._run_with_stage_timing(
+                suspended_stage(), "flexible_worker", "codex", "gpt-6.1-sol",
+                worker_index=2, worker_count=3,
+            ))
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                self.assertFalse(task.done())
+                self.assertEqual(len(captured.output), 1)
+                self.assertIn(
+                    "stage=flexible_worker backend=codex model=gpt-6.1-sol"
+                    " event=start worker_index=2 worker_count=3",
+                    captured.output[0],
+                )
+                self.assertNotIn("duration_seconds=", captured.output[0])
+            finally:
+                release.set()
+                result = await task
+        self.assertEqual(result, "private worker output")
+        self.assertEqual(len(captured.output), 2)
+        self.assertIn("outcome=ok duration_seconds=", captured.output[1])
+        self.assertIn("worker_index=2 worker_count=3", captured.output[1])
+        self.assertNotIn("private worker output", "\n".join(captured.output))
 
 
 class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):

@@ -507,9 +507,15 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
         tool = SimpleNamespace(name="waiting_read", file_action=None, run=waiting_read)
         with mock.patch.dict(agent_tools._BY_NAME, {"waiting_read": tool}), mock.patch.object(
             agent_tools, "_tool_timeout_seconds", return_value=0.02,
-        ):
+        ), self.assertLogs("Cozter.performance", level="INFO") as timings:
             result = await self._execute("waiting_read", {"path": str(self.outside_file)})
         self.assertTrue(result.startswith("Tool waiting_read failed"), result)
+        self.assertIn("timed out", result)
+        self.assertIn("0.02s", result)
+        self.assertIn("before retrying", result)
+        self.assertTrue(any("stage=tool_start" in entry for entry in timings.output))
+        self.assertTrue(any("outcome=timeout" in entry for entry in timings.output))
+        self.assertNotIn(str(self.outside_file), "\n".join(timings.output))
         self.assertIn("escapes workspace", await ReadFileTool().run(
             str(self.workspace), {"path": str(self.outside_file)},
         ))

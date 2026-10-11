@@ -11,15 +11,19 @@ from typing import Any, ClassVar
 from ..base import AgentTool
 from ...utils import (
     clip_status_value,
+    close_subprocess_pipe,
     has_managed_process_group,
     kill_and_wait,
     mark_process_group_leader,
+    wait_for_process_exit,
 )
 
 # Real-work cap; cancel stops instantly.
 
 # Output ceiling: kill the tree past it.
 _BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024  # 4 MB
+# Only applies once the shell has exited, not to commands still doing work.
+_BASH_POST_EXIT_DRAIN_TIMEOUT = 1.0
 
 
 class BashTool(AgentTool):
@@ -73,19 +77,20 @@ class BashTool(AgentTool):
             await _kill_command_tree(proc)
             return "Error: could not capture command output"
 
-        truncated = False
         try:
-            stdout, truncated = await _read_capped(
-                proc.stdout, _BASH_MAX_OUTPUT_BYTES,
+            stdout, truncated, incomplete = await _read_command_output(
+                proc, _BASH_MAX_OUTPUT_BYTES,
             )
-            if truncated:
-                # Reap the tree on firehose output.
+            if truncated or incomplete:
+                # Reap the owned tree on excess output or an inherited pipe.
                 await _kill_command_tree(proc)
             else:
-                await proc.wait()
-        except asyncio.CancelledError:
+                await wait_for_process_exit(proc)
+        except BaseException:
             await _kill_command_tree(proc)  # /stop must not leak it.
             raise
+        finally:
+            close_subprocess_pipe(proc, 1)
 
         output = stdout.decode("utf-8", errors="replace")
         if truncated:
@@ -95,6 +100,11 @@ class BashTool(AgentTool):
                 " say PARTIAL + remainder when work is left]"
             )
             return (output + note) if output else note.lstrip()
+        if incomplete:
+            output += (
+                "\n… [output capture stopped after the shell exited while a"
+                " child kept its output pipe open; output may be incomplete]"
+            )
         rc = proc.returncode
         if rc == 0:
             return output or "(no output)"
@@ -150,28 +160,66 @@ def shell_context() -> str:
     return f"Host shell: {name}. Use POSIX shell syntax."
 
 
-async def _read_capped(
-    stream: asyncio.StreamReader, limit: int,
-) -> tuple[bytes, bool]:
-    """Read *stream* to EOF or *limit* bytes; return ``(data, truncated)``.
+async def _read_command_output(
+    proc: asyncio.subprocess.Process, limit: int,
+) -> tuple[bytes, bool, bool]:
+    """Capture output until EOF, the byte cap, or an exited parent's grace.
 
-    A cut at the cap may split a UTF-8 sequence; the caller decodes
-    with ``errors="replace"``.
+    Waiting for EOF alone can hang when a background child inherits stdout.
+    Watch the shell's exit independently of its pipes and allow a fixed drain
+    grace for buffered output. Keep captured bytes when abandoning that pipe.
     """
+    stream = proc.stdout
+    assert stream is not None
     chunks: list[bytes] = []
     total = 0
     truncated = False
-    while True:
-        chunk = await stream.read(64 * 1024)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        total += len(chunk)
-        if total > limit:
-            truncated = True
-            break
+    incomplete = False
+    read_task = asyncio.create_task(stream.read(64 * 1024))
+    exit_task = asyncio.create_task(wait_for_process_exit(proc))
+    loop = asyncio.get_running_loop()
+    deadline: float | None = None
+    try:
+        while True:
+            if deadline is None and exit_task.done():
+                await exit_task
+                deadline = loop.time() + _BASH_POST_EXIT_DRAIN_TIMEOUT
+            if deadline is None:
+                await asyncio.wait(
+                    (read_task, exit_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not read_task.done():
+                    continue
+            else:
+                remaining = deadline - loop.time()
+                if remaining <= 0 and not read_task.done():
+                    incomplete = True
+                    break
+                if not read_task.done():
+                    done, _ = await asyncio.wait((read_task,), timeout=remaining)
+                    if not done:
+                        incomplete = True
+                        break
+            chunk = await read_task
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > limit:
+                truncated = True
+                break
+            if deadline is not None and loop.time() >= deadline:
+                incomplete = True
+                break
+            read_task = asyncio.create_task(stream.read(64 * 1024))
+    finally:
+        for task in (read_task, exit_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(read_task, exit_task, return_exceptions=True)
     data = b"".join(chunks)
-    return (data[:limit] if truncated else data), truncated
+    return (data[:limit] if truncated else data), truncated, incomplete
 
 
 async def _kill_command_tree(proc: asyncio.subprocess.Process) -> None:
