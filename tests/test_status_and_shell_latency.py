@@ -154,7 +154,7 @@ class StatusCoalescingTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(bot._run_turn("user", "chat", "work"), timeout=0.3)
         self.assertIn("final", bot.sent)
 
-    async def test_signal_skips_all_transient_status_but_delivers_reply(self) -> None:
+    async def test_signal_shows_thinking_and_delivers_reply(self) -> None:
         bot = SignalBot([], jsonrpc_socket="tcp://127.0.0.1:7583")
 
         async def run(*args, on_event, **kwargs):
@@ -174,10 +174,11 @@ class StatusCoalescingTests(unittest.IsolatedAsyncioTestCase):
         ):
             await asyncio.wait_for(bot._run_turn("user", "chat", "work"), timeout=0.3)
             await asyncio.sleep(0)
-            self.assertEqual(send.await_count, 1)
+            self.assertEqual(send.await_count, 2)
+            self.assertEqual(send.await_args_list[0].args[1], "Thinking...")
             self.assertEqual(send.await_args.args[1], "final")
             edit.assert_not_awaited()
-            delete.assert_not_awaited()
+            delete.assert_awaited_once_with(MessageHandle("chat", "reply"))
             status.assert_not_awaited()
 
 

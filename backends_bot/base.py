@@ -48,6 +48,7 @@ from ..utils import save_json_object
 from ..utils import try_parse_int
 
 logger = logging.getLogger(__name__)
+performance_logger = logging.getLogger("Cozter.performance")
 
 _TEXT_EXTENSIONS = frozenset({
     ".txt", ".md", ".rst", ".py", ".js", ".ts", ".jsx", ".tsx",
@@ -385,6 +386,10 @@ class BotPlatform(ABC):
     """Base class: holds all command logic, leaves I/O to subclasses."""
 
     supports_transient_status: ClassVar[bool] = True
+    # Platform-specific limits supplement the shared preview throttle.
+    status_update_interval_sec: ClassVar[float] = 0.0
+    status_update_limit: ClassVar[int | None] = None
+    status_fallback_messages: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -3503,9 +3508,16 @@ class BotPlatform(ABC):
 
         thinking_result = None
         if self.supports_transient_status:
+            status_started = time.monotonic()
             thinking_result = await self._run_status_operation(
                 self.send_text(chat_id, "Thinking..."),
                 action="posting the Thinking status",
+            )
+            performance_logger.info(
+                "stage=thinking_status platform=%s outcome=%s elapsed_ms=%.3f",
+                self.platform_id,
+                "posted" if isinstance(thinking_result, MessageHandle) else "no_handle",
+                (time.monotonic() - status_started) * 1_000,
             )
         thinking_handle = (
             thinking_result
@@ -3514,16 +3526,28 @@ class BotPlatform(ABC):
 
         status_lines: list[str] = []
         latest_text = ""
-        last_edit = 0.0
+        last_edit = (
+            asyncio.get_running_loop().time()
+            if self.status_update_interval_sec > 0 else 0.0
+        )
+        status_updates = 0
         pending_status: str | None = None
         status_edit_task: asyncio.Task[object] | None = None
 
         async def flush_status_edits() -> None:
             """Rate-limit one worker, keeping the latest pending preview."""
-            nonlocal pending_status, last_edit
+            nonlocal pending_status, last_edit, status_updates
             while pending_status is not None:
+                if (
+                    self.status_update_limit is not None
+                    and status_updates >= self.status_update_limit
+                ):
+                    pending_status = None
+                    return
                 loop = asyncio.get_running_loop()
-                next_edit = last_edit + _STATUS_EDIT_INTERVAL_SEC
+                next_edit = last_edit + max(
+                    _STATUS_EDIT_INTERVAL_SEC, self.status_update_interval_sec,
+                )
                 delay = next_edit - loop.time()
                 while delay > 0:
                     # Windows timers can wake one clock tick early. Recheck
@@ -3535,6 +3559,9 @@ class BotPlatform(ABC):
                 # Select after sleeping so superseded previews are discarded.
                 display = pending_status
                 pending_status = None
+                # Count attempts before I/O: ambiguous failures/timeouts must
+                # not cause us to exceed a platform's per-message edit cap.
+                status_updates += 1
                 operation = (
                     self.edit_text(thinking_handle, display)
                     if thinking_handle is not None
@@ -3552,6 +3579,14 @@ class BotPlatform(ABC):
             nonlocal latest_text
             nonlocal pending_status, status_edit_task
             if not self.supports_transient_status:
+                return
+            if (
+                (thinking_handle is None and not self.status_fallback_messages)
+                or (
+                    self.status_update_limit is not None
+                    and status_updates >= self.status_update_limit
+                )
+            ):
                 return
             if ev.kind == "text":
                 if ev.content.strip():

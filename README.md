@@ -502,6 +502,16 @@ example `/run/signal-cli/socket`. Cozter only connects to the socket; run
 and restart the `signal-cli daemon` from a service manager such as
 systemd.
 
+Active Signal tasks show one `Thinking...` message, including scheduled
+tasks once they start. Progress updates edit that message at most once per
+minute and stop after ten attempts, respecting [Signal's message edit
+limit](https://support.signal.org/hc/en-us/articles/6255134251546-Edit-Message).
+The status stays visible until the turn ends, when Cozter removes it and
+sends the final reply. Failed or slow status operations are best-effort
+and bounded to four seconds; they do not block streamed work or the final
+reply. If the initial message has no editable timestamp, Cozter skips
+further previews for that turn.
+
 The Signal phone number, socket path, and `signal-cli` binary location are
 owned by that daemon/service setup rather than by Cozter's
 `.config/config.json`. A local daemon config or service environment might

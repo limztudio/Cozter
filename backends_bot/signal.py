@@ -146,7 +146,11 @@ def _signal_tcp_address(endpoint: str) -> tuple[str, int] | None:
 class SignalBot(BotPlatform):
     """Signal group adapter backed by signal-cli."""
 
-    supports_transient_status = False
+    # Signal permits at most ten edits per message. Keep one visible status,
+    # coalesce progress to minute intervals, then retain it until completion.
+    status_update_interval_sec = 60.0
+    status_update_limit = 10
+    status_fallback_messages = False
 
     def __init__(
         self,
@@ -259,10 +263,6 @@ class SignalBot(BotPlatform):
         await self._send_rpc_and_remember(
             "send", {"groupId": group_id, "attachment": path},
         )
-
-    async def send_status(self, chat_id: str, text: str) -> None:
-        # No transient status on Signal; deliver the final reply.
-        return None
 
     # startup/shutdown
 
