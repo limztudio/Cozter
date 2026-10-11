@@ -1043,7 +1043,7 @@ the hard ones:
 Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
 `gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
 These defaults follow the [current Codex model guidance](https://developers.openai.com/codex/models)
-and the installed CLI catalog (verified 2026-10-07 against codex-cli 0.160.1).
+and the installed CLI catalog (verified 2026-10-09 against codex-cli 0.162.0).
 Model access depends on the account and client; select an available model on
 older or company-managed installations. Existing saved model choices are retained. Pointing a
 tier at another agent picks that agent's cheap/mid/strong models
@@ -1253,8 +1253,8 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. That built-in Codex fallback (verified 2026-10-07 against
-codex-cli 0.160.1) lists the `gpt-6.1-sol` / `gpt-6-astra` / `gpt-6-sol` / `gpt-6-luna` quartet first in live-listed order — Astra shipped
+authoritative. That built-in Codex fallback (verified 2026-10-09 against
+codex-cli 0.162.0) lists the `gpt-6.1-sol` / `gpt-6-astra` / `gpt-6-sol` / `gpt-6-luna` quartet first in live-listed order — Astra shipped
 on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
 the GPT-5.6 family (Sol is the coding/everyday workhorse, Luna the fast
 affordable tier, both also 272K active) — followed by
