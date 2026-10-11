@@ -1408,8 +1408,11 @@ The child receives the same UTF-8 bytes and EOF; the temporary backing disappear
 when its handles close. Shell commands also watch process exit independently
 of output EOF: after the shell exits, they allow one second to drain buffered
 output before closing a pipe still held by a background child and marking the
-captured output as potentially incomplete. Running commands retain their
-configured real-work limit.
+captured output as potentially incomplete. Git tools use the same one-second
+post-exit allowance for stdout and stderr together. They drain both streams
+concurrently, retaining bounded previews even for verbose hooks or large
+diffs; excess output does not stop an ongoing Git operation. Running commands
+retain their configured real-work limit.
 Live chat status streams mark their own trims too: only the newest few
 status lines are kept (older updates flagged omitted), over-long reply
 previews carry a `… [preview]` marker, and long tool-content lines and
@@ -1726,12 +1729,24 @@ text prompts avoid the vision-preparation thread hop.
 Normal completion trailers get a short drain (at most 50 ms and 64 KiB) to
 preserve connection reuse; the drain is skipped near the request deadline.
 Flexible worker prompts retain their full actionable instruction once instead
-of repeating it in the plan overview. Bounded report excerpts keep their opening
-and final evidence; an omitted middle alone does not imply unfinished work,
-and completion still requires retained evidence for the requested scope.
+of repeating it in the plan overview. The merger receives each complete plan
+instruction once; numbered report headers refer back to those plan items.
+Bounded report and continuation draft excerpts keep their opening and final
+evidence; an omitted middle alone does not imply unfinished work, and completion
+still requires retained evidence for the requested scope.
+Background compaction and titling run as one pipeline per session. A later
+turn's maintenance waits for the earlier pipeline, then checks current state,
+so it can use the compactor's title without launching a competing title request.
+These background waits do not delay the foreground answer.
+When a worker reports an explicit exhausted quota or authentication failure,
+later plan items for that exact backend and model are marked unrun for the
+current turn. Other models and providers remain eligible. Temporary throttling
+and task-specific tool refusals do not suppress later workers.
 File discovery matches the requested glob before resolving targets. Bounded
 permission modes still check matching targets for symlink escapes, while full
-mode avoids unused containment work.
+mode avoids unused containment work. Discovery also prunes directories that
+cannot match the pattern's fixed prefix or nonrecursive depth; recursive
+globstars retain every eligible branch.
 Repeated-only tool rounds and three consecutive entirely blocked rounds force
 a final report from the available evidence, while useful tool work can continue.
 On Windows, the Python entry process owns a process-lifetime job before it

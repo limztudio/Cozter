@@ -609,6 +609,36 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             "request", plan, ["earlier report", "verified targets"], collaborative=False,
         ))
 
+    def test_merge_keeps_full_plan_once_and_maps_all_reports(self) -> None:
+        instructions = (
+            "Verify every exact target in these directories: " + "target/" * 600,
+            "Exercise the runtime path and report warnings for each requested target",
+        )
+        plan = flexible.Plan(
+            understanding="",
+            subtasks=tuple(
+                flexible.Subtask(tier=tier, instruction=instruction)
+                for tier, instruction in zip(("mid", "high"), instructions)
+            ),
+        )
+        prompt = flexible.build_merge_prompt(
+            "original request", plan, ["verified first targets"],
+            collaborative=True, blocked=(1,),
+        )
+        for instruction in instructions:
+            self.assertEqual(prompt.count(instruction), 1)
+        self.assertIn("--- 1 [mid]: plan item 1 ---", prompt)
+        self.assertIn("verified first targets", prompt)
+        self.assertIn("--- 2 [high]: plan item 2 [BLOCKED] ---", prompt)
+        self.assertIn("(no report)", prompt)
+        self.assertIn("missing evidence = PARTIAL + remainder", prompt)
+        extra_report = flexible.build_merge_prompt(
+            "original request", plan, ["first", "second", "extra evidence"],
+            collaborative=False,
+        )
+        self.assertIn("--- 3 [unknown]: (no sub-task) ---", extra_report)
+        self.assertIn("extra evidence", extra_report)
+
     async def test_workers_get_the_request_not_the_full_history(self) -> None:
         """Workers are driven with the bare user request as context."""
         seen: list[str] = []
@@ -780,6 +810,132 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Checked retry.py; exit code 0.", result.text)
         self.assertIn("provider unavailable", result.text)
         self.assertIn("debug the race", result.text)
+
+    async def test_exhausted_account_skips_only_exact_target_and_retains_scope(self) -> None:
+        self.plan_output = (
+            "[PLAN]\n1. [high] inspect status\n2. [low] repair retries\n"
+            "3. [mid] verify retry runtime\n4. [high] preserve other component\n[/PLAN]"
+        )
+        for other_target in (("meta", "other-model"), ("codex", "other-model")):
+            for error in ("meta returned HTTP 401: unauthorized", "quota exhausted", "invalid API key"):
+                with self.subTest(other_target=other_target, error=error):
+                    calls = []
+
+                    async def drive(backend, _ws, _prompt, model, _approval, **kwargs):
+                        self.assertEqual(kwargs["effort"], 100)
+                        calls.append((backend.name, model))
+                        if len(calls) == 2:
+                            return AgentResult(error=error), False
+                        return _worker(
+                            "Status inspected; exit code 0." if len(calls) == 1
+                            else "Other component preserved; exit code 0.",
+                            usage={"input_tokens": 10},
+                        ), False
+
+                    tiers = {"low": ("meta", "blocked-model"), "mid": ("meta", "blocked-model"),
+                             "high": other_target}
+                    with tempfile.TemporaryDirectory() as ws:
+                        with (
+                            mock.patch.object(workspace, "get_flexible_run_config", return_value=tiers),
+                            mock.patch.object(agent, "run_internal_backend", self._fake_internal),
+                            mock.patch.object(agent, "_drive_backend", side_effect=drive),
+                        ):
+                            result, restarting = await agent._run_flexible(
+                                "context", "inspect and repair", ws, approval="full", effort=100,
+                                collaborative=False, summary_backend_name="codex", summary_model="summary",
+                                on_event=None, inject_queue=None, injected=[],
+                            )
+                    self.assertFalse(restarting)
+                    self.assertEqual(calls, [other_target, ("meta", "blocked-model"), other_target])
+                    self.assertEqual(result.error, error)
+                    self.assertEqual(result.usage, {"input_tokens": 20})
+                    self.assertIn("Status inspected; exit code 0.", result.text)
+                    self.assertIn("Other component preserved; exit code 0.", result.text)
+                    self.assertIn("sub-task 3 was not run: verify retry runtime", result.text)
+                    self.assertIn("This plan item remains unfinished", result.text)
+                    self.assertIn(error, result.text)
+                    self.assertFalse(result.continue_instruction)
+        self.assertTrue(all(label == "Flexible planner" for label in self.internal))
+
+    async def test_transient_throttling_and_task_refusal_do_not_skip_later_worker(self) -> None:
+        self.plan_output = "[PLAN]\n1. [low] first\n2. [mid] second\n[/PLAN]"
+        for error in (
+            "meta returned HTTP 429: too many requests; retry later",
+            "meta stopped after 3 consecutive rounds where every tool call was refused",
+            "meta returned HTTP 403: forbidden",
+        ):
+            with self.subTest(error=error):
+                calls = []
+
+                async def drive(*_args, **_kwargs):
+                    calls.append(1)
+                    return (AgentResult(error=error) if len(calls) == 1 else _worker("second completed")), False
+
+                with tempfile.TemporaryDirectory() as ws:
+                    with (
+                        mock.patch.object(workspace, "get_flexible_run_config", return_value={
+                            "low": ("meta", "same-model"), "mid": ("meta", "same-model"),
+                        }),
+                        mock.patch.object(agent, "run_internal_backend", self._fake_internal),
+                        mock.patch.object(agent, "_drive_backend", side_effect=drive),
+                    ):
+                        result, _ = await agent._run_flexible(
+                            "context", "request", ws, approval="full", effort=100,
+                            collaborative=False, summary_backend_name="codex", summary_model="summary",
+                            on_event=None, inject_queue=None, injected=[],
+                        )
+                self.assertEqual(len(calls), 2)
+                self.assertIn("second completed", result.text)
+                self.assertNotIn("was not run", result.text)
+
+    async def test_injection_at_skipped_worker_restarts_with_pending_scope(self) -> None:
+        self.plan_output = "[PLAN]\n1. [low] first\n2. [mid] second\n[/PLAN]"
+        queue = asyncio.Queue()
+        injected = []
+
+        async def on_event(event):
+            if "skipping unavailable" in event.content:
+                queue.put_nowait("use another authorized model")
+
+        with tempfile.TemporaryDirectory() as ws:
+            with (
+                mock.patch.object(workspace, "get_flexible_run_config", return_value={
+                    "low": ("meta", "same-model"), "mid": ("meta", "same-model"),
+                }),
+                mock.patch.object(agent, "run_internal_backend", self._fake_internal),
+                mock.patch.object(agent, "_drive_backend", return_value=(AgentResult(error="quota exhausted"), False)) as drive,
+            ):
+                _, restarting = await agent._run_flexible(
+                    "context", "request", ws, approval="full", effort=100,
+                    collaborative=False, summary_backend_name="codex", summary_model="summary",
+                    on_event=on_event, inject_queue=queue, injected=injected,
+                )
+        self.assertTrue(restarting)
+        self.assertEqual(drive.await_count, 1)
+        self.assertEqual(injected, ["use another authorized model"])
+
+    async def test_cancellation_at_skipped_worker_propagates(self) -> None:
+        self.plan_output = "[PLAN]\n1. [low] first\n2. [mid] second\n[/PLAN]"
+
+        async def on_event(event):
+            if "skipping unavailable" in event.content:
+                asyncio.current_task().cancel()
+
+        with tempfile.TemporaryDirectory() as ws:
+            with (
+                mock.patch.object(workspace, "get_flexible_run_config", return_value={
+                    "low": ("meta", "same-model"), "mid": ("meta", "same-model"),
+                }),
+                mock.patch.object(agent, "run_internal_backend", self._fake_internal),
+                mock.patch.object(agent, "_drive_backend", return_value=(AgentResult(error="quota exhausted"), False)) as drive,
+            ):
+                with self.assertRaises(asyncio.CancelledError):
+                    await agent._run_flexible(
+                        "context", "request", ws, approval="full", effort=100,
+                        collaborative=False, summary_backend_name="codex", summary_model="summary",
+                        on_event=on_event, inject_queue=None, injected=[],
+                    )
+        self.assertEqual(drive.await_count, 1)
 
     async def test_followup_lines_grow_the_total_mid_run(self) -> None:
         """Workers discovering leftovers grow done/total live."""
@@ -1117,6 +1273,19 @@ class JudgeVerdictTests(unittest.TestCase):
         self.assertIn(draft, prompt)
         self.assertIn("CONTINUE", prompt)
 
+    def test_draft_excerpt_obeys_explicit_and_tight_budgets(self) -> None:
+        draft = "OPENING: completed work.\n" + "detail\n" * 1_000 + "FINAL: verified."
+        for limit in (-1, 0, 1, 2, len(flexible._DRAFT_OMISSION_MARKER), 300):
+            with self.subTest(limit=limit):
+                excerpt = flexible._bounded_draft_excerpt(draft, limit=limit)
+                self.assertEqual(len(excerpt), max(0, limit))
+                self.assertNotIn("PARTIAL", excerpt)
+        excerpt = flexible._bounded_draft_excerpt(draft, limit=300)
+        self.assertTrue(excerpt.startswith("OPENING: completed work."))
+        self.assertTrue(excerpt.endswith("FINAL: verified."))
+        self.assertIn(flexible._DRAFT_OMISSION_MARKER, excerpt)
+        self.assertEqual(flexible._bounded_draft_excerpt("short", limit=10), "short")
+
 
 class FlexibleLatencyTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_flexible_continuation_passes_evidence_to_the_actual_worker(self) -> None:
@@ -1252,6 +1421,23 @@ class FlexibleLatencyTurnTests(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(error=error):
                 self.assertFalse(agent._terminal_provider_error(error))
+
+    def test_account_suppression_requires_explicit_quota_or_auth_failure(self) -> None:
+        for error in (
+            "meta returned HTTP401: unauthorized", "HTTP status 401: invalid credentials",
+            "You have reached your usage limit", "usage limit reached", "insufficient_quota",
+            "quota exhausted", "quota exceeded", "insufficient credits", "invalid API key",
+            "authentication failed",
+        ):
+            with self.subTest(error=error):
+                self.assertTrue(agent._account_provider_unavailable(error))
+        for error in (
+            "HTTP429: too many requests", "HTTP status 403: forbidden",
+            "quota service temporarily unavailable", "expected status 401 in a test response",
+            "consecutive rounds where every tool call was refused", "path escapes workspace",
+        ):
+            with self.subTest(error=error):
+                self.assertFalse(agent._account_provider_unavailable(error))
 
     async def test_stage_timing_keeps_output_private_and_preserves_cancellation(self) -> None:
         async def successful_stage():

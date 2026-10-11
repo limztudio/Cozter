@@ -31,6 +31,8 @@ _MAX_FILE_BYTES = 1 * 1024 * 1024
 _MAX_FILE_LINES = 50_000
 # Precompiled per-hunk header.
 _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+# Exact str.splitlines boundaries; consume CRLF as one line break.
+_LINE_BREAK_RE = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 
 
 class _PatchError(Exception):
@@ -190,26 +192,14 @@ def _splitline_limit_exceeded(text: str, limit: int) -> bool:
         return False
 
     line_count = 0
-    ended_with_break = False
-    index = 0
-    length = len(text)
-    while index < length:
-        char = text[index]
-        if char == "\r":
-            if index + 1 < length and text[index + 1] == "\n":
-                index += 1
-            line_count += 1
-            ended_with_break = True
-        elif char in "\n\v\f\x1c\x1d\x1e\x85\u2028\u2029":
-            line_count += 1
-            ended_with_break = True
-        else:
-            ended_with_break = False
+    last_end = 0
+    for boundary in _LINE_BREAK_RE.finditer(text):
+        line_count += 1
         if line_count > limit:
             return True
-        index += 1
+        last_end = boundary.end()
 
-    if not ended_with_break:
+    if last_end < len(text):
         line_count += 1
     return line_count > limit
 

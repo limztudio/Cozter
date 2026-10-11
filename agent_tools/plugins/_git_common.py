@@ -10,14 +10,43 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from contextlib import suppress
+from dataclasses import dataclass, field
 
 from ..base import truncate_with_marker
+from ...backends_agent.base import create_captured_subprocess
+from ...utils import (
+    close_subprocess_pipe, has_managed_process_group, kill_and_wait,
+    wait_for_process_exit,
+)
 
 # Shared output/error clipping.
 MAX_OUTPUT_CHARS = 12_000
 MAX_GIT_ERROR_CHARS = 500
 TRUNCATION_MARKER = "say PARTIAL + remainder when coverage is unclear"
+_GIT_POST_EXIT_DRAIN_SECONDS = 1.0
+# Retain enough UTF-8 bytes for the character-based display limits. Continue
+# draining excess output so a verbose commit hook or fetch can still finish.
+_GIT_STDOUT_BYTES = MAX_OUTPUT_CHARS * 4
+_GIT_STDERR_BYTES = MAX_GIT_ERROR_CHARS * 4
+
+
+@dataclass
+class _GitCapture:
+    limit: int
+    data: bytearray = field(default_factory=bytearray)
+    truncated: bool = False
+
+    async def drain(self, stream: asyncio.StreamReader) -> None:
+        while chunk := await stream.read(64 * 1024):
+            remaining = self.limit - len(self.data)
+            self.data.extend(chunk[:remaining])
+            self.truncated |= len(chunk) > remaining
+
+    def text(self) -> str:
+        text = self.data.decode("utf-8", errors="replace")
+        if self.truncated:
+            text += f"\n… [git output truncated; {TRUNCATION_MARKER}]"
+        return text
 
 # Allowed ref chars; markers/edge checks below reject git-special cases.
 REF_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
@@ -92,29 +121,94 @@ async def git_once(
     workspace: str,
     env: dict[str, str],
 ) -> tuple[str, str, int]:
-    """Run one git argv, reaping the process on cancellation."""
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=workspace,
-        env=env,
+    """Run Git with bounded capture and an exited parent's drain grace."""
+    proc = await _spawn_git(argv, workspace, env)
+    assert proc.stdout is not None and proc.stderr is not None
+    stdout = _GitCapture(_GIT_STDOUT_BYTES)
+    stderr = _GitCapture(_GIT_STDERR_BYTES)
+    readers = (
+        asyncio.create_task(stdout.drain(proc.stdout)),
+        asyncio.create_task(stderr.drain(proc.stderr)),
     )
+    exited = asyncio.create_task(wait_for_process_exit(proc))
+    incomplete = False
     try:
-        stdout_b, stderr_b = await proc.communicate()
+        pending_tasks: set[asyncio.Task] = {*readers, exited}
+        while not exited.done():
+            completed, pending_tasks = await asyncio.wait(
+                pending_tasks, return_when=asyncio.FIRST_COMPLETED,
+            )
+            for reader in completed:
+                # Surface a broken pipe reader immediately while the parent
+                # is alive; successful EOF alone must still await its exit.
+                reader.result()
+        await exited
+        _, pending = await asyncio.wait(
+            readers, timeout=_GIT_POST_EXIT_DRAIN_SECONDS,
+        )
+        incomplete = bool(pending)
+        if incomplete and has_managed_process_group(proc):
+            await kill_and_wait(proc)
+        for reader in readers:
+            if reader.done():
+                reader.result()
     except BaseException:
-        # Cancelled turn: never orphan the git process.
-        if proc.returncode is None:
-            proc.kill()
-            with suppress(ProcessLookupError):
-                await proc.wait()
+        if proc.returncode is None or has_managed_process_group(proc):
+            await kill_and_wait(proc)
         raise
+    finally:
+        close_subprocess_pipe(proc, 1)
+        close_subprocess_pipe(proc, 2)
+        for reader in (*readers, exited):
+            if not reader.done():
+                reader.cancel()
+        await asyncio.gather(*readers, exited, return_exceptions=True)
+    output = stdout.text()
+    if incomplete:
+        output += (
+            "\n… [git exited while a child kept an output pipe open;"
+            " output may be incomplete]"
+        )
     return (
-        stdout_b.decode("utf-8", errors="replace"),
-        stderr_b.decode("utf-8", errors="replace"),
+        output,
+        stderr.text(),
         proc.returncode if proc.returncode is not None else -1,
     )
+
+
+async def _spawn_git(
+    argv: list[str], workspace: str, env: dict[str, str],
+) -> asyncio.subprocess.Process:
+    """Retain ownership when cancellation races process creation."""
+    launch = asyncio.create_task(create_captured_subprocess(
+        argv, cwd=workspace, env=env, start_new_session=os.name != "nt",
+    ))
+    try:
+        return await asyncio.shield(launch)
+    except asyncio.CancelledError:
+        cleanup = asyncio.create_task(_reap_cancelled_git_launch(launch))
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        cleanup.result()
+        raise
+
+
+async def _reap_cancelled_git_launch(
+    launch: asyncio.Task[asyncio.subprocess.Process],
+) -> None:
+    try:
+        proc = await launch
+    except (Exception, asyncio.CancelledError):
+        return
+    try:
+        if proc.returncode is None or has_managed_process_group(proc):
+            await kill_and_wait(proc)
+    finally:
+        close_subprocess_pipe(proc, 1)
+        close_subprocess_pipe(proc, 2)
 
 
 def bounded(text: str) -> str:

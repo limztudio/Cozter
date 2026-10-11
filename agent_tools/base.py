@@ -271,34 +271,24 @@ def utf8_byte_limit_exceeded(
     Counts incrementally (no large encoded copy). With *restore_crlf*, a
     lone LF counts as the CRLF the atomic writer will restore.
     """
+    # Every character needs at least one byte. Reject huge arguments before
+    # scanning them; encode only small chunks for the remaining exact count.
+    if len(text) > limit:
+        return bool(text)
     used = 0
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if (
-            restore_crlf and char == "\r" and index + 1 < len(text)
-            and text[index + 1] == "\n"
-        ):
-            used += 2
-            index += 2
-            if used > limit:
-                return True
-            continue
-        if restore_crlf and char == "\n":
-            used += 2
-        else:
-            codepoint = ord(char)
-            if codepoint <= 0x7F:
-                used += 1
-            elif codepoint <= 0x7FF:
-                used += 2
-            elif codepoint <= 0xFFFF:
-                used += 3
-            else:
-                used += 4
+    previous_cr = False
+    for index in range(0, len(text), 4096):
+        chunk = text[index:index + 4096]
+        # Match the former codepoint count for lone JSON surrogates. The
+        # strict file writer still reports unencodable content separately.
+        used += len(chunk.encode("utf-8", errors="surrogatepass"))
+        if restore_crlf:
+            used += chunk.count("\n") - chunk.count("\r\n")
+            if previous_cr and chunk.startswith("\n"):
+                used -= 1
+            previous_cr = chunk.endswith("\r")
         if used > limit:
             return True
-        index += 1
     return False
 
 
@@ -536,13 +526,50 @@ def iter_workspace_files(
         pattern if discovery_pattern is None else discovery_pattern,
     )
     full_access = get_tool_permission() == "full"
+    pattern_parts = _glob_segments(pattern or "**/*")
+    if "**" in pattern_parts:
+        directory_prefix = pattern_parts[:pattern_parts.index("**")]
+        max_directory_depth = None
+    else:
+        # POSIX permits literal backslashes in names. Since matching treats
+        # them as separators, a filename consisting of backslashes can have
+        # no components; retain that possible final directory component.
+        filename_depth = 1 if os.sep == "\\" else 0
+        max_directory_depth = max(0, len(pattern_parts) - filename_depth)
+        directory_prefix = pattern_parts[:max_directory_depth]
 
     for dirpath, dirnames, filenames in os.walk(abs_root):
         dirnames[:] = [dirname for dirname in dirnames if dirname not in skip_dirs]
+        # A nonrecursive pattern cannot match files below its directory
+        # depth. Before the first globstar, each directory must also match
+        # the corresponding segment; after it, retain every possible branch.
+        if directory_prefix or max_directory_depth is not None:
+            directory_rel = os.path.relpath(dirpath, abs_root)
+            directory_depth = (
+                0 if directory_rel == "."
+                else len(_glob_segments(directory_rel))
+            )
+            if (
+                max_directory_depth is not None
+                and directory_depth >= max_directory_depth
+                and os.sep == "\\"
+            ):
+                dirnames.clear()
+            elif (
+                directory_depth < len(directory_prefix)
+                or max_directory_depth is not None
+            ):
+                dirnames[:] = [
+                    dirname for dirname in dirnames
+                    if _discovery_directory_matches(
+                        dirname, directory_depth, directory_prefix,
+                        max_directory_depth,
+                    )
+                ]
         for filename in filenames:
             fpath = os.path.join(dirpath, filename)
             root_rel = os.path.relpath(fpath, abs_root).replace(os.sep, "/")
-            if not _path_matches_glob(root_rel, pattern):
+            if not _match_glob_parts(pattern_parts, _glob_segments(root_rel)):
                 continue
             # Reject by spelling before doing filesystem work. Full mode
             # does not need a resolved-target containment check; bounded
@@ -561,6 +588,20 @@ def iter_workspace_files(
                 if lexical_inside else fpath
             ).replace(os.sep, "/")
             yield fpath, ws_rel, root_rel
+
+
+def _discovery_directory_matches(
+    name: str, depth: int, prefix: list[str], max_depth: int | None,
+) -> bool:
+    """Keep normalized directory components that can still match a file."""
+    parts = _glob_segments(name)
+    if max_depth is not None and depth + len(parts) > max_depth:
+        return False
+    return all(
+        fnmatch.fnmatchcase(part, prefix[depth + index])
+        for index, part in enumerate(parts)
+        if depth + index < len(prefix)
+    )
 
 
 def _discovery_skip_dirs(pattern: str) -> set[str]:

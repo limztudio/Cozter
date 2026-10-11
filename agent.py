@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import re
+import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import dataclasses
@@ -99,6 +100,24 @@ def _terminal_provider_error(error: str) -> bool:
         "insufficient quota", "insufficient credits", "out of credits",
         "credit balance exhausted", "invalid api key", "authentication failed",
         "consecutive rounds where every tool call was refused",
+    ))
+
+
+def _account_provider_unavailable(error: str) -> bool:
+    """Recognize definite account limits, separately from task refusals.
+
+    A bare HTTP 429 may be temporary throttling, and a tool refusal or HTTP
+    403 can depend on the task. Only explicit exhausted limits or failed
+    authentication justify suppressing another launch on the same model.
+    """
+    if re.search(r"\bHTTP\s*(?:status\s*)?401\b", error, re.IGNORECASE):
+        return True
+    normalized = error.casefold().replace("_", " ").replace("-", " ")
+    return any(marker in normalized for marker in (
+        "usage limit reached", "usage limit exceeded", "reached your usage limit",
+        "quota exceeded", "quota exhausted", "quota limit reached", "quota limit exceeded",
+        "insufficient quota", "insufficient credits", "out of credits",
+        "credit balance exhausted", "invalid api key", "authentication failed",
     ))
 
 
@@ -1417,6 +1436,7 @@ async def _run_flexible(
     usage_totals: dict = {}
     blocked: list[int] = []
     worker_errors: list[str] = []
+    unavailable_models: dict[tuple[str, str | None], str] = {}
     queue: list[flexible.Subtask] = list(plan.subtasks)
     done = 0
     total = len(queue)
@@ -1426,6 +1446,25 @@ async def _run_flexible(
         queue_index += 1
         task = queue[queue_index]
         tier_backend_name, tier_model = tiers[task.tier]
+        target = (tier_backend_name, tier_model)
+        unavailable_cause = unavailable_models.get(target)
+        if unavailable_cause is not None:
+            await status(
+                f"flexible [{done + 1}/{total}] {task.tier} ·"
+                f" {tier_backend_name}/{tier_model}: skipping unavailable account/model"
+            )
+            # Skipped slots still yield for /stop and honor accepted injects.
+            await asyncio.sleep(0)
+            if _take_pending_injections(inject_queue, injected):
+                return result, True
+            reports.append(
+                f"PARTIAL: sub-task {done + 1} was not run: {task.instruction}\n"
+                f"The earlier {tier_backend_name}/{tier_model} worker reported"
+                f" an account/auth limit: {unavailable_cause}\n"
+                "This plan item remains unfinished."
+            )
+            done += 1
+            continue
         tier_backend = backends_agent.get_backend(tier_backend_name)
         await status(
             f"flexible [{done + 1}/{total}] {task.tier} ·"
@@ -1463,6 +1502,8 @@ async def _run_flexible(
 
         if sub_result.error:
             worker_errors.append(sub_result.error)
+            if _account_provider_unavailable(sub_result.error):
+                unavailable_models[target] = sub_result.error
             logger.warning(
                 "Flexible sub-task %d/%d (%s/%s) failed: %s",
                 done + 1, total, tier_backend_name, tier_model, sub_result.error,
@@ -1796,6 +1837,11 @@ def _compaction_context_targets(
     return ((summary_backend, summary_model), *tier_targets)
 
 
+_POST_TURN_MAINTENANCE_LOCKS: weakref.WeakValueDictionary[
+    tuple[str, str], asyncio.Lock,
+] = weakref.WeakValueDictionary()
+
+
 async def _run_post_turn_maintenance(
     workspace_path: str,
     session_id: str,
@@ -1808,17 +1854,28 @@ async def _run_post_turn_maintenance(
     Compaction can require another full model call. Keeping it out of the
     foreground turn means chat platforms can deliver the completed answer
     immediately. Titling follows compaction so a title emitted by the
-    compactor wins over the lightweight auto-title fallback.
+    compactor wins over the lightweight auto-title fallback. Serialize the
+    complete pipeline per session: another completed turn must not skip an
+    in-flight compaction and then start a competing title request. Waiters
+    reload current session state after acquiring the lock.
     """
-    await compaction.maybe_compact(
-        workspace_path, session_id, summary_model,
-        backend_name=summary_backend,
-        context_targets=context_targets,
+    key = (
+        workspace_mod.canonicalize_workspace_path(workspace_path), session_id,
     )
-    await titling.maybe_auto_title(
-        workspace_path, session_id, summary_model,
-        backend_name=summary_backend,
-    )
+    lock = _POST_TURN_MAINTENANCE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _POST_TURN_MAINTENANCE_LOCKS[key] = lock
+    async with lock:
+        await compaction.maybe_compact(
+            workspace_path, session_id, summary_model,
+            backend_name=summary_backend,
+            context_targets=context_targets,
+        )
+        await titling.maybe_auto_title(
+            workspace_path, session_id, summary_model,
+            backend_name=summary_backend,
+        )
 
 
 INTERRUPTED_TURN_MAX_CHARS = 1200
@@ -2182,7 +2239,7 @@ async def _run_turn_impl(
             continuation_prompt = (
                 contextual_prompt
                 + "\n\n[Previous draft — continue its work and return the completed answer]:\n"
-                + _truncate_context_text(draft, history_budget)
+                + flexible._bounded_draft_excerpt(draft, limit=history_budget)
                 + followup
             )
             try:

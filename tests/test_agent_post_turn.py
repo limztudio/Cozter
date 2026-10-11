@@ -19,6 +19,113 @@ class _ImmediateBackend:
 
 
 class AgentPostTurnMaintenanceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_overlapping_maintenance_uses_compactor_title_and_latest_state(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        snapshots = []
+
+        async def compact(ws, sid, *_args, **_kwargs):
+            snapshots.append(len(session.load_session(ws, sid)["messages"]))
+            if len(snapshots) == 1:
+                started.set()
+                await release.wait()
+                session.set_session_name(ws, sid, "Compactor Title")
+
+        with tempfile.TemporaryDirectory() as ws:
+            data = session.create_session(ws)
+            sid = data["id"]
+            session.append_messages(ws, sid, [{"role": "assistant", "content": "first reply"}])
+            with (
+                mock.patch.object(agent.compaction, "maybe_compact", side_effect=compact),
+                mock.patch.object(agent.titling, "generate", new_callable=mock.AsyncMock) as generate,
+            ):
+                owner = asyncio.create_task(agent._run_post_turn_maintenance(
+                    ws, sid, "summary", "codex", (("codex", "model"),),
+                ))
+                await asyncio.wait_for(started.wait(), timeout=1)
+                session.append_messages(ws, sid, [{"role": "user", "content": "later turn"}])
+                waiter = asyncio.create_task(agent._run_post_turn_maintenance(
+                    os.path.join(ws, "."), sid, "summary", "codex", (("codex", "model"),),
+                ))
+                try:
+                    await asyncio.sleep(0)
+                    self.assertFalse(waiter.done())
+                    self.assertEqual(snapshots, [1])
+                    generate.assert_not_awaited()
+                finally:
+                    release.set()
+                    await asyncio.gather(owner, waiter)
+                self.assertEqual(snapshots, [1, 2])
+                generate.assert_not_awaited()
+                self.assertEqual(session.load_session(ws, sid)["name"], "Compactor Title")
+
+    async def test_cancelled_maintenance_waiter_does_not_cancel_owner(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def compact(*_args, **_kwargs):
+            started.set()
+            await release.wait()
+
+        with tempfile.TemporaryDirectory() as ws:
+            with (
+                mock.patch.object(agent.compaction, "maybe_compact", side_effect=compact) as check,
+                mock.patch.object(agent.titling, "maybe_auto_title", new_callable=mock.AsyncMock) as title,
+            ):
+                arguments = (ws, "session", "summary", "codex", (("codex", "model"),))
+                owner = asyncio.create_task(agent._run_post_turn_maintenance(*arguments))
+                await asyncio.wait_for(started.wait(), timeout=1)
+                waiter = asyncio.create_task(agent._run_post_turn_maintenance(*arguments))
+                try:
+                    await asyncio.sleep(0)
+                    waiter.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await waiter
+                    self.assertFalse(owner.done())
+                    self.assertEqual(check.await_count, 1)
+                finally:
+                    release.set()
+                    await owner
+                self.assertEqual(title.await_count, 1)
+                await agent._run_post_turn_maintenance(*arguments)
+                self.assertEqual(check.await_count, 2)
+                self.assertEqual(title.await_count, 2)
+                key = (agent.workspace_mod.canonicalize_workspace_path(ws), "session")
+                self.assertNotIn(key, agent._POST_TURN_MAINTENANCE_LOCKS)
+
+    async def test_cancelled_maintenance_owner_releases_pipeline_for_waiter(self):
+        started = asyncio.Event()
+        entered = 0
+
+        async def compact(*_args, **_kwargs):
+            nonlocal entered
+            entered += 1
+            if entered == 1:
+                started.set()
+                await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as ws:
+            with (
+                mock.patch.object(agent.compaction, "maybe_compact", side_effect=compact),
+                mock.patch.object(agent.titling, "maybe_auto_title", new_callable=mock.AsyncMock) as title,
+            ):
+                arguments = (ws, "session", "summary", "codex", (("codex", "model"),))
+                owner = asyncio.create_task(agent._run_post_turn_maintenance(*arguments))
+                await asyncio.wait_for(started.wait(), timeout=1)
+                waiter = asyncio.create_task(agent._run_post_turn_maintenance(*arguments))
+                try:
+                    await asyncio.sleep(0)
+                    owner.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await owner
+                    await asyncio.wait_for(waiter, timeout=1)
+                finally:
+                    owner.cancel()
+                    waiter.cancel()
+                    await asyncio.gather(owner, waiter, return_exceptions=True)
+                self.assertEqual(entered, 2)
+                self.assertEqual(title.await_count, 1)
+
     async def test_omitted_summary_model_uses_backend_default(self) -> None:
         maintenance_tasks: list[asyncio.Task] = []
         backend = _ImmediateBackend()
@@ -195,6 +302,37 @@ class AgentContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage["input_tokens"], 30)
         self.assertEqual(result.usage["output_tokens"], 11)
         self.assertAlmostEqual(result.usage["total_cost_usd"], 0.3)
+
+    async def test_direct_continuation_keeps_final_evidence_with_same_draft_budget(self):
+        for ending in (
+            "FINAL EVIDENCE: all 24 targets verified; exit code 0; warnings 0.",
+            "PARTIAL: target 24 is unverified; remainder: exercise its runtime path.",
+        ):
+            with self.subTest(ending=ending):
+                draft = "OPENING: retry.py fixed.\n" + "detail\n" * 3_000 + ending
+                prompts = []
+
+                async def drive(_backend, _ws, prompt, *_args, **_kwargs):
+                    prompts.append(prompt)
+                    return AgentResult(text=draft if len(prompts) == 1 else "remaining check done"), False
+
+                judge = mock.AsyncMock(side_effect=[
+                    (flexible.JudgeVerdict(True, "runtime evidence", "verify remaining runtime path"), False),
+                    (flexible.JudgeVerdict(False), False),
+                ])
+                with tempfile.TemporaryDirectory() as ws:
+                    with mock.patch.object(agent.workspace_mod, "get_history_budget", return_value=500):
+                        await self.run_turn(ws, drive, judge)
+                self.assertEqual(len(prompts), 2)
+                excerpt = flexible._bounded_draft_excerpt(draft, limit=500)
+                self.assertEqual(len(excerpt), 500)
+                self.assertIn(excerpt, prompts[1])
+                self.assertIn("OPENING: retry.py fixed.", prompts[1])
+                self.assertIn(ending, prompts[1])
+                self.assertNotIn("say PARTIAL + remainder", excerpt)
+                self.assertIn("verify remaining runtime path", prompts[1])
+                if ending.startswith("FINAL EVIDENCE"):
+                    self.assertNotIn("PARTIAL", excerpt)
 
     async def test_inject_during_cap_judge_restarts_with_added_context(self):
         prompts = []

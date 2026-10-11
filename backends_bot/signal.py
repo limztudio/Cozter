@@ -65,6 +65,12 @@ _SIGNAL_RETRY_AFTER_RE = re.compile(
 _SIGNAL_GROUP_URL_RE = re.compile(r"https://signal\.group/#[^\s]+")
 _SIGNAL_GROUP_SCHEME_RE = re.compile(r"sgnl://[^\s]+")
 _SIGNAL_ATTACH_WHITESPACE_RE = re.compile(r"\s+")
+_SIGNAL_ATTACH_ASCII_WHITESPACE = tuple(
+    chr(code) for code in range(128) if chr(code).isspace()
+)
+_SIGNAL_ATTACH_ASCII_WHITESPACE_DELETE = {
+    ord(character): None for character in _SIGNAL_ATTACH_ASCII_WHITESPACE
+}
 _SIGNAL_MD_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
 _SIGNAL_WORD_CHAR_RE = re.compile(r"\w")
 
@@ -802,7 +808,7 @@ class SignalBot(BotPlatform):
                 result = await self._rpc_request(
                     "getAttachment", {"id": attachment_id, "groupId": group_id},
                 )
-                payload = _SIGNAL_ATTACH_WHITESPACE_RE.sub("", _attachment_payload(result))
+                payload = _strip_attachment_whitespace(_attachment_payload(result))
                 data = _decode_attachment_payload(payload, self.max_upload_bytes)
                 write_bytes_atomically(local_path, data)
 
@@ -1805,6 +1811,18 @@ def _attachment_declared_size(att: dict[str, Any]) -> int | None:
         ):
             return value
     return None
+
+
+def _strip_attachment_whitespace(payload: str) -> str:
+    """Normalize base64 whitespace without a regex scan for ordinary payloads."""
+    if payload.isascii():
+        # Signal normally sends unbroken ASCII base64. Reuse that string
+        # without another attachment-sized allocation when nothing is removed.
+        if not any(character in payload for character in _SIGNAL_ATTACH_ASCII_WHITESPACE):
+            return payload
+        return payload.translate(_SIGNAL_ATTACH_ASCII_WHITESPACE_DELETE)
+    # Keep the Unicode whitespace accepted by the existing import path.
+    return _SIGNAL_ATTACH_WHITESPACE_RE.sub("", payload)
 
 
 def _decode_attachment_payload(payload: str, max_upload_bytes: int) -> bytes:

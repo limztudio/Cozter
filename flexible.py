@@ -193,11 +193,15 @@ _DRAFT_OMISSION_MARKER = (
 )
 
 
-def _bounded_draft_excerpt(text: str) -> str:
+def _bounded_draft_excerpt(text: str, *, limit: int = _DRAFT_MAX_CHARS) -> str:
     """Keep a draft's opening and final evidence without adding new work."""
-    if len(text) <= _DRAFT_MAX_CHARS:
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
         return text
-    remaining = _DRAFT_MAX_CHARS - len(_DRAFT_OMISSION_MARKER)
+    if limit <= len(_DRAFT_OMISSION_MARKER):
+        return "…" + text[-(limit - 1):] if limit > 1 else "…"
+    remaining = limit - len(_DRAFT_OMISSION_MARKER)
     head = remaining // 2
     tail = remaining - head
     return text[:head] + _DRAFT_OMISSION_MARKER + text[-tail:]
@@ -484,7 +488,7 @@ def build_merge_prompt(
         tag = " [BLOCKED]" if report_index in blocked else ""
         header = (
             f"\n--- {report_index + 1} [{task.tier}]:"
-            f" {task.instruction}{tag} ---\n"
+            f" plan item {report_index + 1}{tag} ---\n"
             if task is not None
             else f"\n--- {report_index + 1} [unknown]: (no sub-task){tag} ---\n"
         )
