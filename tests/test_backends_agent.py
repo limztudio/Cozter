@@ -1188,6 +1188,7 @@ warning: ignored after the catalog
         self.assertEqual(run_mock.call_count, 2)
         run_mock.assert_called_with(
             ["codex", "debug", "models"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
             check=False,
@@ -1214,6 +1215,10 @@ warning: ignored after the catalog
             )
 
         self.assertEqual(run_mock.call_count, 2)
+        self.assertTrue(all(
+            call.kwargs.get("stdin") == subprocess.DEVNULL
+            for call in run_mock.call_args_list
+        ))
 
     def test_codex_discovery_recovers_from_stale_reasoning_config(self) -> None:
         failed = subprocess.CompletedProcess(
@@ -1263,6 +1268,7 @@ warning: ignored after the catalog
         try:
             proc = subprocess.run(
                 [codex, "debug", "models"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=15,
             )

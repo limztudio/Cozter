@@ -29,6 +29,7 @@ from ..base import (
     object_parameters,
     require_nonempty_string_arg,
     resolve_inside_workspace,
+    truncate_with_marker,
 )
 
 _SESSIONS_RELPATH = ".cozter/sessions"
@@ -200,23 +201,36 @@ def _iter_search_texts(data: dict):
         yield f"{msg['role'].capitalize()}:", msg["content"]
 
 
-def _fit_output(lines: list[str], header: str) -> str:
-    """Join *lines* under the result budget, dropping from the end."""
+def _fit_output(
+    lines: list[str], header: str, *, keep_newest: bool = False,
+) -> str:
+    """Join *lines* under the budget, retaining the useful end of the list."""
+    lines = list(lines)
     # Track joined size incrementally.
     total = len(header) + sum(len(line) + 1 for line in lines)
-    omitted_len = len("(…more omitted)")
     dropped = 0
-    while lines and total + omitted_len > _OUTPUT_BUDGET:
-        total -= len(lines.pop()) + 1
-        dropped += 1
-    if dropped:
-        lines.append(
+
+    def omission_footer() -> str:
+        return (
             f"(…{dropped} more result(s) omitted to fit the limit;"
             " raise *limit* to see more; never treat this preview"
             " as full coverage; say PARTIAL + remainder"
             " when coverage is unclear)"
         )
-    return "\n".join([header, *lines])
+
+    while lines and total + (len(omission_footer()) + 1 if dropped else 0) > _OUTPUT_BUDGET:
+        total -= len(lines.pop(0 if keep_newest else -1)) + 1
+        dropped += 1
+    if dropped:
+        lines.append(omission_footer())
+    result = "\n".join([header, *lines])
+    if len(result) > _OUTPUT_BUDGET:
+        # A model-supplied query/session name can exceed the whole budget.
+        return truncate_with_marker(
+            result, _OUTPUT_BUDGET,
+            "narrow the query or shorten the session name",
+        )
+    return result
 
 
 class MemoryTool(AgentTool):
@@ -385,7 +399,7 @@ class MemoryTool(AgentTool):
             if len(content) > _LINE_CAP:
                 content = content[:_LINE_CAP] + "… [line clipped]"
             lines.append(f"{shown_from + offset}. {msg['role'].capitalize()}: {content}")
-        return _fit_output(lines, header)
+        return _fit_output(lines, header, keep_newest=True)
 
 
 def _find_session(

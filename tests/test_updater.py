@@ -26,6 +26,12 @@ def _fake_git(outputs: dict[str, str], calls: list[tuple[str, ...]]):
 
 
 class UpdaterAutoPullGuardTests(unittest.TestCase):
+    def test_git_probe_closes_stdin_instead_of_sharing_cli_input(self) -> None:
+        with mock.patch.object(updater.subprocess, "run") as run:
+            updater._git("rev-parse", "HEAD")
+
+        self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
     def _run_fetch_and_pull(
         self, outputs: dict[str, str],
     ) -> list[tuple[str, ...]]:
@@ -221,6 +227,7 @@ class UpdaterRequirementsTests(unittest.TestCase):
             updater.install_requirements()
 
         self.assertEqual(run.call_args.kwargs["timeout"], updater._PIP_INSTALL_TIMEOUT)
+        self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 
     def test_updated_requirements_install_has_a_timeout(self) -> None:
         completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")

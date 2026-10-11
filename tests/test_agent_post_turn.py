@@ -390,6 +390,35 @@ class AgentContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("new requirement", prompts[1])
         self.assertEqual(inject_queue.put_if_active("after completion"), "finished")
 
+    async def test_injected_scope_survives_continuation_judging_and_session_log(self):
+        injected_scope = "also verify the Windows path"
+        requests = []
+        drives = 0
+
+        async def drive(*_args, injected, **_kwargs):
+            nonlocal drives
+            drives += 1
+            if drives == 1:
+                injected.append(injected_scope)
+                return AgentResult(), True
+            return AgentResult(text="draft" if drives == 2 else "completed"), False
+
+        async def judge(request, *_args, **_kwargs):
+            requests.append(request)
+            return (
+                flexible.JudgeVerdict(True, next_instruction="finish verification")
+                if len(requests) == 1 else flexible.JudgeVerdict(False)
+            ), False
+
+        with tempfile.TemporaryDirectory() as ws:
+            result = await self.run_turn(ws, drive, judge)
+            saved = session.load_session(ws, result.session_id)
+            self.assertIn(injected_scope, saved["messages"][0]["content"])
+        self.assertEqual(drives, 3)
+        self.assertEqual(len(requests), 2)
+        for request in requests:
+            self.assertIn(injected_scope, request)
+
 
 class BotContinuationTests(unittest.IsolatedAsyncioTestCase):
     async def test_chained_turn_keeps_artifacts_usage_and_active_inject_queue(self):

@@ -10,7 +10,7 @@ import signal
 import struct
 import subprocess
 import tempfile
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator
 from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,8 @@ CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.
 _STDERR_CAPTURE_BYTES = 64 * 1024
 # Malformed CLIs can emit endless lines.
 _MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024
+# Keep decoded state safe for deepcopy, normalization, and JSON serialization.
+_MAX_JSON_NESTING_DEPTH = 100
 # A spawned CLI leads the group.
 _PROCESS_GROUP_ID_ATTR = "_cozter_process_group_id"
 # After signalling the group, allow a short pipe-shutdown grace.
@@ -277,6 +279,7 @@ def terminate_windows_process_tree(pid: object) -> bool:
     try:
         completed = subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=2,
@@ -566,7 +569,8 @@ def load_json_object(
     try:
         with open(path, encoding="utf-8") as file_handle:
             data = json.load(file_handle)
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+        validate_json_nesting(data)
+    except (ValueError, OSError, RecursionError) as e:
         (log or logger).warning(
             "Corrupt or unreadable %s (%s): %s", label, path, e,
         )
@@ -575,6 +579,35 @@ def load_json_object(
         return data
     (log or logger).warning("Ignoring non-object %s (%s)", label, path)
     return {}
+
+
+def validate_json_nesting(value: object) -> None:
+    """Reject decoded JSON too deeply nested for recursive state consumers.
+
+    Newer CPython JSON decoders can accept substantially deeper nesting than
+    deepcopy or serialization can process. Walk iteratively with memory
+    proportional to depth so even those decoded inputs fail cleanly before
+    they reach a cache or a persisted record.
+    """
+    stack: list[Iterator[Any]] = [iter((value,))]
+    while stack:
+        try:
+            node = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        children: Iterable[Any]
+        if isinstance(node, dict):
+            children = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        if len(stack) > _MAX_JSON_NESTING_DEPTH:
+            raise ValueError(
+                f"JSON nesting exceeds {_MAX_JSON_NESTING_DEPTH} levels",
+            )
+        stack.append(iter(children))
 
 
 async def iter_stream_lines(
@@ -671,7 +704,8 @@ async def iter_json_events(
             continue
         try:
             event = json.loads(stripped)
-        except json.JSONDecodeError:
+            validate_json_nesting(event)
+        except (ValueError, RecursionError):
             if on_invalid:
                 on_invalid(stripped)
             continue
@@ -761,6 +795,11 @@ async def iter_process_json_events(
                 # Let the parent-authored backlog through, not an inherited child.
                 assert post_exit_deadline is not None
                 if not next_event_task.done():
+                    # A slow event consumer can outlive the drain allowance.
+                    # Give the reader one turn to expose already-buffered data
+                    # or EOF before interpreting that elapsed time as a stall.
+                    await asyncio.sleep(0)
+                if not next_event_task.done():
                     remaining = post_exit_deadline - loop.time()
                     if remaining <= 0:
                         await _abandon_post_exit_stream()
@@ -788,8 +827,16 @@ async def iter_process_json_events(
                     (next_event_task, exit_task),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
+                if exit_task in done:
+                    await exit_task
+                    parent_exited = True
+                    post_exit_deadline = (
+                        loop.time() + _POST_EXIT_STREAM_DRAIN_TIMEOUT
+                    )
                 # A buffered event/EOF already waiting is parent output;
-                # consume it first rather than arming the post-exit drain.
+                # consume it, while still bounding the remaining backlog once
+                # the parent's exit is known. Ready events must not starve the
+                # exit task and bypass the post-exit byte/time allowance.
                 if next_event_task in done:
                     try:
                         event = await next_event_task
@@ -801,12 +848,7 @@ async def iter_process_json_events(
                     yield event
                     next_event_task = asyncio.create_task(_next_event())
                     continue
-                if exit_task in done:
-                    await exit_task
-                    parent_exited = True
-                    post_exit_deadline = (
-                        loop.time() + _POST_EXIT_STREAM_DRAIN_TIMEOUT
-                    )
+                if parent_exited:
                     continue
 
             try:

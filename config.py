@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from .utils import CONFIG_DIR
 from .utils import normalize_string_list
+from .utils import validate_json_nesting
 
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
@@ -81,6 +82,7 @@ def _load_config_object() -> dict:
         # Missing/unstatable: fall through to open().
         with open(CONFIG_PATH, encoding="utf-8") as file_handle:
             cfg = json.load(file_handle)
+        validate_json_nesting(cfg)
         if not isinstance(cfg, dict):
             raise ValueError("config.json must contain a JSON object") from None
         return cfg
@@ -93,6 +95,7 @@ def _load_config_object() -> dict:
         return _CONFIG_CACHE_DATA
     with open(CONFIG_PATH, encoding="utf-8") as file_handle:
         cfg = json.load(file_handle)
+    validate_json_nesting(cfg)
     if not isinstance(cfg, dict):
         raise ValueError("config.json must contain a JSON object")
     _CONFIG_CACHE_PATH = CONFIG_PATH
@@ -178,6 +181,9 @@ def _get_https_url(key: str) -> str:
     value = _get_nonempty_string(key)
     try:
         parsed = urlsplit(value)
+        # urlsplit defers malformed/out-of-range port validation until this
+        # property is read. Reject those overrides before request construction.
+        parsed.port
     except ValueError:
         return cast(str, _DEFAULT_CONFIG[key])
     if parsed.scheme.lower() == "https" and parsed.hostname:
@@ -429,7 +435,7 @@ def load_config() -> dict:
 
     try:
         cfg = _load_config_object()
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, RecursionError) as e:
         print(f"ERROR: config.json is corrupted or unreadable: {e}")
         print(f"Fix or delete {CONFIG_PATH}, then restart.")
         sys.exit(1)

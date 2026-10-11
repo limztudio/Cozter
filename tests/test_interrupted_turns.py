@@ -26,6 +26,50 @@ class _RecordingBackend:
 
 
 class InterruptedTurnMemoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_after_inject_restart_preserves_the_added_requirement(self) -> None:
+        entered = asyncio.Event()
+        log_tasks = []
+        drive_count = 0
+        original_create = agent.create_background_task
+
+        def capture(coro, *, name, log=None):
+            task = original_create(coro, name=name, log=log)
+            log_tasks.append(task)
+            return task
+
+        async def drive(*_args, injected, **_kwargs):
+            nonlocal drive_count
+            drive_count += 1
+            if drive_count == 1:
+                injected.append("also preserve the new requirement")
+                return AgentResult(), True
+            entered.set()
+            await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as ws:
+            data = session.create_session(ws, name="Work")
+            with (
+                mock.patch.object(agent.backends_agent, "get_backend", return_value=_RecordingBackend()),
+                mock.patch.object(agent, "_drive_backend", side_effect=drive),
+                mock.patch.object(agent, "create_background_task", side_effect=capture),
+            ):
+                turning = asyncio.create_task(agent.run(
+                    "continue work", ws, 1, backend_name=_RecordingBackend.name,
+                    session_id=data["id"],
+                ))
+                try:
+                    await asyncio.wait_for(entered.wait(), timeout=1)
+                    turning.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await turning
+                    await asyncio.gather(*log_tasks)
+                    saved = session.load_session(ws, data["id"])
+                    self.assertIn("also preserve the new requirement", saved["messages"][0]["content"])
+                    self.assertIn("[Interrupted turn", saved["messages"][1]["content"])
+                finally:
+                    turning.cancel()
+                    await asyncio.gather(turning, *log_tasks, return_exceptions=True)
+
     async def _run_until_cancelled(
         self,
         workspace_path: str,

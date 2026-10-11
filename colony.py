@@ -415,6 +415,12 @@ async def _consolidate_inner(
             return False
         # No sessions: drop memory deterministically.
         async with workspace_mod.get_lock(workspace_path):
+            if (
+                session.list_sessions_with_data(workspace_path)
+                or get_items(workspace_path) != existing_colony
+            ):
+                logger.info("Colony pass: memory changed before cleanup, skipping")
+                return False
             set_items(workspace_path, [])
         logger.info(
             "Colony pass: cleared %d stale item(s); no sessions remain in %s",
@@ -494,8 +500,24 @@ async def _consolidate_inner(
         # Partial evidence cannot retire unseen shared facts reliably.
         new_colony = list(dict.fromkeys([*existing_colony, *new_colony]))
 
-    # Apply atomically.
+    # Check the evidence again under the writer lock. Foreground turns may
+    # append messages safely, but a direct memory edit, deleted session, or
+    # newly created session makes this backend result stale.
     async with workspace_mod.get_lock(workspace_path):
+        latest_memory = {
+            data["id"]: data["long_term"]
+            for data in session.list_sessions_with_data(workspace_path)
+        }
+        snapshot_memory = {sid: lt for sid, _name, lt in inputs}
+        if (
+            get_items(workspace_path) != existing_colony
+            or latest_memory != snapshot_memory
+        ):
+            logger.warning(
+                "Skipping stale colony consolidation for %s; memory or sessions changed",
+                workspace_path,
+            )
+            return False
         set_items(workspace_path, new_colony)
         for sid, new_lt in per_session.items():
             sess_data = session.load_session(workspace_path, sid)

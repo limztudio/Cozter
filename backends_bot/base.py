@@ -23,7 +23,7 @@ import tempfile
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -430,6 +430,7 @@ class BotPlatform(ABC):
         self._reply_delivery_file_lock: asyncio.Lock = asyncio.Lock()
         # Per-user delivery-vs-cancel lock.
         self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
+        self._reply_delivery_tasks: dict[str, set[asyncio.Task]] = {}
         self._pending_reply_delivery_users: set[str] = set()
         # Pipelined attachment uploads: per-chat tails.
         self._attachment_tasks: dict[str, set[asyncio.Task]] = {}
@@ -437,6 +438,8 @@ class BotPlatform(ABC):
         # Detached tasks: results awaiting delivery, not prompts.
         self._detached_task_file_lock: asyncio.Lock = asyncio.Lock()
         self._detached_task_watcher: asyncio.Task | None = None
+        self._detached_delivery_locks: dict[str, asyncio.Lock] = {}
+        self._detached_delivery_tasks: dict[str, set[asyncio.Task]] = {}
         # Users already acknowledged by /cancel or /stop.
         self._cancel_acknowledged: set[str] = set()
         # Per-user epochs.
@@ -773,16 +776,17 @@ class BotPlatform(ABC):
         if msg_queue is None:
             msg_queue = asyncio.Queue(maxsize=maxsize)
             self._message_queues[uid] = msg_queue
-        elif maxsize and msg_queue.maxsize != maxsize:
-            # Resize by replacing the queue.
-            replacement: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
-            while not msg_queue.empty():
-                try:
-                    replacement.put_nowait(msg_queue.get_nowait())
-                except asyncio.QueueFull:
-                    break
-            self._message_queues[uid] = replacement
-            return replacement
+        elif msg_queue.maxsize != maxsize:
+            # Keep the queue object and every admitted entry: a restored
+            # backlog may exceed today's cap, and producers/drainers may
+            # already hold this object. asyncio.Queue has no public resize
+            # API; changing its capacity leaves FIFO data and waiters intact.
+            msg_queue._maxsize = maxsize
+            # A growth can make space without a get(), so wake blocked putters
+            # to recheck full(). Each still checks capacity before admission.
+            if not msg_queue.full():
+                while msg_queue._putters:
+                    msg_queue._wakeup_next(msg_queue._putters)
         return msg_queue
 
     @staticmethod
@@ -2524,6 +2528,7 @@ class BotPlatform(ABC):
         recalled, but this lock guarantees a reply which has not begun its
         outbound send cannot race past this explicit cancellation.
         """
+        await self._cancel_owned_deliveries(uid, self._reply_delivery_tasks)
         async with self._reply_delivery_lock(uid), self._reply_delivery_file_lock:
             data = self._read_reply_deliveries_file()
             records = self._reply_delivery_records(data.get("deliveries"))
@@ -2541,6 +2546,30 @@ class BotPlatform(ABC):
         return removed
 
     async def _deliver_staged_reply(
+        self, record: dict, *, ws: str | None = None,
+        result: agent.AgentResult | None = None,
+        awaiting_uid: str | None = None,
+    ) -> bool:
+        """Own each delivery so explicit cancellation can interrupt its I/O."""
+        uid = record["user_id"]
+        task = asyncio.create_task(self._deliver_current_staged_reply(
+            record, ws=ws, result=result, awaiting_uid=awaiting_uid,
+        ))
+        tasks = self._reply_delivery_tasks.setdefault(uid, set())
+        tasks.add(task)
+        try:
+            return await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            return False
+        finally:
+            tasks.discard(task)
+            if not tasks:
+                self._reply_delivery_tasks.pop(uid, None)
+
+    async def _deliver_current_staged_reply(
         self, record: dict, *, ws: str | None = None,
         result: agent.AgentResult | None = None,
         awaiting_uid: str | None = None,
@@ -2652,6 +2681,14 @@ class BotPlatform(ABC):
         async with self._detached_task_file_lock:
             data = self._read_detached_tasks_file()
             return self._detached_task_records(data.get("tasks"))
+
+    async def _get_detached_task_record(self, record_id: str) -> dict | None:
+        """Re-read a callback's identity after acquiring its delivery lock."""
+        return next(
+            (record for record in await self._list_detached_task_records()
+             if record["id"] == record_id),
+            None,
+        )
 
     async def _register_detached_task(
         self,
@@ -2842,17 +2879,7 @@ class BotPlatform(ABC):
             )
             if output:
                 message += f"\n\nRecent output:\n{output}"
-            try:
-                await self.send_text(record["chat_id"], message, rich=True)
-            except Exception:
-                logger.warning(
-                    "Failed to report blocked detached task %s",
-                    record["task_id"], exc_info=True,
-                )
-                return
-            await self._update_detached_task_record(
-                record["id"], last_reported_state="blocked",
-            )
+            await self._report_blocked_detached_task(record, message)
             return
         if status.state not in _DETACHED_TERMINAL_STATES:
             logger.warning(
@@ -2880,6 +2907,51 @@ class BotPlatform(ABC):
             message += f"\n\n{output}"
         await self._stage_detached_task_delivery(record, message)
 
+    async def _report_blocked_detached_task(self, record: dict, message: str) -> None:
+        """Serialize a needs-input notification against explicit cancellation."""
+        await self._run_detached_delivery(
+            record["user_id"], self._report_live_blocked_detached_task(record, message),
+        )
+
+    def _detached_task_delivery_lock(self, uid: str) -> asyncio.Lock:
+        return ensure_lock(self._detached_delivery_locks, uid)
+
+    async def _run_detached_delivery(self, uid: str, delivery: Coroutine[None, None, None]) -> None:
+        """Own each outbound callback so cancellation can interrupt stalled I/O."""
+        task = asyncio.create_task(delivery)
+        tasks = self._detached_delivery_tasks.setdefault(uid, set())
+        tasks.add(task)
+        try:
+            await task
+        except asyncio.CancelledError:
+            # A user cancelled this child send; keep the shared watcher alive.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+        finally:
+            tasks.discard(task)
+            if not tasks:
+                self._detached_delivery_tasks.pop(uid, None)
+
+    async def _report_live_blocked_detached_task(self, record: dict, message: str) -> None:
+        async with self._detached_task_delivery_lock(record["user_id"]):
+            record = await self._get_detached_task_record(record["id"])
+            if record is None or record.get("last_reported_state") == "blocked":
+                return
+            if not self.authorized(record["user_id"], record["chat_id"]):
+                return
+            try:
+                await self.send_text(record["chat_id"], message, rich=True)
+            except Exception:
+                logger.warning(
+                    "Failed to report blocked detached task %s",
+                    record["task_id"], exc_info=True,
+                )
+                return
+            await self._update_detached_task_record(
+                record["id"], last_reported_state="blocked",
+            )
+
     async def _stage_detached_task_delivery(
         self, record: dict, message: str,
     ) -> None:
@@ -2893,6 +2965,19 @@ class BotPlatform(ABC):
 
     async def _deliver_detached_task(self, record: dict, message: str) -> None:
         """Deliver an already-persisted completion, then remove its ledger row."""
+        await self._run_detached_delivery(
+            record["user_id"], self._deliver_current_detached_task(record, message),
+        )
+
+    async def _deliver_current_detached_task(self, record: dict, message: str) -> None:
+        async with self._detached_task_delivery_lock(record["user_id"]):
+            live = await self._get_detached_task_record(record["id"])
+            if live is None:
+                return
+            await self._deliver_live_detached_task(live, message)
+
+    async def _deliver_live_detached_task(self, record: dict, message: str) -> None:
+        """Send a live callback while holding the user's delivery lock."""
         if not self.authorized(record["user_id"], record["chat_id"]):
             await self._remove_detached_task_record(record["id"])
             return
@@ -3019,6 +3104,21 @@ class BotPlatform(ABC):
 
     async def _cancel_detached_tasks(self, uid: str) -> int:
         """Cancel/dismiss every tracked detached task owned by one user."""
+        await self._cancel_owned_deliveries(uid, self._detached_delivery_tasks)
+        async with self._detached_task_delivery_lock(uid):
+            return await self._cancel_detached_tasks_locked(uid)
+
+    async def _cancel_owned_deliveries(
+        self, uid: str, owned_tasks: dict[str, set[asyncio.Task]],
+    ) -> None:
+        tasks = tuple(owned_tasks.get(uid, ()))
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            await await_cancelled(task)
+
+    async def _cancel_detached_tasks_locked(self, uid: str) -> int:
+        """Remove detached callbacks while excluding sends for this user."""
         cancelled = 0
         for record in await self._list_detached_task_records():
             if record["user_id"] != uid:
@@ -3122,6 +3222,11 @@ class BotPlatform(ABC):
                     None,
                 )
                 if current is None:
+                    continue
+                # Days/time can change while this tick waits for the lock.
+                # Claim only the current schedule's slot, never its snapshot.
+                slot = schedules.most_recent_slot(current, now)
+                if slot is None:
                     continue
                 baseline = schedules.parse_iso(current.get("last_fired")) or schedules.parse_iso(
                     current.get("created"),

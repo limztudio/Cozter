@@ -20,6 +20,7 @@ from .utils import load_json_object
 from .utils import normalize_string_list
 from .utils import save_json_object
 from .utils import stat_mtime_size
+from .utils import validate_json_nesting
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ def migrate_last_session(
     """Copy the first legacy last-session pointer to a new user key."""
     data = _load_last_session_map(workspace)
     target_key = str(target_user_id)
-    if isinstance(data.get(target_key), str) and data[target_key]:
+    if _is_safe_session_id(data.get(target_key)):
         return False
 
     for source_user_id in source_user_ids:
@@ -328,7 +329,8 @@ def _load_session_path(
     try:
         with open(path, encoding="utf-8") as file_handle:
             data = json.load(file_handle)
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        validate_json_nesting(data)
+    except (ValueError, OSError, RecursionError):
         if log_corrupt:
             logger.warning("Corrupt session file, ignoring: %s", path)
         return None
@@ -360,9 +362,10 @@ def list_newest_sessions_with_data(
 ) -> tuple[list[dict], int]:
     """Return (newest *limit* sessions' data, total session count).
 
-    Files are ordered by mtime (newest first) so only the newest *limit*
-    files are parsed; older sessions are counted but skipped. Falls back
-    to full parsing when mtimes are unavailable.
+    Files are ordered by mtime (newest first) and parsed until *limit*
+    valid sessions are found; corrupt files do not hide usable older ones.
+    Older sessions are counted but skipped. Falls back to directory order
+    when mtimes are unavailable.
     """
     return _list_sessions_with_data(workspace, limit=limit)
 
@@ -388,7 +391,9 @@ def _list_sessions_with_data(
     fnames = [fname for fname in os.listdir(sdir) if fname.endswith(".json")]
     total = len(fnames)
     if limit is not None:
-        fnames = _newest_first(sdir, fnames, limit)
+        if limit < 1:
+            return [], total
+        fnames = _newest_first(sdir, fnames, total)
     out: list[dict] = []
     for fname in fnames:
         expected_id = fname[:-len(".json")]
@@ -402,6 +407,8 @@ def _list_sessions_with_data(
         )
         if data is not None:
             out.append(data)
+            if limit is not None and len(out) >= limit:
+                break
     out.sort(key=lambda d: d.get("created", ""), reverse=True)
     if limit is not None:
         return out, total

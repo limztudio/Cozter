@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 from Cozter import utils
 from Cozter.tests.helpers import create_python_script_process
@@ -38,6 +39,26 @@ class InternalBackendStub:
 
 
 class ProcessDrainTests(unittest.TestCase):
+    def test_exited_parent_cannot_bypass_stdout_budget_with_buffered_events(self) -> None:
+        async def run() -> None:
+            reader = asyncio.StreamReader()
+            reader.feed_data(b'{"text":"buffered"}\n' * 100)
+            reader.feed_eof()
+            proc = SimpleNamespace(stdout=reader, returncode=0, pid=0)
+            with (
+                mock.patch.object(utils, "_POST_EXIT_STREAM_DRAIN_BYTES", 100),
+                mock.patch.object(utils, "terminate_process_group") as terminate,
+                mock.patch.object(utils, "close_subprocess_pipe") as close,
+                self.assertLogs(utils.logger, level="WARNING"),
+            ):
+                events = [event async for event in utils.iter_process_json_events(proc)]
+            self.assertLess(len(events), 100)
+            self.assertTrue(events)
+            terminate.assert_called_once_with(proc)
+            close.assert_called_once_with(proc, 1)
+
+        asyncio.run(run())
+
     def test_oversized_line_callback_can_abort_a_transport(self) -> None:
         async def run() -> None:
             async def chunks():
@@ -230,6 +251,7 @@ class ProcessTerminationTests(unittest.TestCase):
 
         taskkill.assert_called_once_with(
             ["taskkill", "/PID", "2468", "/T", "/F"],
+            stdin=utils.subprocess.DEVNULL,
             stdout=utils.subprocess.DEVNULL,
             stderr=utils.subprocess.DEVNULL,
             timeout=2,

@@ -230,6 +230,39 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 run_agent.assert_awaited_once()
             self.assertIn("final response", bot.sent)
 
+    async def test_explicit_cancellation_interrupts_hanging_delayed_reply(self) -> None:
+        for command in ("stop", "cancel"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                with mock.patch.object(workspace, "CONFIG_DIR", tmp):
+                    bot = _ReplyDeliveryBot(tmp, fail_final=False)
+                    entry_id = await bot._persist_enqueue("u1", "prompt", "chat")
+                    record = await bot._stage_reply_delivery(
+                        "u1", entry_id, "chat", tmp,
+                        AgentResult(events=[ChatEvent(kind="text", content="final response")]),
+                        allow_await=True,
+                    )
+                    started = asyncio.Event()
+
+                    async def hanging_send(_chat, text, *, rich=False):
+                        if text == "final response":
+                            started.set()
+                            await asyncio.Event().wait()
+                        bot.sent.append(text)
+
+                    with mock.patch.object(bot, "send_text", side_effect=hanging_send):
+                        delivery = asyncio.create_task(bot._deliver_staged_reply(record))
+                        await asyncio.wait_for(started.wait(), timeout=2)
+                        ctx = BotContext(
+                            user_id="u1", chat_id="chat", text=f"/{command}",
+                            command=command, args="", attachment=None, platform=bot,
+                        )
+                        await asyncio.wait_for(getattr(bot, f"cmd_{command}")(ctx), timeout=2)
+                        self.assertFalse(await asyncio.wait_for(delivery, timeout=2))
+                    self.assertEqual(bot.sent, ["Cancelled."])
+                    self.assertEqual(await bot._list_reply_delivery_records(), [])
+                    self.assertEqual(bot._read_queue_file(), {})
+                    self.assertEqual(bot._reply_delivery_tasks, {})
+
     async def test_pipelined_uploads_overlap_next_turn(self) -> None:
         """Texts return fast; pictures upload behind the next agent turn."""
         with tempfile.TemporaryDirectory() as tmp:

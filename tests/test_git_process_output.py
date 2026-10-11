@@ -13,6 +13,15 @@ from Cozter.agent_tools.plugins import _git_common as git
 
 
 class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
+    async def test_successful_stderr_only_diagnostic_reaches_tool_result(self) -> None:
+        with tempfile.TemporaryDirectory() as path:
+            out, err, rc = await self._script(path, (
+                "import sys\nsys.stderr.write('warning: fixture diagnostic\\n')\n"
+            ))
+        self.assertEqual(rc, 0)
+        result = git.finish_git_output(out, err)
+        self.assertEqual(result, "OK\n\ngit said:\nwarning: fixture diagnostic")
+
     async def _script(self, path: str, script: str) -> tuple[str, str, int]:
         executable = getattr(sys, "_base_executable", sys.executable)
         return await asyncio.wait_for(
@@ -184,6 +193,39 @@ class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
                     for proc in spawned:
                         if proc.returncode is None:
                             await utils.kill_and_wait(proc)
+
+    async def test_cancelled_spawn_failure_is_consumed_without_loop_diagnostics(self) -> None:
+        started, release = asyncio.Event(), asyncio.Event()
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        diagnostics: list[dict] = []
+        loop.set_exception_handler(lambda _loop, context: diagnostics.append(context))
+        self.addCleanup(loop.set_exception_handler, previous_handler)
+
+        async def fail_creation(*_args, **_kwargs):
+            started.set()
+            await release.wait()
+            raise OSError("fixture git spawn failed after cancellation")
+
+        with mock.patch.object(git, "create_captured_subprocess", side_effect=fail_creation):
+            task = asyncio.create_task(git._spawn_git(["fixture-git"], ".", {}))
+            try:
+                await asyncio.wait_for(started.wait(), timeout=1)
+                task.cancel()
+                await asyncio.sleep(0)
+                self.assertFalse(task.done())
+                release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=1)
+                # Flush callbacks so a consumed launch failure cannot become
+                # an "exception in shielded future" diagnostic on Python 3.14.
+                await asyncio.sleep(0)
+                self.assertEqual(diagnostics, [])
+            finally:
+                release.set()
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
     async def test_reader_failure_reaps_live_parent_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as path:

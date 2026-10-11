@@ -483,6 +483,19 @@ async def _maybe_compact_under_maintenance_lock(
         latest = session.load_session(workspace_path, session_id)
         if latest is None:
             return
+        # Appended turns are safe: set_summary trims only the covered prefix.
+        # An edited/replaced prefix or memory is a different snapshot, though,
+        # and applying this result could discard text the compactor never saw.
+        if (
+            latest["messages"][:covered_count] != data["messages"][:covered_count]
+            or latest.get("summary") != data.get("summary")
+            or latest.get("long_term") != data.get("long_term")
+        ):
+            logger.warning(
+                "Skipping stale compaction for session %s; history or memory changed",
+                session_id,
+            )
+            return
         title_to_save = new_title
         if latest.get("name") != data.get("name"):
             title_to_save = None

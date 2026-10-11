@@ -237,6 +237,7 @@ class CodexBackend(Backend):
         try:
             proc = subprocess.run(
                 [*prefix, "debug", "models"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
                 check=False,
@@ -259,6 +260,7 @@ class CodexBackend(Backend):
                         "-c", 'model_reasoning_effort="high"',
                         "debug", "models",
                     ],
+                    stdin=subprocess.DEVNULL,
                     capture_output=True,
                     timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
                     check=False,

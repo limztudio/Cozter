@@ -234,6 +234,27 @@ class RequestDeadlineTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VisionPreparationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_compaction_stays_text_only_even_with_attachment_markers(self):
+        prompt = "Summarize history: [Photo attachment saved to: image.png]"
+        with (
+            mock.patch.object(
+                oa, "_vision_parts_for_prompt", return_value=[
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                ],
+            ) as prepare,
+            mock.patch.object(
+                oa, "_stream_completion", return_value=("summary", "", []),
+            ) as stream,
+        ):
+            await _LongWorkBackend()._run_agent(
+                _CaptureProc(), ".", prompt, "model", "full", True, 0,
+            )
+        prepare.assert_not_called()
+        payload = stream.await_args.args[1]
+        self.assertEqual(payload["messages"][1]["content"], prompt)
+        self.assertNotIn("tools", payload)
+
     async def test_image_preparation_runs_outside_event_loop_thread(self):
         owner_thread = threading.get_ident()
         reader_threads = []

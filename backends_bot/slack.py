@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 # Markdown -> mrkdwn
 
-# PUA placeholders: collision-free, re.sub-safe.
+# Ordinary prose uses cheap PUA placeholders; collisions get private markers.
 _BOLD_OPEN = ""
 _BOLD_CLOSE = ""
 
@@ -83,13 +83,26 @@ def _mrkdwn_line(line: str) -> str:
 
 def _mrkdwn_prose(line: str) -> str:
     line = escape_html_entities(line)
+    bold_open, bold_close = _BOLD_OPEN, _BOLD_CLOSE
+    bold_sub = _bold_sub
+    if bold_open in line or bold_close in line:
+        while bold_open in line:
+            bold_open += "\x00"
+        while bold_close in line:
+            bold_close += "\x00"
+
+        def collision_safe_bold_sub(match: re.Match) -> str:
+            return bold_open + match.group(1) + bold_close
+
+        bold_sub = collision_safe_bold_sub
+
     # Bold first.
     if line[:1] == "#":
-        line = _SLACK_HEADING_RE.sub(_bold_sub, line)
+        line = _SLACK_HEADING_RE.sub(bold_sub, line)
     if "**" in line:
-        line = _SLACK_BOLD_STAR_RE.sub(_bold_sub, line)
+        line = _SLACK_BOLD_STAR_RE.sub(bold_sub, line)
     if "__" in line:
-        line = _SLACK_BOLD_UNDER_RE.sub(_bold_sub, line)
+        line = _SLACK_BOLD_UNDER_RE.sub(bold_sub, line)
     # Italic: `*text*` -> `_text_`.
     if "*" in line:
         line = _SLACK_ITALIC_STAR_RE.sub(r"_\1_", line)
@@ -97,8 +110,8 @@ def _mrkdwn_prose(line: str) -> str:
     if "~~" in line:
         line = _SLACK_STRIKE_RE.sub(r"~\1~", line)
     # Swap bold placeholders back.
-    if _BOLD_OPEN in line:
-        line = line.replace(_BOLD_OPEN, "*").replace(_BOLD_CLOSE, "*")
+    if bold_open in line:
+        line = line.replace(bold_open, "*").replace(bold_close, "*")
     return line
 
 

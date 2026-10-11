@@ -151,6 +151,11 @@ class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancelled_creation_failure_preserves_cancellation_and_closes_input(self) -> None:
         started, release = asyncio.Event(), asyncio.Event()
         files, track = self._track_temporary_input()
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        diagnostics = []
+        loop.set_exception_handler(lambda _loop, context: diagnostics.append(context))
+        self.addCleanup(loop.set_exception_handler, previous_handler)
 
         async def fail_creation(*_args, **_kwargs):
             started.set()
@@ -168,6 +173,10 @@ class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(asyncio.CancelledError):
                     await asyncio.wait_for(launch, timeout=1)
                 self.assertTrue(files[0].closed)
+                # Flush callbacks: a consumed spawn failure must not become
+                # an "exception in shielded future" diagnostic on Python 3.14.
+                await asyncio.sleep(0)
+                self.assertEqual(diagnostics, [])
             finally:
                 release.set()
                 if not launch.done():

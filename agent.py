@@ -24,7 +24,7 @@ from .agent_tools.base import copy_file_atomically
 from .backends_agent.base import (
     DOC_FOLLOWING_RULE, NO_RESPONSE_TEXT, WHOLE_SCOPE_RULE, AgentResult,
     ChatEvent, append_detached_task_request,
-    append_text_result, set_error_result,
+    append_text_result, record_backend_error, set_error_result,
 )
 from .utils import (
     IMAGE_EXTENSIONS,
@@ -1138,12 +1138,16 @@ async def _drive_backend(
     if has_managed_process_group(proc) and not result.detached_tasks:
         terminate_process_group(proc)
 
-    # A tool-streaming death still owes an error answer.
-    if proc.returncode != 0 and not result.text:
+    # A partial reply does not make a failed process a successful turn.
+    # Keep provider errors more specific than a generic exit status.
+    if proc.returncode != 0 and not result.error:
         msg = f"{backend.name} exited with code {proc.returncode}"
         if stderr:
             msg += f"\n{stderr}"
-        set_error_result(result, msg, display_text=msg)
+        if result.text:
+            record_backend_error(result, msg)
+        else:
+            set_error_result(result, msg, display_text=msg)
 
     return result, False
 
@@ -1437,6 +1441,7 @@ async def _run_flexible(
     blocked: list[int] = []
     worker_errors: list[str] = []
     unavailable_models: dict[tuple[str, str | None], str] = {}
+    unrun_followups: list[flexible.Subtask] = []
     queue: list[flexible.Subtask] = list(plan.subtasks)
     done = 0
     total = len(queue)
@@ -1498,6 +1503,9 @@ async def _run_flexible(
         result.events.extend(
             ev for ev in sub_result.events if ev.kind != "text"
         )
+        for task_ref in sub_result.detached_tasks:
+            if task_ref not in result.detached_tasks:
+                result.detached_tasks.append(task_ref)
         _accumulate_usage(usage_totals, sub_result.usage)
 
         if sub_result.error:
@@ -1533,8 +1541,12 @@ async def _run_flexible(
 
         # [followup:<tier>] lines grow the queue live.
         for extra in flexible.parse_followups(report):
-            if extra not in queue and len(queue) < flexible.MAX_SUBTASKS * 2:
+            if extra in queue:
+                continue
+            if len(queue) < flexible.MAX_SUBTASKS * 2:
                 queue.append(extra)
+            elif extra not in unrun_followups:
+                unrun_followups.append(extra)
         if len(queue) != total:
             total = len(queue)
             plan = flexible.Plan(
@@ -1544,6 +1556,15 @@ async def _run_flexible(
             )
             await status(f"flexible: plan grew to {total} sub-tasks")
         done += 1
+
+    remainder = ""
+    if unrun_followups:
+        remainder = (
+            "PARTIAL: the follow-up task limit was reached; these tasks were not run:\n"
+            + "\n".join(
+                f"- [{task.tier}] {task.instruction}" for task in unrun_followups
+            )
+        )
 
     if worker_errors and (
         len(worker_errors) == len(queue)
@@ -1574,6 +1595,8 @@ async def _run_flexible(
                 final += f"\n\n{marker}"
         if collaborative and blocked:
             final += "\n\n[[await]]"
+        if remainder:
+            final += "\n\n" + remainder
         append_text_result(result, final)
         result.usage = usage_totals or None
         return result, False
@@ -1629,6 +1652,9 @@ async def _run_flexible(
 
     if collaborative and (merge_awaiting or blocked):
         final += "\n\n[[await]]"
+
+    if remainder:
+        final += "\n\n" + remainder
 
     append_text_result(result, final)
     result.usage = usage_totals or None
@@ -2119,6 +2145,7 @@ async def _run_turn_impl(
                 "\n\n[Added while you were thinking]:\n"
                 + "\n".join(injected)
             )
+        turn.prompt = effective_prompt
 
         contextual_prompt = _build_contextual_prompt(
             effective_prompt, session_data, colony_items,
@@ -2220,13 +2247,6 @@ async def _run_turn_impl(
                 f"{flexible.JUDGE_MAX_CONTINUES}:"
                 f" {verdict.next_instruction}]"
             )
-            if injected:
-                followup += (
-                    "\n\n[Added while you were thinking]:\n"
-                    + "\n".join(injected)
-                )
-                injected.clear()
-                effective_prompt = prompt
             await _stream_event(ChatEvent(
                 kind="tool",
                 content="Continuing with judge follow-up"

@@ -22,6 +22,7 @@ from ..base import (
     ensure_parent_dir,
     object_parameters,
     resolve_inside_workspace,
+    resolve_workspace_entry,
     write_text_after_edit,
 )
 from ...utils import clip_status_value
@@ -61,7 +62,13 @@ class NotesTool(AgentTool):
             return "Error: 'action' must be one of append, read, clear"
 
         try:
-            target = resolve_inside_workspace(
+            # Clearing deletes the named notes entry. Content operations may
+            # follow an allowed symlink, but clear must preserve its target.
+            resolver = (
+                resolve_workspace_entry if action == "clear"
+                else resolve_inside_workspace
+            )
+            target = resolver(
                 workspace_path, _NOTES_RELPATH,
             )
         except ValueError as exc:

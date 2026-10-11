@@ -282,8 +282,6 @@ def parse_followups(report: str) -> list[Subtask]:
         if entry not in seen:
             seen.add(entry)
             found.append(entry)
-        if len(found) >= MAX_SUBTASKS:
-            break
     return found
 
 

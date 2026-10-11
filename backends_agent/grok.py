@@ -177,6 +177,7 @@ class GrokBackend(CachedModelCatalog, Backend):
         try:
             proc = subprocess.run(
                 [*executable_command(self.executable), "models"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
                 check=False,

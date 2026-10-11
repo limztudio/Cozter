@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import unittest
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from unittest import mock
 
 from Cozter.agent_tools.builtin import web_search
@@ -161,20 +160,48 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertNotIn("Home", result)
 
     def test_retries_same_endpoint_before_moving_on(self) -> None:
-        net = _FakeNet(
-            SimpleNamespace(status=503, content=_Content(b"")),
-            (200, _LITE_BODY.encode()),
-            (200, _LITE_BODY.encode()),
-        )
-        result = _run_search(net, query="anything")
-        self.assertIn("Lite One", result)
-        # The 503 endpoint is retried, then the healthy results win.
-        html_urls = [
-            url for url in net.urls
-            if url.startswith("https://html.duckduckgo.com")
-        ]
+        calls: list[str] = []
+
+        @asynccontextmanager
+        async def flaky_frontend(url: str):
+            calls.append(url)
+            if url.startswith("https://html.duckduckgo.com"):
+                html_calls = sum("html.duckduckgo.com" in call for call in calls)
+                yield _Response(503, b"") if html_calls == 1 else _Response(200, _HTML_BODY.encode())
+            else:
+                yield _Response(503, b"")
+
+        result = _run_search(flaky_frontend, query="anything")
+        self.assertIn("First Result", result)
+        html_urls = [url for url in calls if "html.duckduckgo.com" in url]
         self.assertEqual(len(html_urls), 2)
         self.assertEqual(html_urls[0], html_urls[1])
+
+    def test_healthy_frontend_finishes_without_waiting_for_stalled_sibling(self) -> None:
+        async def run() -> None:
+            stalled = asyncio.Event()
+            closed = asyncio.Event()
+
+            @asynccontextmanager
+            async def frontend(url: str):
+                if "html.duckduckgo.com" in url:
+                    stalled.set()
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        closed.set()
+                else:
+                    await stalled.wait()
+                yield _Response(200, _LITE_BODY.encode())
+
+            with mock.patch.object(web_search, "open_http_response", frontend):
+                result = await asyncio.wait_for(
+                    WebSearchTool().run(".", {"query": "anything"}), timeout=1,
+                )
+            self.assertIn("Lite One", result)
+            self.assertTrue(closed.is_set(), "stalled HTTP context was not closed")
+
+        asyncio.run(run())
 
     def test_all_attempts_failing_reports_each_host_once(self) -> None:
         net = _FakeNet(

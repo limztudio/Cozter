@@ -12,6 +12,15 @@ from Cozter.backends_bot.telegram import (
 
 
 class PlatformFormattingTests(unittest.TestCase):
+    def test_slack_bold_placeholders_preserve_literal_private_use_characters(self):
+        for source, expected in (
+            ("\ue001literal\ue002", "\ue001literal\ue002"),
+            ("\ue001literal\ue002 **bold**", "\ue001literal\ue002 *bold*"),
+            ("# \ue001literal\ue002", "*\ue001literal\ue002*"),
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(_md_to_mrkdwn(source), expected)
+
     def test_inline_code_preserves_markdown_characters_and_escapes_html(self):
         source = "**Run** `**literal** _arg_ ~~value~~ <x & y>`"
         self.assertEqual(

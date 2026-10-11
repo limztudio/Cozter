@@ -99,7 +99,7 @@ class GitInfoTool(AgentTool):
         except FileNotFoundError:
             return "Error: git is not installed or not on PATH"
         except TimeoutError:
-            return f"Error: git {action} timed out after 15s"
+            return f"Error: git {action} timed out"
         except _GitFailedError as exc:
             return f"Error: git {action}: {exc}"
 
@@ -190,7 +190,7 @@ class GitInfoTool(AgentTool):
                 if isinstance(ref, str) and ref.strip()
                 else "HEAD"
             )
-            return argv + ["blame", revision, "--", resolved]
+            return argv + ["blame", "--no-textconv", revision, "--", resolved]
         number = coerce_int_arg(line, default=0, minimum=1, maximum=1_000_000)
         ref = args.get("ref")
         revision = (
@@ -199,7 +199,8 @@ class GitInfoTool(AgentTool):
             else "HEAD"
         )
         return argv + [
-            "blame", "-L", f"{number},{number}", revision, "--", resolved,
+            "blame", "--no-textconv", "-L", f"{number},{number}",
+            revision, "--", resolved,
         ]
 
     @staticmethod

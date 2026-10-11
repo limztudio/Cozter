@@ -14,7 +14,7 @@ from unittest import mock
 
 from Cozter import agent, flexible, workspace
 from Cozter.agent_tools.builtin.bash import BashTool
-from Cozter.backends_agent.base import AgentResult, ChatEvent
+from Cozter.backends_agent.base import AgentResult, ChatEvent, append_detached_task
 from Cozter.backends_bot.base import BotPlatform
 
 
@@ -380,6 +380,34 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result.usage, {"input_tokens": 20, "output_tokens": 10},
         )
+
+    async def test_discovered_worker_tasks_survive_merge_and_single_worker(self) -> None:
+        async def detached_worker(*_args, **_kwargs):
+            result = _worker("Provider task started.")
+            append_detached_task(result, "claude_code", "task-123")
+            return result, False
+
+        with tempfile.TemporaryDirectory() as ws:
+            for plan_output in (
+                self.plan_output,
+                "[PLAN]\n1. [low] perform the work\n[/PLAN]",
+            ):
+                with self.subTest(plan_output=plan_output):
+                    self.plan_output = plan_output
+                    with (
+                        mock.patch.object(agent, "run_internal_backend", self._fake_internal),
+                        mock.patch.object(agent, "_drive_backend", detached_worker),
+                    ):
+                        result, restarting = await agent._run_flexible(
+                            "context", "request", ws, approval="auto", effort=0,
+                            collaborative=False, summary_backend_name="codex",
+                            summary_model="summary", on_event=None,
+                            inject_queue=None, injected=[],
+                        )
+                    self.assertFalse(restarting)
+                    self.assertEqual(len(result.detached_tasks), 1)
+                    self.assertEqual(result.detached_tasks[0].task_id, "task-123")
+
 
     async def test_worker_attachments_survive_the_merge(self) -> None:
         self.worker_texts = ["made a chart [[attach: chart.png]]", "done"]

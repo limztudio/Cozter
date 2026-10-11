@@ -19,6 +19,7 @@ from ..base import (
     ensure_parent_dir,
     object_parameters,
     resolve_inside_workspace,
+    resolve_workspace_entry,
     utf8_byte_limit_exceeded,
     write_text_after_edit,
 )
@@ -350,7 +351,9 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     # Deletion: +++ /dev/null
     if fp.new_path is None and fp.old_path is not None:
         try:
-            target = resolve_inside_workspace(workspace_path, fp.old_path)
+            # Delete the named entry; following a final symlink here would
+            # remove its target while leaving a dangling link behind.
+            target = resolve_workspace_entry(workspace_path, fp.old_path)
         except ValueError as exc:
             return f"{fp.old_path}: skipped ({exc})"
         if not os.path.isfile(target):

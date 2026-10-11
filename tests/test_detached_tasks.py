@@ -787,6 +787,77 @@ class DetachedTaskLedgerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.backend.stopped, ["048e1065"])
         self.assertEqual(await self.bot._list_detached_task_records(), [])
 
+    async def test_cancel_during_output_poll_suppresses_stale_callback(self) -> None:
+        for state in ("done", "blocked"):
+            with self.subTest(state=state):
+                self.bot.sent.clear()
+                self.backend.status = DetachedTaskStatus(state)
+                await self._register()
+                started = asyncio.Event()
+                release = asyncio.Event()
+
+                async def output(_ws, _task_id):
+                    started.set()
+                    await release.wait()
+                    return "stale output"
+
+                with mock.patch.object(
+                    self.backend, "get_detached_task_output", side_effect=output,
+                ):
+                    poll = asyncio.create_task(self.bot._check_detached_tasks())
+                    await asyncio.wait_for(started.wait(), timeout=2)
+                    self.assertEqual(await self.bot._cancel_detached_tasks("u1"), 1)
+                    release.set()
+                    await asyncio.wait_for(poll, timeout=2)
+                self.assertEqual(self.bot.sent, [])
+                self.assertEqual(await self.bot._list_detached_task_records(), [])
+
+    async def test_callback_waiting_for_delivery_lock_rechecks_cancelled_record(self):
+        await self._register()
+        record = (await self.bot._list_detached_task_records())[0]
+        await self.bot._update_detached_task_record(record["id"], delivery_text="done")
+        async with self.bot._detached_task_delivery_lock("u1"):
+            delivery = asyncio.create_task(self.bot._deliver_detached_task(record, "done"))
+            await asyncio.sleep(0)
+            await self.bot._remove_detached_task_record(record["id"])
+        await asyncio.wait_for(delivery, timeout=2)
+        self.assertEqual(self.bot.sent, [])
+
+    async def test_stop_interrupts_detached_send_and_keeps_poller_alive(self):
+        for state in ("done", "blocked"):
+            with self.subTest(state=state):
+                self.bot.sent.clear()
+                self.backend.status = DetachedTaskStatus(state)
+                await self._register()
+                started = asyncio.Event()
+
+                async def hanging_send(_chat, text, *, rich=False):
+                    if text.startswith("Background task"):
+                        started.set()
+                        await asyncio.Event().wait()
+                    self.bot.sent.append(text)
+
+                with mock.patch.object(self.bot, "send_text", side_effect=hanging_send):
+                    poll = asyncio.create_task(self.bot._check_detached_tasks())
+                    await asyncio.wait_for(started.wait(), timeout=2)
+                    ctx = BotContext(
+                        user_id="u1", chat_id="chat", text="/stop", command="stop",
+                        args="", attachment=None, platform=self.bot,
+                    )
+                    await asyncio.wait_for(self.bot.cmd_stop(ctx), timeout=2)
+                    await asyncio.wait_for(poll, timeout=2)
+                self.assertEqual(self.bot.sent, ["Cancelled."])
+                self.assertEqual(await self.bot._list_detached_task_records(), [])
+                self.assertEqual(self.bot._detached_delivery_tasks, {})
+
+    async def test_detached_cancellation_does_not_wait_for_foreground_delivery_lock(self):
+        await self._register()
+        async with self.bot._reply_delivery_lock("u1"):
+            self.assertEqual(
+                await asyncio.wait_for(self.bot._cancel_detached_tasks("u1"), timeout=2), 1,
+            )
+        self.assertEqual(await self.bot._list_detached_task_records(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

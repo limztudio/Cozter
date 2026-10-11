@@ -27,12 +27,13 @@ are trusted in-process code, not sandboxed extensions.
     then merges the reports into one reply. Tiers can straddle backends.
     Whole-scope (`all`/`entire`/`every`/`whole`) and doc-following requests
     are split so every item/rule is covered with verifiable done-criteria;
-    build/verify requests are split into enumerate-targets plus canonical
-    build/test steps with full-log evidence (commands + exit codes +
-    error/warning counts);
+    build/verify requests keep target enumeration, canonical build/test,
+    full-log inspection, repairs, rechecks, and runtime verification together
+    in one cohesive task per target or related target group, with full-log
+    evidence (commands + exit codes + error/warning counts);
     a plan that hits the 12-task cap carries an explicit PARTIAL + remainder
     note, and truncated worker reports are marked as previews so the merge
-    never claims done from them
+    requires retained scope and verification evidence before claiming done
   - `codex` — OpenAI's CLI (`codex exec`)
   - `claude_code` — Anthropic's CLI (`claude --print`)
   - `copilot` — GitHub's CLI
@@ -341,6 +342,9 @@ keeps the existing directory ACLs because those permissions are not managed by
 
 `recent_workspace_limit` controls how many paths `/open` shows.
 `message_queue_size` caps each user's pending chat turns.
+If a restored backlog exceeds the current cap, every accepted entry stays
+in FIFO order while the queue drains; shrinking the cap does not discard
+accepted work or replace the queue held by an active producer or drain loop.
 `max_upload_bytes` (default 52,428,800 / 50 MiB) caps each attachment
 accepted from or sent to Telegram, Slack, and Signal.
 
@@ -351,8 +355,9 @@ identical call after that many executions. Real work carries a 3600s cap:
 tool calls (`tool_timeout`, default 3600s) and generation streams
 (`llama_socket_timeout`, `zai_socket_timeout`, `meta_socket_timeout`,
 each default 3600s) keep running up to that bound so slow work finishes
-instead of timing out and forcing a wasteful retry. Cancel (`/stop`, new
-user message, `[[await]]` pause) still stops instantly. A generation-stream
+instead of timing out and forcing a wasteful retry. `/stop` cancels active
+work, and `/inject` interrupts its active phase to apply new context; ordinary
+messages queue for the next turn. A generation-stream
 timeout surfaces as `<service> request timed out after <N>s
 (<socket-timeout-setting>)`, naming the real-work bound and the config key
 that controls it, so the message itself points at the knob to raise.
@@ -734,8 +739,9 @@ session-only Bash hook that denies ordinary `&`, `nohup`, `disown`,
 silently escape the callback ledger.
 `/stop` (or `/cancel` when no picker is active) also stops a tracked detached
 task, including its user-owned picture uploads. A detached completion's
-textual `[[await]]` marker is delivered as text but never pauses the
-normal queue. If Claude reports that a task is blocked waiting for input, Cozter
+`[[await]]` marker is stripped from the delivered text and never pauses the
+normal queue; an existing interactive answer pause remains in place.
+If Claude reports that a task is blocked waiting for input, Cozter
 notifies the chat; use `claude agents` and `claude attach` in the workspace
 to continue that interactive session.
 
@@ -1001,10 +1007,11 @@ sees an explicit PARTIAL preview marker instead of a silent cut
 and notes when only the first N results are shown). The fetch-capped
 footer itself is one shared `with_fetch_cap_marker()` helper in
 `agent_tools/base.py`, used by both `web_fetch` and the `http_request`
-plugin so their wording stays in sync. `web_search` tries DuckDuckGo's `html` and `lite`
-frontends race concurrently via `asyncio.gather` — two attempts each, with a short
-delay between tries — so a slow/flaky frontend no longer blocks the healthy
-one, and sponsored (`ad_*`) and DuckDuckGo-internal links never become results.
+plugin so their wording stays in sync. `web_search` starts DuckDuckGo's `html`
+and `lite` frontends concurrently, with two attempts per frontend and a short
+retry delay. It returns the first usable result page and cancels the remaining
+request, so a stalled frontend cannot delay healthy results. Sponsored (`ad_*`)
+and DuckDuckGo-internal links never become results.
 `web_fetch` instead uses a public-network-only client with redirect targets
 validated individually, preventing redirects into private addresses.
 One HTTP session serves both fetch attempts so the retry reuses the
@@ -1079,8 +1086,11 @@ characters with the request preserved; a middle-context omission marker is
 reserved inside that cap so the planner still sees it must cover every
 item/rule), up to 12 planned worker calls plus worker-discovered follow-ups
 (each worker may report genuine leftovers as `[followup:<tier>]` lines,
-which join the queue live so progress reads `done/total` with a growing
-total, e.g. `3/12` then `3/13`), and one
+all of which are parsed and de-duplicated). Distinct follow-ups join the queue
+in reported order up to an execution cap of 24 worker tasks for that plan,
+including the initial tasks. Progress reads `done/total` with a growing total,
+e.g. `3/12` then `3/13`. Any further distinct follow-ups are retained in an explicit
+PARTIAL remainder listing the tasks that were not run. The turn then makes one
 merge call over the bare request. Each worker report is capped at 6,000
 characters with its truncation marker reserved inside the cap, so a clipped
 report always arrives marked `[report truncated: remainder omitted]` as a
@@ -1092,8 +1102,10 @@ backends, a single request can
 also be sent to multiple configured providers. Select a direct backend when a
 single-provider path or more predictable request cost is important.
 The merge step checks every plan item against the reports before claiming
-done: partial, missing, failed, or truncated reports force a PARTIAL +
-remainder answer instead of a full-completion claim, and doc/standard
+done: partial, missing, or failed reports force a PARTIAL + remainder answer.
+A truncated report remains a preview; an omitted middle alone does not prove
+unfinished work. Completion still requires retained scope and verification
+evidence, and missing evidence forces PARTIAL + remainder. Doc/standard
 requests are never accepted from first/last-few coverage alone.
 Build/verify requests are claimed clean only when every report lists its
 commands + exit codes + error/warning counts from full (not preview) logs
@@ -1102,8 +1114,9 @@ Each turn also runs a capped continue-judge loop (up to 3 follow-ups per
 turn): when the judge still says CONTINUE after the cap is exhausted, the
 turn ships its draft with an auto-continued remainder note and chains up
 to 3 hands-free continuation turns in the same session instead of stopping
-at PARTIAL. `/stop` or a new message cancels the chain instantly, and an
-`[[await]]` draft never chains.
+at PARTIAL. `/stop` cancels the active chain, and `/inject` interrupts its
+active phase to apply new context. Ordinary new messages queue for the next
+turn; an `[[await]]` draft never chains.
 
 Two behaviors are worth knowing. Under `/style collaborative`, the turn can
 stop and wait for you (`[[await]]`) at either end of the pipeline: the
@@ -1359,6 +1372,7 @@ ordinary queued chat still waits for the user's answer.
 Cozter/
 ├── __init__.py           package marker
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
+├── launch_process.py     Windows launcher job owns descendant lifetimes
 ├── requirements.txt      Python runtime dependencies installed into .venv
 ├── py.typed              marks the package as typed for downstream checkers
 ├── pyproject.toml        Ruff E4/E7/E9/F lint contract
@@ -1420,7 +1434,13 @@ temporary file, so launch returns without waiting for the CLI to consume the
 prompt before its output readers can start. This avoids a startup deadlock when
 a CLI writes more output than its pipes can hold before reading its input.
 The child receives the same UTF-8 bytes and EOF; the temporary backing disappears
-when its handles close. Shell commands also watch process exit independently
+when its handles close. If launch is cancelled while the OS is creating the
+process, Cozter keeps the temporary input alive until creation settles and
+reaps any child before returning cancellation, including repeated cancellation
+requests. Noninteractive Git, update, package-install, and CLI model-catalog
+commands use closed stdin so they cannot contend with the terminal's input
+reader or consume the next chat command. Copilot's ACP catalog handshake instead
+owns a dedicated protocol pipe. Shell commands also watch process exit independently
 of output EOF: after the shell exits, they allow one second to drain buffered
 output before closing a pipe still held by a background child and marking the
 captured output as potentially incomplete. Git tools use the same one-second
@@ -1444,9 +1464,10 @@ runner applies a configured positive deadline to startup and response together,
 so a stalled launch cannot escape the helper's budget. It consumes
 stdout and stderr without pipe deadlocks, kills cancelled children, and
 logs stderr when a backend exits without an assistant response. Streamed
-backend events prefer an already-buffered event or EOF over arming the
-post-exit drain, so a fast parent that exits with its final lines still
-buffered keeps every event instead of losing the tail to tree teardown.
+backend events retain an already-buffered final backlog, including when chat
+delivery is slow. Once the parent exits, the remaining backlog has a byte
+limit and a stalled reader has a short drain allowance, so continuously ready
+stdout cannot bypass cleanup.
 HTTP backends expose the same
 process-shaped contract through `backends_agent/_http_proc.py`, so the
 orchestrator uses one cleanup model for CLI and API agents.
@@ -1509,7 +1530,8 @@ contains CRLF is normalized before restoration, so an edit cannot introduce
 duplicate carriage returns. Non-UTF-8 files are refused rather than rewritten
 with replacement characters.
 Regression coverage for these paths lives in
-`tests/test_agent_process_cleanup.py`, `tests/test_utils.py`,
+`tests/test_agent_process_cleanup.py`, `tests/test_prompt_subprocess.py`,
+`tests/test_cli_commands.py`, `tests/test_launch_process.py`, `tests/test_utils.py`,
 `tests/test_agent_tools.py`, and `tests/test_discovery_tools_async.py`.
 
 CLI JSONL and OpenAI-compatible HTTP SSE use the same bounded line reader in
@@ -1542,8 +1564,8 @@ malformed last-session pointers, unsafe session IDs, and session files whose
 embedded ID does not match their filename are ignored. A damaged or
 hand-edited state file therefore falls back to normal session selection rather
 than reaching outside `.cozter/sessions/`. Workspace discovery retains normal
-`**` glob behavior while memoizing match states, so an agent-supplied pattern
-with many repeated globstars cannot turn matching into exponential work.
+`**` glob behavior with an iterative matcher, so repeated globstars avoid
+recursive stack limits and a cache of every equivalent match state.
 
 ## Source inventory
 
@@ -1553,13 +1575,13 @@ audit should use `git ls-files` so hidden tracked files, especially
 ignored for local secrets and runtime queues.
 
 - Package entry and runtime setup: `__init__.py`, `__main__.py`,
-  `config.py`, `updater.py`, and `utils.py`
+  `launch_process.py`, `config.py`, `updater.py`, and `utils.py`
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
   `colony.py`, `flexible.py`, and `schedules.py`
-- Chat-platform adapters: `backends_bot/base.py`, `formatting.py`,
+- Chat-platform adapters: `backends_bot/__init__.py`, `base.py`, `formatting.py`,
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
-- Agent adapters: `backends_agent/base.py`, `_http_proc.py`,
+- Agent adapters: `backends_agent/__init__.py`, `base.py`, `_http_proc.py`,
   `_openai_agent.py`, `codex.py`, `claude_code.py`,
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
   `llama.py`, `zai.py`, and `meta.py`
@@ -1573,12 +1595,15 @@ ignored for local secrets and runtime queues.
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
 - Tests: `tests/conftest.py`, shared `tests/helpers.py`, plus focused
-  `unittest` modules covering agent attachments, prompts, process cleanup,
-  interrupted-turn persistence, and post-turn behavior;
+  `unittest` modules covering config validation, agent attachments, prompts,
+  process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults, shared catalog/result/content helpers, CLI tool
-  summaries, process-resource maps, event parsing, and llama retry; bot and
-  Slack commands; compaction; the flexible meta-agent; inject (including
-  the bounded confirmation send); run locks, session picking, and
+  summaries, process-resource maps, event parsing, and llama retry; bot,
+  CLI, and Slack commands, including native stdin ownership, restored-queue
+  FIFO/reference preservation, and schedule edits while waiting for a lock;
+  Windows launcher descendant lifetimes; compaction; the flexible meta-agent
+  including all reported follow-ups and the 24-worker execution cap;
+  inject (including the bounded confirmation send); run locks, session picking, and
   auto-titling; platform, Slack,
   and Signal rich-text formatting; durable reply delivery; detached tasks
   and Claude's background-launch guard; runtime diagnostics; state
@@ -1819,6 +1844,11 @@ If `codex` is on `PATH`, one catalog-consistency test also invokes
 `codex debug models` with a 15-second timeout; it skips when that command
 fails, times out, or returns no visible models. To avoid that optional CLI
 probe, run the suite with Codex absent from `PATH`.
+
+When Git is available, a native CLI fixture checks that `/version` responds
+while its input pipe remains open, then exits on EOF. Prompt-transfer,
+cancellation, and Windows launcher-lifetime fixtures also launch isolated
+test children; they do not start configured chat services.
 
 For a local developer check with a CI-supported Python version, create the
 project venv with Python 3.11 or 3.12 and install the runtime dependencies

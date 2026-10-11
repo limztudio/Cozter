@@ -26,6 +26,8 @@ def _git(*args: str) -> subprocess.CompletedProcess:
     """Run a git command with a timeout, returning the CompletedProcess."""
     return subprocess.run(
         ["git", *args],
+        # Background probes must never share the CLI input reader's pipe.
+        stdin=subprocess.DEVNULL,
         cwd=MODULE_ROOT, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
         check=False,
     )
@@ -276,6 +278,7 @@ def install_requirements() -> None:
     try:
         pip = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_PATH],
+            stdin=subprocess.DEVNULL,
             cwd=MODULE_ROOT,
             capture_output=True,
             text=True,

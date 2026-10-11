@@ -7,6 +7,7 @@ workspace. The global workspace-state file is redirected to the tempdir.
 """
 
 import asyncio
+from datetime import datetime
 import os
 import tempfile
 import unittest
@@ -63,6 +64,42 @@ class BotCommandTests(unittest.TestCase):
 
     def _run(self, coro) -> None:
         asyncio.run(coro)
+
+    def test_restored_queue_shrinks_without_losing_backlog_or_identity(self) -> None:
+        self.bot.max_queue_size = 2
+        restored = self.bot._ensure_message_queue(self.uid, min_size=5)
+        entries = [(f"prompt {index}", "c1", str(index), False) for index in range(5)]
+        for entry in entries:
+            restored.put_nowait(entry)
+
+        current = self.bot._ensure_message_queue(self.uid)
+
+        self.assertIs(current, restored)
+        self.assertEqual(current.maxsize, 2)
+        self.assertTrue(current.full())
+        self.assertEqual([current.get_nowait() for _ in range(5)], entries)
+
+    def test_queue_growth_wakes_a_producer_waiting_on_existing_queue(self) -> None:
+        async def run() -> None:
+            self.bot.max_queue_size = 1
+            original = self.bot._ensure_message_queue(self.uid)
+            first = ("first", "c1", "1", False)
+            second = ("second", "c1", "2", False)
+            original.put_nowait(first)
+            producer = asyncio.create_task(original.put(second))
+            try:
+                await asyncio.sleep(0)
+                self.assertFalse(producer.done())
+                grown = self.bot._ensure_message_queue(self.uid, min_size=2)
+                self.assertIs(grown, original)
+                await asyncio.wait_for(producer, timeout=1)
+                self.assertEqual([grown.get_nowait(), grown.get_nowait()], [first, second])
+            finally:
+                if not producer.done():
+                    producer.cancel()
+                    await asyncio.gather(producer, return_exceptions=True)
+
+        self._run(run())
 
     # text command aliases
     def test_backslash_command_alias_dispatches_with_arguments(self) -> None:
@@ -226,6 +263,50 @@ class BotCommandTests(unittest.TestCase):
                 fire.assert_awaited_once()
 
         self._run(run())
+
+    def test_scheduler_rechecks_edited_time_after_waiting_for_workspace_lock(self) -> None:
+        async def run(updated_time: str, expected_slot: str | None) -> None:
+            schedules._save_all(self.ws, {self.uid: [{
+                "id": "edited", "days": list(schedules.DAY_ABBREV),
+                "time": "08:30", "created": "2026-10-12T08:00:00",
+                "chat_id": "c1", "command": "run",
+            }]})
+            lock = asyncio.Lock()
+            await lock.acquire()
+            with (
+                mock.patch.object(workspace, "get_lock", return_value=lock),
+                mock.patch("Cozter.backends_bot.base.datetime") as clock,
+                mock.patch.object(self.bot, "_fire_schedule", new=mock.AsyncMock()) as fire,
+            ):
+                clock.now.return_value = datetime(2026, 10, 12, 9, 0)
+                tick = asyncio.create_task(self.bot._scheduler_tick())
+                try:
+                    await asyncio.sleep(0)
+                    self.assertFalse(tick.done())
+                    current = schedules._load_all(self.ws)
+                    current[self.uid][0]["time"] = updated_time
+                    schedules._save_all(self.ws, current)
+                    lock.release()
+                    await asyncio.wait_for(tick, timeout=1)
+                finally:
+                    if lock.locked():
+                        lock.release()
+                    if not tick.done():
+                        tick.cancel()
+                        await asyncio.gather(tick, return_exceptions=True)
+                if expected_slot is None:
+                    fire.assert_not_awaited()
+                    self.assertNotIn("last_fired", schedules.list_schedules(self.ws, self.uid)[0])
+                else:
+                    fire.assert_awaited_once()
+                    self.assertEqual(fire.await_args.args[1]["last_fired"], expected_slot)
+
+        for updated_time, expected_slot in (
+            ("10:00", None),
+            ("08:45", "2026-10-12T08:45:00"),
+        ):
+            with self.subTest(updated_time=updated_time):
+                self._run(run(updated_time, expected_slot))
 
     def test_signal_legacy_adoption_preserves_other_platforms_schedules(self):
         bot = SignalBot(["https://signal.group/#test"], jsonrpc_socket="/tmp/signal.sock")

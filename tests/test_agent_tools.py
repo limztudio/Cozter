@@ -249,6 +249,15 @@ class AgentToolHelperTests(unittest.TestCase):
         self.assertTrue(_path_matches_glob(path, pattern))
         self.assertFalse(_path_matches_glob(path, pattern[:-2] + "txt"))
 
+    def test_path_glob_has_no_recursive_segment_limit(self) -> None:
+        pattern = "**/" * 1_500 + "target.py"
+        self.assertTrue(_path_matches_glob("target.py", pattern))
+        self.assertFalse(_path_matches_glob("target.txt", pattern))
+        path = "/".join(["directory"] * 1_500 + ["target.py"])
+        self.assertTrue(_path_matches_glob(path, path))
+        self.assertTrue(_path_matches_glob(path, "**/target.py"))
+        self.assertFalse(_path_matches_glob(path, "**/target.txt"))
+
 
 class BuiltinEditToolTests(unittest.TestCase):
     def test_edit_file_uses_shared_replacement_logic(self) -> None:
@@ -593,6 +602,25 @@ class DeleteFileToolTests(unittest.TestCase):
 
 
 class CopyFileToolTests(unittest.TestCase):
+    def test_copy_fallback_without_hard_links_preserves_bytes_and_no_clobber(self) -> None:
+        from Cozter.agent_tools import base
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source.bin")
+            target = os.path.join(tmp, "target.bin")
+            content = bytes(range(256)) * 300
+            with open(source, "wb") as output:
+                output.write(content)
+            with mock.patch.object(
+                base.os, "link", side_effect=OSError(errno.EOPNOTSUPP, "unsupported"),
+            ):
+                self.assertTrue(base.copy_file_atomically(source, target))
+                self.assertFalse(base.copy_file_atomically(source, target))
+            for path in (source, target):
+                with open(path, "rb") as input_file:
+                    self.assertEqual(input_file.read(), content)
+            self.assertEqual(sorted(os.listdir(tmp)), ["source.bin", "target.bin"])
+
     def test_copy_does_not_clobber_a_destination_created_after_preflight(
         self,
     ) -> None:

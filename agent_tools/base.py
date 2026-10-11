@@ -15,7 +15,6 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager, suppress
 from contextvars import ContextVar
-from functools import cache
 from typing import Any, ClassVar
 
 import aiohttp
@@ -217,7 +216,9 @@ def resolve_workspace_entry(workspace: str, path: str) -> str:
     if get_tool_permission() == "full":
         return candidate
     try:
-        lexical_inside = os.path.commonpath((candidate, abs_ws)) == abs_ws
+        lexical_inside = os.path.normcase(
+            os.path.commonpath((candidate, abs_ws)),
+        ) == os.path.normcase(abs_ws)
     except (OSError, ValueError):
         lexical_inside = False
     if not lexical_inside or not is_path_within(candidate, abs_ws):
@@ -580,7 +581,9 @@ def iter_workspace_files(
             # its target: an external link can point to a different drive
             # inside the workspace without becoming a relative entry.
             try:
-                lexical_inside = os.path.commonpath((fpath, abs_ws)) == abs_ws
+                lexical_inside = os.path.normcase(
+                    os.path.commonpath((fpath, abs_ws)),
+                ) == os.path.normcase(abs_ws)
             except (OSError, ValueError):
                 lexical_inside = False
             ws_rel = (
@@ -627,33 +630,42 @@ def _path_matches_glob(rel_path: str, pattern: str) -> bool:
 
 
 def _match_glob_parts(pattern_parts: list[str], path_parts: list[str]) -> bool:
-    """Match glob path segments without re-exploring ``**`` branches.
+    """Match path segments iteratively, with constant auxiliary space.
 
-    Adjacent (or otherwise repeated) ``**`` segments have many equivalent
-    ways to consume the same path components.  Caching the pair of indexes
-    keeps an agent-supplied pattern such as ``**/**/**/...`` polynomial
-    instead of exponential while preserving the existing matching rules.
+    ``**`` consumes any number of whole segments. Remember the latest such
+    segment and extend it when the following literal/wildcard does not match.
+    This avoids both recursive stack limits and caching a matrix of equivalent
+    globstar branches; ordinary patterns still take one pass over the path.
     """
-    @cache
-    def matches(pattern_index: int, path_index: int) -> bool:
-        if pattern_index == len(pattern_parts):
-            return path_index == len(path_parts)
-        part = pattern_parts[pattern_index]
-        if part == "**":
-            return (
-                matches(pattern_index + 1, path_index)
-                or (
-                    path_index < len(path_parts)
-                    and matches(pattern_index, path_index + 1)
-                )
+    pattern_index = path_index = 0
+    globstar_index = -1
+    globstar_end = 0
+    while path_index < len(path_parts):
+        if (
+            pattern_index < len(pattern_parts)
+            and pattern_parts[pattern_index] == "**"
+        ):
+            globstar_index = pattern_index
+            globstar_end = path_index
+            pattern_index += 1
+        elif (
+            pattern_index < len(pattern_parts)
+            and fnmatch.fnmatchcase(
+                path_parts[path_index], pattern_parts[pattern_index],
             )
-        return (
-            path_index < len(path_parts)
-            and fnmatch.fnmatchcase(path_parts[path_index], part)
-            and matches(pattern_index + 1, path_index + 1)
-        )
-
-    return matches(0, 0)
+        ):
+            pattern_index += 1
+            path_index += 1
+        elif globstar_index >= 0:
+            globstar_end += 1
+            path_index = globstar_end
+            pattern_index = globstar_index + 1
+        else:
+            return False
+    return all(
+        pattern_parts[index] == "**"
+        for index in range(pattern_index, len(pattern_parts))
+    )
 
 
 def validate_replacement_strings(
@@ -960,10 +972,13 @@ def _copy_file_metadata_to_fd(source_path: str, target_fd: int) -> None:
     try:
         if fchmod is not None:
             fchmod(target_fd, stat.S_IMODE(source_stat.st_mode))
-        os.utime(
-            target_fd,
-            ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
-        )
+        # Windows accepts only paths here. Keep the reserved destination
+        # private by skipping unsupported fd metadata operations.
+        if os.utime in os.supports_fd:
+            os.utime(
+                target_fd,
+                ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns),
+            )
     except (AttributeError, OSError):
         # Bytes + no-clobber matter more than metadata here.
         return
@@ -1338,6 +1353,9 @@ async def open_public_http_session() -> AsyncIterator[aiohttp.ClientSession]:
             headers=HTTP_USER_AGENT_HEADERS,
             connector=connector,
             trust_env=False,
+            # The library's implicit 300s timeout would stop a valid fetch
+            # before the tool dispatcher reaches its documented work cap.
+            timeout=aiohttp.ClientTimeout(total=3600),
         ) as session:
             yield session
     finally:

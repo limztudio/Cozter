@@ -178,6 +178,7 @@ class DiscoveryPruningTests(unittest.TestCase):
             path=SimpleNamespace(
                 realpath=lambda path: path, join=posixpath.join,
                 relpath=posixpath.relpath, commonpath=posixpath.commonpath,
+                normcase=posixpath.normcase,
             ),
         )
         for pattern in ("src/deep/*.js", "src/deep/**/*.js", "root/*.js", "*.js", "**/*.js", "."):

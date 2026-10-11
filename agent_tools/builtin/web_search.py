@@ -106,32 +106,35 @@ class WebSearchTool(AgentTool):
                     await asyncio.sleep(_RETRY_DELAY_SECONDS)
             return host, [], local_failures, saw_local_page
 
-        gathered = await asyncio.gather(
-            *(_try_endpoint(endpoint) for endpoint in _SEARCH_ENDPOINTS),
-        )
+        tasks = [
+            asyncio.create_task(_try_endpoint(endpoint))
+            for endpoint in _SEARCH_ENDPOINTS
+        ]
         failures: list[str] = []
         saw_page = False
-        # Both ran concurrently; chain order (html first) wins.
-        for _host, results, endpoint_failures, page in gathered:
-            failures.extend(endpoint_failures)
-            saw_page = saw_page or page
-            if results:
-                if len(results) < max_results + (
-                    1 if results[-1].startswith("(…parser") else 0
-                ) and results[-1].startswith("(…parser"):
-                    pass  # scan-cap footnote already appended
-                elif len(
-                    [result for result in results if result[:1].isdigit()]
-                ) >= max_results:
-                    results.append(
-                        "(showing first"
-                        f" {max_results} result(s); raise"
-                        " max_results up to 10 for more;"
-                        " never treat this preview as full"
-                        " coverage; say PARTIAL + remainder"
-                        " when coverage is unclear)"
-                    )
-                return "\n".join(results)
+        try:
+            # Return a usable frontend immediately, even when its sibling is
+            # still connecting or retrying. Cancel/close that request below.
+            for completed in asyncio.as_completed(tasks):
+                _host, results, endpoint_failures, page = await completed
+                failures.extend(endpoint_failures)
+                saw_page = saw_page or page
+                if results:
+                    if not results[-1].startswith("(…parser") and len(results) >= max_results:
+                        results.append(
+                            "(showing first"
+                            f" {max_results} result(s); raise"
+                            " max_results up to 10 for more;"
+                            " never treat this preview as full"
+                            " coverage; say PARTIAL + remainder"
+                            " when coverage is unclear)"
+                        )
+                    return "\n".join(results)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         if saw_page:
             # A 200 with no parseable results means no results.

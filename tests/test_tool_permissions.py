@@ -645,6 +645,7 @@ class WindowsDiscoveryPathTests(unittest.TestCase):
         path_api = SimpleNamespace(
             realpath=realpath, join=ntpath.join,
             relpath=ntpath.relpath, commonpath=ntpath.commonpath,
+            normcase=ntpath.normcase,
         )
         mocked_os = SimpleNamespace(
             path=path_api, sep="\\",

@@ -184,12 +184,15 @@ async def _spawn_git(
         argv, cwd=workspace, env=env, start_new_session=os.name != "nt",
     ))
     try:
-        return await asyncio.shield(launch)
+        # wait() retains the owned launch on cancellation without creating
+        # a shield future that logs an already-consumed failure on 3.14.
+        await asyncio.wait((launch,))
+        return launch.result()
     except asyncio.CancelledError:
         cleanup = asyncio.create_task(_reap_cancelled_git_launch(launch))
         while not cleanup.done():
             try:
-                await asyncio.shield(cleanup)
+                await asyncio.wait((cleanup,))
             except asyncio.CancelledError:
                 continue
         cleanup.result()
@@ -237,9 +240,7 @@ def finish_git_output(
     stdout: str, stderr: str, *, empty_text: str = "OK",
 ) -> str:
     """Clip stdout/stderr into the model-facing result with empty handling."""
-    text = stdout.strip()
-    if not text:
-        return empty_text
+    text = stdout.strip() or empty_text
     return bounded(append_stderr_note(text, stderr))
 
 

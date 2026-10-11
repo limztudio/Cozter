@@ -473,9 +473,9 @@ class GitOpsToolTests(_GitRepoMixin):
         self.assertEqual(
             self.invoke(action="branch-create", branch="feat/x"), "OK",
         )
-        self.assertEqual(
-            self.invoke(action="checkout", branch="feat/x"), "OK",
-        )
+        checked_out = self.invoke(action="checkout", branch="feat/x")
+        self.assertTrue(checked_out.startswith("OK"), checked_out)
+        self.assertIn("feat/x", checked_out)  # Git reports checkout on stderr.
 
     def test_branch_delete_and_rename(self) -> None:
         self.write("a.txt", "hello\n")

@@ -47,6 +47,37 @@ class _StreamingBackend:
 
 
 class AgentProcessCleanupTests(unittest.TestCase):
+    def test_nonzero_exit_after_a_reply_retains_reply_and_records_failure(self) -> None:
+        async def run() -> None:
+            class PartialBackend:
+                name = "partial-exit"
+
+                async def launch(self, *_args, **_kwargs):
+                    script = (
+                        "import json, sys\n"
+                        "print(json.dumps({'text': 'Completed the first step.'}), flush=True)\n"
+                        "print('provider connection lost', file=sys.stderr)\n"
+                        "sys.exit(7)\n"
+                    )
+                    return await backend_base.create_captured_subprocess(
+                        [sys.executable, "-c", script],
+                    )
+
+                @staticmethod
+                def parse_event(event, result):
+                    backend_base.append_text_result(result, event["text"])
+
+            result, restarting = await agent._drive_backend(
+                PartialBackend(), "/work", "prompt", None, "auto", effort=0,
+            )
+            self.assertFalse(restarting)
+            self.assertEqual(result.text, "Completed the first step.")
+            self.assertIn("exited with code 7", result.error)
+            self.assertIn("provider connection lost", result.error)
+            self.assertEqual([event.content for event in result.events], [result.text])
+
+        asyncio.run(run())
+
     def test_captured_subprocess_closes_stdin_and_captures_output(self) -> None:
         async def run() -> None:
             script = (

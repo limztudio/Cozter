@@ -643,14 +643,18 @@ async def create_prompt_subprocess(
             start_new_session=os.name != "nt",
         ))
         try:
-            return await asyncio.shield(launch)
+            # wait() leaves the owned launch running if this caller is
+            # cancelled. Unlike shield() on Python 3.14, it does not log a
+            # later spawn failure that our cancellation cleanup consumes.
+            await asyncio.wait((launch,))
+            return launch.result()
         except asyncio.CancelledError:
             # Cancellation can race OS process creation. Keep stdin alive
             # until creation settles, then reap any child before returning.
             cleanup = asyncio.create_task(_reap_cancelled_prompt_launch(launch))
             while not cleanup.done():
                 try:
-                    await asyncio.shield(cleanup)
+                    await asyncio.wait((cleanup,))
                 except asyncio.CancelledError:
                     # A second /stop must not interrupt ownership cleanup.
                     continue

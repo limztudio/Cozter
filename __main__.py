@@ -194,7 +194,9 @@ def _ensure_venv_and_reexec() -> None:
     python = _venv_python()
     if not os.path.exists(python):
         venv_dir = os.path.dirname(os.path.dirname(python))
-        subprocess.check_call([sys.executable, "-m", "venv", venv_dir])
+        subprocess.check_call(
+            [sys.executable, "-m", "venv", venv_dir], stdin=subprocess.DEVNULL,
+        )
 
     env = {**os.environ, _VENV_REEXEC_ENV: "1"}
     args = [python, "-m", "Cozter", *sys.argv[1:]]
@@ -239,6 +241,7 @@ def _install_deps() -> None:
         )
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "-q", "-r", req_file],
+            stdin=subprocess.DEVNULL,
             timeout=_DEPENDENCY_INSTALL_TIMEOUT_SEC,
         )
     except subprocess.TimeoutExpired as exc:
@@ -737,7 +740,7 @@ def run() -> None:
             logger.critical(
                 "Cozter crashed - crash log written to %s", crash_path,
             )
-            return
+            raise SystemExit(1) from exc
         logger.critical(
             "Unhandled exception - crash log written to %s."
             " Restarting in %ds...",

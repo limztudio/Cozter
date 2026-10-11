@@ -11,6 +11,48 @@ from Cozter import colony, compaction, session, workspace
 
 
 class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_compaction_does_not_overwrite_history_or_memory_edited_mid_call(self):
+        for changed_field in ("messages", "summary", "long_term"):
+            with self.subTest(changed_field=changed_field), tempfile.TemporaryDirectory() as ws:
+                data = session.create_session(ws, name="Manual")
+                data["messages"] = [
+                    {"role": "user", "content": f"original {index}"}
+                    for index in range(6)
+                ]
+                data["long_term"] = ["Original fact."]
+                session.save_session(ws, data["id"], data)
+                started, release = asyncio.Event(), asyncio.Event()
+
+                async def delayed_compact(*_args, **_kwargs):
+                    started.set()
+                    await release.wait()
+                    return "s" * 100, ["Stale fact."], None, 6
+
+                with (
+                    mock.patch.object(workspace, "get_compact_interval", return_value=1),
+                    mock.patch.object(compaction, "compact_session", side_effect=delayed_compact),
+                    mock.patch.object(colony, "bump_compact_count") as bump,
+                    mock.patch.object(colony, "maybe_trigger"),
+                ):
+                    compacting = asyncio.create_task(compaction.maybe_compact(ws, data["id"]))
+                    try:
+                        await asyncio.wait_for(started.wait(), timeout=1)
+                        latest = session.load_session(ws, data["id"])
+                        if changed_field == "messages":
+                            latest["messages"][0]["content"] = "Edited unsummarized content."
+                        elif changed_field == "summary":
+                            latest["summary"] = "Newer summary."
+                        else:
+                            latest["long_term"] = ["Newer fact."]
+                        session.save_session(ws, data["id"], latest)
+                        release.set()
+                        await compacting
+                        self.assertEqual(session.load_session(ws, data["id"]), latest)
+                        bump.assert_not_called()
+                    finally:
+                        release.set()
+                        await asyncio.gather(compacting, return_exceptions=True)
+
     async def test_known_capacity_below_threshold_does_not_use_message_fallback(self) -> None:
         backend = SimpleNamespace(context_window_tokens=lambda _model: 1_000_000)
         with tempfile.TemporaryDirectory() as ws:

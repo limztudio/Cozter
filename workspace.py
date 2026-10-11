@@ -47,6 +47,8 @@ def _workspace_state_dir(path: str, *, create: bool = False) -> tuple[str, str]:
     if not root or "\x00" in root:
         raise ValueError("invalid workspace path")
     state_dir = os.path.join(root, COZTER_DIR)
+    if not is_path_within(state_dir, root):
+        raise ValueError("workspace state directory escapes the workspace")
     try:
         if create:
             os.makedirs(state_dir, exist_ok=True)
@@ -69,6 +71,7 @@ def workspace_state_path(workspace_path: str, *parts: str) -> str:
         not isinstance(part, str)
         or not part
         or "\x00" in part
+        or ":" in part
         or os.path.isabs(part)
         or part in {".", ".."}
         # One path component only: reject both separators.
@@ -169,7 +172,7 @@ def get_recent(
         return []
     if isinstance(limit, bool) or not isinstance(limit, int):
         return []
-    if limit < 0:
+    if limit <= 0:
         return []
     paths: list[str] = []
     seen: set[str] = set()
@@ -181,7 +184,9 @@ def get_recent(
             continue
         seen.add(canonical)
         paths.append(canonical)
-    return paths[:limit]
+        if len(paths) >= limit:
+            break
+    return paths
 
 
 def iter_current_workspaces(
