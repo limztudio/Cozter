@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import dataclasses
 from datetime import datetime
+from typing import TypeVar
 
 from . import (
     agent_tools, backends_agent, colony, compaction, flexible, router,
@@ -44,6 +45,50 @@ from .utils import (
 from .utils import drain_queue as _drain_queue
 
 logger = logging.getLogger(__name__)
+performance_logger = logging.getLogger("Cozter.performance")
+_StageResult = TypeVar("_StageResult")
+
+
+async def _run_with_stage_timing(
+    call: Awaitable[_StageResult], stage: str, backend_name: str,
+    model: str | None,
+) -> _StageResult:
+    """Record stage duration without logging prompts or provider output."""
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    outcome = "ok"
+    try:
+        value = await call
+        payload = value[0] if isinstance(value, tuple) and value else value
+        if getattr(payload, "error", None):
+            outcome = "error"
+        if isinstance(value, tuple) and len(value) == 2 and value[1] is True:
+            outcome = "cancelled"
+        return value
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
+    except Exception:
+        outcome = "error"
+        raise
+    finally:
+        performance_logger.info(
+            "stage=%s backend=%s model=%s outcome=%s duration_seconds=%.3f",
+            stage, backend_name, model, outcome, loop.time() - started,
+        )
+
+
+def _terminal_provider_error(error: str) -> bool:
+    """Recognize explicit account/auth failures and Cozter's refusal stop."""
+    if re.search(r"\bHTTP\s*(?:status\s*)?(?:401|403|429)\b", error, re.IGNORECASE):
+        return True
+    normalized = error.casefold().replace("_", " ").replace("-", " ")
+    return any(marker in normalized for marker in (
+        "usage limit", "quota exceeded", "quota exhausted", "quota limit",
+        "insufficient quota", "insufficient credits", "out of credits",
+        "credit balance exhausted", "invalid api key", "authentication failed",
+        "consecutive rounds where every tool call was refused",
+    ))
 
 
 @dataclass(frozen=True)
@@ -1241,7 +1286,7 @@ async def _judge_draft(
             f" {summary_backend.name}/{summary_model}",
         ))
     try:
-        raw, restarting = await _run_with_inject_watch(
+        raw, restarting = await _run_with_stage_timing(_run_with_inject_watch(
             run_internal_backend(
                 summary_backend,
                 workspace_path,
@@ -1257,7 +1302,7 @@ async def _judge_draft(
             ),
             inject_queue,
             injected,
-        )
+        ), "judge", summary_backend.name, summary_model)
     except (AttributeError, TypeError) as exc:
         # Judge is advisory: ship the draft.
         logger.warning("Continue judge unavailable (%s) - shipping draft", exc)
@@ -1284,6 +1329,7 @@ async def _run_flexible(
     inject_queue: asyncio.Queue[str] | None,
     injected: list[str],
     close_inject_on_completion: bool = True,
+    previous_draft: str | None = None,
 ) -> tuple[AgentResult, bool]:
     """Run one turn of the ``flexible`` meta-agent.
 
@@ -1294,6 +1340,7 @@ async def _run_flexible(
 
     Returns ``(result, restarting)`` like :func:`_drive_backend` - an
     inject mid-pipeline abandons the run and replans with the new context.
+    Continuations pass *previous_draft* to the workers as completion evidence.
     """
     summary_backend = backends_agent.get_backend(summary_backend_name)
     tiers = workspace_mod.get_flexible_run_config(workspace_path)
@@ -1306,7 +1353,7 @@ async def _run_flexible(
     await status(
         f"flexible: planning with {summary_backend.name}/{summary_model}"
     )
-    raw_plan, restarting = await _run_with_inject_watch(
+    raw_plan, restarting = await _run_with_stage_timing(_run_with_inject_watch(
         run_internal_backend(
             summary_backend,
             workspace_path,
@@ -1325,7 +1372,7 @@ async def _run_flexible(
         ),
         inject_queue,
         injected,
-    )
+    ), "flexible_planner", summary_backend.name, summary_model)
     if restarting:
         return AgentResult(), True
     plan = flexible.parse_plan(raw_plan or "", request)
@@ -1358,6 +1405,7 @@ async def _run_flexible(
     attach_markers: list[str] = []
     usage_totals: dict = {}
     blocked: list[int] = []
+    worker_errors: list[str] = []
     queue: list[flexible.Subtask] = list(plan.subtasks)
     done = 0
     total = len(queue)
@@ -1372,7 +1420,7 @@ async def _run_flexible(
             f"flexible [{done + 1}/{total}] {task.tier} ·"
             f" {tier_backend_name}/{tier_model}: {task.instruction}"
         )
-        sub_result, restarting = await _drive_backend(
+        sub_result, restarting = await _run_with_stage_timing(_drive_backend(
             tier_backend,
             workspace_path,
             _build_backend_prompt(
@@ -1380,6 +1428,7 @@ async def _run_flexible(
                 flexible.build_subtask_prompt(
                     # Planner instructions are self-contained.
                     request, plan, done, reports,
+                    previous_draft=previous_draft,
                 ),
                 collaborative=False,
                 allow_detached_requests=False,
@@ -1390,7 +1439,7 @@ async def _run_flexible(
             on_event=on_event,
             inject_queue=inject_queue,
             injected=injected,
-        )
+        ), "flexible_worker", tier_backend_name, tier_model)
         if restarting:
             return result, True
 
@@ -1401,6 +1450,7 @@ async def _run_flexible(
         _accumulate_usage(usage_totals, sub_result.usage)
 
         if sub_result.error:
+            worker_errors.append(sub_result.error)
             logger.warning(
                 "Flexible sub-task %d/%d (%s/%s) failed: %s",
                 done + 1, total, tier_backend_name, tier_model, sub_result.error,
@@ -1442,12 +1492,24 @@ async def _run_flexible(
             await status(f"flexible: plan grew to {total} sub-tasks")
         done += 1
 
-    if len(queue) == 1:
+    if worker_errors and (
+        len(worker_errors) == len(queue)
+        or any(_terminal_provider_error(error) for error in worker_errors)
+    ):
+        # Terminal worker failures must not become new judge/auto-chain work.
+        result.error = "; ".join(dict.fromkeys(worker_errors))
+
+    if len(queue) == 1 or result.error:
         if _take_pending_injections(inject_queue, injected):
             return AgentResult(), True
         if close_inject_on_completion:
             _close_inject_queue(inject_queue)
-        final = reports[0].strip()
+        final = (
+            reports[0] if len(queue) == 1
+            else flexible.merge_fallback(plan, reports)
+        ).strip()
+        if result.error and len(worker_errors) < len(queue):
+            final = "PARTIAL: task failures prevented full completion.\n\n" + final
         if not final:
             final = (
                 "The worker produced no output for this turn. Check the agent"
@@ -1467,7 +1529,7 @@ async def _run_flexible(
     await status(
         f"flexible: merging with {summary_backend.name}/{summary_model}"
     )
-    merged, restarting = await _run_with_inject_watch(
+    merged, restarting = await _run_with_stage_timing(_run_with_inject_watch(
         run_internal_backend(
             summary_backend,
             workspace_path,
@@ -1487,7 +1549,7 @@ async def _run_flexible(
         inject_queue,
         injected,
         close_inject_on_completion=close_inject_on_completion,
-    )
+    ), "flexible_merge", summary_backend.name, summary_model)
     if restarting:
         return AgentResult(), True
     final = (merged or "").strip() or flexible.merge_fallback(plan, reports)
@@ -2125,6 +2187,7 @@ async def _run_turn_impl(
                         inject_queue=inject_queue,
                         injected=injected,
                         close_inject_on_completion=False,
+                        previous_draft=draft,
                     )
                 else:
                     result, restarting = await _drive_backend(

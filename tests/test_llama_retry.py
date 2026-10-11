@@ -236,7 +236,8 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         timeout = captured[0]
         self.assertIsNone(timeout.total)
         self.assertIsNone(timeout.sock_read)
-        self.assertIsNone(timeout.sock_connect)
+        self.assertEqual(timeout.sock_connect, 30)
+        self.assertEqual(timeout.connect, 30)
 
     def test_stream_once_honors_explicit_sock_read_for_compatibility(self) -> None:
         captured: list[object] = []
@@ -259,7 +260,8 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         self.assertEqual(text, "ok")
         timeout = captured[0]
         self.assertEqual(timeout.sock_read, 30)
-        self.assertIsNone(timeout.total)
+        self.assertEqual(timeout.total, 30)
+        self.assertEqual(timeout.sock_connect, 30)
 
     def _stream(
         self, events: list[object], *, include_done: bool = True,

@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import json
 import unittest
 from unittest import mock
 from typing import Any
@@ -350,6 +352,120 @@ class SignalJsonRpcRequestTests(unittest.TestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await request
             self.assertEqual(bot._jsonrpc_pending, {})
+
+        asyncio.run(run())
+
+
+class SignalJsonRpcTransportTests(unittest.TestCase):
+    def test_tcp_requests_share_a_real_line_delimited_connection(self) -> None:
+        """Exercise framing and responses larger than asyncio's default limit."""
+        async def run() -> None:
+            requests: list[dict[str, Any]] = []
+            clients: set[asyncio.Task] = set()
+            large_result = "x" * 70_000
+
+            async def serve(
+                reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+            ) -> None:
+                task = asyncio.current_task()
+                assert task is not None
+                clients.add(task)
+                try:
+                    while line := await reader.readline():
+                        request = json.loads(line)
+                        requests.append(request)
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": request["id"],
+                            "result": large_result,
+                        }
+                        writer.write((json.dumps(response) + "\n").encode())
+                        await writer.drain()
+                finally:
+                    writer.close()
+                    with contextlib.suppress(ConnectionError):
+                        await writer.wait_closed()
+                    clients.discard(task)
+
+            server = await asyncio.start_server(serve, "127.0.0.1", 0)
+            assert server.sockets is not None
+            port = server.sockets[0].getsockname()[1]
+            bot = SignalBot(
+                [SIGNAL_GROUP_URL], jsonrpc_socket=f"tcp://127.0.0.1:{port}",
+            )
+            try:
+                self.assertEqual(
+                    await bot._rpc_request("listGroups", timeout=5),
+                    large_result,
+                )
+                self.assertEqual(
+                    await bot._rpc_request(
+                        "getGroup", {"groupId": "example"}, timeout=5,
+                    ),
+                    large_result,
+                )
+                self.assertEqual(len(clients), 1)
+            finally:
+                bot._stop_requested.set()
+                await bot._stop_jsonrpc()
+                server.close()
+                await server.wait_closed()
+                if clients:
+                    await asyncio.gather(*clients)
+            self.assertEqual(
+                requests,
+                [
+                    {"jsonrpc": "2.0", "method": "listGroups", "id": "1"},
+                    {
+                        "jsonrpc": "2.0", "method": "getGroup", "id": "2",
+                        "params": {"groupId": "example"},
+                    },
+                ],
+            )
+
+        asyncio.run(run())
+
+    def test_invalid_tcp_urls_fail_before_attempting_a_connection(self) -> None:
+        for endpoint in (
+            "http://127.0.0.1:7583", "tcp:127.0.0.1:7584",
+            "tcp://127.0.0.1", "tcp://:7584", "tcp://host:0",
+            "tcp://host:65536", "tcp://host:bad", "tcp://host:-1",
+            "tcp://user:secret@host:7584", "tcp://host:7584/",
+            "tcp://host:7584?account=1", "tcp://host:7584#fragment",
+            "tcp://ho\nst:7584", "tcp://[::1:7584",
+        ):
+            with self.subTest(endpoint=endpoint):
+                with self.assertRaisesRegex(ValueError, "signal_jsonrpc_socket"):
+                    SignalBot([SIGNAL_GROUP_URL], jsonrpc_socket=endpoint)
+
+    def test_unix_socket_path_still_uses_unix_connector(self) -> None:
+        async def run() -> None:
+            bot = SignalBot(
+                [SIGNAL_GROUP_URL], jsonrpc_socket="/run/signal-cli/socket",
+            )
+            reader, writer = mock.Mock(), mock.Mock()
+            with mock.patch(
+                "Cozter.backends_bot.signal.asyncio.open_unix_connection",
+                new=mock.AsyncMock(return_value=(reader, writer)),
+                create=True,
+            ) as connect:
+                self.assertEqual(
+                    await bot._open_jsonrpc_socket(), (reader, writer),
+                )
+                self.assertEqual(connect.await_args.args, ("/run/signal-cli/socket",))
+
+        asyncio.run(run())
+
+    def test_unavailable_unix_connector_explains_tcp_configuration(self) -> None:
+        async def run() -> None:
+            bot = SignalBot([SIGNAL_GROUP_URL], jsonrpc_socket="/tmp/s")
+            with mock.patch(
+                "Cozter.backends_bot.signal.asyncio.open_unix_connection",
+                new=mock.AsyncMock(side_effect=NotImplementedError),
+                create=True,
+            ):
+                with self.assertRaisesRegex(SignalCliError, "tcp://HOST:PORT"):
+                    await bot._open_jsonrpc_socket()
 
         asyncio.run(run())
 

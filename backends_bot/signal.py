@@ -1,7 +1,7 @@
 """Signal adapter: wires signal-cli group messages to BotPlatform.
 
 This backend talks to Signal through a shared signal-cli daemon JSON-RPC
-Unix socket. The daemon lifecycle is owned outside Cozter.
+Unix or TCP socket. The daemon lifecycle is owned outside Cozter.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import re
 import time
 from collections import deque
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..config import (
     DEFAULT_MAX_UPLOAD_BYTES,
@@ -94,8 +95,52 @@ class SignalCliError(RuntimeError):
     """Raised when the signal-cli JSON-RPC socket is unavailable."""
 
 
+def _signal_tcp_address(endpoint: str) -> tuple[str, int] | None:
+    """Validate TCP URLs while leaving existing Unix socket paths intact."""
+    if not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", endpoint):
+        if endpoint.lower().startswith("tcp:"):
+            raise ValueError(
+                "signal_jsonrpc_socket must use tcp://HOST:PORT for TCP"
+            )
+        return None
+    try:
+        parsed = urlsplit(endpoint)
+        if parsed.scheme != "tcp":
+            raise ValueError("unsupported protocol")
+        host = parsed.hostname
+        port = parsed.port
+        if (
+            not host
+            or port is None
+            or not 1 <= port <= 65535
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or "?" in endpoint
+            or "#" in endpoint
+            or any(char.isspace() for char in endpoint)
+            or not endpoint.isprintable()
+            or "\\" in host
+            or "%" in host
+            or (
+                parsed.netloc.startswith("[")
+                and not re.fullmatch(r"\[[^\]]+\]:[0-9]+", parsed.netloc)
+            )
+        ):
+            raise ValueError("invalid TCP address")
+    except ValueError as exc:
+        raise ValueError(
+            "signal_jsonrpc_socket must be a Unix socket path or "
+            "tcp://HOST:PORT (port 1-65535, without credentials, path, "
+            "query, or fragment)"
+        ) from exc
+    return host, port
+
+
 class SignalBot(BotPlatform):
     """Signal group adapter backed by signal-cli."""
+
+    supports_transient_status = False
 
     def __init__(
         self,
@@ -116,6 +161,7 @@ class SignalBot(BotPlatform):
         self.jsonrpc_socket = jsonrpc_socket.strip() if jsonrpc_socket else ""
         if not self.jsonrpc_socket:
             raise ValueError("signal_jsonrpc_socket is required for Signal")
+        self._jsonrpc_tcp_address = _signal_tcp_address(self.jsonrpc_socket)
         self._group_ids_by_url: dict[str, str] = {}
         self._group_ids: set[str] = set()
         self._jsonrpc_reader: asyncio.StreamReader | None = None
@@ -276,18 +322,42 @@ class SignalBot(BotPlatform):
     async def _open_jsonrpc_socket(
         self, *, timeout: float = 15.0,
     ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        unix_connector = None
+        if self._jsonrpc_tcp_address is None:
+            try:
+                unix_connector = asyncio.open_unix_connection
+            except AttributeError as exc:
+                raise SignalCliError(
+                    "Unix signal-cli sockets are unavailable on this platform; "
+                    "set signal_jsonrpc_socket to tcp://HOST:PORT"
+                ) from exc
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         last_error: BaseException | None = None
         while True:
             try:
-                return await asyncio.wait_for(
-                    asyncio.open_unix_connection(
+                if self._jsonrpc_tcp_address is not None:
+                    connection = asyncio.open_connection(
+                        *self._jsonrpc_tcp_address,
+                        limit=_JSONRPC_STREAM_LIMIT,
+                    )
+                else:
+                    assert unix_connector is not None
+                    connection = unix_connector(
                         self.jsonrpc_socket,
                         limit=_JSONRPC_STREAM_LIMIT,
-                    ),
+                    )
+                return await asyncio.wait_for(
+                    connection,
                     timeout=min(1.0, max(0.1, deadline - loop.time())),
                 )
+            except NotImplementedError as exc:
+                if self._jsonrpc_tcp_address is not None:
+                    raise
+                raise SignalCliError(
+                    "Unix signal-cli sockets are unavailable on this platform; "
+                    "set signal_jsonrpc_socket to tcp://HOST:PORT"
+                ) from exc
             except (OSError, TimeoutError) as exc:
                 last_error = exc
                 if loop.time() >= deadline:
@@ -569,13 +639,17 @@ class SignalBot(BotPlatform):
             request["params"] = params
         line = json.dumps(request, separators=(",", ":")) + "\n"
         try:
-            async with self._jsonrpc_write_lock:
-                writer.write(line.encode("utf-8"))
-                await writer.drain()
-            response = await asyncio.wait_for(fut, timeout=timeout)
+            # One deadline also bounds a busy writer and socket backpressure.
+            async with asyncio.timeout(timeout):
+                async with self._jsonrpc_write_lock:
+                    writer.write(line.encode("utf-8"))
+                    await writer.drain()
+                response = await fut
         except BaseException:
             # CancelledError is BaseException: pop it.
             self._jsonrpc_pending.pop(request_id, None)
+            if not fut.done():
+                fut.cancel()
             raise
         if not isinstance(response, dict):
             raise SignalCliError("invalid JSON-RPC response")

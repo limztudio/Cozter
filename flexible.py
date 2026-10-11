@@ -77,11 +77,14 @@ _PLANNER_RULES = (
     " every rule/section is covered; never one vague 'follow the doc' task"
     " hiding dozens of rules.\n"
     "- Build/verify requests (buildable, no error/warning, no runtime"
-    " warning): split into enumerate-targets + canonical build/test with"
-    " 3600s cap (cancel still stops instantly; capture to file) + grep full logs"
-    " for error/warning/exception + fix + re-run until zero + runtime"
-    " launch/exercise/log-check; each task states evidence required"
-    " (commands + exit codes + counts), never one vague 'check build' task.\n"
+    " warning): keep enumeration, canonical build/test, log inspection,"
+    " repair, re-run, and runtime verification in one cohesive task for"
+    " each target or related target group. Split only when distinct scope"
+    " or difficulty requires another worker, not merely for workflow stages."
+    " Require the 3600s cap (cancel still stops instantly; capture to file),"
+    " grep full logs for error/warning/exception, fix and re-run until zero,"
+    " then runtime launch/exercise/log-check. Each task states evidence"
+    " required (commands + exit codes + counts), never one vague 'check build' task.\n"
     "- Each instruction states its done-criteria and requires the worker to"
     " verify no leftovers remain with evidence.\n"
     "- No tools; plan from the text.\n"
@@ -151,6 +154,9 @@ _JUDGE_RULES = (
     "- Read the request, then the draft. DONE only when every asked item"
     " is answered with evidence and no PARTIAL + remainder is left.\n"
     "- A draft ending with [[await]] is DONE: it waits on the user.\n"
+    "- A bounded draft excerpt may omit its middle. Omission alone is not"
+    " evidence of unfinished work. CONTINUE requires a concrete missing"
+    " requested item, not a demand to regenerate omitted text.\n"
     "- Never mention plans/workers/tiers; never emit 'Next turn should:'.\n"
     "- No tools; decide from the text.\n"
     "- Reply in exactly this format, nothing else:\n\n"
@@ -176,6 +182,23 @@ _REPORT_TRUNCATION_MARKER = (
     "\n… [report truncated: remainder omitted — never treat this preview"
     " as full content; say PARTIAL + remainder when coverage is unclear]"
 )
+
+# Judge and continuation excerpts preserve final evidence as well as context.
+_DRAFT_MAX_CHARS = 12_000
+_DRAFT_OMISSION_MARKER = (
+    "\n… [middle omitted from bounded draft excerpt; omission alone does not"
+    " imply unfinished work]\n"
+)
+
+
+def _bounded_draft_excerpt(text: str) -> str:
+    """Keep a draft's opening and final evidence without adding new work."""
+    if len(text) <= _DRAFT_MAX_CHARS:
+        return text
+    remaining = _DRAFT_MAX_CHARS - len(_DRAFT_OMISSION_MARKER)
+    head = remaining // 2
+    tail = remaining - head
+    return text[:head] + _DRAFT_OMISSION_MARKER + text[-tail:]
 
 
 def _truncate_report(text: str) -> str:
@@ -293,6 +316,7 @@ def parse_plan(raw: str, request: str) -> Plan:
     # Scan the whole reply when the planner forgot the wrapper.
     block = extract_marker_block(raw, "PLAN") or raw
     subtasks: list[Subtask] = []
+    seen: set[Subtask] = set()
     capped = False
     for line in block.splitlines():
         match = _PLAN_LINE_RE.match(line)
@@ -302,10 +326,14 @@ def parse_plan(raw: str, request: str) -> Plan:
         instruction = match.group("instruction").strip()
         if tier is None or not instruction:
             continue
-        subtasks.append(Subtask(tier=tier, instruction=instruction))
+        subtask = Subtask(tier=tier, instruction=instruction)
+        if subtask in seen:
+            continue
         if len(subtasks) == MAX_SUBTASKS:
             capped = True
             break
+        seen.add(subtask)
+        subtasks.append(subtask)
 
     if not subtasks:
         return fallback_plan(request)
@@ -350,6 +378,7 @@ def _render_plan(plan: Plan, *, current: int | None = None) -> str:
 
 def build_subtask_prompt(
     context: str, plan: Plan, index: int, results: list[str],
+    *, previous_draft: str | None = None,
 ) -> str:
     """Prompt for the worker running sub-task *index* of *plan*.
 
@@ -357,7 +386,9 @@ def build_subtask_prompt(
     planner saw the history and wrote self-contained instructions.
     When the request carries "[... attachment saved to: ...]" markers
     they ride along verbatim so a vision-capable tier backend still
-    resolves the image bytes natively.
+    resolves the image bytes natively. A continuation also carries a bounded
+    *previous_draft* excerpt so workers retain already-completed work and its
+    final evidence.
     """
     task = plan.subtasks[index]
     parts = [context, ""]
@@ -377,6 +408,14 @@ def build_subtask_prompt(
                 f"\n--- report {result_index + 1} ---\n"
                 f"{_truncate_report(text)}"
             )
+
+    if previous_draft:
+        parts.append(
+            "\nPrevious draft and evidence from this turn:\n"
+            + _bounded_draft_excerpt(previous_draft)
+            + "\nRetain completed work and verify its current state. Address"
+            " the remaining instructions without repeating completed actions."
+        )
 
     parts.append(
         f"\nYour task: {task.instruction}\n"
@@ -505,7 +544,7 @@ def build_judge_prompt(request: str, draft: str) -> str:
         request if isinstance(request, str) and request else "(empty)",
         "",
         "--- draft ---",
-        _truncate_report(draft) if draft else "(no draft)",
+        _bounded_draft_excerpt(draft) if draft else "(no draft)",
         "",
         "--- end ---",
     ]

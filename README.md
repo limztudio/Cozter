@@ -450,9 +450,13 @@ vision API does not support.
 workspace may use, bot-wide, in privilege order `deny < confirm < auto <
 full`. `full` is the only mode that requests each CLI's explicit bypass flag
 (arbitrary code execution) and exposes the in-process HTTP agents' direct host
-shell for any authorized chat participant. Keep the default `auto` to prevent
-those bypasses, or set it to `full` only when an operator explicitly accepts
-that risk; provider-native sandbox and approval behavior still differs by CLI.
+shell for any authorized chat participant. For HTTP agents, `full` also permits
+built-in filesystem tools to access paths outside the workspace, subject to the
+host account's operating system permissions; relative paths still start at the
+workspace. `auto` and `confirm` keep these tools confined to the workspace.
+Keep the default `auto` to prevent those bypasses, or set it to `full` only when
+an operator explicitly accepts that risk; provider-native sandbox and approval
+behavior still differs by CLI.
 Trusted HTTP plugins are not sandboxed: an author must set
 `requires_full_permission = True` for a plugin that can escape Cozter's
 workspace-bounded tool model. See [Plugins](#plugins) for that contract.
@@ -1174,8 +1178,14 @@ and `deny`. `llama`, `meta`, and `zai` run in-process: `deny` exposes no tools a
 `confirm` exposes only read-only tools. `auto` permits Cozter's
 workspace-bounded built-ins plus plugins that do not declare themselves
 full-only with `requires_full_permission`; both it and `confirm` block the
-built-in direct host shell again at execution time. `claude_code` uses bypass
-only for `full`, `acceptEdits` for `auto`, and plan mode for `confirm`/`deny`.
+built-in direct host shell again at execution time. `full` enables the direct
+host shell and removes the workspace boundary for built-in filesystem tools,
+including absolute paths and paths that resolve outside through `..` or
+symlinks. Operating system permissions and tool-specific plugin restrictions
+still apply. HTTP agent prompts state the effective permission on every turn,
+so the model can follow changes without assuming a workspace sandbox in
+`full`. `claude_code` uses bypass only for `full`, `acceptEdits` for `auto`, and
+plan mode for `confirm`/`deny`.
 `copilot` uses `--yolo` only
 for `full`, `--allow-all-tools` (while retaining path and URL checks) for
 `auto`, and an explicit empty tool list for `confirm`/`deny`.
@@ -1687,6 +1697,20 @@ checkout that is about to change.
 ## Runtime diagnostics
 
 `__main__.py` writes rotating warning/error logs to `.log/cozter.log`.
+It also writes metadata-only stage timings to `.log/performance.log`:
+planner, worker, merge and judge durations; HTTP completion durations and
+retry counts; time to the first content, reasoning or tool delta; and tool
+batch durations and counts. Prompts, responses, tool arguments and API keys
+are excluded. The timing log rotates at 5 MiB with three backups.
+HTTP connection attempts are bounded at 30 seconds (or the shorter configured
+socket timeout). A positive socket timeout also caps the entire completion,
+including retries and backoff; streaming heartbeats cannot extend that budget.
+Repeated-only tool rounds and three consecutive entirely blocked rounds force
+a final report from the available evidence, while useful tool work can continue.
+On Windows, the Python entry process owns a process-lifetime job before it
+spawns module or virtual-environment replacements. Stopping the registered
+Python launcher also terminates those descendants, so a restart replaces the
+old instance instead of leaving it active alongside another one.
 Unhandled exceptions also get timestamped crash files in `.log/`, and
 asyncio/thread dumps go to `.log/diagnostics.log`. On Unix-like hosts,
 send `SIGUSR1` to the running daemon process to dump tasks, thread

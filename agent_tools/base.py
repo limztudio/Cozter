@@ -13,7 +13,8 @@ import tempfile
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
+from contextvars import ContextVar
 from functools import cache
 from typing import Any, ClassVar
 
@@ -172,12 +173,37 @@ class AgentTool(ABC):
 # Shared helpers
 
 
+_TOOL_PERMISSION: ContextVar[str] = ContextVar("tool_permission", default="auto")
+
+
+def get_tool_permission() -> str:
+    """Return the trusted mode of the current tool call, bounded by default."""
+    return _TOOL_PERMISSION.get()
+
+
+@contextmanager
+def tool_permission_scope(approval: str) -> Iterator[None]:
+    """Apply dispatcher permission to this call without changing plugin APIs.
+
+    Task-local context prevents concurrent full and bounded calls from
+    sharing privileges. Worker threads inherit it via ``asyncio.to_thread``;
+    spawned processes must receive the mode explicitly. Model arguments
+    never select this scope.
+    """
+    token = _TOOL_PERMISSION.set(approval)
+    try:
+        yield
+    finally:
+        _TOOL_PERMISSION.reset(token)
+
+
 def resolve_workspace_entry(workspace: str, path: str) -> str:
     """Return a checked absolute path without dereferencing its endpoint.
 
     ``path`` may be relative to the workspace root or an absolute path
-    inside it. Both its lexical spelling and its current resolved target
-    must stay under the workspace root. Returning the lexical endpoint is
+    inside or, in full mode, outside it. Bounded modes require both its
+    lexical spelling and its current resolved target to stay under the
+    workspace root. Returning the lexical endpoint is
     important for operations on a final symlink: deleting or moving
     ``link.txt`` must affect the link itself, not its target. Intermediate
     symlinks remain resolved by the OS when the returned path is used.
@@ -188,6 +214,8 @@ def resolve_workspace_entry(workspace: str, path: str) -> str:
     candidate = os.path.abspath(
         path if os.path.isabs(path) else os.path.join(abs_ws, path)
     )
+    if get_tool_permission() == "full":
+        return candidate
     try:
         lexical_inside = os.path.commonpath((candidate, abs_ws)) == abs_ws
     except (OSError, ValueError):
@@ -198,10 +226,11 @@ def resolve_workspace_entry(workspace: str, path: str) -> str:
 
 
 def resolve_inside_workspace(workspace: str, path: str) -> str:
-    """Return the resolved target path; raise if it escapes the workspace.
+    """Resolve a tool path under the current permission mode.
 
     Most file-content tools deliberately follow a final symlink after
-    verifying that it resolves inside the workspace. Path-entry operations
+    checking workspace containment in bounded modes. Full calls may follow
+    links and paths outside the workspace. Path-entry operations
     such as move and delete should instead use
     :func:`resolve_workspace_entry` to preserve the final link.
     """
@@ -490,28 +519,46 @@ def iter_workspace_files(
     workspace: str,
     root: str,
     pattern: str = "**/*",
+    *,
+    discovery_pattern: str | None = None,
 ) -> Iterator[tuple[str, str, str]]:
     """Yield files under *root* that match *pattern*.
 
-    Returns ``(absolute_path, workspace_relative_path, root_relative_path)``.
+    Returns ``(absolute_path, display_path, root_relative_path)``; display
+    paths are workspace-relative for local entries and absolute otherwise.
     Common generated/cache directories are pruned unless the pattern
-    explicitly names that directory segment.
+    explicitly names that directory segment. ``discovery_pattern`` preserves
+    those explicit names when a caller strips a literal search prefix.
     """
     abs_ws = os.path.realpath(workspace)
     abs_root = os.path.realpath(root)
-    skip_dirs = _discovery_skip_dirs(pattern)
+    skip_dirs = _discovery_skip_dirs(
+        pattern if discovery_pattern is None else discovery_pattern,
+    )
+    full_access = get_tool_permission() == "full"
 
     for dirpath, dirnames, filenames in os.walk(abs_root):
         dirnames[:] = [dirname for dirname in dirnames if dirname not in skip_dirs]
         for filename in filenames:
             fpath = os.path.join(dirpath, filename)
             real = os.path.realpath(fpath)
-            if not is_path_within(real, abs_ws):
+            inside_workspace = is_path_within(real, abs_ws)
+            if not full_access and not inside_workspace:
                 continue
             root_rel = os.path.relpath(fpath, abs_root).replace(os.sep, "/")
             if not _path_matches_glob(root_rel, pattern):
                 continue
-            ws_rel = os.path.relpath(fpath, abs_ws).replace(os.sep, "/")
+            # Display containment uses the lexical entry, independently of
+            # its target: an external link can point to a different drive
+            # inside the workspace without becoming a relative entry.
+            try:
+                lexical_inside = os.path.commonpath((fpath, abs_ws)) == abs_ws
+            except (OSError, ValueError):
+                lexical_inside = False
+            ws_rel = (
+                os.path.relpath(fpath, abs_ws)
+                if lexical_inside else fpath
+            ).replace(os.sep, "/")
             yield fpath, ws_rel, root_rel
 
 
@@ -730,17 +777,17 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
     except OSError:
         pass
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp")
-    os.close(fd)
-    # mkstemp-created files cannot be overwritten by copy2 on Windows, so
-    # release the reserved name and let copy2 recreate it below.
-    os.unlink(tmp_path)
     try:
-        # copy2 keeps metadata; fsync first (read-write handle: read-only
-        # fds cannot be synced on some Windows Python builds).
-        shutil.copy2(source_path, tmp_path)
-        with open(tmp_path, "r+b") as tmp_file:
+        # Windows fsync requires a writable descriptor. Flush before copying
+        # metadata, which may make a read-only source's destination read-only.
+        with (
+            os.fdopen(fd, "wb") as tmp_file,
+            open(source_path, "rb") as source_file,
+        ):
+            shutil.copyfileobj(source_file, tmp_file)
             tmp_file.flush()
             os.fsync(tmp_file.fileno())
+        shutil.copystat(source_path, tmp_path)
         return _publish_new_file_no_clobber(
             tmp_path, target_path, preserve_metadata=True,
         )
@@ -754,6 +801,23 @@ def _publish_new_file_no_clobber(
     tmp_path: str, target_path: str, *, preserve_metadata: bool = False,
 ) -> bool:
     """Publish a completed temporary file only if *target_path* is vacant."""
+    if (
+        os.name == "nt"
+        and preserve_metadata
+        and not os.stat(tmp_path).st_mode & stat.S_IWRITE
+    ):
+        # A read-only hard-linked temp cannot be unlinked on Windows without
+        # changing the published file's attributes too. Windows rename is
+        # atomic and refuses an existing target, and consumes our temp.
+        try:
+            os.rename(tmp_path, target_path)
+        except FileExistsError:
+            return False
+        finally:
+            # A failed publication leaves only our unpublished temp behind.
+            with suppress(OSError):
+                os.chmod(tmp_path, stat.S_IWRITE)
+        return True
     try:
         os.link(tmp_path, target_path)
     except FileExistsError:

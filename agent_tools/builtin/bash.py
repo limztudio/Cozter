@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ntpath
 import os
 import shutil
 from typing import Any, ClassVar
@@ -26,9 +27,11 @@ class BashTool(AgentTool):
     # Unrestricted shell: full-permission only.
     requires_full_permission = True
     description = (
-        "Run a shell command (cwd = workspace, 3600s real-work cap — runs until done"
-        " or cancelled). For build/test/verify: capture output to a file"
-        " (`... 2>&1 | tee /tmp/build.log`), then grep the FULL file for"
+        "Run a host shell command using the shell stated in the system prompt"
+        " (cwd = workspace, 3600s real-work cap — runs until done or cancelled)."
+        " On Windows the shell may be PowerShell or cmd; use its syntax."
+        " For build/test/verify: capture output to a workspace file using"
+        " the selected shell's redirection, then grep the FULL file for"
         " error/warning/exception/traceback — never eyeball tail only;"
         " a truncated preview is not proof of clean."
     )
@@ -107,16 +110,44 @@ class BashTool(AgentTool):
 def _find_shell() -> list[str] | None:
     """Return an argv prefix that runs a single shell command."""
     if os.name == "nt":
-        # Prefer bash; fall back to cmd.
+        # A WindowsApps/System32 bash.exe launches WSL, which may be absent or
+        # prompt for setup. A real Bash installation remains usable.
         bash = shutil.which("bash")
-        if bash:
+        if bash and not _is_windows_bash_launcher(bash):
             return [bash, "-c"]
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if powershell:
+            return [
+                powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+            ]
         cmd = shutil.which("cmd.exe") or "cmd.exe"
-        return [cmd, "/c"]
+        return [cmd, "/d", "/c"]
     sh = shutil.which("bash") or shutil.which("sh")
     if sh:
         return [sh, "-c"]
     return None
+
+
+def _is_windows_bash_launcher(path: str) -> bool:
+    normalized = ntpath.normpath(path).casefold()
+    return (
+        "\\microsoft\\windowsapps\\" in normalized
+        or "\\windows\\system32\\" in normalized
+        or "\\windows\\sysnative\\" in normalized
+    )
+
+
+def shell_context() -> str:
+    """Describe the selected host shell so model commands use its dialect."""
+    shell = _find_shell()
+    if shell is None:
+        return "Host shell: unavailable."
+    name = ntpath.basename(shell[0]).casefold().removesuffix(".exe")
+    if name in {"pwsh", "powershell"}:
+        return "Host shell: PowerShell (noninteractive, without profiles). Use PowerShell syntax."
+    if name == "cmd":
+        return "Host shell: Windows cmd.exe. Use cmd syntax."
+    return f"Host shell: {name}. Use POSIX shell syntax."
 
 
 async def _read_capped(

@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import time
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
 from importlib.util import find_spec
@@ -63,6 +64,12 @@ def _validate_launch_args(args: list[str]) -> None:
 
 if __name__ == "__main__":
     _validate_launch_args(sys.argv[1:])
+    if os.name == "nt":
+        # Task Scheduler terminates the entry process, not subprocess.call's
+        # module/venv descendants. Tie that entire chain to this first owner.
+        import_module(
+            f"{__package__}.launch_process" if __package__ else "launch_process",
+        ).ensure_launch_job()
 
 # Relaunch as module when run as `python Cozter`.
 if __name__ == "__main__" and not __package__:
@@ -287,6 +294,23 @@ def setup_logging() -> None:
     root.setLevel(logging.DEBUG)
     root.addHandler(file_handler)
     root.addHandler(console_handler)
+
+    # Stage timings contain metadata only. Keep provider bodies, prompts and
+    # tool arguments out of this separately rotated diagnostic file.
+    performance = logging.getLogger("Cozter.performance")
+    for old_handler in performance.handlers[:]:
+        performance.removeHandler(old_handler)
+        old_handler.close()
+    timing_handler = RotatingFileHandler(
+        os.path.join(LOG_DIR, "performance.log"),
+        maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+    )
+    timing_handler.setLevel(logging.INFO)
+    timing_handler.setFormatter(fmt)
+    performance.setLevel(logging.INFO)
+    performance.propagate = False
+    performance.addHandler(timing_handler)
+    performance.info("stage=runtime outcome=started")
 
 
 def log_crash(exc: BaseException) -> str:

@@ -107,7 +107,7 @@ class DiscoveryToolAsyncTests(unittest.TestCase):
             started = threading.Event()
             release = threading.Event()
 
-            def slow_iter_workspace_files(*args):
+            def slow_iter_workspace_files(*args, **kwargs):
                 started.set()
                 release.wait(timeout=1)
                 return []

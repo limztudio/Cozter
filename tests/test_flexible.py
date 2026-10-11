@@ -48,6 +48,31 @@ class PlanParsingTests(unittest.TestCase):
         )
         self.assertEqual([subtask.tier for subtask in plan.subtasks], ["high", "low"])
 
+    def test_exact_duplicate_tasks_are_removed_in_first_seen_order(self) -> None:
+        plan = flexible.parse_plan(
+            "[PLAN]\n1. [low] inspect status\n2. [mid] repair code\n"
+            "3. [low] inspect status\n4. [medium] repair code\n"
+            "5. [high] inspect status\n6. [low] inspect logs\n[/PLAN]",
+            "inspect and repair",
+        )
+        self.assertEqual(
+            [(task.tier, task.instruction) for task in plan.subtasks],
+            [("low", "inspect status"), ("mid", "repair code"),
+             ("high", "inspect status"), ("low", "inspect logs")],
+        )
+
+    def test_duplicates_do_not_consume_the_unique_task_cap(self) -> None:
+        raw = "[PLAN]\n" + "".join(
+            f"{index}. [low] task {index // 2}\n"
+            for index in range(flexible.MAX_SUBTASKS * 2)
+        ) + "[/PLAN]"
+        plan = flexible.parse_plan(raw, "inspect all tasks")
+        self.assertEqual(
+            [task.instruction for task in plan.subtasks],
+            [f"task {index}" for index in range(flexible.MAX_SUBTASKS)],
+        )
+        self.assertNotIn("PARTIAL", plan.understanding)
+
     def test_subtask_count_is_capped(self) -> None:
         raw = "[PLAN]\n" + "".join(
             f"{index}. [low] task {index}\n"
@@ -516,6 +541,33 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("FULL HISTORY", prompt)
             self.assertIn("user message", prompt)
 
+    async def test_continuation_workers_receive_previous_draft_evidence(self) -> None:
+        seen: list[str] = []
+        draft = "Fixed retry.py; exit code 0.\n" + "detail\n" * 3_000
+        draft += "FINAL EVIDENCE: integration test passed."
+
+        async def capture_drive(*args, **kwargs):
+            seen.append(args[2])
+            return _worker("remaining evidence added", usage={}), False
+
+        with tempfile.TemporaryDirectory() as ws:
+            with mock.patch.object(
+                agent, "run_internal_backend", self._fake_internal,
+            ), mock.patch.object(agent, "_drive_backend", capture_drive):
+                await agent._run_flexible(
+                    "context", "add remaining evidence", ws,
+                    approval="auto", effort=100, collaborative=False,
+                    summary_backend_name="codex", summary_model="gpt-5.6-luna",
+                    on_event=None, inject_queue=None, injected=[],
+                    previous_draft=draft,
+                )
+        self.assertEqual(len(seen), 2)
+        for prompt in seen:
+            self.assertIn("Fixed retry.py; exit code 0.", prompt)
+            self.assertIn("FINAL EVIDENCE: integration test passed.", prompt)
+            self.assertIn("without repeating completed actions", prompt)
+            self.assertIn(flexible._DRAFT_OMISSION_MARKER, prompt)
+
     async def test_textless_workers_never_reply_with_a_placeholder(
         self,
     ) -> None:
@@ -584,6 +636,54 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertIn("429 usage limit reached", result.text)
+        self.assertEqual(result.error, "429 usage limit reached")
+
+    async def test_all_failed_workers_keep_errors_and_skip_merge(self) -> None:
+        async def failing_worker(*_args, **_kwargs):
+            return AgentResult(error="429 usage limit reached"), False
+
+        with tempfile.TemporaryDirectory() as ws:
+            with mock.patch.object(
+                agent, "run_internal_backend", self._fake_internal,
+            ), mock.patch.object(agent, "_drive_backend", failing_worker):
+                result, _ = await agent._run_flexible(
+                    "context", "user message", ws,
+                    approval="auto", effort=0, collaborative=False,
+                    summary_backend_name="codex", summary_model="gpt-5.6-luna",
+                    on_event=None, inject_queue=None, injected=[],
+                )
+        self.assertEqual(result.error, "429 usage limit reached")
+        self.assertEqual(self.internal, ["Flexible planner"])
+        self.assertIn("tweak the check", result.text)
+        self.assertIn("debug the race", result.text)
+        self.assertIn("429 usage limit reached", result.text)
+
+    async def test_mixed_worker_results_keep_success_and_failed_scope(self) -> None:
+        worker_results = [
+            _worker("Checked retry.py; exit code 0.", usage={}),
+            AgentResult(error="provider unavailable"),
+        ]
+
+        async def mixed_workers(*_args, **_kwargs):
+            return worker_results.pop(0), False
+
+        async def fallback_merge(*args, **kwargs):
+            return self.plan_output if kwargs["label"] == "Flexible planner" else ""
+
+        with tempfile.TemporaryDirectory() as ws:
+            with mock.patch.object(
+                agent, "run_internal_backend", fallback_merge,
+            ), mock.patch.object(agent, "_drive_backend", mixed_workers):
+                result, _ = await agent._run_flexible(
+                    "context", "user message", ws,
+                    approval="auto", effort=0, collaborative=False,
+                    summary_backend_name="codex", summary_model="gpt-5.6-luna",
+                    on_event=None, inject_queue=None, injected=[],
+                )
+        self.assertIsNone(result.error)
+        self.assertIn("Checked retry.py; exit code 0.", result.text)
+        self.assertIn("provider unavailable", result.text)
+        self.assertIn("debug the race", result.text)
 
     async def test_followup_lines_grow_the_total_mid_run(self) -> None:
         """Workers discovering leftovers grow done/total live."""
@@ -806,9 +906,12 @@ class CoveragePromptTests(unittest.TestCase):
 
     def test_build_verify_requires_evidence_across_prompts(self) -> None:
         """Build checks must demand full-log evidence, never eyeball-only."""
-        # Planner must split build/verify into enumerated evidence tasks.
+        # A cohesive workflow still needs every verification stage and evidence.
         self.assertIn("Build/verify", flexible._PLANNER_RULES)
         self.assertIn("exit codes", flexible._PLANNER_RULES)
+        self.assertIn("one cohesive task", flexible._PLANNER_RULES)
+        self.assertIn("not merely for workflow stages", flexible._PLANNER_RULES)
+        self.assertIn("runtime launch/exercise/log-check", flexible._PLANNER_RULES)
         # Merge must refuse clean claims without per-report evidence.
         self.assertIn("exit codes", flexible._MERGE_RULES)
         self.assertIn("PARTIAL + remainder", flexible._MERGE_RULES)
@@ -896,6 +999,200 @@ class JudgeVerdictTests(unittest.TestCase):
         self.assertIn("partial fix", prompt)
         self.assertIn("[VERDICT]", prompt)
         self.assertIn("No tools", prompt)
+
+    def test_long_judge_excerpt_retains_opening_and_final_evidence(self) -> None:
+        draft = "REQUEST COVERAGE: all targets checked.\n" + "detail\n" * 3_000
+        draft += "FINAL: every target passed; no remaining work."
+        excerpt = flexible._bounded_draft_excerpt(draft)
+        self.assertLessEqual(len(excerpt), flexible._DRAFT_MAX_CHARS)
+        self.assertTrue(excerpt.startswith("REQUEST COVERAGE: all targets checked."))
+        self.assertTrue(excerpt.endswith("FINAL: every target passed; no remaining work."))
+        prompt = flexible.build_judge_prompt("check all targets", draft)
+        self.assertIn(excerpt, prompt)
+        self.assertNotIn(flexible._REPORT_TRUNCATION_MARKER, prompt)
+        self.assertNotIn("say PARTIAL + remainder", excerpt)
+        self.assertIn("Omission alone is not evidence of unfinished work", prompt)
+
+    def test_judge_keeps_explicit_unfinished_work_in_draft(self) -> None:
+        draft = "PARTIAL: retry.py is fixed; runtime verification remains."
+        prompt = flexible.build_judge_prompt("fix and verify retries", draft)
+        self.assertIn(draft, prompt)
+        self.assertIn("CONTINUE", prompt)
+
+
+class FlexibleLatencyTurnTests(unittest.IsolatedAsyncioTestCase):
+    async def test_flexible_continuation_passes_evidence_to_the_actual_worker(self) -> None:
+        prompts: list[str] = []
+        original_draft = "Fixed retry.py. Evidence: pytest exited 0."
+
+        async def planner(*_args, **kwargs):
+            self.assertEqual(kwargs["label"], "Flexible planner")
+            return "[PLAN]\n1. [low] finish retry verification\n[/PLAN]"
+
+        async def worker(*args, **kwargs):
+            prompts.append(args[2])
+            self.assertEqual(kwargs["effort"], 100)
+            return AgentResult(
+                text=original_draft if len(prompts) == 1 else "Runtime verified."
+            ), False
+
+        verdicts = [
+            (flexible.JudgeVerdict(True, "runtime evidence", "verify runtime"), False),
+            (flexible.JudgeVerdict(False), False),
+        ]
+        with tempfile.TemporaryDirectory() as ws:
+            from Cozter import session
+            data = session.create_session(ws, name="Retry work")
+            workspace.set_reasoning_effort(ws, 100)
+            for tier in flexible.TIERS:
+                workspace.set_flexible_backend_name(ws, tier, "meta")
+            with (
+                mock.patch.object(agent, "run_internal_backend", planner),
+                mock.patch.object(agent, "_drive_backend", worker),
+                mock.patch.object(agent, "_judge_draft", side_effect=verdicts),
+                mock.patch.object(agent, "_run_post_turn_maintenance", mock.AsyncMock()),
+            ):
+                result = await agent.run(
+                    "fix and verify retries", ws, 1, backend_name="flexible",
+                    summary_backend_name="meta", session_id=data["id"],
+                )
+                await asyncio.sleep(0)
+        self.assertEqual(result.text, "Runtime verified.")
+        self.assertEqual(len(prompts), 2)
+        self.assertNotIn("Previous draft and evidence from this turn:", prompts[0])
+        self.assertIn(original_draft, prompts[1])
+        self.assertIn("verify runtime", prompts[1])
+        self.assertIn("without repeating completed actions", prompts[1])
+
+    async def test_failed_flexible_turn_skips_judge_and_auto_chain(self) -> None:
+        async def planner(*_args, **kwargs):
+            return "[PLAN]\n1. [low] inspect status\n[/PLAN]"
+
+        with tempfile.TemporaryDirectory() as ws:
+            from Cozter import session
+            data = session.create_session(ws, name="Status work")
+            with (
+                mock.patch.object(agent, "run_internal_backend", planner),
+                mock.patch.object(
+                    agent, "_drive_backend",
+                    return_value=(AgentResult(error="429 usage limit reached"), False),
+                ),
+                mock.patch.object(
+                    agent, "_judge_draft",
+                    side_effect=AssertionError("failed provider must not be judged"),
+                ),
+                mock.patch.object(agent, "_run_post_turn_maintenance", mock.AsyncMock()),
+            ):
+                result = await agent.run(
+                    "inspect status", ws, 1, backend_name="flexible",
+                    summary_backend_name="meta", session_id=data["id"],
+                )
+                await asyncio.sleep(0)
+        self.assertEqual(result.error, "429 usage limit reached")
+        self.assertIn("429 usage limit reached", result.text)
+        self.assertFalse(result.continue_instruction)
+
+    async def test_mixed_success_and_terminal_error_skips_merge_judge_and_chain(self) -> None:
+        for error in (
+            "meta returned HTTP 429: quota exceeded",
+            "meta stopped after 3 consecutive rounds where every tool call was refused",
+        ):
+            with self.subTest(error=error):
+                calls = 0
+
+                async def planner(*_args, **kwargs):
+                    self.assertEqual(kwargs["label"], "Flexible planner")
+                    return "[PLAN]\n1. [low] inspect status\n2. [high] repair retries\n[/PLAN]"
+
+                async def worker(*args, **kwargs):
+                    nonlocal calls
+                    calls += 1
+                    return (
+                        AgentResult(text="Status inspected: retry.py needs repair.")
+                        if calls == 1 else AgentResult(error=error)
+                    ), False
+
+                with tempfile.TemporaryDirectory() as ws:
+                    from Cozter import session
+                    data = session.create_session(ws, name="Retry work")
+                    with (
+                        mock.patch.object(agent, "run_internal_backend", planner),
+                        mock.patch.object(agent, "_drive_backend", worker),
+                        mock.patch.object(
+                            agent, "_judge_draft",
+                            side_effect=AssertionError("terminal failures must not be judged"),
+                        ),
+                        mock.patch.object(agent, "_run_post_turn_maintenance", mock.AsyncMock()),
+                    ):
+                        result = await agent.run(
+                            "inspect and repair retries", ws, 1, backend_name="flexible",
+                            summary_backend_name="meta", session_id=data["id"],
+                        )
+                        await asyncio.sleep(0)
+                self.assertEqual(calls, 2)
+                self.assertEqual(error, result.error)
+                self.assertIn("Status inspected: retry.py needs repair.", result.text)
+                self.assertIn("repair retries", result.text)
+                self.assertIn(error, result.text)
+                self.assertIn("PARTIAL", result.text)
+                self.assertFalse(result.continue_instruction)
+
+    def test_terminal_provider_classification_is_narrow(self) -> None:
+        for error in (
+            "meta returned HTTP 429: too many requests",
+            "zai returned HTTP401: unauthorized",
+            "provider returned HTTP status 403: forbidden",
+            "You have reached your usage limit",
+            "insufficient_quota", "quota exhausted", "insufficient credits",
+            "out of credits", "invalid API key", "authentication failed",
+        ):
+            with self.subTest(error=error):
+                self.assertTrue(agent._terminal_provider_error(error))
+        for error in (
+            "provider unavailable", "HTTP 503", "connection reset", "request timed out",
+            "expected status 429 in test response", "quota service temporarily unavailable",
+        ):
+            with self.subTest(error=error):
+                self.assertFalse(agent._terminal_provider_error(error))
+
+    async def test_stage_timing_keeps_output_private_and_preserves_cancellation(self) -> None:
+        async def successful_stage():
+            return "private worker output"
+
+        async def cancelled_stage():
+            raise asyncio.CancelledError
+
+        async def failed_stage():
+            raise RuntimeError("private provider error")
+
+        async def failed_worker():
+            return AgentResult(error="private provider error"), False
+
+        with self.assertLogs("Cozter.performance", level="INFO") as captured:
+            result = await agent._run_with_stage_timing(
+                successful_stage(), "flexible_worker", "meta", "muse-spark-1.3",
+            )
+            with self.assertRaises(asyncio.CancelledError):
+                await agent._run_with_stage_timing(
+                    cancelled_stage(), "flexible_planner", "meta", "muse-spark-1.2",
+                )
+            with self.assertRaises(RuntimeError):
+                await agent._run_with_stage_timing(
+                    failed_stage(), "judge", "meta", "muse-spark-1.2",
+                )
+            await agent._run_with_stage_timing(
+                failed_worker(), "flexible_worker", "meta", "muse-spark-1.3",
+            )
+        self.assertEqual(result, "private worker output")
+        self.assertEqual(len(captured.output), 4)
+        self.assertIn("stage=flexible_worker backend=meta model=muse-spark-1.3", captured.output[0])
+        self.assertIn("duration_seconds=", captured.output[0])
+        self.assertIn("outcome=ok", captured.output[0])
+        self.assertIn("outcome=cancelled", captured.output[1])
+        self.assertIn("outcome=error", captured.output[2])
+        self.assertIn("outcome=error", captured.output[3])
+        self.assertNotIn("private worker output", "\n".join(captured.output))
+        self.assertNotIn("private provider error", "\n".join(captured.output))
 
 
 class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):

@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import random
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -30,6 +31,7 @@ from typing import Any
 import aiohttp
 
 from .. import agent_tools as tools
+from ..agent_tools.builtin.bash import shell_context
 from ..utils import clip_status_value, iter_bounded_lines
 from ._http_proc import HttpAgentProcess, http_error_translator
 from .base import (
@@ -39,6 +41,7 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+performance_logger = logging.getLogger("Cozter.performance")
 
 # One SSE event can exceed the readline limit.
 _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
@@ -61,6 +64,8 @@ _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
 # Reject absurd ID lengths.
 _MAX_MODEL_ID_CHARS = 512
 _MAX_MODEL_IDS = 4_096
+_HTTP_CONNECT_TIMEOUT = 30.0
+_BLOCKED_TOOL_ROUND_LIMIT = 3
 # 3600s real-work cap; bound error bodies.
 _MAX_HTTP_ERROR_BODY_BYTES = 8 * 1024
 _EOF_SUCCESS_FINISH_REASONS = frozenset({
@@ -204,6 +209,29 @@ def _message_payload_bytes(message: dict[str, Any]) -> int:
     """Return the approximate UTF-8 JSON size retained for one chat message."""
     # Match aiohttp escaping so non-ASCII can't evade.
     return len(json.dumps(message).encode("utf-8"))
+
+
+def _is_blocked_tool_result(result: str) -> bool:
+    """Recognize dispatcher refusals, not ordinary fixable tool failures."""
+    if result.startswith(("Blocked:", "Unknown tool:")):
+        return True
+    path_refusals = (
+        "Error: path escapes workspace:", "Glob failed: path escapes workspace:",
+        "List failed: path escapes workspace:", "Grep failed: path escapes workspace:",
+        "Copy failed: path escapes workspace:", "Move failed: path escapes workspace:",
+        "Create directory failed: path escapes workspace:",
+    )
+    if result.startswith(path_refusals):
+        return True
+    if result.startswith("Tool ") and " failed: path escapes workspace:" in result:
+        return True
+    # apply_patch can report several files. Treat only an entirely refused
+    # patch as stalled; one successfully applied file is useful progress.
+    lines = result.splitlines()
+    return bool(lines) and all(
+        ": skipped (path escapes workspace:" in line and line.endswith(")")
+        for line in lines
+    )
 
 
 class OpenAIChatBackend(Backend):
@@ -382,7 +410,8 @@ class OpenAIChatBackend(Backend):
         request_model = self._request_model(model)
 
         # Approval -> tools.
-        tools_schema = _tools_for_approval(approval, compaction)
+        effective_approval = "deny" if compaction else approval
+        tools_schema = _tools_for_approval(effective_approval, compaction)
         if tools_schema and not self._supports_tools_for_model(request_model):
             tools_schema = None
         enabled_tool_names = tuple(
@@ -396,8 +425,8 @@ class OpenAIChatBackend(Backend):
         # Vision backends attach image bytes too.
         user_content: str | list[dict[str, Any]] = prompt
         if getattr(self, "supports_vision", False):
-            vision_parts = _vision_parts_for_prompt(
-                prompt, workspace_path,
+            vision_parts = await asyncio.to_thread(
+                _vision_parts_for_prompt, prompt, workspace_path,
             )
             if vision_parts is not None:
                 user_content = vision_parts
@@ -406,7 +435,9 @@ class OpenAIChatBackend(Backend):
         messages: list[dict] = [
             {
                 "role": "system",
-                "content": _system_prompt(workspace_path, enabled_tool_names),
+                "content": _system_prompt(
+                    workspace_path, enabled_tool_names, effective_approval,
+                ),
             },
             {"role": "user", "content": user_content},
         ]
@@ -438,6 +469,10 @@ class OpenAIChatBackend(Backend):
             emit_message_limit_error()
             return
         tool_repeat_counts: dict[str, int] = {}
+        blocked_rounds = 0
+        stopped_on_refusals = False
+        stop_reason = "Tool limit reached."
+        tool_rounds = 0
         has_preserved_reasoning = False
         # One session per turn.
 
@@ -500,6 +535,7 @@ class OpenAIChatBackend(Backend):
 
                     if not tool_calls:
                         return
+                    tool_rounds += 1
 
                     # Refuse before running if retaining it breaks the run bound.
                     if not append_message(assistant_msg):
@@ -527,7 +563,7 @@ class OpenAIChatBackend(Backend):
                     ) -> str:
                         # execute_tool owns permissions, status, truncation, timeout.
                         return await tools.execute_tool(
-                            _name, _args, workspace_path, approval,
+                            _name, _args, workspace_path, effective_approval,
                             proc.emit,
                         )
 
@@ -536,6 +572,7 @@ class OpenAIChatBackend(Backend):
                         batch_index for batch_index, _skip in enumerate(_batch_skipped)
                         if not _skip
                     ]
+                    batch_started = time.monotonic()
                     if _to_run_idx:
                         _gathered = await asyncio.gather(
                             *(
@@ -547,6 +584,12 @@ class OpenAIChatBackend(Backend):
                         )
                         for _pos, _res in zip(_to_run_idx, _gathered, strict=True):
                             _results[_pos] = _res
+                    performance_logger.info(
+                        "stage=tool_batch backend=%s seconds=%.3f calls=%d skipped=%d",
+                        self.name, time.monotonic() - batch_started,
+                        len(tool_calls), len(tool_calls) - len(_to_run_idx),
+                    )
+                    batch_results: list[str] = []
                     for _i, call in enumerate(tool_calls):
                         name = _batch_names[_i]
                         if _batch_skipped[_i]:
@@ -568,6 +611,7 @@ class OpenAIChatBackend(Backend):
                                 else f"Tool {name} failed: no result"
                             )
                             result = _res_str
+                        batch_results.append(result)
 
                         # Include ``name`` alongside tool_call_id.
                         tool_message = {
@@ -579,6 +623,27 @@ class OpenAIChatBackend(Backend):
                         if not append_message(tool_message):
                             emit_message_limit_error()
                             return
+
+                    # A skipped-only round cannot add evidence. Do not spend
+                    # hundreds of completions asking for the same blocked calls.
+                    if all(_batch_skipped):
+                        stop_reason = "Repeated tool calls made no further progress."
+                        break
+                    if all(_is_blocked_tool_result(item) for item in batch_results):
+                        blocked_rounds += 1
+                    else:
+                        blocked_rounds = 0
+                    if blocked_rounds >= _BLOCKED_TOOL_ROUND_LIMIT:
+                        stop_reason = "Successive tool rounds were blocked."
+                        stopped_on_refusals = True
+                        break
+
+                if stop_reason != "Tool limit reached.":
+                    performance_logger.info(
+                        "stage=tool_loop backend=%s tool_rounds=%d outcome=stalled",
+                        self.name, tool_rounds,
+                    )
+                    break
 
                 if not self._auto_continue_after_tool_limit():
                     break
@@ -611,7 +676,7 @@ class OpenAIChatBackend(Backend):
             final_request_message = {
                 "role": "user",
                 "content": (
-                    "Tool limit reached. No more tools: answer from"
+                    stop_reason + " No more tools: answer from"
                     " collected info; say what's missing if incomplete."
                 ),
             }
@@ -624,6 +689,17 @@ class OpenAIChatBackend(Backend):
 
             if assistant_text:
                 proc.emit({"type": "assistant_text", "text": assistant_text})
+                if stopped_on_refusals:
+                    # Preserve the report but prevent judge/auto-chain from
+                    # retrying a scope that permissions/tool availability block.
+                    proc.emit({
+                        "type": "error",
+                        "message": (
+                            f"{self.name} stopped after {_BLOCKED_TOOL_ROUND_LIMIT}"
+                            " consecutive rounds where every tool call was refused."
+                            " Review effective permission or available tools before retrying."
+                        ),
+                    })
             else:
                 proc.emit({
                     "type": "error",
@@ -817,10 +893,15 @@ async def _stream_completion(
     *max_retries* times - retrying a completion is safe because tool side
     effects only run *after* this returns. A bad status or malformed
     response is not retried. Real-work cap: the stream runs up to the
-    ``sock_read`` bound (default 3600s) or until the turn is cancelled.
+    ``sock_read`` bound (default 3600s), shared across retries and backoff,
+    or until the turn is cancelled. Heartbeats cannot extend this budget.
     """
-    async with http_error_translator(label, sock_read, timeout_setting):
-        attempt = 0
+    started = time.monotonic()
+    retries = 0
+    outcome = "error"
+
+    async def with_retries() -> tuple[str, str, list[dict]]:
+        nonlocal retries
         while True:
             try:
                 return await _stream_once(
@@ -828,16 +909,34 @@ async def _stream_completion(
                     session=session,
                 )
             except _RetryableError as exc:
-                attempt += 1
-                if attempt > max_retries:
+                if retries >= max_retries:
                     raise
-                delay = _backoff_delay(attempt, exc.retry_after)
+                retries += 1
+                delay = _backoff_delay(retries, exc.retry_after)
                 logger.warning(
                     "%s transient failure (attempt %d/%d): %s;"
                     " retrying in %.1fs",
-                    label, attempt, max_retries, exc, delay,
+                    label, retries, max_retries, exc, delay,
                 )
                 await asyncio.sleep(delay)
+
+    try:
+        async with http_error_translator(label, sock_read, timeout_setting):
+            if sock_read is not None and sock_read > 0:
+                result = await asyncio.wait_for(with_retries(), timeout=sock_read)
+            else:
+                result = await with_retries()
+        outcome = "ok"
+        return result
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
+    finally:
+        performance_logger.info(
+            "stage=http_completion backend=%s model=%s seconds=%.3f retries=%d outcome=%s",
+            label, clip_status_value(str(payload.get("model", "default")), 120),
+            time.monotonic() - started, retries, outcome,
+        )
 
 
 async def _stream_once(
@@ -856,9 +955,16 @@ async def _stream_once(
     until the turn is cancelled; cancel still stops instantly.
     """
     if sock_read is not None and sock_read > 0:
-        timeout = aiohttp.ClientTimeout(total=None, sock_read=sock_read)
+        timeout = aiohttp.ClientTimeout(
+            total=sock_read, sock_read=sock_read,
+            connect=min(_HTTP_CONNECT_TIMEOUT, sock_read),
+            sock_connect=min(_HTTP_CONNECT_TIMEOUT, sock_read),
+        )
     else:
-        timeout = aiohttp.ClientTimeout(total=None)
+        timeout = aiohttp.ClientTimeout(
+            total=None, connect=_HTTP_CONNECT_TIMEOUT,
+            sock_connect=_HTTP_CONNECT_TIMEOUT,
+        )
     if session is None:
         async with aiohttp.ClientSession() as owned_session:
             return await _stream_once(
@@ -889,6 +995,9 @@ async def _post_completion_stream(
     # EOF alone isn't completion.
     saw_terminal_marker = False
     terminal_finish_reason: str | None = None
+    started = time.monotonic()
+    first_delta: float | None = None
+    outcome = "error"
 
     try:
         async with session.post(
@@ -959,6 +1068,10 @@ async def _post_completion_stream(
                 delta = choice.get("delta")
                 if not isinstance(delta, dict):
                     continue
+                if first_delta is None and any(
+                    delta.get(key) for key in ("content", "reasoning_content", "tool_calls")
+                ):
+                    first_delta = time.monotonic() - started
                 content = delta.get("content")
                 if isinstance(content, str) and content:
                     text_bytes += len(content.encode("utf-8", errors="replace"))
@@ -994,6 +1107,13 @@ async def _post_completion_stream(
                         _check_completion_buffer_limit(
                             text_bytes, reasoning_bytes, tool_argument_bytes,
                         )
+            if saw_terminal_marker and not (
+                terminal_finish_reason == "length" and tool_buffers
+            ):
+                outcome = "ok"
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
     except (
         aiohttp.ClientConnectorError,
         aiohttp.ServerDisconnectedError,
@@ -1004,6 +1124,12 @@ async def _post_completion_stream(
     except (_SSEEventTooLargeError, _CompletionTooLargeError) as exc:
         # Never continue after dropped deltas/caps (retry is safe).
         raise _RetryableError(f"{label}: {exc}") from exc
+    finally:
+        performance_logger.info(
+            "stage=http_attempt backend=%s seconds=%.3f first_delta_seconds=%s outcome=%s",
+            label, time.monotonic() - started,
+            f"{first_delta:.3f}" if first_delta is not None else "none", outcome,
+        )
 
     if not saw_terminal_marker:
         raise _RetryableError(
@@ -1257,24 +1383,51 @@ def _tools_for_approval(
 
 
 def _system_prompt(
-    workspace_path: str, tool_names: tuple[str, ...],
+    workspace_path: str, tool_names: tuple[str, ...], approval: str = "auto",
 ) -> str:
     """Build the per-turn system message.
 
     Embeds the current workspace path so the model is aware of where it is
     operating; lists the exact tools available this turn (which may be a
     read-only subset under the confirm permission) so the model doesn't try
-    to call tools that aren't exposed. Rebuilt on every turn, so any
-    workspace switch is automatically reflected.
+    to call tools that aren't exposed. States the effective permission too,
+    so full-access turns do not inherit a workspace sandbox assumption.
+    Rebuilt on every turn, so permission changes and workspace switches are
+    automatically reflected.
     """
+    effective_approval = (
+        approval if approval in {"auto", "full", "confirm"} else "deny"
+    )
     parts = [
         "Cozter assistant.",
         f"Workspace: {workspace_path}",
+        f"Effective permission: {effective_approval}.",
         WHOLE_SCOPE_RULE,
         DOC_FOLLOWING_RULE,
         PROGRESS_RULE,
         VISION_RULE,
     ]
+    if effective_approval == "full":
+        parts.append(
+            "Built-in filesystem tools may access paths outside the workspace,"
+            " including absolute paths and relative paths with '..', subject"
+            " to the host account's operating system permissions. Relative"
+            " paths are based on the workspace. Full permission removes"
+            " Cozter's workspace boundary for these tools; use them for"
+            " authorized work instead of assuming this turn is sandboxed."
+            " Other tool-specific restrictions still apply."
+        )
+    elif effective_approval in {"auto", "confirm"}:
+        parts.append(
+            "Filesystem tools are confined to the workspace, including"
+            " resolved symlink targets. Relative paths are based on the"
+            " workspace; absolute paths must remain inside it. The direct"
+            " host shell is unavailable."
+        )
+        if effective_approval == "confirm":
+            parts.append("Only read-only tools are available; state changes are blocked.")
+    else:
+        parts.append("Tool execution is disabled by the effective permission.")
     if tool_names:
         parts.append(
             f"Tools: {', '.join(tool_names)}."
@@ -1282,6 +1435,8 @@ def _system_prompt(
             " they run concurrently (results return in order)."
             " One pass; don't repeat calls."
         )
+        if "bash" in tool_names:
+            parts.append(shell_context())
     else:
         parts.append("No tools this turn.")
     return "\n".join(parts)

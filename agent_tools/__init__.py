@@ -43,7 +43,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .base import AgentTool
-from .base import truncate_with_marker
+from .base import tool_permission_scope, truncate_with_marker
 
 logger = logging.getLogger(__name__)
 
@@ -283,12 +283,13 @@ async def execute_tool(
         # Real-work cap; cancel stops instantly.
         try:
             cap = _tool_timeout_seconds()
-            if cap is not None and cap > 0:
-                raw_result: object = await asyncio.wait_for(
-                    tool.run(workspace_path, args), timeout=cap,
-                )
-            else:
-                raw_result = await tool.run(workspace_path, args)
+            with tool_permission_scope(approval):
+                if cap is not None and cap > 0:
+                    raw_result: object = await asyncio.wait_for(
+                        tool.run(workspace_path, args), timeout=cap,
+                    )
+                else:
+                    raw_result = await tool.run(workspace_path, args)
             if isinstance(raw_result, str):
                 result = raw_result
             else:

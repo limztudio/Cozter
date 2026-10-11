@@ -71,6 +71,7 @@ def _read_inline_text_attachment(path: str) -> str:
 UPLOADS_DIR = "uploads"
 # Status previews must never block the stream or answer.
 _STATUS_OPERATION_TIMEOUT_SEC = 4.0
+_STATUS_EDIT_INTERVAL_SEC = 1.5
 # Ack is cosmetic; bound it.
 _INJECT_ACK_TIMEOUT_SEC = 8.0
 _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
@@ -381,6 +382,8 @@ class _InjectQueue(asyncio.Queue[str]):
 
 class BotPlatform(ABC):
     """Base class: holds all command logic, leaves I/O to subclasses."""
+
+    supports_transient_status: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -3495,10 +3498,12 @@ class BotPlatform(ABC):
         inject_q = _InjectQueue(maxsize=self.max_queue_size)
         self._inject_queues[uid] = inject_q
 
-        thinking_result = await self._run_status_operation(
-            self.send_text(chat_id, "Thinking..."),
-            action="posting the Thinking status",
-        )
+        thinking_result = None
+        if self.supports_transient_status:
+            thinking_result = await self._run_status_operation(
+                self.send_text(chat_id, "Thinking..."),
+                action="posting the Thinking status",
+            )
         thinking_handle = (
             thinking_result
             if isinstance(thinking_result, MessageHandle) else None
@@ -3511,19 +3516,31 @@ class BotPlatform(ABC):
         status_edit_task: asyncio.Task[object] | None = None
 
         async def flush_status_edits() -> None:
-            """Coalesce preview updates while prior platform I/O is pending."""
-            nonlocal pending_status
+            """Rate-limit one worker, keeping the latest pending preview."""
+            nonlocal pending_status, last_edit
             while pending_status is not None:
+                loop = asyncio.get_running_loop()
+                delay = last_edit + _STATUS_EDIT_INTERVAL_SEC - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                # Select after sleeping so superseded previews are discarded.
                 display = pending_status
                 pending_status = None
+                last_edit = loop.time()
+                operation = (
+                    self.edit_text(thinking_handle, display)
+                    if thinking_handle is not None
+                    else self.send_status(chat_id, display)
+                )
                 await self._run_status_operation(
-                    self.edit_text(thinking_handle, display),
-                    action="updating the Thinking status",
+                    operation, action="updating the progress status",
                 )
 
         async def on_event(ev: agent.ChatEvent) -> None:
-            nonlocal last_edit, latest_text
+            nonlocal latest_text
             nonlocal pending_status, status_edit_task
+            if not self.supports_transient_status:
+                return
             if ev.kind == "text":
                 if ev.content.strip():
                     latest_text = ev.content
@@ -3544,27 +3561,14 @@ class BotPlatform(ABC):
                 return
             if thinking_handle is None:
                 # No editable status: progress as fresh messages; skip answer text.
-                if ev.kind != "text":
-                    await self._run_status_operation(
-                        self.send_status(chat_id, status_lines[-1]),
-                        action="sending a progress status",
-                    )
-                return
-            # One Thinking message, edited in place.
-            pending_status = self._compose_thinking_display(
-                status_lines, latest_text,
-            )
-            now = asyncio.get_running_loop().time()
-            if now - last_edit < 1.5:
-                # Throttled: schedule a flush so this update lands.
-                if status_edit_task is None or status_edit_task.done():
-                    status_edit_task = create_background_task(
-                        flush_status_edits(),
-                        name=f"{self.platform_id}:status-edit:{uid}",
-                        log=logger,
-                    )
-                return
-            last_edit = now
+                if ev.kind == "text":
+                    return
+                pending_status = status_lines[-1]
+            else:
+                # One Thinking message, edited in place.
+                pending_status = self._compose_thinking_display(
+                    status_lines, latest_text,
+                )
             if status_edit_task is None or status_edit_task.done():
                 status_edit_task = create_background_task(
                     flush_status_edits(),

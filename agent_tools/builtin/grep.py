@@ -13,11 +13,13 @@ from ..base import (
     AgentTool,
     capped_list_tail,
     coerce_int_arg,
+    get_tool_permission,
     iter_workspace_files,
     object_parameters,
     require_nonempty_string_arg,
     resolve_tool_path,
     summarize_arg,
+    tool_permission_scope,
 )
 
 # Skip oversized files.
@@ -150,12 +152,14 @@ def _scan_worker(
     file_glob: str,
     regex: re.Pattern[str],
     max_results: int,
+    approval: str = "auto",
 ) -> None:
     """Run one scan in a child process and return its result."""
     try:
-        result_conn.send((True, GrepTool._scan(
-            workspace_path, search_root, file_glob, regex, max_results,
-        )))
+        with tool_permission_scope(approval):
+            result_conn.send((True, GrepTool._scan(
+                workspace_path, search_root, file_glob, regex, max_results,
+            )))
     except BaseException as exc:
         # Report scan failures, not false empties.
         try:
@@ -192,7 +196,7 @@ def _start_scan_worker(
         target=_scan_worker,
         args=(
             send_conn, workspace_path, search_root, file_glob, regex,
-            max_results,
+            max_results, get_tool_permission(),
         ),
         daemon=True,
     )

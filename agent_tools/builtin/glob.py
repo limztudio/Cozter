@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from glob import has_magic
 
 from ..base import (
     AgentTool,
@@ -12,6 +13,7 @@ from ..base import (
     iter_workspace_files,
     object_parameters,
     require_nonempty_string_arg,
+    resolve_inside_workspace,
     summarize_arg,
 )
 
@@ -22,6 +24,10 @@ class GlobTool(AgentTool):
     parameters = object_parameters(
         {
             "pattern": {"type": "string"},
+            "path": {
+                "type": "string",
+                "description": "Search root; defaults to the workspace.",
+            },
             "max_results": {
                 "type": "integer",
                 "description": "max 500.",
@@ -45,9 +51,17 @@ class GlobTool(AgentTool):
 
         abs_ws = os.path.realpath(workspace_path)
         try:
-            matches = await asyncio.to_thread(
-                self._find_matches, abs_ws, pattern, max_results,
+            root = resolve_inside_workspace(
+                abs_ws, args.get("path") or ".",
             )
+            if root == abs_ws:
+                matches = await asyncio.to_thread(
+                    self._find_matches, abs_ws, pattern, max_results,
+                )
+            else:
+                matches = await asyncio.to_thread(
+                    self._find_matches, abs_ws, pattern, max_results, root,
+                )
         except Exception as exc:
             return f"Glob failed: {exc}"
 
@@ -65,11 +79,25 @@ class GlobTool(AgentTool):
     @staticmethod
     def _find_matches(
         workspace_path: str, pattern: str, max_results: int,
+        search_root: str | None = None,
     ) -> list[str]:
         """Synchronously scan for matches; called in a worker thread."""
+        # Separate a literal directory prefix so full mode can search an
+        # absolute or ../ pattern without scanning unrelated directories.
+        # Treat drive/UNC anchors literally; shares may contain '[' or ']'.
+        # Splitting a magical anchor repeatedly would otherwise never shrink.
+        drive, tail = os.path.splitdrive(pattern)
+        prefix, search_pattern = os.path.split(tail)
+        while has_magic(prefix):
+            prefix, segment = os.path.split(prefix)
+            search_pattern = os.path.join(segment, search_pattern)
+        root = resolve_inside_workspace(
+            workspace_path,
+            os.path.join(search_root or workspace_path, drive + prefix or "."),
+        )
         matches: list[str] = []
         for _path, rel, _root_rel in iter_workspace_files(
-            workspace_path, workspace_path, pattern,
+            workspace_path, root, search_pattern, discovery_pattern=pattern,
         ):
             matches.append(rel)
             if len(matches) >= max_results:
