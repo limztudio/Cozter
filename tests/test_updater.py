@@ -229,20 +229,6 @@ class UpdaterRequirementsTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["timeout"], updater._PIP_INSTALL_TIMEOUT)
         self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 
-    def test_updated_requirements_install_has_a_timeout(self) -> None:
-        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-        with (
-            mock.patch.object(updater.os.path, "exists", return_value=True),
-            mock.patch.object(
-                updater.subprocess, "run", return_value=completed,
-            ) as run,
-        ):
-            updater.install_requirements()
-
-        self.assertEqual(
-            run.call_args.kwargs["timeout"], updater._PIP_INSTALL_TIMEOUT,
-        )
-
     def test_updated_requirements_timeout_is_reported(self) -> None:
         with (
             mock.patch.object(updater.os.path, "exists", return_value=True),

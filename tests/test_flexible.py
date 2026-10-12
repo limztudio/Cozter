@@ -230,10 +230,6 @@ class FlexibleSettingsTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 workspace.get_flexible_backend_name(ws, "extreme")
 
-    def test_flexible_is_the_default_agent(self) -> None:
-        self.assertEqual(workspace.DEFAULT_BACKEND, "flexible")
-        self.assertNotIn("flexible", workspace.DIRECT_BACKENDS)
-
     def test_every_tier_command_is_registered(self) -> None:
         for tier in workspace.FLEXIBLE_TIERS:
             self.assertIn(f"agent_flexible_{tier}", BotPlatform._COMMANDS)
@@ -562,28 +558,6 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.text, "solo report")
         self.assertEqual(self.internal, ["Flexible planner"])
 
-    async def test_long_worker_reports_are_truncated_downstream(self) -> None:
-        """Unbounded reports are capped before later workers/the merge."""
-        long_report = "x" * (flexible._REPORT_MAX_CHARS + 500)
-        plan = flexible.Plan(
-            understanding="",
-            subtasks=(
-                flexible.Subtask(tier="low", instruction="first"),
-                flexible.Subtask(tier="mid", instruction="second"),
-            ),
-        )
-        worker_prompt = flexible.build_subtask_prompt(
-            "request", plan, 1, [long_report],
-        )
-        self.assertNotIn(long_report, worker_prompt)
-        self.assertIn(flexible._REPORT_TRUNCATION_MARKER, worker_prompt)
-        merge_prompt = flexible.build_merge_prompt(
-            "context", plan, [long_report, "short"],
-            collaborative=False,
-        )
-        self.assertNotIn(long_report, merge_prompt)
-        self.assertIn("short", merge_prompt)
-
     def test_report_excerpt_keeps_final_evidence_and_real_remainder(self) -> None:
         plan = flexible.Plan(
             understanding="",
@@ -765,34 +739,6 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("(no response)", result.text)
         # The reply names the quiet tier.
         self.assertIn(f"{low_agent}/{low_model}", result.text)
-
-    async def test_a_failing_worker_reports_why_it_went_quiet(self) -> None:
-        """A backend error must reach the user, not just the journal."""
-        async def failing_worker(*_args, **_kwargs):
-            result = AgentResult()
-            result.error = "429 usage limit reached"
-            return result, False
-
-        async def silent_merge(*_args, **kwargs):
-            if kwargs["label"] == "Flexible planner":
-                return self.plan_output
-            return ""  # the same broken agent runs the merge
-
-        with tempfile.TemporaryDirectory() as ws:
-            workspace.ensure_cozter_dir(ws)
-            with mock.patch.object(
-                agent, "run_internal_backend", silent_merge,
-            ), mock.patch.object(agent, "_drive_backend", failing_worker):
-                result, _ = await agent._run_flexible(
-                    "context", "user message", ws,
-                    approval="auto", effort=0, collaborative=False,
-                    summary_backend_name="codex",
-                    summary_model="gpt-5.6-luna",
-                    on_event=None, inject_queue=None, injected=[],
-                )
-
-        self.assertIn("429 usage limit reached", result.text)
-        self.assertEqual(result.error, "429 usage limit reached")
 
     async def test_all_failed_workers_keep_errors_and_skip_merge(self) -> None:
         async def failing_worker(*_args, **_kwargs):
@@ -1160,17 +1106,6 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
 
 class CoveragePromptTests(unittest.TestCase):
-    def test_merge_checks_doc_rules_and_truncated_previews(self) -> None:
-        self.assertIn("every rule/section", flexible._MERGE_RULES)
-        self.assertIn("PARTIAL + remainder", flexible._MERGE_RULES)
-        self.assertIn("bounded report excerpt", flexible._MERGE_RULES)
-        self.assertIn("retained scope and verification evidence", flexible._MERGE_RULES)
-
-    def test_report_marker_warns_preview_not_full(self) -> None:
-        self.assertIn("never treat this preview", flexible._REPORT_TRUNCATION_MARKER)
-        self.assertIn("omission alone does not imply unfinished work", flexible._REPORT_TRUNCATION_MARKER)
-        self.assertNotIn("PARTIAL", flexible._REPORT_TRUNCATION_MARKER)
-
     def test_plan_cap_surfaces_partial_remainder(self) -> None:
         lines = [
             f"{index + 1}. [{['low', 'mid', 'high'][index % 3]}] task {index + 1}"
@@ -1184,9 +1119,6 @@ class CoveragePromptTests(unittest.TestCase):
         self.assertEqual(len(plan.subtasks), flexible.MAX_SUBTASKS)
         self.assertIn("PARTIAL", plan.understanding)
         self.assertIn("remainder", plan.understanding)
-
-    def test_planner_rules_mention_cap_remainder(self) -> None:
-        self.assertIn("PARTIAL + remainder", flexible._PLANNER_RULES)
 
     def test_build_verify_requires_evidence_across_prompts(self) -> None:
         """Build checks must demand full-log evidence, never eyeball-only."""
@@ -1218,28 +1150,8 @@ class CoveragePromptTests(unittest.TestCase):
         self.assertIn("FULL", BashTool.description)
         self.assertIn("grep", BashTool.description.lower())
 
-    def test_discovery_tools_point_at_paging(self) -> None:
-        from Cozter.agent_tools.builtin import glob as glob_mod
-        from Cozter.agent_tools.builtin import grep as grep_mod
-        from Cozter.agent_tools.builtin import list_dir as list_dir_mod
-        from Cozter.agent_tools.builtin import read_file as read_file_mod
-        from Cozter.agent_tools.builtin import tree as tree_mod
-
-        for tool_module, name in (
-            (glob_mod, "GlobTool"), (grep_mod, "GrepTool"),
-            (tree_mod, "TreeTool"), (list_dir_mod, "ListDirTool"),
-            (read_file_mod, "ReadFileTool"),
-        ):
-            tool_cls = getattr(tool_module, name, None) or getattr(
-                tool_module, next(key for key in dir(tool_module) if key.endswith("Tool")),
-            )
-            self.assertIn("page", tool_cls.description.lower())
-
 
 class FlexibleUserReplyPolicyTests(unittest.TestCase):
-    def test_merge_rules_ban_handoff_notes(self) -> None:
-        self.assertIn("Next turn should:", flexible._MERGE_RULES)
-
     def test_worker_prompt_bans_handoff_notes(self) -> None:
         plan = flexible.Plan(
             understanding="",

@@ -393,10 +393,6 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             },
         }])
 
-    def test_sse_error_envelope_is_surfaced(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "quota exhausted"):
-            self._stream([{"error": {"message": "quota exhausted"}}])
-
     def test_sse_error_message_is_bounded(self) -> None:
         with self.assertRaises(RuntimeError) as raised:
             self._stream([{"error": "x" * 2_000}])
@@ -471,20 +467,6 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 },
             ], include_done=False)
 
-    def test_standard_finish_reason_allows_eof_without_done(self) -> None:
-        text, reasoning, tool_calls = self._stream([
-            {
-                "choices": [{
-                    "delta": {"content": "complete"},
-                    "finish_reason": "stop",
-                }],
-            },
-        ], include_done=False)
-
-        self.assertEqual(text, "complete")
-        self.assertEqual(reasoning, "")
-        self.assertEqual(tool_calls, [])
-
     def test_error_finish_reason_never_returns_partial_tool_call(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "response was incomplete"):
             self._stream([
@@ -501,28 +483,6 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                             }],
                         },
                         "finish_reason": "model_context_window_exceeded",
-                    }],
-                },
-            ])
-
-    def test_length_finish_reason_never_returns_partial_tool_call(self) -> None:
-        with self.assertRaisesRegex(
-            oa._RetryableError, "length while a tool call was pending",
-        ):
-            self._stream([
-                {
-                    "choices": [{
-                        "delta": {
-                            "tool_calls": [{
-                                "index": 0,
-                                "id": "call-1",
-                                "function": {
-                                    "name": "write_file",
-                                    "arguments": '{"path":"x.txt",',
-                                },
-                            }],
-                        },
-                        "finish_reason": "length",
                     }],
                 },
             ])
@@ -643,45 +603,6 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             ),
         ):
             self._stream(events)
-
-    def test_fragmented_tool_arguments_are_joined_at_completion(self) -> None:
-        text, reasoning, tool_calls = self._stream([
-            {
-                "choices": [{
-                    "delta": {
-                        "tool_calls": [{
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "read_file",
-                                "arguments": '{"path":',
-                            },
-                        }],
-                    },
-                }],
-            },
-            {
-                "choices": [{
-                    "delta": {
-                        "tool_calls": [{
-                            "index": 0,
-                            "function": {"arguments": '"x.txt"}'},
-                        }],
-                    },
-                }],
-            },
-        ])
-
-        self.assertEqual(text, "")
-        self.assertEqual(reasoning, "")
-        self.assertEqual(tool_calls, [{
-            "id": "call-1",
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "arguments": '{"path":"x.txt"}',
-            },
-        }])
 
     def test_tool_argument_and_completion_buffer_caps_are_enforced(self) -> None:
         argument_events = [

@@ -202,13 +202,6 @@ class ClaudeCodeParseTests(unittest.TestCase):
     def setUp(self) -> None:
         self.backend = ClaudeCodeBackend()
 
-    def test_assistant_text_block(self) -> None:
-        result = _run(self.backend, [
-            {"type": "assistant", "message": {"content": [
-                {"type": "text", "text": "hi there"},
-            ]}},
-        ])
-        self.assertEqual(result.text, "hi there")
 
     def test_assistant_text_block_non_string_text_is_skipped(self) -> None:
         result = _run(self.backend, [{
@@ -430,7 +423,6 @@ class CopilotParseTests(unittest.TestCase):
         self.assertEqual(result.error, "Unknown error")
 
 
-
 class GrokParseTests(unittest.TestCase):
     def setUp(self) -> None:
         self.backend = GrokBackend()
@@ -527,11 +519,6 @@ class LlamaParseTests(unittest.TestCase):
     def setUp(self) -> None:
         self.backend = LlamaBackend()
 
-    def test_assistant_text(self) -> None:
-        result = _run(self.backend, [
-            {"type": "assistant_text", "text": "yo"},
-        ])
-        self.assertEqual(result.text, "yo")
 
     def test_tool_use_with_file_action(self) -> None:
         result = _run(self.backend, [

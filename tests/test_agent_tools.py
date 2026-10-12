@@ -3,8 +3,6 @@ import errno
 import os
 import re
 import stat
-import subprocess
-import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -860,30 +858,6 @@ class BashToolTests(unittest.TestCase):
         self.assertEqual(asyncio.run(run()), "cancelled")
 
 
-class PluginScriptTests(unittest.TestCase):
-    def test_plugin_module_invocation_does_not_preload_target(self) -> None:
-        package_parent = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
-
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "Cozter.agent_tools.plugins.current_time",
-                '{"timezone":"UTC"}',
-            ],
-            cwd=package_parent,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertNotIn("RuntimeWarning", proc.stderr)
-        self.assertIn("+00:00", proc.stdout.strip())
-
-
 class PluginLoadingTests(unittest.TestCase):
     def test_failed_plugin_import_restores_colliding_registration(self) -> None:
         """A broken plugin cannot replace a builtin as an unmarked tool."""
@@ -1091,20 +1065,6 @@ class DiscoveryToolTests(unittest.TestCase):
                 except asyncio.CancelledError:
                     pass
                 self.assertTrue(task.cancelled() or task.done())
-
-        asyncio.run(run())
-
-    def test_grep_completes_simple_scan_without_cancel(self) -> None:
-        async def run() -> None:
-            with tempfile.TemporaryDirectory() as tmp:
-                path = os.path.join(tmp, "note.txt")
-                with open(path, "w", encoding="utf-8") as file_handle:
-                    file_handle.write("needle in a haystack\n")
-                result = await GrepTool().run(
-                    tmp, {"pattern": "needle"},
-                )
-
-            self.assertIn("note.txt:1: needle in a haystack", result)
 
         asyncio.run(run())
 

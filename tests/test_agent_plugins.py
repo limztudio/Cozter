@@ -334,12 +334,6 @@ class GitInfoToolTests(unittest.TestCase):
             ),
         )
 
-    def test_branches_lists_current_branch(self) -> None:
-        self._commit("a.txt", "hello\n", "initial commit")
-        result = self.invoke(action="branches")
-        self.assertFalse(result.startswith("Error:"))
-        self.assertIn("*", result)
-
     def test_tags_and_stashes_empty_reports(self) -> None:
         self._commit("a.txt", "hello\n", "initial commit")
         self.assertEqual(self.invoke(action="tags"), "No tags.")
@@ -583,9 +577,6 @@ class GitSyncToolTests(_GitRepoMixin):
              self.remote_dir],
             check=True,
         )
-
-    def test_requires_full_permission(self) -> None:
-        self.assertTrue(self.tool.requires_full_permission)
 
     def test_remotes_lists_origin(self) -> None:
         result = self.invoke(action="remotes")

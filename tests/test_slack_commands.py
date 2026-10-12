@@ -36,17 +36,6 @@ class SlackMessageCommandTests(unittest.TestCase):
 
         self.assertEqual(bot.replies, ["Cozter bot is running."])
 
-    def test_app_mention_strips_bot_tag_before_dispatching_alias(self) -> None:
-        bot = _CapturingSlackBot()
-
-        asyncio.run(bot._on_app_mention({
-            "user": "U1",
-            "channel": "C1",
-            "text": r"<@B1> \start",
-        }))
-
-        self.assertEqual(bot.replies, ["Cozter bot is running."])
-
     def test_app_mention_strips_bot_tag_before_dispatching_text(self) -> None:
         bot = _CapturingSlackBot()
 

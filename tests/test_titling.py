@@ -89,10 +89,6 @@ class CleanTitleTests(unittest.TestCase):
 
 class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_titling_summary_clip_never_exceeds_budget(self) -> None:
-        marker = (
-            "… [older summary omitted — preview only;"
-            " title from shown context]"
-        )
         with (
             mock.patch.object(
                 titling.backends_agent,
@@ -119,7 +115,6 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
             prompt = run_title.await_args.args[2]
             self.assertLessEqual(len(prompt), titling.TITLE_CONTEXT_CHARS)
             self.assertIn("…", prompt)
-            _ = marker
 
     def test_colony_session_name_clip_never_exceeds_name_space(self) -> None:
         from Cozter import colony as colony_mod
@@ -130,12 +125,10 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
                 "sid123", long_name, [], budget,
             )
             self.assertEqual(complete, bool(block))
-            header_len = len("Session: ") + len("\n[SESSION:sid123]\n")
             self.assertLessEqual(len(block), budget + len("[/SESSION]\n") + 1)
             if block:
                 self.assertIn("…", block)
                 self.assertNotIn("… [name clipped]… [name clipped]", block)
-            _ = header_len
 
     def test_flexible_report_clip_never_exceeds_cap(self) -> None:
         from Cozter import flexible as flexible_mod
@@ -177,12 +170,6 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
         long_prompt = "p" * 2_000
         body = router_mod._build_router_prompt(long_prompt, [], 0)
         user_section = body.split("Existing sessions")[0]
-        self.assertLessEqual(
-            len("p" * router_mod.ROUTER_PROMPT_PREVIEW_CHARS)
-            + len("… [message preview truncated]"),
-            router_mod.ROUTER_PROMPT_PREVIEW_CHARS
-            + len("… [message preview truncated]"),
-        )
         self.assertIn("…", user_section)
         # preview block + header + separators.
         self.assertLessEqual(

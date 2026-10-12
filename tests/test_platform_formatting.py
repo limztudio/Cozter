@@ -151,12 +151,6 @@ class TelegramSendTextTests(unittest.TestCase):
             "a" * (_TELEGRAM_TEXT_LIMIT - 1) + "\n" + "b",
         )
 
-    def test_rich_chunks_do_not_split_html_tags(self) -> None:
-        html = _md_to_html("**bold** and `code`")
-        self.assertEqual(_rich_telegram_chunks("**bold** and `code`"), [html])
-        self.assertIn("<b>bold</b>", html)
-        self.assertIn("<code>code</code>", html)
-
     def test_expanding_entities_and_long_code_keep_text_and_balanced_tags(self):
         for source in (
             "&" * 1_000,

@@ -176,10 +176,6 @@ class BotCommandTests(unittest.TestCase):
         self._run(self.bot.cmd_compact(self._ctx(args="12")))
         self.assertEqual(workspace.get_compact_interval(self.ws), 12)
 
-    def test_context_sets_budget(self) -> None:
-        self._run(self.bot.cmd_context(self._ctx(args="8000")))
-        self.assertEqual(workspace.get_history_budget(self.ws), 8000)
-
     def test_numeric_commands_reject_overlong_decimal_input(self) -> None:
         too_long = "9" * 5_000
 

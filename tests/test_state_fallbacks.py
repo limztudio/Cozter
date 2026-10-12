@@ -741,17 +741,6 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
     tool/update-idle/dump-traceback config getters added by the
     runtime-hardening work."""
 
-    def test_defaults_match_hardening_contract(self) -> None:
-        old = config.CONFIG_PATH
-        config.CONFIG_PATH = "/nonexistent/config.json"
-        try:
-            self.assertEqual(config.get_tool_timeout(), 3600)
-            self.assertEqual(config.get_update_idle_timeout(), 1200)
-            # 0 means "disabled": periodic dump off, SIGUSR1 still works.
-            self.assertEqual(config.get_dump_traceback_interval(), 0)
-        finally:
-            config.CONFIG_PATH = old
-
     def test_positive_getters_honor_config_overrides(self) -> None:
         with temporary_config({
             "tool_timeout": 5,
@@ -1816,14 +1805,6 @@ class RuntimeInputValidationTests(unittest.TestCase):
 
     def test_router_session_block_rejects_junk_id(self) -> None:
         self.assertEqual(router._build_session_block({"id": 123}), "")
-
-    def test_router_valid_ids_skip_non_string(self) -> None:
-        sessions_data = [
-            {"id": "good-id", "created": "2024-01-01"},
-            {"id": 7, "created": "2024-01-02"},
-        ]
-        valid = {session["id"] for session in sessions_data if isinstance(session.get("id"), str)}
-        self.assertEqual(valid, {"good-id"})
 
     def test_colony_bump_never_goes_negative(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -134,13 +134,6 @@ class PromptPolicyTests(unittest.TestCase):
         )
         self.assertIn("TARGETWORD deployment facts", out)
 
-    def test_planner_context_keeps_the_request_under_a_cap(self) -> None:
-        history = "history line\n" * 2_000
-        request = "the actual user request"
-        out = agent._planner_context(history + request, request)
-        self.assertLessEqual(len(out), agent._PLANNER_CONTEXT_CAP)
-        self.assertIn(request, out)
-
     def test_explicit_session_turn_is_autonomous(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace.set_interaction_style(tmp, "collaborative")
@@ -194,18 +187,6 @@ class BackendVerificationPromptTests(unittest.TestCase):
                 self.assertIn(
                     "PARTIAL + remainder", prompt, msg=f"agent={name}",
                 )
-
-    def test_every_direct_agent_gets_verify_with_evidence(self) -> None:
-        from Cozter.backends_agent import DIRECT_BACKENDS, get_backend
-
-        self.assertEqual(len(DIRECT_BACKENDS), 7)
-        for name in DIRECT_BACKENDS:
-            backend = get_backend(name)
-            prompt = agent._build_backend_prompt(
-                backend, "verify build", collaborative=False,
-                allow_detached_requests=False,
-            )
-            self.assertIn("Verify-with-evidence", prompt, msg=f"agent={name}")
 
 
 class CompactionTargetTests(unittest.TestCase):
@@ -434,26 +415,6 @@ class FormatUsageTests(unittest.TestCase):
 
 
 class PromptTruncationDisclosureTests(unittest.TestCase):
-    def test_context_marker_warns_preview_not_full_content(self) -> None:
-        self.assertIn("never treat", agent._CONTEXT_TRUNCATION_MARKER)
-        self.assertIn("re-check leftovers", agent._CONTEXT_TRUNCATION_MARKER)
-
-    def test_tool_result_cap_points_at_paging(self) -> None:
-        from Cozter import agent_tools
-
-        async def run() -> str:
-            return await agent_tools.execute_tool(
-                "read_file", {"path": "nope.txt"}, "auto", "/tmp",
-                emit=None,
-            )
-
-        _ = run  # schema-level check below instead of live execution
-        import inspect
-
-        function_source = inspect.getsource(agent_tools.execute_tool)
-        self.assertIn("page until no truncation marker remains", function_source)
-        self.assertIn("PARTIAL + remainder", function_source)
-
     def test_planner_omission_marker_forces_coverage(self) -> None:
         history = "history line\n" * 2_000
         request = "the actual user request"

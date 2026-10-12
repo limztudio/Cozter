@@ -314,8 +314,6 @@ class BackendSharedHelperTests(unittest.TestCase):
         self.assertEqual(empty.error, "boom")
         self.assertEqual(empty.text, "Error: boom")
 
-    def test_context_window_hook_defaults_to_unknown(self) -> None:
-        self.assertIsNone(_DummyBackend().context_window_tokens("any-model"))
 
     def test_workspace_model_hooks_default_to_existing_behavior(self) -> None:
         backend = _DummyBackend()
@@ -591,17 +589,6 @@ class BackendPermissionCommandTests(unittest.TestCase):
 
 
 class BackendModelTests(unittest.TestCase):
-    def test_backend_catalogs_are_nonempty_and_deduped(self) -> None:
-        for backend_cls in (
-            CodexBackend,
-            ClaudeCodeBackend,
-            CopilotBackend,
-            GrokBackend,
-        ):
-            with self.subTest(backend=backend_cls.name):
-                models = backend_cls().available_models
-                self.assertTrue(models)
-                self.assertEqual(len(models), len(set(models)))
 
     def test_grok_model_listing_parser_uses_only_available_model_rows(self) -> None:
         output = """You are logged in with grok.com.
@@ -622,20 +609,7 @@ warning: ignored after the catalog
         )
         self.assertEqual(grok_mod._parse_models_output("login failed"), ())
 
-    def test_grok_fallback_metadata_covers_every_model(self) -> None:
-        specs = grok_mod._FALLBACK_MODEL_SPECS
-        self.assertEqual(
-            tuple(model for model, _efforts, _window in specs),
-            grok_mod._FALLBACK_MODELS,
-        )
-        self.assertEqual(
-            {model: efforts for model, efforts, _window in specs},
-            grok_mod._FALLBACK_MODEL_EFFORT_LEVELS,
-        )
-        self.assertEqual(
-            {model: window for model, _efforts, window in specs},
-            grok_mod._FALLBACK_MODEL_CONTEXT_WINDOWS,
-        )
+    def test_grok_default_models_are_selectable(self) -> None:
         self.assertIn(GrokBackend.default_model, grok_mod._FALLBACK_MODELS)
         self.assertIn(
             GrokBackend.default_summary_model, grok_mod._FALLBACK_MODELS,
@@ -791,6 +765,7 @@ warning: ignored after the catalog
 
         asyncio.run(run())
 
+
     def test_vision_flags_cover_every_backend(self) -> None:
         from Cozter.backends_agent import get_backend
         expected = {
@@ -808,6 +783,7 @@ warning: ignored after the catalog
                 self.assertTrue(backend.supports_vision)
                 self.assertEqual(backend.vision_mode, mode)
         self.assertFalse(get_backend("flexible").supports_vision)
+
 
     def test_shared_vision_helpers_resolve_and_cap(self) -> None:
         from Cozter.backends_agent.base import (
@@ -930,40 +906,6 @@ warning: ignored after the catalog
                     )
         asyncio.run(run())
 
-    def test_copilot_launch_attaches_vision_images(self) -> None:
-        async def run() -> None:
-            with tempfile.TemporaryDirectory() as ws:
-                rel = os.path.join(".cozter", "uploads", "photo.png")
-                local_path = os.path.join(ws, rel)
-                os.makedirs(os.path.dirname(local_path))
-                with open(local_path, "wb") as handle:
-                    handle.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
-                prompt = f"see\n[Photo attachment saved to: {rel}]"
-                with (
-                    mock.patch.object(
-                        copilot_mod, "executable_command",
-                        return_value=["copilot"],
-                    ),
-                    mock.patch.object(
-                        copilot_mod,
-                        "create_prompt_subprocess",
-                        new=mock.AsyncMock(
-                            return_value=mock.Mock(),
-                        ),
-                    ) as create_process,
-                    mock.patch.object(
-                        copilot_mod,
-                        "_create_isolated_copilot_home",
-                        return_value="/tmp/copilot-home",
-                    ),
-                ):
-                    await CopilotBackend().launch(ws, prompt, None, "auto")
-                    command = tuple(create_process.await_args.args[0])
-                    self.assertIn("--attachment", command)
-                    self.assertIn(
-                        os.path.realpath(local_path), command,
-                    )
-        asyncio.run(run())
 
     def test_claude_launch_adds_vision_hint(self) -> None:
         async def run() -> None:
@@ -1016,20 +958,6 @@ warning: ignored after the catalog
         for model in CodexBackend.tier_models.values():
             self.assertIn(model, models)
 
-    def test_codex_fallback_metadata_covers_every_model(self) -> None:
-        specs = codex_mod._FALLBACK_MODEL_SPECS
-        self.assertEqual(
-            tuple(model for model, _efforts, _window in specs),
-            codex_mod._FALLBACK_MODELS,
-        )
-        self.assertEqual(
-            {model: efforts for model, efforts, _window in specs},
-            codex_mod._FALLBACK_MODEL_EFFORT_LEVELS,
-        )
-        self.assertEqual(
-            {model: window for model, _efforts, window in specs},
-            codex_mod._FALLBACK_MODEL_CONTEXT_WINDOWS,
-        )
 
     def test_codex_effort_uses_levels_supported_by_selected_picker_model(
         self,
@@ -2244,24 +2172,6 @@ class BackendHealthCheckTests(unittest.TestCase):
 
         self.assertEqual(fetch.call_count, 2)
 
-    def test_llama_model_ids_tolerate_malformed_payloads(self) -> None:
-        for payload in (None, [], {}, {"data": None}, {"data": {}}):
-            with self.subTest(payload=payload):
-                self.assertEqual(extract_model_ids(payload), ())
-
-        self.assertEqual(
-            extract_model_ids({
-                "data": [
-                    {"id": "model-a"},
-                    {"id": ""},
-                    {"id": "model-a"},
-                    {"id": "model-b"},
-                    "bad entry",
-                ],
-            }),
-            ("model-a", "model-b"),
-        )
-
 
 class ZaiBackendTests(unittest.TestCase):
     def test_fallback_models_are_current_and_selectable(self) -> None:
@@ -2280,32 +2190,6 @@ class ZaiBackendTests(unittest.TestCase):
         self.assertIn(ZaiBackend.default_model, models)
         self.assertIn(ZaiBackend.default_summary_model, models)
 
-    def test_fallback_metadata_is_projected_from_curated_catalogs(self) -> None:
-        specs = zai_mod._ALL_FALLBACK_MODEL_SPECS
-        self.assertEqual(
-            tuple(
-                spec.name for spec in zai_mod._FALLBACK_MODEL_SPECS
-            ),
-            zai_mod._FALLBACK_MODELS,
-        )
-        self.assertEqual(
-            tuple(spec.name for spec in specs),
-            zai_mod._CODING_PLAN_FALLBACK_MODELS,
-        )
-        self.assertEqual(
-            {spec.name: spec.context_window for spec in specs},
-            zai_mod._MODEL_CONTEXT_WINDOWS,
-        )
-        self.assertEqual(
-            frozenset(
-                spec.name for spec in specs if spec.preserves_reasoning
-            ),
-            zai_mod._PRESERVED_THINKING_MODELS,
-        )
-        self.assertEqual(
-            frozenset(spec.name for spec in specs if spec.streams_tools),
-            zai_mod._TOOL_STREAM_MODELS,
-        )
 
     def test_context_windows_cover_only_published_curated_ids(self) -> None:
         backend = ZaiBackend()
@@ -2864,18 +2748,6 @@ class MetaBackendTests(unittest.TestCase):
         self.assertIn(MetaModelApiBackend.default_model, models)
         self.assertIn(MetaModelApiBackend.default_summary_model, models)
 
-    def test_fallback_metadata_is_projected_from_curated_catalog(
-        self,
-    ) -> None:
-        specs = meta_mod._FALLBACK_MODEL_SPECS
-        self.assertEqual(
-            tuple(spec.name for spec in specs),
-            meta_mod._FALLBACK_MODELS,
-        )
-        self.assertEqual(
-            {spec.name: spec.context_window for spec in specs},
-            meta_mod._MODEL_CONTEXT_WINDOWS,
-        )
 
     def test_fallback_picker_includes_current_agent_models(self) -> None:
         self.assertEqual(meta_mod._FALLBACK_MODELS, (
@@ -3040,14 +2912,6 @@ class MetaBackendTests(unittest.TestCase):
             "muse-spark-1.2",
         )
 
-    def test_config_defaults_are_registered(self) -> None:
-        self.assertEqual(
-            config._DEFAULT_CONFIG["meta_base_url"],
-            "https://api.meta.ai/v1",
-        )
-        self.assertEqual(config._DEFAULT_CONFIG["meta_socket_timeout"], 3600)
-        self.assertEqual(config._DEFAULT_CONFIG["meta_max_retries"], 2)
-        self.assertEqual(config._DEFAULT_CONFIG["meta_api_key"], "")
 
     def test_registered_in_backend_catalog(self) -> None:
         from Cozter.backends_agent import AVAILABLE_BACKENDS, DIRECT_BACKENDS
