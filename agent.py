@@ -40,7 +40,7 @@ from .utils import (
     kill_and_wait,
     run_internal_backend,
     take_recent_lines,
-    terminate_process_group,
+    terminate_process_group_async,
     wait_for_process_exit,
 )
 from .utils import drain_queue as _drain_queue
@@ -1057,8 +1057,9 @@ async def _drive_backend(
         if injected is not None:
             injected.append(msg)
         restarting = True
-        # Kill the process group with grandchildren.
-        terminate_process_group(active_proc)
+        # Kill the process group with grandchildren (async: taskkill
+        # runs off-loop so the watcher never blocks its own loop).
+        await terminate_process_group_async(active_proc)
 
     inject_task: asyncio.Task | None = None
     if inject_queue is not None:
@@ -1109,7 +1110,7 @@ async def _drive_backend(
         except BaseException:
             # Late teardown failure is not a clean turn.
             if has_managed_process_group(proc):
-                terminate_process_group(proc)
+                await terminate_process_group_async(proc)
             raise
         finally:
             # Teardown can be cancelled; never leak watchers.
@@ -1129,14 +1130,14 @@ async def _drive_backend(
     if _take_pending_injections(inject_queue, injected):
         # Watcher stopped; terminate before rebuilding the prompt.
         if has_managed_process_group(proc):
-            terminate_process_group(proc)
+            await terminate_process_group_async(proc)
         return result, True
     if close_inject_on_completion:
         _close_inject_queue(inject_queue)
 
     # Completed turn: stop same-group children.
     if has_managed_process_group(proc) and not result.detached_tasks:
-        terminate_process_group(proc)
+        await terminate_process_group_async(proc)
 
     # A partial reply does not make a failed process a successful turn.
     # Keep provider errors more specific than a generic exit status.

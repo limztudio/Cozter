@@ -349,9 +349,16 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
     fake HttpAgentProcess (pid <= 0, whose ``kill()`` just cancels a task)
     falls back to a single-target ``proc.kill()``.
     """
+    _terminate_tree(proc)
+
+
+def _terminate_tree(proc: asyncio.subprocess.Process) -> None:
+    """Shared tree-kill body for sync and off-loop callers."""
     pid = getattr(proc, "pid", None)
     if os.name == "nt":
         # No POSIX groups on Windows: ``taskkill /T`` walks the tree.
+        # Off-loop callers already run in a worker thread; the spawn is
+        # the ~0.1s step that must not hold the event loop.
         if terminate_windows_process_tree(pid):
             return
     elif has_managed_process_group(proc):
@@ -398,6 +405,18 @@ async def abandon_subprocess_stream_task(
     await await_cancelled(task)
 
 
+async def terminate_process_group_async(proc: asyncio.subprocess.Process) -> None:
+    """Force-stop a subprocess tree without blocking the event loop.
+
+    Same observable behavior as :func:`terminate_process_group` (which it
+    calls off-loop), so the blocking Windows ``taskkill`` spawn never holds
+    the loop for ~0.1s (which asyncio debug mode reports as a slow
+    callback). Callers that mock ``terminate_process_group`` keep working
+    because the sync seam is preserved.
+    """
+    await asyncio.to_thread(terminate_process_group, proc)
+
+
 async def kill_and_wait(proc: asyncio.subprocess.Process) -> None:
     """Kill a subprocess (its group if it leads one) and await its exit.
 
@@ -406,7 +425,7 @@ async def kill_and_wait(proc: asyncio.subprocess.Process) -> None:
     escaped the process group.  The child watcher has already reaped the
     parent once ``returncode`` is populated.
     """
-    terminate_process_group(proc)
+    await terminate_process_group_async(proc)
     try:
         await asyncio.wait_for(
             wait_for_process_exit(proc),
@@ -470,7 +489,7 @@ async def finish_process_stderr(
                 "terminating its process tree",
                 getattr(proc, "pid", "?"),
             )
-            terminate_process_group(proc)
+            await terminate_process_group_async(proc)
         elif preserve_tree:
             logger.warning(
                 "Backend process %s exited with stderr still open; "
@@ -783,7 +802,7 @@ async def iter_process_json_events(
                 "terminating its process tree",
                 getattr(proc, "pid", "?"),
             )
-            terminate_process_group(proc)
+            await terminate_process_group_async(proc)
         # Preserved provider tasks may outlive us; don't retain the read end.
         close_subprocess_pipe(proc, 1)
         if not next_event_task.done():
@@ -1115,7 +1134,7 @@ async def drain_llm_subprocess(
             stderr = await finish_process_stderr(proc, stderr_task)
             # Internal LLM calls own no detached work.
             if has_managed_process_group(proc):
-                terminate_process_group(proc)
+                await terminate_process_group_async(proc)
         finally:
             if not stderr_task.done():
                 await abandon_subprocess_stream_task(proc, 2, stderr_task)

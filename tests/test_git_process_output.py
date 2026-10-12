@@ -86,7 +86,7 @@ class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(out.startswith("parent complete"))
                 self.assertIn("output may be incomplete", out)
             finally:
-                self._kill_fixture(pid_path)
+                await self._kill_fixture(pid_path)
 
     async def test_post_exit_grace_keeps_late_child_output(self) -> None:
         with tempfile.TemporaryDirectory() as path:
@@ -133,20 +133,22 @@ class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len(spawned), 1)
                     self.assertIsNotNone(spawned[0].returncode)
                 finally:
-                    self._kill_fixture(pid_path)
-                    self._kill_fixture(child_pid_path)
+                    await self._kill_fixture(pid_path)
+                    await self._kill_fixture(child_pid_path)
                     if not task.done():
                         task.cancel()
                         await asyncio.gather(task, return_exceptions=True)
 
     @staticmethod
-    def _kill_fixture(pid_path: str) -> None:
+    async def _kill_fixture(pid_path: str) -> None:
         if not os.path.exists(pid_path):
             return
         with open(pid_path, encoding="utf-8") as file_handle:
             pid = int(file_handle.read())
         if os.name == "nt":
-            utils.terminate_windows_process_tree(pid)
+            # taskkill spawns a child process (~0.1s); keep it off the
+            # loop so asyncio debug mode does not flag this teardown.
+            await asyncio.to_thread(utils.terminate_windows_process_tree, pid)
         else:
             import signal
             try:
