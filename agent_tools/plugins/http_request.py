@@ -201,7 +201,7 @@ class HttpRequestTool(AgentTool):
             "body": {"type": "string"},
             "max_chars": {
                 "type": "integer",
-                "description": "max 3500.",
+                "description": "max 12000.",
             },
         },
         ["url"],
@@ -265,8 +265,6 @@ class HttpRequestTool(AgentTool):
                 )
         except _RequestRefusedError as exc:
             return str(exc)
-        except (aiohttp.ClientError, TimeoutError, OSError) as exc:
-            return f"Request failed: {exc}"
         except Exception as exc:  # aiohttp raises bare Exception subclasses
             return f"Request failed: {exc}"
 

@@ -825,6 +825,22 @@ def _tool_call(call_id: str, path: str) -> dict:
     }
 
 
+async def _execute_ok(name, _args, _workspace_path, _approval, _emit):
+    return f"{name} ok"
+
+
+def _run_tool_fixture(stream, execute_tool, backend=None) -> _CaptureProc:
+    oa._stream_completion = stream
+    oa.tools.execute_tool = execute_tool
+    proc = _CaptureProc()
+    if backend is None:
+        backend = _ToolLimitBackend(auto_continue=False)
+    asyncio.run(backend._run_agent(
+        proc, "/tmp", "work", None, "auto", False, 0,
+    ))
+    return proc
+
+
 class OpenAIToolLimitTests(unittest.TestCase):
     def setUp(self) -> None:
         self._orig_stream = oa._stream_completion
@@ -848,13 +864,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
             emit({"type": "tool_use", "name": name, "input": args})
             return f"{name} ok"
 
-        oa._stream_completion = stream
-        oa.tools.execute_tool = execute_tool
-
-        proc = _CaptureProc()
-        asyncio.run(_ToolLimitBackend(auto_continue=True)._run_agent(
-            proc, "/tmp", "work", None, "auto", False, 0,
-        ))
+        proc = _run_tool_fixture(stream, execute_tool, _ToolLimitBackend(auto_continue=True))
 
         self.assertEqual(len(calls), 3)
         self.assertTrue(all("tools" in payload for payload in calls))
@@ -877,16 +887,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
                 return "", "", [_tool_call("call-1", "x.txt")]
             return "", "", []
 
-        async def execute_tool(name, args, workspace_path, approval, emit):
-            return f"{name} ok"
-
-        oa._stream_completion = stream
-        oa.tools.execute_tool = execute_tool
-
-        proc = _CaptureProc()
-        asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
-            proc, "/tmp", "work", None, "auto", False, 0,
-        ))
+        proc = _run_tool_fixture(stream, _execute_ok)
 
         self.assertEqual(len(calls), 2)
         self.assertIn("tools", calls[0])
@@ -933,16 +934,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
                 return "", "", [_tool_call("call-1", "x.txt")]
             return "done", "", []
 
-        async def execute_tool(name, args, workspace_path, approval, emit):
-            return f"{name} ok"
-
-        oa._stream_completion = stream
-        oa.tools.execute_tool = execute_tool
-
-        proc = _CaptureProc()
-        asyncio.run(_ToolStreamingBackend(auto_continue=False)._run_agent(
-            proc, "/tmp", "work", None, "auto", False, 0,
-        ))
+        _run_tool_fixture(stream, _execute_ok, _ToolStreamingBackend(auto_continue=False))
 
         self.assertEqual(calls[0]["tool_stream"], True)
         self.assertNotIn("tool_stream", calls[1])
@@ -987,13 +979,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
         async def execute_tool(name, args, workspace_path, approval, emit):
             return f"{name} result"
 
-        oa._stream_completion = stream
-        oa.tools.execute_tool = execute_tool
-
-        proc = _CaptureProc()
-        asyncio.run(_ReasoningToolBackend(auto_continue=False)._run_agent(
-            proc, "/tmp", "work", None, "auto", False, 0,
-        ))
+        proc = _run_tool_fixture(stream, execute_tool, _ReasoningToolBackend(auto_continue=False))
 
         self.assertEqual(calls[0]["thinking"], {
             "type": "enabled", "clear_thinking": False,
@@ -1067,16 +1053,7 @@ class OpenAIParallelToolTests(unittest.TestCase):
             calls.append(copy.deepcopy(args[1]))
             return "done", "", []
 
-        async def execute_tool(name, args, workspace_path, approval, emit):
-            return f"{name} ok"
-
-        oa._stream_completion = stream
-        oa.tools.execute_tool = execute_tool
-
-        proc = _CaptureProc()
-        asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
-            proc, "/tmp", "work", None, "auto", False, 0,
-        ))
+        _run_tool_fixture(stream, _execute_ok)
 
         self.assertTrue(calls)
         self.assertTrue(calls[0].get("parallel_tool_calls") is True)
@@ -1105,13 +1082,7 @@ class OpenAIParallelToolTests(unittest.TestCase):
             finally:
                 active -= 1
 
-        oa._stream_completion = stream
-        oa.tools.execute_tool = execute_tool
-
-        proc = _CaptureProc()
-        asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
-            proc, "/tmp", "work", None, "auto", False, 0,
-        ))
+        _run_tool_fixture(stream, execute_tool)
 
         # Overlap proves gather.
         self.assertGreaterEqual(peak, 2)
@@ -1147,13 +1118,7 @@ class OpenAIParallelToolTests(unittest.TestCase):
             ran += 1
             return f"{name} ok"
 
-        oa._stream_completion = stream
-        oa.tools.execute_tool = execute_tool
-
-        proc = _CaptureProc()
-        asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
-            proc, "/tmp", "work", None, "auto", False, 0,
-        ))
+        _run_tool_fixture(stream, execute_tool)
 
         # Repeat limit 3: the 4th identical call is skipped.
         self.assertEqual(ran, 3)

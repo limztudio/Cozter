@@ -78,7 +78,7 @@ _EOF_SUCCESS_FINISH_REASONS = frozenset({
 def extract_model_ids(payload: object) -> tuple[str, ...]:
     """Extract unique, non-empty IDs from an OpenAI-style ``/models`` payload.
 
-    Shared by every OpenAI-compatible backend (llama-server, Z.ai) so the
+    Shared by the HTTP backends (llama-server, Meta Model API, Z.ai) so the
     parsing of ``{"data": [{"id": ...}, ...}`` lives in one place. IDs are
     stripped of surrounding whitespace; duplicates and empties are dropped
     while preserving first-seen order.
@@ -118,7 +118,7 @@ def fetch_model_ids(
 ) -> tuple[str, ...]:
     """Fetch and parse an OpenAI-style ``/models`` catalog.
 
-    Both supported HTTP backends use the same small, synchronous discovery
+    The HTTP backends use the same small, synchronous discovery
     request. Keeping it here avoids providers drifting in response decoding
     or model-ID normalization while still letting each backend choose its URL,
     timeout, authentication headers, and fallback behavior.

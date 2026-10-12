@@ -2492,13 +2492,7 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, self._receive_schedules)
             return
         number = parse_decimal_int(text)
-        if number is None:
-            await ctx.reply_text(
-                "Invalid number. Try again (or /cancel):"
-            )
-            self._expect_input(ctx.user_id, self._receive_schedules)
-            return
-        idx = number - 1
+        idx = -1 if number is None else number - 1
         if not (0 <= idx < len(user_schedules)):
             await ctx.reply_text(
                 "Invalid number. Try again (or /cancel):"
@@ -4101,17 +4095,14 @@ class BotPlatform(ABC):
             if ev.kind == "text":
                 if ev.content.strip():
                     latest_text = ev.content
-            elif ev.kind == "tool":
-                first_line = ev.content.split(chr(10))[0]
-                clipped = (
-                    first_line[:80 - len("… [clipped]")] + "… [clipped]"
-                    if len(first_line) > 80 else first_line
+            elif ev.kind in ("tool", "file"):
+                content = (
+                    ev.content.split(chr(10))[0]
+                    if ev.kind == "tool" else ev.content
                 )
-                status_lines.append(f"» {clipped}")
-            elif ev.kind == "file":
                 clipped = (
-                    ev.content[:80 - len("… [clipped]")] + "… [clipped]"
-                    if len(ev.content) > 80 else ev.content
+                    content[:80 - len("… [clipped]")] + "… [clipped]"
+                    if len(content) > 80 else content
                 )
                 status_lines.append(f"» {clipped}")
             else:

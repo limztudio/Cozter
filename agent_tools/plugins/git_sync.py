@@ -62,10 +62,9 @@ class GitSyncTool(AgentTool):
         action = args.get("action")
         if not isinstance(action, str) or action not in _ACTIONS:
             return f"Error: 'action' must be one of {', '.join(_ACTIONS)}"
-        argv_or_error = self._build_argv(action, args)
-        if isinstance(argv_or_error, str):
-            return argv_or_error
-        _label, rest = argv_or_error
+        rest = self._build_argv(action, args)
+        if isinstance(rest, str):
+            return rest
         argv = ["git", "-C", workspace_path, *rest]
         try:
             stdout, stderr = await _run_git(argv, workspace_path)
@@ -75,8 +74,8 @@ class GitSyncTool(AgentTool):
 
     def _build_argv(
         self, action: str, args: dict,
-    ) -> tuple[str, list[str]] | str:
-        """Build (label, argv-tail); return model-facing error string."""
+    ) -> list[str] | str:
+        """Build the argv tail, or return a model-facing error string."""
         remote_raw = args.get("remote")
         branch_raw = args.get("branch")
         remote: str | None = None
@@ -95,7 +94,7 @@ class GitSyncTool(AgentTool):
             branch = cleaned
 
         if action == "remotes":
-            return ("remotes", ["remote", "-v"])
+            return ["remote", "-v"]
         if action == "fetch":
             tail: list[str] = ["fetch"]
             if args.get("prune") is True:
@@ -106,7 +105,7 @@ class GitSyncTool(AgentTool):
                 tail.append("--all")
                 if "--prune" not in tail:
                     tail.append("--prune")
-            return ("fetch", tail)
+            return tail
         if action == "pull":
             tail = ["pull", "--ff-only"]
             if remote is not None:
@@ -115,7 +114,7 @@ class GitSyncTool(AgentTool):
                     tail.append(branch)
             elif branch is not None:
                 return "Error: 'branch' needs 'remote' for pull"
-            return ("pull", tail)
+            return tail
         # push
         tail = ["push"]
         if args.get("upstream") is True:
@@ -129,7 +128,7 @@ class GitSyncTool(AgentTool):
                 tail.append(branch)
         elif branch is not None:
             return "Error: 'branch' needs 'remote' for push"
-        return ("push", tail)
+        return tail
 
     def summarize(self, args: dict) -> str:
         action = args.get("action") if isinstance(args, dict) else None

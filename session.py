@@ -12,7 +12,7 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from typing import overload
+from typing import TypeGuard, overload
 
 from . import workspace as workspace_mod
 from .utils import take_recent_lines
@@ -36,7 +36,7 @@ def _sessions_dir(workspace: str) -> str:
     return workspace_mod.workspace_state_path(workspace, SESSIONS_DIR)
 
 
-def _is_safe_session_id(session_id: object) -> bool:
+def _is_safe_session_id(session_id: object) -> TypeGuard[str]:
     """Return whether *session_id* is safe to use as one file-name part.
 
     Session IDs normally come from :func:`uuid.uuid4`, but they are also
@@ -171,7 +171,7 @@ def _normalize_session_data(value: object, *, path: str = "") -> dict | None:
         return None
 
     session_id = value.get("id")
-    if not isinstance(session_id, str) or not _is_safe_session_id(session_id):
+    if not _is_safe_session_id(session_id):
         if path:
             logger.warning("Ignoring session without safe id: %s", path)
         return None
@@ -671,6 +671,3 @@ def set_summary(
             data["name"] = cleaned
 
     save_session(workspace, session_id, data)
-
-
-# Schedules live in ``schedules.py``.

@@ -182,7 +182,6 @@ async def _call_slack_with_retry(description: str, method, **kwargs):
     attempts); any other API error is re-raised immediately.
     """
     last_exc: SlackApiError | None = None
-    delay = 0.0
     for attempt in range(1, _SLACK_SEND_MAX_ATTEMPTS + 1):
         try:
             return await method(**kwargs)

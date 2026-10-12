@@ -85,11 +85,9 @@ def clean_ref(value: object, *, what: str = "ref") -> tuple[str | None, str | No
     if not isinstance(value, str) or not value.strip():
         return None, f"Error: '{what}' must be a non-empty string"
     name = value.strip()
-    if len(name) > 200 or not REF_RE.match(name):
-        return None, f"Error: invalid {what} {name!r}"
-    if has_invalid_ref_chars(name):
-        return None, f"Error: invalid {what} {name!r}"
-    if name.startswith(("-", "/", ".")) or name.endswith(("/", ".", ".lock")):
+    try:
+        check_ref(name)
+    except ValueError:
         return None, f"Error: invalid {what} {name!r}"
     return name, None
 
@@ -261,10 +259,7 @@ async def run_git(argv: list[str], workspace: str) -> tuple[str, str]:
         "GIT_OPTIONAL_LOCKS": "1",
     }
     argv = add_common_git_flags(argv)
-    try:
-        stdout, stderr, returncode = await git_once(argv, workspace, env)
-    except TimeoutError:  # asyncio.TimeoutError is the same class on 3.11+
-        raise
+    stdout, stderr, returncode = await git_once(argv, workspace, env)
     if returncode != 0:
         raise GitFailedError(first_stderr_line(stderr))
     return stdout, stderr

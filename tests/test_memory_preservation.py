@@ -11,6 +11,20 @@ from Cozter import colony, compaction, session, workspace
 
 
 class PartialMemoryPreservationTests(unittest.IsolatedAsyncioTestCase):
+    async def _compact_with_new_fact(self, ws, data) -> None:
+        data["messages"] = [{"role": "user", "content": "hello"} for _ in range(6)]
+        await asyncio.to_thread(session.save_session, ws, data["id"], data)
+        output = (
+            "[SUMMARY]" + "s" * 100 + "[/SUMMARY]"
+            "[LONG_TERM]\n- New fact.\n[/LONG_TERM]"
+        )
+        with (
+            mock.patch.object(workspace, "get_compact_interval", return_value=1),
+            mock.patch.object(compaction, "run_internal_backend", new=mock.AsyncMock(return_value=output)),
+            mock.patch.object(colony, "maybe_trigger"),
+        ):
+            await compaction.maybe_compact(ws, data["id"], backend_name="codex")
+
     async def test_colony_partial_pass_cannot_evict_full_shared_or_local_memory(self):
         with (
             tempfile.TemporaryDirectory() as ws,
@@ -43,18 +57,7 @@ class PartialMemoryPreservationTests(unittest.IsolatedAsyncioTestCase):
             retained = [f"Retained fact {index}." for index in range(session.LONG_TERM_CAP)]
             retained[-1] = "x" * compaction.MAX_SUMMARY_CHARS
             data["long_term"] = retained
-            data["messages"] = [{"role": "user", "content": "hello"} for _ in range(6)]
-            await asyncio.to_thread(session.save_session, ws, data["id"], data)
-            output = (
-                "[SUMMARY]" + "s" * 100 + "[/SUMMARY]"
-                "[LONG_TERM]\n- New fact.\n[/LONG_TERM]"
-            )
-            with (
-                mock.patch.object(workspace, "get_compact_interval", return_value=1),
-                mock.patch.object(compaction, "run_internal_backend", new=mock.AsyncMock(return_value=output)),
-                mock.patch.object(colony, "maybe_trigger"),
-            ):
-                await compaction.maybe_compact(ws, data["id"], backend_name="codex")
+            await self._compact_with_new_fact(ws, data)
             self.assertEqual(session.load_session(ws, data["id"])["long_term"], retained)
 
     async def test_partial_compaction_preserves_prior_summary_evidence_not_in_prompt(self):
@@ -91,18 +94,7 @@ class PartialMemoryPreservationTests(unittest.IsolatedAsyncioTestCase):
             original = [f"Old fact {index}." for index in range(session.LONG_TERM_CAP + 1)]
             original[-1] = "x" * compaction.MAX_SUMMARY_CHARS
             data["long_term"] = original
-            data["messages"] = [{"role": "user", "content": "hello"} for _ in range(6)]
-            await asyncio.to_thread(session.save_session, ws, data["id"], data)
-            output = (
-                "[SUMMARY]" + "s" * 100 + "[/SUMMARY]"
-                "[LONG_TERM]\n- New fact.\n[/LONG_TERM]"
-            )
-            with (
-                mock.patch.object(workspace, "get_compact_interval", return_value=1),
-                mock.patch.object(compaction, "run_internal_backend", new=mock.AsyncMock(return_value=output)),
-                mock.patch.object(colony, "maybe_trigger"),
-            ):
-                await compaction.maybe_compact(ws, data["id"], backend_name="codex")
+            await self._compact_with_new_fact(ws, data)
             saved = session.load_session(ws, data["id"])
             self.assertEqual(saved["long_term"], original)
             self.assertEqual(saved["summary"], "s" * 100)

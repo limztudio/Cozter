@@ -203,6 +203,14 @@ _DRAFT_OMISSION_MARKER = (
 )
 
 
+def _clip_excerpt_middle(text: str, limit: int, marker: str) -> str:
+    """Retain both ends of an excerpt around its omission marker."""
+    remaining = limit - len(marker)
+    head = remaining // 2
+    tail = remaining - head
+    return text[:head] + marker + text[-tail:]
+
+
 def _bounded_draft_excerpt(text: str, *, limit: int = _DRAFT_MAX_CHARS) -> str:
     """Keep a draft's opening and final evidence without adding new work."""
     if limit <= 0:
@@ -211,20 +219,14 @@ def _bounded_draft_excerpt(text: str, *, limit: int = _DRAFT_MAX_CHARS) -> str:
         return text
     if limit <= len(_DRAFT_OMISSION_MARKER):
         return "…" + text[-(limit - 1):] if limit > 1 else "…"
-    remaining = limit - len(_DRAFT_OMISSION_MARKER)
-    head = remaining // 2
-    tail = remaining - head
-    return text[:head] + _DRAFT_OMISSION_MARKER + text[-tail:]
+    return _clip_excerpt_middle(text, limit, _DRAFT_OMISSION_MARKER)
 
 
 def _truncate_report(text: str) -> str:
     """Bound a report while retaining its opening and final evidence."""
     if len(text) <= _REPORT_MAX_CHARS:
         return text
-    remaining = _REPORT_MAX_CHARS - len(_REPORT_TRUNCATION_MARKER)
-    head = remaining // 2
-    tail = remaining - head
-    return text[:head] + _REPORT_TRUNCATION_MARKER + text[-tail:]
+    return _clip_excerpt_middle(text, _REPORT_MAX_CHARS, _REPORT_TRUNCATION_MARKER)
 
 
 @dataclass(frozen=True)
@@ -274,6 +276,18 @@ def normalize_tier(value: str) -> str | None:
     return tier if tier in TIERS else None
 
 
+def _parse_subtask_line(line: str, pattern: re.Pattern[str]) -> Subtask | None:
+    """Parse one tier/instruction line shared by plans and follow-ups."""
+    match = pattern.match(line)
+    if match is None:
+        return None
+    tier = normalize_tier(match.group("tier"))
+    instruction = match.group("instruction").strip()
+    if tier is None or not instruction:
+        return None
+    return Subtask(tier=tier, instruction=instruction)
+
+
 def parse_followups(report: str) -> list[Subtask]:
     """Parse worker-reported ``[followup:<tier>] <instruction>`` lines."""
     found: list[Subtask] = []
@@ -281,14 +295,9 @@ def parse_followups(report: str) -> list[Subtask]:
     if not isinstance(report, str) or not report:
         return found
     for line in report.splitlines():
-        match = _FOLLOWUP_LINE_RE.match(line)
-        if match is None:
+        entry = _parse_subtask_line(line, _FOLLOWUP_LINE_RE)
+        if entry is None:
             continue
-        tier = normalize_tier(match.group("tier"))
-        instruction = match.group("instruction").strip()
-        if tier is None or not instruction:
-            continue
-        entry = Subtask(tier=tier, instruction=instruction)
         if entry not in seen:
             seen.add(entry)
             found.append(entry)
@@ -333,14 +342,9 @@ def parse_plan(raw: str, request: str) -> Plan:
     seen: set[Subtask] = set()
     capped = False
     for line in block.splitlines():
-        match = _PLAN_LINE_RE.match(line)
-        if match is None:
+        subtask = _parse_subtask_line(line, _PLAN_LINE_RE)
+        if subtask is None:
             continue
-        tier = normalize_tier(match.group("tier"))
-        instruction = match.group("instruction").strip()
-        if tier is None or not instruction:
-            continue
-        subtask = Subtask(tier=tier, instruction=instruction)
         if subtask in seen:
             continue
         if len(subtasks) == MAX_SUBTASKS:
@@ -524,7 +528,7 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
         return results[0]
     parts: list[str] = []
     missing: list[str] = []
-# Index both sides so mismatches can't drop reports.
+    # Index both sides so mismatches can't drop reports.
     for coverage_index in range(max(len(plan.subtasks), len(results))):
         text = results[coverage_index] if coverage_index < len(results) else ""
         if not text:

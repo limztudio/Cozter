@@ -83,11 +83,18 @@ class SessionWriteLatencyTests(unittest.IsolatedAsyncioTestCase):
 
         self.enterContext(mock.patch.object(session, "append_messages", side_effect=blocked))
 
-    def _turn(self) -> asyncio.Task:
+    def _turn(self, prompt: str = "do the work") -> asyncio.Task:
         return asyncio.create_task(agent.run(
-            "do the work", self.path, 1,
+            prompt, self.path, 1,
             backend_name=_WriteBackend.name, session_id=self.session_id,
         ))
+
+    async def _assert_resuming_is_blocked(
+        self, resuming: asyncio.Task, prompts: list[str],
+    ) -> None:
+        await asyncio.sleep(0)
+        self.assertFalse(resuming.done())
+        self.assertEqual(len(prompts), 1)
 
     async def _wait_for_blocked_write(self) -> None:
         await asyncio.wait_for(self.started.wait(), timeout=1)
@@ -197,13 +204,8 @@ class SessionWriteLatencyTests(unittest.IsolatedAsyncioTestCase):
                     mock.patch.object(session, "load_session", wraps=session.load_session) as load,
                     mock.patch.object(agent.colony, "get_items", wraps=agent.colony.get_items) as memory,
                 ):
-                    resuming = asyncio.create_task(agent.run(
-                        "resume the work", self.path, 1,
-                        backend_name=_WriteBackend.name, session_id=self.session_id,
-                    ))
-                    await asyncio.sleep(0)
-                    self.assertFalse(resuming.done())
-                    self.assertEqual(len(prompts), 1)
+                    resuming = self._turn("resume the work")
+                    await self._assert_resuming_is_blocked(resuming, prompts)
                     load.assert_not_called()
                     memory.assert_not_called()
                     self.release.set()
@@ -239,13 +241,8 @@ class SessionWriteLatencyTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(asyncio.CancelledError):
                     await asyncio.wait_for(turning, timeout=0.5)
                 await self._wait_for_blocked_write()
-                resuming = asyncio.create_task(agent.run(
-                    "resume the work", self.path, 1,
-                    backend_name=_WriteBackend.name, session_id=self.session_id,
-                ))
-                await asyncio.sleep(0)
-                self.assertFalse(resuming.done())
-                self.assertEqual(len(prompts), 1)
+                resuming = self._turn("resume the work")
+                await self._assert_resuming_is_blocked(resuming, prompts)
                 self.release.set()
                 await asyncio.wait_for(resuming, timeout=2)
             finally:

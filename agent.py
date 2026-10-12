@@ -675,15 +675,14 @@ def _prepare_resolved_attachment(
     return _copy_generated_image_into_workspace(real, workspace_path)
 
 
-def _iter_image_files(root: str, *, skip_dirs: bool) -> list[str]:
+def _iter_image_files(root: str) -> list[str]:
     paths: list[str] = []
     try:
         root_real = os.path.realpath(root)
         for dirpath, dirnames, filenames in os.walk(root):
-            if skip_dirs:
-                dirnames[:] = [
-                    dirname for dirname in dirnames if dirname not in _ATTACHMENT_SCAN_SKIP_DIRS
-                ]
+            dirnames[:] = [
+                dirname for dirname in dirnames if dirname not in _ATTACHMENT_SCAN_SKIP_DIRS
+            ]
             for filename in filenames:
                 ext = os.path.splitext(filename)[1].lower()
                 if ext not in IMAGE_EXTENSIONS:
@@ -713,7 +712,7 @@ def _snapshot_attachment_images(
     ws_real = os.path.realpath(workspace_path)
     if not os.path.isdir(ws_real):
         return snapshot
-    for path in _iter_image_files(ws_real, skip_dirs=True):
+    for path in _iter_image_files(ws_real):
         try:
             st = os.stat(path)
         except OSError:
@@ -750,6 +749,22 @@ def _collect_new_attachment_images(
         seen_destinations.add(dest)
         copied.append(dest)
     return copied
+
+
+async def _append_new_attachment_images(
+    result: AgentResult,
+    before: dict[str, tuple[int, int]],
+    workspace_path: str,
+) -> None:
+    """Append this phase's changed images after excluding explicit sources."""
+    explicit_sources = _explicit_attachment_sources(result.events, workspace_path)
+    paths = await asyncio.to_thread(
+        _collect_new_attachment_images,
+        before,
+        workspace_path,
+        exclude_sources=explicit_sources,
+    )
+    result.events.extend(ChatEvent(kind="attachment", content=path) for path in paths)
 
 
 _CONTEXT_TRUNCATION_MARKER = (
@@ -791,14 +806,13 @@ def _bounded_context_block(
     if not body:
         return ""
     header = f"[{label}]\n"
-    footer = ""
     if limit is None:
-        return header + body + footer
-    body_limit = limit - len(header) - len(footer)
+        return header + body
+    body_limit = limit - len(header)
     if body_limit <= 0:
         return ""
     clipped = _truncate_context_text(body, body_limit)
-    return header + clipped + footer if clipped else ""
+    return header + clipped if clipped else ""
 
 
 def _bounded_context_list_block(
@@ -811,10 +825,9 @@ def _bounded_context_list_block(
     if not items:
         return ""
     header = f"[{label}]\n"
-    footer = ""
     if limit is None:
-        return header + "\n".join(formatter(item) for item in items) + footer
-    body_limit = limit - len(header) - len(footer)
+        return header + "\n".join(formatter(item) for item in items)
+    body_limit = limit - len(header)
     if body_limit <= 0:
         return ""
     lines = take_recent_lines(items, body_limit, formatter)
@@ -837,13 +850,9 @@ def _bounded_context_list_block(
             body = _truncate_context_text(omission, body_limit)
         if not body:
             return ""
-        return header + body + footer
-    if lines:
-        body = "\n".join(lines)
-    else:
-        # Oversized item: keep a bounded tail.
-        body = _truncate_context_text(formatter(items[-1]), body_limit)
-    return header + body + footer if body else ""
+        return header + body
+    body = "\n".join(lines)
+    return header + body if body else ""
 
 
 def _context_quotas(lengths: list[int], budget: int) -> list[int]:
@@ -1610,11 +1619,9 @@ async def _run_flexible(
     queue: list[flexible.Subtask] = list(plan.subtasks)
     done = 0
     total = len(queue)
-    queue_index = -1
 
     while done < len(queue):
-        queue_index += 1
-        task = queue[queue_index]
+        task = queue[done]
         tier_backend_name, tier_model = tiers[task.tier]
         target = (tier_backend_name, tier_model)
         unavailable_cause = unavailable_models.get(target)
@@ -1752,6 +1759,19 @@ async def _run_flexible(
         # Terminal worker failures must not become new judge/auto-chain work.
         result.error = "; ".join(dict.fromkeys(worker_errors))
 
+    def finish(final: str, *, awaiting: bool) -> tuple[AgentResult, bool]:
+        """Apply the same output protocol to merged and fallback replies."""
+        for marker in attach_markers:
+            if marker not in final:
+                final += f"\n\n{marker}"
+        if awaiting:
+            final += "\n\n[[await]]"
+        if remainder:
+            final += "\n\n" + remainder
+        append_text_result(result, final)
+        result.usage = usage_totals or None
+        return result, False
+
     if len(queue) == 1 or result.error:
         if _take_pending_injections(inject_queue, injected):
             return AgentResult(), True
@@ -1769,16 +1789,7 @@ async def _run_flexible(
                 " and model bound to each difficulty tier with"
                 " /agent_flexible_low, _mid, and _high."
             )
-        for marker in attach_markers:
-            if marker not in final:
-                final += f"\n\n{marker}"
-        if collaborative and blocked:
-            final += "\n\n[[await]]"
-        if remainder:
-            final += "\n\n" + remainder
-        append_text_result(result, final)
-        result.usage = usage_totals or None
-        return result, False
+        return finish(final, awaiting=bool(collaborative and blocked))
 
     # 3. Merge reports into the user reply.
     await status(
@@ -1825,19 +1836,7 @@ async def _run_flexible(
             " /agent_flexible_low, _mid, and _high."
         )
 
-    for marker in attach_markers:
-        if marker not in final:
-            final += f"\n\n{marker}"
-
-    if collaborative and (merge_awaiting or blocked):
-        final += "\n\n[[await]]"
-
-    if remainder:
-        final += "\n\n" + remainder
-
-    append_text_result(result, final)
-    result.usage = usage_totals or None
-    return result, False
+    return finish(final, awaiting=bool(collaborative and (merge_awaiting or blocked)))
 
 
 async def run(
@@ -2290,14 +2289,14 @@ async def _run_turn(
 ) -> AgentResult:
     """Run the selected agent CLI with session history prepended.
 
-    backend_name selects the CLI adapter (codex/copilot). When None, the
+    backend_name selects the registered agent adapter. When None, the
     default backend is used. The workspace's configured backend should be
     passed in by the caller.
 
     session_id pins the run to a specific session (used for ephemeral
-    schedule sessions). When None, the prompt is routed to the
-    best-matching existing session via ``select_or_create_session`` —
-    or a new session is created when no session is a good fit.
+    schedule sessions). When None, the user's last session is resumed if
+    available; otherwise ``select_or_create_session`` routes the prompt to
+    an existing session or creates a new one when none is a good fit.
 
     on_event  - called for each parsed event as it arrives (streaming).
     inject_queue - when a message is put, the running subprocess is killed
@@ -2405,11 +2404,11 @@ async def _run_turn_impl(
     backend = backends_agent.get_backend(backend_name)
     is_flexible = backend.name == flexible.BACKEND_NAME
 
-# Router/compaction/titling/planner/merge share the summary backend.
+    # Router/compaction/titling/planner/merge share the summary backend.
     summary_backend = summary_backend_name or (
         backends_agent.DEFAULT_DIRECT_BACKEND if is_flexible else backend.name
     )
-# Default the summary model.
+    # Default the summary model.
     summary_model = _resolve_summary_model(summary_model, summary_backend)
     compaction_context_targets = _compaction_context_targets(
         workspace_path,
@@ -2419,15 +2418,15 @@ async def _run_turn_impl(
         summary_model,
     )
 
-# Pinned sessions never clobber last_session.
+    # Pinned sessions never clobber last_session.
     explicit_session = session_id is not None
 
-# session_data reused across inject restarts.
+    # session_data reused across inject restarts.
     if explicit_session:
         assert session_id is not None  # explicit_session == (session_id set)
         session_data = session.load_session(workspace_path, session_id)
         if session_data is None:
-# Pinned session deleted; bail.
+            # Pinned session deleted; bail.
             result = AgentResult()
             set_error_result(
                 result,
@@ -2443,18 +2442,18 @@ async def _run_turn_impl(
             summary_backend,
         )
 
-# session_id set by both branches.
+    # session_id set by both branches.
     assert session_id is not None
     turn.session_id = session_id
-# Workspace memory loads once.
+    # Workspace memory loads once.
     colony_items = colony.get_items(workspace_path)
 
-# Scheduled/ephemeral turns run autonomous.
+    # Scheduled/ephemeral turns run autonomous.
     collaborative = _is_collaborative_turn(
         workspace_path, explicit_session=explicit_session,
     )
 
-# Prepended context-block budget.
+    # Prepended context-block budget.
     history_budget = workspace_mod.get_history_budget(workspace_path)
 
     injected: list[str] = []
@@ -2468,8 +2467,45 @@ async def _run_turn_impl(
         if on_event is not None:
             await on_event(event)
 
-# Tee phases so a cancelled turn records progress.
+    async def _run_phase(
+        phase_prompt: str,
+        phase_request: str,
+        *,
+        previous_draft: str | None = None,
+    ) -> tuple[AgentResult, bool]:
+        """Drive initial and continuation phases with the same turn policy."""
+        if is_flexible:
+            return await _run_flexible(
+                phase_prompt, phase_request, workspace_path,
+                approval=approval,
+                effort=effort,
+                collaborative=collaborative,
+                summary_backend_name=summary_backend,
+                summary_model=summary_model,
+                on_event=_stream_event,
+                inject_queue=inject_queue,
+                injected=injected,
+                close_inject_on_completion=False,
+                previous_draft=previous_draft,
+                on_process=on_process,
+            )
+        return await _drive_backend(
+            backend, workspace_path,
+            _build_backend_prompt(
+                backend, phase_prompt,
+                collaborative=collaborative,
+                allow_detached_requests=not explicit_session,
+            ),
+            model, approval,
+            effort=effort,
+            on_event=_stream_event,
+            inject_queue=inject_queue,
+            injected=injected,
+            close_inject_on_completion=False,
+            on_process=on_process,
+        )
 
+    # Tee phases so a cancelled turn records progress.
     while True:  # restart loop for inject
         effective_prompt = prompt
         if injected:
@@ -2484,69 +2520,31 @@ async def _run_turn_impl(
             budget=history_budget,
         )
 
-# Workspace scans off the event loop.
+        # Workspace scans off the event loop.
         attachment_images_before = await asyncio.to_thread(
             _snapshot_attachment_images, workspace_path,
         )
 
         try:
-            if is_flexible:
-                result, restarting = await _run_flexible(
-                    contextual_prompt, effective_prompt, workspace_path,
-                    approval=approval,
-                    effort=effort,
-                    collaborative=collaborative,
-                    summary_backend_name=summary_backend,
-                    summary_model=summary_model,
-                    on_event=_stream_event,
-                    inject_queue=inject_queue,
-                    injected=injected,
-                    close_inject_on_completion=False,
-                    on_process=on_process,
-                )
-            else:
+            if not is_flexible:
                 logger.info(
                     "Running %s (prompt %d chars, context %d chars)",
                     backend.name, len(prompt), len(contextual_prompt),
                 )
-                result, restarting = await _drive_backend(
-                    backend, workspace_path,
-                    _build_backend_prompt(
-                        backend, contextual_prompt,
-                        collaborative=collaborative,
-                        allow_detached_requests=not explicit_session,
-                    ),
-                    model, approval,
-                    effort=effort,
-                    on_event=_stream_event,
-                    inject_queue=inject_queue,
-                    injected=injected,
-                    close_inject_on_completion=False,
-                    on_process=on_process,
-                )
+            result, restarting = await _run_phase(contextual_prompt, effective_prompt)
         except BackendUnavailableError as e:
             return _error_result(session_id, str(e), inject_queue)
 
-# Inject restart: drain shutdown pipes and injects.
+        # Inject restart: drain shutdown pipes and injects.
         if restarting:
             await _announce_restart(
                 backend.name, injected, inject_queue, _stream_event,
             )
             continue  # restart loop
 
-        explicit_attachment_sources = _explicit_attachment_sources(
-            result.events, workspace_path,
-        )
-        new_attachment_paths = await asyncio.to_thread(
-            _collect_new_attachment_images,
-            attachment_images_before,
-            workspace_path,
-            exclude_sources=explicit_attachment_sources,
-        )
-        for path in new_attachment_paths:
-            result.events.append(ChatEvent(kind="attachment", content=path))
+        await _append_new_attachment_images(result, attachment_images_before, workspace_path)
 
-# CONTINUE re-drives the backend (capped).
+        # CONTINUE re-drives the backend (capped).
         budget = _TURN_BUDGET.get()
         if budget is not None:
             budget.latest_draft = flexible._bounded_draft_excerpt(result.text)
@@ -2603,38 +2601,10 @@ async def _run_turn_impl(
                 + followup
             )
             try:
-                if is_flexible:
-                    result, restarting = await _run_flexible(
-                        continuation_prompt,
-                        effective_prompt + followup, workspace_path,
-                        approval=approval,
-                        effort=effort,
-                        collaborative=collaborative,
-                        summary_backend_name=summary_backend,
-                        summary_model=summary_model,
-                        on_event=_stream_event,
-                        inject_queue=inject_queue,
-                        injected=injected,
-                        close_inject_on_completion=False,
-                        previous_draft=draft,
-                        on_process=on_process,
-                    )
-                else:
-                    result, restarting = await _drive_backend(
-                        backend, workspace_path,
-                        _build_backend_prompt(
-                            backend, continuation_prompt,
-                            collaborative=collaborative,
-                            allow_detached_requests=not explicit_session,
-                        ),
-                        model, approval,
-                        effort=effort,
-                        on_event=_stream_event,
-                        inject_queue=inject_queue,
-                        injected=injected,
-                        close_inject_on_completion=False,
-                        on_process=on_process,
-                    )
+                result, restarting = await _run_phase(
+                    continuation_prompt, effective_prompt + followup,
+                    previous_draft=draft,
+                )
             except BackendUnavailableError as e:
                 return _error_result(session_id, str(e), inject_queue)
             if restarting:
@@ -2649,22 +2619,12 @@ async def _run_turn_impl(
                 if not is_flexible:
                     budget.capture(result, workspace_path)
             carry_forward_turn_output(previous_result, result, workspace_path)
-            explicit_attachment_sources = _explicit_attachment_sources(
-                result.events, workspace_path,
-            )
-            new_attachment_paths = await asyncio.to_thread(
-                _collect_new_attachment_images,
-                attachment_images_before,
-                workspace_path,
-                exclude_sources=explicit_attachment_sources,
-            )
-            for path in new_attachment_paths:
-                result.events.append(ChatEvent(kind="attachment", content=path))
+            await _append_new_attachment_images(result, attachment_images_before, workspace_path)
             if budget is not None:
                 budget.capture(result, workspace_path, account_usage=False)
                 if result.error and "tool budget exhausted" in result.error.casefold():
                     raise _TurnBudgetExhausted(result.error)
-# Cap exhausted: keep the verdict for chaining.
+            # Cap exhausted: keep the verdict for chaining.
             if judged_rounds >= flexible.JUDGE_MAX_CONTINUES:
                 _draft_tail, _tail_awaiting = extract_await(result.text or "")
                 if result.error or _tail_awaiting or not _draft_tail.strip():
@@ -2706,19 +2666,19 @@ async def _run_turn_impl(
             continue
         break  # normal completion
 
-# The completion deadline covers agent work, not durable reply/session writes.
+    # The completion deadline covers agent work, not durable reply/session writes.
     timer = _TURN_TIMEOUT.get()
     if timer is not None:
         timer.reschedule(None)
-# Close before session/reply yields.
+    # Close before session/reply yields.
     _close_inject_queue(inject_queue)
-# Discard Queue messages after the final answer.
+    # Discard Queue messages after the final answer.
     _drain_queue(inject_queue)
 
-# Consume the marker before session/chat delivery.
+    # Consume the marker before session/chat delivery.
     _consume_detached_task_requests(result)
 
-# The detached owner retains the file lock if /stop interrupts the caller.
+    # The detached owner retains the file lock if /stop interrupts the caller.
     async def _log_normal_turn() -> bool:
         turn.logged_normally = await _persist_session_write(
             workspace_path,
@@ -2737,7 +2697,7 @@ async def _run_turn_impl(
     await asyncio.wait((turn.normal_log_task,))
     turn.normal_log_task.result()
 
-# Compaction runs post-turn.
+    # Compaction runs post-turn.
     create_background_task(
         _run_post_turn_maintenance(
             workspace_path,

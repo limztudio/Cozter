@@ -413,7 +413,7 @@ def capped_list_tail(
 ) -> str:
     """Shared PARTIAL + remainder tail for capped listing tools.
 
-    Covers the near-identical truncation footers in glob/grep/list_dir/tree
+    Covers the near-identical truncation footers in glob/grep
     so their paging advice and honesty marker stay in sync.
     """
     return (
@@ -462,10 +462,11 @@ def truncate_with_marker(text: str, max_chars: int, hint: str) -> str:
     """Clip *text* to *max_chars* with a visible PARTIAL + remainder marker.
 
     One shared implementation for the tool-preview truncation blocks in
-    ``agent_tools/__init__``, ``builtin/web_fetch``, ``plugins/git_info``,
-    and ``plugins/http_request`` so their wording and edge behavior (tiny
-    budgets that fit only the ellipsis) cannot drift apart. *hint* is the
-    per-tool paging advice, e.g. ``"use read_file offset/limit ..."``.
+    ``agent_tools/__init__``, ``builtin/web_fetch``, shared git output,
+    ``plugins/http_request``, and ``plugins/memory`` so their wording and
+    edge behavior (tiny budgets that fit only the ellipsis) cannot drift
+    apart. *hint* is per-tool paging advice, e.g.
+    ``"use read_file offset/limit ..."``.
     """
     suffix = (
         f"\n… [truncated, {len(text)} chars total; {hint};"
@@ -621,12 +622,6 @@ def _glob_segments(pattern: str) -> list[str]:
         part for part in normalized.split("/")
         if part not in ("", ".")
     ]
-
-
-def _path_matches_glob(rel_path: str, pattern: str) -> bool:
-    path_parts = _glob_segments(rel_path)
-    pattern_parts = _glob_segments(pattern or "**/*")
-    return _match_glob_parts(pattern_parts, path_parts)
 
 
 def _match_glob_parts(pattern_parts: list[str], path_parts: list[str]) -> bool:

@@ -277,8 +277,7 @@ def get_max_permission() -> str:
 
 def get_zai_api_key() -> str:
     """Z.ai (Zhipu GLM) API key for the ``zai`` backend; "" if unset."""
-    val = _read_config_value("zai_api_key")
-    return val.strip() if isinstance(val, str) else ""
+    return _get_nonempty_string("zai_api_key")
 
 
 def get_zai_base_url() -> str:
@@ -298,8 +297,7 @@ def get_zai_max_retries() -> int:
 
 def get_meta_api_key() -> str:
     """Meta Model API key for the ``meta`` backend; "" if unset."""
-    val = _read_config_value("meta_api_key")
-    return val.strip() if isinstance(val, str) else ""
+    return _get_nonempty_string("meta_api_key")
 
 
 def get_meta_base_url() -> str:

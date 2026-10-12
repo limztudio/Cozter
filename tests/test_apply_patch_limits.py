@@ -32,6 +32,20 @@ class ApplyPatchLimitsTests(unittest.TestCase):
     def _run(self, workspace: str, patch: str) -> str:
         return asyncio.run(ApplyPatchTool().run(workspace, {"patch": patch}))
 
+    def _assert_zero_context_patch(self, original: str, expected: str) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "data.txt")
+            with open(path, "w", encoding="utf-8") as file_handle:
+                file_handle.write(original)
+            patch = "".join(difflib.unified_diff(
+                original.splitlines(keepends=True),
+                expected.splitlines(keepends=True),
+                fromfile="a/data.txt", tofile="b/data.txt", n=0,
+            ))
+            self.assertIn("applied", self._run(tmp, patch))
+            with open(path, encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), expected)
+
     def test_zero_context_insertions_use_unified_diff_line_positions(self) -> None:
         original = "one\ntwo\nthree\n"
         for expected in (
@@ -40,38 +54,16 @@ class ApplyPatchLimitsTests(unittest.TestCase):
             "one\ntwo\nthree\nnew\n",
             "one\nfirst\ntwo\nsecond\nthree\n",
         ):
-            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
-                path = os.path.join(tmp, "data.txt")
-                with open(path, "w", encoding="utf-8") as file_handle:
-                    file_handle.write(original)
-                patch = "".join(difflib.unified_diff(
-                    original.splitlines(keepends=True),
-                    expected.splitlines(keepends=True),
-                    fromfile="a/data.txt", tofile="b/data.txt", n=0,
-                ))
-
-                self.assertIn("applied", self._run(tmp, patch))
-                with open(path, encoding="utf-8") as file_handle:
-                    self.assertEqual(file_handle.read(), expected)
+            with self.subTest(expected=expected):
+                self._assert_zero_context_patch(original, expected)
 
     def test_later_hunks_target_the_correct_duplicate_after_size_changes(self) -> None:
         for original, expected in (
             ("header\nsame\ngap\nsame\n", "header\ninserted\nsame\ngap\nchanged\n"),
             ("discard\nsame\ngap\nsame\nsame\n", "same\ngap\nchanged\nsame\n"),
         ):
-            with self.subTest(original=original), tempfile.TemporaryDirectory() as tmp:
-                path = os.path.join(tmp, "data.txt")
-                with open(path, "w", encoding="utf-8") as file_handle:
-                    file_handle.write(original)
-                patch = "".join(difflib.unified_diff(
-                    original.splitlines(keepends=True),
-                    expected.splitlines(keepends=True),
-                    fromfile="a/data.txt", tofile="b/data.txt", n=0,
-                ))
-
-                self.assertIn("applied", self._run(tmp, patch))
-                with open(path, encoding="utf-8") as file_handle:
-                    self.assertEqual(file_handle.read(), expected)
+            with self.subTest(original=original):
+                self._assert_zero_context_patch(original, expected)
 
     def test_inserting_into_an_empty_existing_file_adds_no_phantom_line(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

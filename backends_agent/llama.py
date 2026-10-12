@@ -24,10 +24,6 @@ logger = logging.getLogger(__name__)
 class LlamaBackend(CachedOpenAIChatBackend):
     name = "llama"
     executable = "llama-server"  # "not found" error text only
-    # Local VL models use OpenAI-style image_url parts.
-    supports_vision = True
-    vision_mode = "openai_parts"
-
     # From /v1/models, cached briefly.
     default_model = "auto"
     default_summary_model = "auto"

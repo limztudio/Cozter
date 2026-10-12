@@ -11,8 +11,7 @@ auto-loaded on bot startup. The same file works two ways:
     and tells the model to invoke them via ``bash`` using
     ``python -m Cozter.agent_tools.plugins.<name>``.
 
-See the example file in this directory and ``README.md`` for the
-template.
+See ``README.md`` for the plugin template.
 
 Files starting with ``_`` are skipped by the loader, so an example can
 ship in-tree without being live until renamed.

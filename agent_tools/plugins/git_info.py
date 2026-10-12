@@ -22,7 +22,6 @@ from ..base import (
 )
 from ...utils import clip_status_value
 from ._git_common import (
-    MAX_OUTPUT_CHARS,
     GitFailedError as _GitFailedError,
     add_common_git_flags,
     append_stderr_note as _append_stderr_note,
@@ -31,9 +30,6 @@ from ._git_common import (
     first_stderr_line,
     git_once as _git_once,
 )
-
-# Test-visible alias.
-_MAX_OUTPUT_CHARS = MAX_OUTPUT_CHARS
 
 # Real-work cap; shared limits/validation live in ._git_common.
 _ACTIONS = (
@@ -183,21 +179,15 @@ class GitInfoTool(AgentTool):
             raise ValueError("'blame' needs 'path' (a workspace file)")
         resolved = resolve_workspace_entry(workspace_path, pathspec.strip())
         line = args.get("line")
-        if line is None or line is False:
-            ref = args.get("ref")
-            revision = (
-                _checked_ref(ref.strip())
-                if isinstance(ref, str) and ref.strip()
-                else "HEAD"
-            )
-            return argv + ["blame", "--no-textconv", revision, "--", resolved]
-        number = coerce_int_arg(line, default=0, minimum=1, maximum=1_000_000)
         ref = args.get("ref")
         revision = (
             _checked_ref(ref.strip())
             if isinstance(ref, str) and ref.strip()
             else "HEAD"
         )
+        if line is None or line is False:
+            return argv + ["blame", "--no-textconv", revision, "--", resolved]
+        number = coerce_int_arg(line, default=0, minimum=1, maximum=1_000_000)
         return argv + [
             "blame", "--no-textconv", "-L", f"{number},{number}",
             revision, "--", resolved,
@@ -215,13 +205,9 @@ class GitInfoTool(AgentTool):
         """
         env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
         argv = add_common_git_flags(argv)
-        try:
-            stdout, stderr, returncode = await _git_once(
-                argv, workspace, env,
-            )
-        except TimeoutError:
-            # Same class as asyncio.TimeoutError on 3.11+.
-            raise
+        stdout, stderr, returncode = await _git_once(
+            argv, workspace, env,
+        )
         if returncode != 0 and "HEAD" in argv:
             head_failure = any(
                 marker in stderr.casefold()

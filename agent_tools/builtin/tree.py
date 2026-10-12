@@ -26,7 +26,7 @@ class TreeTool(AgentTool):
             "depth": {"type": "integer"},
             "max_entries": {
                 "type": "integer",
-                "description": "max 200.",
+                "description": "max 2000.",
             },
         },
         [],

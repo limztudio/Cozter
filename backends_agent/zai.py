@@ -16,7 +16,6 @@ includes the version so only ``/chat/completions`` is appended),
 
 from __future__ import annotations
 
-import logging
 from typing import NamedTuple
 
 from .. import config as cfg
@@ -25,8 +24,7 @@ from ._openai_agent import (
     discover_bearer_models,
     fetch_model_ids,
 )
-
-logger = logging.getLogger(__name__)
+from .base import effort_band
 
 
 class _FallbackModelSpec(NamedTuple):
@@ -139,10 +137,6 @@ class ZaiBackend(CachedOpenAIChatBackend):
     name = "zai"
     executable = "z.ai"  # HTTP backend; never spawns a subprocess
 
-    # Documented multimodal: photo uploads ride as real image parts.
-    supports_vision = True
-    vision_mode = "openai_parts"
-
     default_model = "glm-5.3"
     default_summary_model = "glm-4.5-air"
     # Cheap current general model; mid stays on 4.7 so tiers stay distinct.
@@ -213,14 +207,11 @@ class ZaiBackend(CachedOpenAIChatBackend):
         selected = _capability_model_id(model or self.default_model)
         if selected in _GLM_5_3_REASONING_MODELS:
             # Reasoning-only family: map percentage onto three levels.
-            levels = self.effort_levels_for_model(model)
-            index = min(
-                percent * len(levels) // 100,
-                len(levels) - 1,
-            )
             return {
                 "thinking": {"type": "enabled"},
-                "reasoning_effort": levels[index],
+                "reasoning_effort": effort_band(
+                    percent, self.effort_levels_for_model(model),
+                ),
             }
         if selected == "glm-5.2":
             return {

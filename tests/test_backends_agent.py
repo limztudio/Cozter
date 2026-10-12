@@ -51,6 +51,21 @@ from Cozter.backends_agent.meta import MetaModelApiBackend
 from Cozter.backends_agent.zai import ZaiBackend
 
 
+def _vision_photo_fixture(workspace_path: str) -> tuple[str, str, str]:
+    """Save a tiny PNG and return its paths and attachment prompt."""
+    rel = os.path.join(".cozter", "uploads", "photo.png")
+    local_path = os.path.join(workspace_path, rel)
+    os.makedirs(os.path.dirname(local_path))
+    with open(local_path, "wb") as handle:
+        handle.write(bytes.fromhex(
+            "89504e470d0a1a0a0000000d4948445200000001"
+            "0000000108060000001f15c4890000000d49444154"
+            "789c626001000000ffff0300000600055c01db0000"
+            "000049454e44ae426082"
+        ))
+    return rel, local_path, f"see\n[Photo attachment saved to: {rel}]"
+
+
 def _launch_grok_command(
     approval: str,
     *,
@@ -802,17 +817,7 @@ warning: ignored after the catalog
         )
         import json as _json
         with tempfile.TemporaryDirectory() as ws:
-            rel = os.path.join(".cozter", "uploads", "photo.png")
-            local_path = os.path.join(ws, rel)
-            os.makedirs(os.path.dirname(local_path))
-            with open(local_path, "wb") as handle:
-                handle.write(bytes.fromhex(
-                    "89504e470d0a1a0a0000000d4948445200000001"
-                    "0000000108060000001f15c4890000000d49444154"
-                    "789c626001000000ffff0300000600055c01db0000"
-                    "000049454e44ae426082"
-                ))
-            prompt = f"see\n[Photo attachment saved to: {rel}]"
+            _, local_path, prompt = _vision_photo_fixture(ws)
             paths = attachment_image_paths(prompt, ws)
             self.assertEqual(paths, [os.path.realpath(local_path)])
             parts = vision_image_url_parts(paths)
@@ -843,17 +848,7 @@ warning: ignored after the catalog
         async def run() -> None:
             backend = GrokBackend()
             with tempfile.TemporaryDirectory() as ws:
-                rel = os.path.join(".cozter", "uploads", "photo.png")
-                local_path = os.path.join(ws, rel)
-                os.makedirs(os.path.dirname(local_path))
-                with open(local_path, "wb") as handle:
-                    handle.write(bytes.fromhex(
-                        "89504e470d0a1a0a0000000d4948445200000001"
-                        "0000000108060000001f15c4890000000d49444154"
-                        "789c626001000000ffff0300000600055c01db0000"
-                        "000049454e44ae426082"
-                    ))
-                prompt = f"see\n[Photo attachment saved to: {rel}]"
+                _, _, prompt = _vision_photo_fixture(ws)
                 with (
                     mock.patch.object(
                         grok_mod, "executable_command",

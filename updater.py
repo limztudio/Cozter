@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 MODULE_ROOT = os.path.dirname(__file__)
 REQUIREMENTS_PATH = os.path.join(MODULE_ROOT, "requirements.txt")
 
-# Commit hash at import time.
+# Commit snapshot captured by init_startup_commit at runtime startup.
 _STARTUP_COMMIT: str | None = None
 
 

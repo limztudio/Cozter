@@ -11,6 +11,7 @@ import tempfile
 import time
 
 from Cozter import config
+from Cozter.agent_tools.base import _glob_segments, _match_glob_parts
 from Cozter.backends_bot.base import BotPlatform, MessageHandle
 
 
@@ -75,6 +76,27 @@ async def create_python_script_process(script: str) -> asyncio.subprocess.Proces
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+
+
+def path_matches_glob(rel_path: str, pattern: str) -> bool:
+    """Apply the discovery matcher to a path in test reference scans."""
+    return _match_glob_parts(
+        _glob_segments(pattern or "**/*"), _glob_segments(rel_path),
+    )
+
+
+async def cancel_after_delay_and_read_pid(
+    task: asyncio.Task[str], pid_path: str,
+) -> int:
+    """Cancel a running tool after its child has had time to record its PID."""
+    await asyncio.sleep(1)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    with open(pid_path, encoding="utf-8") as file_handle:
+        return int(file_handle.read().strip())
 
 
 def process_is_running(pid: int) -> bool:

@@ -67,8 +67,6 @@ def try_parse_int(value: str) -> int | None:
     a different number (callers pass stripped text, so this only fires on
     direct misuse).
     """
-    if isinstance(value, bool):
-        return None
     if not isinstance(value, str):
         return None
     try:
@@ -122,7 +120,7 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
             if 0 < width <= 100000 and 0 < height <= 100000:
                 return (width, height, "PNG")
         # GIF: header + width/height.
-        elif head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
+        elif head[:6] in (b"GIF87a", b"GIF89a"):
             width, height = struct.unpack("<HH", head[6:10])
             if width and height:
                 return (width, height, "GIF")
@@ -928,8 +926,6 @@ def _marker_block_slices(text: str, tag: str) -> tuple[slice, slice] | None:
 
 def extract_marker_block(text: str, tag: str) -> str | None:
     """Return the body of ``[TAG]...[/TAG]`` (stripped), or None if absent."""
-    if not isinstance(text, str):
-        return None
     slices = _marker_block_slices(text, tag)
     if slices is None:
         return None
@@ -1106,17 +1102,8 @@ async def drain_llm_subprocess(
 
     assert proc.stdout is not None  # spawned with stdout=PIPE
     try:
-        if timeout is not None and timeout > 0:
-            async with asyncio.timeout(timeout):
-                async for event in iter_process_json_events(
-                    proc, on_invalid=_capture_bare_text,
-                ):
-                    text = backend.extract_agent_text(event)
-                    if text:
-                        raw = text
-                await wait_for_process_exit(proc)
-                finished = True
-        else:
+        deadline = timeout if timeout is not None and timeout > 0 else None
+        async with asyncio.timeout(deadline):
             async for event in iter_process_json_events(
                 proc, on_invalid=_capture_bare_text,
             ):

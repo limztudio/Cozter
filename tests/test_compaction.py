@@ -11,6 +11,17 @@ from Cozter import colony, compaction, session, workspace
 
 
 class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    async def _consolidation_prompt(self, workspace_path: str, output: str) -> str:
+        """Apply a mocked consolidation and return its captured input."""
+        with mock.patch.object(
+            colony, "run_internal_backend", new=mock.AsyncMock(return_value=output),
+        ) as run_consolidate:
+            applied = await colony.consolidate(
+                workspace_path, "model", backend_name="codex",
+            )
+        self.assertTrue(applied)
+        return run_consolidate.await_args.args[2]
+
     async def test_compaction_does_not_overwrite_history_or_memory_edited_mid_call(self):
         for changed_field in ("messages", "summary", "long_term"):
             with self.subTest(changed_field=changed_field), tempfile.TemporaryDirectory() as ws:
@@ -492,11 +503,9 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                     return_value=1_000,
                 ),
             ):
-                trigger = compaction._token_trigger(
-                    loaded,
-                    workspace_path,
-                    (("known", "model"),),
-                )
+                window = compaction._context_window_tokens((("known", "model"),))
+                assert window is not None
+                trigger = compaction._context_trigger(loaded, workspace_path, window)
 
         assert trigger is not None
         self.assertEqual(trigger[0], "history_chars")
@@ -794,17 +803,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 "[COLONY]\n[/COLONY]\n\n"
                 f"[SESSION:{data['id']}]\n[/SESSION]"
             )
-            with mock.patch.object(
-                colony, "run_internal_backend", new=mock.AsyncMock(
-                    return_value=output,
-                ),
-            ) as run_consolidate:
-                applied = await colony.consolidate(
-                    workspace_path, "model", backend_name="codex",
-                )
-
-            self.assertTrue(applied)
-            prompt = run_consolidate.await_args.args[2]
+            prompt = await self._consolidation_prompt(workspace_path, output)
             self.assertIn(f"[SESSION:{data['id']}]", prompt)
             self.assertEqual(colony.get_items(workspace_path), [])
 
@@ -824,17 +823,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 "[COLONY]\n- Rewritten shared fact.\n[/COLONY]\n\n"
                 f"[SESSION:{data['id']}]\n- Current session evidence.\n[/SESSION]"
             )
-            with mock.patch.object(
-                colony, "run_internal_backend", new=mock.AsyncMock(
-                    return_value=output,
-                ),
-            ) as run_consolidate:
-                applied = await colony.consolidate(
-                    workspace_path, "model", backend_name="codex",
-                )
-
-            self.assertTrue(applied)
-            prompt = run_consolidate.await_args.args[2]
+            prompt = await self._consolidation_prompt(workspace_path, output)
             self.assertIn(f"[SESSION:{data['id']}]", prompt)
             self.assertLess(
                 len(prompt),

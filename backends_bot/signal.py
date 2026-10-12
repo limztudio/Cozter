@@ -619,7 +619,6 @@ class SignalBot(BotPlatform):
                     )
                     continue
                 raise
-        raise SignalCliError("signal-cli JSON-RPC request failed")
 
     async def _rpc_request_once(
         self,
@@ -1209,7 +1208,6 @@ class SignalBot(BotPlatform):
         honored with a bounded retry instead of surfacing an error.
         """
         last_exc: BaseException | None = None
-        delay = 0.0
         for attempt in range(1, _SIGNAL_ATTACH_RETRY_MAX_ATTEMPTS + 1):
             async with self._send_lock:
                 now = time.monotonic()

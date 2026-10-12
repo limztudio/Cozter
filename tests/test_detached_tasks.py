@@ -63,6 +63,30 @@ class _DetachedBot(TestBot):
         return None
 
 class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
+    async def _mock_status(self, payload: list[dict]) -> DetachedTaskStatus:
+        async def fake_run(_cmd: list[str], *, cwd: str):
+            self.assertEqual(cwd, "/work")
+            return 0, json.dumps(payload), ""
+
+        with mock.patch.object(claude_code_mod, "_run_claude_command", fake_run):
+            status = await ClaudeCodeBackend().get_detached_task_status(
+                "/work", "048e1065",
+            )
+        self.assertIsNotNone(status)
+        assert status is not None
+        return status
+
+    def _transcript_paths(
+        self, claude_home: str, task_id: str, session_id: str,
+    ) -> tuple[str, str]:
+        state_path = os.path.join(claude_home, "jobs", task_id, "state.json")
+        transcript_path = os.path.join(
+            claude_home, "projects", "-work", f"{session_id}.jsonl",
+        )
+        os.makedirs(os.path.dirname(state_path))
+        os.makedirs(os.path.dirname(transcript_path))
+        return state_path, transcript_path
+
     def _assert_background_guard_settings(self, cmd: list[str]) -> None:
         self.assertIn("--settings", cmd)
         settings = json.loads(cmd[cmd.index("--settings") + 1])
@@ -139,7 +163,6 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("bypassPermissions", seen)
 
     async def test_status_accepts_only_matching_background_session(self) -> None:
-        backend = ClaudeCodeBackend()
         payload = [
             {"id": "048e1065", "kind": "interactive", "cwd": "/work"},
             {
@@ -148,34 +171,17 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             },
         ]
 
-        async def fake_run(_cmd: list[str], *, cwd: str):
-            self.assertEqual(cwd, "/work")
-            return 0, json.dumps(payload), ""
-
-        with mock.patch.object(claude_code_mod, "_run_claude_command", fake_run):
-            status = await backend.get_detached_task_status("/work", "048e1065")
-
-        self.assertIsNotNone(status)
-        assert status is not None
+        status = await self._mock_status(payload)
         self.assertEqual(status.state, "blocked")
         self.assertEqual(status.waiting_for, "input needed")
 
     async def test_status_accepts_a_workspace_subdirectory(self) -> None:
-        backend = ClaudeCodeBackend()
         payload = [{
             "id": "048e1065", "kind": "background",
             "cwd": "/work/packages/api", "state": "working",
         }]
 
-        async def fake_run(_cmd: list[str], *, cwd: str):
-            self.assertEqual(cwd, "/work")
-            return 0, json.dumps(payload), ""
-
-        with mock.patch.object(claude_code_mod, "_run_claude_command", fake_run):
-            status = await backend.get_detached_task_status("/work", "048e1065")
-
-        self.assertIsNotNone(status)
-        assert status is not None
+        status = await self._mock_status(payload)
         self.assertEqual(status.state, "working")
 
     def test_background_id_parser_requires_dedicated_launch_line(self) -> None:
@@ -225,14 +231,9 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
         task_id = "048e1065"
         session_id = "048e1065-aaaa-bbbb-cccc-0123456789ab"
         with tempfile.TemporaryDirectory() as claude_home:
-            state_path = os.path.join(
-                claude_home, "jobs", task_id, "state.json",
+            state_path, transcript_path = self._transcript_paths(
+                claude_home, task_id, session_id,
             )
-            transcript_path = os.path.join(
-                claude_home, "projects", "-work", f"{session_id}.jsonl",
-            )
-            os.makedirs(os.path.dirname(state_path))
-            os.makedirs(os.path.dirname(transcript_path))
             with open(state_path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "cwd": "/work",
@@ -266,14 +267,9 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
         task_id = "048e1065"
         session_id = "048e1065-aaaa-bbbb-cccc-0123456789ab"
         with tempfile.TemporaryDirectory() as claude_home:
-            state_path = os.path.join(
-                claude_home, "jobs", task_id, "state.json",
+            state_path, transcript_path = self._transcript_paths(
+                claude_home, task_id, session_id,
             )
-            transcript_path = os.path.join(
-                claude_home, "projects", "-work", f"{session_id}.jsonl",
-            )
-            os.makedirs(os.path.dirname(state_path))
-            os.makedirs(os.path.dirname(transcript_path))
             with open(state_path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "cwd": "/work",
@@ -310,14 +306,9 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
         task_id = "048e1065"
         session_id = "048e1065-aaaa-bbbb-cccc-0123456789ab"
         with tempfile.TemporaryDirectory() as claude_home:
-            state_path = os.path.join(
-                claude_home, "jobs", task_id, "state.json",
+            state_path, transcript_path = self._transcript_paths(
+                claude_home, task_id, session_id,
             )
-            transcript_path = os.path.join(
-                claude_home, "projects", "-work", f"{session_id}.jsonl",
-            )
-            os.makedirs(os.path.dirname(state_path))
-            os.makedirs(os.path.dirname(transcript_path))
             with open(state_path, "w", encoding="utf-8") as file_handle:
                 json.dump({
                     "cwd": "/work",

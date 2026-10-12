@@ -12,6 +12,7 @@ from unittest import mock
 from Cozter.agent_tools import base
 from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin.grep import GrepTool
+from Cozter.tests.helpers import path_matches_glob
 
 
 class DiscoveryPruningTests(unittest.TestCase):
@@ -64,7 +65,7 @@ class DiscoveryPruningTests(unittest.TestCase):
             for name in files:
                 path = os.path.join(directory, name)
                 relative = os.path.relpath(path, self.workspace).replace(os.sep, "/")
-                if base._path_matches_glob(relative, pattern):
+                if path_matches_glob(relative, pattern):
                     results.append((path, relative, relative))
         return results
 
@@ -187,7 +188,7 @@ class DiscoveryPruningTests(unittest.TestCase):
                 for name in files:
                     path = posixpath.join(directory, name)
                     relative = posixpath.relpath(path, "/workspace")
-                    if base._path_matches_glob(relative, pattern):
+                    if path_matches_glob(relative, pattern):
                         expected.append((path, relative, relative))
             with (
                 self.subTest(pattern=pattern),

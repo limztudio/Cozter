@@ -571,8 +571,8 @@ async def update_loop(
     """Periodically fetch and restart only when an update is available.
 
     restart_code is the exit code used when an update is found. The
-    daemon uses 0 (systemd's Restart=always respawns); CLI mode uses
-    99 so the in-process respawn loop picks it up.
+    daemon uses 0 for POSIX re-execution or the Windows supervisor;
+    CLI mode uses ``CLI_RESTART_EXIT_CODE`` for its outer respawn loop.
     """
     while True:
         await asyncio.sleep(interval)

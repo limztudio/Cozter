@@ -306,25 +306,6 @@ def _context_window_tokens(
     return min(limits) if limits else None
 
 
-def _token_trigger(
-    data: dict,
-    workspace_path: str,
-    context_targets: tuple[tuple[str, str | None], ...] | None,
-) -> tuple[str, int, int, int] | None:
-    """Return token/character trigger details, or ``None`` if not ready.
-
-    The result is ``(reason, measured, threshold, model_window)``. A known
-    model window produces a token trigger; the workspace's explicit history
-    cap remains a second guard against silently dropping raw messages before
-    they have been summarized.
-    """
-    model_window = _context_window_tokens(context_targets)
-    if model_window is None:
-        return None
-
-    return _context_trigger(data, workspace_path, model_window)
-
-
 def _context_trigger(
     data: dict, workspace_path: str, model_window: int,
 ) -> tuple[str, int, int, int] | None:
@@ -591,7 +572,7 @@ def _take_oldest_message_lines(messages: list[dict], budget: int) -> list[str]:
                     lines.append("…")
                 elif budget <= len(marker):
                     # Too tight for the full marker: keep a cut indicator.
-                    lines.append(line[:budget - 1] + "…" if budget > 1 else "…")
+                    lines.append(line[:budget - 1] + "…")
                 else:
                     lines.append(line[:budget - len(marker)] + marker)
             break

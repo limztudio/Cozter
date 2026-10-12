@@ -20,7 +20,6 @@ from typing import Any, ClassVar
 
 from ..base import (
     AgentTool,
-    coerce_int_arg,
     object_parameters,
     resolve_workspace_entry,
 )
@@ -66,9 +65,6 @@ def _clean_message(value: object) -> tuple[str | None, str | None]:
     text = value.strip()
     if len(text) > _MAX_MESSAGE_CHARS:
         return f"Error: 'message' is too long (max {_MAX_MESSAGE_CHARS} chars)", None
-    first = text.splitlines()[0] if text.splitlines() else text
-    if not first.strip():
-        return "Error: 'message' must be a non-empty string", None
     return None, text
 
 
@@ -385,8 +381,7 @@ class GitOpsTool(AgentTool):
             tag if isinstance(tag, str) and tag else ""
         )
         suffix = f" ({clip_status_value(extra)})" if extra else ""
-        limit = coerce_int_arg(40, default=40, minimum=1, maximum=200)
-        return f"git {clip_status_value(action or '?', limit)}{suffix}"
+        return f"git {clip_status_value(action or '?', 40)}{suffix}"
 
 
 if __name__ == "__main__":

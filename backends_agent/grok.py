@@ -221,7 +221,6 @@ class GrokBackend(CachedModelCatalog, Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
-        prompt_path = ""
         cmd: list[str] = [
             *executable_command(self.executable),
             "--cwd",

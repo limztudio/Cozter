@@ -16,7 +16,6 @@ via ``extra_models`` in config without editing source.
 
 from __future__ import annotations
 
-import logging
 from typing import NamedTuple
 
 from .. import config as cfg
@@ -26,8 +25,6 @@ from ._openai_agent import (
     fetch_model_ids,
 )
 from .base import effort_band
-
-logger = logging.getLogger(__name__)
 
 
 class _FallbackModelSpec(NamedTuple):
@@ -81,10 +78,6 @@ def _capability_model_id(model: str | None) -> str:
 class MetaModelApiBackend(CachedOpenAIChatBackend):
     name = "meta"
     executable = "meta"  # HTTP backend; never spawns a subprocess
-
-    # Photo uploads ride as real image parts.
-    supports_vision = True
-    vision_mode = "openai_parts"
 
     default_model = "muse-spark-1.3"
     default_summary_model = "muse-spark-1.2"

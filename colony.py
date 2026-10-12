@@ -231,7 +231,7 @@ def _bounded_colony_lines(items: list[str], budget: int) -> tuple[list[str], boo
     """
     lines: list[str] = []
     used = 0
-    for index, item in enumerate(items):
+    for item in items:
         separator = 1 if lines else 0
         remaining = budget - used - separator
         if remaining <= 0:
@@ -247,28 +247,14 @@ def _bounded_colony_lines(items: list[str], budget: int) -> tuple[list[str], boo
             elif remaining <= len(marker):
                 # Keep a visible cut indicator.
                 lines.append(
-                    line[:remaining - 1] + "…" if remaining > 1 else "…"
+                    line[:remaining - 1] + "…"
                 )
             else:
                 lines.append(line[:remaining - len(marker)] + marker)
             return lines, True
         lines.append(line)
         used += separator + len(line)
-        if index == len(items) - 1:
-            return lines, False
     return lines, False
-
-
-def _build_bounded_session_block(
-    session_id: str,
-    name: object,
-    long_term: object,
-    budget: int,
-) -> str:
-    """Build one complete [SESSION] block within its remaining prompt budget."""
-    return _session_block_with_coverage(
-        session_id, name, long_term, budget,
-    )[0]
 
 
 def _session_block_with_coverage(

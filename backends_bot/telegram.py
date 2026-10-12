@@ -361,7 +361,6 @@ class TelegramBot(BotPlatform):
         Non-rate-limit errors still fail fast after the photo fallback.
         """
         last_exc: BaseException | None = None
-        delay = 0.0
         for attempt in range(1, _TELEGRAM_SEND_MAX_ATTEMPTS + 1):
             try:
                 with open(path, "rb") as file_handle:

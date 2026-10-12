@@ -12,7 +12,6 @@ from unittest import mock
 
 from Cozter import agent_tools
 from Cozter.agent_tools.base import (
-    _path_matches_glob,
     apply_string_replacement,
     coerce_int_arg,
     move_path_no_clobber,
@@ -40,7 +39,12 @@ from Cozter.agent_tools.builtin.move_file import MoveFileTool
 from Cozter.agent_tools.builtin.read_file import ReadFileTool
 from Cozter.agent_tools.builtin.tree import TreeTool
 from Cozter.agent_tools.builtin.write_file import WriteFileTool
-from Cozter.tests.helpers import kill_process, wait_for_process_exit
+from Cozter.tests.helpers import (
+    cancel_after_delay_and_read_pid,
+    kill_process,
+    path_matches_glob,
+    wait_for_process_exit,
+)
 from Cozter.utils import clip_status_value
 
 
@@ -246,17 +250,17 @@ class AgentToolHelperTests(unittest.TestCase):
         path = "/".join([*(f"part{part_index}" for part_index in range(40)), "target.py"])
         pattern = "/".join([*("**" for _ in range(40)), "target.py"])
 
-        self.assertTrue(_path_matches_glob(path, pattern))
-        self.assertFalse(_path_matches_glob(path, pattern[:-2] + "txt"))
+        self.assertTrue(path_matches_glob(path, pattern))
+        self.assertFalse(path_matches_glob(path, pattern[:-2] + "txt"))
 
     def test_path_glob_has_no_recursive_segment_limit(self) -> None:
         pattern = "**/" * 1_500 + "target.py"
-        self.assertTrue(_path_matches_glob("target.py", pattern))
-        self.assertFalse(_path_matches_glob("target.txt", pattern))
+        self.assertTrue(path_matches_glob("target.py", pattern))
+        self.assertFalse(path_matches_glob("target.txt", pattern))
         path = "/".join(["directory"] * 1_500 + ["target.py"])
-        self.assertTrue(_path_matches_glob(path, path))
-        self.assertTrue(_path_matches_glob(path, "**/target.py"))
-        self.assertFalse(_path_matches_glob(path, "**/target.txt"))
+        self.assertTrue(path_matches_glob(path, path))
+        self.assertTrue(path_matches_glob(path, "**/target.py"))
+        self.assertFalse(path_matches_glob(path, "**/target.txt"))
 
 
 class BuiltinEditToolTests(unittest.TestCase):
@@ -823,14 +827,7 @@ class BashToolTests(unittest.TestCase):
                     tmp,
                     {"command": "sleep 30 & echo $! > child.pid; wait"},
                 ))
-                await asyncio.sleep(1)
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                with open(pid_path, encoding="utf-8") as file_handle:
-                    child_pid = int(file_handle.read().strip())
+                child_pid = await cancel_after_delay_and_read_pid(task, pid_path)
                 assert wait_for_process_exit(child_pid), (
                     f"child process {child_pid} survived bash tool cancel"
                 )
@@ -851,14 +848,7 @@ class BashToolTests(unittest.TestCase):
                         "command": "sleep 30 & echo $! > child.pid",
                     },
                 ))
-                await asyncio.sleep(1)
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                with open(pid_path, encoding="utf-8") as file_handle:
-                    child_pid = int(file_handle.read().strip())
+                child_pid = await cancel_after_delay_and_read_pid(task, pid_path)
                 try:
                     assert wait_for_process_exit(child_pid), (
                         f"child process {child_pid} survived after shell exit"

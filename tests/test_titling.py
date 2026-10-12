@@ -126,9 +126,10 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
 
         long_name = "n" * 5_000
         for budget in (5, 20, 60, 500, 3_000):
-            block = colony_mod._build_bounded_session_block(
+            block, complete = colony_mod._session_block_with_coverage(
                 "sid123", long_name, [], budget,
             )
+            self.assertEqual(complete, bool(block))
             header_len = len("Session: ") + len("\n[SESSION:sid123]\n")
             self.assertLessEqual(len(block), budget + len("[/SESSION]\n") + 1)
             if block:
@@ -147,6 +148,7 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
 
     def test_status_clips_reserve_marker_inside_budget(self) -> None:
         from Cozter.agent_tools import base as tools_base
+        from Cozter.agent_tools.plugins import _git_common as git_common
         from Cozter.agent_tools.plugins import git_info as git_info_mod
         from Cozter.backends_agent import base as agent_base
 
@@ -165,7 +167,7 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("… [clipped]", arg_val)
         self.assertLessEqual(
             len(git_info_mod._bounded("y" * 13_000)),
-            git_info_mod._MAX_OUTPUT_CHARS,
+            git_common.MAX_OUTPUT_CHARS,
         )
         self.assertIn("… [truncated", git_info_mod._bounded("y" * 13_000))
 

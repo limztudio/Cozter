@@ -1556,16 +1556,9 @@ class QueueStateFallbackTests(unittest.TestCase):
                 finally:
                     if queue_file_lock_held:
                         bot._queue_file_lock.release()
-                    bot.gate.set()
-                    for task in (first_task, second_task):
-                        if task is not None and not task.done():
-                            task.cancel()
-                    await asyncio.gather(
-                        *(task for task in (first_task, second_task)
-                          if task is not None),
-                        return_exceptions=True,
+                    await _finish_queue_test(
+                        bot, old_config_dir, first_task, second_task,
                     )
-                    workspace.CONFIG_DIR = old_config_dir
 
         asyncio.run(run())
 
@@ -1623,16 +1616,9 @@ class QueueStateFallbackTests(unittest.TestCase):
                     self.assertTrue(bot._message_queues["u1"].empty())
                     self.assertEqual(bot._read_queue_file(), {})
                 finally:
-                    bot.gate.set()
-                    for task in (first_task, second_task):
-                        if task is not None and not task.done():
-                            task.cancel()
-                    await asyncio.gather(
-                        *(task for task in (first_task, second_task)
-                          if task is not None),
-                        return_exceptions=True,
+                    await _finish_queue_test(
+                        bot, old_config_dir, first_task, second_task,
                     )
-                    workspace.CONFIG_DIR = old_config_dir
 
         asyncio.run(run())
 
@@ -1710,6 +1696,17 @@ class _GatedDrainBot(TestBot):
             )
 
 
+async def _finish_queue_test(bot, old_config_dir, *tasks) -> None:
+    bot.gate.set()
+    for task in tasks:
+        if task is not None and not task.done():
+            task.cancel()
+    await asyncio.gather(
+        *(task for task in tasks if task is not None), return_exceptions=True,
+    )
+    workspace.CONFIG_DIR = old_config_dir
+
+
 def _queue_ctx(bot: _GatedDrainBot, text: str) -> BotContext:
     return BotContext(
         user_id="u1",
@@ -1733,6 +1730,22 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
     def _run(self, coro):
         return asyncio.run(coro)
 
+    async def _assert_queued_turn_drains(self, bot: _GatedDrainBot) -> None:
+        t1 = asyncio.create_task(
+            bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
+        )
+        await asyncio.wait_for(bot.entered.wait(), timeout=2)
+        # Queue the second message while the first turn is still active.
+        await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
+        self.assertEqual(bot.ran, ["first"])
+        bot.gate.set()
+        await t1
+        await asyncio.wait_for(bot.second_entered.wait(), timeout=2)
+        drain = bot._running_tasks.get("u1")
+        if drain is not None:
+            await asyncio.wait_for(drain, timeout=2)
+        self.assertEqual(bot.ran, ["first", "second"])
+
     def test_second_message_drains_after_plain_turn(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
@@ -1740,20 +1753,8 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
                 workspace.CONFIG_DIR = tmp
                 try:
                     bot = _GatedDrainBot()
-                    t1 = asyncio.create_task(
-                        bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
-                    )
-                    await asyncio.wait_for(bot.entered.wait(), timeout=2)
                     # Sent while the agent is mid-reply.
-                    await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
-                    self.assertEqual(bot.ran, ["first"])
-                    bot.gate.set()
-                    await t1
-                    await asyncio.wait_for(bot.second_entered.wait(), timeout=2)
-                    drain = bot._running_tasks.get("u1")
-                    if drain is not None:
-                        await asyncio.wait_for(drain, timeout=2)
-                    self.assertEqual(bot.ran, ["first", "second"])
+                    await self._assert_queued_turn_drains(bot)
                 finally:
                     workspace.CONFIG_DIR = old_config_dir
 
@@ -1767,20 +1768,8 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
                 try:
                     bot = _GatedDrainBot()
                     bot.await_on_finish = True
-                    t1 = asyncio.create_task(
-                        bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
-                    )
-                    await asyncio.wait_for(bot.entered.wait(), timeout=2)
                     # Sent before the question; must not park behind the later pause.
-                    await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
-                    self.assertEqual(bot.ran, ["first"])
-                    bot.gate.set()
-                    await t1
-                    await asyncio.wait_for(bot.second_entered.wait(), timeout=2)
-                    drain = bot._running_tasks.get("u1")
-                    if drain is not None:
-                        await asyncio.wait_for(drain, timeout=2)
-                    self.assertEqual(bot.ran, ["first", "second"])
+                    await self._assert_queued_turn_drains(bot)
                 finally:
                     workspace.CONFIG_DIR = old_config_dir
 
