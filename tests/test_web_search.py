@@ -7,6 +7,7 @@ from unittest import mock
 
 from Cozter.agent_tools.builtin import web_search
 from Cozter.agent_tools.builtin.web_search import WebSearchTool
+from Cozter.tests.helpers import BytesContent
 
 _HTML_BODY = """
 <div class="results">
@@ -37,21 +38,12 @@ _LITE_BODY = """
 """
 
 
-class _Content:
-    def __init__(self, body: bytes) -> None:
-        self.body = body
-
-    async def read(self, limit: int) -> bytes:
-        chunk, self.body = self.body[:limit], self.body[limit:]
-        return chunk
-
-
 class _Response:
     charset = "utf-8"
 
     def __init__(self, status: int, body: bytes) -> None:
         self.status = status
-        self.content = _Content(body)
+        self.content = BytesContent(body)
 
 
 class _FakeNet:

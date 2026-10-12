@@ -12,6 +12,7 @@ from Cozter.agent_tools.base import (
     validate_public_url as _validate_public_url,
 )
 from Cozter.agent_tools.builtin.web_fetch import WebFetchTool
+from Cozter.tests.helpers import BytesContent
 
 
 class _StaticResolver:
@@ -30,15 +31,6 @@ class _StaticResolver:
         self.closed = True
 
 
-class _Content:
-    def __init__(self, body: bytes) -> None:
-        self.body = body
-
-    async def read(self, limit: int) -> bytes:
-        chunk, self.body = self.body[:limit], self.body[limit:]
-        return chunk
-
-
 class _Response:
     charset = "utf-8"
 
@@ -53,7 +45,7 @@ class _Response:
         self.status = status
         self.url = url
         self.headers = headers
-        self.content = _Content(body)
+        self.content = BytesContent(body)
 
     async def __aenter__(self) -> _Response:
         return self

@@ -11,12 +11,6 @@ with per-workspace settings, durable sessions with automatic compaction,
 persistent turn queues, file attachments, and a drop-in plugin system that
 works across every backend.
 
-Cozter is for a trusted individual or small trusted group, not a multi-tenant
-service. Authorized participants can select workspaces the service account can
-access and, depending on the chosen backend and permission mode, direct an
-agent to change them. Run it as a dedicated non-privileged OS user; plugins
-are trusted in-process code, not sandboxed extensions.
-
 ## What it gives you
 
 - **A default meta-agent plus seven direct agent backends**, picked per
@@ -50,7 +44,7 @@ are trusted in-process code, not sandboxed extensions.
   - `meta` — Meta's Model API (Muse Spark models: `muse-spark-1.3`,
     `muse-spark-1.2`, `muse-spark-1.1`, …); OpenAI-compatible, so it shares
     the in-process loop — set `meta_api_key` in config
-- **Four chat surfaces**, all runnable at once (configure any combination):
+- **Four chat surfaces**, with Telegram, Slack, and Signal runnable together:
   - Telegram (`python -m Cozter`)
   - Slack (Socket Mode; native Markdown rendering for AI replies; same
     launcher, set `slack_bot_token` in config)
@@ -86,12 +80,9 @@ are trusted in-process code, not sandboxed extensions.
   Cozter stages its text (and any usage footer) in a separate delivery
   ledger. A failed chat send or restart retries that finished text before
   later work, rather than rerunning agent tools; attachment uploads remain
-  best-effort so a retry cannot duplicate a file. Texts (and the usage
-  footer) send synchronously first; pictures then upload in a per-chat
-  background chain, so the turn returns as soon as texts are out and the
-  next queued turn's agent work overlaps the uploads — the next reply's
-  texts wait for the earlier tail first, preserving conversational order.
-  `/cancel` and daemon stop cancel in-flight uploads
+  best-effort so a retry cannot duplicate a file. Text arrives first;
+  background picture uploads overlap the next agent turn while preserving
+  conversational order. `/cancel` and daemon stop cancel in-flight uploads
 - **Platform-safe text delivery**: long replies are split at chat-surface API
   boundaries. Telegram applies its 4,096-character limit to both rich agent
   replies and plain command/status output, rendering rich Markdown to HTML
@@ -285,6 +276,7 @@ request a new one with `/new` wherever the service account's filesystem
 permissions allow. In write-capable modes, an agent can also run commands in
 that selected workspace. Run Cozter as a dedicated, non-privileged OS user and
 authorize only people, channels, and groups you trust.
+It is not a multi-tenant service.
 
 Telegram authorizes the configured user IDs; Slack and Signal authorize the
 configured channels or groups, so anyone able to send a message in an allowed
@@ -551,13 +543,6 @@ Grant access to the daemon's configured identity, such as
 `NT AUTHORITY\LocalService`, according to the deployment's needs.
 `C:\Users\Public\...` can be suitable after checking its directory and file
 ACLs; the path name alone does not guarantee access or `Everyone` full control.
-Historical evidence from one host is kept under
-`.log\live_signal_send_20261012_083004\`:
-`live_send.log` records the per-user-`Temp` failure (RPC `ERROR`,
-`SignalCliError ... Access is denied ... AttachmentInvalidException`,
-nonzero exit, no receipt) while `live_send2.log` records the
-`C:\Users\Public` retry (RPC `SUCCESS` receipt `1791761953774`,
-`SEND_RESULT: PASS`, exit `0`).
 
 Active Signal tasks show one `Thinking...` message, including scheduled
 tasks once they start. Progress updates edit that message at most once per
@@ -944,7 +929,7 @@ through that CLI's own shell/tool policy.
 
 - **HTTP backends** (`llama`, `meta`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
-  the 17 files under `agent_tools/builtin/` (`bash`, `read_file`,
+  the 16 built-in tools under `agent_tools/builtin/` (`bash`, `read_file`,
   `write_file`, `edit_file`, `multi_edit`, `apply_patch`, `delete_file`,
   `copy_file`, `move_file`, `make_dir`, `list_dir`, `tree`, `glob`, `grep`,
   `web_search`, and `web_fetch`)
@@ -1174,7 +1159,9 @@ evidence, and missing evidence forces PARTIAL + remainder. Doc/standard
 requests are never accepted from first/last-few coverage alone.
 Build/verify requests are claimed clean only when every report lists its
 commands + exit codes + error/warning counts from full (not preview) logs
-with zero remaining; missing evidence means PARTIAL + remainder.
+with no unexpected failures remaining; expected negative-path diagnostics,
+test names, platform skips, and historical entries are classified separately.
+Missing evidence means PARTIAL + remainder.
 Each turn also runs a capped continue-judge loop (up to 3 follow-ups per
 turn): when the judge still says CONTINUE after the cap is exhausted, the
 turn ships its draft with an auto-continued remainder note and chains up
@@ -1196,7 +1183,8 @@ doc-following / verify-with-evidence completeness rule (list every target first,
 re-check leftovers; enumerate every rule/section when told to follow a
 doc; build/test/verify means enumerate targets, run canonical commands
 with 3600s cap (cancel still stops instantly) captured to a file, grep the
-full logs for error/warning/exception, fix each hit, re-run until zero,
+full logs for error/warning/exception, classify each hit, repair unexpected
+failures, and re-run the affected checks,
 exercise runtime paths and check logs, and report commands + exit codes +
 counts; never claim done with work left or clean from a truncated preview
 or unrun steps — say PARTIAL + remainder), and
@@ -1205,6 +1193,9 @@ the model cannot mistake a trimmed preview for full coverage. And when planning 
 CLI missing, unparseable output), the turn degrades to a single `high`-tier
 sub-task carrying the original request, so a botched split never quietly
 downgrades hard work to a weak model.
+The continue judge requests another turn only for concrete missing work that
+can run in the current environment. It does not expand the task to provision
+unconfigured providers or verify unavailable platforms unless requested.
 
 ## Backend behavior
 
@@ -1371,8 +1362,8 @@ codex-cli 0.162.1) lists the `gpt-6.1-sol` / `gpt-6-astra` / `gpt-6-sol` / `gpt-
 on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
 the GPT-5.6 family (Sol is the coding/everyday workhorse, Luna the fast
 affordable tier, both also 272K active) — followed by
-the GPT-5.6 Sol/Terra/Luna family (`gpt-5.5` retired from
-Codex with ChatGPT sign-in on October 14, 2026 and already `hide` in the live catalog); `gpt-5.3-codex-spark` is
+the GPT-5.6 Sol/Terra/Luna family (`gpt-5.5` is scheduled to retire from
+Codex with ChatGPT sign-in on October 14, 2026 and is already `hide` in the live catalog); `gpt-5.3-codex-spark` is
 gone from the live catalog, and `gpt-5.4` and `gpt-5.4-mini` were retired
 from Codex ChatGPT sign-in. Grok's published `grok-4.7`, `grok-4.7-build-fast`,
 `grok-4.6`, and `grok-4.5` IDs use a 500K-token
@@ -1945,30 +1936,8 @@ subprocess) and `parse_event()` (translate the CLI's JSONL events to
 ## Development checks
 
 Run the current unit tests from the parent directory, or set
-`PYTHONPATH` to the parent when running inside the repository. Discovery
-covers malformed state/config fallbacks, persistent queue restoration
-(including off-loop durable commits with cancellation order), session-write
-ownership after `/stop`, and memory preservation across partially covered
-maintenance input,
-schedule parsing (including scheduled-job admission versus execution),
-backend model defaults (Claude and cloud provider capabilities), shared catalog/result/content
-helpers, CLI tool summaries, process-resource maps, event parsing, shared
-OpenAI-compatible retry/backoff behavior, the flexible meta-agent's planning/merge
-(including the `MAX_SUBTASKS * 2` worker cap and the whole-request turn
-budget that releases the queue despite expanding agent work), post-turn,
-interrupted-turn, and inject flow, subprocess draining and
-exceptional-path cleanup (native shell/Git output, inherited pipes,
-prompt-subprocess delivery, internal-backend deadlines, HTTP streaming
-deadlines), prompt construction, attachment handling
-(texts-first, pipelined uploads), run-lock cancellation, session
-picking, auto-titling, compaction, platform/Slack/Signal rich-text
-formatting, status-latency and thinking-status display (including Signal
-transport/status/attachment-latency regressions), runtime
-diagnostics, updater behavior, detached tasks, agent-tool helpers
-(including permissions, patch/edit bounds, and audit-/sweep-found
-regressions),
-off-event-loop discovery scans, selective discovery pruning/optimization
-that preserves selection/containment/permissions, and built-in discovery/edit/patch safety.
+`PYTHONPATH` to the parent when running inside the repository. The
+[source inventory](#source-inventory) describes the complete test coverage.
 
 If `codex` is on `PATH`, one catalog-consistency test also invokes
 `codex debug models` with a 15-second timeout; it skips when that command
@@ -1979,27 +1948,6 @@ When Git is available, a native CLI fixture checks that `/version` responds
 while its input pipe remains open, then exits on EOF. Prompt-transfer,
 cancellation, and Windows launcher-lifetime fixtures also launch isolated
 test children; they do not start configured chat services.
-
-For a local developer check with a CI-supported Python version, create the
-project venv with Python 3.11 or 3.12 and install the runtime dependencies
-plus the two CI tools:
-
-```bash
-cd ..
-python3.12 -m venv Cozter/.venv  # or python3.11
-Cozter/.venv/bin/python -m pip install -r Cozter/requirements.txt ruff mypy
-```
-
-```bash
-cd ..
-Cozter/.venv/bin/python -m unittest discover -s Cozter/tests
-```
-
-From inside `Cozter/`:
-
-```bash
-PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests
-```
 
 CI runs the same three gates — `ruff check`, `mypy`, and the `unittest`
 suite — on Python 3.11 and 3.12 for pushes to `main` and merge requests /
@@ -2022,18 +1970,23 @@ parent, prepend it without discarding the intentionally configured inherited
 resolve to this checkout. Local shells should first remove stale deployment
 entries as described below.
 
-`requirements.txt` contains runtime dependencies only, so install the CI
-tooling explicitly before running the lint and type gates locally:
+For a local developer check, create the project venv with Python 3.11 or
+3.12. `requirements.txt` contains runtime dependencies only, so install the
+CI tooling explicitly before running the lint, type, and test gates:
 
 ```bash
 cd ..
+python3.12 -m venv Cozter/.venv  # or python3.11; skip if it already exists
 Cozter/.venv/bin/python -m pip install -r Cozter/requirements.txt ruff mypy
 Cozter/.venv/bin/ruff check Cozter
 Cozter/.venv/bin/mypy --config-file Cozter/mypy.ini --python-version 3.11 -p Cozter
 Cozter/.venv/bin/mypy --config-file Cozter/mypy.ini --python-version 3.12 -p Cozter
-Cozter/.venv/bin/python -m unittest discover -s Cozter/tests
+Cozter/.venv/bin/python -m unittest discover -s Cozter/tests -v
 git -C Cozter diff --check
 ```
+
+From inside `Cozter/`, run the suite with
+`PYTHONPATH=.. .venv/bin/python -m unittest discover -s tests -v`.
 
 The two `mypy` invocations mirror CI's Python 3.11 and 3.12 target matrix. To
 exercise the full CI matrix locally, run the `unittest` command from separate
@@ -2047,22 +2000,8 @@ should stay local.
 On Windows, a shell that inherits `PYTHONPATH=C:\Startup` can import
 `C:\Startup\Cozter` instead of the development checkout, even when the
 working directory is `C:\workstation\cozter`. Running from inside the package
-does not place its parent on the import path. A historical stale deployment
-at `72d2921` showed this failure: the fast
-`python -m unittest tests.test_updater` subset exited `1` with
-`FAILED (errors=2)` (`KeyError: 'stdin'` in
-`test_git_probe_closes_stdin_instead_of_sharing_cli_input` and
-`test_changed_requirements_install`), because the old production code lacked
-the subprocess-cleanup arguments present in that development checkout, while
-the same subset passed under the clean environment. The full suite polluted
-this way failed as well
-(`47F+22E` in
-`.log/supervision_exercise/47_full_unittest311.log`, failing IDs in
-`48_fail_ids.txt`).
-The same import mismatch reproduced eight failures and two errors in the
-focused queue growth/shrink, edited scheduler time, invalid HTTPS port, and
-delayed-reply cancellation cases. Those source fixes were already in the
-development checkout; importing the old deployment bypassed them.
+does not place its parent on the import path. An import mismatch can make
+current tests exercise old production code and report unrelated failures.
 
 Replace the inherited value with the development checkout's parent, with that
 checkout as the working directory. Use the Python 3.11 or 3.12 virtual
@@ -2077,16 +2016,13 @@ $cozterCheckPython = ".\.venv\Scripts\python.exe"
 & $cozterCheckPython -c "import Cozter; print(Cozter.__file__)"
 & $cozterCheckPython -m ruff check .
 & $cozterCheckPython -m mypy --config-file mypy.ini --python-version 3.11 -p Cozter
-& $cozterCheckPython -m unittest discover -s tests
+& $cozterCheckPython -m unittest discover -s tests -v
 ```
 
 Repeat the gates with a separate Python 3.12 environment and
 `--python-version 3.12` for its mypy invocation. The import check must resolve
 inside `C:\workstation\cozter` for this example; Windows may preserve different
-letter casing in the printed path. A historical clean Python 3.11 run in
-`.log/supervision_exercise/52_full_unittest311_cleanenv.log` reported
-`Ran 1174 tests ... OK (skipped=15)`. That tally belongs to that earlier
-checkout and environment, and is not the current suite or matrix count.
+letter casing in the printed path.
 Python 3.14 can be checked with a third environment and
 `--python-version 3.14`; the repository CI matrix remains Python 3.11/3.12.
 

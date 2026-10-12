@@ -15,6 +15,17 @@ from Cozter.agent_tools.base import _glob_segments, _match_glob_parts
 from Cozter.backends_bot.base import BotPlatform, MessageHandle
 
 
+class BytesContent:
+    """In-memory HTTP body with the bounded asynchronous read interface."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    async def read(self, limit: int) -> bytes:
+        chunk, self.body = self.body[:limit], self.body[limit:]
+        return chunk
+
+
 class TestBot(BotPlatform):
     """Concrete no-op platform base for focused bot-logic tests.
 

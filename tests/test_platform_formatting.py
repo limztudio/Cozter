@@ -96,18 +96,19 @@ class PlatformFormattingTests(unittest.TestCase):
         self.assertEqual(_md_to_html(source), "<pre>**plain** &lt;x&gt;</pre>")
 
 
+class _CapturingTelegramApi:
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+
+    async def send_message(self, **kwargs):
+        self.messages.append(kwargs)
+        return SimpleNamespace(message_id=len(self.messages))
+
+
 class TelegramSendTextTests(unittest.TestCase):
     def test_plain_text_is_split_at_telegram_limit_without_losing_text(self) -> None:
-        class CapturingApi:
-            def __init__(self) -> None:
-                self.messages: list[dict] = []
-
-            async def send_message(self, **kwargs):
-                self.messages.append(kwargs)
-                return SimpleNamespace(message_id=len(self.messages))
-
-        async def run() -> tuple[CapturingApi, object]:
-            api = CapturingApi()
+        async def run() -> tuple[_CapturingTelegramApi, object]:
+            api = _CapturingTelegramApi()
             bot = TelegramBot("token", ["1"])
             bot.app = SimpleNamespace(bot=api)
             text = "a" * (_TELEGRAM_TEXT_LIMIT - 1) + "\n" + "b"
@@ -128,16 +129,8 @@ class TelegramSendTextTests(unittest.TestCase):
         self.assertEqual(handle, MessageHandle("42", "2"))
 
     def test_rich_text_is_split_as_markdown_before_html_conversion(self) -> None:
-        class CapturingApi:
-            def __init__(self) -> None:
-                self.messages: list[dict] = []
-
-            async def send_message(self, **kwargs):
-                self.messages.append(kwargs)
-                return SimpleNamespace(message_id=len(self.messages))
-
-        async def run() -> CapturingApi:
-            api = CapturingApi()
+        async def run() -> _CapturingTelegramApi:
+            api = _CapturingTelegramApi()
             bot = TelegramBot("token", ["1"])
             bot.app = SimpleNamespace(bot=api)
             text = "a" * (_TELEGRAM_TEXT_LIMIT - 1) + "\n" + "b"

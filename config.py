@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from .utils import CONFIG_DIR
 from .utils import normalize_string_list
+from .utils import stat_mtime_size
 from .utils import validate_json_nesting
 
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
@@ -76,20 +77,10 @@ def _load_config_object() -> dict:
     """
     global _CONFIG_CACHE_PATH, _CONFIG_CACHE_MTIME_NS
     global _CONFIG_CACHE_SIZE, _CONFIG_CACHE_DATA
-    try:
-        stat_result = os.stat(CONFIG_PATH)
-        mtime_ns = stat_result.st_mtime_ns
-        size = stat_result.st_size
-    except OSError:
-        # Missing/unstatable: fall through to open().
-        with open(CONFIG_PATH, encoding="utf-8") as file_handle:
-            cfg = json.load(file_handle)
-        validate_json_nesting(cfg)
-        if not isinstance(cfg, dict):
-            raise ValueError("config.json must contain a JSON object") from None
-        return cfg
+    mtime_ns, size = stat_mtime_size(CONFIG_PATH)
     if (
-        _CONFIG_CACHE_DATA is not None
+        mtime_ns is not None
+        and _CONFIG_CACHE_DATA is not None
         and _CONFIG_CACHE_PATH == CONFIG_PATH
         and mtime_ns == _CONFIG_CACHE_MTIME_NS
         and size == _CONFIG_CACHE_SIZE
@@ -100,10 +91,13 @@ def _load_config_object() -> dict:
     validate_json_nesting(cfg)
     if not isinstance(cfg, dict):
         raise ValueError("config.json must contain a JSON object")
-    _CONFIG_CACHE_PATH = CONFIG_PATH
-    _CONFIG_CACHE_MTIME_NS = mtime_ns
-    _CONFIG_CACHE_SIZE = size
-    _CONFIG_CACHE_DATA = cfg
+    # An unstatable file must still be read and validated, without trusting
+    # or replacing the last successfully stamped cache entry.
+    if mtime_ns is not None:
+        _CONFIG_CACHE_PATH = CONFIG_PATH
+        _CONFIG_CACHE_MTIME_NS = mtime_ns
+        _CONFIG_CACHE_SIZE = size
+        _CONFIG_CACHE_DATA = cfg
     return cfg
 
 

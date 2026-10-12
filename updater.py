@@ -299,9 +299,8 @@ def install_requirements() -> None:
 def restart_script(exit_code: int = 0) -> None:
     """Restart the current process.
 
-    Daemon/autostart mode re-execs this process directly. XDG autostart
-    units are generated with ``Restart=no``, so exiting would leave the
-    bot stopped after it announces an update restart.
+    POSIX daemon mode re-execs this process directly, so updates do not
+    depend on an external service manager restarting an exited process.
 
     Windows daemon launches always hand restart responsibility to a
     supervisor. ``run_cozter.ps1`` is the normal supervisor, and the venv

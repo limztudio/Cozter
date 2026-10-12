@@ -27,6 +27,7 @@ from ._git_common import (
     append_stderr_note as _append_stderr_note,
     bounded as _bounded,
     check_ref as _checked_ref,
+    finish_git_run_error as _finish_git_run_error,
     first_stderr_line,
     git_once as _git_once,
 )
@@ -92,12 +93,8 @@ class GitInfoTool(AgentTool):
 
         try:
             stdout, stderr = await self._run_git(argv, workspace_path)
-        except FileNotFoundError:
-            return "Error: git is not installed or not on PATH"
-        except TimeoutError:
-            return f"Error: git {action} timed out"
-        except _GitFailedError as exc:
-            return f"Error: git {action}: {exc}"
+        except (FileNotFoundError, TimeoutError, _GitFailedError) as exc:
+            return _finish_git_run_error(action, exc)
 
         text = stdout.strip()
         if not text:

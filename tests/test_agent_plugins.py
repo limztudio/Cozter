@@ -20,6 +20,7 @@ from Cozter.agent_tools.plugins.git_sync import GitSyncTool
 from Cozter.agent_tools.plugins.http_request import HttpRequestTool
 from Cozter.agent_tools.plugins.memory import MemoryTool
 from Cozter.agent_tools.plugins.notes import NotesTool
+from Cozter.tests.helpers import BytesContent
 
 
 def _run(coro):
@@ -909,15 +910,6 @@ class MemoryToolTests(unittest.TestCase):
         self.assertNotIn("badfile", result)
 
 
-class _FakeContent:
-    def __init__(self, body: bytes) -> None:
-        self.body = body
-
-    async def read(self, limit: int) -> bytes:
-        chunk, self.body = self.body[:limit], self.body[limit:]
-        return chunk
-
-
 class _FakeResponse:
     charset = "utf-8"
 
@@ -937,7 +929,7 @@ class _FakeResponse:
             key.lower(): value for key, value in (headers or {}).items()
         }
         self.reason = reason
-        self.content = _FakeContent(body)
+        self.content = BytesContent(body)
 
     async def __aenter__(self) -> _FakeResponse:
         return self
