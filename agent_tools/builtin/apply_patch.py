@@ -151,9 +151,16 @@ class ApplyPatchTool(AgentTool):
                 "Error: no hunks found; expected unified-diff headers"
                 " (--- / +++ / @@)"
             )
-        return "\n".join(
-            _apply_file_patch(workspace_path, fp) for fp in file_patches
-        )
+        results: list[str] = []
+        for file_patch in file_patches:
+            try:
+                results.append(_apply_file_patch(workspace_path, file_patch))
+            except OSError as exc:
+                # Files are applied independently. Preserve earlier outcomes
+                # and report every target even when one cannot be read/written.
+                label = file_patch.new_path or file_patch.old_path or "?"
+                results.append(f"{label}: failed ({exc})")
+        return "\n".join(results)
 
     def summarize(self, args: dict) -> str:
         patch = args.get("patch")

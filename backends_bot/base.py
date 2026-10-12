@@ -2824,7 +2824,12 @@ class BotPlatform(ABC):
         msg_queue = self._message_queues.get(record["user_id"])
         if msg_queue is not None:
             self._select_queue_entry(
-                msg_queue, lambda entry: entry[2] == record["id"],
+                msg_queue,
+                lambda entry: (
+                    isinstance(entry, tuple)
+                    and len(entry) == 4
+                    and entry[2] == record["id"]
+                ),
             )
         return True
 

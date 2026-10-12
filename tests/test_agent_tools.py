@@ -1591,8 +1591,11 @@ class ApplyPatchToolTests(unittest.TestCase):
             with mock.patch(
                 "Cozter.agent_tools.base.os.link",
                 side_effect=OSError("simulated link failure"),
-            ), self.assertRaisesRegex(OSError, "simulated link"):
-                self._run(tmp, patch)
+            ):
+                result = self._run(tmp, patch)
+
+            self.assertIn("new.txt: failed", result)
+            self.assertIn("simulated link failure", result)
 
             self.assertFalse(os.path.exists(target_path))
 

@@ -257,7 +257,28 @@ def _skip_command_wrappers(segment: list[str]) -> int:
     while index < len(segment):
         name = _command_basename(segment[index])
         if name in {"command", "builtin", "exec"}:
+            wrapper_index = index
             index += 1
+            while index < len(segment):
+                option = segment[index]
+                if option == "--":
+                    index += 1
+                    break
+                if name == "command" and option == "-p":
+                    index += 1
+                    continue
+                if name == "exec" and option in {"-c", "-l", "-cl", "-lc"}:
+                    index += 1
+                    continue
+                if name == "exec" and option == "-a":
+                    # argv[0] is data; the executable follows its argument.
+                    index += 2
+                    continue
+                if option.startswith("-"):
+                    # command -v/-V only inspect names; unknown wrapper flags
+                    # must not turn their arguments into executed commands.
+                    return wrapper_index
+                break
             continue
         if name == "env":
             index += 1

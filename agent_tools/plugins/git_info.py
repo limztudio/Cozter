@@ -203,12 +203,13 @@ class GitInfoTool(AgentTool):
         switches keep the run strictly passive: no index-refresh lock, no
         fsmonitor daemon spawn, and no locale-dependent path quoting.
         """
+        is_diff = len(argv) > 3 and argv[3] == "diff"
         env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
         argv = add_common_git_flags(argv)
         stdout, stderr, returncode = await _git_once(
             argv, workspace, env,
         )
-        if returncode != 0 and "HEAD" in argv:
+        if returncode != 0 and is_diff and "HEAD" in argv:
             head_failure = any(
                 marker in stderr.casefold()
                 for marker in ("unknown revision", "ambiguous argument 'head'")

@@ -1143,7 +1143,7 @@ async def _post_completion_stream(
                     await _drain_completion_tail(resp, deadline)
                     break
             if saw_terminal_marker and not (
-                terminal_finish_reason == "length" and tool_buffers
+                terminal_finish_reason in {"length", "content_filter"} and tool_buffers
             ):
                 outcome = "ok"
     except asyncio.CancelledError:
@@ -1157,6 +1157,12 @@ async def _post_completion_stream(
     ) as exc:
         raise _RetryableError(f"{label}: {exc}") from exc
     except (_SSEEventTooLargeError, _CompletionTooLargeError) as exc:
+        if terminal_finish_reason == "content_filter":
+            # The filtered terminal delta may itself exceed a buffer cap.
+            # Its explicit refusal remains deterministic even in that case.
+            raise RuntimeError(
+                f"{label} stream ended with content_filter; response was incomplete",
+            ) from exc
         # Never continue after dropped deltas/caps (retry is safe).
         raise _RetryableError(f"{label}: {exc}") from exc
     finally:
@@ -1175,6 +1181,15 @@ async def _post_completion_stream(
     if terminal_finish_reason == "length" and tool_buffers:
         raise _RetryableError(
             f"{label} stream ended with length while a tool call was pending",
+        )
+
+    # A filtered completion can contain syntactically valid argument JSON
+    # that was cut before the provider finished the call. Never execute it,
+    # and do not retry a deterministic provider refusal automatically.
+    if terminal_finish_reason == "content_filter" and tool_buffers:
+        raise RuntimeError(
+            f"{label} stream ended with content_filter while a tool call was pending; "
+            "response was incomplete",
         )
 
     # Normalize buffers into tool_calls.

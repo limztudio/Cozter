@@ -527,6 +527,59 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 },
             ])
 
+    def test_content_filter_never_returns_pending_tool_calls(self) -> None:
+        tool_delta = {"tool_calls": [{
+            "index": 0,
+            "id": "call-1",
+            "function": {
+                "name": "write_file",
+                "arguments": '{"path":"x.txt","content":"partial"}',
+            },
+        }]}
+        # A filter can terminate either alongside the last delta or after
+        # earlier arguments. Valid JSON alone does not prove completion.
+        for same_event in (False, True):
+            with self.subTest(same_event=same_event):
+                events = [] if same_event else [{
+                    "choices": [{"delta": tool_delta}],
+                }]
+                events.append({"choices": [{
+                    "delta": tool_delta if same_event else {},
+                    "finish_reason": "content_filter",
+                }]})
+                with self.assertRaisesRegex(
+                    RuntimeError, "content_filter while a tool call was pending",
+                ) as raised:
+                    self._stream(events)
+                # Filtering is deterministic; do not automatically retry it.
+                self.assertNotIsInstance(raised.exception, oa._RetryableError)
+
+    def test_content_filter_keeps_text_without_tool_calls(self) -> None:
+        text, reasoning, tool_calls = self._stream([{"choices": [{
+            "delta": {"content": "available text"},
+            "finish_reason": "content_filter",
+        }]}])
+        self.assertEqual((text, reasoning, tool_calls), ("available text", "", []))
+
+    def test_content_filter_with_oversized_terminal_delta_is_not_retryable(self) -> None:
+        for field in ("content", "reasoning_content", "tool_calls"):
+            delta = {field: "oversized"} if field != "tool_calls" else {
+                "tool_calls": [{"index": 0, "function": {
+                    "name": "write_file", "arguments": '{"path":"x.txt"}',
+                }}],
+            }
+            with (
+                self.subTest(field=field),
+                mock.patch.object(oa, "_MAX_COMPLETION_TEXT_BYTES", 8),
+                mock.patch.object(oa, "_MAX_COMPLETION_REASONING_BYTES", 8),
+                mock.patch.object(oa, "_MAX_TOOL_ARGUMENT_BYTES", 8),
+                self.assertRaisesRegex(RuntimeError, "content_filter") as raised,
+            ):
+                self._stream([{"choices": [{
+                    "delta": delta, "finish_reason": "content_filter",
+                }]}])
+            self.assertNotIsInstance(raised.exception, oa._RetryableError)
+
     def test_multiline_sse_data_event_is_decoded_once(self) -> None:
         async def stream() -> tuple[str, str, list[dict]]:
             content = _SSEContent([

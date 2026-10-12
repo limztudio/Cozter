@@ -90,7 +90,12 @@ class NotesTool(AgentTool):
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         entry = f"## {stamp}\n{text}\n\n"
 
-        existing = _read_notes_text(target)
+        try:
+            existing = _read_notes_text(target)
+        except OSError as exc:
+            # A failed read is not an empty file: replacing it would silently
+            # discard durable notes that this call never inspected.
+            return f"Error: could not read notes: {exc}"
         pre_fit = (existing + entry) if existing else entry
         combined = _fit_entries([existing, entry] if existing else [entry])
         trimmed = combined != pre_fit
@@ -111,7 +116,10 @@ class NotesTool(AgentTool):
         return note
 
     def _read(self, target: str) -> str:
-        text = _read_notes_text(target)
+        try:
+            text = _read_notes_text(target)
+        except OSError as exc:
+            return f"Error: could not read notes: {exc}"
         if not text:
             return (
                 "Notes are empty. Use action=append to record progress,"
@@ -156,8 +164,9 @@ def _read_notes_text(target: str) -> str:
             file_handle.seek(0, os.SEEK_END)
             size = file_handle.tell()
             file_handle.seek(max(0, size - (_NOTES_MAX_BYTES + 1)))
-            raw = file_handle.read()
-    except OSError:
+            # The file may grow after seek/tell; keep the read bounded too.
+            raw = file_handle.read(_NOTES_MAX_BYTES + 1)
+    except FileNotFoundError:
         return ""
     return raw.decode("utf-8", errors="replace")
 

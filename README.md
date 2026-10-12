@@ -1575,7 +1575,9 @@ overwrite a file another writer creates concurrently, and a failed preparation
 leaves no partial target. New patch-created files use normal file-creation
 permissions (subject to the process umask); a delete patch must match the
 current file and remove all of its content before the file is unlinked. Failed
-hunks leave the target in place.
+hunks leave the target in place. Files in a multi-file patch are applied
+independently: an I/O failure is reported against its target while earlier
+outcomes remain visible and the remaining files are still attempted.
 Each built-in file path is checked both lexically and after resolution, so an
 existing symlink cannot escape the workspace. Content tools follow a safe
 in-workspace final symlink; `delete_file` and `move_file` instead operate on
@@ -1690,7 +1692,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 63 focused
+- Tests: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 66 focused
   `unittest` modules covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared

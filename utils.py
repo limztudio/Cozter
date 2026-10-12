@@ -127,22 +127,36 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
         # JPEG: scan SOF markers for height/width.
         elif head[:2] == b"\xff\xd8":
             offset = 2
-            while offset + 9 < len(head):
+            while offset + 1 < len(head):
                 if head[offset] != 0xFF:
                     offset += 1
                     continue
+                # JPEG permits any number of FF fill bytes before a marker.
+                while offset + 1 < len(head) and head[offset + 1] == 0xFF:
+                    offset += 1
+                if offset + 1 >= len(head):
+                    return None
                 marker = head[offset + 1]
-                if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+                if marker in (0xD9, 0xDA):
+                    # Dimensions precede the first scan; don't inspect entropy
+                    # data or bytes beyond the end of an image as header fields.
+                    return None
+                if marker in (0xD8, 0x00, 0x01) or 0xD0 <= marker <= 0xD7:
+                    offset += 2
+                    continue
+                if offset + 4 > len(head):
+                    return None
+                seg_len = (head[offset + 2] << 8) | head[offset + 3]
+                if seg_len < 2:
+                    return None
+                # C4/C8/CC are table/extension markers, not frame headers.
+                if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                    if seg_len < 8 or offset + 2 + seg_len > len(head):
+                        return None
                     height = (head[offset + 5] << 8) | head[offset + 6]
                     width = (head[offset + 7] << 8) | head[offset + 8]
                     if width and height:
                         return (width, height, "JPEG")
-                    return None
-                if marker in (0xD8, 0xD9, 0x00, 0x01) or 0xD0 <= marker <= 0xD7:
-                    offset += 2
-                    continue
-                seg_len = (head[offset + 2] << 8) | head[offset + 3]
-                if seg_len < 2:
                     return None
                 offset += 2 + seg_len
         # BMP: width/height at offset 18.

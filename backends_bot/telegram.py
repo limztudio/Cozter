@@ -12,7 +12,7 @@ import re
 os.environ.setdefault("PTB_TIMEDELTA", "1")
 
 from telegram import Update
-from telegram.error import NetworkError
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -278,7 +278,9 @@ class TelegramBot(BotPlatform):
                 msg = await self.app.bot.send_message(
                     chat_id=chat_id, text=chunk, parse_mode="HTML",
                 )
-            except Exception:
+            except BadRequest:
+                # Rejected markup is safe to resend as plain text. Network
+                # errors can lose the acknowledgement of an accepted send.
                 plain = strip_html_markup(chunk)
                 if not plain.strip():
                     continue
@@ -309,7 +311,7 @@ class TelegramBot(BotPlatform):
                 text=html,
                 parse_mode="HTML",
             )
-        except Exception:
+        except BadRequest:
             plain = strip_html_markup(html)
             await self.app.bot.edit_message_text(
                 chat_id=handle.chat_id,
@@ -445,9 +447,17 @@ class TelegramBot(BotPlatform):
     async def stop(self) -> None:
         await self._stop_daemon_services()
         if self.app:
-            await self.app.updater.stop()
-            await self.app.stop()
-            await self.app.shutdown()
+            app = self.app
+            try:
+                if app.updater is not None and app.updater.running:
+                    await app.updater.stop()
+            finally:
+                try:
+                    if app.running:
+                        await app.stop()
+                finally:
+                    await app.shutdown()
+                    self.app = None
             logger.info("Telegram bot stopped.")
 
     # events
