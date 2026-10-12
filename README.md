@@ -325,6 +325,7 @@ example layout lives in `.config/config.example.json`):
   "meta_max_retries": 2,
 
   "tool_timeout": 3600,
+  "agent_turn_timeout": 3600,
   "update_idle_timeout": 1200,
   "dump_traceback_interval": 0,
   "update_check_interval": 300,
@@ -385,8 +386,16 @@ that controls it, so the message itself points at the knob to raise.
 Chat-reply paths
 (Signal RPC, model discovery, stream drains) keep their own short timeouts.
 
-Agent turns do not have a wall-clock timeout; long-running work is
-allowed to finish. `update_idle_timeout` (default 1200s) controls how often
+Each request has a shared `agent_turn_timeout` (default 3600s) covering
+planning, workers, merging, judge follow-ups, injected replanning, and automatic
+continuations. Set it to `0` to explicitly disable the time limit. The initial wait for
+the workspace run lock does not consume this allowance. Flexible requests also
+share a maximum of 24 workers across every continuation. On either limit,
+Cozter returns a truthful partial report with completed work and unfinished
+scope, preserves artifacts and accounting, and advances the queue. A backend's
+tool cap similarly ends the request after its final report. These limits do
+not change permission settings, models, reasoning effort, or individual tool
+and provider limits. `update_idle_timeout` (default 1200s) controls how often
 the auto-update loop dumps diagnostics while waiting for active turns; it
 keeps waiting instead of restarting through active work.
 `dump_traceback_interval` (default 0) enables optional periodic thread dumps

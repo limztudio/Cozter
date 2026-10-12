@@ -482,6 +482,7 @@ class OpenAIChatBackend(Backend):
         tool_repeat_counts: dict[str, int] = {}
         blocked_rounds = 0
         stopped_on_refusals = False
+        stopped_on_budget = False
         stop_reason = "Tool limit reached."
         tool_rounds = 0
         has_preserved_reasoning = False
@@ -657,8 +658,10 @@ class OpenAIChatBackend(Backend):
                     break
 
                 if not self._auto_continue_after_tool_limit():
+                    stopped_on_budget = True
                     break
                 if segment >= max_segments:
+                    stopped_on_budget = True
                     # Ceiling hit: fall through to a no-tools answer.
                     logger.warning(
                         "%s hit the %d-segment cap (%d tool turns each);"
@@ -700,6 +703,13 @@ class OpenAIChatBackend(Backend):
 
             if assistant_text:
                 proc.emit({"type": "assistant_text", "text": assistant_text})
+                if stopped_on_budget:
+                    # The final report survives, but another judge must not
+                    # restart the same work with a fresh tool allowance.
+                    proc.emit({
+                        "type": "error",
+                        "message": f"Tool budget exhausted after {tool_rounds} tool rounds.",
+                    })
                 if stopped_on_refusals:
                     # Preserve the report but prevent judge/auto-chain from
                     # retrying a scope that permissions/tool availability block.

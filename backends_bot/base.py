@@ -3977,6 +3977,18 @@ class BotPlatform(ABC):
         *, session_id: str | None = None,
         queue_entry_id: str | None = None,
     ) -> None:
+        # Every automatic continuation spends the same request allowance.
+        with agent.turn_budget():
+            await self._run_turn_with_budget(
+                uid, chat_id, text, session_id=session_id,
+                queue_entry_id=queue_entry_id,
+            )
+
+    async def _run_turn_with_budget(
+        self, uid: str, chat_id: str, text: str,
+        *, session_id: str | None = None,
+        queue_entry_id: str | None = None,
+    ) -> None:
         """Send a "Thinking..." status, run the agent, then post the reply.
 
         ``session_id`` pins the run to a specific session — used by
@@ -4179,7 +4191,8 @@ class BotPlatform(ABC):
                 except Exception:
                     logger.exception("Auto-chained continuation turn failed")
                     break
-                agent.carry_forward_turn_output(previous_result, result, ws)
+                if not agent.is_cumulative_budget_result(result):
+                    agent.carry_forward_turn_output(previous_result, result, ws)
                 if not getattr(result, "continue_instruction", ""):
                     break
             if chained:

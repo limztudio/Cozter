@@ -17,6 +17,7 @@ from unittest import mock
 
 from Cozter.backends_agent._http_proc import HttpAgentProcess, http_error_translator
 from Cozter.backends_agent import _openai_agent as oa
+from Cozter.backends_agent.base import AgentResult
 
 
 class OpenAIBackoffTests(unittest.TestCase):
@@ -895,6 +896,32 @@ class OpenAIToolLimitTests(unittest.TestCase):
             and "exceeded 1 tool-call turns" in event.get("message", "")
             for event in proc.events
         ))
+
+    def test_segment_cap_preserves_final_report_and_marks_terminal_budget(self) -> None:
+        calls = []
+
+        async def stream(*args, **kwargs):
+            payload = args[1]
+            calls.append(copy.deepcopy(payload))
+            if "tools" in payload:
+                return "", "", [_tool_call(f"call-{len(calls)}", f"file-{len(calls)}.txt")]
+            return "Repair completed; final verification remains.", "", []
+
+        oa._stream_completion = stream
+        oa.tools.execute_tool = mock.AsyncMock(return_value="read evidence")
+        backend = _ToolLimitBackend(auto_continue=True)
+        with mock.patch.object(backend, "_max_segments", return_value=2):
+            proc = _CaptureProc()
+            asyncio.run(backend._run_agent(
+                proc, "/tmp", "work", None, "full", False, 100,
+            ))
+        result = AgentResult()
+        for event in proc.events:
+            backend.parse_event(event, result)
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("tools", calls[-1])
+        self.assertIn("Repair completed", result.text)
+        self.assertIn("Tool budget exhausted after 2 tool rounds", result.error)
 
     def test_tool_request_fields_apply_only_to_tool_turns(self) -> None:
         calls: list[dict] = []

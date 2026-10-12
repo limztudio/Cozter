@@ -40,6 +40,8 @@ _DEFAULT_CONFIG = {
     "meta_max_retries": 2,
     # Real-work cap.
     "tool_timeout": 3600,
+    # Shared across planning, workers, judge and automatic continuations.
+    "agent_turn_timeout": 3600,
     # Stuck-turn diagnostic interval.
     "update_idle_timeout": 1200,
     # Periodic faulthandler dump interval (0 disables).
@@ -334,6 +336,11 @@ def get_update_idle_timeout() -> int:
     restarting through active work. Defaults to 1200s.
     """
     return _get_int_at_least("update_idle_timeout", 1)
+
+
+def get_agent_turn_timeout() -> int:
+    """Whole request execution limit in seconds; 0 explicitly disables it."""
+    return _get_int_at_least("agent_turn_timeout", 0)
 
 
 def get_dump_traceback_interval() -> int:

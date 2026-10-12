@@ -11,13 +11,15 @@ import os
 import re
 import weakref
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import dataclasses
 from datetime import datetime
 from typing import Any, TypeVar
 
 from . import (
-    agent_tools, backends_agent, colony, compaction, flexible, router,
+    agent_tools, backends_agent, colony, compaction, config, flexible, router,
     session, titling,
 )
 from . import workspace as workspace_mod
@@ -49,6 +51,137 @@ from .utils import drain_queue as _drain_queue
 logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
 _StageResult = TypeVar("_StageResult")
+
+
+class _TurnBudgetExhausted(Exception):
+    """Stop a request without scheduling another completion attempt."""
+
+
+@dataclass
+class TurnBudget:
+    """One request's execution allowance, shared by every continuation."""
+
+    timeout_seconds: int
+    max_workers: int = flexible.MAX_SUBTASKS * 2
+    deadline: float | None = None
+    started: bool = False
+    workers_started: int = 0
+    pending: list[str] = dataclasses.field(default_factory=list)
+    reports: list[tuple[str, str]] = dataclasses.field(default_factory=list)
+    output: AgentResult = dataclasses.field(default_factory=AgentResult)
+    captured: list[weakref.ReferenceType[AgentResult]] = dataclasses.field(default_factory=list)
+    latest_draft: str = ""
+    owner: asyncio.Task | None = dataclasses.field(default_factory=asyncio.current_task)
+
+    def start(self) -> None:
+        # Start after the workspace run lock; time spent queuing is excluded.
+        if not self.started:
+            self.started = True
+            if self.timeout_seconds:
+                self.deadline = asyncio.get_running_loop().time() + self.timeout_seconds
+            performance_logger.info(
+                "stage=turn_budget event=start timeout_seconds=%d max_workers=%d",
+                self.timeout_seconds, self.max_workers,
+            )
+
+    def claim_worker(self) -> None:
+        if self.workers_started >= self.max_workers:
+            raise _TurnBudgetExhausted(
+                f"the shared limit of {self.max_workers} workers was reached"
+            )
+        self.workers_started += 1
+
+    def capture(
+        self, result: AgentResult, workspace_path: str, *, account_usage: bool = True,
+    ) -> None:
+        self.captured = [reference for reference in self.captured if reference() is not None]
+        newly_captured = not any(result is reference() for reference in self.captured)
+        if newly_captured:
+            self.captured.append(weakref.ref(result))
+        retained = AgentResult()
+        carry_forward_turn_output(result, retained, workspace_path)
+        for event in retained.events:
+            if event.kind == "attachment" and event not in self.output.events:
+                self.output.events.append(event)
+        for task in retained.detached_tasks:
+            if task not in self.output.detached_tasks:
+                self.output.detached_tasks.append(task)
+        for request in retained.detached_task_requests:
+            if request not in self.output.detached_task_requests:
+                self.output.detached_task_requests.append(request)
+        if newly_captured and account_usage:
+            usage = self.output.usage or {}
+            _accumulate_usage(usage, result.usage)
+            self.output.usage = usage or None
+
+    def finish(self, reason: str, turn: "_InterruptedTurn") -> AgentResult:
+        result = self.output
+        result.error = f"Turn budget exhausted: {reason}."
+        result.continue_instruction = ""
+        result.session_id = turn.session_id
+        sections = [
+            f"PARTIAL: {reason}. Work already completed was retained; "
+            "the request stopped before full completion.",
+        ]
+        if self.reports:
+            reports = "\n\n".join(
+                f"Task: {instruction}\n{flexible._truncate_report(report)}"
+                for instruction, report in self.reports
+            )
+            sections.append("Completed worker reports:\n" +
+                            flexible._bounded_draft_excerpt(reports))
+        elif self.latest_draft:
+            sections.append("Latest completed draft:\n" +
+                            flexible._bounded_draft_excerpt(self.latest_draft))
+        streamed = next((
+            event.content for event in reversed(turn.events)
+            if event.kind == "text" and event.content.strip()
+        ), "")
+        if streamed and streamed != self.latest_draft:
+            sections.append("Latest streamed output (unverified):\n" +
+                            flexible._bounded_draft_excerpt(streamed, limit=1200))
+        activity = next((
+            event.content for event in reversed(turn.events)
+            if event.kind in ("tool", "file") and event.content.strip()
+        ), "")
+        if activity:
+            sections.append("Last activity before stopping:\n" +
+                            _truncate_context_text(activity, INTERRUPTED_TURN_ACTIVITY_CHARS))
+        if self.pending:
+            pending = "\n".join(
+                f"- {_truncate_context_text(instruction, 200)}"
+                for instruction in dict.fromkeys(self.pending)
+            )
+            sections.append("Unfinished or unverified scope:\n" +
+                            flexible._bounded_draft_excerpt(pending, limit=6000))
+        else:
+            sections.append("Final completion verification remains unfinished.")
+        append_text_result(result, "\n\n".join(sections))
+        return result
+
+
+_TURN_BUDGET: ContextVar[TurnBudget | None] = ContextVar("cozter_turn_budget", default=None)
+_TURN_TIMEOUT: ContextVar[asyncio.Timeout | None] = ContextVar("cozter_turn_timeout", default=None)
+
+
+@contextmanager
+def turn_budget():
+    """Reuse the current request budget, or own an isolated one for this task."""
+    current = _TURN_BUDGET.get()
+    if current is not None and current.owner is asyncio.current_task():
+        yield current
+        return
+    token = _TURN_BUDGET.set(TurnBudget(config.get_agent_turn_timeout()))
+    try:
+        yield _TURN_BUDGET.get()
+    finally:
+        _TURN_BUDGET.reset(token)
+
+
+def is_cumulative_budget_result(result: AgentResult) -> bool:
+    """Budget completion already includes artifacts/accounting from prior runs."""
+    budget = _TURN_BUDGET.get()
+    return budget is not None and result is budget.output
 _PENDING_SESSION_WRITES: dict[asyncio.Lock, set[asyncio.Task[Any]]] = {}
 
 
@@ -102,6 +235,7 @@ def _terminal_provider_error(error: str) -> bool:
         "insufficient quota", "insufficient credits", "out of credits",
         "credit balance exhausted", "invalid api key", "authentication failed",
         "consecutive rounds where every tool call was refused",
+        "tool budget exhausted",
     ))
 
 
@@ -1098,6 +1232,9 @@ async def _drive_backend(
         completed_stream = True
     except asyncio.CancelledError:
         cancelled = True
+        budget = _TURN_BUDGET.get()
+        if budget is not None:
+            budget.capture(result, workspace_path)
         logger.info(
             "%s run cancelled, killing subprocess %d",
             backend.name, proc.pid,
@@ -1138,6 +1275,9 @@ async def _drive_backend(
     if stderr:
         logger.debug("%s stderr: %s", backend.name, stderr)
 
+    budget = _TURN_BUDGET.get()
+    if budget is not None:
+        budget.capture(result, workspace_path)
     if restarting:
         return result, True
 
@@ -1432,6 +1572,9 @@ async def _run_flexible(
     if restarting:
         return AgentResult(), True
     plan = flexible.parse_plan(raw_plan or "", request)
+    budget = _TURN_BUDGET.get()
+    if budget is not None:
+        budget.pending = [task.instruction for task in plan.subtasks]
 
     # Only the planner may ask.
     if plan.question:
@@ -1493,6 +1636,8 @@ async def _run_flexible(
             done += 1
             continue
         tier_backend = backends_agent.get_backend(tier_backend_name)
+        if budget is not None:
+            budget.claim_worker()
         await status(
             f"flexible [{done + 1}/{total}] {task.tier} ·"
             f" {tier_backend_name}/{tier_model}: {task.instruction}"
@@ -1519,6 +1664,8 @@ async def _run_flexible(
             on_process=on_process,
         ), "flexible_worker", tier_backend_name, tier_model,
             worker_index=done + 1, worker_count=total)
+        if budget is not None:
+            budget.capture(sub_result, workspace_path)
         if restarting:
             return result, True
 
@@ -1557,6 +1704,13 @@ async def _run_flexible(
             # Half answer + failure: tell the merge.
             report += f"\n\n(the agent then failed: {sub_result.error})"
         reports.append(report)
+        if budget is not None:
+            budget.reports.append((task.instruction, flexible._truncate_report(report)))
+            if task.instruction in budget.pending:
+                budget.pending.remove(task.instruction)
+            if sub_result.error and "tool budget exhausted" in sub_result.error.casefold():
+                budget.pending.insert(0, task.instruction)
+                raise _TurnBudgetExhausted(sub_result.error)
 
         # Stuck worker: merge ends on its question.
         if worker_awaiting:
@@ -1566,6 +1720,8 @@ async def _run_flexible(
         for extra in flexible.parse_followups(report):
             if extra in queue:
                 continue
+            if budget is not None and extra.instruction not in budget.pending:
+                budget.pending.append(extra.instruction)
             if len(queue) < flexible.MAX_SUBTASKS * 2:
                 queue.append(extra)
             elif extra not in unrun_followups:
@@ -2154,24 +2310,73 @@ async def _run_turn(
     prompt and any partial output to the session before propagating, so a
     later resume has real memory of the stopped attempt.
     """
-    turn = _InterruptedTurn(workspace_path=workspace_path, prompt=prompt)
-    try:
-        return await _run_turn_impl(
-            turn, prompt, workspace_path, user_id,
-            model=model,
-            summary_model=summary_model,
-            approval=approval,
-            on_event=on_event,
-            inject_queue=inject_queue,
-            backend_name=backend_name,
-            summary_backend_name=summary_backend_name,
-            session_id=session_id,
-            on_process=on_process,
+    turn = _InterruptedTurn(
+        workspace_path=workspace_path, prompt=prompt, session_id=session_id,
+    )
+    with turn_budget() as budget:
+        assert budget is not None
+        budget.start()
+        if not budget.pending:
+            budget.pending = [prompt]
+        timer = asyncio.timeout_at(budget.deadline)
+        token = _TURN_TIMEOUT.set(timer)
+        try:
+            async with timer:
+                return await _run_turn_impl(
+                    turn, prompt, workspace_path, user_id,
+                    model=model,
+                    summary_model=summary_model,
+                    approval=approval,
+                    on_event=on_event,
+                    inject_queue=inject_queue,
+                    backend_name=backend_name,
+                    summary_backend_name=summary_backend_name,
+                    session_id=session_id,
+                    on_process=on_process,
+                )
+        except TimeoutError:
+            if not timer.expired():
+                raise
+            reason = f"the {budget.timeout_seconds}s whole-turn time limit was reached"
+            limit_kind = "time"
+        except _TurnBudgetExhausted as exc:
+            reason = str(exc)
+            limit_kind = "tools" if "tool budget exhausted" in reason.casefold() else "workers"
+        except asyncio.CancelledError:
+            # /stop and daemon shutdown retain their original cancellation contract.
+            _log_interrupted_turn(turn)
+            raise
+        finally:
+            _TURN_TIMEOUT.reset(token)
+
+        result = budget.finish(reason, turn)
+        _close_inject_queue(inject_queue)
+        _drain_queue(inject_queue)
+        performance_logger.info(
+            "stage=turn_budget outcome=exhausted limit=%s workers_started=%d timeout_seconds=%d",
+            limit_kind, budget.workers_started, budget.timeout_seconds,
         )
-    except asyncio.CancelledError:
-# Trace the stopped attempt; never swallow cancellation.
-        _log_interrupted_turn(turn)
-        raise
+        if turn.session_id:
+            budget_session_id = turn.session_id
+
+            async def log_budget_result() -> bool:
+                turn.logged_normally = await _persist_session_write(
+                    workspace_path,
+                    lambda: _log_to_session(workspace_path, budget_session_id, turn.prompt, result),
+                )
+                return turn.logged_normally
+
+            turn.normal_log_task = create_background_task(
+                log_budget_result(), name=f"log-budget-turn:{budget_session_id}", log=logger,
+            )
+            _track_session_write_task(workspace_path, turn.normal_log_task)
+            try:
+                await asyncio.wait((turn.normal_log_task,))
+                turn.normal_log_task.result()
+            except asyncio.CancelledError:
+                _log_interrupted_turn(turn)
+                raise
+        return result
 
 
 async def _run_turn_impl(
@@ -2342,6 +2547,12 @@ async def _run_turn_impl(
             result.events.append(ChatEvent(kind="attachment", content=path))
 
 # CONTINUE re-drives the backend (capped).
+        budget = _TURN_BUDGET.get()
+        if budget is not None:
+            budget.latest_draft = flexible._bounded_draft_excerpt(result.text)
+            budget.capture(result, workspace_path, account_usage=not is_flexible)
+            if result.error and "tool budget exhausted" in result.error.casefold():
+                raise _TurnBudgetExhausted(result.error)
         judged_rounds = 0
         while judged_rounds < flexible.JUDGE_MAX_CONTINUES:
             draft = result.text
@@ -2433,6 +2644,10 @@ async def _run_turn_impl(
                 break
             # The new draft replaces prior text, but artifacts and accounting
             # still belong to the same user turn.
+            if budget is not None:
+                budget.latest_draft = flexible._bounded_draft_excerpt(result.text)
+                if not is_flexible:
+                    budget.capture(result, workspace_path)
             carry_forward_turn_output(previous_result, result, workspace_path)
             explicit_attachment_sources = _explicit_attachment_sources(
                 result.events, workspace_path,
@@ -2445,6 +2660,10 @@ async def _run_turn_impl(
             )
             for path in new_attachment_paths:
                 result.events.append(ChatEvent(kind="attachment", content=path))
+            if budget is not None:
+                budget.capture(result, workspace_path, account_usage=False)
+                if result.error and "tool budget exhausted" in result.error.casefold():
+                    raise _TurnBudgetExhausted(result.error)
 # Cap exhausted: keep the verdict for chaining.
             if judged_rounds >= flexible.JUDGE_MAX_CONTINUES:
                 _draft_tail, _tail_awaiting = extract_await(result.text or "")
@@ -2487,6 +2706,10 @@ async def _run_turn_impl(
             continue
         break  # normal completion
 
+# The completion deadline covers agent work, not durable reply/session writes.
+    timer = _TURN_TIMEOUT.get()
+    if timer is not None:
+        timer.reschedule(None)
 # Close before session/reply yields.
     _close_inject_queue(inject_queue)
 # Discard Queue messages after the final answer.
