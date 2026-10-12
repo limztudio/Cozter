@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import dataclasses
 from datetime import datetime
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from . import (
     agent_tools, backends_agent, colony, compaction, flexible, router,
@@ -1011,6 +1011,7 @@ async def _drive_backend(
     inject_queue: asyncio.Queue[str] | None = None,
     injected: list[str] | None = None,
     close_inject_on_completion: bool = False,
+    on_process: Callable[[Any], None] | None = None,
 ) -> tuple[AgentResult, bool]:
     """Launch *backend*, stream its events, and collect the result.
 
@@ -1018,6 +1019,12 @@ async def _drive_backend(
     arrived on *inject_queue* mid-run: the subprocess was killed, the
     message appended to *injected*, and the caller should rebuild the
     prompt and drive the backend again.
+
+    *on_process* is an optional non-sensitive progress hook: it is
+    called synchronously with the launched process object right after
+    launch (and, for flexible workers, once per worker launch) so the
+    caller can record the backend PID for stuck-wait attribution. The
+    hook receives only the process object — never prompts or arguments.
 
     Raises :exc:`BackendUnavailableError` when the CLI isn't installed.
     """
@@ -1037,6 +1044,12 @@ async def _drive_backend(
         if close_inject_on_completion:
             _close_inject_queue(inject_queue)
         return result, False
+
+    if on_process is not None:
+        try:
+            on_process(proc)
+        except Exception:
+            logger.debug("on_process hook failed", exc_info=True)
 
     result = AgentResult()
     restarting = False
@@ -1365,6 +1378,7 @@ async def _run_flexible(
     injected: list[str],
     close_inject_on_completion: bool = True,
     previous_draft: str | None = None,
+    on_process: Callable[[Any], None] | None = None,
 ) -> tuple[AgentResult, bool]:
     """Run one turn of the ``flexible`` meta-agent.
 
@@ -1376,6 +1390,11 @@ async def _run_flexible(
     Returns ``(result, restarting)`` like :func:`_drive_backend` - an
     inject mid-pipeline abandons the run and replans with the new context.
     Continuations pass *previous_draft* to the workers as completion evidence.
+
+    *on_process* is forwarded to each worker's :func:`_drive_backend`
+    call so stuck-wait attribution follows the currently running worker
+    process (planner/merge/judge phases run through
+    :func:`run_internal_backend` without a foreground process to report).
     """
     summary_backend = backends_agent.get_backend(summary_backend_name)
     tiers = workspace_mod.get_flexible_run_config(workspace_path)
@@ -1495,6 +1514,7 @@ async def _run_flexible(
             on_event=on_event,
             inject_queue=inject_queue,
             injected=injected,
+            on_process=on_process,
         ), "flexible_worker", tier_backend_name, tier_model,
             worker_index=done + 1, worker_count=total)
         if restarting:
@@ -1674,6 +1694,7 @@ async def run(
     backend_name: str | None = None,
     summary_backend_name: str | None = None,
     session_id: str | None = None,
+    on_process: Callable[[Any], None] | None = None,
 ) -> AgentResult:
     """Run a turn, serialized per workspace.
 
@@ -1683,6 +1704,11 @@ async def run(
     (separate from the file lock used for session logging/compaction, so no
     reentrancy deadlock) forces turns to run one at a time. The lock is
     released as soon as the turn finishes; background titling runs after.
+
+    *on_process* is an optional non-sensitive progress hook forwarded to
+    :func:`_drive_backend` (and flexible workers): it receives the
+    launched backend process object so the caller can record the backend
+    PID for stuck-wait attribution. It is never given prompts or args.
     """
     async with workspace_mod.get_run_lock(workspace_path):
         return await _run_turn(
@@ -1697,6 +1723,7 @@ async def run(
             backend_name=backend_name,
             summary_backend_name=summary_backend_name,
             session_id=session_id,
+            on_process=on_process,
         )
 
 
@@ -2012,6 +2039,7 @@ async def _run_turn(
     backend_name: str | None = None,
     summary_backend_name: str | None = None,
     session_id: str | None = None,
+    on_process: Callable[[Any], None] | None = None,
 ) -> AgentResult:
     """Run the selected agent CLI with session history prepended.
 
@@ -2027,6 +2055,9 @@ async def _run_turn(
     on_event  - called for each parsed event as it arrives (streaming).
     inject_queue - when a message is put, the running subprocess is killed
                    and restarted with the injected context appended.
+    on_process - optional non-sensitive hook receiving the launched
+                 backend process object (for backend-PID attribution);
+                 never given prompts or arguments.
 
     Cancellation (/stop, shutdown, or a mid-turn restart) still persists the
     prompt and any partial output to the session before propagating, so a
@@ -2044,6 +2075,7 @@ async def _run_turn(
             backend_name=backend_name,
             summary_backend_name=summary_backend_name,
             session_id=session_id,
+            on_process=on_process,
         )
     except asyncio.CancelledError:
 # Trace the stopped attempt; never swallow cancellation.
@@ -2064,12 +2096,15 @@ async def _run_turn_impl(
     backend_name: str | None = None,
     summary_backend_name: str | None = None,
     session_id: str | None = None,
+    on_process: Callable[[Any], None] | None = None,
 ) -> AgentResult:
     """Drive the backend phases of one turn, updating *turn* as it goes.
 
     Session routing, context prepending, streaming, the normal session log,
     and post-turn maintenance live here; interruption logging and the public
-    contract live on :func:`_run_turn`.
+    contract live on :func:`_run_turn`. *on_process* is forwarded to
+    :func:`_drive_backend` (and flexible workers) for backend-PID
+    attribution; it is never given prompts or arguments.
     """
     backend = backends_agent.get_backend(backend_name)
     is_flexible = backend.name == flexible.BACKEND_NAME
@@ -2171,6 +2206,7 @@ async def _run_turn_impl(
                     inject_queue=inject_queue,
                     injected=injected,
                     close_inject_on_completion=False,
+                    on_process=on_process,
                 )
             else:
                 logger.info(
@@ -2190,6 +2226,7 @@ async def _run_turn_impl(
                     inject_queue=inject_queue,
                     injected=injected,
                     close_inject_on_completion=False,
+                    on_process=on_process,
                 )
         except BackendUnavailableError as e:
             return _error_result(session_id, str(e), inject_queue)
@@ -2278,6 +2315,7 @@ async def _run_turn_impl(
                         injected=injected,
                         close_inject_on_completion=False,
                         previous_draft=draft,
+                        on_process=on_process,
                     )
                 else:
                     result, restarting = await _drive_backend(
@@ -2293,6 +2331,7 @@ async def _run_turn_impl(
                         inject_queue=inject_queue,
                         injected=injected,
                         close_inject_on_completion=False,
+                        on_process=on_process,
                     )
             except BackendUnavailableError as e:
                 return _error_result(session_id, str(e), inject_queue)

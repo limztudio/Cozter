@@ -353,6 +353,54 @@ Handler = Callable[[BotContext], Awaitable[None]]
 QueueEntry = tuple[str, str, str, bool]
 
 
+# Cap for the redacted per-turn progress label kept for stuck diagnostics.
+_TURN_PROGRESS_LABEL_LIMIT = 80
+
+
+def _redact_progress_label(value: object, *, limit: int = _TURN_PROGRESS_LABEL_LIMIT) -> str:
+    """Return a non-sensitive one-line progress label for stuck diagnostics.
+
+    Only the first line is kept (multi-line output bodies are dropped),
+    clipped to *limit* chars with a visible marker. Callers must pass a
+    label they constructed from non-sensitive parts (tool/file *kind*
+    plus a tool *name*, never prompts, arguments, command text, file
+    contents, or credentials).
+    """
+    text = value if isinstance(value, str) else str(value)
+    first_line = text.split("\n")[0].strip()
+    if len(first_line) <= limit:
+        return first_line
+    marker = "… [clipped]"
+    if limit <= len(marker):
+        return first_line[:max(0, limit - 1)] + "…" if limit > 1 else "…"[:limit]
+    return first_line[:limit - len(marker)] + marker
+
+
+@dataclass
+class _TurnProgress:
+    """Non-sensitive attribution for one in-flight agent turn.
+
+    ``backend``/``model`` name the agent driving the turn; ``started``
+    is a monotonic timestamp for the turn start; ``last_kind`` is the
+    last observed event kind (``"tool"`` / ``"file"`` / ...); ``label``
+    is a redacted first-line label built from non-sensitive parts only
+    (tool name, never arguments or command text); ``event_count`` counts
+    observed progress events; ``last_at`` is the monotonic timestamp of
+    the most recent one; ``pid`` is the backend subprocess id when the
+    backend runs as an OS process (``None`` for in-process HTTP agents
+    and for phases that have not launched a process).
+    """
+
+    backend: str = ""
+    model: str = ""
+    started: float = 0.0
+    last_kind: str = ""
+    label: str = ""
+    event_count: int = 0
+    last_at: float = 0.0
+    pid: int | None = None
+
+
 class _InjectQueue(asyncio.Queue[str]):
     """A turn-owned queue that can atomically stop accepting injections.
 
@@ -361,7 +409,6 @@ class _InjectQueue(asyncio.Queue[str]):
     on the event loop there is no await-point between checking the window and
     enqueueing (or closing) it.
     """
-
     def __init__(self, maxsize: int) -> None:
         super().__init__(maxsize=maxsize)
         self._accepting = True
@@ -440,6 +487,20 @@ class BotPlatform(ABC):
         self._detached_task_watcher: asyncio.Task | None = None
         self._detached_delivery_locks: dict[str, asyncio.Lock] = {}
         self._detached_delivery_tasks: dict[str, set[asyncio.Task]] = {}
+        # Non-sensitive per-turn progress for stuck-wait attribution.
+        #
+        # ``stuck_turn_diagnostics()`` historically reported only task/lock
+        # identity, so an hour-long command-output wait (e.g. a Bash tool
+        # call awaiting a slow child) was unattributable: the logs could
+        # not say which backend/model last made progress, which tool the
+        # turn was waiting on, which OS process was involved, or how long
+        # the wait had lasted. These records keep only that attribution
+        # surface — backend/model names, monotonic timestamps, tool/file
+        # *kinds* plus a redacted first-line label, and numeric PIDs.
+        # Prompts, tool arguments, command text, file contents, and
+        # credentials are never stored here (see ``_redact_progress_label``
+        # and ``record_turn_progress``).
+        self._turn_progress: dict[str, _TurnProgress] = {}
         # Users already acknowledged by /cancel or /stop.
         self._cancel_acknowledged: set[str] = set()
         # Per-user epochs.
@@ -669,7 +730,19 @@ class BotPlatform(ABC):
         task, a held lock, or both — the key evidence for diagnosing a
         wedged ``has_active_turns()`` that would otherwise only surface
         as repeated ``Delaying update check`` lines.
+
+        Active turns also report their non-sensitive attribution
+        (backend/model, backend PID when the backend runs as an OS
+        process, elapsed seconds since the turn started, seconds since
+        the last progress event, and the redacted last-progress label),
+        so a historical command-output wait can be attributed to the
+        tool/backend/PID it was waiting on without logging prompts,
+        arguments, or credentials.
         """
+        try:
+            now = asyncio.get_running_loop().time()
+        except RuntimeError:
+            now = time.monotonic()
         tasks = {
             uid: task for uid, task in self._running_tasks.items()
             if not task.done()
@@ -679,9 +752,9 @@ class BotPlatform(ABC):
         }
         parts: list[str] = []
         if tasks:
-            # Report uid + task state.
+            # Report uid + task state + non-sensitive turn attribution.
             names = [
-                f"{uid}(cancelled={task.cancelled()})"
+                self._describe_running_task(uid, task, now)
                 for uid, task in tasks.items()
             ]
             parts.append("running_tasks=[" + ", ".join(names) + "]")
@@ -716,6 +789,132 @@ class BotPlatform(ABC):
         if locks:
             parts.append("held_locks=[" + ", ".join(sorted(locks)) + "]")
         return "; ".join(parts) or "<no stuck state found>"
+
+    def _describe_running_task(
+        self, uid: str, task: asyncio.Task, now: float,
+    ) -> str:
+        """Render one running turn with its non-sensitive attribution.
+
+        Falls back to the legacy ``uid(cancelled=...)`` shape when no
+        progress record exists (turns started before tracking, or tests
+        that register ``_running_tasks`` directly).
+        """
+        base = f"{uid}(cancelled={task.cancelled()})"
+        progress = self._turn_progress.get(uid)
+        if progress is None:
+            return base
+        elapsed = max(0.0, now - progress.started) if progress.started else 0.0
+        detail = f"backend={progress.backend or '?'}"
+        detail += f" model={progress.model or '?'}"
+        detail += f" pid={progress.pid if progress.pid is not None else '?'}"
+        detail += f" elapsed={elapsed:.1f}s"
+        if progress.event_count:
+            idle = max(0.0, now - progress.last_at) if progress.last_at else 0.0
+            detail += (
+                f" last={progress.last_kind or '?'}"
+                f"({progress.event_count} events,"
+                f" idle={idle:.1f}s)"
+            )
+            if progress.label:
+                detail += f" {progress.label}"
+        else:
+            detail += " last=<no progress events yet>"
+        return f"{base}[{detail}]"
+
+    def _begin_turn_progress(
+        self, uid: str, *, backend: str, model: str,
+    ) -> None:
+        """Start (or restart) the non-sensitive progress record for *uid*."""
+        try:
+            started = asyncio.get_running_loop().time()
+        except RuntimeError:
+            started = time.monotonic()
+        self._turn_progress[uid] = _TurnProgress(
+            backend=backend if isinstance(backend, str) else str(backend),
+            model=model if isinstance(model, str) else str(model),
+            started=started,
+            last_at=started,
+        )
+
+    def _note_turn_process(self, uid: str, pid: object) -> None:
+        """Record the backend subprocess id for *uid* when it is numeric.
+
+        In-process HTTP agents report ``pid=-1`` (``HttpAgentProcess``);
+        that sentinel — and any non-integer value — is stored as ``None``
+        so diagnostics render ``pid=?`` instead of a bogus id.
+        """
+        progress = self._turn_progress.get(uid)
+        if progress is None:
+            return
+        if isinstance(pid, bool):
+            return
+        if isinstance(pid, int) and pid > 0:
+            progress.pid = pid
+        elif pid is None:
+            progress.pid = None
+
+    def record_turn_progress(self, uid: str, *, kind: str, label: str) -> None:
+        """Record one non-sensitive progress event for *uid*'s turn.
+
+        *kind* is the event kind (``"tool"`` / ``"file"`` / ...);
+        *label* must already be redacted by the caller — a tool/file
+        *name*, never prompts, arguments, command text, file contents,
+        or credentials. Unknown/empty kinds are ignored so a malformed
+        event can never poison the attribution record.
+        """
+        progress = self._turn_progress.get(uid)
+        if progress is None:
+            return
+        if not isinstance(kind, str) or not kind.strip():
+            return
+        try:
+            now = asyncio.get_running_loop().time()
+        except RuntimeError:
+            now = time.monotonic()
+        progress.last_kind = kind.strip()
+        progress.label = _redact_progress_label(label)
+        progress.event_count += 1
+        progress.last_at = now
+
+    def _clear_turn_progress(self, uid: str) -> None:
+        """Drop the attribution record for *uid* (turn finished/cancelled)."""
+        self._turn_progress.pop(uid, None)
+
+    def _record_turn_event_progress(self, uid: str, ev: object) -> None:
+        """Fold one streamed event into *uid*'s attribution record.
+
+        Only the event *kind* plus a redacted label are kept. The label
+        is the leading tool-name token of the event's first line
+        (``"read_file: ..."`` → ``"tool: read_file"``;
+        ``"$ ..."`` shell lines → ``"tool: shell"``), so arguments,
+        command text, paths, prompts, file contents, and credentials
+        are never stored. ``file`` events record ``"file: change"``
+        without any path; every other kind records just its kind.
+        """
+        kind = getattr(ev, "kind", "")
+        content = getattr(ev, "content", "")
+        if not isinstance(kind, str) or not kind.strip():
+            return
+        kind = kind.strip()
+        label = kind
+        if kind == "tool" and isinstance(content, str) and content.strip():
+            first_line = content.strip().split("\n")[0].strip()
+            # Status-preview lines carry a "» " marker; drop it.
+            if first_line.startswith("»"):
+                first_line = first_line[1:].strip()
+            if first_line.startswith("$"):
+                label = "tool: shell"
+            else:
+                token = first_line.split(":")[0].split(" ")[0].split("(")[0].strip()
+                # Keep only plausible bare tool/status names.
+                if token and len(token) <= 64 and token.replace(
+                    "_", "").replace("-", "").isalnum():
+                    label = f"tool: {token}"
+                else:
+                    label = "tool"
+        elif kind == "file":
+            label = "file: change"
+        self.record_turn_progress(uid, kind=kind, label=label)
 
     # dispatch hooks
 
@@ -3439,6 +3638,7 @@ class BotPlatform(ABC):
         self._running_tasks.pop(uid, None)
         self._inject_queues.pop(uid, None)
         self._cancel_acknowledged.discard(uid)
+        self._clear_turn_progress(uid)
         lock.release()
 
     async def _discard_cancelled_dispatch_entry(
@@ -3643,6 +3843,10 @@ class BotPlatform(ABC):
         backend_name, model, summary_model, perm, summary_backend = (
             workspace.get_run_config(ws)
         )
+        # Start the non-sensitive attribution record before the first
+        # yield so a stuck wait can name backend/model/elapsed even when
+        # the turn stalls before its first progress event.
+        self._begin_turn_progress(uid, backend=backend_name, model=model)
 
         inject_q = _InjectQueue(maxsize=self.max_queue_size)
         self._inject_queues[uid] = inject_q
@@ -3719,6 +3923,7 @@ class BotPlatform(ABC):
         async def on_event(ev: agent.ChatEvent) -> None:
             nonlocal latest_text
             nonlocal pending_status, status_edit_task
+            self._record_turn_event_progress(uid, ev)
             if not self.supports_transient_status:
                 return
             if (
@@ -3773,6 +3978,9 @@ class BotPlatform(ABC):
                 backend_name=backend_name,
                 summary_backend_name=summary_backend,
                 session_id=session_id,
+                on_process=lambda proc, uid=uid: self._note_turn_process(
+                    uid, getattr(proc, "pid", None),
+                ),
             )
             # Auto-chain judge-exhausted CONTINUE hands-free (bounded).
             chained = 0
@@ -3809,6 +4017,9 @@ class BotPlatform(ABC):
                         session_id=(
                             session_id if session_id is not None
                             else result.session_id
+                        ),
+                        on_process=lambda proc, uid=uid: self._note_turn_process(
+                            uid, getattr(proc, "pid", None),
                         ),
                     )
                 except asyncio.CancelledError:
@@ -3867,6 +4078,11 @@ class BotPlatform(ABC):
         finally:
             # Idempotent window close before I/O can yield.
             inject_q.close()
+            # The attribution record's job ends with the agent phase:
+            # delivery/post-turn work runs under the same lock but is no
+            # longer a command-output wait. The caller's _cleanup_turn
+            # also clears (idempotent) for cancel paths that bypass this.
+            self._clear_turn_progress(uid)
             if status_edit_task is not None and not status_edit_task.done():
                 status_edit_task.cancel()
             if thinking_handle is not None:

@@ -9,7 +9,10 @@ from unittest import mock
 from Cozter import agent, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import BotContext
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import (
+    TestBot,
+    create_python_script_process,
+)
 
 
 class _ReplyDeliveryBot(TestBot):
@@ -470,6 +473,129 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(20):
                 await asyncio.sleep(0)
             self.assertFalse(bot.has_active_turns())
+
+    async def test_stuck_diag_reports_backend_model_pid_and_last_progress(
+        self,
+    ) -> None:
+        """A stuck wait names backend/model/PID/elapsed/last-progress."""
+        bot = _ReplyDeliveryBot(tempfile.mkdtemp(), fail_final=False)
+        task = asyncio.current_task()
+        assert task is not None
+        bot._running_tasks["u1"] = task
+        bot._begin_turn_progress("u1", backend="meta", model="muse-spark-1.3")
+        bot._note_turn_process("u1", 42424)
+        bot._record_turn_event_progress(
+            "u1", ChatEvent(kind="tool", content="$ sleep 3600"),
+        )
+        diag = bot.stuck_turn_diagnostics()
+        self.assertIn("backend=meta", diag)
+        self.assertIn("model=muse-spark-1.3", diag)
+        self.assertIn("pid=42424", diag)
+        self.assertIn("elapsed=", diag)
+        self.assertIn("last=tool", diag)
+        self.assertIn("tool: shell", diag)
+
+    async def test_stuck_diag_redacts_prompts_args_and_credentials(
+        self,
+    ) -> None:
+        """Progress labels never carry command text, paths, or secrets."""
+        bot = _ReplyDeliveryBot(tempfile.mkdtemp(), fail_final=False)
+        task = asyncio.current_task()
+        assert task is not None
+        bot._running_tasks["u1"] = task
+        bot._begin_turn_progress("u1", backend="codex", model="gpt-5")
+        bot._note_turn_process("u1", 777)
+        bot._record_turn_event_progress(
+            "u1",
+            ChatEvent(
+                kind="tool",
+                content="bash: run hunter2 --token s3cr3t /etc/passwd",
+            ),
+        )
+        diag = bot.stuck_turn_diagnostics()
+        for sensitive in ("hunter2", "s3cr3t", "--token", "/etc/passwd", "run "):
+            self.assertNotIn(sensitive, diag)
+        # Only the redacted tool name survives.
+        self.assertIn("tool: bash", diag)
+        bot._record_turn_event_progress(
+            "u1",
+            ChatEvent(kind="file", content="changed: /etc/passwd hunter2"),
+        )
+        diag = bot.stuck_turn_diagnostics()
+        for sensitive in ("hunter2", "/etc/passwd"):
+            self.assertNotIn(sensitive, diag)
+        self.assertIn("file: change", diag)
+
+    async def test_stuck_diag_without_progress_keeps_legacy_shape(
+        self,
+    ) -> None:
+        """Turns without a progress record render as before."""
+        bot = _ReplyDeliveryBot(tempfile.mkdtemp(), fail_final=False)
+        task = asyncio.current_task()
+        assert task is not None
+        bot._running_tasks["u1"] = task
+        diag = bot.stuck_turn_diagnostics()
+        self.assertIn("u1(cancelled=False)", diag)
+        self.assertNotIn("backend=", diag)
+
+    async def test_turn_progress_cleared_on_cleanup(self) -> None:
+        """Finished/cancelled turns drop their attribution record."""
+        bot = _ReplyDeliveryBot(tempfile.mkdtemp(), fail_final=False)
+        bot._begin_turn_progress("u1", backend="meta", model="m")
+        bot._record_turn_event_progress(
+            "u1", ChatEvent(kind="tool", content="bash"),
+        )
+        self.assertIn("u1", bot._turn_progress)
+        lock = bot._ensure_task_lock("u1")
+        await lock.acquire()
+        bot._running_tasks["u1"] = asyncio.current_task()
+        try:
+            bot._cleanup_turn("u1", lock)
+        except RuntimeError:
+            lock.release()
+            raise
+        self.assertNotIn("u1", bot._turn_progress)
+        self.assertNotIn("backend=", bot.stuck_turn_diagnostics())
+
+    async def test_drive_backend_reports_pid_through_on_process_hook(
+        self,
+    ) -> None:
+        """_drive_backend calls on_process with the launched process."""
+        seen: list[int | None] = []
+
+        class _PidBackend:
+            name = "pid-test"
+
+            async def launch(self, *_args, **_kwargs):
+                return await create_python_script_process(
+                    "import time\ntime.sleep(60)\n",
+                )
+
+            @staticmethod
+            def parse_event(_event, _result) -> None:
+                return None
+
+        proc_holder: list[object] = []
+        try:
+            result, restarting = await agent._drive_backend(
+                _PidBackend(), tempfile.mkdtemp(), "prompt", None, "auto",
+                effort=0,
+                on_process=lambda proc: (
+                    seen.append(proc.pid), proc_holder.append(proc),
+                ),
+            )
+        finally:
+            for proc in proc_holder:
+                try:
+                    proc.kill()  # type: ignore[union-attr]
+                    await proc.wait()  # type: ignore[union-attr]
+                except (ProcessLookupError, OSError):
+                    pass
+        self.assertFalse(restarting)
+        self.assertEqual(len(seen), 1)
+        self.assertIsInstance(seen[0], int)
+        self.assertGreater(seen[0], 0)
+        self.assertIsNone(result.error)
 
 
 if __name__ == "__main__":
