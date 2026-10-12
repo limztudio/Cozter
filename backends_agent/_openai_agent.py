@@ -33,7 +33,7 @@ import aiohttp
 from .. import agent_tools as tools
 from ..agent_tools.builtin.bash import shell_context
 from ..utils import clip_status_value, iter_bounded_lines
-from ._http_proc import HttpAgentProcess, http_error_translator
+from ._http_process import HttpAgentProcess, http_error_translator
 from .base import (
     DOC_FOLLOWING_RULE, PROGRESS_RULE, VISION_RULE, WHOLE_SCOPE_RULE,
     AgentResult, Backend, CachedModelCatalog, ChatEvent, append_text_result,
@@ -559,18 +559,18 @@ class OpenAIChatBackend(Backend):
                     _batch_args: list[dict] = []
                     _batch_skipped: list[bool] = []
                     for call in tool_calls:
-                        _b_name, _b_args = tools.parse_openai_call(call)
-                        _b_sig = tools.tool_signature(_b_name, _b_args)
-                        tool_repeat_counts[_b_sig] = (
-                            tool_repeat_counts.get(_b_sig, 0) + 1
+                        call_name, call_args = tools.parse_openai_call(call)
+                        call_signature = tools.tool_signature(call_name, call_args)
+                        tool_repeat_counts[call_signature] = (
+                            tool_repeat_counts.get(call_signature, 0) + 1
                         )
-                        _batch_names.append(_b_name)
-                        _batch_args.append(_b_args)
+                        _batch_names.append(call_name)
+                        _batch_args.append(call_args)
                         _batch_skipped.append(
-                            tool_repeat_counts[_b_sig] > tool_repeat_limit,
+                            tool_repeat_counts[call_signature] > tool_repeat_limit,
                         )
 
-                    async def _run_one(
+                    async def run_tool_call(
                         _name: str, _args: dict,
                     ) -> str:
                         # execute_tool owns permissions, status, truncation, timeout.
@@ -580,26 +580,26 @@ class OpenAIChatBackend(Backend):
                         )
 
                     _results: list[str | None] = [None] * len(tool_calls)
-                    _to_run_idx: list[int] = [
+                    runnable_indices: list[int] = [
                         batch_index for batch_index, _skip in enumerate(_batch_skipped)
                         if not _skip
                     ]
                     batch_started = time.monotonic()
-                    if _to_run_idx:
+                    if runnable_indices:
                         _gathered = await asyncio.gather(
                             *(
-                                _run_one(
+                                run_tool_call(
                                     _batch_names[run_index], _batch_args[run_index],
                                 )
-                                for run_index in _to_run_idx
+                                for run_index in runnable_indices
                             ),
                         )
-                        for _pos, _res in zip(_to_run_idx, _gathered, strict=True):
+                        for _pos, _res in zip(runnable_indices, _gathered, strict=True):
                             _results[_pos] = _res
                     performance_logger.info(
                         "stage=tool_batch backend=%s seconds=%.3f calls=%d skipped=%d",
                         self.name, time.monotonic() - batch_started,
-                        len(tool_calls), len(tool_calls) - len(_to_run_idx),
+                        len(tool_calls), len(tool_calls) - len(runnable_indices),
                     )
                     batch_results: list[str] = []
                     for _i, call in enumerate(tool_calls):
@@ -616,13 +616,13 @@ class OpenAIChatBackend(Backend):
                                 "output": result,
                             })
                         else:
-                            _res_item: str | None = _results[_i]
-                            _res_str: str = (
-                                _res_item
-                                if isinstance(_res_item, str)
+                            call_result: str | None = _results[_i]
+                            result_text: str = (
+                                call_result
+                                if isinstance(call_result, str)
                                 else f"Tool {name} failed: no result"
                             )
-                            result = _res_str
+                            result = result_text
                         batch_results.append(result)
 
                         # Include ``name`` alongside tool_call_id.
@@ -735,34 +735,34 @@ class OpenAIChatBackend(Backend):
     def parse_event(self, event: dict, result: AgentResult) -> None:
         if not isinstance(event, dict):
             return
-        etype = event.get("type", "")
+        event_type = event.get("type", "")
 
-        if etype == "assistant_text":
+        if event_type == "assistant_text":
             text = event.get("text")
             if isinstance(text, str) and text:
                 # Last text wins.
                 append_text_result(result, text)
             return
 
-        if etype == "tool_use":
+        if event_type == "tool_use":
             tool = event.get("name", "?")
             if not isinstance(tool, str):
                 tool = "?"
-            inp = event.get("input") or {}
-            if not isinstance(inp, dict):
-                inp = {}
-            content = tools.summarize_tool_use(tool, inp)
+            tool_input = event.get("input") or {}
+            if not isinstance(tool_input, dict):
+                tool_input = {}
+            content = tools.summarize_tool_use(tool, tool_input)
             result.events.append(ChatEvent(kind="tool", content=content))
             if event.get("file_action"):
                 # write/edit/delete surface as kind="file".
-                path = inp.get("path", "?")
+                path = tool_input.get("path", "?")
                 action = event["file_action"]
                 result.events.append(ChatEvent(
                     kind="file", content=f"📄 {action}: {path}",
                 ))
             return
 
-        if etype == "tool_result":
+        if event_type == "tool_result":
             # Covered by the tool_use event; skip.
             return
 
@@ -1361,7 +1361,7 @@ def _merge_tool_call(
                 f"{_MAX_TOOL_NAME_CHARS} character limit",
             )
         buf["function"]["name"] = name
-    args_frag = fn.get("arguments")
+    raw_arguments = fn.get("arguments")
     argument_parts = buf.get("_argument_parts")
     if not isinstance(argument_parts, list):
         argument_parts = []
@@ -1369,22 +1369,22 @@ def _merge_tool_call(
     previous_bytes = buf.get("_argument_bytes", 0)
     if not isinstance(previous_bytes, int):
         previous_bytes = 0
-    if isinstance(args_frag, str):
+    if isinstance(raw_arguments, str):
         # Arguments stream as fragments.
-        fragment_bytes = len(args_frag.encode("utf-8", errors="replace"))
+        fragment_bytes = len(raw_arguments.encode("utf-8", errors="replace"))
         next_bytes = previous_bytes + fragment_bytes
         if next_bytes > _MAX_TOOL_ARGUMENT_BYTES:
             raise _CompletionTooLargeError(
                 "tool-call arguments exceeded "
                 f"{_MAX_TOOL_ARGUMENT_BYTES} byte limit",
             )
-        argument_parts.append(args_frag)
+        argument_parts.append(raw_arguments)
         buf["_argument_bytes"] = next_bytes
         return fragment_bytes
-    if isinstance(args_frag, dict):
+    if isinstance(raw_arguments, dict):
         # Some servers send the whole arguments object in one delta.
         try:
-            serialized = json.dumps(args_frag)
+            serialized = json.dumps(raw_arguments)
         except (TypeError, ValueError):
             # Keeps this boundary safe for direct custom-provider calls.
             logger.debug("Ignoring non-serializable tool-call arguments")

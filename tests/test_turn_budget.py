@@ -316,7 +316,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             return True
 
         async def exhausted(*_args, **_kwargs):
-            raise agent._TurnBudgetExhausted("worker limit reached")
+            raise agent._TurnBudgetExhaustedError("worker limit reached")
 
         with (mock.patch.object(agent, "_run_turn_impl", exhausted),
               mock.patch.object(agent, "_persist_session_write", write)):

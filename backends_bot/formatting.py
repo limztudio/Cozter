@@ -50,7 +50,7 @@ def iter_fenced_markdown(
     the fence state machine.
     """
     fence_marker: str | None = None
-    code_buf: list[str] = []
+    code_lines: list[str] = []
 
     if not isinstance(text, str):
         return
@@ -61,11 +61,11 @@ def iter_fenced_markdown(
                 len(stripped) >= len(fence_marker)
                 and stripped.strip(fence_marker[0]) == ""
             ):
-                yield True, code_buf
-                code_buf = []
+                yield True, code_lines
+                code_lines = []
                 fence_marker = None
             else:
-                code_buf.append(source_line)
+                code_lines.append(source_line)
             continue
 
         opener = _FENCE_OPEN_RE.match(source_line)
@@ -76,8 +76,8 @@ def iter_fenced_markdown(
             continue
         yield False, [source_line]
 
-    if fence_marker is not None and code_buf:
-        yield True, code_buf
+    if fence_marker is not None and code_lines:
+        yield True, code_lines
 
 
 def render_fenced_markdown(

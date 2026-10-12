@@ -436,12 +436,12 @@ def dump_runtime_diagnostics(
         dump_file.write("-- bot turn state --\n")
         for bot in bots:
             try:
-                has = bot.has_active_turns()
-                diag = bot.stuck_turn_diagnostics() if has else "<idle>"
+                has_active_turns = bot.has_active_turns()
+                turn_diagnostics = bot.stuck_turn_diagnostics() if has_active_turns else "<idle>"
             except Exception as exc:  # pragma: no cover - defensive
-                has, diag = None, f"<error: {exc}>"
+                has_active_turns, turn_diagnostics = None, f"<error: {exc}>"
             dump_file.write(
-                f"  {_bot_label(bot)}: has_active_turns={has} {diag}\n"
+                f"  {_bot_label(bot)}: has_active_turns={has_active_turns} {turn_diagnostics}\n"
             )
         dump_file.flush()
 

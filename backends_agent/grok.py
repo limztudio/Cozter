@@ -279,11 +279,11 @@ class GrokBackend(CachedModelCatalog, Backend):
     def parse_event(self, event: dict, result: AgentResult) -> None:
         if not isinstance(event, dict):
             return
-        etype = event.get("type", "")
-        if not isinstance(etype, str):
+        event_type = event.get("type", "")
+        if not isinstance(event_type, str):
             return
 
-        if etype == "assistant":
+        if event_type == "assistant":
             message = event.get("message") or {}
             if not isinstance(message, dict):
                 return
@@ -296,19 +296,19 @@ class GrokBackend(CachedModelCatalog, Backend):
             )
             return
 
-        if etype == "result":
+        if event_type == "result":
             apply_terminal_result_event(
                 event, result, error_message=self._error_message(event),
             )
             return
 
-        if etype == "error":
+        if event_type == "error":
             # Record, but never erase a streamed reply.
             record_backend_error(result, self._error_message(event))
             return
 
         # Transcript-only events: skip the status display.
-        if etype not in {
+        if event_type not in {
             "system",
             "user",
             "usage",
@@ -320,7 +320,7 @@ class GrokBackend(CachedModelCatalog, Backend):
         }:
             logger.debug(
                 "Grok: unhandled event type=%r keys=%r",
-                etype,
+                event_type,
                 list(event.keys()),
             )
 

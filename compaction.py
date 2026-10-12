@@ -37,7 +37,7 @@ _MODEL_CONTEXT_COMPACT_FRACTION = 0.60
 _HISTORY_BUDGET_COMPACT_FRACTION = 0.75
 
 # Reserve most of the prompt for raw messages.
-_PREVIOUS_SUMMARY_FRACTION = 4
+_PREVIOUS_SUMMARY_BUDGET_DIVISOR = 4
 _PREVIOUS_SUMMARY_TRUNCATION_MARKER = (
     "\n… [previous summary truncated: remainder omitted — this is a preview,"
     " not full coverage; say PARTIAL + remainder when coverage is unclear]\n"
@@ -104,9 +104,9 @@ def _parse_output(
     if not isinstance(text, str):
         return "", None, None
     summary = extract_marker_block(text, "SUMMARY")
-    lt_block = extract_marker_block(text, "LONG_TERM")
+    long_term_block = extract_marker_block(text, "LONG_TERM")
     long_term: list[str] | None = (
-        parse_bullets(lt_block) if lt_block is not None else None
+        parse_bullets(long_term_block) if long_term_block is not None else None
     )
     title_block = extract_marker_block(text, "TITLE")
     title: str | None = (
@@ -123,7 +123,7 @@ def _parse_output(
 
 def _previous_summary_budget() -> int:
     """Return the portion of the compaction input reserved for old summary."""
-    return max(1, MAX_SUMMARY_CHARS // _PREVIOUS_SUMMARY_FRACTION)
+    return max(1, MAX_SUMMARY_CHARS // _PREVIOUS_SUMMARY_BUDGET_DIVISOR)
 
 
 def _bounded_previous_summary(summary: str) -> str:
@@ -180,13 +180,13 @@ def _compaction_prompt_parts(
     """Build the fixed prefix of a compaction prompt before raw messages."""
     parts: list[str] = []
     if existing_long_term:
-        lt_lines, _omitted = _bounded_long_term(existing_long_term)
-        if lt_lines:
+        long_term_lines, _omitted = _bounded_long_term(existing_long_term)
+        if long_term_lines:
             parts.append(
                 "Existing long-term items (rewrite this list per the "
                 "instructions above):"
             )
-            parts.extend(lt_lines)
+            parts.extend(long_term_lines)
             parts.append("")
     if existing_summary:
         parts.append(
@@ -538,10 +538,10 @@ async def _maybe_compact_under_maintenance_lock(
                 first_message_tail=original_content[consumed_chars:],
             )
         colony_count = colony.bump_compact_count(workspace_path)
-    lt_count = len(new_long_term) if new_long_term is not None else "?"
+    long_term_count = len(new_long_term) if new_long_term is not None else "?"
     logger.info(
         "Session %s compacted, summary %d chars, long_term %s items",
-        session_id, len(new_summary), lt_count,
+        session_id, len(new_summary), long_term_count,
     )
     colony.maybe_trigger(
         workspace_path, colony_count, summary_model,

@@ -10,7 +10,7 @@ from unittest import mock
 from types import SimpleNamespace
 
 from Cozter import utils
-from Cozter.backends_agent._http_proc import HttpAgentProcess
+from Cozter.backends_agent._http_process import HttpAgentProcess
 from Cozter.tests.helpers import create_python_script_process
 
 

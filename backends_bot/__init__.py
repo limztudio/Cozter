@@ -27,15 +27,15 @@ def create_platforms(config: dict) -> list[BotPlatform]:
     have been validated by ``config.load_config`` — this function is a
     pure dispatcher, not a validator.
     """
-    tg_tokens = config.get("telegram_bot_tokens") or []
-    if isinstance(tg_tokens, str):
-        tg_tokens = [tg_tokens]
-    if not isinstance(tg_tokens, list):
-        tg_tokens = []
-    tg_tokens = [token for token in tg_tokens if isinstance(token, str) and token.strip()]
-    slack_bot = config.get("slack_bot_token") or ""
-    if not isinstance(slack_bot, str):
-        slack_bot = ""
+    telegram_bot_tokens = config.get("telegram_bot_tokens") or []
+    if isinstance(telegram_bot_tokens, str):
+        telegram_bot_tokens = [telegram_bot_tokens]
+    if not isinstance(telegram_bot_tokens, list):
+        telegram_bot_tokens = []
+    telegram_bot_tokens = [token for token in telegram_bot_tokens if isinstance(token, str) and token.strip()]
+    slack_bot_token = config.get("slack_bot_token") or ""
+    if not isinstance(slack_bot_token, str):
+        slack_bot_token = ""
     signal_groups = config.get("signal_group_urls") or []
     if isinstance(signal_groups, str):
         signal_groups = [signal_groups]
@@ -55,7 +55,7 @@ def create_platforms(config: dict) -> list[BotPlatform]:
 
     bots: list[BotPlatform] = []
 
-    if tg_tokens:
+    if telegram_bot_tokens:
         # Deferred: avoid requiring the other platform's dependency.
         from .telegram import TelegramBot
         raw_ids = config.get("user_ids") or []
@@ -74,10 +74,10 @@ def create_platforms(config: dict) -> list[BotPlatform]:
                 max_queue_size=queue_size,
                 max_upload_bytes=max_upload_bytes,
             )
-            for token in tg_tokens
+            for token in telegram_bot_tokens
         )
 
-    if slack_bot.strip():
+    if slack_bot_token.strip():
         from .slack import SlackBot
         raw_channels = config.get("slack_channel_ids") or []
         if isinstance(raw_channels, str):
@@ -89,7 +89,7 @@ def create_platforms(config: dict) -> list[BotPlatform]:
         ]
         bots.append(
             SlackBot(
-                slack_bot,
+                slack_bot_token,
                 config.get("slack_app_token") or "",
                 channel_ids,
                 recent_limit=recent_limit,

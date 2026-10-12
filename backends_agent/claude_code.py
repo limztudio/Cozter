@@ -774,9 +774,9 @@ class ClaudeCodeBackend(Backend):
     def parse_event(self, event: dict, result: AgentResult) -> None:
         if not isinstance(event, dict):
             return
-        etype = event.get("type", "")
+        event_type = event.get("type", "")
 
-        if etype == "assistant":
+        if event_type == "assistant":
             msg = event.get("message", {}) or {}
             if not isinstance(msg, dict):
                 return
@@ -787,18 +787,18 @@ class ClaudeCodeBackend(Backend):
             )
             return
 
-        if etype == "result":
+        if event_type == "result":
             # Terminal event: streamed text else cumulative 'result'.
             apply_terminal_result_event(event, result)
             return
 
-        if etype == "user":
+        if event_type == "user":
             # Only paired ``claude --bg`` Bash results.
             self._handle_user_tool_results(event, result)
             return
 
         # System/init events carry no new info for the status display; skip.
-        if etype == "system":
+        if event_type == "system":
             return
 
         if record_error_event(event, result):
@@ -806,7 +806,7 @@ class ClaudeCodeBackend(Backend):
 
         logger.debug(
             "Claude Code: unhandled event type=%r keys=%r",
-            etype, list(event.keys()),
+            event_type, list(event.keys()),
         )
 
     def extract_agent_text(self, event: dict) -> str | None:
@@ -861,13 +861,13 @@ class ClaudeCodeBackend(Backend):
         tool = block.get("name", "?")
         if not isinstance(tool, str) or not tool:
             tool = "?"
-        inp = block.get("input") or {}
-        if not isinstance(inp, dict):
-            inp = {}
+        tool_input = block.get("input") or {}
+        if not isinstance(tool_input, dict):
+            tool_input = {}
 
         # File tools surface as kind="file" for the Thinking status UX.
         if tool in ClaudeCodeBackend._FILE_TOOLS:
-            path = inp.get("file_path") or inp.get("notebook_path") or "?"
+            path = tool_input.get("file_path") or tool_input.get("notebook_path") or "?"
             if not isinstance(path, str) or not path:
                 path = "?"
             action = "write" if tool == "Write" else "edit"
@@ -879,7 +879,7 @@ class ClaudeCodeBackend(Backend):
 
         # Bash reports its command; other tools report their name.
         if tool == "Bash":
-            cmd = inp.get("command") or "?"
+            cmd = tool_input.get("command") or "?"
             tool_use_id = block.get("id")
             if (
                 isinstance(cmd, str)

@@ -2614,7 +2614,7 @@ class ZaiBackendTests(unittest.TestCase):
         def _key() -> str:
             return "secret-key"
 
-        def _nokey() -> str:
+        def _missing_api_key() -> str:
             return ""
 
         orig = config.get_zai_api_key
@@ -2624,7 +2624,7 @@ class ZaiBackendTests(unittest.TestCase):
                 ZaiBackend()._auth_headers(),
                 {"Authorization": "Bearer secret-key"},
             )
-            config.get_zai_api_key = _nokey
+            config.get_zai_api_key = _missing_api_key
             self.assertEqual(ZaiBackend()._auth_headers(), {})
         finally:
             config.get_zai_api_key = orig
@@ -2633,12 +2633,12 @@ class ZaiBackendTests(unittest.TestCase):
         def _key() -> str:
             return "k"
 
-        def _nokey() -> str:
+        def _missing_api_key() -> str:
             return ""
 
         orig = config.get_zai_api_key
         try:
-            config.get_zai_api_key = _nokey
+            config.get_zai_api_key = _missing_api_key
             ok, detail = ZaiBackend().health_check()
             self.assertFalse(ok)
             self.assertIn("no API key", detail)

@@ -265,11 +265,11 @@ def _session_block_with_coverage(
         name = session_id[:8]
     closing = "[/SESSION]\n"
     header_suffix = f"\n[SESSION:{session_id}]\n"
-    name_space = budget - len("Session: ") - len(header_suffix) - len(closing)
-    if name_space < 1:
+    name_budget = budget - len("Session: ") - len(header_suffix) - len(closing)
+    if name_budget < 1:
         return "", False
     # Titles are hints only: clip them.
-    rendered_name = name[:min(name_space, 2_000)]
+    rendered_name = name[:min(name_budget, 2_000)]
     if len(name) > len(rendered_name):
         marker = "… [name clipped]"
         if len(rendered_name) <= len(marker):
@@ -390,10 +390,10 @@ async def _consolidate_inner(
     # Include empty sessions; items must retire.
     inputs: list[tuple[str, str, list[str]]] = []
     for data in session.list_sessions_with_data(workspace_path):
-        lt = data.get("long_term") or []
+        long_term = data.get("long_term") or []
         sid = data["id"]
         name = data.get("name") or sid[:8]
-        inputs.append((sid, name, lt))
+        inputs.append((sid, name, long_term))
 
     if not inputs:
         if not existing_colony:
@@ -434,9 +434,9 @@ async def _consolidate_inner(
     used = sum(len(part) + 1 for part in parts)
     included: list[str] = []
     fully_shown: set[str] = set()
-    for sid, name, lt in inputs:
+    for sid, name, long_term in inputs:
         block, complete = _session_block_with_coverage(
-            sid, name, lt, CONSOLIDATE_MAX_INPUT_CHARS - used - 1,
+            sid, name, long_term, CONSOLIDATE_MAX_INPUT_CHARS - used - 1,
         )
         if not block:
             logger.warning(
@@ -480,7 +480,7 @@ async def _consolidate_inner(
     # Ignore model-invented sessions.
     included_set = set(included)
     per_session = {
-        sid: lt for sid, lt in per_session.items() if sid in included_set
+        sid: long_term for sid, long_term in per_session.items() if sid in included_set
     }
     if colony_truncated or len(fully_shown) != len(inputs):
         # Partial evidence cannot retire unseen shared facts reliably.
@@ -496,7 +496,7 @@ async def _consolidate_inner(
             data["id"]: data["long_term"]
             for data in session.list_sessions_with_data(workspace_path)
         }
-        snapshot_memory = {sid: lt for sid, _name, lt in inputs}
+        snapshot_memory = {sid: long_term for sid, _name, long_term in inputs}
         if (
             get_items(workspace_path) != existing_colony
             or latest_memory != snapshot_memory
@@ -507,21 +507,21 @@ async def _consolidate_inner(
             )
             return False
         set_items(workspace_path, new_colony)
-        for sid, new_lt in per_session.items():
-            sess_data = session.load_session(workspace_path, sid)
-            if sess_data is None:
+        for sid, new_long_term in per_session.items():
+            session_data = session.load_session(workspace_path, sid)
+            if session_data is None:
                 continue
             if sid not in fully_shown:
                 # Preserve the original list when only a preview was shown.
                 cleaned = session.merge_partial_memory(
-                    sess_data["long_term"], new_lt, session.LONG_TERM_CAP,
+                    session_data["long_term"], new_long_term, session.LONG_TERM_CAP,
                 )
             else:
                 cleaned = list(dict.fromkeys(
-                    item for item in new_lt if item
+                    item for item in new_long_term if item
                 ))[-session.LONG_TERM_CAP:]
-            sess_data["long_term"] = cleaned
-            session.save_session(workspace_path, sid, sess_data)
+            session_data["long_term"] = cleaned
+            session.save_session(workspace_path, sid, session_data)
 
     logger.info(
         "Colony consolidated for %s: %d colony item(s); %d session(s) rewritten",

@@ -538,10 +538,10 @@ class TelegramBot(BotPlatform):
             )
             return
 
-        tg_file = await media.get_file()
+        telegram_file = await media.get_file()
         try:
             # getFile may supply size; reject first.
-            self._check_upload_size(getattr(tg_file, "file_size", None))
+            self._check_upload_size(getattr(telegram_file, "file_size", None))
         except UploadTooLargeError:
             await self._reply_file_error(
                 update, upload_limit_message(self.max_upload_bytes),
@@ -550,7 +550,7 @@ class TelegramBot(BotPlatform):
 
         caption = (message.caption or "").strip()
         # Strip paths to prevent traversal.
-        filename = os.path.basename(filename) or f"file_{tg_file.file_id}"
+        filename = os.path.basename(filename) or f"file_{telegram_file.file_id}"
 
         if not ws or not os.path.isdir(ws):
             ctx = self._build_context(update, text="")
@@ -562,7 +562,7 @@ class TelegramBot(BotPlatform):
             upload_dir = ensure_upload_dir(ws)
             with reserve_upload_path(upload_dir, filename) as local_path:
                 await _download_telegram_file(
-                    tg_file, local_path, self.max_upload_bytes,
+                    telegram_file, local_path, self.max_upload_bytes,
                 )
         except UploadTooLargeError:
             await self._reply_file_error(
@@ -642,7 +642,7 @@ class TelegramBot(BotPlatform):
 
 
 async def _download_telegram_file(
-    tg_file: object,
+    telegram_file: object,
     local_path: str,
     max_upload_bytes: int,
 ) -> None:
@@ -654,11 +654,11 @@ async def _download_telegram_file(
     returned by ``get_file`` carry either a signed HTTP(S) URL or a local Bot
     API path, both of which can be copied while enforcing our own byte cap.
     """
-    file_path = getattr(tg_file, "file_path", None)
+    file_path = getattr(telegram_file, "file_path", None)
     if not isinstance(file_path, str) or not file_path:
         raise RuntimeError("Telegram did not supply an attachment download path")
 
-    get_encoded_url = getattr(tg_file, "_get_encoded_url", None)
+    get_encoded_url = getattr(telegram_file, "_get_encoded_url", None)
     url = get_encoded_url() if callable(get_encoded_url) else file_path
     if not isinstance(url, str):
         raise RuntimeError("Telegram supplied an invalid attachment download URL")

@@ -159,12 +159,12 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
             out = clip("x" * 300)
             self.assertLessEqual(len(out), 200)
             self.assertIn("… [clipped]", out)
-        arg_out = tools_base.summarize_arg(
+        argument_summary = tools_base.summarize_arg(
             "grep", {"pattern": "a" * 300}, "pattern",
         )
-        arg_val = arg_out.split("grep: ", 1)[1]
-        self.assertLessEqual(len(arg_val), 200)
-        self.assertIn("… [clipped]", arg_val)
+        summarized_value = argument_summary.split("grep: ", 1)[1]
+        self.assertLessEqual(len(summarized_value), 200)
+        self.assertIn("… [clipped]", summarized_value)
         self.assertLessEqual(
             len(git_info_mod._bounded("y" * 13_000)),
             git_common.MAX_OUTPUT_CHARS,

@@ -19,7 +19,7 @@ from Cozter.backends_bot.signal import SignalBot
 from Cozter.tests.helpers import TestBot
 
 
-class _CmdBot(TestBot):
+class _CommandBot(TestBot):
     def __init__(self) -> None:
         super().__init__(["u1"])
         self.replies: list[str] = []
@@ -43,7 +43,7 @@ class BotCommandTests(unittest.TestCase):
         self.ws = self._tmp.name
         self._orig_state = workspace.WORKSPACE_STATE_PATH
         workspace.WORKSPACE_STATE_PATH = os.path.join(self.ws, "state.json")
-        self.bot = _CmdBot()
+        self.bot = _CommandBot()
         self.uid = "u1"
         workspace.select_workspace(self.uid, self.ws, self.bot.platform_id)
 

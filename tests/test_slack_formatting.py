@@ -204,14 +204,14 @@ class TelegramRetryDelayTests(unittest.TestCase):
     def test_bool_retry_after_is_rejected(self) -> None:
         from Cozter.backends_bot.telegram import _telegram_retry_delay
 
-        class _Exc(Exception):
+        class _TelegramThrottleError(Exception):
             def __init__(self, value: object) -> None:
                 super().__init__("throttled")
                 self.retry_after = value
 
-        self.assertIsNone(_telegram_retry_delay(_Exc(True)))
-        self.assertIsNone(_telegram_retry_delay(_Exc(False)))
-        self.assertEqual(_telegram_retry_delay(_Exc(3)), 3.5)
+        self.assertIsNone(_telegram_retry_delay(_TelegramThrottleError(True)))
+        self.assertIsNone(_telegram_retry_delay(_TelegramThrottleError(False)))
+        self.assertEqual(_telegram_retry_delay(_TelegramThrottleError(3)), 3.5)
 
     def test_openai_retry_after_rejects_bool(self) -> None:
         from Cozter.backends_agent._openai_agent import _parse_retry_after

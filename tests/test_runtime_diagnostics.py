@@ -274,12 +274,12 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         self.assertIn("boom", body)
 
     def test_bot_label_falls_back_to_class_name(self):
-        class _NoId:
+        class _MissingPlatformIdBot:
             pass
 
         # platform_id raises; fall back to the class name.
         self.assertEqual(
-            self._main._bot_label(_NoId()), _NoId().__class__.__name__,
+            self._main._bot_label(_MissingPlatformIdBot()), _MissingPlatformIdBot().__class__.__name__,
         )
 
     def test_log_crash_retention_caps_crash_files(self):

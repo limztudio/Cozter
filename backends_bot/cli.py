@@ -140,12 +140,12 @@ class CliBot(BotPlatform):
     async def _input_loop(self) -> None:
         # Daemon-thread stdin.
         loop = asyncio.get_running_loop()
-        line_q: asyncio.Queue[str | None] = asyncio.Queue()
+        line_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
         def _safe_post(value: str | None) -> bool:
             """Hand *value* to the loop; return False if it's already closed."""
             try:
-                loop.call_soon_threadsafe(line_q.put_nowait, value)
+                loop.call_soon_threadsafe(line_queue.put_nowait, value)
                 return True
             except RuntimeError:
                 # Loop closed; nothing left to do.
@@ -172,7 +172,7 @@ class CliBot(BotPlatform):
             while not self._stop_requested.is_set():
                 # Reprint the prompt below the last output.
                 print("> ", end="", flush=True)
-                line = await line_q.get()
+                line = await line_queue.get()
                 if line is None:  # EOF / Ctrl-D
                     break
                 line = line.strip()
@@ -269,14 +269,14 @@ def _enable_ansi() -> None:
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
-        STD_OUTPUT_HANDLE = -11
-        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
-        handle = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        std_output_handle = -11
+        enable_virtual_terminal_processing = 0x0004
+        handle = kernel32.GetStdHandle(std_output_handle)
         mode = ctypes.c_uint32()
         if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
             _ANSI_ENABLED = False
             return
-        new_mode = mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        new_mode = mode.value | enable_virtual_terminal_processing
         _ANSI_ENABLED = bool(kernel32.SetConsoleMode(handle, new_mode))
     except (OSError, AttributeError):
         _ANSI_ENABLED = False

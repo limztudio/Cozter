@@ -359,7 +359,7 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
         if not os.path.isfile(target):
             return f"{fp.old_path}: already absent"
         try:
-            file_lines, _had_nl, _crlf = _read_file_lines(target)
+            file_lines, _had_final_newline, _uses_crlf = _read_file_lines(target)
         except _FileLimitError as exc:
             return f"{fp.old_path}: {exc}; not deleted"
         except UnicodeDecodeError:
@@ -403,7 +403,7 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     if not os.path.isfile(target):
         return f"{fp.new_path}: skipped (file not found)"
     try:
-        file_lines, had_nl, uses_crlf = _read_file_lines(target)
+        file_lines, had_final_newline, uses_crlf = _read_file_lines(target)
     except _FileLimitError as exc:
         return f"{fp.new_path}: skipped ({exc})"
     except UnicodeDecodeError:
@@ -415,7 +415,7 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
 
     out = "\n".join(applied)
     if applied and _new_file_ends_with_newline(
-        fp.hunks, default=had_nl or not file_lines,
+        fp.hunks, default=had_final_newline or not file_lines,
     ):
         out += "\n"
     output_error = _output_limit_error(
@@ -455,11 +455,11 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
         raise _FileLimitError(
             f"file exceeds the {_MAX_FILE_LINES:,}-line limit",
         )
-    had_nl = content.endswith("\n")
+    had_final_newline = content.endswith("\n")
     lines = content.split("\n") if content else []
-    if had_nl and lines and lines[-1] == "":
+    if had_final_newline and lines and lines[-1] == "":
         lines.pop()  # drop the trailing "" left by the final newline
-    return lines, had_nl, uses_crlf
+    return lines, had_final_newline, uses_crlf
 
 
 def _newline_line_limit_exceeded(text: str, limit: int) -> bool:

@@ -444,25 +444,25 @@ class CopilotBackend(Backend):
     def parse_event(self, event: dict, result: AgentResult) -> None:
         if not isinstance(event, dict):
             return
-        etype = event.get("type") or event.get("event") or ""
-        if not isinstance(etype, str):
+        event_type = event.get("type") or event.get("event") or ""
+        if not isinstance(event_type, str):
             return
 
         # Typed branches first.
-        if etype in self._TOOL_USE_TYPES:
+        if event_type in self._TOOL_USE_TYPES:
             tool = (
                 event.get("name")
                 or event.get("tool")
                 or event.get("tool_name")
                 or "?"
             )
-            inp = event.get("input") or event.get("args") or {}
+            tool_input = event.get("input") or event.get("args") or {}
             result.events.append(ChatEvent(
-                kind="tool", content=summarize_cli_tool(tool, inp),
+                kind="tool", content=summarize_cli_tool(tool, tool_input),
             ))
             return
 
-        if etype in self._TOOL_RESULT_TYPES:
+        if event_type in self._TOOL_RESULT_TYPES:
             tool = event.get("name") or event.get("tool") or "tool"
             output = event.get("output") or event.get("result") or ""
             if isinstance(output, (dict, list)):
@@ -473,7 +473,7 @@ class CopilotBackend(Backend):
             result.events.append(ChatEvent(kind="tool", content=content))
             return
 
-        if etype in self._FILE_TYPES:
+        if event_type in self._FILE_TYPES:
             path = (
                 event.get("path")
                 or event.get("file")
@@ -486,7 +486,7 @@ class CopilotBackend(Backend):
             ))
             return
 
-        if etype in self._ERROR_TYPES:
+        if event_type in self._ERROR_TYPES:
             msg = event.get("message")
             if not msg:
                 err = event.get("error")
@@ -500,36 +500,36 @@ class CopilotBackend(Backend):
             return
 
         # Fall through on assistant-like text.
-        text = self._assistant_text(event, etype)
+        text = self._assistant_text(event, event_type)
         if text:
             append_text_result(result, text)
             return
 
         logger.debug("Copilot: unhandled event type=%r keys=%r",
-                     etype, list(event.keys()))
+                     event_type, list(event.keys()))
 
     def extract_agent_text(self, event: dict) -> str | None:
         if not isinstance(event, dict):
             return None
-        etype = event.get("type") or event.get("event") or ""
-        if not isinstance(etype, str):
+        event_type = event.get("type") or event.get("event") or ""
+        if not isinstance(event_type, str):
             return None
         # Tool/file/error events never carry the final reply.
-        if etype in self._NON_AGENT_TYPES:
+        if event_type in self._NON_AGENT_TYPES:
             return None
-        return self._assistant_text(event, etype)
+        return self._assistant_text(event, event_type)
 
     # event helpers
 
-    def _assistant_text(self, event: dict, etype: str) -> str | None:
+    def _assistant_text(self, event: dict, event_type: str) -> str | None:
         """Return the event's text content if it looks like assistant output."""
         role = event.get("role")
         if role and role not in ("assistant", "model", "agent"):
             return None
         is_assistant_type = (
-            etype in self._ASSISTANT_TYPES
-            or etype == ""
-            or etype == "item.completed"
+            event_type in self._ASSISTANT_TYPES
+            or event_type == ""
+            or event_type == "item.completed"
         )
         if not is_assistant_type:
             return None

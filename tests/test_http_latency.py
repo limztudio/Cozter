@@ -12,7 +12,7 @@ from aiohttp import web
 
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.backends_agent.base import AgentResult
-from Cozter.tests.test_llama_retry import _CaptureProc, _SSESession, _SSEResponse, _tool_call
+from Cozter.tests.test_openai_agent import _EventCaptureProcess, _SSESession, _SSEResponse, _tool_call
 
 
 class _LongWorkBackend(oa.OpenAIChatBackend):
@@ -38,7 +38,7 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
             executed.append((name, args))
             return tool_result(args)
 
-        proc = _CaptureProc()
+        proc = _EventCaptureProcess()
         with (
             mock.patch.object(oa, "_stream_completion", side_effect=stream),
             mock.patch.object(oa.tools, "execute_tool", side_effect=execute),
@@ -91,7 +91,7 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(oa, "_stream_completion", side_effect=stream):
             await _LongWorkBackend()._run_agent(
-                _CaptureProc(), ".", "work", "model", "auto", False, 0,
+                _EventCaptureProcess(), ".", "work", "model", "auto", False, 0,
             )
         self.assertEqual(len(calls), 4)
         self.assertNotIn("tools", calls[-1])
@@ -248,7 +248,7 @@ class VisionPreparationTests(unittest.IsolatedAsyncioTestCase):
             ) as stream,
         ):
             await _LongWorkBackend()._run_agent(
-                _CaptureProc(), ".", prompt, "model", "full", True, 0,
+                _EventCaptureProcess(), ".", prompt, "model", "full", True, 0,
             )
         prepare.assert_not_called()
         payload = stream.await_args.args[1]
@@ -268,7 +268,7 @@ class VisionPreparationTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(oa, "_stream_completion", return_value=("done", "", [])),
         ):
             await _LongWorkBackend()._run_agent(
-                _CaptureProc(), ".", "[image attachment saved to: image.png]",
+                _EventCaptureProcess(), ".", "[image attachment saved to: image.png]",
                 "model", "full", False, 0,
             )
         self.assertEqual(len(reader_threads), 1)
@@ -280,7 +280,7 @@ class VisionPreparationTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(oa, "_stream_completion", return_value=("done", "", [])),
         ):
             await _LongWorkBackend()._run_agent(
-                _CaptureProc(), ".", "plain text", "model", "full", False, 0,
+                _EventCaptureProcess(), ".", "plain text", "model", "full", False, 0,
             )
         prepare.assert_not_called()
 
@@ -555,7 +555,7 @@ class CompactRequestTests(unittest.TestCase):
             mock.patch.object(oa.tools, "execute_tool", return_value="read ok"),
         ):
             asyncio.run(_LongWorkBackend()._run_agent(
-                _CaptureProc(), ".", "plain text", "model", "full", False, 100,
+                _EventCaptureProcess(), ".", "plain text", "model", "full", False, 100,
             ))
         self.assertEqual(len(payloads), 2)
         factory.assert_called_once_with(json_serialize=oa._compact_json)

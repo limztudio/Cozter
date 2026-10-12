@@ -55,9 +55,9 @@ _SIGNAL_STYLE_ITALIC = "ITALIC"
 _SIGNAL_STYLE_MONOSPACE = "MONOSPACE"
 _SIGNAL_STYLE_STRIKETHROUGH = "STRIKETHROUGH"
 _SIGNAL_STYLE_SPOILER = "SPOILER"
-_SIGNAL_ATTACH_RETRY_MAX_ATTEMPTS = 4
-_SIGNAL_ATTACH_RETRY_BASE_DELAY_SEC = 1.0
-_SIGNAL_ATTACH_RETRY_MAX_DELAY_SEC = 30.0
+_SIGNAL_SEND_MAX_ATTEMPTS = 4
+_SIGNAL_SEND_BASE_DELAY_SEC = 1.0
+_SIGNAL_SEND_MAX_DELAY_SEC = 30.0
 _SIGNAL_SEND_MIN_INTERVAL_SEC = 1.2
 _SIGNAL_RETRY_AFTER_RE = re.compile(
     r"retry after (\d+(?:\.\d+)?)\s*seconds?", re.IGNORECASE,
@@ -91,7 +91,7 @@ def _signal_rate_limit_delay(exc: BaseException) -> float | None:
         return None
     if not math.isfinite(delay) or delay < 0:
         return None
-    return min(delay, _SIGNAL_ATTACH_RETRY_MAX_DELAY_SEC)
+    return min(delay, _SIGNAL_SEND_MAX_DELAY_SEC)
 
 # Send-methods aren't retried: a duplicate is worse than a lost reply.
 _NON_IDEMPOTENT_RPC_METHODS = frozenset({"send"})
@@ -1208,7 +1208,7 @@ class SignalBot(BotPlatform):
         honored with a bounded retry instead of surfacing an error.
         """
         last_exc: BaseException | None = None
-        for attempt in range(1, _SIGNAL_ATTACH_RETRY_MAX_ATTEMPTS + 1):
+        for attempt in range(1, _SIGNAL_SEND_MAX_ATTEMPTS + 1):
             async with self._send_lock:
                 now = time.monotonic()
                 wait = (
@@ -1225,17 +1225,17 @@ class SignalBot(BotPlatform):
                     parsed = _signal_rate_limit_delay(exc)
                     if parsed is None:
                         raise
-                    if attempt >= _SIGNAL_ATTACH_RETRY_MAX_ATTEMPTS:
+                    if attempt >= _SIGNAL_SEND_MAX_ATTEMPTS:
                         break
                     delay = max(
                         parsed,
-                        _SIGNAL_ATTACH_RETRY_BASE_DELAY_SEC * (2 ** (attempt - 1)),
+                        _SIGNAL_SEND_BASE_DELAY_SEC * (2 ** (attempt - 1)),
                     )
                     logger.warning(
                         "Signal throttled send (attempt %d/%d); "
                         "retrying in %.1fs: %s",
                         attempt,
-                        _SIGNAL_ATTACH_RETRY_MAX_ATTEMPTS,
+                        _SIGNAL_SEND_MAX_ATTEMPTS,
                         delay,
                         _safe_error_message(exc),
                     )
@@ -1494,10 +1494,10 @@ def _signal_style_strings_for_chunk(
     if not relevant:
         return []
     # One UTF-16 prefix sum (astral = 2).
-    need = max(end for _, end, _ in relevant)
-    prefix: list[int] = [0] * (need - chunk_start + 1)
+    max_span_end = max(end for _, end, _ in relevant)
+    prefix: list[int] = [0] * (max_span_end - chunk_start + 1)
     total = 0
-    for body_index in range(chunk_start, need):
+    for body_index in range(chunk_start, max_span_end):
         total += 2 if ord(body[body_index]) > 0xFFFF else 1
         prefix[body_index - chunk_start + 1] = total
     styles: list[str] = []

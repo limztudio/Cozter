@@ -75,15 +75,15 @@ def _tool_timeout_seconds() -> float | None:
 # Import siblings to trigger self-registration.
 
 
-def _load_subpackage(subpkg: str, *, mark_as_plugin: bool) -> None:
-    """Import every module of ``agent_tools/<subpkg>/`` so tool classes
+def _load_subpackage(subpackage: str, *, mark_as_plugin: bool) -> None:
+    """Import every module of ``agent_tools/<subpackage>/`` so tool classes
     inside auto-register via ``AgentTool.__init_subclass__``. New
     registrations are tagged with ``is_plugin`` per the flag.
 
     Files starting with ``_`` are skipped, so an example plugin can
     ship in-tree without being live until renamed.
     """
-    pkg_name = f"{__name__}.{subpkg}"
+    pkg_name = f"{__name__}.{subpackage}"
     try:
         pkg = importlib.import_module(pkg_name)
     except ImportError as exc:

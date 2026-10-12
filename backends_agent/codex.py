@@ -350,14 +350,14 @@ class CodexBackend(Backend):
     def parse_event(self, event: dict, result: AgentResult) -> None:
         if not isinstance(event, dict):
             return
-        etype = event.get("type", "")
+        event_type = event.get("type", "")
         # `or {}` guards present-but-null `"item"`.
         item = event.get("item") or {}
         if not isinstance(item, dict):
             item = {}
         item_type = item.get("type", "")
 
-        if etype == "item.completed":
+        if event_type == "item.completed":
             if item_type == "agent_message":
                 text = item.get("text", "")
                 if isinstance(text, str) and text:
@@ -386,23 +386,23 @@ class CodexBackend(Backend):
                         content=f"📄 {kind}: {path}",
                     ))
 
-        elif etype == "turn.completed":
+        elif event_type == "turn.completed":
             usage = event.get("usage")
             if isinstance(usage, dict):
                 result.usage = dict(usage)
 
-        elif etype == "turn.failed":
-            err_obj = event.get("error")
-            if isinstance(err_obj, dict):
-                err = err_obj.get("message") or "Unknown error"
-            elif isinstance(err_obj, str):
-                err = err_obj
+        elif event_type == "turn.failed":
+            error_payload = event.get("error")
+            if isinstance(error_payload, dict):
+                err = error_payload.get("message") or "Unknown error"
+            elif isinstance(error_payload, str):
+                err = error_payload
             else:
                 err = "Unknown error"
             # Record, but never replace a streamed reply.
             record_backend_error(result, err)
 
-        elif etype == "error":
+        elif event_type == "error":
             # Stream failure without turn.failed: record it.
             msg = event.get("message", "Unknown error")
             logger.warning("Codex stream error: %s", msg)

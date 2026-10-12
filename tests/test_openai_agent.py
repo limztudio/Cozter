@@ -15,7 +15,7 @@ import json
 import unittest
 from unittest import mock
 
-from Cozter.backends_agent._http_proc import HttpAgentProcess, http_error_translator
+from Cozter.backends_agent._http_process import HttpAgentProcess, http_error_translator
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.backends_agent.base import AgentResult
 
@@ -806,7 +806,7 @@ class _ReasoningToolBackend(_ToolLimitBackend):
         return {"thinking": {"type": "enabled", "clear_thinking": False}}
 
 
-class _CaptureProc:
+class _EventCaptureProcess:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
@@ -829,10 +829,10 @@ async def _execute_ok(name, _args, _workspace_path, _approval, _emit):
     return f"{name} ok"
 
 
-def _run_tool_fixture(stream, execute_tool, backend=None) -> _CaptureProc:
+def _run_tool_fixture(stream, execute_tool, backend=None) -> _EventCaptureProcess:
     oa._stream_completion = stream
     oa.tools.execute_tool = execute_tool
-    proc = _CaptureProc()
+    proc = _EventCaptureProcess()
     if backend is None:
         backend = _ToolLimitBackend(auto_continue=False)
     asyncio.run(backend._run_agent(
@@ -912,7 +912,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
         oa.tools.execute_tool = mock.AsyncMock(return_value="read evidence")
         backend = _ToolLimitBackend(auto_continue=True)
         with mock.patch.object(backend, "_max_segments", return_value=2):
-            proc = _CaptureProc()
+            proc = _EventCaptureProcess()
             asyncio.run(backend._run_agent(
                 proc, "/tmp", "work", None, "full", False, 100,
             ))
@@ -947,7 +947,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
             return "done", "", []
 
         oa._stream_completion = stream
-        proc = _CaptureProc()
+        proc = _EventCaptureProcess()
         asyncio.run(_NoToolBackend(auto_continue=False)._run_agent(
             proc, "/tmp", "work", None, "auto", False, 0,
         ))
@@ -1022,7 +1022,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
         oa._stream_completion = stream
         oa.tools.execute_tool = execute_tool
 
-        proc = _CaptureProc()
+        proc = _EventCaptureProcess()
         with mock.patch.object(oa, "_MAX_AGENT_MESSAGE_BYTES", 9_000):
             asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
                 proc, "/tmp", "work", None, "auto", False, 0,

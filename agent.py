@@ -53,7 +53,7 @@ performance_logger = logging.getLogger("Cozter.performance")
 _StageResult = TypeVar("_StageResult")
 
 
-class _TurnBudgetExhausted(Exception):
+class _TurnBudgetExhaustedError(Exception):
     """Stop a request without scheduling another completion attempt."""
 
 
@@ -86,7 +86,7 @@ class TurnBudget:
 
     def claim_worker(self) -> None:
         if self.workers_started >= self.max_workers:
-            raise _TurnBudgetExhausted(
+            raise _TurnBudgetExhaustedError(
                 f"the shared limit of {self.max_workers} workers was reached"
             )
         self.workers_started += 1
@@ -483,12 +483,12 @@ def format_usage(usage: dict | None) -> str | None:
     if not isinstance(usage, dict):
         return None
     parts: list[str] = []
-    inp = usage.get("input_tokens")
-    if isinstance(inp, int) and not isinstance(inp, bool) and inp >= 0:
-        parts.append(f"{_compact_tokens(inp)} in")
-    out = usage.get("output_tokens")
-    if isinstance(out, int) and not isinstance(out, bool) and out >= 0:
-        parts.append(f"{_compact_tokens(out)} out")
+    input_tokens = usage.get("input_tokens")
+    if isinstance(input_tokens, int) and not isinstance(input_tokens, bool) and input_tokens >= 0:
+        parts.append(f"{_compact_tokens(input_tokens)} in")
+    output_tokens = usage.get("output_tokens")
+    if isinstance(output_tokens, int) and not isinstance(output_tokens, bool) and output_tokens >= 0:
+        parts.append(f"{_compact_tokens(output_tokens)} out")
     cost = usage.get("total_cost_usd")
     if (
         isinstance(cost, (int, float))
@@ -897,12 +897,12 @@ def _relevance_last(items: list, keywords: set[str]) -> list:
     if not keywords:
         return items
     # First-char probe: skip items without a keyword initial.
-    firsts = {kw[0] for kw in keywords if kw}
-    firsts |= {char.swapcase() for char in firsts}
+    keyword_initials = {keyword[0] for keyword in keywords if keyword}
+    keyword_initials |= {char.swapcase() for char in keyword_initials}
     scored = []
     for index, item in enumerate(items):
         text = item if isinstance(item, str) else session.format_msg_line(item)
-        if not any(char in text for char in firsts):
+        if not any(char in text for char in keyword_initials):
             scored.append((0, index, item))
             continue
         words = set(_KEYWORD_RE.findall(text.lower()))
@@ -1717,7 +1717,7 @@ async def _run_flexible(
                 budget.pending.remove(task.instruction)
             if sub_result.error and "tool budget exhausted" in sub_result.error.casefold():
                 budget.pending.insert(0, task.instruction)
-                raise _TurnBudgetExhausted(sub_result.error)
+                raise _TurnBudgetExhaustedError(sub_result.error)
 
         # Stuck worker: merge ends on its question.
         if worker_awaiting:
@@ -2338,7 +2338,7 @@ async def _run_turn(
                 raise
             reason = f"the {budget.timeout_seconds}s whole-turn time limit was reached"
             limit_kind = "time"
-        except _TurnBudgetExhausted as exc:
+        except _TurnBudgetExhaustedError as exc:
             reason = str(exc)
             limit_kind = "tools" if "tool budget exhausted" in reason.casefold() else "workers"
         except asyncio.CancelledError:
@@ -2550,7 +2550,7 @@ async def _run_turn_impl(
             budget.latest_draft = flexible._bounded_draft_excerpt(result.text)
             budget.capture(result, workspace_path, account_usage=not is_flexible)
             if result.error and "tool budget exhausted" in result.error.casefold():
-                raise _TurnBudgetExhausted(result.error)
+                raise _TurnBudgetExhaustedError(result.error)
         judged_rounds = 0
         while judged_rounds < flexible.JUDGE_MAX_CONTINUES:
             draft = result.text
@@ -2623,7 +2623,7 @@ async def _run_turn_impl(
             if budget is not None:
                 budget.capture(result, workspace_path, account_usage=False)
                 if result.error and "tool budget exhausted" in result.error.casefold():
-                    raise _TurnBudgetExhausted(result.error)
+                    raise _TurnBudgetExhaustedError(result.error)
             # Cap exhausted: keep the verdict for chaining.
             if judged_rounds >= flexible.JUDGE_MAX_CONTINUES:
                 _draft_tail, _tail_awaiting = extract_await(result.text or "")

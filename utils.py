@@ -1102,8 +1102,8 @@ async def drain_llm_subprocess(
 
     assert proc.stdout is not None  # spawned with stdout=PIPE
     try:
-        deadline = timeout if timeout is not None and timeout > 0 else None
-        async with asyncio.timeout(deadline):
+        drain_timeout = timeout if timeout is not None and timeout > 0 else None
+        async with asyncio.timeout(drain_timeout):
             async for event in iter_process_json_events(
                 proc, on_invalid=_capture_bare_text,
             ):

@@ -385,37 +385,37 @@ def _list_sessions_with_data(
 def _list_sessions_with_data(
     workspace: str, limit: int | None,
 ) -> list[dict] | tuple[list[dict], int]:
-    sdir = _sessions_dir(workspace)
-    if not os.path.isdir(sdir):
+    sessions_dir = _sessions_dir(workspace)
+    if not os.path.isdir(sessions_dir):
         return ([], 0) if limit is not None else []
-    fnames = [fname for fname in os.listdir(sdir) if fname.endswith(".json")]
-    total = len(fnames)
+    filenames = [filename for filename in os.listdir(sessions_dir) if filename.endswith(".json")]
+    total = len(filenames)
     if limit is not None:
         if limit < 1:
             return [], total
-        fnames = _newest_first(sdir, fnames, total)
+        filenames = _newest_first(sessions_dir, filenames, total)
     out: list[dict] = []
-    for fname in fnames:
-        expected_id = fname[:-len(".json")]
+    for filename in filenames:
+        expected_id = filename[:-len(".json")]
         try:
-            fpath = _session_path(workspace, expected_id)
+            file_path = _session_path(workspace, expected_id)
         except ValueError:
-            logger.warning("Ignoring unsafe session file: %s", fname)
+            logger.warning("Ignoring unsafe session file: %s", filename)
             continue
         data = _load_session_path(
-            fpath, expected_id, log_corrupt=False,
+            file_path, expected_id, log_corrupt=False,
         )
         if data is not None:
             out.append(data)
             if limit is not None and len(out) >= limit:
                 break
-    out.sort(key=lambda d: d.get("created", ""), reverse=True)
+    out.sort(key=lambda session_data: session_data.get("created", ""), reverse=True)
     if limit is not None:
         return out, total
     return out
 
 
-def _newest_first(sdir: str, fnames: list[str], limit: int) -> list[str]:
+def _newest_first(sessions_dir: str, filenames: list[str], limit: int) -> list[str]:
     """Order session files newest-first by mtime, keeping *limit* names.
 
     Falls back to the raw directory order when no file can be stated,
@@ -425,18 +425,18 @@ def _newest_first(sdir: str, fnames: list[str], limit: int) -> list[str]:
         return []
     stamped: list[tuple[int, str]] = []
     unavailable: list[str] = []
-    for fname in fnames:
+    for filename in filenames:
         try:
-            mtime_ns = os.stat(os.path.join(sdir, fname)).st_mtime_ns
+            mtime_ns = os.stat(os.path.join(sessions_dir, filename)).st_mtime_ns
         except OSError:
             # One removed/unstatable file must not discard the recency of
             # every other session. Keep unavailable names as fallback entries
             # so a readable file with inaccessible metadata is still usable.
-            unavailable.append(fname)
+            unavailable.append(filename)
         else:
-            stamped.append((mtime_ns, fname))
+            stamped.append((mtime_ns, filename))
     stamped.sort(key=lambda item: item[0], reverse=True)
-    return ([fname for _, fname in stamped] + unavailable)[:limit]
+    return ([filename for _, filename in stamped] + unavailable)[:limit]
 
 
 def list_sessions(workspace: str) -> list[dict]:

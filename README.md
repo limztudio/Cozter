@@ -1480,7 +1480,7 @@ Cozter/
 │   ├── grok.py             wraps `grok --prompt-file`; CachedModelCatalog and
 │   │                       ProcessResourceMap for prompt files
 │   ├── flexible.py         flexible meta-agent backend (no CLI of its own)
-│   ├── _http_proc.py       process-like adapter and error handling for HTTP backends
+│   ├── _http_process.py       process-like adapter and error handling for HTTP backends
 │   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop;
 │   │                       one HTTP session per turn; shared catalog cache,
 │   │                       Bearer discovery probe, and key health check
@@ -1542,7 +1542,7 @@ delivery is slow. Once the parent exits, the remaining backlog has a byte
 limit and a stalled reader has a short drain allowance, so continuously ready
 stdout cannot bypass cleanup.
 HTTP backends expose the same
-process-shaped contract through `backends_agent/_http_proc.py`, so the
+process-shaped contract through `backends_agent/_http_process.py`, so the
 orchestrator uses one cleanup model for CLI and API agents.
 HTTP task cancellation stays on its owning event loop. Native Windows
 process-tree cleanup runs blocking `taskkill` in a worker thread so the loop
@@ -1677,7 +1677,7 @@ ignored for local secrets and runtime queues.
   `colony.py`, `flexible.py`, and `schedules.py`
 - Chat-platform adapters: `backends_bot/__init__.py`, `base.py`, `formatting.py`,
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
-- Agent adapters: `backends_agent/__init__.py`, `base.py`, `_http_proc.py`,
+- Agent adapters: `backends_agent/__init__.py`, `base.py`, `_http_process.py`,
   `_openai_agent.py`, `codex.py`, `claude_code.py`,
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
   `llama.py`, `zai.py`, and `meta.py`
