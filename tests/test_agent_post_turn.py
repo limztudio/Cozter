@@ -460,12 +460,17 @@ class BotContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage, {"input_tokens": 30})
         self.assertTrue(any(event.kind == "attachment" and event.content == artifact for event in result.events))
 
-    async def test_chain_cap_reports_remaining_work(self):
+    async def test_chain_cap_does_not_end_an_unfinished_job(self):
         with tempfile.TemporaryDirectory() as ws:
             bot = TestBot(["u1"])
 
-            async def run(*_args, **_kwargs):
-                return AgentResult(text="Draft", events=[ChatEvent(kind="text", content="Draft")], continue_instruction="verify the deployment")
+            calls = []
+
+            async def run(*args, **_kwargs):
+                calls.append(args[0])
+                if len(calls) <= 3:
+                    return AgentResult(text="Draft", events=[ChatEvent(kind="text", content="Draft")], continue_instruction="verify the deployment")
+                return AgentResult(text="Verified the entire deployment", events=[ChatEvent(kind="text", content="Verified the entire deployment")])
 
             with (
                 mock.patch.object(bot, "_current_workspace_for_turn", new=mock.AsyncMock(return_value=ws)),
@@ -476,8 +481,9 @@ class BotContinuationTests(unittest.IsolatedAsyncioTestCase):
             ):
                 await bot._run_turn("u1", "chat", "original task")
             result = send.await_args.args[2]
-        self.assertIn("PARTIAL", result.text)
-        self.assertIn("verify the deployment", result.text)
+        self.assertEqual(len(calls), 4)
+        self.assertTrue(all("original task" in prompt for prompt in calls))
+        self.assertEqual(result.text, "Verified the entire deployment")
 
 
 if __name__ == "__main__":

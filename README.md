@@ -380,16 +380,20 @@ that controls it, so the message itself points at the knob to raise.
 Chat-reply paths
 (Signal RPC, model discovery, stream drains) keep their own short timeouts.
 
-Each request has a shared `agent_turn_timeout` (default 3600s) covering
-planning, workers, merging, judge follow-ups, injected replanning, and automatic
-continuations. Set it to `0` to explicitly disable the time limit. The initial wait for
-the workspace run lock does not consume this allowance. Flexible requests also
-share a maximum of 24 workers across every continuation. On either limit,
-Cozter returns a truthful partial report with completed work and unfinished
-scope, preserves artifacts and accounting, and advances the queue. A backend's
-tool cap similarly ends the request after its final report. These limits do
-not change permission settings, models, reasoning effort, or individual tool
-and provider limits. `update_idle_timeout` (default 1200s) controls how often
+Each execution attempt has an `agent_turn_timeout` (default 3600s) covering
+planning, workers, merging, judge follow-ups, and injected replanning. Set it
+to `0` to disable that time limit. Waiting for the workspace run lock does not
+consume the allowance. Flexible attempts also have a maximum of 24 workers.
+Time, worker, and backend tool limits checkpoint the current job instead of
+completing it: Cozter saves the original request, prior worker evidence,
+remaining scope, workspace, session, artifacts, and accounting, then resumes
+the same job with a fresh execution allowance. Later queued jobs remain held
+until the whole request completes. A pending update may restart between
+attempts; the durable checkpoint restores the same job first. Provider
+failures, unavailable completion verification, or a required user answer
+pause that job and hold later work until guidance arrives or `/stop` cancels
+it. These limits do not change permissions, models, reasoning effort, or
+individual tool and provider limits. `update_idle_timeout` (default 1200s) controls how often
 the auto-update loop dumps diagnostics while waiting for active turns; it
 keeps waiting instead of restarting through active work.
 `dump_traceback_interval` (default 0) enables optional periodic thread dumps
@@ -802,14 +806,14 @@ already taken), and firing stamps every record sharing that id, so a
 legacy duplicate id cannot leave a stale twin due forever and refiring
 every tick.
 Scheduled prompts run through the same persistent queue as user messages,
-but use a fresh ephemeral session that is deleted after the turn; they do
+but use a job-owned session that is deleted after full completion or explicit cancellation; they do
 not append to the user's current conversation. Each owner runs one turn at a
 time, so scheduled jobs wait behind active work and older queued messages.
 `Queued scheduled task` confirms the prompt has been saved in the queue;
 `Starting scheduled task` appears when that job is selected to run. These
 notices time out after four seconds so a slow chat connection cannot hold
 the scheduler or agent indefinitely. They run autonomously and can
-continue even while normal chat work is paused waiting for a collaborative
+not overtake an unfinished job that is waiting for a collaborative
 `[[await]]` answer. CLI mode accepts `/reserve` but does not currently run a
 scheduler or restore queued turns after a restart.
 
@@ -1164,13 +1168,14 @@ commands + exit codes + error/warning counts from full (not preview) logs
 with no unexpected failures remaining; expected negative-path diagnostics,
 test names, platform skips, and historical entries are classified separately.
 Missing evidence means PARTIAL + remainder.
-Each turn also runs a capped continue-judge loop (up to 3 follow-ups per
-turn): when the judge still says CONTINUE after the cap is exhausted, the
-turn ships its draft with an auto-continued remainder note and chains up
-to 3 hands-free continuation turns in the same session instead of stopping
-at PARTIAL. `/stop` cancels the active chain, and `/inject` interrupts its
-active phase to apply new context. Ordinary new messages queue for the next
-turn; an `[[await]]` draft never chains.
+Each attempt also runs a continue-judge loop (up to 3 immediate follow-ups).
+When the judge still says CONTINUE after that limit, the job saves its
+progress and resumes in the same session with a fresh allowance. There is no
+overall continuation-count limit that discards unfinished work. An unavailable
+or malformed completion verdict does not count as DONE. `/stop` explicitly
+cancels the job and its queued work; `/inject` interrupts its active phase to
+apply new context. A question ending with `[[await]]` keeps the current job
+pending; replying supplies guidance and resumes it ahead of later jobs.
 
 Two behaviors are worth knowing. Under `/style collaborative`, the turn can
 stop and wait for you (`[[await]]`) at either end of the pipeline: the
@@ -1697,7 +1702,8 @@ ignored for local secrets and runtime queues.
   lifetimes; compaction and durable memory preservation across partially
   covered maintenance input; the flexible meta-agent including all reported
   follow-ups and the 24-worker (`MAX_SUBTASKS * 2`) execution cap plus the
-  whole-request turn budget that releases the queue despite expanding work;
+  per-attempt budgets with durable continuation of unfinished jobs before
+  later queue entries, including restart recovery and blocked-work handling;
   inject (including the bounded confirmation send); run locks, session picking, and
   auto-titling; platform, Slack,
   and Signal rich-text formatting; durable reply delivery; detached tasks

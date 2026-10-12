@@ -1168,6 +1168,7 @@ class JudgeVerdictTests(unittest.TestCase):
             "[VERDICT]\nDONE\n[/VERDICT]\n",
         )
         self.assertFalse(verdict.should_continue)
+        self.assertTrue(verdict.verified)
 
     def test_continue_names_missing_and_next(self) -> None:
         verdict = flexible.parse_judge(
@@ -1178,16 +1179,21 @@ class JudgeVerdictTests(unittest.TestCase):
         self.assertTrue(verdict.should_continue)
         self.assertEqual(verdict.missing, "error counts")
         self.assertEqual(verdict.next_instruction, "grep the full log")
+        self.assertTrue(verdict.verified)
 
-    def test_continue_without_next_is_done(self) -> None:
+    def test_continue_without_next_does_not_verify_completion(self) -> None:
         verdict = flexible.parse_judge(
             "[VERDICT]\nCONTINUE\n[/VERDICT]\n",
         )
         self.assertFalse(verdict.should_continue)
+        self.assertFalse(verdict.verified)
 
-    def test_garbage_is_done(self) -> None:
-        self.assertFalse(flexible.parse_judge("").should_continue)
-        self.assertFalse(flexible.parse_judge("looks fine").should_continue)
+    def test_empty_or_unrecognized_judge_reply_does_not_verify_completion(self) -> None:
+        for raw in ("", "looks fine", "[VERDICT]\nUNKNOWN\n[/VERDICT]", None):
+            with self.subTest(raw=raw):
+                verdict = flexible.parse_judge(raw)
+                self.assertFalse(verdict.should_continue)
+                self.assertFalse(verdict.verified)
 
     def test_judge_prompt_covers_request_and_draft(self) -> None:
         prompt = flexible.build_judge_prompt("fix it", "partial fix")
@@ -1459,7 +1465,7 @@ class FlexibleTurnCompletionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
-    async def test_judge_failure_ships_the_draft(self) -> None:
+    async def test_judge_failure_retains_an_unverified_draft(self) -> None:
         verdict, restarting = await agent._judge_draft(
             "req", "draft", "/tmp",
             summary_backend_name="missing-backend",
@@ -1469,6 +1475,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(restarting)
         self.assertFalse(verdict.should_continue)
+        self.assertFalse(verdict.verified)
 
     async def test_awaiting_draft_skips_the_judge(self) -> None:
         with mock.patch.object(
@@ -1538,6 +1545,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(result.text, "full answer")
         self.assertEqual(calls["drive"], 2)
+        self.assertTrue(result.completion_verified)
 
     async def test_exhausted_judge_flags_auto_chain(self) -> None:
         calls = {"drive": 0}
@@ -1589,6 +1597,8 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["drive"], 1 + flexible.JUDGE_MAX_CONTINUES)
         self.assertTrue(result.continue_instruction)
         self.assertIn("keep going", result.continue_instruction)
+        self.assertFalse(result.completion_verified)
+        self.assertEqual(result.continuation_reason, "judge_limit")
 
     async def test_done_draft_carries_no_chain_flag(self) -> None:
         async def fast_drive(*_args, **_kwargs):
@@ -1631,6 +1641,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(result.text, "all done")
         self.assertFalse(result.continue_instruction)
+        self.assertTrue(result.completion_verified)
 
 
 if __name__ == "__main__":

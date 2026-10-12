@@ -41,7 +41,7 @@ _DEFAULT_CONFIG = {
     "meta_max_retries": 2,
     # Real-work cap.
     "tool_timeout": 3600,
-    # Shared across planning, workers, judge and automatic continuations.
+    # Per-attempt allowance; unfinished jobs checkpoint and renew it.
     "agent_turn_timeout": 3600,
     # Stuck-turn diagnostic interval.
     "update_idle_timeout": 1200,
@@ -331,7 +331,7 @@ def get_update_idle_timeout() -> int:
 
 
 def get_agent_turn_timeout() -> int:
-    """Whole request execution limit in seconds; 0 explicitly disables it."""
+    """One execution attempt's time limit; 0 explicitly disables it."""
     return _get_int_at_least("agent_turn_timeout", 0)
 
 

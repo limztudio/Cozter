@@ -13,6 +13,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Literal, TypedDict
 
 from ..utils import (
     clip_status_value,
@@ -374,6 +375,32 @@ class DetachedTaskStatus:
 NO_RESPONSE_TEXT = "(no response)"
 
 
+ContinuationReason = Literal["time_budget", "worker_budget", "tool_budget", "judge_limit"]
+
+
+class ContinuationReport(TypedDict):
+    """Worker evidence retained separately from the final reply excerpt."""
+
+    instruction: str
+    report: str
+
+
+class ContinuationCheckpoint(TypedDict):
+    """Bounded, JSON-compatible progress for resuming the same request."""
+
+    reason: str
+    request: str
+    request_truncated: bool
+    accepted_additions: list[str]
+    accepted_additions_truncated: bool
+    reports: list[ContinuationReport]
+    pending: list[str]
+    latest_draft: str
+    last_activity: str
+    streamed_output: str
+    truncated: bool
+
+
 @dataclass
 class AgentResult:
     """Collected result from a single agent run.
@@ -398,8 +425,13 @@ class AgentResult:
     detached_task_tool_use_ids: set[str] = field(
         default_factory=set, repr=False,
     )
-    # Set when the judge loop exhausts.
+    # Remaining work after an execution allowance or judge loop exhausts.
     continue_instruction: str = ""
+    # Explicitly distinguish resumable allowance exhaustion from provider errors.
+    continuation_reason: ContinuationReason | None = None
+    continuation_checkpoint: ContinuationCheckpoint | None = None
+    # None for raw backend results; agent orchestration requires an explicit DONE verdict.
+    completion_verified: bool | None = None
 
 
 def append_text_result(result: AgentResult, text: str) -> None:

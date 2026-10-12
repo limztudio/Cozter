@@ -1,7 +1,8 @@
-"""Whole requests finish and release their queue despite expanding agent work."""
+"""Execution limits retain enough progress to finish the same queued request."""
 
 import asyncio
 import gc
+import json
 import os
 import tempfile
 import unittest
@@ -97,7 +98,12 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage, {"input_tokens": 10})
         self.assertEqual([event.content for event in result.events if event.kind == "attachment"], [artifact])
         self.assertIn("Turn budget exhausted", result.error)
-        self.assertFalse(result.continue_instruction)
+        self.assertTrue(result.continue_instruction)
+        self.assertEqual(result.continuation_reason, "worker_budget")
+        self.assertEqual(result.continuation_checkpoint["pending"], ["verify remaining runtime"])
+        self.assertEqual(result.continuation_checkpoint["reports"], [{
+            "instruction": "repair retry", "report": "Retry fixed; tests passed.",
+        }])
         self.assertIn("PARTIAL", session.load_session(self.ws, self.data["id"])["messages"][-1]["content"])
 
     async def test_injected_replanning_does_not_reset_worker_allowance(self):
@@ -153,6 +159,12 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("final release check", result.text)
         self.assertEqual(result.usage, {"input_tokens": 12})
         self.assertTrue(any(event.kind == "attachment" for event in result.events))
+        self.assertEqual(result.continuation_reason, "time_budget")
+        self.assertEqual(result.continuation_checkpoint["pending"], ["verify runtime", "final release check"])
+        self.assertEqual(result.continuation_checkpoint["reports"], [{
+            "instruction": "repair code", "report": "Completed repair evidence",
+        }])
+        self.assertEqual(result.continuation_checkpoint["streamed_output"], "Active partial output")
 
     async def test_expiry_during_merge_preserves_worker_reports(self):
         async def internal(*_args, label, **_kwargs):
@@ -174,8 +186,11 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("First verification evidence", result.text)
         self.assertIn("Second verification evidence", result.text)
         self.assertIn("completion verification remains unfinished", result.text)
+        self.assertEqual(result.continuation_checkpoint["pending"], [
+            "Verify completion of the full original request and finish any remaining work.",
+        ])
 
-    async def test_terminal_tool_budget_delivers_partial_without_judge_or_more_workers(self):
+    async def test_tool_budget_retains_partial_and_pending_scope_for_next_attempt(self):
         with (
             mock.patch.object(agent, "run_internal_backend", mock.AsyncMock(return_value=
                 "[PLAN]\n1. [low] inspect code\n2. [low] verify code\n[/PLAN]")),
@@ -189,6 +204,9 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         judge.assert_not_awaited()
         self.assertIn("Evidence gathered", result.text)
         self.assertIn("verify code", result.text)
+        self.assertEqual(result.continuation_reason, "tool_budget")
+        self.assertEqual(result.continuation_checkpoint["pending"], ["inspect code", "verify code"])
+        self.assertIn("Evidence gathered", result.continuation_checkpoint["reports"][0]["report"])
 
     async def test_direct_backend_tool_cap_is_partial_and_cannot_be_judged_again(self):
         with (
@@ -204,6 +222,9 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         judge.assert_not_awaited()
         self.assertTrue(result.text.startswith("PARTIAL"))
         self.assertIn("Repair evidence", result.text)
+        self.assertEqual(result.continuation_reason, "tool_budget")
+        self.assertEqual(result.continuation_checkpoint["latest_draft"], "Repair evidence")
+        self.assertEqual(result.continuation_checkpoint["pending"], ["repair requested scope"])
 
     async def test_artifact_discovered_after_result_capture_survives_judge_timeout(self):
         artifact = os.path.join(self.ws, "late.txt")
@@ -231,7 +252,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage, {"input_tokens": 3})
         self.assertEqual([event.content for event in result.events if event.kind == "attachment"], [artifact])
 
-    async def test_autochain_shares_budget_without_duplicating_artifacts_or_accounting(self):
+    async def test_job_continuation_renews_budget_without_duplicating_artifacts(self):
         seen = []
         bot = _ReplyDeliveryBot(self.ws, fail_final=False)
         artifact = os.path.join(self.ws, "result.txt")
@@ -244,7 +265,8 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             budget.pending = ["finish remaining scope"]
             budget.claim_worker()
             result = AgentResult(
-                text="Draft", continue_instruction="finish remaining scope",
+                text="Draft" if len(seen) == 1 else "Full scope completed",
+                continue_instruction="finish remaining scope" if len(seen) == 1 else "",
                 events=[ChatEvent(kind="attachment", content=artifact)], usage={"input_tokens": 10},
                 session_id=self.data["id"],
             )
@@ -260,10 +282,10 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             await bot._run_turn("u1", "chat", "original scope")
         result = send.await_args.args[2]
         self.assertEqual(len(seen), 2)
-        self.assertIs(seen[0], seen[1])
-        self.assertEqual(result.usage, {"input_tokens": 10})
+        self.assertIsNot(seen[0], seen[1])
+        self.assertEqual(result.usage, {"input_tokens": 20})
         self.assertEqual([event.content for event in result.events if event.kind == "attachment"], [artifact])
-        self.assertIn("Initial evidence", result.text)
+        self.assertEqual(result.text, "Full scope completed")
 
     async def test_expired_shared_deadline_retains_pinned_session(self):
         with agent.turn_budget() as budget:
@@ -275,6 +297,100 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
                 result = await self.run_flexible()
         self.assertEqual(result.session_id, self.data["id"])
         self.assertIn("PARTIAL", session.load_session(self.ws, self.data["id"])["messages"][-1]["content"])
+
+    async def test_fresh_attempt_replaces_allowance_and_restores_outer_scope(self):
+        with agent.turn_budget() as original:
+            original.started = True
+            original.deadline = asyncio.get_running_loop().time() - 1
+            original.workers_started = original.max_workers
+            with agent.turn_budget(fresh=True) as following:
+                self.assertIsNot(following, original)
+                self.assertFalse(following.started)
+                following.claim_worker()
+                self.assertEqual(following.workers_started, 1)
+                with agent.turn_budget() as nested:
+                    self.assertIs(nested, following)
+            self.assertIs(agent._TURN_BUDGET.get(), original)
+
+    async def test_budget_expiry_retains_accepted_injections_in_resume_request(self):
+        queue = _InjectQueue(maxsize=10)
+
+        async def exhausted(turn, *_args, **_kwargs):
+            turn.injected.append("Keep the first accepted correction")
+            queue.put_nowait("Also verify the deployment")
+            raise agent._TurnBudgetExhaustedError("worker limit reached")
+
+        with mock.patch.object(agent, "_run_turn_impl", exhausted):
+            result = await self.run_flexible(inject_queue=queue)
+        self.assertEqual(queue.put_if_active("Too late"), "finished")
+        self.assertTrue(queue.empty())
+        self.assertIn("Fix and verify requested scope", result.continuation_checkpoint["request"])
+        self.assertIn("Keep the first accepted correction", result.continuation_checkpoint["request"])
+        self.assertIn("Also verify the deployment", result.continuation_checkpoint["request"])
+        self.assertFalse(result.continuation_checkpoint["request_truncated"])
+        self.assertEqual(result.continuation_checkpoint["accepted_additions"], [
+            "Keep the first accepted correction", "Also verify the deployment",
+        ])
+        self.assertFalse(result.continuation_checkpoint["accepted_additions_truncated"])
+
+    async def test_checkpoint_bounds_large_accepted_additions_with_omission_evidence(self):
+        with agent.turn_budget() as budget:
+            additions = ["start\n" + "x" * 100000 + "\nfinish"]
+            final = budget.finish("worker cap reached", agent._InterruptedTurn(
+                self.ws, "request", injected=additions,
+            ))
+        checkpoint = final.continuation_checkpoint
+        self.assertTrue(checkpoint["truncated"])
+        self.assertTrue(checkpoint["accepted_additions_truncated"])
+        self.assertTrue(checkpoint["accepted_additions"][0].startswith("start"))
+        self.assertTrue(checkpoint["accepted_additions"][0].endswith("finish"))
+        self.assertIn("middle omitted", checkpoint["accepted_additions"][0])
+        self.assertLess(len(json.dumps(checkpoint)), 75000)
+
+    async def test_full_accepted_additions_survive_a_bounded_checkpoint_in_session(self):
+        queue = _InjectQueue(maxsize=10)
+        addition = "start\n" + "x" * 100000 + "\nfinish"
+
+        async def exhausted(*_args, **_kwargs):
+            queue.put_nowait(addition)
+            raise agent._TurnBudgetExhaustedError("worker limit reached")
+
+        with mock.patch.object(agent, "_run_turn_impl", exhausted):
+            result = await self.run_flexible(inject_queue=queue)
+        self.assertTrue(result.continuation_checkpoint["accepted_additions_truncated"])
+        messages = session.load_session(self.ws, self.data["id"])["messages"]
+        saved_request = next(message["content"] for message in reversed(messages) if message["role"] == "user")
+        self.assertTrue(saved_request.endswith(addition))
+        self.assertIn("Fix and verify requested scope", saved_request)
+
+    async def test_routed_session_is_persisted_before_worker_work(self):
+        session.set_last_session(self.ws, 1, self.data["id"])
+        order = []
+
+        async def pin_session(session_id):
+            order.append(("pinning", session_id))
+            await asyncio.sleep(0)
+            order.append(("pinned", session_id))
+
+        async def drive(*_args, **_kwargs):
+            self.assertEqual(order[-1], ("pinned", self.data["id"]))
+            order.append(("work", self.data["id"]))
+            return AgentResult(text="Work complete"), False
+
+        with (
+            mock.patch.object(agent.backends_agent, "get_backend", return_value=_BlockingBackend()),
+            mock.patch.object(agent, "_drive_backend", drive),
+            mock.patch.object(agent, "_judge_draft", mock.AsyncMock(return_value=(
+                flexible.JudgeVerdict(False), False,
+            ))),
+        ):
+            result = await agent.run(
+                "repair requested scope", self.ws, 1, backend_name="budget-test", on_session=pin_session,
+            )
+        self.assertEqual(order, [("pinning", self.data["id"]), ("pinned", self.data["id"]),
+                                 ("work", self.data["id"])])
+        self.assertEqual(result.session_id, self.data["id"])
+        self.assertTrue(result.completion_verified)
 
     async def test_independent_child_tasks_do_not_inherit_another_requests_allowance(self):
         with agent.turn_budget() as parent:
@@ -305,6 +421,79 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(final.text), 14000)
         self.assertIn("middle omitted", final.text)
         self.assertEqual(final.usage, {"input_tokens": 3})
+        self.assertTrue(final.continuation_checkpoint["truncated"])
+        self.assertEqual(len(final.continuation_checkpoint["reports"]), 24)
+        self.assertLess(len(json.dumps(final.continuation_checkpoint)), 75000)
+
+    async def test_checkpoint_retains_worker_evidence_omitted_from_partial_reply(self):
+        with agent.turn_budget() as budget:
+            budget.reports = [(f"task {index}", "Opening\n" + str(index) * 3500 + "\nVerified")
+                              for index in range(5)]
+            budget.pending = ["Finish verification and push the completed work"]
+            final = budget.finish("worker cap reached", agent._InterruptedTurn(self.ws, "request"))
+        self.assertIn("middle omitted", final.text)
+        self.assertEqual(final.continuation_checkpoint["reports"][2]["report"], budget.reports[2][1])
+        self.assertEqual(final.continuation_checkpoint["pending"], budget.pending)
+        self.assertFalse(final.continuation_checkpoint["truncated"])
+
+    async def test_provider_error_is_not_resumable_budget_exhaustion(self):
+        with (
+            mock.patch.object(agent.backends_agent, "get_backend", return_value=_BlockingBackend()),
+            mock.patch.object(agent, "_drive_backend", mock.AsyncMock(return_value=(
+                AgentResult(text="Account unavailable", error="invalid API key"), False,
+            ))),
+            mock.patch.object(agent, "_judge_draft", mock.AsyncMock()) as judge,
+        ):
+            result = await agent.run(
+                "repair requested scope", self.ws, 1, backend_name="budget-test", session_id=self.data["id"],
+            )
+        judge.assert_not_awaited()
+        self.assertEqual(result.error, "invalid API key")
+        self.assertIsNone(result.continuation_reason)
+        self.assertIsNone(result.continuation_checkpoint)
+        self.assertFalse(result.continue_instruction)
+
+    async def test_unavailable_or_malformed_judge_retains_draft_without_verifying_completion(self):
+        for reply in (None, "", "looks fine", "[VERDICT]\nCONTINUE\n[/VERDICT]",
+                      OSError("judge executable unavailable"), RuntimeError("judge could not run")):
+            with (
+                self.subTest(reply=reply),
+                mock.patch.object(agent.backends_agent, "get_backend", return_value=_BlockingBackend()),
+                mock.patch.object(agent, "_drive_backend", mock.AsyncMock(return_value=(
+                    AgentResult(text="Repaired the requested scope", completion_verified=True), False,
+                ))),
+                mock.patch.object(agent, "run_internal_backend", mock.AsyncMock(
+                    side_effect=reply if isinstance(reply, Exception) else None,
+                    return_value=reply if not isinstance(reply, Exception) else None,
+                )),
+            ):
+                result = await agent.run(
+                    "repair requested scope", self.ws, 1, backend_name="budget-test", session_id=self.data["id"],
+                )
+            self.assertEqual(result.text, "Repaired the requested scope")
+            self.assertIsNone(result.error)
+            self.assertFalse(result.completion_verified)
+            self.assertFalse(result.continue_instruction)
+
+    async def test_unavailable_tail_judge_does_not_verify_a_followup_result(self):
+        with (
+            mock.patch.object(agent.backends_agent, "get_backend", return_value=_BlockingBackend()),
+            mock.patch.object(agent, "_drive_backend", mock.AsyncMock(return_value=(
+                AgentResult(text="Repaired the requested scope"), False,
+            ))) as worker,
+            mock.patch.object(flexible, "JUDGE_MAX_CONTINUES", 1),
+            mock.patch.object(agent, "_judge_draft", mock.AsyncMock(side_effect=[
+                (flexible.JudgeVerdict(True, "verification", "verify remaining work"), False),
+                (flexible.JudgeVerdict(False, verified=False), False),
+            ])),
+        ):
+            result = await agent.run(
+                "repair requested scope", self.ws, 1, backend_name="budget-test", session_id=self.data["id"],
+            )
+        self.assertEqual(worker.await_count, 2)
+        self.assertEqual(result.text, "Repaired the requested scope")
+        self.assertFalse(result.completion_verified)
+        self.assertFalse(result.continue_instruction)
 
     async def test_cancel_during_budget_result_write_propagates_and_owned_write_finishes(self):
         write_started = asyncio.Event()
@@ -328,7 +517,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             write_release.set()
             await agent._wait_for_pending_session_writes(self.ws)
 
-    async def test_timed_out_request_delivers_partial_and_next_queue_entry_starts(self):
+    async def test_timed_out_request_finishes_remainder_before_next_queue_entry(self):
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.ws))
         bot = _ReplyDeliveryBot(self.ws, fail_final=False)
         started = []
@@ -336,11 +525,12 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         async def implementation(turn, prompt, *_args, **_kwargs):
             started.append(prompt)
             turn.session_id = self.data["id"]
-            if prompt == "slow task":
+            if prompt == "slow task" and len(started) == 1:
                 timer = agent._TURN_TIMEOUT.get()
                 timer.reschedule(asyncio.get_running_loop().time() + 0.03)
                 await asyncio.Event().wait()
-            return AgentResult(text="Next task completed", events=[ChatEvent(kind="text", content="Next task completed")])
+            answer = "Slow task completed" if "slow task" in prompt else "Next task completed"
+            return AgentResult(text=answer, events=[ChatEvent(kind="text", content=answer)], session_id=self.data["id"])
 
         for text in ("slow task", "next task"):
             entry = await bot._persist_enqueue("u1", text, "chat")
@@ -348,8 +538,10 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         with (mock.patch.object(agent, "_run_turn_impl", implementation),
               mock.patch.object(workspace, "get_run_config", return_value=("flexible", "", "", "full", "meta"))):
             await asyncio.wait_for(bot._drain_message_queue("u1"), timeout=2)
-        self.assertEqual(started, ["slow task", "next task"])
-        self.assertTrue(any("PARTIAL" in text for text in bot.sent))
+        self.assertEqual(started[0], "slow task")
+        self.assertIn("slow task", started[1])
+        self.assertEqual(started[2], "next task")
+        self.assertLess(bot.sent.index("Slow task completed"), bot.sent.index("Next task completed"))
         self.assertIn("Next task completed", bot.sent)
         self.assertEqual(bot._read_queue_file(), {})
         self.assertEqual(await bot._list_reply_delivery_records(), [])
@@ -369,4 +561,3 @@ class VerificationConvergencePromptTests(unittest.TestCase):
         judge = flexible.build_judge_prompt("request", "unconfigured service")
         self.assertIn("current environment", judge)
         self.assertIn("unconfigured service", judge)
-

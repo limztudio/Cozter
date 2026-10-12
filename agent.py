@@ -26,7 +26,8 @@ from . import workspace as workspace_mod
 from .agent_tools.base import copy_file_atomically
 from .backends_agent.base import (
     DOC_FOLLOWING_RULE, NO_RESPONSE_TEXT, WHOLE_SCOPE_RULE, AgentResult,
-    ChatEvent, append_detached_task_request,
+    ChatEvent, ContinuationCheckpoint, ContinuationReason, ContinuationReport,
+    append_detached_task_request,
     append_text_result, record_backend_error, set_error_result,
 )
 from .utils import (
@@ -54,12 +55,16 @@ _StageResult = TypeVar("_StageResult")
 
 
 class _TurnBudgetExhaustedError(Exception):
-    """Stop a request without scheduling another completion attempt."""
+    """Pause an execution attempt while retaining the request's remaining work."""
+
+
+CONTINUATION_CHECKPOINT_CHARS = 64_000
+_CONTINUATION_CHECKPOINT_ITEMS = flexible.MAX_SUBTASKS * 4
 
 
 @dataclass
 class TurnBudget:
-    """One request's execution allowance, shared by every continuation."""
+    """One execution attempt's allowance, shared by its immediate continuations."""
 
     timeout_seconds: int
     max_workers: int = flexible.MAX_SUBTASKS * 2
@@ -114,14 +119,82 @@ class TurnBudget:
             _accumulate_usage(usage, result.usage)
             self.output.usage = usage or None
 
-    def finish(self, reason: str, turn: "_InterruptedTurn") -> AgentResult:
+    def checkpoint(self, reason: str, turn: "_InterruptedTurn") -> ContinuationCheckpoint:
+        """Keep worker evidence and actionable scope outside the reply's small preview."""
+        reports = self.reports[-_CONTINUATION_CHECKPOINT_ITEMS:]
+        pending = list(dict.fromkeys(self.pending))[:_CONTINUATION_CHECKPOINT_ITEMS]
+        additions = turn.injected[:_CONTINUATION_CHECKPOINT_ITEMS]
+        if not pending:
+            pending = ["Verify completion of the full original request and finish any remaining work."]
+        streamed = next((
+            event.content for event in reversed(turn.events)
+            if event.kind == "text" and event.content.strip()
+        ), "")
+        if streamed == self.latest_draft:
+            streamed = ""
+        activity = next((
+            event.content for event in reversed(turn.events)
+            if event.kind in ("tool", "file") and event.content.strip()
+        ), "")
+        values = [value for pair in reports for value in pair] + pending + additions + [
+            turn.prompt,
+            self.latest_draft,
+            _truncate_context_text(activity, INTERRUPTED_TURN_ACTIVITY_CHARS),
+            flexible._bounded_draft_excerpt(streamed, limit=1200),
+        ]
+        quotas = _context_quotas([len(value) for value in values], CONTINUATION_CHECKPOINT_CHARS)
+        bounded = [
+            flexible._bounded_draft_excerpt(value, limit=quota)
+            for value, quota in zip(values, quotas, strict=True)
+        ]
+        report_values: list[ContinuationReport] = [
+            {"instruction": bounded[index * 2], "report": bounded[index * 2 + 1]}
+            for index in range(len(reports))
+        ]
+        pending_start = len(reports) * 2
+        additions_start = pending_start + len(pending)
+        bounded_additions = bounded[additions_start:additions_start + len(additions)]
+        return {
+            "reason": reason,
+            "request": bounded[-4],
+            "request_truncated": bounded[-4] != turn.prompt,
+            "accepted_additions": bounded_additions,
+            "accepted_additions_truncated": turn.injected != bounded_additions,
+            "reports": report_values,
+            "pending": bounded[pending_start:pending_start + len(pending)],
+            "latest_draft": bounded[-3],
+            "last_activity": bounded[-2],
+            "streamed_output": bounded[-1],
+            "truncated": (
+                len(self.reports) > len(reports)
+                or len(set(self.pending)) > len(pending)
+                or len(turn.injected) > len(additions)
+                or values != bounded
+                or len(activity) > INTERRUPTED_TURN_ACTIVITY_CHARS
+                or len(streamed) > 1200
+                or flexible._DRAFT_OMISSION_MARKER in self.latest_draft
+                or any(flexible._REPORT_TRUNCATION_MARKER in report for _, report in reports)
+            ),
+        }
+
+    def finish(
+        self, reason: str, turn: "_InterruptedTurn",
+        *, continuation_reason: ContinuationReason = "worker_budget",
+    ) -> AgentResult:
         result = self.output
         result.error = f"Turn budget exhausted: {reason}."
-        result.continue_instruction = ""
+        result.completion_verified = False
+        result.continuation_reason = continuation_reason
+        result.continuation_checkpoint = self.checkpoint(reason, turn)
+        result.continue_instruction = (
+            "Continue the same original request from the retained checkpoint. "
+            "Re-check saved files and artifacts; preserve verified completed work, "
+            "finish every unfinished or unverified requirement, and verify full completion."
+        )
         result.session_id = turn.session_id
         sections = [
             f"PARTIAL: {reason}. Work already completed was retained; "
-            "the request stopped before full completion.",
+            "this execution attempt paused before full completion and needs continuation.",
         ]
         if self.reports:
             reports = "\n\n".join(
@@ -165,10 +238,10 @@ _TURN_TIMEOUT: ContextVar[asyncio.Timeout | None] = ContextVar("cozter_turn_time
 
 
 @contextmanager
-def turn_budget():
-    """Reuse the current request budget, or own an isolated one for this task."""
+def turn_budget(*, fresh: bool = False):
+    """Reuse an attempt's budget, or explicitly start the next allowance."""
     current = _TURN_BUDGET.get()
-    if current is not None and current.owner is asyncio.current_task():
+    if not fresh and current is not None and current.owner is asyncio.current_task():
         yield current
         return
     token = _TURN_BUDGET.set(TurnBudget(config.get_agent_turn_timeout()))
@@ -1465,19 +1538,18 @@ async def _judge_draft(
     Universal continue-judge: every backend and every turn (direct and
     flexible) routes through here. Returns ``(verdict, restarting)`` like
     :func:`_drive_backend` - an inject mid-judge abandons the verdict and
-    the caller restarts the turn. ``[[await]]`` drafts and empty drafts
-    are DONE without a model call: nothing is left to judge. Judge
-    failures (missing CLI, unparsable reply) fail closed to DONE
-    so the draft ships instead of looping.
+    the caller restarts the turn. ``[[await]]`` drafts, empty drafts, and
+    judge failures retain the draft without verifying completion. The
+    caller can pause the queued request until verification is available.
     """
     cleaned, awaiting = extract_await(draft or "")
     if awaiting or not cleaned.strip():
-        return flexible.JudgeVerdict(should_continue=False), False
+        return flexible.JudgeVerdict(should_continue=False, verified=False), False
     try:
         summary_backend = backends_agent.get_backend(summary_backend_name)
     except (ValueError, AttributeError, TypeError) as exc:
-        logger.warning("Continue judge unavailable (%s) - shipping draft", exc)
-        return flexible.JudgeVerdict(should_continue=False), False
+        logger.warning("Continue judge unavailable (%s) - retaining unverified draft", exc)
+        return flexible.JudgeVerdict(should_continue=False, verified=False), False
     if on_event is not None:
         await on_event(ChatEvent(
             kind="tool",
@@ -1495,22 +1567,20 @@ async def _judge_draft(
                 label="Continue judge",
                 log=logger,
                 missing_executable_message=(
-                    "%s CLI not found - shipping the draft without judging"
+                    "%s CLI not found - retaining the draft without verifying completion"
                 ),
                 missing_level=logging.WARNING,
             ),
             inject_queue,
             injected,
         ), "judge", summary_backend.name, summary_model)
-    except (AttributeError, TypeError) as exc:
-        # Judge is advisory: ship the draft.
-        logger.warning("Continue judge unavailable (%s) - shipping draft", exc)
-        return flexible.JudgeVerdict(should_continue=False), False
+    except (AttributeError, TypeError, OSError, RuntimeError) as exc:
+        logger.warning("Continue judge unavailable (%s) - retaining unverified draft", exc)
+        return flexible.JudgeVerdict(should_continue=False, verified=False), False
     if restarting:
-        return flexible.JudgeVerdict(should_continue=False), True
+        return flexible.JudgeVerdict(should_continue=False, verified=False), True
     if raw is None:
-        # Judge CLI missing: ship the draft.
-        return flexible.JudgeVerdict(should_continue=False), False
+        return flexible.JudgeVerdict(should_continue=False, verified=False), False
     return flexible.parse_judge(raw or ""), False
 
 
@@ -1852,6 +1922,7 @@ async def run(
     summary_backend_name: str | None = None,
     session_id: str | None = None,
     on_process: Callable[[Any], None] | None = None,
+    on_session: Callable[[str], Awaitable[None]] | None = None,
 ) -> AgentResult:
     """Run a turn, serialized per workspace.
 
@@ -1866,6 +1937,8 @@ async def run(
     :func:`_drive_backend` (and flexible workers): it receives the
     launched backend process object so the caller can record the backend
     PID for stuck-wait attribution. It is never given prompts or args.
+    *on_session* is awaited after routing and before agent work so callers
+    can durably pin the conversation used by a recoverable queued request.
     """
     async with workspace_mod.get_run_lock(workspace_path):
         await _wait_for_pending_session_writes(workspace_path)
@@ -1882,6 +1955,7 @@ async def run(
             summary_backend_name=summary_backend_name,
             session_id=session_id,
             on_process=on_process,
+            on_session=on_session,
         )
 
 
@@ -2184,6 +2258,7 @@ class _InterruptedTurn:
     prompt: str
     session_id: str | None = None
     events: list[ChatEvent] = dataclasses.field(default_factory=list)
+    injected: list[str] = dataclasses.field(default_factory=list)
     logged_normally: bool = False
     normal_log_task: asyncio.Task[bool] | None = None
 
@@ -2284,6 +2359,7 @@ async def _run_turn(
     summary_backend_name: str | None = None,
     session_id: str | None = None,
     on_process: Callable[[Any], None] | None = None,
+    on_session: Callable[[str], Awaitable[None]] | None = None,
 ) -> AgentResult:
     """Run the selected agent CLI with session history prepended.
 
@@ -2330,6 +2406,7 @@ async def _run_turn(
                     summary_backend_name=summary_backend_name,
                     session_id=session_id,
                     on_process=on_process,
+                    on_session=on_session,
                 )
         except TimeoutError:
             if not timer.expired():
@@ -2346,9 +2423,18 @@ async def _run_turn(
         finally:
             _TURN_TIMEOUT.reset(token)
 
-        result = budget.finish(reason, turn)
+        continuation_reason: ContinuationReason = (
+            "time_budget" if limit_kind == "time"
+            else "tool_budget" if limit_kind == "tools"
+            else "worker_budget"
+        )
+        # An accepted message is part of this request even if the allowance
+        # expires before its injected backend restart can run.
         _close_inject_queue(inject_queue)
-        _drain_queue(inject_queue)
+        _take_pending_injections(inject_queue, turn.injected)
+        if turn.injected:
+            turn.prompt = prompt + "\n\n[Added while you were thinking]:\n" + "\n".join(turn.injected)
+        result = budget.finish(reason, turn, continuation_reason=continuation_reason)
         performance_logger.info(
             "stage=turn_budget outcome=exhausted limit=%s workers_started=%d timeout_seconds=%d",
             limit_kind, budget.workers_started, budget.timeout_seconds,
@@ -2390,6 +2476,7 @@ async def _run_turn_impl(
     summary_backend_name: str | None = None,
     session_id: str | None = None,
     on_process: Callable[[Any], None] | None = None,
+    on_session: Callable[[str], Awaitable[None]] | None = None,
 ) -> AgentResult:
     """Drive the backend phases of one turn, updating *turn* as it goes.
 
@@ -2442,6 +2529,8 @@ async def _run_turn_impl(
     # session_id set by both branches.
     assert session_id is not None
     turn.session_id = session_id
+    if on_session is not None:
+        await on_session(session_id)
     # Workspace memory loads once.
     colony_items = colony.get_items(workspace_path)
 
@@ -2453,7 +2542,7 @@ async def _run_turn_impl(
     # Prepended context-block budget.
     history_budget = workspace_mod.get_history_budget(workspace_path)
 
-    injected: list[str] = []
+    injected = turn.injected
     effort = workspace_mod.get_reasoning_effort(workspace_path)
 
     async def _stream_event(event: ChatEvent) -> None:
@@ -2529,6 +2618,7 @@ async def _run_turn_impl(
                     backend.name, len(prompt), len(contextual_prompt),
                 )
             result, restarting = await _run_phase(contextual_prompt, effective_prompt)
+            result.completion_verified = False
         except BackendUnavailableError as e:
             return _error_result(session_id, str(e), inject_queue)
 
@@ -2571,6 +2661,7 @@ async def _run_turn_impl(
                 restarting = True
                 break
             if not verdict.should_continue:
+                result.completion_verified = verdict.verified
                 break
             judged_rounds += 1
             followup = (
@@ -2602,6 +2693,7 @@ async def _run_turn_impl(
                     continuation_prompt, effective_prompt + followup,
                     previous_draft=draft,
                 )
+                result.completion_verified = False
             except BackendUnavailableError as e:
                 return _error_result(session_id, str(e), inject_queue)
             if restarting:
@@ -2641,6 +2733,7 @@ async def _run_turn_impl(
                     )
                     restarting = True
                     break
+                result.completion_verified = _tail_verdict.verified and not _tail_verdict.should_continue
                 if _tail_verdict.should_continue:
                     _tail_next = (_tail_verdict.next_instruction or "").strip()
                     if _tail_next:
@@ -2652,6 +2745,13 @@ async def _run_turn_impl(
                             else f"[Auto-continued remainder"
                             f" ({judged_rounds + 1}): {_tail_next}]"
                         )
+                        result.continuation_reason = "judge_limit"
+                        if budget is not None:
+                            budget.pending = [result.continue_instruction]
+                            result.continuation_checkpoint = budget.checkpoint(
+                                "The completion judge found unfinished work after its continuation limit.",
+                                turn,
+                            )
                 break
         if restarting:
             continue  # restart loop

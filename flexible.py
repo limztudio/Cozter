@@ -552,11 +552,12 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
 
 @dataclass(frozen=True)
 class JudgeVerdict:
-    """A parsed continue-judge reply: keep going, or ship the draft."""
+    """A continue-judge reply, distinguishing verified decisions from unavailable ones."""
 
     should_continue: bool
     missing: str = ""
     next_instruction: str = ""
+    verified: bool = True
 
 
 def build_judge_prompt(request: str, draft: str) -> str:
@@ -580,16 +581,18 @@ def build_judge_prompt(request: str, draft: str) -> str:
 
 
 def parse_judge(raw: str) -> JudgeVerdict:
-    """Parse a judge reply; fail-closed to DONE so a bad verdict ships."""
+    """Recognize explicit decisions; malformed replies never verify completion."""
     if not isinstance(raw, str) or not raw.strip():
-        return JudgeVerdict(should_continue=False)
+        return JudgeVerdict(should_continue=False, verified=False)
     verdict = (extract_marker_block(raw, "VERDICT") or "").strip().upper()
-    if verdict != "CONTINUE":
+    if verdict == "DONE":
         return JudgeVerdict(should_continue=False)
+    if verdict != "CONTINUE":
+        return JudgeVerdict(should_continue=False, verified=False)
     missing = (extract_marker_block(raw, "MISSING") or "").strip()
     followup = (extract_marker_block(raw, "NEXT") or "").strip()
     if not followup:
-        return JudgeVerdict(should_continue=False)
+        return JudgeVerdict(should_continue=False, verified=False)
     return JudgeVerdict(
         should_continue=True, missing=missing, next_instruction=followup,
     )

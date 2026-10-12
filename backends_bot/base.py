@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
+import json
 import logging
 import os
 import re
@@ -47,6 +48,7 @@ from ..utils import parse_decimal_int
 from ..utils import probe_image_dimensions
 from ..utils import save_json_object
 from ..utils import try_parse_int
+from ..backends_agent.base import DetachedTaskRef, DetachedTaskRequest
 
 logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
@@ -521,6 +523,9 @@ class BotPlatform(ABC):
         self._inject_queues: dict[str, _InjectQueue] = {}
         # Users awaiting an answer: queue drain paused.
         self._awaiting_answer: set[str] = set()
+        # An unfinished job needing input blocks every later entry, including
+        # scheduled work. Its checkpoint is also retained in the queue file.
+        self._paused_jobs: set[str] = set()
         # Multi-step flow state.
         self._pending_input: dict[str, Handler] = {}
         # Scheduler state.
@@ -711,6 +716,8 @@ class BotPlatform(ABC):
         return None
 
     def _start_queue_drain(self, uid: str) -> None:
+        if uid in self._paused_jobs:
+            return
         create_background_task(
             self._drain_message_queue(uid),
             name=f"{self.platform_id}:drain:{uid}",
@@ -2537,6 +2544,105 @@ class BotPlatform(ABC):
     def _write_queue_file(self, data: dict) -> None:
         self._write_platform_state_file(self._queue_file_path(), data)
 
+    async def _load_job_checkpoint(self, uid: str, entry_id: str) -> dict:
+        def read() -> dict:
+            for entry in self._queue_entries(self._read_queue_file().get(uid)):
+                if entry.get("id") == entry_id:
+                    job = entry.get("job")
+                    return job if isinstance(job, dict) else {}
+            return {}
+
+        return await _run_durable_file_operation(self._queue_file_lock, read)
+
+    async def _save_job_checkpoint(
+        self, uid: str, entry_id: str, job: dict,
+    ) -> bool:
+        """Checkpoint an existing job without resurrecting a cancelled entry."""
+        def save() -> bool:
+            data = self._read_queue_file()
+            entries = self._queue_entries(data.get(uid))
+            for entry in entries:
+                if entry.get("id") == entry_id:
+                    entry["job"] = job
+                    # The running request must win over later arrivals even
+                    # if it originally entered through the direct path.
+                    data[uid] = [entry, *[item for item in entries if item is not entry]]
+                    self._write_queue_file(data)
+                    return True
+            return False
+
+        return await _run_durable_file_operation(self._queue_file_lock, save)
+
+    async def _retain_job_entry(self, uid: str, entry_id: str) -> None:
+        """Put unfinished work first in memory, retaining durable FIFO order."""
+        def read() -> dict | None:
+            return next((entry for entry in self._queue_entries(
+                self._read_queue_file().get(uid),
+            ) if entry.get("id") == entry_id), None)
+
+        entry = await _run_durable_file_operation(self._queue_file_lock, read)
+        if entry is None:
+            return  # /stop already removed it
+        existing = self._message_queues.get(uid)
+        queue = self._ensure_message_queue(
+            uid, min_size=(existing.qsize() if existing else 0) + 1,
+        )
+        if not any(isinstance(item, tuple) and len(item) == 4
+                   and item[2] == entry_id for item in queue._queue):
+            queue.put_nowait((entry.get("text", ""), entry.get("chat_id", ""),
+                              entry_id, entry.get("ephemeral") is True))
+        self._promote_queue_entry(queue, entry_id)
+
+    async def _pause_job_after_failure(
+        self, uid: str, entry_id: str, chat_id: str, error: Exception,
+    ) -> None:
+        self._paused_jobs.add(uid)
+        try:
+            job = await self._load_job_checkpoint(uid, entry_id)
+            job.update({"state": "paused", "instruction": f"Resolve this failure and finish the original job: {error}"})
+            await self._save_job_checkpoint(uid, entry_id, job)
+            await self._retain_job_entry(uid, entry_id)
+        except Exception:
+            # The original inbound entry is already durable. A failed
+            # checkpoint write must never turn it into a completed request.
+            logger.exception("Could not save failure checkpoint for unfinished job")
+        await self._send_text_best_effort(
+            chat_id, f"Current job remains unfinished: {error}. "
+            "Later jobs are held; reply with guidance or use /stop to cancel.",
+        )
+
+    async def _resume_paused_job(
+        self, uid: str, chat_id: str, guidance: str, generation: int,
+    ) -> bool:
+        if uid not in self._paused_jobs:
+            return False
+
+        def resume() -> bool:
+            if self._cancel_generations.get(uid, 0) != generation:
+                return False
+            data = self._read_queue_file()
+            entries = self._queue_entries(data.get(uid))
+            if not entries or entries[0].get("chat_id") != chat_id:
+                return False
+            job = entries[0].get("job")
+            if not isinstance(job, dict) or job.get("state") != "paused":
+                return False
+            request = job.get("request") or entries[0].get("text", "")
+            job["request"] = request + "\n\n[User guidance for the unfinished job]:\n" + guidance
+            job["state"] = "running"
+            self._write_queue_file(data)
+            return True
+
+        async with self._ensure_dispatch_admission_lock(uid):
+            resumed = await _run_durable_file_operation(self._queue_file_lock, resume)
+        if self._cancel_generations.get(uid, 0) != generation:
+            return False
+        if resumed:
+            self._paused_jobs.discard(uid)
+            self._awaiting_answer.discard(uid)
+            self._start_queue_drain(uid)
+        return resumed
+
     async def _persist_enqueue(
         self, uid: str, text: str, chat_id: str,
         *, ephemeral: bool = False,
@@ -2604,15 +2710,31 @@ class BotPlatform(ABC):
         await _run_durable_file_operation(self._queue_file_lock, complete)
 
     async def _clear_persistent_queue(self, uid: str) -> int:
+        running = self._running_tasks.get(uid)
+        active = running is not None and not running.done()
+
         def clear() -> int:
             data = self._read_queue_file()
             entries = data.pop(uid, None)
             if entries is not None:
                 self._write_queue_file(data)
+                for entry in self._queue_entries(entries):
+                    job = entry.get("job")
+                    if (entry.get("ephemeral") is True and isinstance(job, dict)
+                            and (not active or job.get("state") == "paused")
+                            and isinstance(job.get("workspace_path"), str)
+                            and isinstance(job.get("session_id"), str)):
+                        try:
+                            session.delete_session(job["workspace_path"], job["session_id"])
+                        except Exception:
+                            logger.warning("Failed to clean a cancelled scheduled-job session", exc_info=True)
                 return len(self._queue_entries(entries)) or 1
             return 0
 
-        return await _run_durable_file_operation(self._queue_file_lock, clear)
+        return await _run_durable_file_operation(
+            self._queue_file_lock, clear,
+            on_complete=lambda _: self._paused_jobs.discard(uid),
+        )
 
     async def restore_queues(self) -> None:
         """Rehydrate in-memory queues from disk and resume processing.
@@ -2649,6 +2771,9 @@ class BotPlatform(ABC):
                     # Malformed flags must not make ephemeral turns.
                     entry.get("ephemeral") is True,
                 ))
+            first_job = entries[0].get("job")
+            if isinstance(first_job, dict) and first_job.get("state") == "paused":
+                self._paused_jobs.add(uid)
             drained_users.append(uid)
 
         for uid in drained_users:
@@ -3618,7 +3743,7 @@ class BotPlatform(ABC):
         """Push a scheduled command onto the user's message queue.
 
         The queue entry is flagged ``ephemeral=True`` so the drain loop
-        runs it in a fresh session that is deleted after the turn,
+        runs it in a job-owned session kept until completion or cancellation,
         rather than appending to whichever session was current at the
         time the schedule fires.
         """
@@ -3831,6 +3956,9 @@ class BotPlatform(ABC):
         uid = ctx.user_id
         chat_id = ctx.chat_id
         generation = self._cancel_generations.get(uid, 0)
+        if await self._resume_paused_job(uid, chat_id, text, generation):
+            await ctx.reply_text("Resuming the unfinished job with your guidance.")
+            return
         if self._update_restart_pending:
             self._ensure_task_lock(uid)
             msg_queue = self._ensure_message_queue(uid)
@@ -3852,7 +3980,8 @@ class BotPlatform(ABC):
 
         lock = self._ensure_task_lock(uid)
 
-        if lock.locked() or uid in self._pending_reply_delivery_users:
+        if (lock.locked() or uid in self._pending_reply_delivery_users
+                or uid in self._paused_jobs):
             msg_queue = self._ensure_message_queue(uid)
             if msg_queue.full():
                 await ctx.reply_text("Queue full. Wait or /stop first.")
@@ -3910,7 +4039,7 @@ class BotPlatform(ABC):
         # Register early so /stop finds the task.
         self._running_tasks[uid] = asyncio.current_task()
         try:
-            await self._run_turn(
+            completed = await self._run_turn(
                 uid, chat_id, text, queue_entry_id=entry_id,
             )
         except asyncio.CancelledError:
@@ -3919,12 +4048,13 @@ class BotPlatform(ABC):
                 await self._send_text_best_effort(chat_id, "Cancelled.")
             return
         except Exception as e:
-            # Consume before replying.
             logger.exception("AI turn failed")
-            await self._persist_complete(uid, entry_id)
-            await self._send_text_best_effort(chat_id, f"Error: {e}")
+            await self._pause_job_after_failure(uid, entry_id, chat_id, e)
         else:
-            await self._persist_complete(uid, entry_id)
+            if completed is False:
+                await self._retain_job_entry(uid, entry_id)
+            else:
+                await self._persist_complete(uid, entry_id)
         finally:
             self._cleanup_turn(uid, lock)
 
@@ -3961,19 +4091,242 @@ class BotPlatform(ABC):
         self, uid: str, chat_id: str, text: str,
         *, session_id: str | None = None,
         queue_entry_id: str | None = None,
-    ) -> None:
-        # Every automatic continuation spends the same request allowance.
-        with agent.turn_budget():
-            await self._run_turn_with_budget(
-                uid, chat_id, text, session_id=session_id,
-                queue_entry_id=queue_entry_id,
+    ) -> bool:
+        """Keep one job current until its full scope is complete.
+
+        Each execution allowance is a checkpoint boundary, not a queue
+        completion. The original request, progress and pinned session remain
+        durable before a restart can yield to anything else.
+        """
+        job = await self._load_job_checkpoint(uid, queue_entry_id) if queue_entry_id else {}
+        ws = job.get("workspace_path")
+        if not isinstance(ws, str) or not ws:
+            ws = await self._current_workspace_for_turn(uid, chat_id)
+        if ws is None or not os.path.isdir(ws):
+            if queue_entry_id:
+                job.update({"state": "paused", "request": text,
+                            "instruction": "Restore the job's workspace and finish the original scope."})
+                await self._save_job_checkpoint(uid, queue_entry_id, job)
+            self._paused_jobs.add(uid)
+            return False
+        request = job.get("request")
+        if not isinstance(request, str) or not request:
+            request = text
+        pinned_session = job.get("session_id")
+        if not isinstance(pinned_session, str) or not pinned_session:
+            pinned_session = session_id
+        if job.get("state") == "paused":
+            self._paused_jobs.add(uid)
+            return False
+
+        while True:
+            job.update({"workspace_path": ws, "session_id": pinned_session,
+                        "request": request, "state": "running"})
+            if queue_entry_id and not await self._save_job_checkpoint(uid, queue_entry_id, job):
+                return False
+            prompt = request
+            checkpoint = job.get("checkpoint")
+            instruction = job.get("instruction")
+            if checkpoint or instruction:
+                prompt += (
+                    "\n\n[Resume the SAME unfinished job; later queued jobs remain held.]\n"
+                    "Keep the original full scope above. Re-check saved artifacts and "
+                    "working-tree changes before doing more work. Use prior worker "
+                    "evidence to avoid repeating verified completed steps. Reports may "
+                    "be partial or truncated; inspect their artifacts to verify them. "
+                    "Complete every remaining obligation, including final verification "
+                    "and requested commit/push. Return DONE only when the full original "
+                    "request is complete; otherwise state the exact remainder.\n"
+                    + (instruction if isinstance(instruction, str) else "")
+                    + "\n[Saved progress checkpoint]:\n"
+                    + json.dumps(checkpoint or {}, ensure_ascii=False)
+                )
+            previous = self._job_output(job.get("output"))
+
+            async def session_ready(selected_session: str) -> None:
+                nonlocal pinned_session
+                pinned_session = selected_session
+                job["session_id"] = selected_session
+                if queue_entry_id and not await self._save_job_checkpoint(uid, queue_entry_id, job):
+                    raise asyncio.CancelledError
+
+            with agent.turn_budget(fresh=True):
+                result = await self._run_turn_with_budget(
+                    uid, chat_id, prompt, session_id=pinned_session,
+                    queue_entry_id=queue_entry_id,
+                    workspace_path=ws, previous_result=previous,
+                    on_session=session_ready,
+                )
+            if result is None:
+                self._paused_jobs.discard(uid)
+                return True
+
+            checkpoint = result.continuation_checkpoint or {}
+            additions = checkpoint.get("accepted_additions", [])
+            if checkpoint.get("accepted_additions_truncated"):
+                checkpoint_session = result.session_id or pinned_session
+                data = (await asyncio.to_thread(session.load_session, ws, checkpoint_session)
+                        if checkpoint_session else None)
+                messages = data.get("messages", []) if isinstance(data, dict) else []
+                full_request = next((message.get("content") for message in reversed(messages)
+                                     if isinstance(message, dict) and message.get("role") == "user"
+                                     and isinstance(message.get("content"), str)), "")
+                if full_request.startswith(prompt):
+                    request += full_request[len(prompt):]
+                else:
+                    # Never silently accept completion with known omitted
+                    # user requirements when the full source is unavailable.
+                    result.continuation_reason = None
+                    result.continue_instruction = ""
+                    result.completion_verified = False
+                    result.error = "Cannot recover the full accepted job updates from its saved session."
+            elif isinstance(additions, list):
+                for addition in additions:
+                    if isinstance(addition, str) and addition:
+                        request += "\n\n[Added while working]:\n" + addition
+            pinned_session = result.session_id or pinned_session
+            resumable = bool(result.continuation_reason or (
+                result.continue_instruction and not result.error
+            ) or (not result.error and result.completion_verified is not False
+                  and result.text.lstrip().upper().startswith("PARTIAL")))
+            job.update({
+                "request": request, "session_id": pinned_session,
+                "instruction": result.continue_instruction or (
+                    "Finish the remaining original scope and verify completion.\n"
+                    + (result.text or result.error or "No completed answer was produced.")
+                ),
+                "checkpoint": self._merge_job_checkpoint(job.get("checkpoint"), checkpoint, result),
+                "attempts": (job.get("attempts", 0) if isinstance(job.get("attempts", 0), int)
+                             and not isinstance(job.get("attempts", 0), bool) else 0) + 1,
+                "state": "running" if resumable else "paused",
+                "output": self._job_output_record(result, ws),
+            })
+            if queue_entry_id and not await self._save_job_checkpoint(uid, queue_entry_id, job):
+                return False
+            if not resumable:
+                self._paused_jobs.add(uid)
+                explanation = ("Completion could not be verified.\n\nLatest draft:\n"
+                               if result.completion_verified is False else "")
+                paused_text, _ = agent.extract_await(result.text or result.error or
+                                                     "No completed answer was produced.")
+                await self._send_text_best_effort(
+                    chat_id,
+                    explanation + paused_text
+                    + "\n\nThe current job is still unfinished. Later jobs are held. "
+                    "Reply with guidance to resume it, or use /stop to cancel.",
+                )
+                return False
+            await self._run_status_operation(
+                self.send_status(chat_id, "Saved progress; continuing the current "
+                                 "job before starting any later queued job."),
+                action="announcing continued work",
             )
+            if self._update_restart_pending:
+                return False  # queue checkpoint survives the updater's restart
+            await asyncio.sleep(0)
+
+    @staticmethod
+    def _merge_job_checkpoint(previous: object, current: dict, result: agent.AgentResult) -> dict:
+        """Retain worker evidence across attempts without nesting resume prompts."""
+        checkpoint = {key: value for key, value in current.items()
+                      if key not in {"request", "accepted_additions", "reports"}}
+        if not current:
+            checkpoint["pending"] = [result.continue_instruction] if result.continue_instruction else []
+            checkpoint["latest_draft"] = result.text[:12_000]
+        reports = []
+        seen = set()
+        for source in (previous, current):
+            rows = source.get("reports", []) if isinstance(source, dict) else []
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                instruction, report = row.get("instruction"), row.get("report")
+                if not isinstance(instruction, str) or not isinstance(report, str):
+                    continue
+                key = (instruction, report)
+                if key not in seen:
+                    seen.add(key)
+                    reports.append({"instruction": instruction, "report": report})
+        truncated = bool(checkpoint.get("truncated") or (
+            isinstance(previous, dict) and previous.get("truncated")
+        ))
+        if len(reports) > 128:
+            reports = reports[:64] + reports[-64:]
+            truncated = True
+        available = max(0, agent.CONTINUATION_CHECKPOINT_CHARS
+                        - len(json.dumps(checkpoint, ensure_ascii=False)) - 8192)
+        quota = available // max(1, len(reports))
+        for row in reports:
+            instruction_limit = min(2000, quota // 3)
+            report_limit = max(0, quota - instruction_limit)
+            for key, limit in (("instruction", instruction_limit), ("report", report_limit)):
+                value = row[key]
+                if len(value) > limit:
+                    marker = "… [saved evidence excerpt truncated; verify its artifacts]"
+                    row[key] = value[:max(0, limit - len(marker))] + marker[:limit]
+                    truncated = True
+        checkpoint.update({"reports": reports, "truncated": truncated})
+        return checkpoint
+
+    @staticmethod
+    def _job_output_record(result: agent.AgentResult, ws: str) -> dict:
+        """Keep cumulative artifacts/usage without replaying old partial replies."""
+        retained = agent.AgentResult()
+        agent.carry_forward_turn_output(result, retained, ws)
+        return {
+            "attachments": list(dict.fromkeys(event.content for event in retained.events
+                                               if event.kind == "attachment")),
+            "usage": result.usage,
+            "detached_tasks": [{"backend_name": task.backend_name, "task_id": task.task_id}
+                               for task in result.detached_tasks],
+            "detached_task_requests": [request.prompt for request in result.detached_task_requests],
+        }
+
+    @staticmethod
+    def _job_output(payload: object) -> agent.AgentResult | None:
+        if not isinstance(payload, dict):
+            return None
+        result = agent.AgentResult()
+        attachments = payload.get("attachments")
+        if isinstance(attachments, list):
+            result.events = [agent.ChatEvent(kind="attachment", content=path)
+                             for path in attachments if isinstance(path, str)]
+        usage = payload.get("usage")
+        result.usage = usage if isinstance(usage, dict) else None
+        tasks = payload.get("detached_tasks")
+        if isinstance(tasks, list):
+            result.detached_tasks = [DetachedTaskRef(task["backend_name"], task["task_id"])
+                                     for task in tasks if isinstance(task, dict)
+                                     and isinstance(task.get("backend_name"), str)
+                                     and isinstance(task.get("task_id"), str)]
+        requests = payload.get("detached_task_requests")
+        if isinstance(requests, list):
+            result.detached_task_requests = [DetachedTaskRequest(prompt)
+                                            for prompt in requests if isinstance(prompt, str)]
+        return result
+
+    @staticmethod
+    def _job_result_is_incomplete(result: agent.AgentResult) -> bool:
+        text = result.text or "\n\n".join(event.content for event in result.events
+                                           if event.kind == "text")
+        _, awaiting = agent.extract_await(text)
+        return bool(result.continuation_reason or result.continue_instruction
+                    or result.error or awaiting or result.completion_verified is False
+                    or (not text.strip()
+                        and not any(event.kind == "attachment" for event in result.events)
+                        and not result.detached_tasks)
+                    or text.lstrip().upper().startswith("PARTIAL"))
 
     async def _run_turn_with_budget(
         self, uid: str, chat_id: str, text: str,
         *, session_id: str | None = None,
         queue_entry_id: str | None = None,
-    ) -> None:
+        workspace_path: str | None = None,
+        previous_result: agent.AgentResult | None = None,
+        on_session: Callable[[str], Awaitable[None]] | None = None,
+    ) -> agent.AgentResult | None:
         """Send a "Thinking..." status, run the agent, then post the reply.
 
         ``session_id`` pins the run to a specific session — used by
@@ -3986,7 +4339,7 @@ class BotPlatform(ABC):
         lock.acquire(), so /stop can cancel this turn during any of
         its await points.
         """
-        ws = await self._current_workspace_for_turn(uid, chat_id)
+        ws = workspace_path or await self._current_workspace_for_turn(uid, chat_id)
         if ws is None:
             return
         backend_name, model, summary_model, perm, summary_backend = (
@@ -4122,69 +4475,24 @@ class BotPlatform(ABC):
                 backend_name=backend_name,
                 summary_backend_name=summary_backend,
                 session_id=session_id,
+                on_session=on_session,
                 on_process=lambda proc, uid=uid: self._note_turn_process(
                     uid, getattr(proc, "pid", None),
                 ),
             )
-            # Auto-chain judge-exhausted CONTINUE hands-free (bounded).
-            chained = 0
-            try:
-                from .. import flexible as _flexible_mod
-                _chain_cap = _flexible_mod.MAX_AUTO_CHAIN_TURNS
-            except Exception:
-                _chain_cap = 0
-            while (
-                chained < _chain_cap
-                and getattr(result, "continue_instruction", "")
-                and not self._update_restart_pending
-                and not result.error
-            ):
-                _next_instruction = result.continue_instruction.strip()
-                if not _next_instruction:
-                    break
-                chained += 1
-                await on_event(agent.ChatEvent(
-                    kind="tool",
-                    content=f"Auto-continuing remainder {chained}/{_chain_cap}...",
-                ))
-                previous_result = result
-                inject_q = _InjectQueue(maxsize=self.max_queue_size)
-                self._inject_queues[uid] = inject_q
-                try:
-                    result = await agent.run(
-                        f"{text}\n\n{_next_instruction}", ws, user_id=uid,
-                        model=model, summary_model=summary_model,
-                        approval=perm,
-                        on_event=on_event, inject_queue=inject_q,
-                        backend_name=backend_name,
-                        summary_backend_name=summary_backend,
-                        session_id=(
-                            session_id if session_id is not None
-                            else result.session_id
-                        ),
-                        on_process=lambda proc, uid=uid: self._note_turn_process(
-                            uid, getattr(proc, "pid", None),
-                        ),
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    logger.exception("Auto-chained continuation turn failed")
-                    break
-                if not agent.is_cumulative_budget_result(result):
-                    agent.carry_forward_turn_output(previous_result, result, ws)
-                if not getattr(result, "continue_instruction", ""):
-                    break
-            if chained:
-                await on_event(agent.ChatEvent(
-                    kind="tool",
-                    content=f"Auto-continue finished after {chained} turn(s).",
-                ))
-
-            if result.continue_instruction and not result.error:
-                agent.append_text_result(
-                    result, "PARTIAL — remaining work:\n" + result.continue_instruction,
-                )
+            if previous_result is not None:
+                agent.carry_forward_turn_output(previous_result, result, ws)
+                seen_attachments: set[str] = set()
+                events = []
+                for event in result.events:
+                    if event.kind == "attachment":
+                        if event.content in seen_attachments:
+                            continue
+                        seen_attachments.add(event.content)
+                    events.append(event)
+                result.events = events
+            if self._job_result_is_incomplete(result):
+                return result  # checkpoint first; never enter the final reply ledger
 
             # Start durable provider jobs here (interactive turns only).
             if session_id is None:
@@ -4262,47 +4570,64 @@ class BotPlatform(ABC):
     async def _run_ephemeral_turn(
         self, uid: str, chat_id: str, text: str,
         *, queue_entry_id: str | None = None,
-    ) -> None:
-        """Run a scheduled command in a fresh, throwaway session.
-
-        The session is created right before the run and deleted in a
-        ``finally`` so a crash, /stop, or backend error still cleans up.
-        It never becomes the user's current session — interactive
-        chat continues against whatever session was current before.
-        """
-        ws = await self._current_workspace_for_turn(uid, chat_id)
+    ) -> bool:
+        """Keep a scheduled session until its job completes or is cancelled."""
+        job = await self._load_job_checkpoint(uid, queue_entry_id) if queue_entry_id else {}
+        ws = job.get("workspace_path")
+        if not isinstance(ws, str) or not ws:
+            ws = await self._current_workspace_for_turn(uid, chat_id)
         if ws is None:
-            return
+            if queue_entry_id:
+                job.update({"state": "paused", "request": text,
+                            "instruction": "Restore the scheduled job's workspace and finish its original scope."})
+                await self._save_job_checkpoint(uid, queue_entry_id, job)
+            self._paused_jobs.add(uid)
+            return False
 
         # Distinctive name: avoids the auto-title race.
         stripped = text.strip()
         label = stripped.splitlines()[0] if stripped else "scheduled"
         if len(label) > 40:
             label = label[:40 - len("… [clipped]")] + "… [clipped]"
-        sid: str | None = None
+        sid = job.get("session_id")
+        if not isinstance(sid, str) or session.load_session(ws, sid) is None:
+            sid = None
+        completed = False
 
         def created(sess_data: dict) -> None:
             nonlocal sid
             sid = sess_data["id"]
 
         try:
-            await _run_durable_file_operation(
-                workspace.get_lock(ws),
-                lambda: session.create_session(ws, name=f"⏰ {label}"),
-                on_complete=created,
-            )
+            if sid is None:
+                await _run_durable_file_operation(
+                    workspace.get_lock(ws),
+                    lambda: session.create_session(ws, name=f"⏰ {label}"),
+                    on_complete=created,
+                )
+            if queue_entry_id:
+                job.update({"workspace_path": ws, "session_id": sid})
+                if not await self._save_job_checkpoint(uid, queue_entry_id, job):
+                    return False
             await self._run_status_operation(
                 self.send_text(chat_id, f"⏰ Starting scheduled task: {text}"),
                 action="announcing a starting scheduled task",
             )
-            await self._run_turn(
+            outcome = await self._run_turn(
                 uid, chat_id, text, session_id=sid,
                 queue_entry_id=queue_entry_id,
             )
+            completed = outcome is not False
+            return completed
         finally:
-            # Always tear down the throwaway session.
+            # A restarted daemon must resume the same job/session, not rerun
+            # its completed workers in a fresh scheduled conversation.
             try:
-                if sid is not None:
+                pending = await self._load_job_checkpoint(uid, queue_entry_id) if queue_entry_id else {}
+                retain_session = (not completed and pending.get("session_id") == sid
+                                  and uid not in self._cancel_acknowledged
+                                  and not self._cancel_work_depths.get(uid, 0))
+                if sid is not None and not retain_session:
                     await _run_durable_file_operation(
                         workspace.get_lock(ws), lambda: session.delete_session(ws, sid),
                         required_cleanup=True,
@@ -4533,6 +4858,8 @@ class BotPlatform(ABC):
                 break
             if self._update_restart_pending:
                 break
+            if uid in self._paused_jobs:
+                break
             if lock.locked():
                 break
             await lock.acquire()
@@ -4585,11 +4912,11 @@ class BotPlatform(ABC):
             self._running_tasks[uid] = asyncio.current_task()
             try:
                 if ephemeral:
-                    await self._run_ephemeral_turn(
+                    completed = await self._run_ephemeral_turn(
                         uid, msg_chat_id, text, queue_entry_id=entry_id,
                     )
                 else:
-                    await self._run_turn(
+                    completed = await self._run_turn(
                         uid, msg_chat_id, text, queue_entry_id=entry_id,
                     )
             except asyncio.CancelledError:
@@ -4601,11 +4928,15 @@ class BotPlatform(ABC):
                 break
             except Exception as e:
                 logger.exception("Queued AI chat failed")
-                await self._send_text_best_effort(
-                    msg_chat_id, f"Error: {e}",
-                )
-                await self._persist_complete(uid, entry_id)
+                await self._pause_job_after_failure(uid, entry_id, msg_chat_id, e)
+                if self._update_restart_pending or uid in self._paused_jobs:
+                    break
             else:
+                if completed is False:
+                    await self._retain_job_entry(uid, entry_id)
+                    if self._update_restart_pending or uid in self._paused_jobs:
+                        break
+                    continue  # guidance arrived while the pause notice was sending
                 await self._persist_complete(uid, entry_id)
             finally:
                 self._cleanup_turn(uid, lock)
