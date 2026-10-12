@@ -388,7 +388,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             def _auto_ceiling() -> str:
                 return "auto"
 
-            orig = config.get_max_permission
+            original_get_max_permission = config.get_max_permission
             config.get_max_permission = _auto_ceiling
             try:
                 # Above the ceiling is rejected.
@@ -406,7 +406,7 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                     json.dump({"permission": "full"}, file_handle)
                 self.assertEqual(workspace.get_permission(tmp), "auto")
             finally:
-                config.get_max_permission = orig
+                config.get_max_permission = original_get_max_permission
 
     def test_interaction_style_falls_back_to_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -672,10 +672,10 @@ class ColonyStateFallbackTests(unittest.TestCase):
                     "items": [f"i{item_index}" for item_index in range(150)],
                     "compact_count": 0,
                 }, file_handle)
-            got = colony.get_items(tmp)
-            self.assertEqual(len(got), colony.COLONY_CAP)
-            self.assertEqual(got[0], "i50")
-            self.assertEqual(got[-1], "i149")
+            items = colony.get_items(tmp)
+            self.assertEqual(len(items), colony.COLONY_CAP)
+            self.assertEqual(items[0], "i50")
+            self.assertEqual(items[-1], "i149")
 
 
 class ConfigFallbackTests(unittest.TestCase):
@@ -1731,7 +1731,7 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
         return asyncio.run(coro)
 
     async def _assert_queued_turn_drains(self, bot: _GatedDrainBot) -> None:
-        t1 = asyncio.create_task(
+        first_turn_task = asyncio.create_task(
             bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
         )
         await asyncio.wait_for(bot.entered.wait(), timeout=2)
@@ -1739,7 +1739,7 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
         await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
         self.assertEqual(bot.ran, ["first"])
         bot.gate.set()
-        await t1
+        await first_turn_task
         await asyncio.wait_for(bot.second_entered.wait(), timeout=2)
         drain = bot._running_tasks.get("u1")
         if drain is not None:
@@ -1776,7 +1776,7 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
         self._run(run())
 
 
-class RemainderBatchRegressionTests(unittest.TestCase):
+class RuntimeInputValidationTests(unittest.TestCase):
     def test_queue_predicates_require_strict_bool_flags(self) -> None:
         msg_queue = asyncio.Queue()
         msg_queue.put_nowait(("t", "c", "id-1", 1))
@@ -1854,11 +1854,11 @@ class RemainderBatchRegressionTests(unittest.TestCase):
                 session.save_session(tmp, data["id"], data)
                 with mock.patch.object(
                     titling, "generate", return_value="Some Title",
-                ) as gen:
+                ) as generate_title:
                     await titling.maybe_auto_title(
                         tmp, data["id"], None, backend_name=None,
                     )
-                    gen.assert_not_called()
+                    generate_title.assert_not_called()
 
         asyncio.run(run())
 

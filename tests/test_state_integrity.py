@@ -20,7 +20,7 @@ INVALID_JSON_VALUES = (
 )
 
 
-class StateJsonAuditTests(unittest.TestCase):
+class StateValidationAndRecoveryTests(unittest.TestCase):
     def test_example_config_covers_current_defaults(self) -> None:
         example_path = os.path.join(os.path.dirname(config.__file__), ".config", "config.example.json")
         with open(example_path, encoding="utf-8") as file_handle:
@@ -120,7 +120,7 @@ class StateJsonAuditTests(unittest.TestCase):
             self.assertFalse(os.path.exists(target))
 
 
-class JsonEventAuditTests(unittest.IsolatedAsyncioTestCase):
+class JsonEventValidationTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_numeric_and_nested_events_do_not_drop_later_valid_event(self) -> None:
         stream = asyncio.StreamReader()
         stream.feed_data(("\n".join([*INVALID_JSON_VALUES, '{"text":"complete"}']) + "\n").encode())
@@ -131,7 +131,7 @@ class JsonEventAuditTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invalid, list(INVALID_JSON_VALUES))
 
 
-class ColonySnapshotAuditTests(unittest.IsolatedAsyncioTestCase):
+class ColonyConsolidationConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_stale_consolidation_preserves_concurrent_memory_and_session_changes(self) -> None:
         for change in ("local", "shared", "created", "deleted"):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as ws:

@@ -14,13 +14,13 @@ from unittest import mock
 from Cozter import agent, compaction, session, workspace
 
 
-def _messages(n: int) -> list[dict]:
+def _messages(message_count: int) -> list[dict]:
     return [
         {
             "role": "user" if index % 2 == 0 else "assistant",
             "content": f"message number {index} " + "x" * 100,
         }
-        for index in range(n)
+        for index in range(message_count)
     ]
 
 
@@ -46,24 +46,24 @@ class ContextBudgetTests(unittest.TestCase):
     def test_larger_budget_keeps_more_history(self) -> None:
         data = {"summary": "", "long_term": [], "messages": _messages(50)}
 
-        big = agent._build_contextual_prompt(
+        large_budget_prompt = agent._build_contextual_prompt(
             "NEW MESSAGE", dict(data), budget=1_000_000,
         )
-        small = agent._build_contextual_prompt(
+        small_budget_prompt = agent._build_contextual_prompt(
             "NEW MESSAGE", dict(data), budget=3_000,
         )
 
         # The new message survives at any budget.
-        self.assertIn("NEW MESSAGE", big)
-        self.assertIn("NEW MESSAGE", small)
+        self.assertIn("NEW MESSAGE", large_budget_prompt)
+        self.assertIn("NEW MESSAGE", small_budget_prompt)
         # A tight budget drops older messages...
-        self.assertLess(len(small), len(big))
+        self.assertLess(len(small_budget_prompt), len(large_budget_prompt))
         # ...but the newest message is retained in both.
-        self.assertIn("message number 49", big)
-        self.assertIn("message number 49", small)
+        self.assertIn("message number 49", large_budget_prompt)
+        self.assertIn("message number 49", small_budget_prompt)
         # ...while the oldest is dropped under the tight budget.
-        self.assertIn("message number 0", big)
-        self.assertNotIn("message number 0 ", small)
+        self.assertIn("message number 0", large_budget_prompt)
+        self.assertNotIn("message number 0 ", small_budget_prompt)
 
     def test_no_context_returns_prompt_unchanged(self) -> None:
         out = agent._build_contextual_prompt("hi", None)
@@ -135,9 +135,9 @@ class PromptPolicyTests(unittest.TestCase):
         self.assertIn("TARGETWORD deployment facts", out)
 
     def test_planner_context_keeps_the_request_under_a_cap(self) -> None:
-        big = "history line\n" * 2_000
+        history = "history line\n" * 2_000
         request = "the actual user request"
-        out = agent._planner_context(big + request, request)
+        out = agent._planner_context(history + request, request)
         self.assertLessEqual(len(out), agent._PLANNER_CONTEXT_CAP)
         self.assertIn(request, out)
 
@@ -167,7 +167,7 @@ class PromptPolicyTests(unittest.TestCase):
             self.assertIn("DONE", hint)
 
 
-class VerifyEvidenceReachesEveryAgentTests(unittest.TestCase):
+class BackendVerificationPromptTests(unittest.TestCase):
     def test_every_selectable_agent_gets_verify_with_evidence(self) -> None:
         from Cozter.backends_agent import AVAILABLE_BACKENDS, get_backend
 
@@ -433,7 +433,7 @@ class FormatUsageTests(unittest.TestCase):
         self.assertNotIn("$", footer)
 
 
-class TruncationHonestyTests(unittest.TestCase):
+class PromptTruncationDisclosureTests(unittest.TestCase):
     def test_context_marker_warns_preview_not_full_content(self) -> None:
         self.assertIn("never treat", agent._CONTEXT_TRUNCATION_MARKER)
         self.assertIn("re-check leftovers", agent._CONTEXT_TRUNCATION_MARKER)
@@ -450,14 +450,14 @@ class TruncationHonestyTests(unittest.TestCase):
         _ = run  # schema-level check below instead of live execution
         import inspect
 
-        src = inspect.getsource(agent_tools.execute_tool)
-        self.assertIn("page until no truncation marker remains", src)
-        self.assertIn("PARTIAL + remainder", src)
+        function_source = inspect.getsource(agent_tools.execute_tool)
+        self.assertIn("page until no truncation marker remains", function_source)
+        self.assertIn("PARTIAL + remainder", function_source)
 
     def test_planner_omission_marker_forces_coverage(self) -> None:
-        big = "history line\n" * 2_000
+        history = "history line\n" * 2_000
         request = "the actual user request"
-        out = agent._planner_context(big + request, request)
+        out = agent._planner_context(history + request, request)
         self.assertLessEqual(len(out), agent._PLANNER_CONTEXT_CAP)
         self.assertIn(request, out)
         self.assertIn("every item/rule", out)

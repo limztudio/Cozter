@@ -8,7 +8,7 @@ import unittest
 from Cozter import utils
 
 
-class ImageHeaderAuditTests(unittest.TestCase):
+class JpegDimensionParsingTests(unittest.TestCase):
     @staticmethod
     def _jpeg_header(
         marker: int = 0xC0, *, fill: bytes = b"", width: int = 47, height: int = 31,

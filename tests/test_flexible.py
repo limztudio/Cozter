@@ -976,18 +976,18 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         async def followup_worker(
             _backend, _ws, _prompt, _model, _approval, **kwargs,
         ):
-            idx = len(calls)
+            call_index = len(calls)
             calls.append(_model)
-            if idx == 0:
+            if call_index == 0:
                 return _worker(
                     "first done\n[followup:mid] handle leftover",
                     usage={},
                 ), False
             return _worker("leftover done", usage={}), False
 
-        async def on_event(ev: ChatEvent) -> None:
-            if ev.kind == "tool":
-                statuses.append(ev.content)
+        async def on_event(event: ChatEvent) -> None:
+            if event.kind == "tool":
+                statuses.append(event.content)
 
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
@@ -1114,9 +1114,9 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         injected: list[str] = []
         original_take = agent._take_pending_injections
 
-        def take_after_putting(q, collected):
-            q.put_nowait("include the new requirement")
-            return original_take(q, collected)
+        def take_after_putting(inject_queue, collected):
+            inject_queue.put_nowait("include the new requirement")
+            return original_take(inject_queue, collected)
 
         async def failing_call() -> str:
             raise RuntimeError("planner connection dropped")
@@ -1225,18 +1225,18 @@ class CoveragePromptTests(unittest.TestCase):
         from Cozter.agent_tools.builtin import read_file as read_file_mod
         from Cozter.agent_tools.builtin import tree as tree_mod
 
-        for mod, name in (
+        for tool_module, name in (
             (glob_mod, "GlobTool"), (grep_mod, "GrepTool"),
             (tree_mod, "TreeTool"), (list_dir_mod, "ListDirTool"),
             (read_file_mod, "ReadFileTool"),
         ):
-            tool_cls = getattr(mod, name, None) or getattr(
-                mod, next(key for key in dir(mod) if key.endswith("Tool")),
+            tool_cls = getattr(tool_module, name, None) or getattr(
+                tool_module, next(key for key in dir(tool_module) if key.endswith("Tool")),
             )
             self.assertIn("page", tool_cls.description.lower())
 
 
-class NoHandoffLeakTests(unittest.TestCase):
+class FlexibleUserReplyPolicyTests(unittest.TestCase):
     def test_merge_rules_ban_handoff_notes(self) -> None:
         self.assertIn("Next turn should:", flexible._MERGE_RULES)
 
@@ -1317,7 +1317,7 @@ class JudgeVerdictTests(unittest.TestCase):
         self.assertEqual(flexible._bounded_draft_excerpt("short", limit=10), "short")
 
 
-class FlexibleLatencyTurnTests(unittest.IsolatedAsyncioTestCase):
+class FlexibleTurnCompletionTests(unittest.IsolatedAsyncioTestCase):
     async def test_flexible_continuation_passes_evidence_to_the_actual_worker(self) -> None:
         prompts: list[str] = []
         original_draft = "Fixed retry.py. Evidence: pytest exited 0."
@@ -1596,7 +1596,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
             from Cozter import session
             data = await asyncio.to_thread(session.create_session, ws, name="Work")
             backend = type(
-                "B", (),
+                "JudgeTestBackend", (),
                 {
                     "name": "judge-test",
                     "default_summary_model": "m",
@@ -1645,7 +1645,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
             from Cozter import session
             data = await asyncio.to_thread(session.create_session, ws, name="Work")
             backend = type(
-                "B", (),
+                "JudgeTestBackend", (),
                 {
                     "name": "judge-test",
                     "default_summary_model": "m",
@@ -1689,7 +1689,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
             from Cozter import session
             data = await asyncio.to_thread(session.create_session, ws, name="Work")
             backend = type(
-                "B", (),
+                "JudgeTestBackend", (),
                 {
                     "name": "judge-test",
                     "default_summary_model": "m",

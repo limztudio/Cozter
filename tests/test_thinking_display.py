@@ -27,8 +27,8 @@ class ThinkingDisplayTests(unittest.TestCase):
         self.assertIn("… [3 older update(s) omitted — preview only]", out)
 
     def test_truncates_long_text_keeping_tail(self) -> None:
-        long = "HEAD" + "b" * 1000 + "TAIL"
-        out = BotPlatform._compose_thinking_display([], long)
+        long_text = "HEAD" + "b" * 1000 + "TAIL"
+        out = BotPlatform._compose_thinking_display([], long_text)
         self.assertIn("TAIL", out)
         self.assertNotIn("HEAD", out)  # head dropped, tail kept
         self.assertIn("… [preview]", out)  # visible cut marker, not bare "…"

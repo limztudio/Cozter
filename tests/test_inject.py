@@ -49,10 +49,10 @@ class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
                 ChatEvent(kind="text", content="final reply"),
             ])
 
-        with tempfile.TemporaryDirectory() as ws, tempfile.TemporaryDirectory() as cfg:
+        with tempfile.TemporaryDirectory() as ws, tempfile.TemporaryDirectory() as config_dir:
             from Cozter import workspace as workspace_mod
             old_config_dir = workspace_mod.CONFIG_DIR
-            workspace_mod.CONFIG_DIR = cfg
+            workspace_mod.CONFIG_DIR = config_dir
             self.addCleanup(setattr, workspace_mod, "CONFIG_DIR", old_config_dir)
             bot = _InjectRaceBot(ws)
             bot.notify_targets = ["u1"]
@@ -143,9 +143,9 @@ class InjectAckBoundTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         async def waiting_run(*_args, **kwargs) -> AgentResult:
-            iq = kwargs.get("inject_queue")
-            assert iq is not None
-            msg = await asyncio.wait_for(iq.get(), timeout=20)
+            inject_queue = kwargs.get("inject_queue")
+            assert inject_queue is not None
+            msg = await asyncio.wait_for(inject_queue.get(), timeout=20)
             assert msg == "urgent!"
             return AgentResult(events=[
                 ChatEvent(kind="text", content="after:" + msg),
@@ -165,7 +165,7 @@ class InjectAckBoundTests(unittest.IsolatedAsyncioTestCase):
                     bot._run_ephemeral_turn("u1", "chat", "sched cmd"),
                 )
                 await asyncio.sleep(0.5)
-                t0 = time.monotonic()
+                ack_started = time.monotonic()
                 await asyncio.wait_for(
                     bot.cmd_inject(BotContext(
                         user_id="u1", chat_id="chat", text="",
@@ -175,7 +175,7 @@ class InjectAckBoundTests(unittest.IsolatedAsyncioTestCase):
                     timeout=bot_base._INJECT_ACK_TIMEOUT_SEC + 15,
                 )
                 self.assertLess(
-                    time.monotonic() - t0,
+                    time.monotonic() - ack_started,
                     bot_base._INJECT_ACK_TIMEOUT_SEC + 15,
                 )
                 await asyncio.wait_for(turn, timeout=25)

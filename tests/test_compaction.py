@@ -10,7 +10,7 @@ from unittest import mock
 from Cozter import colony, compaction, session, workspace
 
 
-class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+class CompactionAndColonyTests(unittest.IsolatedAsyncioTestCase):
     async def _consolidation_prompt(self, workspace_path: str, output: str) -> str:
         """Apply a mocked consolidation and return its captured input."""
         with mock.patch.object(

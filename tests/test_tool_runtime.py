@@ -37,7 +37,7 @@ PLUGIN_NAMES = frozenset({
 })
 
 
-class ToolsAuditRegressionTests(unittest.TestCase):
+class ToolIoFailureAndShellGuardTests(unittest.TestCase):
     def test_unreadable_notes_refuse_append_and_preserve_existing_state(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
             target = Path(workspace, ".cozter", "notes.md")

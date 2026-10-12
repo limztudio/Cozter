@@ -93,7 +93,7 @@ class CliBot(BotPlatform):
         """
         if not text:
             return
-        if _ANSI_ENABLED:
+        if _ansi_enabled:
             # ESC[2m = dim, ESC[90m = gray.
             print(f"\x1b[2;90m{text}\x1b[0m")
         else:
@@ -243,24 +243,24 @@ def _prepare_console() -> None:
 
 
 # ANSI status colors: TTYs only.
-_ANSI_ENABLED = False
+_ansi_enabled = False
 
 
 def _enable_ansi() -> None:
     """Best-effort enable ANSI escape processing in the current console.
 
-    Sets the module-level ``_ANSI_ENABLED`` flag based on whether stdout
+    Sets the module-level ``_ansi_enabled`` flag based on whether stdout
     is a TTY and (on Windows) whether we can switch the console into
     Virtual Terminal Processing mode. Modern Windows Terminal and
     cmd.exe on Windows 10 1903+ support VT processing once enabled.
     """
-    global _ANSI_ENABLED
+    global _ansi_enabled
     if not sys.stdout.isatty():
-        _ANSI_ENABLED = False
+        _ansi_enabled = False
         return
     if sys.platform != "win32":
         # POSIX terminals honor ANSI.
-        _ANSI_ENABLED = True
+        _ansi_enabled = True
         return
     # Windows: enable VT processing via SetConsoleMode.
     try:
@@ -271,12 +271,12 @@ def _enable_ansi() -> None:
         handle = kernel32.GetStdHandle(std_output_handle)
         mode = ctypes.c_uint32()
         if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-            _ANSI_ENABLED = False
+            _ansi_enabled = False
             return
         new_mode = mode.value | enable_virtual_terminal_processing
-        _ANSI_ENABLED = bool(kernel32.SetConsoleMode(handle, new_mode))
+        _ansi_enabled = bool(kernel32.SetConsoleMode(handle, new_mode))
     except (OSError, AttributeError):
-        _ANSI_ENABLED = False
+        _ansi_enabled = False
 
 
 _force_exit_installed = False

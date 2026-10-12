@@ -1157,10 +1157,10 @@ class OpenAIParallelToolTests(unittest.TestCase):
         async def stream(*args, **kwargs):
             payloads.append(copy.deepcopy(args[1]))
             if len(payloads) == 1:
-                dup = _tool_call("c-base", "x.txt")
+                duplicate_call = _tool_call("c-base", "x.txt")
                 batch = []
                 for attempt in range(4):
-                    one = copy.deepcopy(dup)
+                    one = copy.deepcopy(duplicate_call)
                     one["id"] = f"c{attempt}"
                     batch.append(one)
                 return "", "", batch

@@ -149,14 +149,14 @@ class AttachmentGuardTests(unittest.TestCase):
             first_destination = ""
             call_count = 0
 
-            def publish_with_competitor(src: str, destination: str) -> bool:
+            def publish_with_competitor(source: str, destination: str) -> bool:
                 nonlocal first_destination, call_count
                 call_count += 1
                 if call_count == 1:
                     first_destination = destination
                     with open(destination, "wb") as file_handle:
                         file_handle.write(b"concurrent image")
-                return original_copy(src, destination)
+                return original_copy(source, destination)
 
             with (
                 mock.patch.dict(

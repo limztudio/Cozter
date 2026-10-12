@@ -23,7 +23,7 @@ from Cozter.agent_tools.plugins.notes import (
 )
 
 
-class NotesTrimSweepTests(unittest.TestCase):
+class NotesTrimmingTests(unittest.TestCase):
     def test_trim_preserves_exact_newest_entries_and_separator_newlines(self) -> None:
         entries = [
             f"## 2026-10-12 00:{index:02d}:00\nentry {index} " + "한" * 1000 + "\n\n"
@@ -49,7 +49,7 @@ class NotesTrimSweepTests(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("git"), "git not available")
-class GitSymlinkSweepTests(unittest.TestCase):
+class GitSymlinkHandlingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -113,7 +113,7 @@ class GitSymlinkSweepTests(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "nt", "Windows read-only file behavior")
-class WindowsMoveSweepTests(unittest.TestCase):
+class WindowsReadOnlyFileMoveTests(unittest.TestCase):
     def test_read_only_file_moves_without_leaving_a_duplicate_entry(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:
             source = Path(workspace, "source.txt")

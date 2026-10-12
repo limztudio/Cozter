@@ -1131,9 +1131,9 @@ async def _post_completion_stream(
                     reasoning_parts.append(reasoning_content)
                 tool_call_deltas = delta.get("tool_calls")
                 if isinstance(tool_call_deltas, list):
-                    for tc in tool_call_deltas:
+                    for tool_call_delta in tool_call_deltas:
                         tool_argument_bytes += _merge_tool_call(
-                            tool_buffers, tc,
+                            tool_buffers, tool_call_delta,
                         )
                         _check_completion_buffer_limit(
                             text_bytes, reasoning_bytes, tool_argument_bytes,
@@ -1334,9 +1334,9 @@ def _merge_tool_call(
     if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
         return 0
 
-    fn = delta.get("function")
+    function_delta = delta.get("function")
     # A non-object function field is an invalid delta.
-    if fn is not None and not isinstance(fn, dict):
+    if function_delta is not None and not isinstance(function_delta, dict):
         return 0
 
     # Pre-seed an id; the real id overrides.
@@ -1363,10 +1363,10 @@ def _merge_tool_call(
                 f"{_MAX_TOOL_CALL_ID_CHARS} character limit",
             )
         buf["id"] = call_id
-    if fn is None:
+    if function_delta is None:
         return 0
 
-    name = fn.get("name")
+    name = function_delta.get("name")
     if isinstance(name, str) and name:
         if len(name) > _MAX_TOOL_NAME_CHARS:
             raise _CompletionTooLargeError(
@@ -1374,7 +1374,7 @@ def _merge_tool_call(
                 f"{_MAX_TOOL_NAME_CHARS} character limit",
             )
         buf["function"]["name"] = name
-    raw_arguments = fn.get("arguments")
+    raw_arguments = function_delta.get("arguments")
     argument_parts = buf.get("_argument_parts")
     if not isinstance(argument_parts, list):
         argument_parts = []

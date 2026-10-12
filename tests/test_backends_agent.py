@@ -2215,12 +2215,12 @@ class BackendHealthCheckTests(unittest.TestCase):
         def _dead_url() -> str:
             return "http://127.0.0.1:1"
 
-        orig = config.get_llama_server_url
+        original_get_server_url = config.get_llama_server_url
         config.get_llama_server_url = _dead_url
         try:
             ok, detail = LlamaBackend().health_check()
         finally:
-            config.get_llama_server_url = orig
+            config.get_llama_server_url = original_get_server_url
         self.assertFalse(ok)
         self.assertIn("unreachable", detail)
 
@@ -2612,7 +2612,7 @@ class ZaiBackendTests(unittest.TestCase):
         def _missing_api_key() -> str:
             return ""
 
-        orig = config.get_zai_api_key
+        original_get_api_key = config.get_zai_api_key
         try:
             config.get_zai_api_key = _key
             self.assertEqual(
@@ -2622,7 +2622,7 @@ class ZaiBackendTests(unittest.TestCase):
             config.get_zai_api_key = _missing_api_key
             self.assertEqual(ZaiBackend()._auth_headers(), {})
         finally:
-            config.get_zai_api_key = orig
+            config.get_zai_api_key = original_get_api_key
 
     def test_health_check_reflects_key(self) -> None:
         def _key() -> str:
@@ -2631,7 +2631,7 @@ class ZaiBackendTests(unittest.TestCase):
         def _missing_api_key() -> str:
             return ""
 
-        orig = config.get_zai_api_key
+        original_get_api_key = config.get_zai_api_key
         try:
             config.get_zai_api_key = _missing_api_key
             ok, detail = ZaiBackend().health_check()
@@ -2641,7 +2641,7 @@ class ZaiBackendTests(unittest.TestCase):
             ok, _ = ZaiBackend().health_check()
             self.assertTrue(ok)
         finally:
-            config.get_zai_api_key = orig
+            config.get_zai_api_key = original_get_api_key
 
     def test_request_model_falls_back_to_default(self) -> None:
         backend = ZaiBackend()

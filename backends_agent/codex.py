@@ -374,11 +374,11 @@ class CodexBackend(Backend):
                 changes = item.get("changes")
                 if not isinstance(changes, list):
                     return
-                for ch in changes:
-                    if not isinstance(ch, dict):
+                for change in changes:
+                    if not isinstance(change, dict):
                         continue
-                    path = ch.get("path", "?")
-                    kind = ch.get("kind", "?")
+                    path = change.get("path", "?")
+                    kind = change.get("kind", "?")
                     result.events.append(ChatEvent(
                         kind="file",
                         content=f"📄 {kind}: {path}",

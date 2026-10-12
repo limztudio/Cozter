@@ -19,7 +19,7 @@ from Cozter.agent_tools.plugins.memory import MemoryTool, _OUTPUT_BUDGET, _fit_o
 from Cozter.agent_tools.plugins.notes import NotesTool
 
 
-class ToolAuditRegressionTests(unittest.TestCase):
+class ToolSafetyAndOutputLimitTests(unittest.TestCase):
     def test_public_http_session_uses_the_documented_one_hour_cap(self) -> None:
         async def inspect_timeout() -> None:
             async with tool_base.open_public_http_session() as session:
