@@ -1690,24 +1690,34 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests: `tests/conftest.py`, shared `tests/helpers.py`, plus focused
+- Tests: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 63 focused
   `unittest` modules covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
-  backend model defaults, shared catalog/result/content helpers, CLI tool
-  summaries, process-resource maps, event parsing, and llama retry; bot,
+  backend model defaults (Claude and cloud provider capabilities), shared
+  catalog/result/content helpers, CLI tool summaries, process-resource maps,
+  event parsing, and the shared OpenAI-compatible retry/backoff loop; bot,
   CLI, and Slack commands, including native stdin ownership, restored-queue
   FIFO/reference preservation, and schedule edits while waiting for a lock;
-  Windows launcher descendant lifetimes; compaction; the flexible meta-agent
-  including all reported follow-ups and the 24-worker execution cap;
+  scheduled-job admission versus execution; Windows launcher descendant
+  lifetimes; compaction and durable memory preservation across partially
+  covered maintenance input; the flexible meta-agent including all reported
+  follow-ups and the 24-worker (`MAX_SUBTASKS * 2`) execution cap plus the
+  whole-request turn budget that releases the queue despite expanding work;
   inject (including the bounded confirmation send); run locks, session picking, and
   auto-titling; platform, Slack,
   and Signal rich-text formatting; durable reply delivery; detached tasks
   and Claude's background-launch guard; runtime diagnostics; state
-  fallbacks including containment-checked nested workspace dirs; status
-  latency and thinking-status display; updater behavior; utilities
-  including the shared lock helper; upload limits; and the built-in/plugin
-  tool surface, including off-event-loop discovery scans that continue after
-  a failed `is_dir()`
+  audits and fallbacks including containment-checked nested workspace dirs;
+  status latency (including chat status I/O, shell/Signal latency, and
+  thinking-status display) and Signal transport/status/attachment-latency
+  regressions; native shell/Git subprocess output draining with inherited
+  pipes, prompt-subprocess delivery, internal-backend deadlines, and HTTP
+  streaming deadlines; updater behavior; utilities
+  including the shared lock helper; upload limits; tool permissions; and
+  the built-in/plugin tool surface, including patch/edit bounds, audit- and
+  sweep-found regressions, off-event-loop discovery scans that continue after
+  a failed `is_dir()`, and discovery pruning/optimization that preserves
+  file selection, containment, and permission checks
 
 The normal working checkout may also contain ignored runtime state such as
 `.venv/`, `.cozter/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`,
@@ -1934,17 +1944,29 @@ subprocess) and `parse_event()` (translate the CLI's JSONL events to
 
 Run the current unit tests from the parent directory, or set
 `PYTHONPATH` to the parent when running inside the repository. Discovery
-covers malformed state/config fallbacks, persistent queue restoration,
-schedule parsing, backend model defaults, shared catalog/result/content
-helpers, CLI tool summaries, process-resource maps, event parsing, llama
-retry behavior, the flexible meta-agent's planning/merge, post-turn,
+covers malformed state/config fallbacks, persistent queue restoration
+(including off-loop durable commits with cancellation order), session-write
+ownership after `/stop`, and memory preservation across partially covered
+maintenance input,
+schedule parsing (including scheduled-job admission versus execution),
+backend model defaults (Claude and cloud provider capabilities), shared catalog/result/content
+helpers, CLI tool summaries, process-resource maps, event parsing, shared
+OpenAI-compatible retry/backoff behavior, the flexible meta-agent's planning/merge
+(including the `MAX_SUBTASKS * 2` worker cap and the whole-request turn
+budget that releases the queue despite expanding agent work), post-turn,
 interrupted-turn, and inject flow, subprocess draining and
-exceptional-path cleanup, prompt construction, attachment handling
+exceptional-path cleanup (native shell/Git output, inherited pipes,
+prompt-subprocess delivery, internal-backend deadlines, HTTP streaming
+deadlines), prompt construction, attachment handling
 (texts-first, pipelined uploads), run-lock cancellation, session
 picking, auto-titling, compaction, platform/Slack/Signal rich-text
-formatting, status-latency and thinking-status display, runtime
-diagnostics, updater behavior, detached tasks, agent-tool helpers,
-off-event-loop discovery scans, and built-in discovery/edit/patch safety.
+formatting, status-latency and thinking-status display (including Signal
+transport/status/attachment-latency regressions), runtime
+diagnostics, updater behavior, detached tasks, agent-tool helpers
+(including permissions, patch/edit bounds, and audit-/sweep-found
+regressions),
+off-event-loop discovery scans, selective discovery pruning/optimization
+that preserves selection/containment/permissions, and built-in discovery/edit/patch safety.
 
 If `codex` is on `PATH`, one catalog-consistency test also invokes
 `codex debug models` with a 15-second timeout; it skips when that command
