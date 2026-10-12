@@ -123,7 +123,8 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_detached_registration_preserves_fifo_context_and_watcher_thread(self) -> None:
-        self._block(os, "fsync")
+        # Count whole commits; POSIX syncs both the file and its directory.
+        self._block(self.bot, "_write_detached_tasks_file")
         self.context.set("request-context")
         first = self._spawn(self._register_detached("first-task"))
         try:
@@ -176,7 +177,7 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.bot._detached_task_file_lock.locked())
 
     async def test_queue_commits_keep_loop_responsive_and_preserve_fifo_context(self) -> None:
-        self._block(os, "fsync")
+        self._block(self.bot, "_write_queue_file")
         self.context.set("request-context")
         first = self._spawn(self.bot._persist_enqueue("u1", "first", "chat"))
         await self._wait_blocked(self.bot._queue_file_lock)
