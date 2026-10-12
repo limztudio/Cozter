@@ -553,11 +553,19 @@ class BotPlatform(ABC):
         await self.start_scheduler()
 
     async def _stop_daemon_services(self) -> None:
-        """Stop the background services started by _start_daemon_services."""
+        """Stop the background services started by _start_daemon_services.
+
+        Owned durable-reply retries keep the staged ledger durable, so a
+        blocked send must be cancelled (not awaited) here: restart
+        delivery resumes from the retained record via
+        ``restore_reply_deliveries``.
+        """
         await self.stop_detached_task_watcher()
         await self.stop_scheduler()
         for owner in list(self._attachment_tasks):
             await self._cancel_attachment_uploads(owner)
+        for owner in list(self._reply_delivery_tasks):
+            await self._cancel_owned_deliveries(owner, self._reply_delivery_tasks)
 
     async def _send_text_best_effort(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -628,12 +636,26 @@ class BotPlatform(ABC):
             self._start_queue_drain(uid)
 
     def has_active_turns(self) -> bool:
-        """Return True while any agent reply is still in progress."""
+        """Return True while any agent reply is still in progress.
+
+        Standalone durable-reply retries (the watcher/restart path that
+        re-sends an already staged reply without holding the per-user
+        turn lock) own their sends in ``_reply_delivery_tasks``. They
+        count here so an update restart waits for the in-flight send
+        instead of racing ahead of it; the staged ledger stays durable
+        either way. Explicit ``/cancel``/``/stop`` still interrupts
+        them via ``_clear_reply_deliveries``.
+        """
         if any(not task.done() for task in self._running_tasks.values()):
             return True
         tasks = self._attachment_tasks
         if any(
             not task.done() for owned in tasks.values() for task in owned
+        ):
+            return True
+        deliveries = self._reply_delivery_tasks
+        if any(
+            not task.done() for owned in deliveries.values() for task in owned
         ):
             return True
         return any(lock.locked() for lock in self._task_locks.values())
@@ -677,6 +699,20 @@ class BotPlatform(ABC):
                 for owner, count in sorted(pending_uploads.items())
             ]
             parts.append("pending_uploads=[" + ", ".join(uploads) + "]")
+        pending_deliveries = {
+            owner: sum(1 for task in owned if not task.done())
+            for owner, owned in self._reply_delivery_tasks.items()
+        }
+        pending_deliveries = {
+            owner: count for owner, count in pending_deliveries.items()
+            if count
+        }
+        if pending_deliveries:
+            deliveries = [
+                f"{owner}({count})"
+                for owner, count in sorted(pending_deliveries.items())
+            ]
+            parts.append("pending_deliveries=[" + ", ".join(deliveries) + "]")
         if locks:
             parts.append("held_locks=[" + ", ".join(sorted(locks)) + "]")
         return "; ".join(parts) or "<no stuck state found>"

@@ -263,6 +263,118 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(bot._read_queue_file(), {})
                     self.assertEqual(bot._reply_delivery_tasks, {})
 
+    async def test_blocked_standalone_retry_counts_as_an_active_turn(self) -> None:
+        """A standalone retry's blocked send must hold the update idle wait.
+
+        This is the ``BotPlatform`` regression for the standalone durable
+        reply retry: a restart-retry re-sends an already staged reply
+        without holding the per-user turn lock, so the update loop's
+        ``has_active_turns()`` check is the only thing that keeps a
+        restart from racing ahead of the in-flight send.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(workspace, "CONFIG_DIR", tmp):
+                bot = _ReplyDeliveryBot(tmp, fail_final=False)
+                entry_id = await bot._persist_enqueue("u1", "prompt", "chat")
+                await bot._stage_reply_delivery(
+                    "u1", entry_id, "chat", tmp,
+                    AgentResult(events=[
+                        ChatEvent(kind="text", content="final response"),
+                    ]),
+                    allow_await=False,
+                )
+                entered = asyncio.Event()
+                release = asyncio.Event()
+
+                async def blocked_send(_chat, text, *, rich=False):
+                    if text == "final response":
+                        entered.set()
+                        await release.wait()
+                    bot.sent.append(text)
+                    return None
+
+                with mock.patch.object(
+                    bot, "send_text", side_effect=blocked_send,
+                ), mock.patch.object(
+                    bot, "start_detached_task_watcher",
+                ):
+                    retry = asyncio.create_task(bot._check_reply_deliveries())
+                    try:
+                        await asyncio.wait_for(entered.wait(), timeout=5)
+                        # The owned retry is in flight without a held lock.
+                        self.assertEqual(
+                            len(bot._reply_delivery_tasks.get("u1", ())), 1,
+                        )
+                        self.assertTrue(bot.has_active_turns())
+                        self.assertIn(
+                            "pending_deliveries=[u1(1)]",
+                            bot.stuck_turn_diagnostics(),
+                        )
+                        release.set()
+                        await asyncio.wait_for(retry, timeout=5)
+                    finally:
+                        release.set()
+                        if not retry.done():
+                            retry.cancel()
+                            await asyncio.gather(
+                                retry, return_exceptions=True,
+                            )
+                self.assertEqual(bot.sent, ["final response"])
+                self.assertEqual(
+                    await bot._list_reply_delivery_records(), [],
+                )
+                self.assertEqual(bot._reply_delivery_tasks, {})
+                self.assertFalse(bot.has_active_turns())
+
+    async def test_stop_services_cancels_a_blocked_standalone_retry(self) -> None:
+        """Shutdown cancels a blocked retry while keeping its ledger row.
+
+        Cancelling (not awaiting) the stuck send lets ``stop()`` proceed
+        without preserving delivery order, and the retained staged record
+        resumes after restart via ``restore_reply_deliveries``.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(workspace, "CONFIG_DIR", tmp):
+                bot = _ReplyDeliveryBot(tmp, fail_final=False)
+                entry_id = await bot._persist_enqueue("u1", "prompt", "chat")
+                record = await bot._stage_reply_delivery(
+                    "u1", entry_id, "chat", tmp,
+                    AgentResult(events=[
+                        ChatEvent(kind="text", content="final response"),
+                    ]),
+                    allow_await=False,
+                )
+                entered = asyncio.Event()
+
+                async def blocked_send(_chat, text, *, rich=False):
+                    if text == "final response":
+                        entered.set()
+                        await asyncio.Event().wait()
+                    bot.sent.append(text)
+                    return None
+
+                with mock.patch.object(
+                    bot, "send_text", side_effect=blocked_send,
+                ):
+                    delivery = asyncio.create_task(
+                        bot._deliver_staged_reply(record),
+                    )
+                    await asyncio.wait_for(entered.wait(), timeout=5)
+                    self.assertTrue(bot.has_active_turns())
+                    await asyncio.wait_for(
+                        bot._stop_daemon_services(), timeout=5,
+                    )
+                    self.assertFalse(await asyncio.wait_for(
+                        delivery, timeout=5,
+                    ))
+                self.assertEqual(bot.sent, [])
+                # The staged text survives for post-restart retry.
+                self.assertEqual(
+                    len(await bot._list_reply_delivery_records()), 1,
+                )
+                self.assertEqual(bot._reply_delivery_tasks, {})
+                self.assertFalse(bot.has_active_turns())
+
     async def test_pipelined_uploads_overlap_next_turn(self) -> None:
         """Texts return fast; pictures upload behind the next agent turn."""
         with tempfile.TemporaryDirectory() as tmp:
