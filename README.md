@@ -163,6 +163,8 @@ On startup, Cozter creates or re-execs through a project-local `.venv` when
 needed. It installs `requirements.txt` only when a required runtime module is
 missing or its installed version falls outside the declared requirement; an
 update that changes the requirements installs them before restart.
+An inherited `COZTER_VENV_REEXEC` marker cannot bypass this check when a shell
+tool launches system Python; the interpreter must actually be inside a venv.
 
 ### Windows Task Scheduler
 

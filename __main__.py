@@ -188,10 +188,25 @@ def _venv_python() -> str:
 
 def _ensure_venv_and_reexec() -> None:
     """Run daemon mode through a project-local venv on managed Python."""
-    if _running_in_venv() or os.environ.get(_VENV_REEXEC_ENV) == "1":
+    if _running_in_venv():
         return
 
     python = _venv_python()
+    # Shell tools inherit the reexec marker. If they later launch system
+    # Python, that marker must not bypass the project's virtual environment
+    # and send dependency repair to an externally managed system install.
+    # Only use it to detect a broken project interpreter and avoid an exec
+    # loop. Compare launch paths, not realpaths: venv Python is often a
+    # symlink to the same binary as system Python.
+    if (
+        os.environ.get(_VENV_REEXEC_ENV) == "1"
+        and os.path.normcase(os.path.abspath(sys.executable))
+        == os.path.normcase(os.path.abspath(python))
+    ):
+        raise RuntimeError(
+            "Cozter's project interpreter did not enter its virtual "
+            "environment; recreate the project .venv before starting Cozter."
+        )
     if not os.path.exists(python):
         venv_dir = os.path.dirname(os.path.dirname(python))
         subprocess.check_call(

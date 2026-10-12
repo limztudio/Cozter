@@ -36,22 +36,17 @@ def _load_main_module():
     ]
     sys.path.insert(0, workspace_pkg_parent)
 
-    real_check_call = subprocess.check_call
-    old_reexec = os.environ.get("COZTER_VENV_REEXEC")
-    subprocess.check_call = lambda *_args, **_kwargs: 0
-    os.environ["COZTER_VENV_REEXEC"] = "1"
-    try:
+    with (
+        mock.patch.object(subprocess, "check_call", return_value=0),
+        # Import as a virtual-environment runtime even when the test runner
+        # uses system Python. A reexec marker alone is not proof of a venv.
+        mock.patch.object(sys, "base_prefix", sys.prefix + "-test-base"),
+    ):
         import importlib
         with contextlib.redirect_stderr(io.StringIO()):
             import Cozter.__main__ as main_mod
             importlib.reload(main_mod)  # in case an earlier import cached deps
         return main_mod
-    finally:
-        subprocess.check_call = real_check_call
-        if old_reexec is None:
-            os.environ.pop("COZTER_VENV_REEXEC", None)
-        else:
-            os.environ["COZTER_VENV_REEXEC"] = old_reexec
 
 
 class _StubBot:
@@ -70,6 +65,44 @@ class _StubBot:
 
 
 class VenvBootstrapTests(unittest.TestCase):
+    def test_system_python_reexecs_despite_inherited_venv_marker(self) -> None:
+        main = _load_main_module()
+        python = main._venv_python()
+        with (
+            mock.patch.object(main, "_running_in_venv", return_value=False),
+            mock.patch.object(main.sys, "executable", "/usr/bin/python3"),
+            mock.patch.dict(main.os.environ, {main._VENV_REEXEC_ENV: "1"}),
+            mock.patch.object(main.os, "name", "posix"),
+            mock.patch.object(main, "_venv_python", return_value=python),
+            mock.patch.object(main.os.path, "exists", return_value=True),
+            mock.patch.object(main.os, "execve") as reexec,
+            mock.patch.object(main.subprocess, "check_call") as install,
+        ):
+            main._ensure_venv_and_reexec()
+
+        reexec.assert_called_once()
+        args = reexec.call_args.args
+        self.assertEqual(args[0], python)
+        self.assertEqual(args[1], [python, "-m", "Cozter", *main.sys.argv[1:]])
+        self.assertEqual(args[2][main._VENV_REEXEC_ENV], "1")
+        install.assert_not_called()
+
+    def test_broken_venv_interpreter_fails_before_reexec_or_system_install(self) -> None:
+        main = _load_main_module()
+        python = main._venv_python()
+        with (
+            mock.patch.object(main, "_running_in_venv", return_value=False),
+            mock.patch.object(main.sys, "executable", python),
+            mock.patch.dict(main.os.environ, {main._VENV_REEXEC_ENV: "1"}),
+            mock.patch.object(main.os, "execve") as reexec,
+            mock.patch.object(main.subprocess, "check_call") as install,
+            self.assertRaisesRegex(RuntimeError, "recreate the project .venv"),
+        ):
+            main._ensure_venv_and_reexec()
+
+        reexec.assert_not_called()
+        install.assert_not_called()
+
     def test_dependency_bootstrap_skips_pip_when_runtime_is_complete(self) -> None:
         main = _load_main_module()
         with (
