@@ -55,8 +55,8 @@ class AutoTitlingTests(unittest.IsolatedAsyncioTestCase):
             return "Stale Auto Title"
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path)
-            session.append_messages(workspace_path, data["id"], [{
+            data = await asyncio.to_thread(session.create_session, workspace_path)
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [{
                 "role": "assistant", "content": "Initial reply",
             }])
 
@@ -68,8 +68,8 @@ class AutoTitlingTests(unittest.IsolatedAsyncioTestCase):
 
                 # Same write a rename performs mid-fallback.
                 async with workspace.get_lock(workspace_path):
-                    session.set_session_name(
-                        workspace_path, data["id"], "Compaction Title",
+                    await asyncio.to_thread(
+                        session.set_session_name, workspace_path, data["id"], "Compaction Title",
                     )
 
                 release.set()

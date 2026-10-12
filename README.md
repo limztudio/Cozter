@@ -187,6 +187,9 @@ Start Cozter normally once before registering the task so the project
 `.venv` exists; the script expects `.venv\Scripts\python.exe` to be present.
 It runs that venv directly and restarts Cozter after every exit, including
 updates and failures, so Task Scheduler keeps a single supervised process.
+The PowerShell supervisor owns a Windows launch job before starting Python.
+Stopping that scheduled entry also stops its Python and tool descendants;
+each restarted child shares the supervisor's job without retaining its handle.
 Point the task at the deployment's own checkout (for example
 `C:\Startup\Cozter\run_cozter.ps1` with **Start in** `C:\Startup`), not at an
 unrelated source tree, and keep that deployment on a clean tracking branch so
@@ -196,6 +199,15 @@ same supervisor loop. A global `python.exe C:\...\Cozter` task action still
 restarts through the launcher's built-in Windows supervision loop, but that
 path nests extra Python parents per layer instead of the single supervised
 process above, so prefer `run_cozter.ps1` for long-running deployments.
+
+Use absolute paths for the task action and its **Start in** directory, both
+from the same deployment. The supervisor derives its project root from its
+own script location and changes to that checkout's parent before launching
+`.venv\Scripts\python.exe -m Cozter`. Agent CLI subprocesses later run in the
+selected workspace; that workspace is separate from the deployment working
+directory. Keep developer shells pointed at the development checkout's parent
+as described in [Development checks](#development-checks), even when a service
+runs from a different deployment path.
 
 ### POSIX systemd
 
@@ -519,14 +531,19 @@ systemd.
 On Windows the `signal-cli` daemon usually runs as a restricted service
 account such as `NT AUTHORITY\LocalService`, so it can only attach files
 that account can open. Cozter's `SignalBot.send_file` hands the daemon a
-local path and the daemon itself opens that path: a per-user `Temp` file
-such as `C:\Users\<you>\AppData\Local\Temp\...` is not readable by the
-service, and the `send` RPC fails fast with `Access is denied` wrapped as
-`AttachmentInvalidException` (surfaced as `SignalCliError`), with no
-delivery. Stage live Signal attachments under a daemon-readable path such
-as `C:\Users\Public\...` (which grants `Everyone` full control, including
-the service account) and remove the staged copy after the send. Canonical
-evidence is kept under `.log\live_signal_send_20261012_083004\`:
+local path and the daemon itself opens that path. A per-user `Temp` file
+such as `C:\Users\<you>\AppData\Local\Temp\...` can be inaccessible to the
+service; an unreadable attachment makes the `send` RPC fail with `Access is
+denied` wrapped as `AttachmentInvalidException` (surfaced as
+`SignalCliError`), with no delivery. Stage live Signal attachments in a
+directory whose actual Windows ACLs allow the daemon account to read the file
+and access its parent directories, then remove the staged copy after the send.
+Grant access to the daemon's configured identity, such as
+`NT AUTHORITY\LocalService`, according to the deployment's needs.
+`C:\Users\Public\...` can be suitable after checking its directory and file
+ACLs; the path name alone does not guarantee access or `Everyone` full control.
+Historical evidence from one host is kept under
+`.log\live_signal_send_20261012_083004\`:
 `live_send.log` records the per-user-`Temp` failure (RPC `ERROR`,
 `SignalCliError ... Access is denied ... AttachmentInvalidException`,
 nonzero exit, no receipt) while `live_send2.log` records the
@@ -668,6 +685,11 @@ Maintenance calls discard responses from timed-out or failed backends.
 Compaction preserves long-term items omitted from its input; a partial colony
 pass preserves existing shared and session facts whose evidence was clipped,
 so a preview cannot silently erase memory the model never received.
+Partial memory rewrites reserve the existing facts' capacity before accepting
+new facts, so additions cannot push unseen memory out of the 100-item colony
+or 50-item session cap. When an oversized previous summary is clipped for the
+compaction prompt, its omitted middle remains verbatim beside the new summary;
+later passes can shrink that retained text without discarding unseen evidence.
 
 For a direct agent turn, automatic compaction follows that selected model's
 known input window. For a flexible turn, it follows the smallest known window
@@ -893,6 +915,14 @@ Drop a `.py` file into `agent_tools/plugins/` and every agent discovers it
 on next restart. Whether a backend can invoke it still follows its selected
 permission mode. Files whose names start with `_` are skipped, which is useful
 for disabled examples or local scratch tools. One file, two invocation paths:
+
+The launcher exports its package parent through `PYTHONPATH` while preserving
+existing entries, so a CLI working in the selected workspace can still import
+`Cozter.agent_tools.plugins`. A direct plugin invocation from another directory
+needs the same import path. On a development checkout, select that checkout's
+parent instead of an inherited deployment path; on GitLab CI, retain the
+temporary parent containing the `Cozter` symlink. See
+[Development checks](#development-checks) for both layouts.
 
 Treat plugins as trusted bot code: discovery imports their modules in the
 Cozter process, so module-level code runs at startup and any dependencies must
@@ -1294,17 +1324,18 @@ simply rediscovered when it is opened again. The ACP probe runs from the
 selected workspace so project policy, including `.github/allowed_models.txt`,
 applies to the picker and stored-model check.
 Its prompt keeps the leading system preamble (including the whole-scope /
-doc-following / verify-with-evidence coverage rule) when the platform argv cap forces middle
-context out, marking the omission explicitly; a tail-only cut likewise keeps
-a visible marker and never splits a UTF-8 character, so a clipped Copilot
-prompt always reads as a PARTIAL preview with a remainder obligation.
+doc-following / verify-with-evidence coverage rule) and the complete composed
+context intact through redirected stdin.
 Its picker also accepts ACP's provider-grouped model selectors and both legacy
 session metadata forms (`models.availableModels` and top-level
 `availableModels`), so account-approved models stay visible without a
-hard-coded catalog. The `copilot` backend keeps its `-p` prompt within the
-platform's single-argument limit—quoted UTF-16 units on Windows and UTF-8 bytes
-on POSIX—by dropping the oldest composed context; the current user message
-stays at the tail. Each Copilot run also uses a short-lived private CLI home,
+hard-coded catalog. The `copilot` backend supplies its prompt through the
+CLI's [piped-prompt support](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference),
+omitting `-p`. File-backed stdin sends the exact UTF-8 bytes and EOF without
+trimming for platform argv limits or passing newlines, quotes, and shell
+metacharacters through Windows `.cmd` forwarding. The shared launcher returns
+before the child reads stdin, so captured startup output cannot deadlock
+prompt transfer. Each Copilot run also uses a short-lived private CLI home,
 so its planner, worker, and merge calls do not appear in Copilot's session
 history or get exported to GitHub web and mobile; Cozter's workspace session
 remains the durable conversation record. The private home copies `config.json`
@@ -1313,6 +1344,13 @@ and `settings.json` from `$COPILOT_HOME` when it is set, otherwise from
 elsewhere. That home is remembered by process-object identity
 (`ProcessResourceMap` in `backends_agent/base.py`), not PID, so concurrent
 Copilot turns cannot clobber each other after PID reuse.
+
+On Windows, recognized standard npm Node shims launch their bundled or
+PATH-resolved Node interpreter and existing `node_modules` script directly.
+This preserves arguments such as the empty restricted tool list when the
+installation path contains spaces, and avoids an extra command-processor
+hop. Unreadable, missing, or custom batch launchers retain their existing
+`cmd.exe /c` fallback.
 
 Codex uses discovered effort and context-window metadata only while its
 60-second catalog cache is fresh. Until `/model` refreshes an expired cache,
@@ -1382,7 +1420,7 @@ workspace:
   question and ends with `[[await]]`, pausing the queue until you reply.
   Small, reversible choices are made without asking. This is a
   backend-agnostic prompt policy, so it steers every backend (codex,
-  copilot, claude_code, grok, llama, zai) the same way — not just the CLIs that
+  copilot, claude_code, grok, llama, meta, zai) the same way — not just the CLIs that
   ask on their own.
 - `autonomous` — the agent decides and proceeds without asking, closer to
   a full-auto run.
@@ -1497,6 +1535,29 @@ stdout cannot bypass cleanup.
 HTTP backends expose the same
 process-shaped contract through `backends_agent/_http_proc.py`, so the
 orchestrator uses one cleanup model for CLI and API agents.
+HTTP task cancellation stays on its owning event loop. Native Windows
+process-tree cleanup runs blocking `taskkill` in a worker thread so the loop
+remains responsive; POSIX group signals run directly on the loop.
+
+Foreground session logging and interrupted-turn logging also run durable
+file writes outside the event loop. A background owner keeps the workspace
+file lock until the write finishes, including after cancellation of the turn.
+An interrupted-turn fallback waits for any normal write's outcome, so a
+successful completed reply is recorded once and a failed write can still
+leave the interrupted attempt in session history.
+Subsequent turns and detached launches wait for those write owners before
+reading session context, so a resumed request sees the committed memory.
+
+Durable queue, reply-ledger, and detached-task ledger operations, and temporary scheduled-session
+creation and deletion, also perform file I/O outside the event loop. Once an
+atomic operation starts, it finishes under its file lock before cancellation
+unwinds the caller's admission or delivery locks. Reply bookkeeping follows
+the completed write before cancellation is propagated, preserving FIFO and
+restart recovery. A cancelled scheduled-session creation still removes the
+temporary session.
+Cancellation retains the user's admission lock through durable cleanup and
+blocks new detached notifications until that cleanup ends. Incoming work can
+then enter the queue in order without being removed by the earlier cancellation.
 
 The built-in file tools also fail closed at workspace boundaries. In
 particular, an `apply_patch` create patch uses an atomic no-clobber link where
@@ -1825,6 +1886,16 @@ asyncio/thread dumps go to `.log/diagnostics.log`. On Unix-like hosts,
 send `SIGUSR1` to the running daemon process to dump tasks, thread
 stacks, and per-platform active-turn state without restarting it.
 
+Asyncio debug mode uses the normal `slow_callback_duration` of **0.10 seconds**
+on Python 3.11, 3.12, and 3.14; Cozter does not raise that
+threshold. Debug mode can be enabled with `PYTHONASYNCIODEBUG=1`, and
+`unittest.IsolatedAsyncioTestCase` enables it for its test loops. An
+`Executing ... took ... seconds` warning measures a callback or task step
+holding the event loop at least that long. Inspect the reported location for
+synchronous blocking work and correlate it with `.log/performance.log` stage
+timings. A long asynchronous wait for a backend can leave the loop responsive;
+the slow-callback warning and a whole-stage duration measure different work.
+
 If `dump_traceback_interval` is set above zero, faulthandler emits
 periodic stack dumps to the same diagnostics file. The auto-update path
 uses the same machinery when it has waited longer than
@@ -1905,6 +1976,19 @@ mirrors it on GitHub. mypy is enforced on the core runtime, agent backends,
 and tool surface; `tests/` are excluded and the chat-platform adapters are
 temporarily error-suppressed for their untyped SDK interactions, as defined
 in `mypy.ini`.
+
+GitLab runners may check out this repository under a name other than `Cozter`.
+The canonical pipeline creates a temporary directory containing
+`Cozter -> $CI_PROJECT_DIR` and sets `PYTHONPATH` to that temporary directory.
+Keep that import alias in child subprocess environments as well as the test
+runner's environment. Resolving a test file with `Path(__file__).resolve()`
+follows the symlink to the physical checkout, whose parent might not contain
+an importable `Cozter` package. When a child needs an additional package
+parent, prepend it without discarding the intentionally configured inherited
+`PYTHONPATH` entries. An import check in both the runner and its child should
+resolve to this checkout. Local shells should first remove stale deployment
+entries as described below.
+
 `requirements.txt` contains runtime dependencies only, so install the CI
 tooling explicitly before running the lint and type gates locally:
 
@@ -1927,37 +2011,55 @@ should stay local.
 
 ### Stale `PYTHONPATH` on Windows checkouts
 
-On Windows, a shell that inherits `PYTHONPATH=C:\Startup` imports the stale
-`C:\Startup\Cozter` deploy copy instead of the current checkout, even when the
-working directory is `c:\workstation\cozter`. That stale copy (for example
-`72d2921` while the workspace is ahead) fails: the fast
-`python -m unittest tests.test_updater` subset exits `1` with
+On Windows, a shell that inherits `PYTHONPATH=C:\Startup` can import
+`C:\Startup\Cozter` instead of the development checkout, even when the
+working directory is `C:\workstation\cozter`. Running from inside the package
+does not place its parent on the import path. A historical stale deployment
+at `72d2921` showed this failure: the fast
+`python -m unittest tests.test_updater` subset exited `1` with
 `FAILED (errors=2)` (`KeyError: 'stdin'` in
 `test_git_probe_closes_stdin_instead_of_sharing_cli_input` and
-`test_changed_requirements_install`), because the old production code lacks
-the current subprocess-cleanup arguments, while the same subset passes under
-the clean environment. The full suite polluted this way fails the same way
+`test_changed_requirements_install`), because the old production code lacked
+the subprocess-cleanup arguments present in that development checkout, while
+the same subset passed under the clean environment. The full suite polluted
+this way failed as well
 (`47F+22E` in
 `.log/supervision_exercise/47_full_unittest311.log`, failing IDs in
 `48_fail_ids.txt`).
+The same import mismatch reproduced eight failures and two errors in the
+focused queue growth/shrink, edited scheduler time, invalid HTTPS port, and
+delayed-reply cancellation cases. Those source fixes were already in the
+development checkout; importing the old deployment bypassed them.
 
-Always clear the inherited value and point `PYTHONPATH` at the checkout's
-parent, with the checkout as the working directory. Canonical Windows
-invocation (verified in
-`.log/supervision_exercise/52_full_unittest311_cleanenv.log`:
-`Ran 1174 tests ... OK (skipped=15)`):
+Replace the inherited value with the development checkout's parent, with that
+checkout as the working directory. Use the Python 3.11 or 3.12 virtual
+environment selected for the gate, rather than assuming the global `python`
+has the intended version. For example, from a checkout with that venv:
 
 ```powershell
-$env:PYTHONPATH = "c:\workstation"
-Set-Location "c:\workstation\cozter"
-python -m ruff check .
-python -m mypy -p Cozter
-python -m unittest discover -s tests
+$env:PYTHONPATH = "C:\workstation"
+Set-Location -LiteralPath "C:\workstation\cozter"
+$cozterCheckPython = ".\.venv\Scripts\python.exe"
+& $cozterCheckPython --version
+& $cozterCheckPython -c "import Cozter; print(Cozter.__file__)"
+& $cozterCheckPython -m ruff check .
+& $cozterCheckPython -m mypy --config-file mypy.ini --python-version 3.11 -p Cozter
+& $cozterCheckPython -m unittest discover -s tests
 ```
 
-Check which copy Python resolves before trusting a result:
-`python -c "import Cozter; print(Cozter.__file__)"` must print
-`c:\workstation\Cozter\__init__.py`, not `C:\Startup\Cozter\__init__.py`.
-This happens because this shell is a descendant of the live daemon (whose
-process environment carries `PYTHONPATH=C:\Startup`); prefer a shell outside
-that process tree, or at minimum override `PYTHONPATH` per command as above.
+Repeat the gates with a separate Python 3.12 environment and
+`--python-version 3.12` for its mypy invocation. The import check must resolve
+inside `C:\workstation\cozter` for this example; Windows may preserve different
+letter casing in the printed path. A historical clean Python 3.11 run in
+`.log/supervision_exercise/52_full_unittest311_cleanenv.log` reported
+`Ran 1174 tests ... OK (skipped=15)`. That tally belongs to that earlier
+checkout and environment, and is not the current suite or matrix count.
+Python 3.14 can be checked with a third environment and
+`--python-version 3.14`; the repository CI matrix remains Python 3.11/3.12.
+
+A shell launched by a service can inherit that service's deployment
+`PYTHONPATH`. Check the effective value and `Cozter.__file__` before trusting
+results, and use a development shell with a clean import path. On POSIX the
+same check applies to inherited deployment paths; use `PYTHONPATH=..` inside
+a normally named checkout, or explicitly set it to the intentional import
+alias parent when following the GitLab symlink layout.

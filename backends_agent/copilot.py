@@ -1,11 +1,10 @@
 """GitHub Copilot CLI backend.
 
-Copilot's non-interactive mode (`copilot -p <prompt> --output-format json`)
-streams JSONL events to stdout. Unlike codex, copilot:
-  - takes the prompt via argv (`-p`), not stdin - prompts are capped to
-    the platform's exec limit (Windows' ~32K CreateProcess command line;
-    POSIX ARG_MAX, commonly ~2 MB). copilot has no prompt-via-stdin or
-    --prompt-file path yet, so argv is the only delivery mechanism.
+Copilot's non-interactive mode (`copilot --output-format json` with stdin)
+streams JSONL events to stdout. Cozter's Copilot integration:
+  - reads a redirected stdin prompt when `-p` is omitted. File-backed stdin
+    preserves the full UTF-8 prompt, including newlines, without platform
+    argv limits or Windows cmd.exe/.cmd quoting and forwarding changes.
   - supports `-C <dir>`, but Cozter uses the subprocess `cwd` parameter so
     the launch path stays compatible with older CLI versions
   - requires an explicit ``--allow-all-tools`` for autonomous headless work;
@@ -31,7 +30,6 @@ import os
 import queue
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -39,17 +37,13 @@ import time
 from .base import (
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, ProcessResourceMap,
     append_text_result, attachment_image_paths,
-    create_captured_subprocess, executable_command, fresh_model_catalog,
+    create_prompt_subprocess, executable_command, fresh_model_catalog,
     record_backend_error, summarize_cli_tool, truncate_status_text,
 )
 from ..utils import terminate_windows_process_tree
 
 logger = logging.getLogger(__name__)
 
-# Prompt caps: Windows argv 32767; Linux MAX_ARG_STRLEN 131072.
-_WINDOWS_PROMPT_CHARS = 28_000
-# Same per-arg cap on POSIX.
-_POSIX_PROMPT_ARG_BYTES = 128_000
 _ACP_PROTOCOL_VERSION = 1
 _MODEL_DISCOVERY_TIMEOUT_SEC = 12
 _MODEL_FAILURE_RETRY_SEC = 15
@@ -68,159 +62,6 @@ _MAX_WORKSPACE_MODEL_CACHE_ENTRIES = 64
 
 # ``auto`` always works; don't fall back to help names.
 _FALLBACK_MODELS = ("auto",)
-
-def _max_prompt_chars() -> int:
-    """Largest prompt argv budget we can safely pass to Copilot via ``-p``.
-
-    copilot delivers the prompt as a single argv value - it has no
-    prompt-via-stdin or ``--prompt-file`` path yet - so the OS exec limit
-    applies. Windows' CreateProcess caps the whole command line at 32767
-    UTF-16 code units; POSIX bounds argv + env combined by ARG_MAX (commonly
-    ~2 MB, measured in bytes).
-    Use a conservative fraction of ARG_MAX to leave room for env vars, the
-    executable path, and the other flags. The old fixed 28K cap truncated
-    POSIX prompts far below both the OS limit and agent.py's own 50K
-    context budget.
-    """
-    if sys.platform == "win32":
-        return _WINDOWS_PROMPT_CHARS
-    try:
-        arg_max = os.sysconf("SC_ARG_MAX")
-    except (ValueError, OSError, AttributeError):
-        return _POSIX_PROMPT_ARG_BYTES
-    if arg_max <= 0:
-        return _POSIX_PROMPT_ARG_BYTES
-    return min(
-        _POSIX_PROMPT_ARG_BYTES,
-        max(_WINDOWS_PROMPT_CHARS, min(arg_max // 4, 1_000_000)),
-    )
-
-
-def _prompt_argv_units(prompt: str) -> int:
-    """Return the platform unit count consumed by one prompt argv value."""
-    if not isinstance(prompt, str):
-        return 0
-    if sys.platform == "win32":
-        # Astral chars count as two UTF-16 units.
-        encoded = subprocess.list2cmdline([prompt])
-        return len(encoded.encode("utf-16-le", errors="replace")) // 2
-    return len(prompt.encode("utf-8", errors="replace"))
-
-
-def _truncate_utf8_tail(text: str, budget: int) -> tuple[str, bool]:
-    """Return the newest *budget* argv units without splitting a character.
-
-    A single backward scan accumulates per-character widths, so truncation
-    is linear in the prompt size instead of re-encoding a shrinking tail
-    on every binary-search probe. The flag reports whether any head
-    context was dropped.
-    """
-    if not isinstance(text, str):
-        return "", True
-    if budget <= 0:
-        return "", True
-    if sys.platform == "win32":
-        # No cheap per-char model: binary search on Windows.
-        if _prompt_argv_units(text) <= budget:
-            return text, False
-        lower, upper = 0, len(text)
-        while lower < upper:
-            middle = (lower + upper) // 2
-            if _prompt_argv_units(text[middle:]) <= budget:
-                upper = middle
-            else:
-                lower = middle + 1
-        return text[lower:], True
-    # Encode once; walk back to a char boundary.
-    encoded = text.encode("utf-8", errors="replace")
-    if len(encoded) <= budget:
-        return text, False
-    cut = len(encoded) - budget
-    while cut < len(encoded) and (encoded[cut] & 0xC0) == 0x80:
-        cut += 1
-    if cut >= len(encoded):
-        return "", True
-    return encoded[cut:].decode("utf-8", errors="replace"), True
-
-
-def _truncate_prompt_for_argv(prompt: str, limit: int) -> str:
-    """Keep the newest complete characters that fit in an argv unit budget."""
-    if not isinstance(prompt, str):
-        return ""
-    if _prompt_argv_units(prompt) <= limit:
-        return prompt
-    if limit <= 0:
-        return ""
-
-    # Tail holds the request; head drop is preview-only.
-    marker = "… [older prompt context dropped to fit argv cap — preview only]"
-    if _prompt_argv_units(marker) >= limit:
-        # Too tight for the marker: keep a cut indicator.
-        cut_marker = "…"
-        if _prompt_argv_units(cut_marker) > limit:
-            cut_marker = "." * limit
-        tail, _ = _truncate_utf8_tail(prompt, limit - _prompt_argv_units(cut_marker))
-        return tail + cut_marker
-    tail, truncated = _truncate_utf8_tail(
-        prompt, limit - _prompt_argv_units(marker),
-    )
-    return tail + marker if truncated else tail
-
-
-# Marker for argv-clipped middle context.
-_ARGV_MIDDLE_DROPPED_MARKER = (
-    "\n… [Copilot argv cap: middle context dropped to fit; "
-    "head preamble kept — never treat this preview as full content; "
-    "re-check leftovers via tools, say PARTIAL + remainder]\n"
-)
-
-
-def _truncate_prompt_preserving_head(prompt: str, limit: int) -> str:
-    """Truncate *prompt* for argv while keeping the leading preamble.
-
-    The composed prompt is ``[System: preamble]\\n\\n<context+request>``. A
-    plain tail-slice drops the whole-scope/doc-following rule at the head,
-    so keep the first ``\\n\\n``-delimited block intact and take the tail
-    for the rest. Falls back to the plain tail-slice when there is no head
-    block or even head+marker+minimal tail cannot fit.
-    """
-    if _prompt_argv_units(prompt) <= limit:
-        return prompt
-    sep = "\n\n"
-    head, found, _rest = prompt.partition(sep)
-    if not found or not head.startswith("[System:"):
-        return _truncate_prompt_for_argv(prompt, limit)
-    head_with_sep = head + sep
-    # Single backward scan over the tail.
-    prefix_units = _prompt_argv_units(head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER)
-    if prefix_units >= limit:
-        return _truncate_prompt_for_argv(prompt, limit)
-    if sys.platform == "win32":
-        lower, upper = 0, len(prompt)
-        while lower < upper:
-            middle = (lower + upper) // 2
-            candidate = head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[middle:]
-            if _prompt_argv_units(candidate) <= limit:
-                upper = middle
-            else:
-                lower = middle + 1
-        return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt[lower:]
-    tail_budget = limit - prefix_units
-    # Encode once and walk back to a UTF-8 char boundary.
-    tail_encoded = prompt.encode("utf-8", errors="replace")
-    if len(tail_encoded) <= tail_budget:
-        return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + prompt
-    cut = len(tail_encoded) - tail_budget
-    while cut < len(tail_encoded) and (tail_encoded[cut] & 0xC0) == 0x80:
-        cut += 1
-    tail = (
-        "" if cut >= len(tail_encoded)
-        else tail_encoded[cut:].decode("utf-8", errors="replace")
-    )
-    if not tail:
-        return _truncate_prompt_for_argv(prompt, limit)
-    return head_with_sep + _ARGV_MIDDLE_DROPPED_MARKER + tail
-
 
 def _create_isolated_copilot_home() -> str:
     """Create a short-lived Copilot home with just account metadata.
@@ -426,11 +267,9 @@ class CopilotBackend(Backend):
             logger.debug("copilot not on PATH; model picker is auto-only")
             return None
         prefix = executable_command(self.executable)
-        uses_windows_cmd_shim = (
-            os.name == "nt"
-            and bool(prefix)
-            and os.path.basename(prefix[0]).casefold() == "cmd.exe"
-        )
+        # Both cmd shims and direct Node loaders can own a native CLI child.
+        # Catalog-only launches own all their descendants on Windows.
+        owns_windows_tree = os.name == "nt"
 
         proc: subprocess.Popen[str] | None = None
         isolated_home: str | None = None
@@ -531,7 +370,7 @@ class CopilotBackend(Backend):
             return None
         finally:
             if proc is not None:
-                _stop_acp_process(proc, kill_tree=uses_windows_cmd_shim)
+                _stop_acp_process(proc, kill_tree=owns_windows_tree)
             if isolated_home is not None:
                 _remove_isolated_copilot_home(isolated_home)
 
@@ -545,23 +384,11 @@ class CopilotBackend(Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
-        # Resolve attachments from the full prompt: their markers can occur
-        # in old context removed to fit Copilot's single argv value.
+        # Resolve images before launch; prompt bytes stay intact on stdin.
         image_paths = (
             attachment_image_paths(prompt, workspace_path)
             if self.supports_vision and not compaction else []
         )
-        max_prompt_chars = _max_prompt_chars()
-        prompt_units = _prompt_argv_units(prompt)
-        if prompt_units > max_prompt_chars:
-            # Keep the tail; drop head preamble/old context.
-            logger.warning(
-                "Copilot prompt %d argv units exceeds %d-unit cap; "
-                "dropping oldest context",
-                prompt_units, max_prompt_chars,
-            )
-            prompt = _truncate_prompt_preserving_head(prompt, max_prompt_chars)
-
         prefix = executable_command(self.executable)
         cmd: list[str] = [
             *prefix,
@@ -577,17 +404,14 @@ class CopilotBackend(Backend):
         for _image_path in image_paths:
             cmd += ["--attachment", _image_path]
 
-        cmd += ["-p", prompt]
         isolated_home = _create_isolated_copilot_home()
         env = os.environ.copy()
         env["COPILOT_HOME"] = isolated_home
         try:
-            proc = await create_captured_subprocess(
-                cmd,
+            proc = await create_prompt_subprocess(
+                cmd, prompt,
                 cwd=workspace_path,
                 env=env,
-                # Own process group on POSIX so /stop//inject kills the tree.
-                start_new_session=os.name != "nt",
             )
         except BaseException:
             _remove_isolated_copilot_home(isolated_home)
@@ -1002,7 +826,7 @@ def _stop_acp_process(
         except OSError:
             pass
     if kill_tree:
-        # .cmd shims run under cmd.exe; kill the whole tree.
+        # Windows cmd shims and Node loaders may own a native CLI child.
         terminate_windows_process_tree(proc.pid)
     try:
         if proc.poll() is None:

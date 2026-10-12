@@ -45,6 +45,10 @@ class _ReplyDeliveryBot(TestBot):
 
 
 class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    def _temporary_workspace(self) -> str:
+        """Keep standalone diagnostic/PID fixtures under unittest cleanup."""
+        return self.enterContext(tempfile.TemporaryDirectory())
+
     async def test_detached_reply_preserves_an_interactive_answer_pause(self):
         with tempfile.TemporaryDirectory() as tmp:
             bot = _ReplyDeliveryBot(tmp, fail_final=False)
@@ -478,7 +482,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         """A stuck wait names backend/model/PID/elapsed/last-progress."""
-        bot = _ReplyDeliveryBot(tempfile.mkdtemp(), fail_final=False)
+        bot = _ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
         task = asyncio.current_task()
         assert task is not None
         bot._running_tasks["u1"] = task
@@ -499,7 +503,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         """Progress labels never carry command text, paths, or secrets."""
-        bot = _ReplyDeliveryBot(tempfile.mkdtemp(), fail_final=False)
+        bot = _ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
         task = asyncio.current_task()
         assert task is not None
         bot._running_tasks["u1"] = task
@@ -530,7 +534,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         """Turns without a progress record render as before."""
-        bot = _ReplyDeliveryBot(tempfile.mkdtemp(), fail_final=False)
+        bot = _ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
         task = asyncio.current_task()
         assert task is not None
         bot._running_tasks["u1"] = task
@@ -540,7 +544,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_turn_progress_cleared_on_cleanup(self) -> None:
         """Finished/cancelled turns drop their attribution record."""
-        bot = _ReplyDeliveryBot(tempfile.mkdtemp(), fail_final=False)
+        bot = _ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
         bot._begin_turn_progress("u1", backend="meta", model="m")
         bot._record_turn_event_progress(
             "u1", ChatEvent(kind="tool", content="bash"),
@@ -568,7 +572,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
             async def launch(self, *_args, **_kwargs):
                 return await create_python_script_process(
-                    "import time\ntime.sleep(60)\n",
+                    "print('{}')\n",
                 )
 
             @staticmethod
@@ -578,7 +582,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         proc_holder: list[object] = []
         try:
             result, restarting = await agent._drive_backend(
-                _PidBackend(), tempfile.mkdtemp(), "prompt", None, "auto",
+                _PidBackend(), self._temporary_workspace(), "prompt", None, "auto",
                 effort=0,
                 on_process=lambda proc: (
                     seen.append(proc.pid), proc_holder.append(proc),

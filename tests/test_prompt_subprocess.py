@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,62 @@ from Cozter import utils
 # Bypass the Windows venv redirector in native fixtures, so the handles under
 # test belong to the Python process executing the fixture itself.
 _FIXTURE_PYTHON = getattr(sys, "_base_executable", None) or sys.executable
+
+
+class NpmShimResolutionTests(unittest.TestCase):
+    def _fixture(self, root):
+        script = os.path.join(root, "node_modules", "fixture", "loader.js")
+        os.makedirs(os.path.dirname(script))
+        with open(script, "w", encoding="utf-8") as handle:
+            handle.write("// offline fixture")
+        shim = os.path.join(root, "fixture.cmd")
+        with open(shim, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(backend_base._NPM_NODE_SHIM_HEADER) + "\n")
+            handle.write(
+                'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & '
+                '"%_prog%" "%dp0%\\node_modules\\fixture\\loader.js" %*\n'
+            )
+        return shim, script
+
+    def test_standard_npm_shim_uses_bundled_node_before_path(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="npm shim ") as root:
+            shim, script = self._fixture(root)
+            node = os.path.join(root, "node.exe")
+            with open(node, "wb") as handle:
+                handle.write(b"offline existence fixture")
+            with mock.patch.object(backend_base.shutil, "which") as which:
+                self.assertEqual(backend_base._npm_node_shim_prefix(shim), [node, script])
+            which.assert_not_called()
+
+    def test_standard_npm_shim_uses_path_node_when_unbundled(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="npm shim ") as root:
+            shim, script = self._fixture(root)
+            with mock.patch.object(backend_base.shutil, "which", return_value="node-on-path") as which:
+                self.assertEqual(backend_base._npm_node_shim_prefix(shim), ["node-on-path", script])
+            which.assert_called_once_with("node")
+
+    def test_custom_missing_script_missing_node_and_unreadable_shims_keep_fallback(self) -> None:
+        for invalid in ("custom", "missing_script", "missing_node", "unreadable", "custom_header"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as root:
+                shim, script = self._fixture(root)
+                if invalid == "custom":
+                    with open(shim, "w", encoding="utf-8") as handle:
+                        handle.write("@echo off\nnode custom-loader.js %*\n")
+                elif invalid == "custom_header":
+                    with open(shim, "a", encoding="utf-8") as handle:
+                        handle.write("echo custom side effect\n")
+                elif invalid == "missing_script":
+                    os.unlink(script)
+                with (
+                    mock.patch.object(backend_base.sys, "platform", "win32"),
+                    mock.patch.object(backend_base.shutil, "which", side_effect=lambda name: shim if name == "fixture" else None),
+                ):
+                    if invalid == "unreadable":
+                        with mock.patch("builtins.open", side_effect=OSError("fixture unreadable")):
+                            prefix = backend_base.resolve_executable_prefix("fixture")
+                    else:
+                        prefix = backend_base.resolve_executable_prefix("fixture")
+                self.assertEqual(prefix, ["cmd.exe", "/c", shim])
 
 
 class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):

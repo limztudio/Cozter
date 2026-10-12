@@ -47,7 +47,7 @@ class InterruptedTurnMemoryTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
 
         with tempfile.TemporaryDirectory() as ws:
-            data = session.create_session(ws, name="Work")
+            data = await asyncio.to_thread(session.create_session, ws, name="Work")
             with (
                 mock.patch.object(agent.backends_agent, "get_backend", return_value=_RecordingBackend()),
                 mock.patch.object(agent, "_drive_backend", side_effect=drive),
@@ -138,7 +138,9 @@ class InterruptedTurnMemoryTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()  # hang until /stop cancels us
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Work")
+            data = await asyncio.to_thread(
+                session.create_session, workspace_path, name="Work",
+            )
             await self._run_until_cancelled(workspace_path, data["id"], drive)
             messages = await self._load_messages(workspace_path, data["id"])
 
@@ -159,7 +161,9 @@ class InterruptedTurnMemoryTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Work")
+            data = await asyncio.to_thread(
+                session.create_session, workspace_path, name="Work",
+            )
             await self._run_until_cancelled(workspace_path, data["id"], drive)
             messages = await self._load_messages(workspace_path, data["id"])
 
@@ -184,7 +188,9 @@ class InterruptedTurnMemoryTests(unittest.IsolatedAsyncioTestCase):
             return task
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Work")
+            data = await asyncio.to_thread(
+                session.create_session, workspace_path, name="Work",
+            )
             with (
                 mock.patch.object(
                     agent.backends_agent, "get_backend",

@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from Cozter import config
+from Cozter.backends_agent import base as backend_base
 from Cozter.backends_agent import claude_code as claude_code_mod
 from Cozter.backends_agent import codex as codex_mod
 from Cozter.backends_agent import copilot as copilot_mod
@@ -393,7 +394,7 @@ class BackendPermissionCommandTests(unittest.TestCase):
                     ),
                     mock.patch.object(
                         copilot_mod,
-                        "create_captured_subprocess",
+                        "create_prompt_subprocess",
                         new=mock.AsyncMock(return_value=proc),
                     ) as create_process,
                 ):
@@ -950,7 +951,7 @@ warning: ignored after the catalog
                     ),
                     mock.patch.object(
                         copilot_mod,
-                        "create_captured_subprocess",
+                        "create_prompt_subprocess",
                         new=mock.AsyncMock(
                             return_value=mock.Mock(),
                         ),
@@ -1796,6 +1797,84 @@ warning: ignored after the catalog
 
         taskkill.assert_called_once_with(12345)
 
+    def test_copilot_node_catalog_launch_owns_windows_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            home = os.path.join(root, "private-home")
+            os.mkdir(home)
+            process = mock.Mock(stdout=None)
+            with (
+                mock.patch.object(copilot_mod.os, "name", "nt"),
+                mock.patch.object(copilot_mod.shutil, "which", return_value="copilot.cmd"),
+                mock.patch.object(copilot_mod, "executable_command", return_value=["node.exe", "npm-loader.js"]),
+                mock.patch.object(copilot_mod, "_create_isolated_copilot_home", return_value=home),
+                mock.patch.object(copilot_mod.subprocess, "Popen", return_value=process),
+                mock.patch.object(copilot_mod, "_stop_acp_process") as stop,
+            ):
+                self.assertIsNone(CopilotBackend()._discover_models(root))
+            stop.assert_called_once_with(process, kill_tree=True)
+            self.assertFalse(os.path.exists(home))
+
+    def test_copilot_node_catalog_launch_reaps_its_native_child(self) -> None:
+        if sys.platform != "win32":
+            self.skipTest("Windows catalog process-tree regression")
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is unavailable for the offline catalog fixture")
+        import ctypes
+        from Cozter.utils import terminate_windows_process_tree
+        api = ctypes.windll.kernel32
+        api.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int32, ctypes.c_uint32]
+        api.OpenProcess.restype = ctypes.c_void_p
+        api.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        api.WaitForSingleObject.restype = ctypes.c_uint32
+        api.CloseHandle.argtypes = [ctypes.c_void_p]
+        api.CloseHandle.restype = ctypes.c_int32
+
+        def running(pid):
+            handle = api.OpenProcess(0x100000, False, pid)
+            if not handle:
+                return False
+            try:
+                return api.WaitForSingleObject(handle, 0) == 258
+            finally:
+                api.CloseHandle(handle)
+
+        with tempfile.TemporaryDirectory(prefix="catalog npm ") as root:
+            launcher = os.path.join(root, "launcher.js")
+            identities = os.path.join(root, "identities.json")
+            with open(launcher, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "const {spawn}=require('node:child_process');"
+                    "const fs=require('node:fs');"
+                    "const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],"
+                    "{stdio:['ignore','inherit','inherit']});"
+                    f"fs.writeFileSync({json.dumps(identities)},JSON.stringify({{parent:process.pid,child:child.pid}}));"
+                    "setInterval(()=>{},1000);"
+                )
+            home = os.path.join(root, "private-home")
+            os.mkdir(home)
+            pids = {}
+            try:
+                with (
+                    mock.patch.object(copilot_mod.shutil, "which", return_value=node),
+                    mock.patch.object(copilot_mod, "executable_command", return_value=[node, launcher]),
+                    mock.patch.object(copilot_mod, "_create_isolated_copilot_home", return_value=home),
+                    mock.patch.object(copilot_mod, "_MODEL_DISCOVERY_TIMEOUT_SEC", 0.5),
+                ):
+                    self.assertIsNone(CopilotBackend()._discover_models(root))
+                with open(identities, encoding="utf-8") as handle:
+                    pids = json.load(handle)
+                self.assertFalse(running(pids["parent"]))
+                self.assertFalse(running(pids["child"]))
+                self.assertFalse(os.path.exists(home))
+            finally:
+                if not pids and os.path.isfile(identities):
+                    with open(identities, encoding="utf-8") as handle:
+                        pids = json.load(handle)
+                for pid in pids.values():
+                    if running(pid):
+                        terminate_windows_process_tree(pid)
+
     def test_copilot_effort_matches_current_cli_choices(self) -> None:
         backend = CopilotBackend()
         self.assertEqual(
@@ -1833,7 +1912,7 @@ warning: ignored after the catalog
                     ),
                     mock.patch.object(
                         copilot_mod,
-                        "create_captured_subprocess",
+                        "create_prompt_subprocess",
                         new_callable=mock.AsyncMock,
                         return_value=proc,
                     ) as create_process,
@@ -1952,100 +2031,109 @@ warning: ignored after the catalog
                 self.assertNotIn(model, models)
 
 
-class CopilotPromptCapTests(unittest.TestCase):
-    def test_head_preserving_cap_with_no_room_for_a_multibyte_tail(self) -> None:
-        head = "[System: preamble]\n\n"
-        prompt = head + "😀" * 1_000
-        prefix = head + copilot_mod._ARGV_MIDDLE_DROPPED_MARKER
-        with mock.patch.object(copilot_mod.sys, "platform", "linux"):
-            limit = copilot_mod._prompt_argv_units(prefix) + 1
-            out = copilot_mod._truncate_prompt_preserving_head(prompt, limit)
-            self.assertIn("😀", out)
-            self.assertIn("older prompt context dropped", out)
-            self.assertLessEqual(copilot_mod._prompt_argv_units(out), limit)
+class CopilotPromptStdinTests(unittest.IsolatedAsyncioTestCase):
+    async def test_full_multiline_prompt_and_native_attachment_stay_intact(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            image = os.path.join(workspace, "photo.png")
+            with open(image, "wb") as handle:
+                handle.write(b"small photo")
+            prompt = (
+                "[System: whole-scope preamble]\n\n"
+                "[Photo attachment saved to: photo.png]\n"
+                + "서울 😀 old context \"quoted\" & %literal%\n" * 10_000
+                + "FINAL REQUEST"
+            )
+            home = os.path.join(workspace, "private-home")
+            os.mkdir(home)
+            backend = CopilotBackend()
+            with (
+                mock.patch.object(copilot_mod, "executable_command", return_value=["copilot"]),
+                mock.patch.object(copilot_mod, "_create_isolated_copilot_home", return_value=home),
+                mock.patch.object(copilot_mod, "create_prompt_subprocess", new=mock.AsyncMock()) as create,
+            ):
+                process = await backend.launch(workspace, prompt, "selected-model", "auto", effort=100)
+            command, supplied_prompt = create.await_args.args
+            self.assertEqual(supplied_prompt, prompt)
+            self.assertNotIn("-p", command)
+            self.assertNotIn(prompt, command)
+            self.assertIn("--attachment", command)
+            self.assertIn(os.path.realpath(image), command)
+            self.assertIn("--allow-all-tools", command)
+            self.assertIn("selected-model", command)
+            self.assertEqual(create.await_args.kwargs["env"]["COPILOT_HOME"], home)
+            await backend.cleanup_process(process)
+            self.assertFalse(os.path.exists(home))
 
-    def test_tiny_posix_caps_do_not_exceed_the_byte_budget(self) -> None:
-        with mock.patch.object(copilot_mod.sys, "platform", "linux"):
-            for limit in (0, 1, 2, 3, 4):
-                with self.subTest(limit=limit):
-                    out = copilot_mod._truncate_prompt_for_argv("😀" * 10, limit)
-                    self.assertLessEqual(copilot_mod._prompt_argv_units(out), limit)
-
-    def test_upload_in_dropped_context_keeps_native_attachment(self) -> None:
-        async def run() -> None:
-            with tempfile.TemporaryDirectory() as workspace:
-                image = os.path.join(workspace, "photo.png")
-                with open(image, "wb") as handle:
-                    handle.write(b"small photo")
-                prompt = (
-                    "[System: preamble]\n\n"
-                    "[Photo attachment saved to: photo.png]\n"
-                    + "old context " * 1_000 + "Describe this photo"
+    async def test_windows_npm_shim_round_trips_large_utf8_stdin(self) -> None:
+        if sys.platform != "win32":
+            self.skipTest("Windows npm-shim regression")
+        if shutil.which("node") is None:
+            self.skipTest("Node is unavailable for the offline npm-shim fixture")
+        import hashlib
+        with tempfile.TemporaryDirectory(prefix="copilot npm ") as workspace:
+            loader = os.path.join(workspace, "node_modules", "fixture", "npm-loader.js")
+            os.makedirs(os.path.dirname(loader))
+            with open(loader, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "const crypto=require('node:crypto'); const chunks=[];"
+                    "process.stdin.on('data', b => chunks.push(b));"
+                    "process.stdin.on('end', () => {const b=Buffer.concat(chunks);"
+                    "console.log(JSON.stringify({bytes:b.length,"
+                    "sha256:crypto.createHash('sha256').update(b).digest('hex'),"
+                    "args:process.argv.slice(2),home:process.env.COPILOT_HOME}));});"
                 )
-                backend = CopilotBackend()
-                with (
-                    mock.patch.object(copilot_mod, "_max_prompt_chars", return_value=400),
-                    mock.patch.object(
-                        copilot_mod, "create_captured_subprocess", new=mock.AsyncMock(),
-                    ) as create,
-                ):
-                    proc = await backend.launch(workspace, prompt, None, "auto")
-                command = create.await_args.args[0]
-                sent = command[command.index("-p") + 1]
-                self.assertNotIn("attachment saved to:", sent)
-                self.assertIn("Describe this photo", sent)
-                self.assertIn("--attachment", command)
-                self.assertIn(os.path.realpath(image), command)
-                await backend.cleanup_process(proc)
+            shim = os.path.join(workspace, "copilot.cmd")
+            with open(shim, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n"
+                    ":start\nSETLOCAL\nCALL :find_dp0\n"
+                    'IF EXIST "%dp0%\\node.exe" (\n'
+                    '  SET "_prog=%dp0%\\node.exe"\n) ELSE (\n'
+                    '  SET "_prog=node"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n'
+                    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & '
+                    '"%_prog%" "%dp0%\\node_modules\\fixture\\npm-loader.js" %*\n'
+                )
+            home = os.path.join(workspace, "private-home")
+            os.mkdir(home)
+            prompt = "[System: preamble]\n\n" + "서울 😀 \"quotes\" & %literal%\r\n" * 10_000 + "FINAL REQUEST"
+            original_which = shutil.which
+            with mock.patch.object(backend_base.shutil, "which", side_effect=lambda name: shim if name == "offline-copilot" else original_which(name)):
+                prefix = backend_base.resolve_executable_prefix("offline-copilot")
+            self.assertEqual(prefix, [original_which("node"), loader])
+            backend = CopilotBackend()
+            with (
+                mock.patch.object(copilot_mod, "executable_command", return_value=prefix),
+                mock.patch.object(copilot_mod, "_create_isolated_copilot_home", return_value=home),
+            ):
+                process = await asyncio.wait_for(backend.launch(workspace, prompt, None, "deny"), timeout=5)
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+                self.assertEqual(process.returncode, 0, stderr.decode("utf-8", errors="replace"))
+                received = json.loads(stdout)
+                self.assertEqual(received["bytes"], len(prompt.encode("utf-8")))
+                self.assertEqual(received["sha256"], hashlib.sha256(prompt.encode("utf-8")).hexdigest())
+                self.assertEqual(received["home"], home)
+                self.assertNotIn("-p", received["args"])
+                self.assertIn("--available-tools", received["args"])
+                self.assertIn("--no-remote-export", received["args"])
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+                await backend.cleanup_process(process)
+            self.assertFalse(os.path.exists(home))
 
-        asyncio.run(run())
-
-    def test_max_prompt_chars_is_platform_sane(self) -> None:
-        cap = copilot_mod._max_prompt_chars()
-        self.assertIsInstance(cap, int)
-        # Sanity bounds: never below the Windows floor, never absurd.
-        self.assertGreaterEqual(cap, 28_000)
-        self.assertLessEqual(cap, 1_000_000)
-
-    def test_posix_prompt_cap_respects_single_argument_limit(self) -> None:
-        if not hasattr(copilot_mod.os, "sysconf"):
-            self.skipTest("os.sysconf unavailable on this platform")
-        with (
-            mock.patch.object(copilot_mod.sys, "platform", "linux"),
-            mock.patch.object(
-                copilot_mod.os, "sysconf", return_value=2_097_152,
-            ),
-        ):
-            self.assertEqual(
-                copilot_mod._max_prompt_chars(),
-                copilot_mod._POSIX_PROMPT_ARG_BYTES,
-            )
-
-    def test_windows_prompt_cap_counts_utf16_units_not_code_points(self) -> None:
-        # Astral chars cost 2 UTF-16 units.
-        with mock.patch.object(copilot_mod.sys, "platform", "win32"):
-            out = copilot_mod._truncate_prompt_for_argv("x😀😀😀", 4)
-            self.assertEqual(out, "😀…")
-            self.assertEqual(copilot_mod._prompt_argv_units("😀😀"), 4)
-            quoted = 'say "hello" to Copilot'
-            self.assertGreater(
-                copilot_mod._prompt_argv_units(quoted),
-                len(quoted.encode("utf-16-le")) // 2,
-            )
-
-    def test_argv_truncation_preserves_head_preamble(self) -> None:
-        head = "[System: Whole-scope rule]\n\n"
-        body = "ctx\n" * 20_000 + "FINAL REQUEST"
-        out = copilot_mod._truncate_prompt_preserving_head(
-            head + body, copilot_mod._WINDOWS_PROMPT_CHARS,
-        )
-        self.assertTrue(out.startswith(head))
-        self.assertIn("FINAL REQUEST", out)
-        self.assertIn("never treat this preview as full content", out)
-        self.assertLessEqual(
-            copilot_mod._prompt_argv_units(out),
-            copilot_mod._WINDOWS_PROMPT_CHARS,
-        )
+    async def test_launch_failure_discards_the_private_home(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            home = os.path.join(workspace, "private-home")
+            os.mkdir(home)
+            with (
+                mock.patch.object(copilot_mod, "_create_isolated_copilot_home", return_value=home),
+                mock.patch.object(copilot_mod, "create_prompt_subprocess", side_effect=FileNotFoundError("fixture missing")),
+            ):
+                with self.assertRaises(FileNotFoundError):
+                    await CopilotBackend().launch(workspace, "fixture prompt", None, "deny")
+            self.assertFalse(os.path.exists(home))
 
 
 class ClaudeControlCancellationTests(unittest.IsolatedAsyncioTestCase):

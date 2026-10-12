@@ -281,19 +281,28 @@ class ShellSelectionTests(unittest.TestCase):
 
 
 class NativeShellSmokeTests(unittest.IsolatedAsyncioTestCase):
-    @unittest.skipUnless(os.name == "nt", "Windows native shell smoke test")
-    async def test_native_powershell_runs_without_profile_or_interactive_setup(self) -> None:
+    def setUp(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if powershell is None:
             self.skipTest("PowerShell unavailable")
-        with tempfile.TemporaryDirectory() as path, mock.patch.object(
+        # PATH lookup and filesystem fixtures can block; prepare them before
+        # unittest starts running the test coroutine on its debug event loop.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = temporary.name
+        shell = mock.patch.object(
             bash_tool, "_find_shell", return_value=[
                 powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
             ],
-        ):
-            result = await asyncio.wait_for(bash_tool.BashTool().run(
-                path, {"command": "Write-Output 'native shell probe'"},
-            ), timeout=5)
+        )
+        shell.start()
+        self.addCleanup(shell.stop)
+
+    @unittest.skipUnless(os.name == "nt", "Windows native shell smoke test")
+    async def test_native_powershell_runs_without_profile_or_interactive_setup(self) -> None:
+        result = await asyncio.wait_for(bash_tool.BashTool().run(
+            self.path, {"command": "Write-Output 'native shell probe'"},
+        ), timeout=5)
         self.assertEqual(result.strip(), "native shell probe")
 
 

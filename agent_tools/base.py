@@ -1002,9 +1002,10 @@ def move_path_no_clobber(source_path: str, target_path: str) -> bool:
     ``os.rename`` replaces an existing target on POSIX, so the ordinary
     absence preflight performed by ``move_file`` cannot uphold its documented
     no-clobber contract when another writer creates the target in between.
-    Regular files use an atomic hard-link publication (with the existing
+    Writable regular files use an atomic hard-link publication (with the existing
     no-clobber copy fallback across filesystems); symlinks use exclusive
-    symlink creation.  Directories and special files need the OS's native
+    symlink creation. Read-only Windows files, directories, and special files
+    need the OS's native
     no-replace rename primitive, because they cannot be safely represented by
     a temporary file/link pair.
 
@@ -1020,8 +1021,14 @@ def move_path_no_clobber(source_path: str, target_path: str) -> bool:
 
 
 def _move_regular_file_no_clobber(source_path: str, target_path: str) -> bool:
-    """Publish a regular file at a new name before unlinking its old name."""
+    """Move a regular file without replacing a concurrent destination."""
     source_stat = os.stat(source_path, follow_symlinks=False)
+    if os.name == "nt" and not source_stat.st_mode & stat.S_IWRITE:
+        # Windows permits renaming a read-only file but refuses unlinking it.
+        # A hard-link publication would therefore fail to remove the source
+        # and fail to roll back its read-only destination as well. Native
+        # rename preserves attributes and refuses a concurrent destination.
+        return _rename_path_no_clobber(source_path, target_path)
     try:
         # Atomic create refuses a raced-in destination.
         os.link(source_path, target_path, follow_symlinks=False)
@@ -1094,7 +1101,7 @@ def _rename_unavailable_error(detail: str) -> OSError:
 
 
 def _rename_path_no_clobber(source_path: str, target_path: str) -> bool:
-    """Use a platform-native no-replace rename for non-file paths."""
+    """Use a platform-native no-replace rename for supported path types."""
     if os.name == "nt":
         # Windows rename fails if the destination exists.
         try:

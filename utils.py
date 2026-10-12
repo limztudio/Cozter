@@ -408,13 +408,17 @@ async def abandon_subprocess_stream_task(
 async def terminate_process_group_async(proc: asyncio.subprocess.Process) -> None:
     """Force-stop a subprocess tree without blocking the event loop.
 
-    Same observable behavior as :func:`terminate_process_group` (which it
-    calls off-loop), so the blocking Windows ``taskkill`` spawn never holds
-    the loop for ~0.1s (which asyncio debug mode reports as a slow
-    callback). Callers that mock ``terminate_process_group`` keep working
-    because the sync seam is preserved.
+    Windows native process trees need a blocking ``taskkill`` spawn, which
+    runs in a worker thread. In-process HTTP adapters cancel an asyncio task
+    through ``kill()`` and must stay on that task's owning event loop. POSIX
+    group signals likewise need no blocking child process. Both paths retain
+    the synchronous teardown seam for callers that mock it.
     """
-    await asyncio.to_thread(terminate_process_group, proc)
+    pid = getattr(proc, "pid", None)
+    if os.name == "nt" and isinstance(pid, int) and pid > 0:
+        await asyncio.to_thread(terminate_process_group, proc)
+    else:
+        terminate_process_group(proc)
 
 
 async def kill_and_wait(proc: asyncio.subprocess.Process) -> None:

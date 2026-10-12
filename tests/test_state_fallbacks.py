@@ -1544,19 +1544,13 @@ class QueueStateFallbackTests(unittest.TestCase):
                         bot._queue_file_lock.release()
                         queue_file_lock_held = False
 
-                        for _ in range(20):
-                            if bot.ran:
-                                break
-                            await asyncio.sleep(0)
+                        await asyncio.wait_for(bot.entered.wait(), timeout=2)
                         self.assertEqual(bot.ran, ["first"])
 
                         await bot.cmd_stop(bot.make_context("u1", "chat"))
                         await first_task
-                        for _ in range(20):
-                            await asyncio.sleep(0)
-
+                        await asyncio.wait_for(second_task, timeout=2)
                         self.assertTrue(second_task.done())
-                        await second_task
                         self.assertEqual(bot.ran, ["first"])
                         self.assertEqual(bot._read_queue_file(), {})
                 finally:
@@ -1588,10 +1582,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     first_task = asyncio.create_task(
                         bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
                     )
-                    for _ in range(20):
-                        if bot.ran:
-                            break
-                        await asyncio.sleep(0)
+                    await asyncio.wait_for(bot.entered.wait(), timeout=2)
                     self.assertEqual(bot.ran, ["first"])
 
                     original_persist = bot._persist_enqueue
@@ -1627,8 +1618,6 @@ class QueueStateFallbackTests(unittest.TestCase):
                         release_second_persist.set()
                         await stop_task
                         await second_task
-                        for _ in range(20):
-                            await asyncio.sleep(0)
 
                     self.assertEqual(bot.ran, ["first"])
                     self.assertTrue(bot._message_queues["u1"].empty())
@@ -1691,6 +1680,8 @@ class _GatedDrainBot(TestBot):
         super().__init__(["u1"], max_queue_size=5)
         self.ran: list[str] = []
         self.gate: asyncio.Event = asyncio.Event()
+        self.entered = asyncio.Event()
+        self.second_entered = asyncio.Event()
         self.await_on_finish: bool = False
 
     @property
@@ -1703,6 +1694,9 @@ class _GatedDrainBot(TestBot):
         queue_entry_id: str | None = None,
     ) -> None:
         self.ran.append(text)
+        self.entered.set()
+        if len(self.ran) == 2:
+            self.second_entered.set()
         await self.gate.wait()
         if self.await_on_finish and session_id is None:
             result = agent.AgentResult()
@@ -1749,15 +1743,16 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
                     t1 = asyncio.create_task(
                         bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
                     )
-                    await asyncio.sleep(0)
-                    await asyncio.sleep(0)
+                    await asyncio.wait_for(bot.entered.wait(), timeout=2)
                     # Sent while the agent is mid-reply.
                     await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
                     self.assertEqual(bot.ran, ["first"])
                     bot.gate.set()
                     await t1
-                    for _ in range(10):
-                        await asyncio.sleep(0)
+                    await asyncio.wait_for(bot.second_entered.wait(), timeout=2)
+                    drain = bot._running_tasks.get("u1")
+                    if drain is not None:
+                        await asyncio.wait_for(drain, timeout=2)
                     self.assertEqual(bot.ran, ["first", "second"])
                 finally:
                     workspace.CONFIG_DIR = old_config_dir
@@ -1775,15 +1770,16 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
                     t1 = asyncio.create_task(
                         bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
                     )
-                    await asyncio.sleep(0)
-                    await asyncio.sleep(0)
+                    await asyncio.wait_for(bot.entered.wait(), timeout=2)
                     # Sent before the question; must not park behind the later pause.
                     await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
                     self.assertEqual(bot.ran, ["first"])
                     bot.gate.set()
                     await t1
-                    for _ in range(10):
-                        await asyncio.sleep(0)
+                    await asyncio.wait_for(bot.second_entered.wait(), timeout=2)
+                    drain = bot._running_tasks.get("u1")
+                    if drain is not None:
+                        await asyncio.wait_for(drain, timeout=2)
                     self.assertEqual(bot.ran, ["first", "second"])
                 finally:
                     workspace.CONFIG_DIR = old_config_dir

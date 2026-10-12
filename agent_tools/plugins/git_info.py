@@ -18,7 +18,7 @@ from ..base import (
     AgentTool,
     coerce_int_arg,
     object_parameters,
-    resolve_inside_workspace,
+    resolve_workspace_entry,
 )
 from ...utils import clip_status_value
 from ._git_common import (
@@ -149,7 +149,7 @@ class GitInfoTool(AgentTool):
             if isinstance(pathspec, str) and pathspec.strip():
                 tail += [
                     "--",
-                    resolve_inside_workspace(
+                    resolve_workspace_entry(
                         workspace_path, pathspec.strip(),
                     ),
                 ]
@@ -181,7 +181,7 @@ class GitInfoTool(AgentTool):
         pathspec = args.get("path")
         if not isinstance(pathspec, str) or not pathspec.strip():
             raise ValueError("'blame' needs 'path' (a workspace file)")
-        resolved = resolve_inside_workspace(workspace_path, pathspec.strip())
+        resolved = resolve_workspace_entry(workspace_path, pathspec.strip())
         line = args.get("line")
         if line is None or line is False:
             ref = args.get("ref")

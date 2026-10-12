@@ -305,7 +305,9 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
     async def test_each_subtask_runs_on_its_own_tier_agent(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
-            workspace.set_flexible_backend_name(ws, "high", "claude_code")
+            await asyncio.to_thread(
+                workspace.set_flexible_backend_name, ws, "high", "claude_code",
+            )
 
             _, restarting = await self._run(ws)
 
@@ -1337,10 +1339,12 @@ class FlexibleLatencyTurnTests(unittest.IsolatedAsyncioTestCase):
         ]
         with tempfile.TemporaryDirectory() as ws:
             from Cozter import session
-            data = session.create_session(ws, name="Retry work")
-            workspace.set_reasoning_effort(ws, 100)
+            data = await asyncio.to_thread(session.create_session, ws, name="Retry work")
+            await asyncio.to_thread(workspace.set_reasoning_effort, ws, 100)
             for tier in flexible.TIERS:
-                workspace.set_flexible_backend_name(ws, tier, "meta")
+                await asyncio.to_thread(
+                    workspace.set_flexible_backend_name, ws, tier, "meta",
+                )
             with (
                 mock.patch.object(agent, "run_internal_backend", planner),
                 mock.patch.object(agent, "_drive_backend", worker),
@@ -1365,7 +1369,7 @@ class FlexibleLatencyTurnTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as ws:
             from Cozter import session
-            data = session.create_session(ws, name="Status work")
+            data = await asyncio.to_thread(session.create_session, ws, name="Status work")
             with (
                 mock.patch.object(agent, "run_internal_backend", planner),
                 mock.patch.object(
@@ -1409,7 +1413,7 @@ class FlexibleLatencyTurnTests(unittest.IsolatedAsyncioTestCase):
 
                 with tempfile.TemporaryDirectory() as ws:
                     from Cozter import session
-                    data = session.create_session(ws, name="Retry work")
+                    data = await asyncio.to_thread(session.create_session, ws, name="Retry work")
                     with (
                         mock.patch.object(agent, "run_internal_backend", planner),
                         mock.patch.object(agent, "_drive_backend", worker),
@@ -1590,7 +1594,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as ws:
             from Cozter import session
-            data = session.create_session(ws, name="Work")
+            data = await asyncio.to_thread(session.create_session, ws, name="Work")
             backend = type(
                 "B", (),
                 {
@@ -1639,7 +1643,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as ws:
             from Cozter import session
-            data = session.create_session(ws, name="Work")
+            data = await asyncio.to_thread(session.create_session, ws, name="Work")
             backend = type(
                 "B", (),
                 {
@@ -1683,7 +1687,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as ws:
             from Cozter import session
-            data = session.create_session(ws, name="Work")
+            data = await asyncio.to_thread(session.create_session, ws, name="Work")
             backend = type(
                 "B", (),
                 {

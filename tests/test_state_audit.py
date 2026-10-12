@@ -135,23 +135,23 @@ class ColonySnapshotAuditTests(unittest.IsolatedAsyncioTestCase):
     async def test_stale_consolidation_preserves_concurrent_memory_and_session_changes(self) -> None:
         for change in ("local", "shared", "created", "deleted"):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as ws:
-                data = session.create_session(ws)
+                data = await asyncio.to_thread(session.create_session, ws)
                 data["long_term"] = ["Original local fact."]
-                session.save_session(ws, data["id"], data)
-                colony.set_items(ws, ["Original shared fact."])
+                await asyncio.to_thread(session.save_session, ws, data["id"], data)
+                await asyncio.to_thread(colony.set_items, ws, ["Original shared fact."])
                 output = f"[COLONY]\n- Stale shared fact.\n[/COLONY][SESSION:{data['id']}][/SESSION]"
 
                 async def stale_result(*_args, **_kwargs):
                     if change == "local":
                         latest = session.load_session(ws, data["id"])
                         latest["long_term"] = ["New local fact."]
-                        session.save_session(ws, data["id"], latest)
+                        await asyncio.to_thread(session.save_session, ws, data["id"], latest)
                     elif change == "shared":
-                        colony.set_items(ws, ["New shared fact."])
+                        await asyncio.to_thread(colony.set_items, ws, ["New shared fact."])
                     elif change == "created":
-                        session.create_session(ws, name="New session")
+                        await asyncio.to_thread(session.create_session, ws, name="New session")
                     else:
-                        session.delete_session(ws, data["id"])
+                        await asyncio.to_thread(session.delete_session, ws, data["id"])
                     return output
 
                 with (
@@ -171,14 +171,14 @@ class ColonySnapshotAuditTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_consolidation_accepts_appended_messages_and_preserves_rename(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
-            data = session.create_session(ws)
+            data = await asyncio.to_thread(session.create_session, ws)
             data["long_term"] = ["Original local fact."]
-            session.save_session(ws, data["id"], data)
+            await asyncio.to_thread(session.save_session, ws, data["id"], data)
             message = {"role": "user", "content": "A new conversation message."}
 
             async def result(*_args, **_kwargs):
-                session.append_messages(ws, data["id"], [message])
-                session.set_session_name(ws, data["id"], "User Renamed Session")
+                await asyncio.to_thread(session.append_messages, ws, data["id"], [message])
+                await asyncio.to_thread(session.set_session_name, ws, data["id"], "User Renamed Session")
                 return f"[COLONY]\n- Shared fact.\n[/COLONY][SESSION:{data['id']}]\n- Remaining local fact.\n[/SESSION]"
 
             with mock.patch.object(colony, "run_internal_backend", side_effect=result):
@@ -191,14 +191,14 @@ class ColonySnapshotAuditTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_empty_workspace_cleanup_rechecks_sessions_after_waiting_for_lock(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
-            colony.set_items(ws, ["Shared fact."])
+            await asyncio.to_thread(colony.set_items, ws, ["Shared fact."])
             writer_lock = workspace.get_lock(ws)
             await writer_lock.acquire()
             consolidation = asyncio.create_task(colony.consolidate(ws, backend_name="codex"))
             try:
                 await asyncio.sleep(0)
                 self.assertFalse(consolidation.done())
-                session.create_session(ws)
+                await asyncio.to_thread(session.create_session, ws)
                 writer_lock.release()
                 self.assertFalse(await consolidation)
                 self.assertEqual(colony.get_items(ws), ["Shared fact."])

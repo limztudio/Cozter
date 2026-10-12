@@ -56,8 +56,8 @@ class RunLockTests(unittest.TestCase):
             link = os.path.join(tmp, "workspace-link")
             try:
                 os.symlink(target, link, target_is_directory=True)
-            except (AttributeError, OSError):
-                return
+            except (AttributeError, OSError) as exc:
+                self.skipTest(f"directory symlinks unavailable: {exc}")
             self.assertIs(
                 workspace.get_lock(target), workspace.get_lock(link),
             )

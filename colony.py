@@ -498,7 +498,9 @@ async def _consolidate_inner(
     }
     if colony_truncated or len(fully_shown) != len(inputs):
         # Partial evidence cannot retire unseen shared facts reliably.
-        new_colony = list(dict.fromkeys([*existing_colony, *new_colony]))
+        new_colony = session.merge_partial_memory(
+            existing_colony, new_colony, COLONY_CAP,
+        )
 
     # Check the evidence again under the writer lock. Foreground turns may
     # append messages safely, but a direct memory edit, deleted session, or
@@ -525,10 +527,13 @@ async def _consolidate_inner(
                 continue
             if sid not in fully_shown:
                 # Preserve the original list when only a preview was shown.
-                new_lt = [*sess_data["long_term"], *new_lt]
-            cleaned = list(dict.fromkeys(
-                item for item in new_lt if item
-            ))[-session.LONG_TERM_CAP:]
+                cleaned = session.merge_partial_memory(
+                    sess_data["long_term"], new_lt, session.LONG_TERM_CAP,
+                )
+            else:
+                cleaned = list(dict.fromkeys(
+                    item for item in new_lt if item
+                ))[-session.LONG_TERM_CAP:]
             sess_data["long_term"] = cleaned
             session.save_session(workspace_path, sid, sess_data)
 

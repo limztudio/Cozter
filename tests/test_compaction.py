@@ -14,13 +14,13 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_compaction_does_not_overwrite_history_or_memory_edited_mid_call(self):
         for changed_field in ("messages", "summary", "long_term"):
             with self.subTest(changed_field=changed_field), tempfile.TemporaryDirectory() as ws:
-                data = session.create_session(ws, name="Manual")
+                data = await asyncio.to_thread(session.create_session, ws, name="Manual")
                 data["messages"] = [
                     {"role": "user", "content": f"original {index}"}
                     for index in range(6)
                 ]
                 data["long_term"] = ["Original fact."]
-                session.save_session(ws, data["id"], data)
+                await asyncio.to_thread(session.save_session, ws, data["id"], data)
                 started, release = asyncio.Event(), asyncio.Event()
 
                 async def delayed_compact(*_args, **_kwargs):
@@ -44,7 +44,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                             latest["summary"] = "Newer summary."
                         else:
                             latest["long_term"] = ["Newer fact."]
-                        session.save_session(ws, data["id"], latest)
+                        await asyncio.to_thread(session.save_session, ws, data["id"], latest)
                         release.set()
                         await compacting
                         self.assertEqual(session.load_session(ws, data["id"]), latest)
@@ -56,8 +56,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_known_capacity_below_threshold_does_not_use_message_fallback(self) -> None:
         backend = SimpleNamespace(context_window_tokens=lambda _model: 1_000_000)
         with tempfile.TemporaryDirectory() as ws:
-            data = session.create_session(ws)
-            session.append_messages(ws, data["id"], [
+            data = await asyncio.to_thread(session.create_session, ws)
+            await asyncio.to_thread(session.append_messages, ws, data["id"], [
                 {"role": "user", "content": "tiny message"} for _ in range(12)
             ])
             with (
@@ -72,11 +72,11 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_compaction_preserves_long_term_items_omitted_from_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
-            data = session.create_session(ws)
+            data = await asyncio.to_thread(session.create_session, ws)
             original = ["Unseen stable fact.", "x" * compaction.MAX_SUMMARY_CHARS]
             data["long_term"] = original
             data["messages"] = [{"role": "user", "content": "hello"} for _ in range(6)]
-            session.save_session(ws, data["id"], data)
+            await asyncio.to_thread(session.save_session, ws, data["id"], data)
             output = "[SUMMARY]" + "s" * 100 + "[/SUMMARY][LONG_TERM]- New fact.[/LONG_TERM]"
             with (
                 mock.patch.object(compaction.workspace_mod, "get_compact_interval", return_value=1),
@@ -90,11 +90,11 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_colony_partial_session_preserves_unseen_local_and_shared_facts(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
-            data = session.create_session(ws)
+            data = await asyncio.to_thread(session.create_session, ws)
             original = ["x" * colony.CONSOLIDATE_MAX_INPUT_CHARS * 2, "Unseen local fact."]
             data["long_term"] = original
-            session.save_session(ws, data["id"], data)
-            colony.set_items(ws, ["Shared fact with unseen evidence."])
+            await asyncio.to_thread(session.save_session, ws, data["id"], data)
+            await asyncio.to_thread(colony.set_items, ws, ["Shared fact with unseen evidence."])
             output = f"[COLONY][/COLONY][SESSION:{data['id']}]\n- New local fact.\n[/SESSION]"
             with mock.patch.object(colony, "run_internal_backend", new=mock.AsyncMock(return_value=output)):
                 self.assertTrue(await colony.consolidate(ws, backend_name="codex"))
@@ -111,10 +111,10 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_oversized_role_label_cannot_discard_unseen_message_content(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
-            data = session.create_session(ws)
+            data = await asyncio.to_thread(session.create_session, ws)
             original = {"role": "r" * compaction.MAX_SUMMARY_CHARS, "content": "Unseen body"}
             data["messages"] = [original]
-            session.save_session(ws, data["id"], data)
+            await asyncio.to_thread(session.save_session, ws, data["id"], data)
             with (
                 mock.patch.object(compaction.workspace_mod, "get_compact_interval", return_value=1),
                 mock.patch.object(compaction, "compact_session", new=mock.AsyncMock()) as compact,
@@ -136,8 +136,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             return ("x" * 100, [], "Stale Compaction Title", 6)
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path)
-            session.append_messages(workspace_path, data["id"], [
+            data = await asyncio.to_thread(session.create_session, workspace_path)
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [
                 {"role": "user", "content": f"message-{index}"}
                 for index in range(6)
             ])
@@ -159,7 +159,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(started.wait(), timeout=1)
 
                 async with workspace.get_lock(workspace_path):
-                    session.set_session_name(
+                    await asyncio.to_thread(session.set_session_name,
                         workspace_path, data["id"], "Manual Session Name",
                     )
 
@@ -175,12 +175,12 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             return ("x" * 100, [], None, 3)
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
             messages = [
                 {"role": "user", "content": f"message-{index}"}
                 for index in range(8)
             ]
-            session.append_messages(workspace_path, data["id"], messages)
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], messages)
             with (
                 mock.patch.object(
                     compaction.workspace_mod, "get_compact_interval",
@@ -219,8 +219,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             return ("x" * 100, [], None, 6)
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [{
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [{
                 "role": "user", "content": "hello",
             }])
             with (
@@ -269,8 +269,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             return False
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [{
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [{
                 "role": "user", "content": "hello",
             }])
             with (
@@ -320,8 +320,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             return ("x" * 100, [], None, 6)
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [{
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [{
                 "role": "user", "content": "hello",
             }])
             with (
@@ -366,8 +366,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             context_window_tokens=lambda _model: 500,
         )
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [
                 {"role": "user", "content": "x" * 120}
                 for _ in range(6)
             ])
@@ -411,8 +411,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         backend = SimpleNamespace(context_window_tokens=lambda _model: None)
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [
                 {"role": "user", "content": "x" * 120}
                 for _ in range(6)
             ])
@@ -470,8 +470,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             context_window_tokens=lambda _model: 1_000_000,
         )
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [
                 {"role": "user", "content": "x" * 600},
                 {"role": "assistant", "content": "y" * 600},
             ])
@@ -507,7 +507,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             return "[SUMMARY]\n" + ("s" * 100) + "\n[/SUMMARY]"
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
             messages = [
                 {
                     "role": "user",
@@ -515,7 +515,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 }
                 for index in range(10)
             ]
-            session.append_messages(workspace_path, data["id"], messages)
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], messages)
             with (
                 mock.patch.object(
                     compaction.workspace_mod, "get_compact_interval", return_value=1,
@@ -563,8 +563,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_oversized_first_message_builds_a_bounded_prompt(self) -> None:
         """Direct compaction still presents a marked bounded prefix."""
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [{
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [{
                 "role": "user",
                 "content": "x" * (compaction.MAX_SUMMARY_CHARS + 1),
             }])
@@ -603,8 +603,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             for index in range(8)
         ]
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [
                 {"role": "user", "content": original},
                 *later_messages,
             ])
@@ -693,8 +693,8 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
 
         original = "x" * (compaction.MAX_SUMMARY_CHARS * 2) + "UNSEEN"
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [{
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [{
                 "role": "user", "content": original,
             }])
             with (
@@ -725,7 +725,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 ))
                 await asyncio.wait_for(started.wait(), timeout=1)
                 async with workspace.get_lock(workspace_path):
-                    session.append_messages(workspace_path, data["id"], [{
+                    await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [{
                         "role": "assistant", "content": "appended while waiting",
                     }])
                 release.set()
@@ -739,14 +739,14 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             })
             self.assertEqual(saved["compacted_count"], 0)
 
-    async def test_oversized_previous_summary_can_be_replaced(self) -> None:
-        """A bad historical summary must not block every future compaction."""
+    async def test_oversized_previous_summary_shrinks_without_losing_unseen_text(self) -> None:
+        """Oversized summary input can shrink while unseen evidence survives."""
         async def fake_summary(*_args, **_kwargs) -> str:
             return "[SUMMARY]\n" + ("s" * 100) + "\n[/SUMMARY]"
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
-            session.append_messages(workspace_path, data["id"], [
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Manual")
+            await asyncio.to_thread(session.append_messages, workspace_path, data["id"], [
                 {"role": "user", "content": f"message-{index}"}
                 for index in range(6)
             ])
@@ -755,7 +755,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             saved["summary"] = "old-summary " + (
                 "x" * compaction.MAX_SUMMARY_CHARS
             )
-            session.save_session(workspace_path, data["id"], saved)
+            await asyncio.to_thread(session.save_session, workspace_path, data["id"], saved)
 
             with (
                 mock.patch.object(
@@ -779,14 +779,17 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             self.assertLess(len(prompt), compaction.MAX_SUMMARY_CHARS)
             compacted = session.load_session(workspace_path, data["id"])
             assert compacted is not None
-            self.assertEqual(compacted["summary"], "s" * 100)
+            _shown, omitted = compaction._previous_summary_with_omission(saved["summary"])
+            self.assertIn(omitted, compacted["summary"])
+            self.assertTrue(compacted["summary"].endswith("s" * 100))
+            self.assertLess(len(compacted["summary"]), len(saved["summary"]))
             self.assertEqual(len(compacted["messages"]), 5)
 
     async def test_colony_can_retire_items_when_sessions_are_empty(self) -> None:
         """Empty session memory is still evidence for a colony reconciliation."""
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Retired Topic")
-            colony.set_items(workspace_path, ["A stale shared fact."])
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Retired Topic")
+            await asyncio.to_thread(colony.set_items, workspace_path, ["A stale shared fact."])
             output = (
                 "[COLONY]\n[/COLONY]\n\n"
                 f"[SESSION:{data['id']}]\n[/SESSION]"
@@ -808,12 +811,12 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_colony_oversized_existing_state_still_includes_sessions(self) -> None:
         """Existing memory cannot consume the whole consolidation budget."""
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Current Topic")
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Current Topic")
             loaded = session.load_session(workspace_path, data["id"])
             assert loaded is not None
             loaded["long_term"] = ["Current session evidence."]
-            session.save_session(workspace_path, data["id"], loaded)
-            colony.set_items(
+            await asyncio.to_thread(session.save_session, workspace_path, data["id"], loaded)
+            await asyncio.to_thread(colony.set_items,
                 workspace_path,
                 ["x" * (colony.CONSOLIDATE_MAX_INPUT_CHARS * 2)],
             )
@@ -841,7 +844,7 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_colony_is_cleared_when_no_sessions_remain(self) -> None:
         """Deleted sessions must not leave stale workspace memory behind."""
         with tempfile.TemporaryDirectory() as workspace_path:
-            colony.set_items(workspace_path, ["A stale shared fact."])
+            await asyncio.to_thread(colony.set_items, workspace_path, ["A stale shared fact."])
             with mock.patch.object(
                 colony, "run_internal_backend", new=mock.AsyncMock(),
             ) as run_consolidate:
@@ -856,12 +859,12 @@ class CompactionConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_colony_truncation_marks_preview_and_partial(self) -> None:
         """Budget-clipped colony input must read as a preview, not full coverage."""
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Topic")
+            data = await asyncio.to_thread(session.create_session, workspace_path, name="Topic")
             loaded = session.load_session(workspace_path, data["id"])
             assert loaded is not None
             loaded["long_term"] = ["kept evidence " + ("y" * 200)] * 30
-            session.save_session(workspace_path, data["id"], loaded)
-            colony.set_items(
+            await asyncio.to_thread(session.save_session, workspace_path, data["id"], loaded)
+            await asyncio.to_thread(colony.set_items,
                 workspace_path, ["x" * (colony.CONSOLIDATE_MAX_INPUT_CHARS * 2)],
             )
             output = (

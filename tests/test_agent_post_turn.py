@@ -32,7 +32,7 @@ class AgentPostTurnMaintenanceTests(unittest.IsolatedAsyncioTestCase):
                 session.set_session_name(ws, sid, "Compactor Title")
 
         with tempfile.TemporaryDirectory() as ws:
-            data = session.create_session(ws)
+            data = await asyncio.to_thread(session.create_session, ws)
             sid = data["id"]
             session.append_messages(ws, sid, [{"role": "assistant", "content": "first reply"}])
             with (
@@ -137,11 +137,14 @@ class AgentPostTurnMaintenanceTests(unittest.IsolatedAsyncioTestCase):
 
         def capture_background_task(coro, *, name, log=None):
             task = original_background_task(coro, name=name, log=log)
-            maintenance_tasks.append(task)
+            if name.startswith("post-turn-maintenance:"):
+                maintenance_tasks.append(task)
             return task
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
+            data = await asyncio.to_thread(
+                session.create_session, workspace_path, name="Manual",
+            )
             with (
                 mock.patch.object(
                     agent.backends_agent, "get_backend", return_value=backend,
@@ -188,11 +191,14 @@ class AgentPostTurnMaintenanceTests(unittest.IsolatedAsyncioTestCase):
 
         def capture_background_task(coro, *, name, log=None):
             task = original_background_task(coro, name=name, log=log)
-            maintenance_tasks.append(task)
+            if name.startswith("post-turn-maintenance:"):
+                maintenance_tasks.append(task)
             return task
 
         with tempfile.TemporaryDirectory() as workspace_path:
-            data = session.create_session(workspace_path, name="Manual")
+            data = await asyncio.to_thread(
+                session.create_session, workspace_path, name="Manual",
+            )
             with (
                 mock.patch.object(
                     agent.backends_agent, "get_backend", return_value=backend,
@@ -242,7 +248,7 @@ class AgentContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_turn(self, ws, drive, judge, *, inject_queue=None):
         backend = _ImmediateBackend()
-        data = session.create_session(ws, name="Manual")
+        data = await asyncio.to_thread(session.create_session, ws, name="Manual")
         tasks = []
         original = agent.create_background_task
 

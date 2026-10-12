@@ -22,7 +22,7 @@ from ..base import (
     AgentTool,
     coerce_int_arg,
     object_parameters,
-    resolve_inside_workspace,
+    resolve_workspace_entry,
 )
 from ...utils import clip_status_value
 from ._git_common import (
@@ -96,7 +96,9 @@ def _collect_pathspecs(
     resolved: list[str] = []
     for entry in raw_paths:
         try:
-            resolved.append(resolve_inside_workspace(workspace_path, entry))
+            # Git pathspecs name repository entries, including final symlinks.
+            # Keep the same containment checks without staging the link target.
+            resolved.append(resolve_workspace_entry(workspace_path, entry))
         except ValueError as exc:
             return None, f"Error: {exc}"
     return resolved, None

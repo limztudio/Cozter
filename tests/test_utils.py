@@ -3,11 +3,14 @@ import json
 import logging
 import os
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 from types import SimpleNamespace
 
 from Cozter import utils
+from Cozter.backends_agent._http_proc import HttpAgentProcess
 from Cozter.tests.helpers import create_python_script_process
 
 
@@ -415,6 +418,60 @@ class ProcessTerminationTests(unittest.TestCase):
 
         taskkill.assert_not_called()
         proc.kill.assert_called_once_with()
+
+
+class AsyncProcessTerminationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_http_cancellation_stays_on_its_owning_event_loop(self) -> None:
+        owner_thread = threading.get_ident()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class OwnedHttpProcess(HttpAgentProcess):
+            def kill(self) -> None:
+                # asyncio.Task.cancel is not a cross-thread API. Catch the
+                # wrong-thread call before it can strand its cancelled waiter.
+                if threading.get_ident() != owner_thread:
+                    raise AssertionError("HTTP cancellation left its owning event loop")
+                super().kill()
+
+        async def provider() -> None:
+            started.set()
+            await release.wait()
+
+        proc = OwnedHttpProcess("termination fixture")
+        proc.start(provider())
+        try:
+            await started.wait()
+            await asyncio.wait_for(utils.kill_and_wait(proc), timeout=1)
+            self.assertEqual(proc.returncode, 130)
+            self.assertTrue(proc.stdout.at_eof())
+        finally:
+            release.set()
+            await proc.wait()
+
+    async def test_windows_native_tree_teardown_leaves_event_loop_responsive(self) -> None:
+        owner_thread = threading.get_ident()
+        threads = []
+
+        def blocking_teardown(_proc) -> None:
+            threads.append(threading.get_ident())
+            time.sleep(0.15)
+
+        with (
+            mock.patch.object(utils.os, "name", "nt"),
+            mock.patch.object(utils, "terminate_process_group", side_effect=blocking_teardown),
+        ):
+            teardown = asyncio.create_task(utils.terminate_process_group_async(
+                SimpleNamespace(pid=2468),
+            ))
+            try:
+                await asyncio.sleep(0.02)
+                self.assertFalse(teardown.done())
+                await teardown
+            finally:
+                await teardown
+        self.assertEqual(len(threads), 1)
+        self.assertNotEqual(threads[0], owner_thread)
 
 
 class JsonHelperTests(unittest.TestCase):

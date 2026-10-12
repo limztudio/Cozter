@@ -14,6 +14,7 @@ adapters only deal with framework plumbing.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import logging
 import os
@@ -27,7 +28,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import BinaryIO, ClassVar
+from typing import BinaryIO, ClassVar, TypeVar
 from urllib.parse import urlparse
 
 import aiohttp
@@ -49,6 +50,61 @@ from ..utils import try_parse_int
 
 logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
+
+_FileResult = TypeVar("_FileResult")
+
+
+async def _run_durable_file_operation(
+    lock: asyncio.Lock, operation: Callable[[], _FileResult], *,
+    on_complete: Callable[[_FileResult], None] | None = None,
+    required_cleanup: bool = False,
+) -> _FileResult:
+    """Run file I/O off-loop, retaining lock ownership through cancellation.
+
+    A queued operation can be cancelled before it acquires its file lock,
+    except required cleanup of a session which has already been created.
+    Once submitted, its executor future must physically finish before this
+    coroutine unwinds any caller-owned admission or delivery locks. Apply
+    in-memory commit bookkeeping on the event loop before replaying a cancel.
+    """
+    cancelled: asyncio.CancelledError | None = None
+    while True:
+        try:
+            await lock.acquire()
+            break
+        except asyncio.CancelledError as error:
+            if not required_cleanup:
+                raise
+            cancelled = error
+    try:
+        context = contextvars.copy_context()
+        future = asyncio.get_running_loop().run_in_executor(
+            None, context.run, operation,
+        )
+        while not future.done():
+            try:
+                # Cancelling asyncio.wait does not cancel its input future.
+                await asyncio.wait((future,))
+            except asyncio.CancelledError as error:
+                cancelled = error
+        try:
+            result = future.result()
+            if on_complete is not None:
+                on_complete(result)
+        except Exception:
+            if cancelled is not None:
+                logger.error(
+                    "Durable file operation failed during cancellation",
+                    exc_info=True,
+                )
+                raise cancelled
+            raise
+        if cancelled is not None:
+            raise cancelled
+        return result
+    finally:
+        lock.release()
+
 
 _TEXT_EXTENSIONS = frozenset({
     ".txt", ".md", ".rst", ".py", ".js", ".ts", ".jsx", ".tsx",
@@ -479,6 +535,8 @@ class BotPlatform(ABC):
         self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
         self._reply_delivery_tasks: dict[str, set[asyncio.Task]] = {}
         self._pending_reply_delivery_users: set[str] = set()
+        # Stop/cancel can overlap while durable file operations settle.
+        self._cancel_work_depths: dict[str, int] = {}
         # Pipelined attachment uploads: per-chat tails.
         self._attachment_tasks: dict[str, set[asyncio.Task]] = {}
         self._attachment_tails: dict[str, asyncio.Task] = {}
@@ -697,7 +755,7 @@ class BotPlatform(ABC):
             self._start_queue_drain(uid)
 
     def has_active_turns(self) -> bool:
-        """Return True while any agent reply is still in progress.
+        """Return True while a reply or cancellation cleanup is in progress.
 
         Standalone durable-reply retries (the watcher/restart path that
         re-sends an already staged reply without holding the per-user
@@ -706,7 +764,10 @@ class BotPlatform(ABC):
         instead of racing ahead of it; the staged ledger stays durable
         either way. Explicit ``/cancel``/``/stop`` still interrupts
         them via ``_clear_reply_deliveries``.
+        Cancellation also stays active while its durable cleanup settles.
         """
+        if self._cancel_work_depths:
+            return True
         if any(not task.done() for task in self._running_tasks.values()):
             return True
         tasks = self._attachment_tasks
@@ -1113,7 +1174,7 @@ class BotPlatform(ABC):
         self, uid: str, entry_id: str,
     ) -> None:
         """Move a persisted queue entry to the front for restart parity."""
-        async with self._queue_file_lock:
+        def promote() -> None:
             data = self._read_queue_file()
             entries = self._queue_entries(data.get(uid))
             selected: dict | None = None
@@ -1127,6 +1188,8 @@ class BotPlatform(ABC):
                 return
             data[uid] = [selected, *remaining]
             self._write_queue_file(data)
+
+        await _run_durable_file_operation(self._queue_file_lock, promote)
 
     async def _resume_awaiting_answer(
         self, uid: str, msg_queue: asyncio.Queue, entry_id: str, *,
@@ -1200,32 +1263,54 @@ class BotPlatform(ABC):
         self._cancel_generations[uid] = (
             self._cancel_generations.get(uid, 0) + 1
         )
+        self._cancel_work_depths[uid] = self._cancel_work_depths.get(uid, 0) + 1
+        try:
+            # Signal foreground agents first.
+            task = self._running_tasks.get(uid)
+            task_running = task is not None and not task.done()
+            if task_running:
+                self._cancel_acknowledged.add(uid)
+                task.cancel()
 
-        # Signal foreground agents first.
-        task = self._running_tasks.get(uid)
-        task_running = task is not None and not task.done()
-        if task_running:
-            self._cancel_acknowledged.add(uid)
-            task.cancel()
+            # Signal outbound work before durable cleanup yields to the loop.
+            for owned_tasks in (self._reply_delivery_tasks, self._detached_delivery_tasks):
+                for delivery in tuple(owned_tasks.get(uid, ())):
+                    delivery.cancel()
+            # A queued upload must not begin while a file commit is settling.
+            uploads = tuple(
+                task for task in self._attachment_tasks.get(uid, ())
+                if not task.done()
+            )
+            for upload in uploads:
+                upload.cancel()
 
-        # Order the bump + clear against persists.
-        admission_lock = self._ensure_dispatch_admission_lock(uid)
-        async with admission_lock:
-            was_awaiting = uid in self._awaiting_answer
-            self._awaiting_answer.discard(uid)
-            drained: list = []
-            _drain_queue(self._message_queues.get(uid), collect=drained)
-        # Dropped work must not return after restart.
-            persisted = await self._clear_persistent_queue(uid)
-        delayed_replies = await self._clear_reply_deliveries(uid)
-        detached_cancelled = await self._cancel_detached_tasks(uid)
-        # Cancel uploads first: the tail would wedge.
-        cancelled_uploads = await self._cancel_attachment_uploads(uid)
-        cleared = max(len(drained), persisted, delayed_replies)
-        return task_running, bool(
-            was_awaiting or cleared or detached_cancelled
-            or cancelled_uploads
-        )
+            # Order the bump + clear against persists.
+            admission_lock = self._ensure_dispatch_admission_lock(uid)
+            async with admission_lock:
+                cancelled_uploads = max(
+                    len(uploads), await self._cancel_attachment_uploads(uid),
+                )
+                was_awaiting = uid in self._awaiting_answer
+                self._awaiting_answer.discard(uid)
+                drained: list = []
+                _drain_queue(self._message_queues.get(uid), collect=drained)
+                # Dropped work must not return after restart.
+                persisted = await self._clear_persistent_queue(uid)
+                # Admit the next prompt only after its predecessor's entire
+                # cancellation is finished, including delayed outbound work.
+                delayed_replies = await self._clear_reply_deliveries(uid)
+                detached_cancelled = await self._cancel_detached_tasks(uid)
+            cleared = max(len(drained), persisted, delayed_replies)
+            return task_running, bool(
+                was_awaiting or cleared or detached_cancelled
+                or cancelled_uploads
+            )
+        finally:
+            depth = self._cancel_work_depths[uid] - 1
+            if depth:
+                self._cancel_work_depths[uid] = depth
+            else:
+                self._cancel_work_depths.pop(uid, None)
 
     # /new (dir-input flow)
 
@@ -1794,10 +1879,16 @@ class BotPlatform(ABC):
             " / 75-100 high\n"
             "  claude_code: model-aware; current models range from low to"
             " max, while Haiku and legacy pins use their default\n"
-            "  copilot:     1-16 minimal / 17-33 low / 34-50 medium"
-            " / 51-66 high / 67-83 xhigh / 84-100 max\n\n"
-            "  zai:         GLM-5.2 uses seven bands; other GLMs toggle"
-            " thinking off below 50% and on at 50%+\n\n"
+            "  copilot:     1-16 minimal / 17-33 low / 34-49 medium"
+            " / 50-66 high / 67-83 xhigh / 84-100 max"
+            " for an explicit model; auto uses Copilot's default\n"
+            "  grok:        model-aware; 4.7/4.6 range from low to xhigh,"
+            " while 4.5 and unknown models range from low to high\n"
+            "  meta:        standard Muse Spark 1.3 ranges from minimal"
+            " to max; older and Contributor models stop at xhigh\n"
+            "  zai:         GLM-5.3/Flash/FlashX use low / high / max;"
+            " GLM-5.2 uses seven bands; compulsory-thinking models stay"
+            " enabled, and other GLMs toggle at 50%\n\n"
             "Applies to your chat turns (not compaction/routing)."
             "\nEnter a number 0-100 (or /cancel):"
         )
@@ -2475,12 +2566,14 @@ class BotPlatform(ABC):
         }
         if ephemeral:
             entry["ephemeral"] = True
-        async with self._queue_file_lock:
+        def enqueue() -> None:
             data = self._read_queue_file()
             entries = self._queue_entries(data.get(uid))
             entries.append(entry)
             data[uid] = entries
             self._write_queue_file(data)
+
+        await _run_durable_file_operation(self._queue_file_lock, enqueue)
         return entry_id
 
     async def _persist_admitted_dispatch_entry(
@@ -2510,7 +2603,7 @@ class BotPlatform(ABC):
     async def _persist_complete(
         self, uid: str, entry_id: str,
     ) -> None:
-        async with self._queue_file_lock:
+        def complete() -> None:
             data = self._read_queue_file()
             entries = self._queue_entries(data.get(uid))
             if not entries:
@@ -2527,14 +2620,18 @@ class BotPlatform(ABC):
                 data.pop(uid, None)
             self._write_queue_file(data)
 
+        await _run_durable_file_operation(self._queue_file_lock, complete)
+
     async def _clear_persistent_queue(self, uid: str) -> int:
-        async with self._queue_file_lock:
+        def clear() -> int:
             data = self._read_queue_file()
             entries = data.pop(uid, None)
             if entries is not None:
                 self._write_queue_file(data)
                 return len(self._queue_entries(entries)) or 1
-        return 0
+            return 0
+
+        return await _run_durable_file_operation(self._queue_file_lock, clear)
 
     async def restore_queues(self) -> None:
         """Rehydrate in-memory queues from disk and resume processing.
@@ -2545,8 +2642,9 @@ class BotPlatform(ABC):
         """
         # Park prompts with staged replies.
         await self.restore_reply_deliveries()
-        async with self._queue_file_lock:
-            data = self._read_queue_file()
+        data = await _run_durable_file_operation(
+            self._queue_file_lock, self._read_queue_file,
+        )
         if not data:
             return
 
@@ -2617,9 +2715,13 @@ class BotPlatform(ABC):
         return records
 
     async def _list_reply_delivery_records(self) -> list[dict]:
-        async with self._reply_delivery_file_lock:
+        def read() -> list[dict]:
             data = self._read_reply_deliveries_file()
             return self._reply_delivery_records(data.get("deliveries"))
+
+        return await _run_durable_file_operation(
+            self._reply_delivery_file_lock, read,
+        )
 
     def _reply_delivery_lock(self, uid: str) -> asyncio.Lock:
         """Return the per-user lock for delivery/cancellation ordering."""
@@ -2629,7 +2731,7 @@ class BotPlatform(ABC):
         self, record_id: str,
     ) -> dict | None:
         """Load the live delivery record, if it has not been cancelled."""
-        async with self._reply_delivery_file_lock:
+        def read() -> dict | None:
             data = self._read_reply_deliveries_file()
             return next(
                 (
@@ -2641,6 +2743,10 @@ class BotPlatform(ABC):
                 ),
                 None,
             )
+
+        return await _run_durable_file_operation(
+            self._reply_delivery_file_lock, read,
+        )
 
     async def restore_reply_deliveries(self) -> None:
         """Block later prompts until any prior completed reply is delivered."""
@@ -2689,12 +2795,12 @@ class BotPlatform(ABC):
         """Persist a final text reply before any non-idempotent send."""
         messages, awaiting = self._reply_delivery_payload(ws, result)
         awaiting = awaiting and allow_await
-        async with self._reply_delivery_file_lock:
+        def stage() -> tuple[dict, bool]:
             data = self._read_reply_deliveries_file()
             records = self._reply_delivery_records(data.get("deliveries"))
             for record in records:
                 if record["id"] == entry_id:
-                    return record
+                    return record, False
             record = {
                 "id": entry_id,
                 "user_id": uid,
@@ -2705,9 +2811,17 @@ class BotPlatform(ABC):
             records.append(record)
             data["deliveries"] = records
             self._write_reply_deliveries_file(data)
-        self._pending_reply_delivery_users.add(uid)
-        # Starting is idempotent.
-        self.start_detached_task_watcher()
+            return record, True
+
+        def staged(outcome: tuple[dict, bool]) -> None:
+            if outcome[1]:
+                self._pending_reply_delivery_users.add(uid)
+                # Starting is idempotent.
+                self.start_detached_task_watcher()
+
+        record, _ = await _run_durable_file_operation(
+            self._reply_delivery_file_lock, stage, on_complete=staged,
+        )
         return record
 
     async def _complete_reply_input(self, record: dict) -> bool:
@@ -2734,8 +2848,7 @@ class BotPlatform(ABC):
         return True
 
     async def _remove_reply_delivery_record(self, record_id: str) -> None:
-        cleared_user: str | None = None
-        async with self._reply_delivery_file_lock:
+        def remove() -> str | None:
             data = self._read_reply_deliveries_file()
             records = self._reply_delivery_records(data.get("deliveries"))
             removed = next(
@@ -2752,9 +2865,16 @@ class BotPlatform(ABC):
             self._write_reply_deliveries_file(data)
             uid = removed["user_id"]
             if not any(record["user_id"] == uid for record in remaining):
-                cleared_user = uid
-        if cleared_user is not None:
-            self._pending_reply_delivery_users.discard(cleared_user)
+                return uid
+            return None
+
+        def removed(cleared_user: str | None) -> None:
+            if cleared_user is not None:
+                self._pending_reply_delivery_users.discard(cleared_user)
+
+        await _run_durable_file_operation(
+            self._reply_delivery_file_lock, remove, on_complete=removed,
+        )
 
     async def _clear_reply_deliveries(self, uid: str) -> int:
         """Discard delayed replies the user explicitly cancelled.
@@ -2764,7 +2884,7 @@ class BotPlatform(ABC):
         outbound send cannot race past this explicit cancellation.
         """
         await self._cancel_owned_deliveries(uid, self._reply_delivery_tasks)
-        async with self._reply_delivery_lock(uid), self._reply_delivery_file_lock:
+        def clear() -> int:
             data = self._read_reply_deliveries_file()
             records = self._reply_delivery_records(data.get("deliveries"))
             remaining = [
@@ -2777,8 +2897,13 @@ class BotPlatform(ABC):
                 else:
                     data.pop("deliveries", None)
                 self._write_reply_deliveries_file(data)
-        self._pending_reply_delivery_users.discard(uid)
-        return removed
+            return removed
+
+        async with self._reply_delivery_lock(uid):
+            return await _run_durable_file_operation(
+                self._reply_delivery_file_lock, clear,
+                on_complete=lambda _: self._pending_reply_delivery_users.discard(uid),
+            )
 
     async def _deliver_staged_reply(
         self, record: dict, *, ws: str | None = None,
@@ -2787,6 +2912,8 @@ class BotPlatform(ABC):
     ) -> bool:
         """Own each delivery so explicit cancellation can interrupt its I/O."""
         uid = record["user_id"]
+        if self._cancel_work_depths.get(uid, 0):
+            return False
         task = asyncio.create_task(self._deliver_current_staged_reply(
             record, ws=ws, result=result, awaiting_uid=awaiting_uid,
         ))
@@ -2913,16 +3040,26 @@ class BotPlatform(ABC):
         return records
 
     async def _list_detached_task_records(self) -> list[dict]:
-        async with self._detached_task_file_lock:
+        def read() -> list[dict]:
             data = self._read_detached_tasks_file()
             return self._detached_task_records(data.get("tasks"))
 
+        return await _run_durable_file_operation(
+            self._detached_task_file_lock, read,
+        )
+
     async def _get_detached_task_record(self, record_id: str) -> dict | None:
         """Re-read a callback's identity after acquiring its delivery lock."""
-        return next(
-            (record for record in await self._list_detached_task_records()
-             if record["id"] == record_id),
-            None,
+        def read() -> dict | None:
+            data = self._read_detached_tasks_file()
+            return next(
+                (record for record in self._detached_task_records(data.get("tasks"))
+                 if record["id"] == record_id),
+                None,
+            )
+
+        return await _run_durable_file_operation(
+            self._detached_task_file_lock, read,
         )
 
     async def _register_detached_task(
@@ -2967,7 +3104,7 @@ class BotPlatform(ABC):
                 )
                 return False
 
-        async with self._detached_task_file_lock:
+        def register() -> bool:
             data = self._read_detached_tasks_file()
             records = self._detached_task_records(data.get("tasks"))
             if any(
@@ -2977,7 +3114,7 @@ class BotPlatform(ABC):
                 and item["chat_id"] == chat_id
                 for item in records
             ):
-                return True
+                return False
             records.append({
                 "id": uuid.uuid4().hex,
                 "backend_name": backend_name,
@@ -2989,13 +3126,21 @@ class BotPlatform(ABC):
             })
             data["tasks"] = records
             self._write_detached_tasks_file(data)
-        self.start_detached_task_watcher()
+            return True
+
+        def registered(created: bool) -> None:
+            if created:
+                self.start_detached_task_watcher()
+
+        await _run_durable_file_operation(
+            self._detached_task_file_lock, register, on_complete=registered,
+        )
         return True
 
     async def _update_detached_task_record(
         self, record_id: str, **changes: object,
     ) -> None:
-        async with self._detached_task_file_lock:
+        def update() -> None:
             data = self._read_detached_tasks_file()
             records = self._detached_task_records(data.get("tasks"))
             changed = False
@@ -3009,8 +3154,10 @@ class BotPlatform(ABC):
                 data["tasks"] = records
                 self._write_detached_tasks_file(data)
 
+        await _run_durable_file_operation(self._detached_task_file_lock, update)
+
     async def _remove_detached_task_record(self, record_id: str) -> None:
-        async with self._detached_task_file_lock:
+        def remove() -> None:
             data = self._read_detached_tasks_file()
             records = self._detached_task_records(data.get("tasks"))
             remaining = [record for record in records if record["id"] != record_id]
@@ -3021,6 +3168,8 @@ class BotPlatform(ABC):
             else:
                 data.pop("tasks", None)
             self._write_detached_tasks_file(data)
+
+        await _run_durable_file_operation(self._detached_task_file_lock, remove)
 
     def start_detached_task_watcher(self) -> None:
         """Start the durable completion watcher once per platform."""
@@ -3153,6 +3302,9 @@ class BotPlatform(ABC):
 
     async def _run_detached_delivery(self, uid: str, delivery: Coroutine[None, None, None]) -> None:
         """Own each outbound callback so cancellation can interrupt stalled I/O."""
+        if self._cancel_work_depths.get(uid, 0):
+            delivery.close()
+            return
         task = asyncio.create_task(delivery)
         tasks = self._detached_delivery_tasks.setdefault(uid, set())
         tasks.add(task)
@@ -4136,9 +4288,18 @@ class BotPlatform(ABC):
         label = stripped.splitlines()[0] if stripped else "scheduled"
         if len(label) > 40:
             label = label[:40 - len("… [clipped]")] + "… [clipped]"
-        sess_data = session.create_session(ws, name=f"⏰ {label}")
-        sid = sess_data["id"]
+        sid: str | None = None
+
+        def created(sess_data: dict) -> None:
+            nonlocal sid
+            sid = sess_data["id"]
+
         try:
+            await _run_durable_file_operation(
+                workspace.get_lock(ws),
+                lambda: session.create_session(ws, name=f"⏰ {label}"),
+                on_complete=created,
+            )
             await self._run_status_operation(
                 self.send_text(chat_id, f"⏰ Starting scheduled task: {text}"),
                 action="announcing a starting scheduled task",
@@ -4150,7 +4311,11 @@ class BotPlatform(ABC):
         finally:
             # Always tear down the throwaway session.
             try:
-                session.delete_session(ws, sid)
+                if sid is not None:
+                    await _run_durable_file_operation(
+                        workspace.get_lock(ws), lambda: session.delete_session(ws, sid),
+                        required_cleanup=True,
+                    )
             except Exception:
                 logger.warning(
                     "Failed to delete ephemeral session %s", sid,

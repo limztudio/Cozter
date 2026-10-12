@@ -181,20 +181,19 @@ def _fit_entries(parts: list[str]) -> str:
     entries: list[tuple[str, int]] = []
     current_lines: list[bytes] = []
     current_size = 0
-    for raw_line in combined_bytes.split(b"\n"):
+    for raw_line in combined_bytes.splitlines(keepends=True):
         is_header = raw_line.startswith(b"## ")
         if is_header and current_lines:
-            text = b"\n".join(current_lines).decode(
+            text = b"".join(current_lines).decode(
                 "utf-8", errors="replace",
             )
             entries.append((text, current_size))
             current_lines = []
             current_size = 0
         current_lines.append(raw_line)
-        # +1 for the "\n" join() re-inserts.
-        current_size += len(raw_line) + 1
+        current_size += len(raw_line)
     if current_lines:
-        text = b"\n".join(current_lines).decode(
+        text = b"".join(current_lines).decode(
             "utf-8", errors="replace",
         )
         entries.append((text, current_size))

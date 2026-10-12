@@ -56,6 +56,60 @@ VISION_RULE = (
 # One curated CLI fallback row (pre-live-catalog).
 FallbackModelSpec = tuple[str, tuple[str, ...], int]
 
+# npm's standard Windows shim ends with this exact Node forwarding command.
+# Resolving that interpreter/script pair avoids cmd.exe's argument rewriting.
+_NPM_NODE_SHIM_TARGET_RE = re.compile(
+    r'^endLocal & goto #_undefined_# 2>NUL \|\| title %COMSPEC% & '
+    r'"%_prog%"\s+"%dp0%\\(?P<script>node_modules\\[^"\r\n]+)"\s+%\*\s*\Z',
+    re.IGNORECASE | re.MULTILINE,
+)
+_MAX_NPM_SHIM_BYTES = 16 * 1024
+_NPM_NODE_SHIM_HEADER = (
+    "@echo off", "goto start", ":find_dp0", "set dp0=%~dp0", "exit /b",
+    ":start", "setlocal", "call :find_dp0", 'if exist "%dp0%\\node.exe" (',
+    'set "_prog=%dp0%\\node.exe"', ") else (", 'set "_prog=node"',
+    "set pathext=%pathext:;.js;=;%", ")",
+)
+
+
+def _npm_node_shim_prefix(path: str) -> list[str] | None:
+    """Resolve only npm's standard Node shim to its direct exec prefix.
+
+    Custom batch launchers retain their original behavior. The bundled Node
+    executable takes precedence, exactly as in npm's shim; otherwise use
+    PATH. A missing interpreter, script, or recognizable forwarding command
+    keeps the existing cmd.exe fallback.
+    """
+    try:
+        with open(path, "rb") as shim_file:
+            raw = shim_file.read(_MAX_NPM_SHIM_BYTES + 1)
+        if len(raw) > _MAX_NPM_SHIM_BYTES:
+            return None
+        shim = raw.decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = _NPM_NODE_SHIM_TARGET_RE.search(shim)
+    if match is None:
+        return None
+    header = tuple(
+        line.strip().casefold() for line in shim[:match.start()].splitlines()
+        if line.strip()
+    )
+    if header != _NPM_NODE_SHIM_HEADER:
+        return None
+    relative_script = match.group("script")
+    if "%" in relative_script or ".." in relative_script.split("\\"):
+        return None
+    if not relative_script.casefold().endswith((".js", ".cjs", ".mjs")):
+        return None
+    shim_dir = os.path.dirname(os.path.abspath(path))
+    script = os.path.join(shim_dir, relative_script.replace("\\", os.sep))
+    if not os.path.isfile(script):
+        return None
+    bundled_node = os.path.join(shim_dir, "node.exe")
+    node = bundled_node if os.path.isfile(bundled_node) else shutil.which("node")
+    return [node, script] if node else None
+
 
 def resolve_executable_prefix(name: str) -> list[str] | None:
     """Resolve *name* to a launchable subprocess argv prefix.
@@ -65,7 +119,8 @@ def resolve_executable_prefix(name: str) -> list[str] | None:
     ``asyncio.create_subprocess_exec`` - auto-appends ``.exe`` but does
     *not* search PATHEXT, so the shim is invisible to subprocess even
     though ``cmd.exe`` finds it via ``where``. Detect that case and
-    wrap with ``cmd.exe /c`` so the shim runs.
+    resolve a recognized npm Node shim directly to its interpreter/script.
+    Other batch launchers use ``cmd.exe /c`` so the shim runs.
 
     Returns None if the binary cannot be found anywhere on PATH; callers
     typically fall back to ``[name]`` and let subprocess raise its own
@@ -75,7 +130,7 @@ def resolve_executable_prefix(name: str) -> list[str] | None:
     if found is None:
         return None
     if sys.platform == "win32" and found.lower().endswith((".cmd", ".bat")):
-        return ["cmd.exe", "/c", found]
+        return _npm_node_shim_prefix(found) or ["cmd.exe", "/c", found]
     return [found]
 
 
@@ -618,6 +673,7 @@ async def create_prompt_subprocess(
     prompt: str,
     *,
     cwd: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> asyncio.subprocess.Process:
     """Spawn a JSONL CLI with the exact UTF-8 prompt available on stdin.
 
@@ -639,6 +695,7 @@ async def create_prompt_subprocess(
             cmd,
             stdin=prompt_input.fileno(),
             cwd=cwd,
+            env=env,
             # New session so /stop or /inject kills the group.
             start_new_session=os.name != "nt",
         ))
@@ -671,7 +728,7 @@ async def create_captured_subprocess(
 ) -> asyncio.subprocess.Process:
     """Spawn a short control command with closed stdin and captured output.
 
-    Claude detached-task controls and Copilot prompt runs both need this
+    Claude detached-task controls and Grok prompt-file runs need this
     process shape. The caller remains responsible for communication,
     timeouts, and cleanup appropriate to its backend.
     """

@@ -423,14 +423,20 @@ def _newest_first(sdir: str, fnames: list[str], limit: int) -> list[str]:
     """
     if limit < 1:
         return []
-    try:
-        stamped = [
-            (os.stat(os.path.join(sdir, fname)).st_mtime_ns, fname) for fname in fnames
-        ]
-    except OSError:
-        return fnames[:limit]
+    stamped: list[tuple[int, str]] = []
+    unavailable: list[str] = []
+    for fname in fnames:
+        try:
+            mtime_ns = os.stat(os.path.join(sdir, fname)).st_mtime_ns
+        except OSError:
+            # One removed/unstatable file must not discard the recency of
+            # every other session. Keep unavailable names as fallback entries
+            # so a readable file with inaccessible metadata is still usable.
+            unavailable.append(fname)
+        else:
+            stamped.append((mtime_ns, fname))
     stamped.sort(key=lambda item: item[0], reverse=True)
-    return [fname for _, fname in stamped[:limit]]
+    return ([fname for _, fname in stamped] + unavailable)[:limit]
 
 
 def list_sessions(workspace: str) -> list[dict]:
@@ -559,6 +565,26 @@ def append_messages(
     data["messages"].extend(messages)
     save_session(workspace, session_id, data)
     return len(data["messages"])
+
+
+def merge_partial_memory(
+    retained: list[str], additions: list[str], cap: int,
+) -> list[str]:
+    """Append new facts within *cap* without evicting unseen retained facts.
+
+    A partial model input cannot authorize removal of facts it never saw.
+    Reserve space for retained memory before accepting generated additions;
+    even pre-existing over-cap memory remains intact in this partial path.
+    """
+    merged = list(retained)
+    seen = set(retained)
+    for item in additions:
+        if len(merged) >= cap:
+            break
+        if item and item not in seen:
+            merged.append(item)
+            seen.add(item)
+    return merged
 
 
 # Summary/compaction

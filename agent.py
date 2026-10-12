@@ -5,6 +5,7 @@ auto-titling background tasks.
 """
 
 import asyncio
+import contextvars
 import logging
 import os
 import re
@@ -48,6 +49,7 @@ from .utils import drain_queue as _drain_queue
 logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
 _StageResult = TypeVar("_StageResult")
+_PENDING_SESSION_WRITES: dict[asyncio.Lock, set[asyncio.Task[Any]]] = {}
 
 
 async def _run_with_stage_timing(
@@ -1711,6 +1713,7 @@ async def run(
     PID for stuck-wait attribution. It is never given prompts or args.
     """
     async with workspace_mod.get_run_lock(workspace_path):
+        await _wait_for_pending_session_writes(workspace_path)
         return await _run_turn(
             prompt,
             workspace_path,
@@ -1801,6 +1804,7 @@ async def launch_detached(
     acknowledging the launch and later polls it through the same adapter.
     """
     async with workspace_mod.get_run_lock(workspace_path):
+        await _wait_for_pending_session_writes(workspace_path)
         backend = backends_agent.get_backend(backend_name)
         if not getattr(backend, "supports_detached_tasks", False):
             raise RuntimeError(
@@ -1867,6 +1871,78 @@ async def log_detached_task_completion(
             }])
     except Exception:
         logger.error("Failed to log detached task completion", exc_info=True)
+
+
+def _track_session_write_task(
+    workspace_path: str, task: asyncio.Task[Any],
+) -> None:
+    """Publish a write owner before another turn can read its session."""
+    lock = workspace_mod.get_lock(workspace_path)
+    owners = _PENDING_SESSION_WRITES.setdefault(lock, set())
+    owners.add(task)
+
+    def retire(done: asyncio.Task[Any]) -> None:
+        owners.discard(done)
+        if not owners:
+            _PENDING_SESSION_WRITES.pop(lock, None)
+
+    task.add_done_callback(retire)
+
+
+async def _wait_for_pending_session_writes(workspace_path: str) -> None:
+    """Read the next turn's context only after stopped-turn writes settle."""
+    lock = workspace_mod.get_lock(workspace_path)
+    while owners := {
+        task for task in _PENDING_SESSION_WRITES.get(lock, ())
+        if not task.done()
+    }:
+        # Caller cancellation must not cancel the detached write owners.
+        await asyncio.wait(owners)
+
+
+async def _persist_session_write(
+    workspace_path: str, write: Callable[[], bool],
+) -> bool:
+    """Own the file lock until an off-loop durable write actually finishes.
+
+    Callers run this in a detached task and await it with ``asyncio.wait`` so
+    cancelling the turn returns immediately without cancelling its write.
+    The owner also survives shutdown cancellation: an executor future stays
+    alive until the thread stops, so the lock never exposes an in-flight
+    read/modify/write to another session writer.
+    """
+    lock = workspace_mod.get_lock(workspace_path)
+    while True:
+        try:
+            await lock.acquire()
+            break
+        except asyncio.CancelledError:
+            continue
+    try:
+        context = contextvars.copy_context()
+        future = asyncio.get_running_loop().run_in_executor(
+            None, context.run, write,
+        )
+        while not future.done():
+            try:
+                await asyncio.wait((future,))
+            except asyncio.CancelledError:
+                continue
+        return future.result()
+    finally:
+        lock.release()
+
+
+def _append_session_messages(
+    workspace_path: str, session_id: str, messages: list[dict],
+    error_message: str,
+) -> bool:
+    """Return whether one synchronous session append completed successfully."""
+    try:
+        return session.append_messages(workspace_path, session_id, messages) > 0
+    except Exception:
+        logger.error(error_message, exc_info=True)
+        return False
 
 
 def _compaction_context_targets(
@@ -1954,6 +2030,7 @@ class _InterruptedTurn:
     session_id: str | None = None
     events: list[ChatEvent] = dataclasses.field(default_factory=list)
     logged_normally: bool = False
+    normal_log_task: asyncio.Task[bool] | None = None
 
 
 def _interrupted_turn_note(turn: _InterruptedTurn) -> str:
@@ -2008,21 +2085,35 @@ def _log_interrupted_turn(turn: _InterruptedTurn) -> None:
     session_id = turn.session_id
 
     async def _append() -> None:
-        try:
-            async with workspace_mod.get_lock(turn.workspace_path):
-                session.append_messages(turn.workspace_path, session_id, [
+        # A cancelled caller may leave its completed answer still being
+        # committed. Wait for that owner before deciding whether a fallback
+        # is needed, so a successful normal write never gains a duplicate.
+        if turn.normal_log_task is not None:
+            while not turn.normal_log_task.done():
+                try:
+                    await asyncio.wait((turn.normal_log_task,))
+                except asyncio.CancelledError:
+                    continue
+            if turn.logged_normally:
+                return
+        await _persist_session_write(
+            turn.workspace_path,
+            lambda: _append_session_messages(
+                turn.workspace_path, session_id, [
                     {"role": "user", "content": turn.prompt},
                     {"role": "assistant", "content": note},
-                ])
-        except Exception:
-            logger.error("Failed to log interrupted turn", exc_info=True)
+                ],
+                "Failed to log interrupted turn",
+            ),
+        )
 
     try:
-        create_background_task(
+        task = create_background_task(
             _append(),
             name=f"log-interrupted-turn:{session_id}",
             log=logger,
         )
+        _track_session_write_task(turn.workspace_path, task)
     except Exception:
         logger.error("Failed to schedule interrupted-turn log", exc_info=True)
 
@@ -2404,11 +2495,24 @@ async def _run_turn_impl(
 # Consume the marker before session/chat delivery.
     _consume_detached_task_requests(result)
 
-# Log the original prompt to session.
-    async with workspace_mod.get_lock(workspace_path):
-        _log_to_session(workspace_path, session_id, effective_prompt, result)
-# Only a completed write suppresses the fallback.
-        turn.logged_normally = True
+# The detached owner retains the file lock if /stop interrupts the caller.
+    async def _log_normal_turn() -> bool:
+        turn.logged_normally = await _persist_session_write(
+            workspace_path,
+            lambda: _log_to_session(
+                workspace_path, session_id, effective_prompt, result,
+            ),
+        )
+        return turn.logged_normally
+
+    turn.normal_log_task = create_background_task(
+        _log_normal_turn(),
+        name=f"log-session-turn:{session_id}",
+        log=logger,
+    )
+    _track_session_write_task(workspace_path, turn.normal_log_task)
+    await asyncio.wait((turn.normal_log_task,))
+    turn.normal_log_task.result()
 
 # Compaction runs post-turn.
     create_background_task(
@@ -2439,18 +2543,19 @@ async def _run_turn_impl(
 
 def _log_to_session(
     workspace_path: str, session_id: str, prompt: str, result: AgentResult,
-) -> None:
+) -> bool:
     """Append the user prompt and AI response in a single read+write."""
     try:
-        session.append_messages(workspace_path, session_id, [
+        return _append_session_messages(workspace_path, session_id, [
             {"role": "user", "content": prompt},
             {
                 "role": "assistant",
                 "content": _format_session_response(result, workspace_path),
             },
-        ])
+        ], "Failed to log session")
     except Exception:
         logger.error("Failed to log session", exc_info=True)
+        return False
 
 
 def _format_session_response(

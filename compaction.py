@@ -132,17 +132,23 @@ def _bounded_previous_summary(summary: str) -> str:
     Keeping the beginning retains the original task framing; keeping the end
     retains the most recently recorded state and open work.
     """
+    return _previous_summary_with_omission(summary)[0]
+
+
+def _previous_summary_with_omission(summary: str) -> tuple[str, str]:
+    """Return the bounded input and exact prior-summary text not shown."""
     budget = _previous_summary_budget()
     if len(summary) <= budget:
-        return summary
+        return summary, ""
     marker = _PREVIOUS_SUMMARY_TRUNCATION_MARKER
     if budget <= len(marker):
         # Too tight for the marker: keep a cut indicator.
         if budget <= 1:
-            return "…"[:budget]
-        return summary[:budget - 1] + "…"
+            return "…"[:budget], summary
+        return summary[:budget - 1] + "…", summary[budget - 1:]
     keep = (budget - len(marker)) // 2
-    return summary[:keep] + marker + summary[-(budget - len(marker) - keep):]
+    tail = budget - len(marker) - keep
+    return summary[:keep] + marker + summary[-tail:], summary[keep:-tail]
 
 
 def _bounded_long_term(
@@ -478,6 +484,21 @@ async def _maybe_compact_under_maintenance_lock(
             len(new_summary), min_len, session_id,
         )
         return
+    if existing_summary:
+        _shown_summary, omitted_summary = _previous_summary_with_omission(
+            existing_summary,
+        )
+        if omitted_summary:
+            # A bounded preview cannot authorize replacing unseen evidence.
+            # Check the generated summary's quality before adding retained
+            # text, then rewrite only the shown beginning/end. Keeping the
+            # exact omitted middle still shrinks an oversized summary.
+            new_summary = (
+                "[Prior summary text omitted from compaction input; retained verbatim]\n"
+                + omitted_summary
+                + "\n\n[Latest compaction summary]\n"
+                + new_summary
+            )
     async with workspace_mod.get_lock(workspace_path):
         # Never let a stale title overwrite a rename.
         latest = session.load_session(workspace_path, session_id)
@@ -652,5 +673,15 @@ async def compact_session(
     if long_term is not None:
         _lines, omitted = _bounded_long_term(existing_long_term)
         # The model cannot carry forward facts it never received.
-        long_term = list(dict.fromkeys([*omitted, *long_term]))
+        if len(omitted) > session.LONG_TERM_CAP:
+            # Legacy/manual state can already exceed the cap. There is no
+            # safe capped rewrite that keeps all unseen facts, so preserve
+            # this session's existing list until a pass can cover it.
+            long_term = None
+        elif omitted:
+            long_term = session.merge_partial_memory(
+                omitted, long_term, session.LONG_TERM_CAP,
+            )
+        else:
+            long_term = list(dict.fromkeys(long_term))
     return (summary, long_term, title, len(msg_lines))
