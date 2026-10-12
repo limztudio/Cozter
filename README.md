@@ -187,6 +187,15 @@ Start Cozter normally once before registering the task so the project
 `.venv` exists; the script expects `.venv\Scripts\python.exe` to be present.
 It runs that venv directly and restarts Cozter after every exit, including
 updates and failures, so Task Scheduler keeps a single supervised process.
+Point the task at the deployment's own checkout (for example
+`C:\Startup\Cozter\run_cozter.ps1` with **Start in** `C:\Startup`), not at an
+unrelated source tree, and keep that deployment on a clean tracking branch so
+`updater.check_for_update()` (every `update_check_interval` seconds, five
+minutes by default) can fast-forward-pull and hand exit code 75 back to this
+same supervisor loop. A global `python.exe C:\...\Cozter` task action still
+restarts through the launcher's built-in Windows supervision loop, but that
+path nests extra Python parents per layer instead of the single supervised
+process above, so prefer `run_cozter.ps1` for long-running deployments.
 
 ### POSIX systemd
 
