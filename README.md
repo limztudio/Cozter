@@ -324,7 +324,7 @@ example layout lives in `.config/config.example.json`):
   "dump_traceback_interval": 0,
   "update_check_interval": 300,
   "recent_workspace_limit": 10,
-  "message_queue_size": 50,
+  "message_queue_size": 5000,
   "max_upload_bytes": 52428800,
 
   "extra_models": {},
@@ -357,7 +357,7 @@ keeps the existing directory ACLs because those permissions are not managed by
 `chmod`.
 
 `recent_workspace_limit` controls how many paths `/open` shows.
-`message_queue_size` caps each user's pending chat turns.
+`message_queue_size` caps each user's pending chat turns (default 5,000).
 If a restored backlog exceeds the current cap, every accepted entry stays
 in FIFO order while the queue drains; shrinking the cap does not discard
 accepted work or replace the queue held by an active producer or drain loop.
