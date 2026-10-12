@@ -1700,15 +1700,15 @@ ignored for local secrets and runtime queues.
   auto-titling; platform, Slack,
   and Signal rich-text formatting; durable reply delivery; detached tasks
   and Claude's background-launch guard; runtime diagnostics; state
-  audits and fallbacks including containment-checked nested workspace dirs;
+  integrity and fallbacks including containment-checked nested workspace dirs;
   status latency (including chat status I/O, shell/Signal latency, and
-  thinking-status display) and Signal transport/status/attachment-latency
+  thinking-status display) and Signal transport/status/attachment-decoding
   regressions; native shell/Git subprocess output draining with inherited
   pipes, prompt-subprocess delivery, internal-backend deadlines, and HTTP
   streaming deadlines; updater behavior; utilities
-  including the shared lock helper; upload limits; tool permissions; and
-  the built-in/plugin tool surface, including patch/edit bounds, audit- and
-  sweep-found regressions, off-event-loop discovery scans that continue after
+  including the shared lock helper and image-dimension probing; upload limits; tool permissions; and
+  the built-in/plugin tool surface, including patch/edit bounds, output-limit
+  and state-integrity regressions, off-event-loop discovery scans that continue after
   a failed `is_dir()`, and discovery pruning/optimization that preserves
   file selection, containment, and permission checks
 
