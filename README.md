@@ -516,6 +516,23 @@ example `/run/signal-cli/socket`. Cozter only connects to the socket; run
 and restart the `signal-cli daemon` from a service manager such as
 systemd.
 
+On Windows the `signal-cli` daemon usually runs as a restricted service
+account such as `NT AUTHORITY\LocalService`, so it can only attach files
+that account can open. Cozter's `SignalBot.send_file` hands the daemon a
+local path and the daemon itself opens that path: a per-user `Temp` file
+such as `C:\Users\<you>\AppData\Local\Temp\...` is not readable by the
+service, and the `send` RPC fails fast with `Access is denied` wrapped as
+`AttachmentInvalidException` (surfaced as `SignalCliError`), with no
+delivery. Stage live Signal attachments under a daemon-readable path such
+as `C:\Users\Public\...` (which grants `Everyone` full control, including
+the service account) and remove the staged copy after the send. Canonical
+evidence is kept under `.log\live_signal_send_20261012_083004\`:
+`live_send.log` records the per-user-`Temp` failure (RPC `ERROR`,
+`SignalCliError ... Access is denied ... AttachmentInvalidException`,
+nonzero exit, no receipt) while `live_send2.log` records the
+`C:\Users\Public` retry (RPC `SUCCESS` receipt `1791761953774`,
+`SEND_RESULT: PASS`, exit `0`).
+
 Active Signal tasks show one `Thinking...` message, including scheduled
 tasks once they start. Progress updates edit that message at most once per
 minute and stop after ten attempts, respecting [Signal's message edit
