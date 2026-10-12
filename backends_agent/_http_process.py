@@ -84,9 +84,7 @@ class HttpAgentProcess:
                 self.returncode = 1
 
         def _finalize(task: asyncio.Task[None]) -> None:
-            # Cancellation can happen before _driver takes its first step,
-            # so its exception handlers cannot finalize that launch. Close
-            # the unstarted coroutine and publish cancellation/EOF here too.
+            # A launch cancelled before _driver starts still needs EOF here.
             if task.cancelled():
                 if inspect.iscoroutine(coro):
                     coro.close()

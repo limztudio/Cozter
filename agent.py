@@ -1554,7 +1554,7 @@ async def _run_flexible(
         if on_event:
             await on_event(ChatEvent(kind="tool", content=text))
 
-    # 1. Plan.
+    # Plan.
     await status(
         f"flexible: planning with {summary_backend.name}/{summary_model}"
     )
@@ -2240,9 +2240,7 @@ def _log_interrupted_turn(turn: _InterruptedTurn) -> None:
     session_id = turn.session_id
 
     async def _append() -> None:
-        # A cancelled caller may leave its completed answer still being
-        # committed. Wait for that owner before deciding whether a fallback
-        # is needed, so a successful normal write never gains a duplicate.
+        # Wait for an in-flight normal write so it never gains a duplicate.
         if turn.normal_log_task is not None:
             while not turn.normal_log_task.done():
                 try:
@@ -2408,7 +2406,6 @@ async def _run_turn_impl(
     summary_backend = summary_backend_name or (
         backends_agent.DEFAULT_DIRECT_BACKEND if is_flexible else backend.name
     )
-    # Default the summary model.
     summary_model = _resolve_summary_model(summary_model, summary_backend)
     compaction_context_targets = _compaction_context_targets(
         workspace_path,

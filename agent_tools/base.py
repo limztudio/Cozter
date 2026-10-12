@@ -533,18 +533,14 @@ def iter_workspace_files(
         directory_prefix = pattern_parts[:pattern_parts.index("**")]
         max_directory_depth = None
     else:
-        # POSIX permits literal backslashes in names. Since matching treats
-        # them as separators, a filename consisting of backslashes can have
-        # no components; retain that possible final directory component.
+        # Backslash-only names have no components under separator matching.
         filename_depth = 1 if os.sep == "\\" else 0
         max_directory_depth = max(0, len(pattern_parts) - filename_depth)
         directory_prefix = pattern_parts[:max_directory_depth]
 
     for dirpath, dirnames, filenames in os.walk(abs_root):
         dirnames[:] = [dirname for dirname in dirnames if dirname not in skip_dirs]
-        # A nonrecursive pattern cannot match files below its directory
-        # depth. Before the first globstar, each directory must also match
-        # the corresponding segment; after it, retain every possible branch.
+        # Prune directories that cannot match a nonrecursive depth.
         if directory_prefix or max_directory_depth is not None:
             directory_rel = os.path.relpath(dirpath, abs_root)
             directory_depth = (
@@ -573,14 +569,10 @@ def iter_workspace_files(
             root_rel = os.path.relpath(fpath, abs_root).replace(os.sep, "/")
             if not _match_glob_parts(pattern_parts, _glob_segments(root_rel)):
                 continue
-            # Reject by spelling before doing filesystem work. Full mode
-            # does not need a resolved-target containment check; bounded
-            # matches still follow symlinks through is_path_within.
+            # Bounded matches still follow symlinks via is_path_within.
             if not full_access and not is_path_within(fpath, abs_ws):
                 continue
-            # Display containment uses the lexical entry, independently of
-            # its target: an external link can point to a different drive
-            # inside the workspace without becoming a relative entry.
+            # Lexical display containment, independent of the link target.
             try:
                 lexical_inside = os.path.normcase(
                     os.path.commonpath((fpath, abs_ws)),
@@ -855,9 +847,8 @@ def _publish_new_file_no_clobber(
         and preserve_metadata
         and not os.stat(tmp_path).st_mode & stat.S_IWRITE
     ):
-        # A read-only hard-linked temp cannot be unlinked on Windows without
-        # changing the published file's attributes too. Windows rename is
-        # atomic and refuses an existing target, and consumes our temp.
+        # A read-only hard-linked temp cannot unlink on Windows without
+        # touching the published file; rename atomically instead.
         try:
             os.rename(tmp_path, target_path)
         except FileExistsError:
@@ -1019,10 +1010,7 @@ def _move_regular_file_no_clobber(source_path: str, target_path: str) -> bool:
     """Move a regular file without replacing a concurrent destination."""
     source_stat = os.stat(source_path, follow_symlinks=False)
     if os.name == "nt" and not source_stat.st_mode & stat.S_IWRITE:
-        # Windows permits renaming a read-only file but refuses unlinking it.
-        # A hard-link publication would therefore fail to remove the source
-        # and fail to roll back its read-only destination as well. Native
-        # rename preserves attributes and refuses a concurrent destination.
+        # Windows rename handles read-only files; hard-link publish cannot.
         return _rename_path_no_clobber(source_path, target_path)
     try:
         # Atomic create refuses a raced-in destination.

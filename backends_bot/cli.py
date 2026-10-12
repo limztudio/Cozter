@@ -69,9 +69,7 @@ class CliBot(BotPlatform):
     ) -> MessageHandle | None:
         if not text:
             return None
-        # Trailing newline.
         print(text)
-        # None prints each event as it arrives.
         return None
 
     async def edit_text(
@@ -138,7 +136,6 @@ class CliBot(BotPlatform):
         return
 
     async def _input_loop(self) -> None:
-        # Daemon-thread stdin.
         loop = asyncio.get_running_loop()
         line_queue: asyncio.Queue[str | None] = asyncio.Queue()
 

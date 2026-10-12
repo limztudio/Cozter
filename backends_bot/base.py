@@ -545,19 +545,8 @@ class BotPlatform(ABC):
         self._detached_task_watcher: asyncio.Task | None = None
         self._detached_delivery_locks: dict[str, asyncio.Lock] = {}
         self._detached_delivery_tasks: dict[str, set[asyncio.Task]] = {}
-        # Non-sensitive per-turn progress for stuck-wait attribution.
-        #
-        # ``stuck_turn_diagnostics()`` historically reported only task/lock
-        # identity, so an hour-long command-output wait (e.g. a Bash tool
-        # call awaiting a slow child) was unattributable: the logs could
-        # not say which backend/model last made progress, which tool the
-        # turn was waiting on, which OS process was involved, or how long
-        # the wait had lasted. These records keep only that attribution
-        # surface — backend/model names, monotonic timestamps, tool/file
-        # *kinds* plus a redacted first-line label, and numeric PIDs.
-        # Prompts, tool arguments, command text, file contents, and
-        # credentials are never stored here (see ``_redact_progress_label``
-        # and ``record_turn_progress``).
+        # Non-sensitive per-turn progress for stuck-wait attribution
+        # (backend/model, timestamps, tool/file kinds, redacted label, PIDs).
         self._turn_progress: dict[str, _TurnProgress] = {}
         # Users already acknowledged by /cancel or /stop.
         self._cancel_acknowledged: set[str] = set()
@@ -1073,10 +1062,8 @@ class BotPlatform(ABC):
             msg_queue = asyncio.Queue(maxsize=maxsize)
             self._message_queues[uid] = msg_queue
         elif msg_queue.maxsize != maxsize:
-            # Keep the queue object and every admitted entry: a restored
-            # backlog may exceed today's cap, and producers/drainers may
-            # already hold this object. asyncio.Queue has no public resize
-            # API; changing its capacity leaves FIFO data and waiters intact.
+            # Keep queue object and entries: asyncio.Queue has no public
+            # resize API; a restored backlog may exceed today's cap.
             msg_queue._maxsize = maxsize
             # A growth can make space without a get(), so wake blocked putters
             # to recheck full(). Each still checks capacity before admission.
@@ -2938,7 +2925,7 @@ class BotPlatform(ABC):
         """
         record_id = record["id"]
         uid = record["user_id"]
-        # Re-read under lock; stale snapshots can't send.
+        # Re-check under the lock before sending.
         async with self._reply_delivery_lock(uid):
             record = await self._get_reply_delivery_record(record_id)
             if record is None:
@@ -3613,13 +3600,12 @@ class BotPlatform(ABC):
                     current.get("created"),
                 )
                 if baseline is not None and slot <= baseline:
-                    # Another platform/tick may have claimed this snapshot
-                    # while it waited for the shared workspace lock.
+                    # Lost the lock race; another tick claimed it.
                     continue
                 claimed_schedule = schedules.update_schedule_fired(
                     ws, uid, schedule_id, slot.isoformat(),
                 )
-            # Claim under lock, not the stale snapshot.
+            # Re-check under the lock; snapshots can go stale.
             if claimed_schedule is not None:
                 await self._fire_schedule(uid, claimed_schedule)
 
@@ -4001,9 +3987,8 @@ class BotPlatform(ABC):
         backend_name, model, summary_model, perm, summary_backend = (
             workspace.get_run_config(ws)
         )
-        # Start the non-sensitive attribution record before the first
-        # yield so a stuck wait can name backend/model/elapsed even when
-        # the turn stalls before its first progress event.
+        # Start attribution before the first yield so a stuck wait can
+        # name backend/model/elapsed even without a first progress event.
         self._begin_turn_progress(uid, backend=backend_name, model=model)
 
         inject_q = _InjectQueue(maxsize=self.max_queue_size)
@@ -4073,9 +4058,8 @@ class BotPlatform(ABC):
                 await self._run_status_operation(
                     operation, action="updating the progress status",
                 )
-                # The operation may itself be scheduled a tick later. Start
-                # the next interval after it settles, so actual edits cannot
-                # bunch together behind a delayed dispatch.
+                # Start the next interval after the op settles so edits
+                # cannot bunch behind a delayed dispatch.
                 last_edit = loop.time()
 
         async def on_event(ev: agent.ChatEvent) -> None:
@@ -4234,10 +4218,8 @@ class BotPlatform(ABC):
         finally:
             # Idempotent window close before I/O can yield.
             inject_q.close()
-            # The attribution record's job ends with the agent phase:
-            # delivery/post-turn work runs under the same lock but is no
-            # longer a command-output wait. The caller's _cleanup_turn
-            # also clears (idempotent) for cancel paths that bypass this.
+            # Attribution record ends with the agent phase; delivery/post-turn
+            # work no longer counts as a command-output wait.
             self._clear_turn_progress(uid)
             if status_edit_task is not None and not status_edit_task.done():
                 status_edit_task.cancel()

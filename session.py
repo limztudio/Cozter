@@ -429,9 +429,7 @@ def _newest_first(sessions_dir: str, filenames: list[str], limit: int) -> list[s
         try:
             mtime_ns = os.stat(os.path.join(sessions_dir, filename)).st_mtime_ns
         except OSError:
-            # One removed/unstatable file must not discard the recency of
-            # every other session. Keep unavailable names as fallback entries
-            # so a readable file with inaccessible metadata is still usable.
+            # Keep unavailable names as fallbacks; one bad file keeps no recency.
             unavailable.append(filename)
         else:
             stamped.append((mtime_ns, filename))

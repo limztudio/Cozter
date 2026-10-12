@@ -145,8 +145,6 @@ def bump_compact_count(workspace: str) -> int:
     return data["compact_count"]
 
 
-# Consolidation: promote recurring, prune stale.
-
 CONSOLIDATE_PROMPT = (
     "Consolidate a workspace's shared memory ('colony') from every"
     " session's long-term memory.\n\n"
@@ -488,9 +486,7 @@ async def _consolidate_inner(
             existing_colony, new_colony, COLONY_CAP,
         )
 
-    # Check the evidence again under the writer lock. Foreground turns may
-    # append messages safely, but a direct memory edit, deleted session, or
-    # newly created session makes this backend result stale.
+    # Re-check under the writer lock; edits/deletes since make this stale.
     async with workspace_mod.get_lock(workspace_path):
         latest_memory = {
             data["id"]: data["long_term"]

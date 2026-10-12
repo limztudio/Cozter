@@ -199,12 +199,9 @@ def _has_background_operator(command: str) -> bool:
 
 def _shell_tokens(command: str) -> list[str]:
     """Best-effort shell tokenization without executing the command."""
-    # Launcher-looking text inside a here-document is data, just as its '&'
-    # characters are data to the operator scanner.
+    # Here-document bodies are data, including '&' and launcher-like text.
     command = _without_heredoc_bodies(command)
-    # shlex treats newlines as whitespace and consumes comment terminators.
-    # Preserve those shell command boundaries before tokenization, while
-    # leaving quoted/escaped newlines inside their original argument.
+    # Preserve shell command boundaries; shlex consumes newlines/comments.
     fragments: list[str] = []
     quote = ""
     index = 0

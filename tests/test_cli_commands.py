@@ -17,10 +17,7 @@ class CliCommandOrderingTests(unittest.IsolatedAsyncioTestCase):
     async def test_version_returns_while_native_input_reader_waits_for_next_line(self):
         """Inherited stdin must not wedge Git while the CLI reader awaits input."""
         package_parent = str(Path(__file__).resolve().parents[2])
-        # Preserve inherited PYTHONPATH entries: where the checkout basename
-        # is not `Cozter` (GitLab symlink layout), `resolve()` above loses
-        # the temporary `Cozter` alias and only the inherited entry keeps
-        # the child able to `import Cozter`.
+        # Non-`Cozter` basenames (GitLab symlink layout) lose the temp alias.
         existing_pythonpath = os.environ.get("PYTHONPATH", "")
         if not existing_pythonpath:
             pythonpath = package_parent

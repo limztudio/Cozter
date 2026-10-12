@@ -470,10 +470,7 @@ async def _maybe_compact_under_maintenance_lock(
             existing_summary,
         )
         if omitted_summary:
-            # A bounded preview cannot authorize replacing unseen evidence.
-            # Check the generated summary's quality before adding retained
-            # text, then rewrite only the shown beginning/end. Keeping the
-            # exact omitted middle still shrinks an oversized summary.
+            # Keep the exact omitted middle verbatim; rewrite only the shown ends.
             new_summary = (
                 "[Prior summary text omitted from compaction input; retained verbatim]\n"
                 + omitted_summary
@@ -485,9 +482,8 @@ async def _maybe_compact_under_maintenance_lock(
         latest = session.load_session(workspace_path, session_id)
         if latest is None:
             return
-        # Appended turns are safe: set_summary trims only the covered prefix.
-        # An edited/replaced prefix or memory is a different snapshot, though,
-        # and applying this result could discard text the compactor never saw.
+        # Appended turns only trim the covered prefix; an edited prefix is a
+        # different snapshot the compactor never saw.
         if (
             latest["messages"][:covered_count] != data["messages"][:covered_count]
             or latest.get("summary") != data.get("summary")
@@ -655,9 +651,7 @@ async def compact_session(
         _lines, omitted = _bounded_long_term(existing_long_term)
         # The model cannot carry forward facts it never received.
         if len(omitted) > session.LONG_TERM_CAP:
-            # Legacy/manual state can already exceed the cap. There is no
-            # safe capped rewrite that keeps all unseen facts, so preserve
-            # this session's existing list until a pass can cover it.
+            # Over-cap unseen facts have no safe capped rewrite; preserve them.
             long_term = None
         elif omitted:
             long_term = session.merge_partial_memory(

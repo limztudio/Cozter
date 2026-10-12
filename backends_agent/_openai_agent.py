@@ -1138,9 +1138,7 @@ async def _post_completion_stream(
                         _check_completion_buffer_limit(
                             text_bytes, reasoning_bytes, tool_argument_bytes,
                         )
-                # The selected choice has finished. Its final delta is now
-                # retained; later usage trailers are not parsed here. Don't
-                # wait for [DONE]/EOF or retry completed work on a stalled tail.
+                # Choice finished: keep its final delta; never retry a stalled tail.
                 if terminal_event:
                     await _drain_completion_tail(resp, deadline)
                     break

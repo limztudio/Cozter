@@ -82,10 +82,7 @@ class GlobTool(AgentTool):
         search_root: str | None = None,
     ) -> list[str]:
         """Synchronously scan for matches; called in a worker thread."""
-        # Separate a literal directory prefix so full mode can search an
-        # absolute or ../ pattern without scanning unrelated directories.
-        # Treat drive/UNC anchors literally; shares may contain '[' or ']'.
-        # Splitting a magical anchor repeatedly would otherwise never shrink.
+        # Split off a literal prefix (anchors literal; never split magical ones).
         drive, tail = os.path.splitdrive(pattern)
         prefix, search_pattern = os.path.split(tail)
         while has_magic(prefix):

@@ -354,9 +354,7 @@ def _terminate_tree(proc: asyncio.subprocess.Process) -> None:
     """Shared tree-kill body for sync and off-loop callers."""
     pid = getattr(proc, "pid", None)
     if os.name == "nt":
-        # No POSIX groups on Windows: ``taskkill /T`` walks the tree.
-        # Off-loop callers already run in a worker thread; the spawn is
-        # the ~0.1s step that must not hold the event loop.
+        # ``taskkill /T`` walks the tree; keep the ~0.1s spawn off the loop.
         if terminate_windows_process_tree(pid):
             return
     elif has_managed_process_group(proc):

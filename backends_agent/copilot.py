@@ -301,9 +301,7 @@ class CopilotBackend(Backend):
                 logger.debug("copilot ACP started without stdout")
                 return None
 
-            # The reader runs independently of the request consumer. Bound
-            # queued output as well as each line so a noisy probe cannot
-            # retain an unlimited number of otherwise valid messages.
+            # Bound queued output and line size against noisy probes.
             messages: queue.Queue[str | None] = queue.Queue(
                 maxsize=_MAX_ACP_MESSAGES_PER_REQUEST,
             )

@@ -146,8 +146,7 @@ def _signal_tcp_address(endpoint: str) -> tuple[str, int] | None:
 class SignalBot(BotPlatform):
     """Signal group adapter backed by signal-cli."""
 
-    # Signal permits at most ten edits per message. Keep one visible status,
-    # coalesce progress to minute intervals, then retain it until completion.
+    # Ten edits max: one visible status, minute-interval progress.
     status_update_interval_sec = 60.0
     status_update_limit = 10
     status_fallback_messages = False
@@ -550,7 +549,7 @@ class SignalBot(BotPlatform):
         if self._jsonrpc_connected():
             return
 
-        # Clear the stale subscription first.
+        # Clear the superseded subscription first.
         self._receive_subscription = None
         self._receive_subscribed = False
         try:
@@ -610,7 +609,7 @@ class SignalBot(BotPlatform):
                     # Close so the next request reconnects.
                     await self._close_jsonrpc_transport()
                     if method in _NON_IDEMPOTENT_RPC_METHODS:
-                        # Dispatched-before-drop: surface.
+                        # May already be dispatched: surface.
                         raise
                     logger.warning(
                         "Signal JSON-RPC request %s failed; reconnecting: %s",

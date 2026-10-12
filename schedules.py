@@ -239,7 +239,7 @@ def update_schedule_fired(
         if not isinstance(schedule, dict):
             continue
         if schedule.get("id") == schedule_id:
-            # Stamp twins: heal legacy duplicates.
+            # Stamp duplicate ids too.
             schedule["last_fired"] = fired_at
             if claimed is None:
                 claimed = dict(schedule)

@@ -300,7 +300,6 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         )
         self.assertEqual(len(remaining), cap)
         self.assertIn(os.path.basename(crash_path), remaining)
-        # Newest file (just written, lexicographically last) is retained.
         self.assertEqual(remaining[-1], os.path.basename(crash_path))
         with open(crash_path, encoding="utf-8") as written:
             body = written.read()

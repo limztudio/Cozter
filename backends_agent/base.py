@@ -700,9 +700,7 @@ async def create_prompt_subprocess(
             start_new_session=os.name != "nt",
         ))
         try:
-            # wait() leaves the owned launch running if this caller is
-            # cancelled. Unlike shield() on Python 3.14, it does not log a
-            # later spawn failure that our cancellation cleanup consumes.
+            # wait() keeps the owned launch running when cancelled here.
             await asyncio.wait((launch,))
             return launch.result()
         except asyncio.CancelledError:

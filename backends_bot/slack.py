@@ -96,7 +96,6 @@ def _mrkdwn_prose(line: str) -> str:
 
         bold_sub = collision_safe_bold_sub
 
-    # Bold first.
     if line[:1] == "#":
         line = _SLACK_HEADING_RE.sub(bold_sub, line)
     if "**" in line:

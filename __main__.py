@@ -269,11 +269,8 @@ from .utils import await_cancelled  # noqa: E402
 MODULE_ROOT = os.path.dirname(__file__)
 LOG_DIR = os.path.join(MODULE_ROOT, ".log")
 
-# Crash-respawn delay.
 _CRASH_RESTART_DELAY_SEC = 5
-# Crash-report retention cap: keep the newest N crash_*.log files so a
-# crash loop (e.g. the 2026-10-09/10-12 open_unix_connection loop that
-# produced 1062 files / ~1.6MB) cannot fill the disk before the fix lands.
+# Keep the newest N crash_*.log files so a crash loop cannot fill the disk.
 _MAX_CRASH_FILES = 50
 _UPDATE_IDLE_POLL_SEC = 1
 _UPDATE_IDLE_LOG_SEC = 30
