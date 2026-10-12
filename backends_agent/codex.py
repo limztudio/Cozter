@@ -29,8 +29,6 @@ _FALLBACK_MODEL_SPECS = (
     ("gpt-5.6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-terra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-5.6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
-    # GPT-5.5 remains selectable until its 2026-10-14 Codex retirement.
-    ("gpt-5.5", _COMMON_EFFORT_LEVELS, 272_000),
 )
 (
     _FALLBACK_MODELS,

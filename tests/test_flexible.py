@@ -203,14 +203,14 @@ class FlexibleSettingsTests(unittest.TestCase):
     def test_each_tier_agent_remembers_its_own_model(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
-            workspace.set_flexible_model(ws, "mid", "gpt-5.5")
+            workspace.set_flexible_model(ws, "mid", "gpt-5.6-sol")
             workspace.set_flexible_backend_name(ws, "mid", "claude_code")
             workspace.set_flexible_model(ws, "mid", "sonnet")
             self.assertEqual(workspace.get_flexible_model(ws, "mid"), "sonnet")
 
             # Switching back restores the last model.
             workspace.set_flexible_backend_name(ws, "mid", "codex")
-            self.assertEqual(workspace.get_flexible_model(ws, "mid"), "gpt-5.5")
+            self.assertEqual(workspace.get_flexible_model(ws, "mid"), "gpt-5.6-sol")
 
     def test_flexible_may_not_serve_as_its_own_tier(self) -> None:
         with tempfile.TemporaryDirectory() as ws:

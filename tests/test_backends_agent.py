@@ -1002,7 +1002,6 @@ warning: ignored after the catalog
             "gpt-5.6-sol",
             "gpt-5.6-terra",
             "gpt-5.6-luna",
-            "gpt-5.5",
         ))
         self.assertEqual(
             CodexBackend.tier_models,
@@ -1058,10 +1057,6 @@ warning: ignored after the catalog
         self.assertEqual(
             backend.effort_levels_for_model("gpt-5.6-luna"),
             ("low", "medium", "high", "xhigh", "max"),
-        )
-        self.assertEqual(
-            backend.effort_levels_for_model("gpt-5.5"),
-            ("low", "medium", "high", "xhigh"),
         )
         self.assertEqual(
             backend.effort_levels_for_model("custom-model"),
