@@ -1907,3 +1907,40 @@ exercise the full CI matrix locally, run the `unittest` command from separate
 status --short` as well, to ensure only intentional source or documentation
 edits are staged. Runtime JSON, logs, sessions, virtualenv files, and caches
 should stay local.
+
+### Stale `PYTHONPATH` on Windows checkouts
+
+On Windows, a shell that inherits `PYTHONPATH=C:\Startup` imports the stale
+`C:\Startup\Cozter` deploy copy instead of the current checkout, even when the
+working directory is `c:\workstation\cozter`. That stale copy (for example
+`72d2921` while the workspace is ahead) fails: the fast
+`python -m unittest tests.test_updater` subset exits `1` with
+`FAILED (errors=2)` (`KeyError: 'stdin'` in
+`test_git_probe_closes_stdin_instead_of_sharing_cli_input` and
+`test_changed_requirements_install`), because the old production code lacks
+the current subprocess-cleanup arguments, while the same subset passes under
+the clean environment. The full suite polluted this way fails the same way
+(`47F+22E` in
+`.log/supervision_exercise/47_full_unittest311.log`, failing IDs in
+`48_fail_ids.txt`).
+
+Always clear the inherited value and point `PYTHONPATH` at the checkout's
+parent, with the checkout as the working directory. Canonical Windows
+invocation (verified in
+`.log/supervision_exercise/52_full_unittest311_cleanenv.log`:
+`Ran 1174 tests ... OK (skipped=15)`):
+
+```powershell
+$env:PYTHONPATH = "c:\workstation"
+Set-Location "c:\workstation\cozter"
+python -m ruff check .
+python -m mypy -p Cozter
+python -m unittest discover -s tests
+```
+
+Check which copy Python resolves before trusting a result:
+`python -c "import Cozter; print(Cozter.__file__)"` must print
+`c:\workstation\Cozter\__init__.py`, not `C:\Startup\Cozter\__init__.py`.
+This happens because this shell is a descendant of the live daemon (whose
+process environment carries `PYTHONPATH=C:\Startup`); prefer a shell outside
+that process tree, or at minimum override `PYTHONPATH` per command as above.
