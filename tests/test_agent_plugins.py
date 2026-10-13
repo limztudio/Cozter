@@ -700,7 +700,7 @@ class MemoryToolTests(unittest.TestCase):
             "No sessions recorded in this workspace yet.",
         )
 
-    def test_search_finds_message_summary_longterm_and_colony(self) -> None:
+    def test_search_finds_message_summary_long_term_and_colony(self) -> None:
         self.write_session(
             "cccccccc-3333", name="Release", created="2025-06-02T08:00:00",
             messages=[{"role": "assistant",

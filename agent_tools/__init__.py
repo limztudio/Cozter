@@ -117,7 +117,7 @@ if not sys.argv or sys.argv[0] != "-m":
 
 # Order: ``order`` then name.
 _TOOLS: tuple[AgentTool, ...] = tuple(
-    sorted(AgentTool.registry, key=lambda t: (t.order, t.name))
+    sorted(AgentTool.registry, key=lambda tool: (tool.order, tool.name))
 )
 _BY_NAME: dict[str, AgentTool] = {tool.name: tool for tool in _TOOLS}
 

@@ -1478,7 +1478,7 @@ class BotPlatform(ABC):
 
     # /summarymodel
 
-    async def cmd_summarymodel(self, ctx: BotContext) -> None:
+    async def cmd_summary_model(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
         if ws is None:
             return
@@ -1492,15 +1492,15 @@ class BotPlatform(ABC):
             f" (summary agent: {summary_backend})\n",
             *self._picker_list(options, current, noun="model"),
         ]))
-        self._expect_input(ctx.user_id, self._receive_summarymodel)
+        self._expect_input(ctx.user_id, self._receive_summary_model)
 
-    async def _receive_summarymodel(
+    async def _receive_summary_model(
         self, ctx: BotContext,
     ) -> None:
         await self._apply_model_choice(
             ctx,
             fetch_options=workspace.get_available_summary_models,
-            retry_handler=self._receive_summarymodel,
+            retry_handler=self._receive_summary_model,
             set_model=workspace.set_summary_model,
             success_text="Summary model set to: {model}",
         )
@@ -1752,7 +1752,7 @@ class BotPlatform(ABC):
 
     # /summaryagent
 
-    async def cmd_summaryagent(self, ctx: BotContext) -> None:
+    async def cmd_summary_agent(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
         if ws is None:
             return
@@ -1763,13 +1763,13 @@ class BotPlatform(ABC):
             f"Current summary agent: {current}\n",
             *self._picker_list(options, current, noun="agent"),
         ]))
-        self._expect_input(ctx.user_id, self._receive_summaryagent)
+        self._expect_input(ctx.user_id, self._receive_summary_agent)
 
-    async def _receive_summaryagent(self, ctx: BotContext) -> None:
+    async def _receive_summary_agent(self, ctx: BotContext) -> None:
         selected = await self._receive_backend_choice(
             ctx,
             options=workspace.DIRECT_BACKENDS,
-            retry_handler=self._receive_summaryagent,
+            retry_handler=self._receive_summary_agent,
         )
         if selected is None:
             return
@@ -2066,7 +2066,7 @@ class BotPlatform(ABC):
 
     # /newsession
 
-    async def cmd_newsession(self, ctx: BotContext) -> None:
+    async def cmd_new_session(self, ctx: BotContext) -> None:
         """Start a fresh session in the current workspace.
 
         Normally every turn continues the user's last-active session
@@ -5021,9 +5021,9 @@ def _build_command_registry() -> dict[str, Handler]:
         "new":          BotPlatform.cmd_new,
         "open":         BotPlatform.cmd_open,
         "model":        BotPlatform.cmd_model,
-        "summarymodel": BotPlatform.cmd_summarymodel,
+        "summarymodel": BotPlatform.cmd_summary_model,
         "agent":        BotPlatform.cmd_agent,
-        "summaryagent": BotPlatform.cmd_summaryagent,
+        "summaryagent": BotPlatform.cmd_summary_agent,
         **_flexible_tier_commands(),
         "permission":   BotPlatform.cmd_permission,
         "style":        BotPlatform.cmd_style,
@@ -5031,7 +5031,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "refresh":      BotPlatform.cmd_refresh,
         "compact":      BotPlatform.cmd_compact,
         "context":      BotPlatform.cmd_context,
-        "newsession":   BotPlatform.cmd_newsession,
+        "newsession":   BotPlatform.cmd_new_session,
         "sessions":     BotPlatform.cmd_sessions,
         "colony":       BotPlatform.cmd_colony,
         "stop":         BotPlatform.cmd_stop,

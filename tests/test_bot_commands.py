@@ -364,7 +364,7 @@ class BotCommandTests(unittest.TestCase):
                 "get_available_models",
             ),
             (
-                self.bot._receive_summarymodel(self._ctx(text="missing")),
+                self.bot._receive_summary_model(self._ctx(text="missing")),
                 "get_available_summary_models",
             ),
             (

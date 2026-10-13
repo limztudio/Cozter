@@ -430,18 +430,18 @@ def _collapse_extra_blank_lines(text: str) -> str:
     return _EXTRA_BLANK_LINES_RE.sub("\n\n", text).strip()
 
 
-def extract_attachment_sources(text: str, ws: str) -> tuple[str, list[str]]:
+def extract_attachment_sources(text: str, workspace_path: str) -> tuple[str, list[str]]:
     """Parse attachment markers without copying external generated images."""
     if not isinstance(text, str):
         return "", []
     paths: list[str] = []
     seen_sources: set[str] = set()
 
-    def _sub(m: re.Match) -> str:
-        rel = m.group(1).strip()
+    def _sub(match: re.Match) -> str:
+        rel = match.group(1).strip()
         if not rel:
             return ""
-        source = _resolve_attachment_source(rel, ws)
+        source = _resolve_attachment_source(rel, workspace_path)
         if source is None:
             return ""
         source_path, _ = source
@@ -811,7 +811,7 @@ def _collect_new_attachment_images(
         path for path, stamp in after.items()
         if before.get(path) != stamp
     ]
-    ordered = sorted(changed, key=lambda p: (after[p][0], p))
+    ordered = sorted(changed, key=lambda path: (after[path][0], path))
 
     copied: list[str] = []
     excluded = exclude_sources or set()

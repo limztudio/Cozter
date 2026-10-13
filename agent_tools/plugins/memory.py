@@ -73,7 +73,9 @@ def _load_sessions(sessions_dir: str) -> list[dict]:
         if data is not None:
             sessions.append(data)
     # Missing timestamps sort as oldest.
-    sessions.sort(key=lambda d: d["created"] or "0000", reverse=True)
+    sessions.sort(
+        key=lambda session_data: session_data["created"] or "0000", reverse=True,
+    )
     return sessions
 
 

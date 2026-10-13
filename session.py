@@ -315,7 +315,7 @@ def take_recent_messages(
     *cap*. Wrapper around :func:`utils.take_recent_lines`.
     """
     return take_recent_lines(
-        messages, budget, lambda m: format_msg_line(m, cap=cap),
+        messages, budget, lambda message: format_msg_line(message, cap=cap),
     )
 
 
