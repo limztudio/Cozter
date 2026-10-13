@@ -164,10 +164,9 @@ def discover_bearer_models(
 
     Shared by the Meta Model API and Z.ai backends: without a key the
     curated *fallback_models* are returned without a network probe; a
-    failed probe also falls back; an empty-after-filter catalog keeps the
-    live IDs (an account may legitimately serve only unknown IDs) only
-    when the probe itself returned IDs. *keep_model_id* filters the live
-    catalog (provider-specific non-chat IDs); ``None`` keeps every ID.
+    failed probe or an empty-after-filter catalog also falls back.
+    *keep_model_id* filters known non-chat IDs from the live catalog while
+    allowing unknown account-specific IDs; ``None`` keeps every ID.
     *fetch* is the catalog probe (default :func:`fetch_model_ids`);
     backends pass their module-level alias so tests can keep patching
     the per-backend ``fetch_model_ids`` name.

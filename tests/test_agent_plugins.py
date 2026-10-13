@@ -911,7 +911,6 @@ class _FakeResponse:
         url: str,
         headers: dict[str, str] | None = None,
         body: bytes = b"",
-        reason: str = "",
     ) -> None:
         self.status = status
         self.url = url
@@ -919,7 +918,6 @@ class _FakeResponse:
         self.headers = {
             key.lower(): value for key, value in (headers or {}).items()
         }
-        self.reason = reason
         self.content = BytesContent(body)
 
     async def __aenter__(self) -> _FakeResponse:
@@ -964,7 +962,6 @@ class HttpRequestToolTests(unittest.TestCase):
                     url="https://api.example.com/v1/things",
                     headers={"Content-Type": "application/json"},
                     body=b'{"ok": true}',
-                    reason="OK",
                 ),
             ],
             url="https://api.example.com/v1/things",
@@ -983,7 +980,6 @@ class HttpRequestToolTests(unittest.TestCase):
                     url="https://api.example.com/v1/missing",
                     headers={"Content-Type": "application/json"},
                     body=b'{"error": "not found"}',
-                    reason="Not Found",
                 ),
             ],
             url="https://api.example.com/v1/missing",

@@ -1,6 +1,6 @@
 """Agent runtime — runs a single user turn: routes to a session,
 prepends colony + session context to the prompt, invokes the backend
-CLI, streams events, logs the turn, and triggers compaction and
+CLI or HTTP backend, streams events, logs the turn, and triggers compaction and
 auto-titling background tasks.
 """
 
@@ -252,10 +252,6 @@ def turn_budget(*, fresh: bool = False):
         _TURN_BUDGET.reset(token)
 
 
-def is_cumulative_budget_result(result: AgentResult) -> bool:
-    """Budget completion already includes artifacts/accounting from prior runs."""
-    budget = _TURN_BUDGET.get()
-    return budget is not None and result is budget.output
 _PENDING_SESSION_WRITES: dict[asyncio.Lock, set[asyncio.Task[Any]]] = {}
 
 
@@ -561,7 +557,7 @@ def format_usage(usage: dict | None) -> str | None:
     """Compact one-line token/cost footer from a backend's usage dict.
 
     Returns None when there's nothing worth showing. Understands the
-    fields codex (``turn.completed``) and claude_code (``result``) expose
+    fields Codex (``turn.completed``), Claude Code and Grok (``result``) expose
     (``input_tokens`` / ``output_tokens`` / ``total_cost_usd``).
     """
     if not isinstance(usage, dict):
@@ -2371,7 +2367,7 @@ async def _run_turn(
     on_process: Callable[[Any], None] | None = None,
     on_session: Callable[[str], Awaitable[None]] | None = None,
 ) -> AgentResult:
-    """Run the selected agent CLI with session history prepended.
+    """Run the selected agent backend with session history prepended.
 
     backend_name selects the registered agent adapter. When None, the
     default backend is used. The workspace's configured backend should be

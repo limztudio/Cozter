@@ -698,22 +698,27 @@ def _read_acp_stdout(
             pass
 
 
-def _acp_notification(
-    proc: subprocess.Popen[str], method: str, params: dict,
-) -> bool:
-    """Send an ACP notification (a JSON-RPC message without an id)."""
+def _write_acp_message(proc: subprocess.Popen[str], message: dict) -> bool:
+    """Write and flush one JSON-RPC message to the catalog-only process."""
     if proc.stdin is None:
         return False
     try:
-        proc.stdin.write(json.dumps({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        }) + "\n")
+        proc.stdin.write(json.dumps(message) + "\n")
         proc.stdin.flush()
     except (BrokenPipeError, OSError):
         return False
     return True
+
+
+def _acp_notification(
+    proc: subprocess.Popen[str], method: str, params: dict,
+) -> bool:
+    """Send an ACP notification (a JSON-RPC message without an id)."""
+    return _write_acp_message(proc, {
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+    })
 
 
 def _acp_request(
@@ -726,17 +731,12 @@ def _acp_request(
     deadline: float | None = None,
 ) -> dict | None:
     """Send one ACP request and return its object result before timeout."""
-    if proc.stdin is None:
-        return None
-    try:
-        proc.stdin.write(json.dumps({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": params,
-        }) + "\n")
-        proc.stdin.flush()
-    except (BrokenPipeError, OSError):
+    if not _write_acp_message(proc, {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+        "params": params,
+    }):
         return None
 
     if deadline is None:
@@ -767,20 +767,14 @@ def _acp_request(
 
 
 def _reject_acp_request(proc: subprocess.Popen[str], request_id: object) -> None:
-    if proc.stdin is None:
-        return
-    try:
-        proc.stdin.write(json.dumps({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": {
-                "code": -32601,
-                "message": "Cozter model discovery supports no ACP callbacks",
-            },
-        }) + "\n")
-        proc.stdin.flush()
-    except (BrokenPipeError, OSError):
-        return
+    _write_acp_message(proc, {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": -32601,
+            "message": "Cozter model discovery supports no ACP callbacks",
+        },
+    })
 
 
 def _close_acp_session_if_supported(

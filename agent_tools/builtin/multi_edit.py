@@ -86,12 +86,11 @@ class MultiEditTool(AgentTool):
 
         write_text_after_edit(target, content, uses_crlf=uses_crlf)
 
-        replacement_total = total_replacements
-        replacement_suffix = "s" if replacement_total != 1 else ""
+        replacement_suffix = "s" if total_replacements != 1 else ""
         edit_suffix = "s" if len(edits) != 1 else ""
         return (
             f"Applied {len(edits)} edit{edit_suffix}"
-            f" ({replacement_total} replacement{replacement_suffix}) in {raw_path}"
+            f" ({total_replacements} replacement{replacement_suffix}) in {raw_path}"
         )
 
     def summarize(self, args: dict) -> str:

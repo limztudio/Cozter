@@ -234,8 +234,9 @@ def get_llama_max_retries() -> int:
 def get_show_usage() -> bool:
     """Whether to append a per-turn token/cost footer to replies.
 
-    Only backends that report usage (codex's turn.completed, claude_code's
-    result) produce one; others are silent regardless. Defaults to True.
+    Only backends that report usage (codex's turn.completed, Claude Code's
+    and Grok's result) produce one; others are silent regardless. Defaults
+    to True.
     """
     val = _read_config_value("show_usage")
     if isinstance(val, bool):
@@ -356,12 +357,13 @@ def get_extra_models(backend_name: str) -> list[str]:
         {
             "extra_models": {
                 "codex": ["my-private-codex-model"],
-                "copilot": ["..."],
+                "llama": ["my-local-model"],
             }
         }
 
     Malformed entries (missing key, non-object value, non-string items)
-    are ignored, returning an empty list.
+    are ignored, returning an empty list. Copilot's picker ignores extras
+    because it requires the workspace's authenticated catalog.
     """
     val = _read_config_value("extra_models")
     if not isinstance(val, dict):

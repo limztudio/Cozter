@@ -267,7 +267,7 @@ class SignalBot(BotPlatform):
 
     async def start(self) -> None:
         self._stop_requested.clear()
-        await self._start_jsonrpc()
+        await self._connect_jsonrpc(resubscribe=False)
         try:
             self._group_ids_by_url = await self._resolve_group_ids()
             self._group_ids = set(self._group_ids_by_url.values())
@@ -320,9 +320,6 @@ class SignalBot(BotPlatform):
         logger.info("Signal bot stopped.")
 
     # transport
-
-    async def _start_jsonrpc(self) -> None:
-        await self._connect_jsonrpc(resubscribe=False)
 
     async def _open_jsonrpc_socket(
         self, *, timeout: float = 15.0,
@@ -900,7 +897,7 @@ class SignalBot(BotPlatform):
     ) -> dict[str, Any] | None:
         groups = await self._rpc_request("listGroups")
         wanted = _normalize_group_url(group_url)
-        for group in _extract_groups_from_value(groups):
+        for group in _coerce_json_items(groups):
             group_id = _group_id(group)
             if not group_id:
                 continue
@@ -1614,10 +1611,6 @@ def _coerce_json_items(value: Any) -> list[dict[str, Any]]:
                 return [item for item in nested if isinstance(item, dict)]
         return [value]
     return []
-
-
-def _extract_groups_from_value(value: Any) -> list[dict[str, Any]]:
-    return _coerce_json_items(value)
 
 
 def _first_group_id_from_value(value: Any) -> str:

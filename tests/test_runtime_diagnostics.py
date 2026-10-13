@@ -29,10 +29,7 @@ def _load_main_module():
     )
     sys.path = [
         entry for entry in sys.path
-        if os.path.abspath(entry) not in {
-            os.path.abspath(workspace_pkg_parent),
-            "/home/utilities/AutoStart",
-        }
+        if os.path.abspath(entry) != os.path.abspath(workspace_pkg_parent)
     ]
     sys.path.insert(0, workspace_pkg_parent)
 

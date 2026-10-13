@@ -70,11 +70,11 @@ class WebSearchTool(AgentTool):
 
         async def _try_endpoint(
             template: str,
-        ) -> tuple[str, list[str], list[str], bool]:
-            """Try one endpoint twice; return (host, lines, failures, page).
+        ) -> tuple[list[str], list[str], bool]:
+            """Try one endpoint twice; return (lines, failures, page).
 
-            Runs concurrently with the other endpoint via gather, so a
-            slow/flaky frontend no longer blocks the healthy one.
+            The caller races both endpoints and returns the first usable
+            result, then cancels any unfinished request.
             """
             url = template.format(qs=encoded)
             host = urllib.parse.urlsplit(url).netloc
@@ -96,7 +96,7 @@ class WebSearchTool(AgentTool):
                             saw_local_page = True
                             results = _parse_results(body, max_results)
                             if results:
-                                return host, results, local_failures, True
+                                return results, local_failures, True
                             local_failures.append(f"{host}: no results parsed")
                 except asyncio.CancelledError:
                     raise
@@ -104,7 +104,7 @@ class WebSearchTool(AgentTool):
                     local_failures.append(f"{host}: {exc}")
                 if attempt + 1 < _ATTEMPTS_PER_ENDPOINT:
                     await asyncio.sleep(_RETRY_DELAY_SECONDS)
-            return host, [], local_failures, saw_local_page
+            return [], local_failures, saw_local_page
 
         tasks = [
             asyncio.create_task(_try_endpoint(endpoint))
@@ -116,7 +116,7 @@ class WebSearchTool(AgentTool):
             # Return a usable frontend immediately, even when its sibling is
             # still connecting or retrying. Cancel/close that request below.
             for completed in asyncio.as_completed(tasks):
-                _host, results, endpoint_failures, page = await completed
+                results, endpoint_failures, page = await completed
                 failures.extend(endpoint_failures)
                 saw_page = saw_page or page
                 if results:

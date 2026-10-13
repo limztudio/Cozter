@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from Cozter import schedules, session, workspace
+from Cozter import backends_agent, schedules, session, workspace
 from Cozter.backends_bot.base import BotContext
 from Cozter.backends_bot.signal import SignalBot
 from Cozter.tests.helpers import TestBot
@@ -323,9 +323,15 @@ class BotCommandTests(unittest.TestCase):
 
     # /doctor
     def test_doctor_lists_every_direct_backend(self) -> None:
-        self._run(self.bot.cmd_doctor(self._ctx()))
+        backend = mock.Mock()
+        backend.health_check.return_value = (True, "fixture ready")
+        with mock.patch(
+            "Cozter.backends_bot.base.backends_agent.get_backend",
+            return_value=backend,
+        ):
+            self._run(self.bot.cmd_doctor(self._ctx()))
         out = self._last()
-        for name in ("codex", "claude_code", "copilot", "grok", "llama", "zai"):
+        for name in backends_agent.DIRECT_BACKENDS:
             self.assertIn(name, out)
 
     # /agent

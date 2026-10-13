@@ -20,7 +20,7 @@ from Cozter.backends_bot.base import (
     upload_limit_message,
     write_bytes_atomically,
 )
-from Cozter.backends_bot.signal import SignalBot
+from Cozter.backends_bot.signal import SignalBot, SignalCliError
 from Cozter.backends_bot.slack import SlackBot, _download_private
 from Cozter.backends_bot.telegram import (
     TelegramBot,
@@ -671,8 +671,6 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
     """Outbound throttles wait-and-retry instead of failing the attach."""
 
     async def test_signal_retry_after_sleeps_then_succeeds(self) -> None:
-        from Cozter.backends_bot.signal import SignalBot, SignalCliError
-
         bot = SignalBot(
             ["https://signal.group/#test"],
             jsonrpc_socket="/tmp/signal.sock",
@@ -701,8 +699,6 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(sleeps[0], 4.0)
 
     async def test_signal_non_throttle_error_fails_fast(self) -> None:
-        from Cozter.backends_bot.signal import SignalBot, SignalCliError
-
         bot = SignalBot(
             ["https://signal.group/#test"],
             jsonrpc_socket="/tmp/signal.sock",
@@ -720,8 +716,6 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
         sleep_mock.assert_not_awaited()
 
     async def test_signal_sends_are_serialized_with_pacing(self) -> None:
-        from Cozter.backends_bot.signal import SignalBot
-
         bot = SignalBot(
             ["https://signal.group/#test"],
             jsonrpc_socket="/tmp/signal.sock",
@@ -739,8 +733,6 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_telegram_retry_after_sleeps_then_succeeds(self) -> None:
         from telegram.error import RetryAfter
-
-        from Cozter.backends_bot.telegram import TelegramBot
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "photo.png")
@@ -772,8 +764,6 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_slack_ratelimited_sleeps_then_succeeds(self) -> None:
         from slack_sdk.errors import SlackApiError
-
-        from Cozter.backends_bot.slack import SlackBot
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "report.txt")
@@ -811,8 +801,6 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_slack_non_throttle_error_fails_fast(self) -> None:
         from slack_sdk.errors import SlackApiError
-
-        from Cozter.backends_bot.slack import SlackBot
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "report.txt")

@@ -113,10 +113,6 @@ class InjectCommandTests(unittest.IsolatedAsyncioTestCase):
             bot._inject_queues.pop("u1", None)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class InjectAckBoundTests(unittest.IsolatedAsyncioTestCase):
     async def test_inject_ack_is_bounded_when_send_hangs(self) -> None:
         """A slow ack send must not stall /inject past the ack bound.
@@ -181,3 +177,7 @@ class InjectAckBoundTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(turn, timeout=25)
 
             bot._inject_queues.pop("u1", None)
+
+
+if __name__ == "__main__":
+    unittest.main()

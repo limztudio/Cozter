@@ -361,11 +361,6 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
     fake HttpAgentProcess (pid <= 0, whose ``kill()`` just cancels a task)
     falls back to a single-target ``proc.kill()``.
     """
-    _terminate_tree(proc)
-
-
-def _terminate_tree(proc: asyncio.subprocess.Process) -> None:
-    """Shared tree-kill body for sync and off-loop callers."""
     pid = getattr(proc, "pid", None)
     if os.name == "nt":
         # ``taskkill /T`` walks the tree; keep the ~0.1s spawn off the loop.
