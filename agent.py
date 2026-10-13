@@ -7,6 +7,7 @@ auto-titling background tasks.
 import asyncio
 import contextvars
 import logging
+import math
 import os
 import re
 import weakref
@@ -540,6 +541,16 @@ def _consume_detached_task_requests(result: AgentResult) -> None:
     result.text = cleaned_text
 
 
+def _valid_usage_number(value: object) -> bool:
+    """Keep malformed provider accounting from breaking reply delivery."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return value >= 0 and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def _compact_tokens(n: int) -> str:
     if isinstance(n, bool) or n < 0:
         return "0"
@@ -557,16 +568,14 @@ def format_usage(usage: dict | None) -> str | None:
         return None
     parts: list[str] = []
     input_tokens = usage.get("input_tokens")
-    if isinstance(input_tokens, int) and not isinstance(input_tokens, bool) and input_tokens >= 0:
+    if isinstance(input_tokens, int) and _valid_usage_number(input_tokens):
         parts.append(f"{_compact_tokens(input_tokens)} in")
     output_tokens = usage.get("output_tokens")
-    if isinstance(output_tokens, int) and not isinstance(output_tokens, bool) and output_tokens >= 0:
+    if isinstance(output_tokens, int) and _valid_usage_number(output_tokens):
         parts.append(f"{_compact_tokens(output_tokens)} out")
     cost = usage.get("total_cost_usd")
     if (
-        isinstance(cost, (int, float))
-        and not isinstance(cost, bool)
-        and cost > 0
+        isinstance(cost, (int, float)) and _valid_usage_number(cost) and cost > 0
     ):
         if cost < 0.0001:
             # Fixed-point: sub-cent costs must not show as $0.
@@ -1473,12 +1482,13 @@ def _accumulate_usage(totals: dict, usage: dict | None) -> None:
         return
     for field in _USAGE_TOTAL_FIELDS:
         value = usage.get(field)
-        if (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and value >= 0
-        ):
-            totals[field] = totals.get(field, 0) + value
+        if _valid_usage_number(value):
+            previous = totals.get(field, 0)
+            if not _valid_usage_number(previous):
+                previous = 0
+            combined = previous + value
+            if _valid_usage_number(combined):
+                totals[field] = combined
 
 
 def carry_forward_turn_output(

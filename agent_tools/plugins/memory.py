@@ -81,7 +81,7 @@ def _load_session_file(path: str, session_id: str) -> dict | None:
     try:
         with open(path, encoding="utf-8") as file_handle:
             raw = json.load(file_handle)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     if not isinstance(raw, dict) or raw.get("id") != session_id:
         return None
@@ -126,7 +126,7 @@ def _colony_items(workspace: str) -> list[str]:
     try:
         with open(path, encoding="utf-8") as file_handle:
             raw = json.load(file_handle)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return []
     items = raw.get("items") if isinstance(raw, dict) else None
     if not isinstance(items, list):

@@ -471,7 +471,9 @@ async def _run_claude_command(
     cmd: list[str], *, cwd: str,
 ) -> tuple[int, str, str]:
     """Run a short Claude control command without owning its worker tree."""
-    proc = await create_captured_subprocess(cmd, cwd=cwd)
+    proc = await create_captured_subprocess(
+        cmd, cwd=cwd, cancel_cleanup=_stop_claude_command_launcher,
+    )
     try:
         stdout_result, stderr_result = await asyncio.wait_for(
             _capture_claude_command_output(proc),

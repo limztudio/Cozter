@@ -205,7 +205,10 @@ class GitOpsTool(AgentTool):
                     assert start is not None
                     argv.append(start)
                 return argv
-            return base + ["checkout", branch]
+            # The branch-only form must not become a path checkout when a
+            # requested branch is absent but a tracked file has that name.
+            # A trailing separator makes Git interpret this as a revision.
+            return base + ["checkout", branch, "--"]
         if action == "branch-create":
             branch, err = _clean_ref(args.get("branch"), what="branch")
             if err is not None:

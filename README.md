@@ -1436,8 +1436,9 @@ workspace:
 
 Scheduled `/reserve` turns run in throwaway sessions that cannot pause for
 a reply, so they always use the autonomous policy regardless of this
-setting. They can also drain past a paused collaborative chat queue;
-ordinary queued chat still waits for the user's answer.
+setting. They remain queued behind an unfinished job waiting for a
+collaborative answer; replying resumes that job before later scheduled
+or ordinary chat work.
 
 ## Architecture
 
@@ -1692,7 +1693,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 66 focused
+- Tests: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 72 focused
   `unittest` modules covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import gc
 import json
 import unittest
 from unittest import mock
@@ -329,6 +330,38 @@ class SignalReceiveStartupTests(unittest.TestCase):
 
 
 class SignalJsonRpcRequestTests(unittest.TestCase):
+    def test_writer_failure_consumes_a_simultaneous_reader_error(self) -> None:
+        """EOF and backpressure failure must not leave an unhandled Future."""
+        async def run() -> None:
+            bot = SignalBot([SIGNAL_GROUP_URL], jsonrpc_socket="/tmp/s")
+
+            class Writer:
+                def write(self, _data: bytes) -> None:
+                    return None
+
+                async def drain(self) -> None:
+                    future = next(iter(bot._jsonrpc_pending.values()))
+                    future.set_exception(SignalCliError("JSON-RPC reader closed"))
+                    raise ConnectionError("JSON-RPC writer closed")
+
+            bot._jsonrpc_writer = Writer()  # type: ignore[assignment]
+            bot._jsonrpc_connected = lambda: True  # type: ignore[method-assign]
+            loop = asyncio.get_running_loop()
+            previous_handler = loop.get_exception_handler()
+            unhandled = []
+            loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+            try:
+                with self.assertRaisesRegex(ConnectionError, "writer closed"):
+                    await bot._rpc_request_once("test")
+                self.assertEqual(bot._jsonrpc_pending, {})
+                gc.collect()
+                await asyncio.sleep(0)
+                self.assertEqual(unhandled, [])
+            finally:
+                loop.set_exception_handler(previous_handler)
+
+        asyncio.run(run())
+
     def test_cancelled_request_is_removed_from_pending_map(self) -> None:
         class Writer:
             def __init__(self) -> None:

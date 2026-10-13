@@ -434,7 +434,7 @@ class OpenAIChatBackend(Backend):
         if (
             getattr(self, "supports_vision", False)
             and not compaction
-            and "attachment saved to:" in prompt
+            and "attachment saved to:" in prompt.casefold()
         ):
             vision_parts = await asyncio.to_thread(
                 _vision_parts_for_prompt, prompt, workspace_path,

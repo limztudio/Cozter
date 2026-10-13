@@ -413,6 +413,34 @@ class FormatUsageTests(unittest.TestCase):
         self.assertIn("500 in", footer)
         self.assertNotIn("$", footer)
 
+    def test_oversized_provider_counter_does_not_break_valid_usage(self) -> None:
+        footer = agent.format_usage({
+            "input_tokens": 10 ** 400, "output_tokens": 28,
+            "total_cost_usd": 0.0123,
+        })
+        self.assertIsNotNone(footer)
+        self.assertNotIn(" in", footer)
+        self.assertIn("28 out", footer)
+        self.assertIn("$0.0123", footer)
+
+    def test_nonfinite_provider_cost_is_ignored(self) -> None:
+        for invalid in (float("inf"), float("-inf"), float("nan"), 10 ** 400):
+            with self.subTest(cost=repr(invalid)):
+                self.assertIsNone(agent.format_usage({"total_cost_usd": invalid}))
+
+    def test_bad_continuation_usage_cannot_poison_accounting(self) -> None:
+        totals = {"input_tokens": 10, "total_cost_usd": 0.25}
+        agent._accumulate_usage(totals, {
+            "input_tokens": 10 ** 400, "output_tokens": 28,
+            "total_cost_usd": float("inf"),
+        })
+        self.assertEqual(totals, {
+            "input_tokens": 10, "output_tokens": 28, "total_cost_usd": 0.25,
+        })
+        totals["total_cost_usd"] = 1e308
+        agent._accumulate_usage(totals, {"total_cost_usd": 1e308})
+        self.assertEqual(totals["total_cost_usd"], 1e308)
+
 
 class PromptTruncationDisclosureTests(unittest.TestCase):
     def test_planner_omission_marker_forces_coverage(self) -> None:

@@ -33,7 +33,7 @@ from .base import (
     MessageHandle,
     UploadTooLargeError,
     attachment_kind_from_mime,
-    copy_file_with_limit,
+    copy_file_with_limit_async,
     reserve_upload_path,
     upload_limit_message,
     upload_size_exceeds_limit,
@@ -654,6 +654,11 @@ class SignalBot(BotPlatform):
             self._jsonrpc_pending.pop(request_id, None)
             if not fut.done():
                 fut.cancel()
+            elif not fut.cancelled():
+                # EOF can fail the response Future while drain() also fails.
+                # This path never awaits that Future, so consume its exception
+                # before discarding it to avoid an unhandled-Future diagnostic.
+                fut.exception()
             raise
         if not isinstance(response, dict):
             raise SignalCliError("invalid JSON-RPC response")
@@ -796,8 +801,7 @@ class SignalBot(BotPlatform):
         with reserve_upload_path(upload_dir, filename) as local_path:
             if source_path:
                 # Large attachments: bounded copy off-loop.
-                await asyncio.to_thread(
-                    copy_file_with_limit,
+                await copy_file_with_limit_async(
                     source_path,
                     local_path,
                     self.max_upload_bytes,

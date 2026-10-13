@@ -355,6 +355,26 @@ def copy_file_with_limit(
             output.write(chunk)
 
 
+async def copy_file_with_limit_async(
+    source_path: str,
+    local_path: str,
+    max_upload_bytes: int,
+) -> None:
+    """Copy off-loop, settling the writer before caller-owned path cleanup.
+
+    Cancelling ``to_thread`` would leave its worker running after an upload
+    reservation removed the destination. The atomic writer could then recreate
+    the cancelled file. Delay cancellation until the copy physically finishes
+    so the reservation also removes any completed output.
+    """
+    await _run_durable_file_operation(
+        asyncio.Lock(),
+        functools.partial(
+            copy_file_with_limit, source_path, local_path, max_upload_bytes,
+        ),
+    )
+
+
 def write_bytes_atomically(local_path: str, data: bytes) -> None:
     """Atomically write already-bounded binary attachment data."""
     with atomic_output_file(local_path) as output:

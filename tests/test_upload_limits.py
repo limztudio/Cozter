@@ -1,8 +1,10 @@
 """Regression coverage for bounded chat-platform attachments."""
 
+import asyncio
 import base64
 import os
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 from typing import Any, cast
@@ -79,6 +81,66 @@ class UploadLimitConfigTests(unittest.TestCase):
 
 
 class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
+    async def _assert_cancelled_local_copy_cleans_upload(self, transfer) -> None:
+        """A cancelled import must settle its writer before removing its path."""
+        started = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        real_replace = os.replace
+
+        def blocked_replace(source, destination):
+            started.set()
+            try:
+                if not release.wait(5):
+                    raise TimeoutError("test did not release attachment writer")
+                real_replace(source, destination)
+            finally:
+                finished.set()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "source.bin")
+            upload_dir = os.path.join(tmp, "uploads")
+            os.mkdir(upload_dir)
+            with open(source, "wb") as file_handle:
+                file_handle.write(b"attachment")
+            with mock.patch(
+                "Cozter.backends_bot.base.os.replace", side_effect=blocked_replace,
+            ):
+                task = asyncio.create_task(transfer(source, upload_dir))
+                try:
+                    self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                    task.cancel()
+                    await asyncio.sleep(0.01)
+                    self.assertFalse(task.done())
+                finally:
+                    release.set()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    self.assertTrue(await asyncio.to_thread(finished.wait, 2))
+            self.assertEqual(os.listdir(upload_dir), [])
+
+    async def test_cancelled_signal_local_copy_removes_completed_writer(self) -> None:
+        bot = SignalBot(
+            ["https://signal.group/#test"], jsonrpc_socket="/tmp/signal.sock",
+        )
+
+        async def transfer(source, upload_dir):
+            await bot._materialize_attachment(
+                {"path": source, "filename": "local.bin"},
+                "group", upload_dir, "",
+            )
+
+        await self._assert_cancelled_local_copy_cleans_upload(transfer)
+
+    async def test_cancelled_telegram_local_copy_removes_completed_writer(self) -> None:
+        async def transfer(source, upload_dir):
+            with reserve_upload_path(upload_dir, "local.bin") as destination:
+                await _download_telegram_file(
+                    SimpleNamespace(file_path=source), destination, 100,
+                )
+
+        await self._assert_cancelled_local_copy_cleans_upload(transfer)
+
     async def test_outbound_uploads_are_checked_before_platform_io(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "large.bin")

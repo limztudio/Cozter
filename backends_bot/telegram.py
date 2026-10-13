@@ -36,7 +36,7 @@ from .base import (
     MessageHandle,
     NO_WORKSPACE_TEXT,
     UploadTooLargeError,
-    copy_file_with_limit,
+    copy_file_with_limit_async,
     download_http_file,
     ensure_upload_dir,
     is_http_url,
@@ -677,6 +677,6 @@ async def _download_telegram_file(
         await download_http_file(url, local_path, max_upload_bytes)
         return
 
-    await asyncio.to_thread(
-        copy_file_with_limit, file_path, local_path, max_upload_bytes,
+    await copy_file_with_limit_async(
+        file_path, local_path, max_upload_bytes,
     )

@@ -84,7 +84,7 @@ def _clean_headers(value: object) -> dict[str, str] | str:
 def _looks_like_json(body: str) -> bool:
     try:
         parsed = json.loads(body)
-    except ValueError:
+    except (ValueError, RecursionError):
         return False
     return isinstance(parsed, (dict, list))
 
@@ -117,10 +117,10 @@ async def _request_following_redirects(
     url: str,
     headers: dict[str, str],
     body: str | None,
-) -> tuple[int, str, str, str | None]:
+) -> tuple[int, str, str, str, str | None]:
     """Send the request, re-validating every redirect hop.
 
-    Returns ``(status, final_url, content_type, text_body)`` where
+    Returns ``(status, final_method, final_url, content_type, text_body)`` where
     ``text_body`` is ``None`` for non-textual (binary) response bodies.
     """
     current_url = url
@@ -174,10 +174,10 @@ async def _request_following_redirects(
 
             content_type = response.headers.get("content-type", "")
             if not _is_textual_content_type(content_type):
-                return status, str(response.url), content_type, None
+                return status, current_method, str(response.url), content_type, None
             text, _http_capped = await read_bounded_text(response)
             return (
-                status, str(response.url), content_type,
+                status, current_method, str(response.url), content_type,
                 with_fetch_cap_marker(text, _http_capped),
             )
 
@@ -258,7 +258,7 @@ class HttpRequestTool(AgentTool):
 
         try:
             async with open_public_http_session() as session:
-                status, final_url, content_type, text = (
+                status, final_method, final_url, content_type, text = (
                     await _request_following_redirects(
                         session, method, url, headers, body,
                     )
@@ -269,7 +269,7 @@ class HttpRequestTool(AgentTool):
             return f"Request failed: {exc}"
 
         header = (
-            f"HTTP {status}\n{method} {final_url}\n"
+            f"HTTP {status}\n{final_method} {final_url}\n"
             f"Content-Type: {content_type or 'unknown'}"
         )
         if text is None:

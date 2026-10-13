@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
@@ -276,7 +276,7 @@ def attachment_image_paths(
     extension, and fit the per-turn byte cap. Never raises: unreadable
     or escaping paths are skipped so a text-only turn proceeds.
     """
-    if not isinstance(prompt, str) or "attachment saved to:" not in prompt:
+    if not isinstance(prompt, str) or "attachment saved to:" not in prompt.casefold():
         return []
     seen: set[str] = set()
     found: list[str] = []
@@ -731,22 +731,8 @@ async def create_prompt_subprocess(
             # New session so /stop or /inject kills the group.
             start_new_session=os.name != "nt",
         ))
-        try:
-            # wait() keeps the owned launch running when cancelled here.
-            await asyncio.wait((launch,))
-            return launch.result()
-        except asyncio.CancelledError:
-            # Cancellation can race OS process creation. Keep stdin alive
-            # until creation settles, then reap any child before returning.
-            cleanup = asyncio.create_task(_reap_cancelled_prompt_launch(launch))
-            while not cleanup.done():
-                try:
-                    await asyncio.wait((cleanup,))
-                except asyncio.CancelledError:
-                    # A second /stop must not interrupt ownership cleanup.
-                    continue
-            cleanup.result()
-            raise
+        # Keep stdin alive until creation settles, even on cancellation.
+        return await _await_process_launch(launch, _reap_failed_prompt_subprocess)
 
 
 async def create_captured_subprocess(
@@ -755,20 +741,49 @@ async def create_captured_subprocess(
     cwd: str | None = None,
     env: dict[str, str] | None = None,
     start_new_session: bool = False,
+    cancel_cleanup: Callable[[asyncio.subprocess.Process], Awaitable[None]] | None = None,
 ) -> asyncio.subprocess.Process:
     """Spawn a short control command with closed stdin and captured output.
 
     Claude detached-task controls and Grok prompt-file runs need this
-    process shape. The caller remains responsible for communication,
-    timeouts, and cleanup appropriate to its backend.
+    process shape. Cancellation during startup settles process creation and
+    reaps the child before returning. Control launchers that must preserve
+    provider-owned workers can supply a launcher-only ``cancel_cleanup``.
+    The caller owns communication, timeouts, and cleanup after launch.
     """
-    return await _create_piped_subprocess(
+    launch = asyncio.create_task(_create_piped_subprocess(
         cmd,
         stdin=asyncio.subprocess.DEVNULL,
         cwd=cwd,
         env=env,
         start_new_session=start_new_session,
+    ))
+    return await _await_process_launch(
+        launch, cancel_cleanup or _reap_failed_prompt_subprocess,
     )
+
+
+async def _await_process_launch(
+    launch: asyncio.Task[asyncio.subprocess.Process],
+    cancel_cleanup: Callable[[asyncio.subprocess.Process], Awaitable[None]],
+) -> asyncio.subprocess.Process:
+    """Transfer a started process, or finish ownership cleanup on cancel."""
+    try:
+        # wait() keeps the owned launch running when cancelled here.
+        await asyncio.wait((launch,))
+        return launch.result()
+    except asyncio.CancelledError:
+        cleanup = asyncio.create_task(_reap_cancelled_process_launch(
+            launch, cancel_cleanup,
+        ))
+        while not cleanup.done():
+            try:
+                await asyncio.wait((cleanup,))
+            except asyncio.CancelledError:
+                # A second /stop must not interrupt ownership cleanup.
+                continue
+        cleanup.result()
+        raise
 
 
 async def _create_piped_subprocess(
@@ -809,8 +824,9 @@ async def _reap_failed_prompt_subprocess(
         close_subprocess_pipe(proc, 2)
 
 
-async def _reap_cancelled_prompt_launch(
+async def _reap_cancelled_process_launch(
     launch: asyncio.Task[asyncio.subprocess.Process],
+    cancel_cleanup: Callable[[asyncio.subprocess.Process], Awaitable[None]],
 ) -> None:
     """Reap a cancelled launch once subprocess creation has settled."""
     try:
@@ -818,7 +834,7 @@ async def _reap_cancelled_prompt_launch(
     except (Exception, asyncio.CancelledError):
         # Failed process creation has no subprocess to transfer to a caller.
         return
-    await _reap_failed_prompt_subprocess(proc)
+    await cancel_cleanup(proc)
 
 
 class Backend(ABC):
