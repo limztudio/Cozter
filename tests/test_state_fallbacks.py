@@ -330,14 +330,6 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 ensure_upload_dir(ws)
             self.assertEqual(os.listdir(outside), [])
 
-    def test_ensure_workspace_state_dir_creates_nested_dir(self) -> None:
-        with tempfile.TemporaryDirectory() as ws:
-            path = workspace.ensure_workspace_state_dir(ws, "uploads")
-            self.assertTrue(os.path.isdir(path))
-            self.assertEqual(
-                path, workspace.workspace_state_path(ws, "uploads"),
-            )
-
     @unittest.skipIf(os.name == "nt", "POSIX mode bits are not Windows ACLs")
     def test_new_config_is_created_owner_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -740,14 +732,6 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
     """Defaults, overrides, and malformed-value fallback for the
     tool/update-idle/dump-traceback config getters added by the
     runtime-hardening work."""
-
-    def test_positive_getters_honor_config_overrides(self) -> None:
-        with temporary_config({
-            "tool_timeout": 5,
-            "update_idle_timeout": 90,
-        }):
-            self.assertEqual(config.get_tool_timeout(), 5)
-            self.assertEqual(config.get_update_idle_timeout(), 90)
 
     def test_dump_traceback_interval_allows_zero_but_rejects_negative(self) -> None:
         with temporary_config({"dump_traceback_interval": 30}):

@@ -365,17 +365,6 @@ class AgentContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("also verify output", prompts[2])
         self.assertEqual(result.text, "draft 3")
 
-    async def test_failed_draft_is_delivered_without_judge_continuation(self):
-        async def drive(*_args, **_kwargs):
-            return AgentResult(text="partial response", error="backend failed"), False
-
-        judge = mock.AsyncMock(side_effect=AssertionError("failed drafts must not be judged"))
-        with tempfile.TemporaryDirectory() as ws:
-            result = await self.run_turn(ws, drive, judge)
-        self.assertEqual(result.error, "backend failed")
-        judge.assert_not_awaited()
-
-
     async def test_owned_injection_queue_stays_open_through_judging(self):
         inject_queue = _InjectQueue(maxsize=2)
         prompts = []

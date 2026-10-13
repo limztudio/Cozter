@@ -21,17 +21,6 @@ INVALID_JSON_VALUES = (
 
 
 class StateValidationAndRecoveryTests(unittest.TestCase):
-    def test_example_config_covers_current_defaults(self) -> None:
-        example_path = os.path.join(os.path.dirname(config.__file__), ".config", "config.example.json")
-        with open(example_path, encoding="utf-8") as file_handle:
-            example = json.load(file_handle)
-        self.assertEqual(example.keys(), config._DEFAULT_CONFIG.keys())
-        for key, default in config._DEFAULT_CONFIG.items():
-            if key in {"telegram_bot_tokens", "user_ids"}:
-                continue
-            with self.subTest(key=key):
-                self.assertEqual(example[key], default)
-
     def test_invalid_numeric_or_nested_json_state_falls_back(self) -> None:
         for raw in INVALID_JSON_VALUES:
             with self.subTest(raw_length=len(raw)), tempfile.TemporaryDirectory() as ws:

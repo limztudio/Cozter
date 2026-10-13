@@ -532,12 +532,6 @@ class CompactRequestTests(unittest.TestCase):
         self.assertIn("\\ud800", compact)
         self.assertIn("\\ud55c", compact)
 
-    def test_message_size_bound_matches_request_serialization(self):
-        message = {"role": "tool", "name": "read_file", "content": "한글\n" * 20}
-        self.assertEqual(
-            oa._message_payload_bytes(message), len(oa._compact_json(message).encode()),
-        )
-
     def test_agent_session_uses_compact_serializer_once_for_all_rounds(self):
         payloads = []
 

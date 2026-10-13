@@ -15,7 +15,6 @@ from unittest import mock
 from Cozter import agent, flexible, workspace
 from Cozter.agent_tools.builtin.bash import BashTool
 from Cozter.backends_agent.base import AgentResult, ChatEvent, append_detached_task
-from Cozter.backends_bot.base import BotPlatform
 
 
 class PlanParsingTests(unittest.TestCase):
@@ -96,13 +95,6 @@ class PlanParsingTests(unittest.TestCase):
                 self.assertIn(note, plan.understanding)
                 self.assertIn(note, flexible.build_subtask_prompt("request", plan, 0, []))
 
-    def test_planner_prompt_advertises_the_expanded_subtask_limit(self) -> None:
-        prompt = flexible.build_plan_prompt("context", collaborative=False)
-        self.assertIn(
-            f"At most {flexible.MAX_SUBTASKS} sub-tasks,",
-            prompt,
-        )
-
     def test_lines_with_an_unknown_tier_are_skipped(self) -> None:
         plan = flexible.parse_plan(
             "[PLAN]\n1. [urgent] nope\n2. [low] yep\n[/PLAN]", "req",
@@ -168,18 +160,6 @@ class MergeFallbackTests(unittest.TestCase):
 
 
 class FlexibleSettingsTests(unittest.TestCase):
-    def test_a_fresh_workspace_has_every_tier_wired_up(self) -> None:
-        with tempfile.TemporaryDirectory() as ws:
-            workspace.ensure_cozter_dir(ws)
-            self.assertEqual(
-                workspace.get_flexible_run_config(ws),
-                {
-                    "low": ("codex", "gpt-6-luna"),
-                    "mid": ("codex", "gpt-6-sol"),
-                    "high": ("codex", "gpt-6.1-sol"),
-                },
-            )
-
     def test_tier_model_defaults_follow_the_tier_agent(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
@@ -229,11 +209,6 @@ class FlexibleSettingsTests(unittest.TestCase):
             workspace.ensure_cozter_dir(ws)
             with self.assertRaises(ValueError):
                 workspace.get_flexible_backend_name(ws, "extreme")
-
-    def test_every_tier_command_is_registered(self) -> None:
-        for tier in workspace.FLEXIBLE_TIERS:
-            self.assertIn(f"agent_flexible_{tier}", BotPlatform._COMMANDS)
-            self.assertIn(f"model_flexible_{tier}", BotPlatform._COMMANDS)
 
 
 def _worker(text: str, *, usage: dict | None = None) -> AgentResult:

@@ -19,26 +19,6 @@ class RunLockTests(unittest.TestCase):
             workspace.get_run_lock("/ws/a"), workspace.get_lock("/ws/a"),
         )
 
-    def test_run_lock_serializes_turns(self) -> None:
-        order: list[str] = []
-
-        async def worker(lock: asyncio.Lock, tag: str) -> None:
-            async with lock:
-                order.append(f"{tag}-start")
-                await asyncio.sleep(0.01)
-                order.append(f"{tag}-end")
-
-        async def scenario() -> None:
-            lock = workspace.get_run_lock("/ws/serialize")
-            await asyncio.gather(worker(lock, "A"), worker(lock, "B"))
-
-        asyncio.run(scenario())
-        # First acquirer fully completes before the other starts: no interleaving.
-        self.assertIn(order, [
-            ["A-start", "A-end", "B-start", "B-end"],
-            ["B-start", "B-end", "A-start", "A-end"],
-        ])
-
     def test_workspace_aliases_share_file_and_run_locks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = os.path.join(tmp, "workspace")

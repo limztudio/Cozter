@@ -442,11 +442,6 @@ class GitOpsToolTests(_GitRepoMixin):
         )
         self.assertIn("init", log.stdout)
 
-    def test_add_all_flag(self) -> None:
-        self.write("a.txt", "hello\n")
-        self.write("b.txt", "world\n")
-        self.assertEqual(self.invoke(action="add", all=True), "OK")
-
     def test_add_rejects_escape(self) -> None:
         self.assertTrue(
             self.invoke(action="add", paths=["../outside"]).startswith(

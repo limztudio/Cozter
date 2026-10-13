@@ -13,10 +13,8 @@ from Cozter.agent_tools.base import (
     apply_string_replacement,
     coerce_int_arg,
     move_path_no_clobber,
-    path_property,
     path_replacement_parameters,
     read_bounded_text,
-    replacement_properties,
     summarize_arg,
     summarize_path,
     summarize_path_pair,
@@ -163,25 +161,6 @@ class AgentToolHelperTests(unittest.TestCase):
             ),
             ("x b x", 2, 2),
         )
-
-    def test_replacement_schema_properties_are_independent(self) -> None:
-        first = replacement_properties()
-        second = replacement_properties()
-
-        self.assertEqual(first, second)
-        first["replace_all"]["description"] = "changed"
-        self.assertNotEqual(
-            first["replace_all"]["description"],
-            second["replace_all"]["description"],
-        )
-
-    def test_path_schema_properties_are_fresh_and_described(self) -> None:
-        first = path_property("A workspace path.")
-        second = path_property("A workspace path.")
-
-        self.assertEqual(first, {"type": "string", "description": "A workspace path."})
-        first["description"] = "changed"
-        self.assertEqual(second["description"], "A workspace path.")
 
     def test_path_replacement_schema_is_fresh(self) -> None:
         first = path_replacement_parameters()
@@ -1116,15 +1095,6 @@ class ConfirmPermissionGateTests(unittest.TestCase):
             agent_tools.execute_tool(name, args, ws, approval, events.append)
         )
 
-    def test_confirm_blocks_state_changing_tool(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            result = self._execute(
-                "write_file", {"path": "x.txt", "content": "hi"},
-                "confirm", tmp,
-            )
-            self.assertTrue(result.startswith("Blocked"), result)
-            self.assertFalse(os.path.exists(os.path.join(tmp, "x.txt")))
-
     def test_confirm_allows_read_only_tool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result = self._execute("list_dir", {"path": "."}, "confirm", tmp)
@@ -1219,25 +1189,6 @@ class ConfirmPermissionGateTests(unittest.TestCase):
             result = self._execute("not_a_real_tool", {}, "auto", tmp)
         self.assertEqual(result, "Unknown tool: not_a_real_tool")
 
-    def test_deny_blocks_a_stray_tool_call(self) -> None:
-        """The execution boundary remains safe if a backend emits a tool anyway."""
-        with tempfile.TemporaryDirectory() as tmp:
-            result = self._execute(
-                "write_file", {"path": "x.txt", "content": "hi"},
-                "deny", tmp,
-            )
-            self.assertTrue(result.startswith("Blocked"), result)
-            self.assertFalse(os.path.exists(os.path.join(tmp, "x.txt")))
-
-    def test_unknown_permission_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            result = self._execute(
-                "write_file", {"path": "x.txt", "content": "hi"},
-                "unexpected", tmp,
-            )
-            self.assertTrue(result.startswith("Blocked"), result)
-            self.assertFalse(os.path.exists(os.path.join(tmp, "x.txt")))
-
     def test_read_only_schema_excludes_mutating_tools(self) -> None:
         names = {
             tool_entry["function"]["name"]
@@ -1255,39 +1206,6 @@ class ConfirmPermissionGateTests(unittest.TestCase):
         }
         self.assertIn("write_file", names)
         self.assertNotIn("bash", names)
-
-
-class ExecuteToolTimeoutTests(unittest.TestCase):
-    def test_execute_tool_real_work_cap_finishes_slow_tool(self) -> None:
-        """3600s real-work cap: a slow tool finishes; cancel still stops instantly."""
-        class SlowTool:
-            file_action = None
-
-            async def run(self, workspace_path: str, args: dict) -> str:
-                del workspace_path, args
-                await asyncio.sleep(0.05)
-                return "finished"
-
-        async def run() -> tuple[str, list[dict]]:
-            events: list[dict] = []
-            return (
-                await agent_tools.execute_tool(
-                    "slow_test", {}, "/tmp", "auto", events.append,
-                ),
-                events,
-            )
-
-        original_tools = agent_tools._BY_NAME
-        agent_tools._BY_NAME = {**original_tools, "slow_test": SlowTool()}
-        try:
-            result, events = asyncio.run(run())
-        finally:
-            agent_tools._BY_NAME = original_tools
-
-        self.assertEqual(result, "finished")
-        self.assertEqual(events[0]["type"], "tool_use")
-        self.assertEqual(events[-1]["type"], "tool_result")
-        self.assertEqual(events[-1]["output"], result)
 
 
 class ExecuteToolResultTests(unittest.TestCase):

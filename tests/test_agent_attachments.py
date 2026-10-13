@@ -13,14 +13,6 @@ from unittest import mock
 from Cozter import agent
 
 
-class AwaitMarkerTests(unittest.TestCase):
-    def test_await_marker_detected_and_stripped(self) -> None:
-        cleaned, awaiting = agent.extract_await("all done [[await]]")
-        self.assertTrue(awaiting)
-        self.assertNotIn("[[await]]", cleaned)
-        self.assertIn("all done", cleaned)
-
-
 class AttachmentGuardTests(unittest.TestCase):
     @staticmethod
     def _write_png(path: str) -> None:

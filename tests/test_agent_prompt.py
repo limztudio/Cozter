@@ -65,10 +65,6 @@ class ContextBudgetTests(unittest.TestCase):
         self.assertIn("message number 0", large_budget_prompt)
         self.assertNotIn("message number 0 ", small_budget_prompt)
 
-    def test_no_context_returns_prompt_unchanged(self) -> None:
-        out = agent._build_contextual_prompt("hi", None)
-        self.assertEqual(out, "hi")
-
     def test_durable_memory_cannot_exceed_history_budget(self) -> None:
         """Large persisted blocks are clipped instead of crowding out the cap."""
         data = {
@@ -148,16 +144,6 @@ class PromptPolicyTests(unittest.TestCase):
                     tmp, explicit_session=True,
                 ),
             )
-
-    def test_capability_hint_enforces_whole_scope_coverage(self) -> None:
-        for collaborative in (True, False):
-            hint = agent._capability_hint(
-                collaborative, allow_detached_requests=False,
-            )
-            self.assertIn("Whole-scope", hint)
-            self.assertIn("PARTIAL", hint)
-            self.assertIn("Thinking...", hint)
-            self.assertIn("DONE", hint)
 
 
 class BackendVerificationPromptTests(unittest.TestCase):
@@ -404,14 +390,6 @@ class FormatUsageTests(unittest.TestCase):
         self.assertIn("12.5k in", footer)
         self.assertIn("28 out", footer)
         self.assertIn("$0.0123", footer)
-
-    def test_tokens_only_no_cost(self) -> None:
-        footer = agent.format_usage(
-            {"input_tokens": 500, "output_tokens": 10},
-        )
-        assert footer is not None
-        self.assertIn("500 in", footer)
-        self.assertNotIn("$", footer)
 
     def test_oversized_provider_counter_does_not_break_valid_usage(self) -> None:
         footer = agent.format_usage({

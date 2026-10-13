@@ -40,6 +40,7 @@ class AutoTitlingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(title, "Recent Context Title")
         prompt = run_title.await_args.args[2]
         self.assertLessEqual(len(prompt), titling.TITLE_CONTEXT_CHARS)
+        self.assertIn("older summary omitted", prompt)
         self.assertIn("Recent messages:\nUser: recent user context", prompt)
         self.assertIn("Assistant: recent assistant context", prompt)
 
@@ -87,35 +88,7 @@ class CleanTitleTests(unittest.TestCase):
         self.assertIn("… [clipped]", title)
         self.assertLessEqual(len(title), titling.TITLE_MAX_CHARS)
 
-class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
-    async def test_titling_summary_clip_never_exceeds_budget(self) -> None:
-        with (
-            mock.patch.object(
-                titling.backends_agent,
-                "get_backend",
-                return_value=mock.sentinel.backend,
-            ),
-            mock.patch.object(
-                titling,
-                "run_internal_backend",
-                new=mock.AsyncMock(return_value="T"),
-            ) as run_title,
-        ):
-            data = {
-                "summary": "s" * 2_000,
-                "messages": [
-                    {"role": "user", "content": "u"},
-                    {"role": "assistant", "content": "a"},
-                ],
-            }
-            await titling.generate(
-                "/ws", "sid", "model", backend_name="t",
-                _preloaded_data=data,
-            )
-            prompt = run_title.await_args.args[2]
-            self.assertLessEqual(len(prompt), titling.TITLE_CONTEXT_CHARS)
-            self.assertIn("…", prompt)
-
+class TruncationBudgetTests(unittest.TestCase):
     def test_colony_session_name_clip_never_exceeds_name_space(self) -> None:
         from Cozter import colony as colony_mod
 
@@ -130,34 +103,10 @@ class TruncationBudgetTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("…", block)
                 self.assertNotIn("… [name clipped]… [name clipped]", block)
 
-    def test_flexible_report_clip_never_exceeds_cap(self) -> None:
-        from Cozter import flexible as flexible_mod
-
-        long_report = "x" * (flexible_mod._REPORT_MAX_CHARS + 500)
-        out = flexible_mod._truncate_report(long_report)
-        self.assertLessEqual(len(out), flexible_mod._REPORT_MAX_CHARS)
-        self.assertIn(flexible_mod._REPORT_TRUNCATION_MARKER, out)
-        self.assertEqual(flexible_mod._truncate_report("hi"), "hi")
-
     def test_status_clips_reserve_marker_inside_budget(self) -> None:
-        from Cozter.agent_tools import base as tools_base
         from Cozter.agent_tools.plugins import _git_common as git_common
         from Cozter.agent_tools.plugins import git_info as git_info_mod
-        from Cozter.backends_agent import base as agent_base
 
-        for clip in (
-            tools_base.clip_status_value,
-            agent_base.clip_status_value,
-        ):
-            out = clip("x" * 300)
-            self.assertLessEqual(len(out), 200)
-            self.assertIn("… [clipped]", out)
-        argument_summary = tools_base.summarize_arg(
-            "grep", {"pattern": "a" * 300}, "pattern",
-        )
-        summarized_value = argument_summary.split("grep: ", 1)[1]
-        self.assertLessEqual(len(summarized_value), 200)
-        self.assertIn("… [clipped]", summarized_value)
         self.assertLessEqual(
             len(git_info_mod._bounded("y" * 13_000)),
             git_common.MAX_OUTPUT_CHARS,

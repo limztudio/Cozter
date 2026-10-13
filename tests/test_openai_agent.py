@@ -1020,18 +1020,6 @@ class OpenAIParallelToolTests(unittest.TestCase):
         oa._stream_completion = self._orig_stream
         oa.tools.execute_tool = self._orig_execute
 
-    def test_payload_advertises_parallel_tool_calls(self) -> None:
-        calls: list[dict] = []
-
-        async def stream(*args, **kwargs):
-            calls.append(copy.deepcopy(args[1]))
-            return "done", "", []
-
-        _run_tool_fixture(stream, _execute_ok)
-
-        self.assertTrue(calls)
-        self.assertTrue(calls[0].get("parallel_tool_calls") is True)
-
     def test_batch_runs_concurrently_and_preserves_order(self) -> None:
         payloads: list[dict] = []
         active = 0

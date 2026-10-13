@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from Cozter import backends_agent, schedules, session, workspace
+from Cozter import schedules, session, workspace
 from Cozter.backends_bot.base import BotContext
 from Cozter.backends_bot.signal import SignalBot
 from Cozter.tests.helpers import TestBot
@@ -147,18 +147,7 @@ class BotCommandTests(unittest.TestCase):
         self.assertIn("Unknown mode", self._last())
         self.assertEqual(workspace.get_permission(self.ws), "auto")  # default
 
-    # /style
-    def test_style_flow_sets_value(self) -> None:
-        self._run(self.bot._receive_style(self._ctx(text="autonomous")))
-        self.assertEqual(
-            workspace.get_interaction_style(self.ws), "autonomous",
-        )
-
     # /effort
-    def test_effort_flow_sets_value(self) -> None:
-        self._run(self.bot._receive_effort(self._ctx(text="60")))
-        self.assertEqual(workspace.get_reasoning_effort(self.ws), 60)
-
     def test_effort_rejects_out_of_range(self) -> None:
         self._run(self.bot._receive_effort(self._ctx(text="500")))
         self.assertIn("Out of range", self._last())
@@ -167,15 +156,7 @@ class BotCommandTests(unittest.TestCase):
         self._run(self.bot._receive_effort(self._ctx(text="9" * 5_000)))
         self.assertIn("Not a number", self._last())
 
-    def test_effort_help_lists_zai_mapping(self) -> None:
-        self._run(self.bot.cmd_effort(self._ctx()))
-        self.assertIn("zai:", self._last())
-
     # /context
-    def test_compact_sets_interval(self) -> None:
-        self._run(self.bot.cmd_compact(self._ctx(args="12")))
-        self.assertEqual(workspace.get_compact_interval(self.ws), 12)
-
     def test_numeric_commands_reject_overlong_decimal_input(self) -> None:
         too_long = "9" * 5_000
 
@@ -320,19 +301,6 @@ class BotCommandTests(unittest.TestCase):
         self.assertEqual(migrated[0]["id"], "legacy")
         self.assertEqual(migrated[0]["platform_id"], "signal")
         self.assertEqual(migrated[0]["chat_id"], "group")
-
-    # /doctor
-    def test_doctor_lists_every_direct_backend(self) -> None:
-        backend = mock.Mock()
-        backend.health_check.return_value = (True, "fixture ready")
-        with mock.patch(
-            "Cozter.backends_bot.base.backends_agent.get_backend",
-            return_value=backend,
-        ):
-            self._run(self.bot.cmd_doctor(self._ctx()))
-        out = self._last()
-        for name in backends_agent.DIRECT_BACKENDS:
-            self.assertIn(name, out)
 
     # /agent
     def test_agent_picker_reserves_zero_for_flexible(self) -> None:

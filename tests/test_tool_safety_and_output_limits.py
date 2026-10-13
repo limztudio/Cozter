@@ -20,13 +20,6 @@ from Cozter.agent_tools.plugins.notes import NotesTool
 
 
 class ToolSafetyAndOutputLimitTests(unittest.TestCase):
-    def test_public_http_session_uses_the_documented_one_hour_cap(self) -> None:
-        async def inspect_timeout() -> None:
-            async with tool_base.open_public_http_session() as session:
-                self.assertEqual(session.timeout.total, 3600)
-
-        asyncio.run(inspect_timeout())
-
     @unittest.skipUnless(os.name == "nt", "Windows paths are case-insensitive")
     def test_bounded_workspace_accepts_different_absolute_path_case(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:

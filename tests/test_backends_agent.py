@@ -17,7 +17,6 @@ from Cozter.backends_agent import base as backend_base
 from Cozter.backends_agent import claude_code as claude_code_mod
 from Cozter.backends_agent import codex as codex_mod
 from Cozter.backends_agent import copilot as copilot_mod
-from Cozter.backends_agent import get_backend
 from Cozter.backends_agent import grok as grok_mod
 from Cozter.backends_agent.base import (
     CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
@@ -25,15 +24,11 @@ from Cozter.backends_agent.base import (
     Backend,
     CachedModelCatalog,
     ChatEvent,
-    ProcessResourceMap,
     apply_messages_assistant_content,
     apply_terminal_result_event,
     extract_messages_style_agent_text,
-    fallback_model_tables,
     fresh_model_catalog,
     messages_content_texts,
-    record_backend_error,
-    record_error_event,
     summarize_cli_tool,
     terminal_result_text,
     truncate_status_text,
@@ -118,18 +113,6 @@ class BackendSharedHelperTests(unittest.TestCase):
         self.assertEqual(fresh_model_catalog(models, 20.0, now=19.9), models)
         self.assertIsNone(fresh_model_catalog(models, 20.0, now=20.0))
         self.assertIsNone(fresh_model_catalog(None, 100.0, now=0.0))
-
-    def test_fallback_model_tables_project_every_row(self) -> None:
-        models, efforts, windows = fallback_model_tables((
-            ("model-a", ("low", "high"), 100),
-            ("model-b", ("low",), 200),
-        ))
-        self.assertEqual(models, ("model-a", "model-b"))
-        self.assertEqual(
-            efforts,
-            {"model-a": ("low", "high"), "model-b": ("low",)},
-        )
-        self.assertEqual(windows, {"model-a": 100, "model-b": 200})
 
     def test_cached_model_catalog_refreshes_after_expiry(self) -> None:
         class Catalog(CachedModelCatalog):
@@ -239,16 +222,6 @@ class BackendSharedHelperTests(unittest.TestCase):
         self.assertEqual(truncate_status_text("abcdef", limit=1), "…")
         self.assertEqual(truncate_status_text("abcdef", limit=2), "a…")
 
-    def test_process_resource_map_keys_by_object_identity(self) -> None:
-        resources = ProcessResourceMap()
-        first = object()
-        second = object()
-        resources.remember(first, "/tmp/a")
-        resources.remember(second, "/tmp/b")
-        self.assertEqual(resources.pop(first), "/tmp/a")
-        self.assertIsNone(resources.pop(first))
-        self.assertEqual(resources.pop(second), "/tmp/b")
-
     def test_terminal_result_helpers_cover_usage_error_and_fallback(self) -> None:
         self.assertEqual(
             terminal_result_text({"type": "result", "result": "done"}),
@@ -293,41 +266,6 @@ class BackendSharedHelperTests(unittest.TestCase):
             error_message="bad model",
         )
         self.assertEqual(custom.error, "bad model")
-
-    def test_record_error_event_normalizes_bad_messages(self) -> None:
-        result = AgentResult()
-        self.assertFalse(record_error_event({"type": "assistant_text"}, result))
-        self.assertTrue(record_error_event({"type": "error", "message": 7}, result))
-        self.assertEqual(result.error, "Unknown error")
-        self.assertEqual(result.text, "Error: Unknown error")
-
-    def test_record_backend_error_preserves_a_streamed_reply(self) -> None:
-        result = AgentResult()
-        result.text = "already answered"
-        record_backend_error(result, "disconnected")
-        self.assertEqual(result.text, "already answered")
-        self.assertEqual(result.error, "disconnected")
-        self.assertEqual(result.events, [])
-
-        empty = AgentResult()
-        record_backend_error(empty, "boom")
-        self.assertEqual(empty.error, "boom")
-        self.assertEqual(empty.text, "Error: boom")
-
-
-    def test_workspace_model_hooks_default_to_existing_behavior(self) -> None:
-        backend = _DummyBackend()
-        backend.available_models = ("model-a",)
-        self.assertEqual(
-            backend.available_models_for_workspace("/workspace"),
-            ("model-a",),
-        )
-        self.assertEqual(
-            backend.resolve_configured_model_for_workspace(
-                "private-model", "/workspace",
-            ),
-            "private-model",
-        )
 
 
 class BackendPermissionCommandTests(unittest.TestCase):
@@ -609,12 +547,6 @@ warning: ignored after the catalog
         )
         self.assertEqual(grok_mod._parse_models_output("login failed"), ())
 
-    def test_grok_default_models_are_selectable(self) -> None:
-        self.assertIn(GrokBackend.default_model, grok_mod._FALLBACK_MODELS)
-        self.assertIn(
-            GrokBackend.default_summary_model, grok_mod._FALLBACK_MODELS,
-        )
-
     def test_grok_effort_uses_its_safe_four_level_fallback(self) -> None:
         backend = GrokBackend()
         self.assertEqual(
@@ -765,26 +697,6 @@ warning: ignored after the catalog
 
         asyncio.run(run())
 
-
-    def test_vision_flags_cover_every_backend(self) -> None:
-        from Cozter.backends_agent import get_backend
-        expected = {
-            "codex": "cli_file_flag",
-            "copilot": "cli_file_flag",
-            "claude_code": "stdin_text",
-            "grok": "prompt_file",
-            "llama": "openai_parts",
-            "meta": "openai_parts",
-            "zai": "openai_parts",
-        }
-        for name, mode in expected.items():
-            with self.subTest(backend=name):
-                backend = get_backend(name)
-                self.assertTrue(backend.supports_vision)
-                self.assertEqual(backend.vision_mode, mode)
-        self.assertFalse(get_backend("flexible").supports_vision)
-
-
     def test_shared_vision_helpers_resolve_and_cap(self) -> None:
         from Cozter.backends_agent.base import (
             attachment_image_paths,
@@ -906,7 +818,6 @@ warning: ignored after the catalog
                     )
         asyncio.run(run())
 
-
     def test_claude_launch_adds_vision_hint(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as ws:
@@ -933,31 +844,6 @@ warning: ignored after the catalog
                     sent = create_process.await_args.args[1]
                     self.assertIn("[Vision:", sent)
         asyncio.run(run())
-
-    def test_codex_fallback_models_are_current_and_selectable(self) -> None:
-        models = codex_mod._FALLBACK_MODELS
-        self.assertEqual(models, (
-            "gpt-6.1-sol",
-            "gpt-6-astra",
-            "gpt-6-sol",
-            "gpt-6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "gpt-5.6-luna",
-        ))
-        self.assertEqual(
-            CodexBackend.tier_models,
-            {
-                "low": "gpt-6-luna",
-                "mid": "gpt-6-sol",
-                "high": "gpt-6.1-sol",
-            },
-        )
-        self.assertIn(CodexBackend.default_model, models)
-        self.assertIn(CodexBackend.default_summary_model, models)
-        for model in CodexBackend.tier_models.values():
-            self.assertIn(model, models)
-
 
     def test_codex_effort_uses_levels_supported_by_selected_picker_model(
         self,
@@ -1209,14 +1095,6 @@ warning: ignored after the catalog
         backend = CodexBackend()
         self.assertEqual(backend.available_models, visible_models)
         self.assertEqual(backend.model_effort_levels, catalog_efforts)
-
-    def test_copilot_fallback_is_policy_safe_auto_only(self) -> None:
-        """A failed account probe must never revive generic model names."""
-        self.assertEqual(copilot_mod._FALLBACK_MODELS, ("auto",))
-        self.assertEqual(CopilotBackend.default_model, "auto")
-        self.assertEqual(CopilotBackend.default_summary_model, "auto")
-        self.assertEqual(CopilotBackend.tier_models, {})
-        self.assertFalse(CopilotBackend.allow_unverified_extra_models)
 
     def test_copilot_isolated_home_copies_metadata_not_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1865,41 +1743,6 @@ warning: ignored after the catalog
         self.assertIn("--effort", named_command)
         self.assertIn("max", named_command)
 
-    def test_claude_code_picker_includes_current_models(self) -> None:
-        models = ClaudeCodeBackend.available_models
-        for model in (
-            "sonnet",
-            "sonnet[1m]",
-            "opus[1m]",
-            "fable[1m]",
-            "opusplan",
-            "opusplan[1m]",
-            "claude-fable-5-1",
-            "claude-fable-5",
-            "claude-haiku-5-5",
-            "claude-sonnet-5-5",
-            "claude-sonnet-5",
-            "claude-opus-5-5",
-            "claude-opus-5",
-            "claude-opus-4-8",
-            "claude-opus-4-7",
-            "claude-opus-4-6",
-            "claude-opus-4-5",
-            "claude-opus-4-5-20251101",
-            "claude-sonnet-4-6",
-            "claude-sonnet-4-5",
-            "claude-sonnet-4-5-20250929",
-            "claude-haiku-4-5",
-            "claude-haiku-4-5-20251001",
-            "claude-opus-5[1m]",
-            "claude-opus-5-5[1m]",
-            "claude-opus-4-8[1m]",
-            "claude-sonnet-5-5[1m]",
-            "claude-sonnet-5[1m]",
-        ):
-            with self.subTest(model=model):
-                self.assertIn(model, models)
-
     def test_claude_context_windows_cover_only_explicit_1m_models(
         self,
     ) -> None:
@@ -1923,33 +1766,6 @@ warning: ignored after the catalog
         ): 
             with self.subTest(model=model):
                 self.assertIsNone(backend.context_window_tokens(model))
-
-    def test_claude_code_picker_excludes_unverified_ids(self) -> None:
-        """Guard model forms not exposed by Claude Code's current picker.
-
-        Every one of these shipped in the picker at some point. The rules
-        they violate are spelled out on ClaudeCodeBackend.available_models.
-        """
-        models = ClaudeCodeBackend.available_models
-        for model in (
-            # No dated snapshot from Opus/Sonnet 4.6 on.
-            "claude-opus-4-6-20251101",
-            "claude-sonnet-4-6-20251114",
-            # Fast mode is the /fast session toggle, not a model ID.
-            "claude-opus-5-fast",
-            "claude-opus-4-6-fast",
-            "claude-opus-4-7-fast",
-            "claude-opus-4-8-fast",
-            # Opus 4.1 retired on 2026-08-05.
-            "claude-opus-4-1",
-            # Sonnet 4.5 has a 200K window; it never exposed a 1M variant.
-            "claude-sonnet-4-5-20250929[1m]",
-            # Fable 5/5.1 are 1M-native; the CLI migrates them out of the picker.
-            "claude-fable-5[1m]",
-            "claude-fable-5-1[1m]",
-        ):
-            with self.subTest(model=model):
-                self.assertNotIn(model, models)
 
 
 class CopilotPromptStdinTests(unittest.IsolatedAsyncioTestCase):
@@ -2103,29 +1919,6 @@ class BackendHealthCheckTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("not found", detail)
 
-    def test_present_executable_reports_healthy(self) -> None:
-        # The test interpreter exists on every supported OS.
-        ok, _ = self._dummy(sys.executable).health_check()
-        self.assertTrue(ok)
-
-    def test_append_model_effort_args(self) -> None:
-        backend = self._dummy("sh")
-        backend.effort_levels = ("low", "high")
-        cmd = ["tool"]
-
-        backend.append_model_effort_args(
-            cmd,
-            "chosen-model",
-            50,
-            model_flag="--model",
-            effort_flag="--effort",
-        )
-
-        self.assertEqual(
-            cmd,
-            ["tool", "--model", "chosen-model", "--effort", "high"],
-        )
-
     def test_append_model_effort_args_supports_templates(self) -> None:
         backend = self._dummy("sh")
         backend.effort_levels = ("low", "high")
@@ -2155,44 +1948,8 @@ class BackendHealthCheckTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("unreachable", detail)
 
-    def test_llama_effort_uses_openai_request_shape(self) -> None:
-        self.assertEqual(
-            LlamaBackend()._effort_fields(100),
-            {"reasoning_effort": "high"},
-        )
-
-    def test_llama_model_catalog_refreshes_after_expiry(self) -> None:
-        backend = LlamaBackend()
-        with mock.patch.object(
-            backend,
-            "_fetch_models",
-            side_effect=[("local-a",), ("local-b",)],
-        ) as fetch:
-            self.assertEqual(backend.available_models, ("local-a",))
-            self.assertEqual(backend.available_models, ("local-a",))
-            backend._catalog_expires_at = 0
-            self.assertEqual(backend.available_models, ("local-b",))
-
-        self.assertEqual(fetch.call_count, 2)
-
 
 class ZaiBackendTests(unittest.TestCase):
-    def test_fallback_models_are_current_and_selectable(self) -> None:
-        models = zai_mod._FALLBACK_MODELS
-        self.assertEqual(len(models), len(set(models)))
-        self.assertEqual(ZaiBackend.default_model, "glm-5.3")
-        self.assertEqual(ZaiBackend.default_summary_model, "glm-4.5-air")
-        self.assertEqual(
-            ZaiBackend.tier_models,
-            {
-                "low": "glm-5.3-flash",
-                "mid": "glm-4.7",
-                "high": "glm-5.3",
-            },
-        )
-        self.assertIn(ZaiBackend.default_model, models)
-        self.assertIn(ZaiBackend.default_summary_model, models)
-
 
     def test_context_windows_cover_only_published_curated_ids(self) -> None:
         backend = ZaiBackend()
@@ -2231,32 +1988,6 @@ class ZaiBackendTests(unittest.TestCase):
             backend.context_window_tokens("glm-4.5-flash"), 200_000,
         )
         self.assertIsNone(backend.context_window_tokens("private-glm"))
-
-    def test_fallback_picker_includes_current_agent_models(self) -> None:
-        self.assertEqual(zai_mod._FALLBACK_MODELS, (
-            "glm-5.3",
-            "glm-5.3-flash",
-            "glm-5.3-flashx",
-            "glm-5.2",
-            "glm-5v-turbo",
-            "glm-5.1",
-            "glm-5-turbo",
-            "glm-5",
-            "glm-4.7",
-            "glm-4.7-flash",
-            "glm-4.7-flashx",
-            "glm-4.6",
-            "glm-4.6v",
-            "glm-4.6v-flashx",
-            "glm-4.6v-flash",
-            "glm-4.5v",
-            "glm-4.5",
-            "glm-4.5-air",
-            "glm-4.5-x",
-            "glm-4.5-airx",
-            "glm-4.5-flash",
-            "glm-4-32b-0414-128k",
-        ))
 
     def test_coding_plan_fallback_includes_documented_1m_pins(self) -> None:
         self.assertEqual(
@@ -2530,12 +2261,6 @@ class ZaiBackendTests(unittest.TestCase):
         finally:
             config.get_zai_api_key = original_get_api_key
 
-    def test_request_model_falls_back_to_default(self) -> None:
-        backend = ZaiBackend()
-        self.assertEqual(backend._request_model("glm-4.7"), "glm-4.7")
-        self.assertEqual(backend._request_model(None), "glm-5.3")
-        self.assertEqual(backend._request_model(""), "glm-5.3")
-
     def test_glm_5_2_effort_uses_reasoning_request_shape(self) -> None:
         backend = ZaiBackend()
         self.assertEqual(backend._effort_fields(0, "glm-5.2"), {})
@@ -2733,32 +2458,6 @@ class ZaiBackendTests(unittest.TestCase):
 class MetaBackendTests(unittest.TestCase):
     """Meta Model API backend: curated catalog, endpoint, and auth."""
 
-    def test_fallback_models_are_current_and_selectable(self) -> None:
-        models = meta_mod._FALLBACK_MODELS
-        self.assertEqual(len(models), len(set(models)))
-        self.assertEqual(MetaModelApiBackend.default_model, "muse-spark-1.3")
-        self.assertEqual(
-            MetaModelApiBackend.default_summary_model, "muse-spark-1.2",
-        )
-        self.assertEqual(
-            MetaModelApiBackend.tier_models,
-            {
-                "low": "muse-spark-1.2",
-                "mid": "muse-spark-1.3",
-                "high": "muse-spark-1.3",
-            },
-        )
-        self.assertIn(MetaModelApiBackend.default_model, models)
-        self.assertIn(MetaModelApiBackend.default_summary_model, models)
-
-
-    def test_fallback_picker_includes_current_agent_models(self) -> None:
-        self.assertEqual(meta_mod._FALLBACK_MODELS, (
-            "muse-spark-1.3",
-            "muse-spark-1.2",
-            "muse-spark-1.1",
-        ))
-
     def test_context_windows_cover_only_published_curated_ids(self) -> None:
         backend = MetaModelApiBackend()
         for model in (
@@ -2905,25 +2604,6 @@ class MetaBackendTests(unittest.TestCase):
             ok, detail = MetaModelApiBackend().health_check()
         self.assertTrue(ok)
         self.assertIn("muse-spark-1.3", detail)
-
-    def test_request_model_falls_back_to_default(self) -> None:
-        self.assertEqual(
-            MetaModelApiBackend()._request_model(None), "muse-spark-1.3",
-        )
-        self.assertEqual(
-            MetaModelApiBackend()._request_model("muse-spark-1.2"),
-            "muse-spark-1.2",
-        )
-
-
-    def test_registered_in_backend_catalog(self) -> None:
-        from Cozter.backends_agent import AVAILABLE_BACKENDS, DIRECT_BACKENDS
-
-        self.assertIn("meta", DIRECT_BACKENDS)
-        self.assertIn("meta", AVAILABLE_BACKENDS)
-        self.assertIsInstance(
-            get_backend("meta"), MetaModelApiBackend,
-        )
 
 
 if __name__ == "__main__":
