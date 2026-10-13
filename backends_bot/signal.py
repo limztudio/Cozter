@@ -653,8 +653,8 @@ class SignalBot(BotPlatform):
                 fut.cancel()
             elif not fut.cancelled():
                 # EOF can fail the response Future while drain() also fails.
-                # This path never awaits that Future, so consume its exception
-                # before discarding it to avoid an unhandled-Future diagnostic.
+                # This path never awaits it, so consume its exception to avoid
+                # an unhandled-Future diagnostic.
                 fut.exception()
             raise
         if not isinstance(response, dict):

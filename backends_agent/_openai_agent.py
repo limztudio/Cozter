@@ -1182,9 +1182,8 @@ async def _post_completion_stream(
             f"{label} stream ended with length while a tool call was pending",
         )
 
-    # A filtered completion can contain syntactically valid argument JSON
-    # that was cut before the provider finished the call. Never execute it,
-    # and do not retry a deterministic provider refusal automatically.
+    # A filtered completion can truncate argument JSON mid-call. Never
+    # execute it, and do not retry a deterministic provider refusal.
     if terminal_finish_reason == "content_filter" and tool_buffers:
         raise RuntimeError(
             f"{label} stream ended with content_filter while a tool call was pending; "

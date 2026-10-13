@@ -192,12 +192,10 @@ def _ensure_venv_and_reexec() -> None:
         return
 
     python = _venv_python()
-    # Shell tools inherit the reexec marker. If they later launch system
-    # Python, that marker must not bypass the project's virtual environment
-    # and send dependency repair to an externally managed system install.
-    # Only use it to detect a broken project interpreter and avoid an exec
-    # loop. Compare launch paths, not realpaths: venv Python is often a
-    # symlink to the same binary as system Python.
+    # Shell tools inherit the reexec marker: it must not bypass the venv
+    # for dependency repair. Only detect a broken interpreter and avoid an
+    # exec loop; compare launch paths, not realpaths (venv Python is often
+    # a symlink to the same binary as system Python).
     if (
         os.environ.get(_VENV_REEXEC_ENV) == "1"
         and os.path.normcase(os.path.abspath(sys.executable))

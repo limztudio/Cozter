@@ -41,10 +41,9 @@ from ..utils import (
 logger = logging.getLogger(__name__)
 
 # Claude Code effort support differs from the API (notably Opus 4.5
-# and pre-5.5 Haiku).
-# https://code.claude.com/docs/en/model-config#adjust-effort-level
-# Opus 4.6 / Sonnet 4.6 offer four levels; every listed Haiku pin predates
-# adaptive reasoning except Haiku 5.5 (released 2026-10-07, five levels).
+# and pre-5.5 Haiku); see model-config#adjust-effort-level docs.
+# Opus/Sonnet 4.6 offer four levels; only Haiku 5.5 (2026-10-07) has
+# adaptive reasoning among the listed Haiku pins.
 _FOUR_LEVEL_EFFORT_MODELS = frozenset({
     "claude-opus-4-6",
     "claude-sonnet-4-6",
@@ -63,9 +62,8 @@ _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 # No safe catalog: keep explicit ``[1m]`` only.
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
-    # Capacity attaches to explicit ``[1m]`` selections only.
-    # Haiku 5.5 is 1M-native (no ``[1m]`` suffix exists for it), so the bare
-    # ``claude-haiku-5-5`` pin carries the window unlike every other bare pin.
+    # Capacity attaches to ``[1m]`` selections only. Haiku 5.5 is
+    # 1M-native (no ``[1m]`` suffix), so its bare pin carries the window.
     "sonnet[1m]",
     "opus[1m]",
     "fable[1m]",

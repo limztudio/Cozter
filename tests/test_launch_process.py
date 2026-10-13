@@ -92,7 +92,7 @@ class LaunchJobUnitTests(unittest.TestCase):
 
     def test_unverified_marker_does_not_skip_new_protection(self) -> None:
         self.environment[launch_process._LAUNCH_JOB_ENV] = "Local\\unrelated-job"
-        # A successful query whose output is FALSE is not proof of protection.
+        # A FALSE query output alone is not proof of protection.
         self.assertTrue(launch_process.ensure_launch_job())
         self.api.CloseHandle.assert_called_once_with(22)
         self.api.CreateJobObjectW.assert_called_once()
@@ -146,8 +146,8 @@ class LaunchJobUnitTests(unittest.TestCase):
 @unittest.skipUnless(os.name == "nt", "Windows job-object lifetime semantics")
 class WindowsLaunchJobLifetimeTests(unittest.IsolatedAsyncioTestCase):
     async def _assert_fixture_tree_dies(self, *, existing_parent_job: bool = False) -> None:
-        # Never assign the unittest runner itself. Every job below belongs to
-        # a new fixture launcher, and every termination targets that fixture.
+        # Every job below belongs to a new fixture launcher, and every
+        # termination targets that fixture, never the unittest runner itself.
         child_script = (
             "import json, os, subprocess, sys, time\n"
             "from Cozter import launch_process\n"
@@ -208,8 +208,7 @@ class WindowsLaunchJobLifetimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(data["owner_kept_job_handle"])
             self.assertFalse(data["child_kept_job_handle"])
             for key in ("child", "grandchild"):
-                # Synchronization handles track the exact processes even if
-                # a PID could later be reused; no os.kill(pid, 0) probes.
+                # Track exact processes via sync handles (PIDs can be reused).
                 handle = api.OpenProcess(0x100000 | 0x1000 | 0x0001, False, data[key])
                 self.assertTrue(handle, f"could not open fixture {key}")
                 handles.append(handle)

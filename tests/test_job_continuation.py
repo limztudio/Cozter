@@ -508,8 +508,8 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
                 result = self.partial(reason="worker_budget")
                 result.continuation_checkpoint.update({
                     # The agent receives the generated resume prompt on the
-                    # second attempt. Saving it recursively would multiply
-                    # old scope and evidence on every subsequent attempt.
+                    # second attempt; saving it recursively would multiply
+                    # scope and evidence on every attempt.
                     "request": prompt,
                     "reports": [{
                         "instruction": "Repair first artifact" if len(calls) == 1 else "Verify second artifact",
