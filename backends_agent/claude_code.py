@@ -40,8 +40,11 @@ from ..utils import (
 
 logger = logging.getLogger(__name__)
 
-# Claude Code effort support differs from the API (notably Opus 4.5).
+# Claude Code effort support differs from the API (notably Opus 4.5
+# and pre-5.5 Haiku).
 # https://code.claude.com/docs/en/model-config#adjust-effort-level
+# Opus 4.6 / Sonnet 4.6 offer four levels; every listed Haiku pin predates
+# adaptive reasoning except Haiku 5.5 (released 2026-10-07, five levels).
 _FOUR_LEVEL_EFFORT_MODELS = frozenset({
     "claude-opus-4-6",
     "claude-sonnet-4-6",
@@ -61,6 +64,8 @@ _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
     # Capacity attaches to explicit ``[1m]`` selections only.
+    # Haiku 5.5 is 1M-native (no ``[1m]`` suffix exists for it), so the bare
+    # ``claude-haiku-5-5`` pin carries the window unlike every other bare pin.
     "sonnet[1m]",
     "opus[1m]",
     "fable[1m]",
@@ -73,6 +78,7 @@ _ONE_MILLION_CONTEXT_MODELS = frozenset({
     "claude-sonnet-5-5[1m]",
     "claude-sonnet-5[1m]",
     "claude-sonnet-4-6[1m]",
+    "claude-haiku-5-5",
 })
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -537,6 +543,7 @@ class ClaudeCodeBackend(Backend):
         "opusplan[1m]",
         "claude-fable-5-1",
         "claude-fable-5",
+        "claude-haiku-5-5",
         "claude-sonnet-5-5",
         "claude-sonnet-5",
         "claude-opus-5-5",
@@ -583,7 +590,13 @@ class ClaudeCodeBackend(Backend):
         return self.effort_levels
 
     def context_window_tokens(self, model: str | None) -> int | None:
-        """Return a verified capacity for one explicit Claude variant."""
+        """Return a verified capacity for one explicit Claude variant.
+
+        Only the explicit ``[1m]`` selections carry Cozter's 1M-token
+        metadata — plus the 1M-native ``claude-haiku-5-5`` bare pin, which
+        has no ``[1m]`` suffix. Aliases and other bare pins stay unknown
+        because their active window varies by account and provider.
+        """
         selected = (model or self.default_model).strip().casefold()
         if selected in _ONE_MILLION_CONTEXT_MODELS:
             return _LONG_CONTEXT_WINDOW_TOKENS

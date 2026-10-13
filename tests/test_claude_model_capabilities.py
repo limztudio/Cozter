@@ -66,6 +66,7 @@ class ClaudeModelCapabilityTests(unittest.TestCase):
             ("claude-fable-5-1", ("low", "medium", "high", "xhigh", "max")),
             ("claude-opus-5-5", ("low", "medium", "high", "xhigh", "max")),
             ("claude-sonnet-5-5", ("low", "medium", "high", "xhigh", "max")),
+            ("claude-haiku-5-5", ("low", "medium", "high", "xhigh", "max")),
         ):
             with self.subTest(model=model):
                 self.assertEqual(backend.effort_levels_for_model(model), expected)

@@ -1876,6 +1876,7 @@ warning: ignored after the catalog
             "opusplan[1m]",
             "claude-fable-5-1",
             "claude-fable-5",
+            "claude-haiku-5-5",
             "claude-sonnet-5-5",
             "claude-sonnet-5",
             "claude-opus-5-5",
@@ -1917,7 +1918,9 @@ warning: ignored after the catalog
             "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7",
             "claude-opus-4-6", "claude-sonnet-4-6",
             "claude-sonnet-4-5-20250929", "private",
-        ):
+            # Haiku 5.5 is 1M-native: no [1m] suffix exists for it.
+            "claude-haiku-5-5[1m]",
+        ): 
             with self.subTest(model=model):
                 self.assertIsNone(backend.context_window_tokens(model))
 
