@@ -45,6 +45,7 @@ from .base import (
 from .formatting import iter_fenced_markdown
 
 logger = logging.getLogger(__name__)
+performance_logger = logging.getLogger("Cozter.performance")
 
 _SIGNAL_TEXT_LIMIT = 4_000
 _OUTGOING_ECHO_TTL = 7 * 24 * 60 * 60
@@ -285,6 +286,8 @@ class SignalBot(BotPlatform):
     status_update_interval_sec = 60.0
     status_update_limit = 10
     status_fallback_messages = False
+    status_initial_timeout_sec = 30.0
+    status_recovery_interval_sec = 300.0
 
     def __init__(
         self,
@@ -1318,12 +1321,45 @@ class SignalBot(BotPlatform):
         """Persist text provenance before sending; retain acknowledged timestamps."""
         group_id = str(params["groupId"])
         text = params.get("message")
-        if isinstance(text, str) and text.strip():
-            await self._outbound_journal.remember(
-                [(group_id, "text", _echo_hash(text.strip()))],
+        text_hash = _echo_hash(text.strip()) if isinstance(text, str) and text.strip() else "-"
+        group_hash = _echo_hash(group_id)
+        kind = "edit" if "editTimestamp" in params else "text" if isinstance(text, str) else "attachment"
+        started = time.monotonic()
+        phase = "journal"
+        try:
+            if text_hash != "-":
+                await self._outbound_journal.remember([(group_id, "text", text_hash)])
+            phase = "rpc"
+            result = await self._paced_rpc_request(method, params)
+        except BaseException as exc:
+            performance_logger.info(
+                "stage=signal_send outcome=%s phase=%s kind=%s group_hash=%s text_hash=%s "
+                "elapsed_seconds=%.3f error_type=%s",
+                "cancelled" if isinstance(exc, asyncio.CancelledError) else "error",
+                phase, kind, group_hash, text_hash, time.monotonic() - started, type(exc).__name__,
             )
-        result = await self._paced_rpc_request(method, params)
+            raise
         timestamp = _extract_timestamp_from_value(result)
+        outcomes = result.get("results") if isinstance(result, dict) else None
+        successes = failures = unclassified = 0
+        if isinstance(outcomes, list):
+            for item in outcomes:
+                outcome = item.get("type") if isinstance(item, dict) else None
+                if outcome == "SUCCESS":
+                    successes += 1
+                elif isinstance(outcome, str) and outcome.endswith("_FAILURE"):
+                    failures += 1
+                else:
+                    unclassified += 1
+        outcome_name = "acknowledged" if timestamp else "no_timestamp"
+        if failures:
+            outcome_name += "_with_failures"
+        performance_logger.info(
+            "stage=signal_send outcome=%s kind=%s group_hash=%s text_hash=%s timestamp=%s "
+            "elapsed_seconds=%.3f result_successes=%d result_failures=%d result_unclassified=%d",
+            outcome_name, kind, group_hash, text_hash, timestamp or "-",
+            time.monotonic() - started, successes, failures, unclassified,
+        )
         if timestamp:
             self._remember_own_sent_timestamp(group_id, timestamp)
             task = create_background_task(

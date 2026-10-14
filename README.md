@@ -563,13 +563,17 @@ ACLs; the path name alone does not guarantee access or `Everyone` full control.
 
 Active Signal tasks show one `Thinking...` message, including scheduled
 tasks once they start. Progress updates edit that message at most once per
-minute and stop after ten attempts, respecting [Signal's message edit
+minute, with at most ten edit attempts per message, respecting [Signal's message edit
 limit](https://support.signal.org/hc/en-us/articles/6255134251546-Edit-Message).
-The status stays visible until the turn ends, when Cozter removes it and
-sends the final reply. Failed or slow status operations are best-effort
-and bounded to four seconds; they do not block streamed work or the final
-reply. If the initial message has no editable timestamp, Cozter skips
-further previews for that turn.
+Long tasks can replace an exhausted status message and remove the old one.
+Creating or recovering a Signal status has a 30-second background deadline;
+the initial foreground wait remains at most four seconds. A late message
+handle is retained so progress can edit it. If creation fails or returns no
+editable timestamp, Cozter can retry instead of silencing the entire task.
+New status attempts are separated by at least five minutes, and activity is
+coalesced into the latest preview. Status work is owned by the current turn
+and stopped before its final reply, preserving task cancellation and queue
+processing.
 
 Set `signal_own_device_id` to the numeric device ID used by this installation's
 signal-cli daemon after checking its account's `listDevices` response. The default
@@ -1774,7 +1778,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (89 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 86 `test_*.py` modules:
+- Tests (91 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 88 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_backend_audit_regressions.py`,
@@ -1800,7 +1804,8 @@ ignored for local secrets and runtime queues.
   `test_reply_delivery.py`, `test_run_lock.py`, `test_runtime_diagnostics.py`,
   `test_schedule_execution.py`, `test_session_picker.py`,
   `test_session_write_latency.py`, `test_signal_attachment_decoding.py`,
-  `test_signal_feedback.py`, `test_signal_formatting.py`, `test_signal_status.py`,
+  `test_signal_feedback.py`, `test_signal_formatting.py`, `test_signal_send_observability.py`,
+  `test_signal_status.py`, `test_signal_status_recovery.py`,
   `test_signal_transport.py`, `test_slack_commands.py`, `test_slack_formatting.py`,
   `test_state_fallbacks.py`, `test_state_integrity.py`,
   `test_status_and_shell_latency.py`, `test_status_latency.py`,
@@ -1981,6 +1986,14 @@ planner, worker, merge and judge starts and durations, including worker position
 HTTP completion durations and
 retry counts; time to the first content, reasoning or tool delta; and tool
 starts, individual durations/outcomes, and batch durations and counts.
+Signal send outcomes correlate the hashed destination and text with the
+acknowledged message timestamp, or identify cancellation, failure, and missing
+timestamps. An RPC acknowledgement confirms submission to signal-cli; it does
+not establish that a recipient displayed or read the message. Plaintext
+messages, destination IDs, and exception contents are excluded from these entries.
+Mixed successful and failed recipient results are counted separately and
+reported as `acknowledged_with_failures`; logging them does not resend a
+message that some recipients may already have received.
 Quiet shell commands emit a `stage=tool_wait` entry every 60 seconds with the
 process ID and elapsed time. This heartbeat leaves the command and its output
 capture running. Waits for earlier attachment uploads record whether they

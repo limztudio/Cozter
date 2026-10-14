@@ -111,10 +111,11 @@ class SignalStatusTests(unittest.IsolatedAsyncioTestCase):
             self.assertLogs("Cozter.performance", level="INFO") as trace,
         ):
             await asyncio.wait_for(bot._run_turn("user", "group", "work"), timeout=1)
-        self.assertEqual(len(trace.output), 1)
-        self.assertIn("stage=thinking_status platform=signal outcome=posted", trace.output[0])
-        self.assertNotIn("group", trace.output[0])
-        self.assertNotIn("user", trace.output[0])
+        thinking_trace = [line for line in trace.output if "stage=thinking_status " in line]
+        self.assertEqual(len(thinking_trace), 1)
+        self.assertIn("stage=thinking_status platform=signal outcome=posted", thinking_trace[0])
+        self.assertNotIn("group", thinking_trace[0])
+        self.assertNotIn("user", thinking_trace[0])
         await asyncio.wait_for(bot.deleted.wait(), timeout=0.5)
         edits = [(when, params) for when, _, params in bot.calls if "editTimestamp" in params]
         self.assertEqual(len(edits), 2)
@@ -174,7 +175,11 @@ class SignalStatusTests(unittest.IsolatedAsyncioTestCase):
                     self.assertLogs("Cozter.performance", level="INFO") as trace,
                 ):
                     await asyncio.wait_for(bot._run_turn("user", "group", "work"), timeout=0.5)
-                self.assertIn("outcome=no_handle", trace.output[0])
+                thinking_trace = [line for line in trace.output if "stage=thinking_status " in line]
+                # The foreground wait may finish one Windows clock tick
+                # before the background failure has settled.
+                self.assertTrue(any(f"outcome={outcome}" in thinking_trace[0]
+                                    for outcome in ("pending", "no_handle")))
                 await asyncio.sleep(0)
                 self.assertEqual([params["message"] for _, _, params in bot.calls], [
                     "Thinking...", "final",

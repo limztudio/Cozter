@@ -393,6 +393,159 @@ class MessageHandle:
     message_id: str
 
 
+class _RecoverableTurnStatus:
+    """Own an editable status without letting slow creation block agent work."""
+
+    def __init__(self, platform: BotPlatform, uid: str, chat_id: str) -> None:
+        self.platform = platform
+        self.uid = uid
+        self.chat_id = chat_id
+        self.handle: MessageHandle | None = None
+        self.pending: str | None = None
+        self.lines: list[str] = []
+        self.latest_text = ""
+        self.updates = 0
+        self.last_edit = 0.0
+        self.next_post = 0.0
+        self.closed = False
+        self.wake = asyncio.Event()
+        self.initial: asyncio.Future[MessageHandle | None] = asyncio.get_running_loop().create_future()
+        self.worker: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        started = time.monotonic()
+        self.worker = create_background_task(
+            self._run(), name=f"{self.platform.platform_id}:status-owner:{self.uid}", log=logger,
+        )
+        # wait() leaves creation owned by this turn after its short foreground
+        # allowance. A late acknowledgement can still supply the edit handle.
+        await asyncio.wait((self.initial,), timeout=_STATUS_OPERATION_TIMEOUT_SEC)
+        outcome = "pending"
+        if self.initial.done():
+            outcome = "posted" if self.initial.result() is not None else "no_handle"
+        performance_logger.info(
+            "stage=thinking_status platform=%s outcome=%s elapsed_ms=%.3f",
+            self.platform.platform_id, outcome, (time.monotonic() - started) * 1_000,
+        )
+
+    def on_event(self, ev: agent.ChatEvent) -> None:
+        if self.closed:
+            return
+        if ev.kind == "text":
+            if ev.content.strip():
+                self.latest_text = ev.content
+        elif ev.kind in ("tool", "file"):
+            content = ev.content.split("\n")[0] if ev.kind == "tool" else ev.content
+            clipped = (content[:80 - len("… [clipped]")] + "… [clipped]"
+                       if len(content) > 80 else content)
+            self.lines.append(f"» {clipped}")
+        else:
+            return
+        self.pending = self.platform._compose_thinking_display(self.lines, self.latest_text)
+        self.wake.set()
+
+    async def _wait_until(self, deadline: float) -> None:
+        loop = asyncio.get_running_loop()
+        while (delay := deadline - loop.time()) > 0:
+            await asyncio.sleep(max(delay, 2 * time.get_clock_info("monotonic").resolution))
+
+    async def _post(self, text: str, reason: str) -> bool:
+        started = time.monotonic()
+        result = await self.platform._run_status_operation(
+            self.platform.send_text(self.chat_id, text),
+            action="posting a recoverable progress status",
+            timeout=self.platform.status_initial_timeout_sec,
+        )
+        loop = asyncio.get_running_loop()
+        assert self.platform.status_recovery_interval_sec is not None
+        self.next_post = loop.time() + self.platform.status_recovery_interval_sec
+        success = isinstance(result, MessageHandle)
+        performance_logger.info(
+            "stage=status_post platform=%s reason=%s outcome=%s elapsed_ms=%.3f",
+            self.platform.platform_id, reason, "posted" if success else "no_handle",
+            (time.monotonic() - started) * 1_000,
+        )
+        if isinstance(result, MessageHandle):
+            old_handle = self.handle
+            self.handle = result
+            self.updates = 0
+            self.last_edit = loop.time()
+            if old_handle is not None and old_handle != result:
+                self._delete(old_handle)
+        return success
+
+    def _delete(self, handle: MessageHandle) -> None:
+        create_background_task(
+            self.platform._run_status_operation(
+                self.platform.delete_message(handle), action="deleting the Thinking status",
+            ),
+            name=f"{self.platform.platform_id}:status-delete:{self.uid}", log=logger,
+        )
+
+    async def _run(self) -> None:
+        try:
+            await self._post("Thinking...", "initial")
+            self.initial.set_result(self.handle)
+            while not self.closed:
+                if self.pending is None:
+                    await self.wake.wait()
+                    self.wake.clear()
+                    continue
+                limit = self.platform.status_update_limit
+                if self.handle is None or (limit is not None and self.updates >= limit):
+                    await self._wait_until(self.next_post)
+                    display, self.pending = self.pending, None
+                    if not await self._post(display, "recovery" if self.handle is None else "rotation"):
+                        # Retry the latest real activity even if the provider
+                        # becomes quiet while status transport is unavailable.
+                        if self.pending is None:
+                            self.pending = display
+                    continue
+                await self._wait_until(self.last_edit + max(
+                    _STATUS_EDIT_INTERVAL_SEC, self.platform.status_update_interval_sec,
+                ))
+                display, self.pending = self.pending, None
+                self.updates += 1  # Ambiguous failures consume the per-message cap.
+
+                async def edit() -> bool:
+                    assert self.handle is not None
+                    await self.platform.edit_text(self.handle, display)
+                    return True
+
+                succeeded = await self.platform._run_status_operation(
+                    edit(), action="updating the progress status",
+                )
+                self.last_edit = asyncio.get_running_loop().time()
+                performance_logger.info(
+                    "stage=status_edit platform=%s outcome=%s attempt=%d",
+                    self.platform.platform_id, "ok" if succeeded else "unavailable", self.updates,
+                )
+                if not succeeded and self.pending is None:
+                    self.pending = display
+        finally:
+            if not self.initial.done():
+                self.initial.set_result(self.handle)
+
+    async def close(self) -> None:
+        self.closed = True  # Close before yielding, so no event can reopen it.
+        self.pending = None
+        interrupted = False
+        if self.worker is not None:
+            self.worker.cancel()
+            while not self.worker.done():
+                try:
+                    await asyncio.wait((self.worker,))
+                except asyncio.CancelledError:
+                    # Settle the owned send/edit even under repeated /stop.
+                    interrupted = True
+        if not self.initial.done():
+            self.initial.set_result(self.handle)
+        if self.handle is not None:
+            self._delete(self.handle)
+        if interrupted:
+            raise asyncio.CancelledError
+
+
 @dataclass
 class AttachmentInfo:
     """An incoming file upload already downloaded to the workspace."""
@@ -518,6 +671,9 @@ class BotPlatform(ABC):
     status_update_interval_sec: ClassVar[float] = 0.0
     status_update_limit: ClassVar[int | None] = None
     status_fallback_messages: ClassVar[bool] = True
+    # Opt in to owned late creation, recovery and per-message edit rotation.
+    status_initial_timeout_sec: ClassVar[float | None] = None
+    status_recovery_interval_sec: ClassVar[float | None] = None
 
     def __init__(
         self,
@@ -718,7 +874,7 @@ class BotPlatform(ABC):
         return True
 
     async def _run_status_operation(
-        self, operation: Awaitable[object], *, action: str,
+        self, operation: Awaitable[object], *, action: str, timeout: float | None = None,
     ) -> object | None:
         """Run noncritical status I/O without delaying a chat reply.
 
@@ -726,9 +882,10 @@ class BotPlatform(ABC):
         the answer. A transient platform API stall should therefore be bounded
         and best-effort rather than backpressure the agent event stream.
         """
+        limit = _STATUS_OPERATION_TIMEOUT_SEC if timeout is None else timeout
         try:
             return await asyncio.wait_for(
-                operation, timeout=_STATUS_OPERATION_TIMEOUT_SEC,
+                operation, timeout=limit,
             )
         except asyncio.CancelledError:
             raise
@@ -736,7 +893,7 @@ class BotPlatform(ABC):
             logger.debug(
                 "Timed out %s after %.1fs",
                 action,
-                _STATUS_OPERATION_TIMEOUT_SEC,
+                limit,
             )
         except Exception:
             logger.debug("Failed %s", action, exc_info=True)
@@ -4560,8 +4717,13 @@ class BotPlatform(ABC):
         inject_q = _InjectQueue(maxsize=self.max_queue_size)
         self._inject_queues[uid] = inject_q
 
+        recovering_status = (
+            _RecoverableTurnStatus(self, uid, chat_id)
+            if self.supports_transient_status and self.status_recovery_interval_sec is not None
+            else None
+        )
         thinking_result = None
-        if self.supports_transient_status:
+        if self.supports_transient_status and recovering_status is None:
             status_started = time.monotonic()
             thinking_result = await self._run_status_operation(
                 self.send_text(chat_id, "Thinking..."),
@@ -4632,6 +4794,9 @@ class BotPlatform(ABC):
             nonlocal latest_text
             nonlocal pending_status, status_edit_task
             self._record_turn_event_progress(uid, ev)
+            if recovering_status is not None:
+                recovering_status.on_event(ev)
+                return
             if not self.supports_transient_status:
                 return
             if (
@@ -4675,6 +4840,8 @@ class BotPlatform(ABC):
                 )
 
         try:
+            if recovering_status is not None:
+                await recovering_status.start()
             result = await agent.run(
                 text, ws, user_id=uid,
                 model=model, summary_model=summary_model,
@@ -4742,6 +4909,8 @@ class BotPlatform(ABC):
             # Attribution record ends with the agent phase; delivery/post-turn
             # work no longer counts as a command-output wait.
             self._clear_turn_progress(uid)
+            if recovering_status is not None:
+                await recovering_status.close()
             if status_edit_task is not None and not status_edit_task.done():
                 status_edit_task.cancel()
             if thinking_handle is not None:
