@@ -242,7 +242,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Repair evidence", result.text)
         self.assertEqual(result.continuation_reason, "tool_budget")
         self.assertEqual(result.continuation_checkpoint["latest_draft"], "Repair evidence")
-        self.assertEqual(result.continuation_checkpoint["pending"], ["repair requested scope"])
+        self.assertEqual(result.continuation_checkpoint["pending"], [agent._DEFAULT_PENDING_SCOPE])
 
     async def test_artifact_discovered_after_result_capture_survives_judge_timeout(self):
         artifact = os.path.join(self.ws, "late.txt")

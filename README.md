@@ -81,8 +81,10 @@ works across every backend.
   ledger. A failed chat send or restart retries that finished text before
   later work, rather than rerunning agent tools; attachment uploads remain
   best-effort so a retry cannot duplicate a file. Text arrives first;
-  background picture uploads overlap the next agent turn while preserving
-  conversational order. `/cancel` and daemon stop cancel in-flight uploads
+  background picture uploads overlap the next agent turn. Later text waits at
+  most five seconds for older uploads, while attachment batches retain their
+  per-chat order with at most three file uploads active in each batch.
+  `/cancel` and daemon stop cancel in-flight uploads
 - **Platform-safe text delivery**: long replies are split at chat-surface API
   boundaries. Telegram applies its 4,096-character limit to both rich agent
   replies and plain command/status output, rendering rich Markdown to HTML
@@ -907,7 +909,14 @@ suffixes (up to 1,000 candidates) and leaves the competing file untouched.
 POSIX, `;` on Windows); blank entries are ignored and `~` is expanded.
 At the end of a run, Cozter also snapshots newly created or modified image
 files in the workspace and attaches them unless the agent already referenced
-them explicitly; shared external output directories always require an
+them explicitly. Automatic discovery skips generated build, test, and cache
+trees, including `__cmake`, `build`, `CMakeFiles`, `Testing`, and `cmake-build-*`.
+It selects at most eight images totaling 20 MiB at selection time per execution
+attempt across all judge phases and reports omitted previews for that attempt;
+the files remain
+in the workspace. Explicitly requested attachments remain eligible, including
+images inside build trees, and do not consume the automatic preview allowance.
+Shared external output directories always require an
 explicit `[[attach: ...]]` marker. The workspace-only scan resolves image
 links and ignores a link whose final target is outside the workspace, so a
 trusted external artifact cannot become an automatic attachment merely by
@@ -916,9 +925,9 @@ being linked into a workspace. Replies can end with
 and that user's queued work pauses until the next message arrives.
 Texts (and the usage footer) send synchronously first; pictures then
 upload in a per-chat background chain, so the turn returns as soon as
-texts are out and the next queued turn's agent work overlaps the uploads
-— the next reply's texts wait for the earlier tail first, preserving
-conversational order without blocking agent work. `/cancel` and daemon
+texts are out and the next queued turn's agent work overlaps the uploads.
+The next reply waits at most five seconds for earlier uploads before sending
+text. Attachment batches keep their per-chat order. `/cancel` and daemon
 stop cancel in-flight uploads, and in-flight uploads count as active
 turns in status and diagnostics.
 
@@ -1761,14 +1770,14 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (85 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 82 `test_*.py` modules:
-  `test_agent_attachments.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
+- Tests (89 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 86 `test_*.py` modules:
+  `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
-  `test_apply_patch_limits.py`, `test_backend_audit_regressions.py`,
+  `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_backend_audit_regressions.py`,
   `test_backend_event_parsing.py`, `test_backend_repair.py`, `test_backends_agent.py`,
-  `test_bash_process_output.py`, `test_blocked_judge_runtime.py`, `test_bot_commands.py`,
+  `test_bash_process_output.py`, `test_bash_progress.py`, `test_blocked_judge_runtime.py`, `test_bot_commands.py`,
   `test_bot_recovery_and_lifecycle.py`, `test_claude_background_guard.py`,
-  `test_claude_model_capabilities.py`, `test_cli_commands.py`,
+  `test_claude_model_capabilities.py`, `test_checkpoint_scope.py`, `test_cli_commands.py`,
   `test_cloud_model_capabilities.py`, `test_compaction.py`, `test_config.py`,
   `test_detached_tasks.py`, `test_discovery_optimization.py`,
   `test_discovery_pruning.py`, `test_discovery_tools_async.py`,
@@ -1968,6 +1977,10 @@ planner, worker, merge and judge starts and durations, including worker position
 HTTP completion durations and
 retry counts; time to the first content, reasoning or tool delta; and tool
 starts, individual durations/outcomes, and batch durations and counts.
+Quiet shell commands emit a `stage=tool_wait` entry every 60 seconds with the
+process ID and elapsed time. This heartbeat leaves the command and its output
+capture running. Waits for earlier attachment uploads record whether they
+settled or reached the five-second limit.
 Tool timeouts identify the configured limit and ask the worker to inspect the
 stall before retrying. Prompts, responses, tool arguments and API keys
 are excluded. The timing log rotates at 5 MiB with three backups.

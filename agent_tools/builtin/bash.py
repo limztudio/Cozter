@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import ntpath
 import os
 import shutil
@@ -23,6 +24,8 @@ from ...utils import (
 _BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 # Only applies once the shell has exited, not to commands still doing work.
 _BASH_POST_EXIT_DRAIN_TIMEOUT = 1.0
+_BASH_PROGRESS_INTERVAL_SEC = 60.0
+performance_logger = logging.getLogger("Cozter.performance")
 
 
 class BashTool(AgentTool):
@@ -215,6 +218,7 @@ async def _read_command_output(
     read_task = asyncio.create_task(stream.read(64 * 1024))
     exit_task = asyncio.create_task(wait_for_process_exit(proc))
     loop = asyncio.get_running_loop()
+    started = loop.time()
     deadline: float | None = None
     try:
         while True:
@@ -222,10 +226,16 @@ async def _read_command_output(
                 await exit_task
                 deadline = loop.time() + _BASH_POST_EXIT_DRAIN_TIMEOUT
             if deadline is None:
-                await asyncio.wait(
+                done, _ = await asyncio.wait(
                     (read_task, exit_task),
                     return_when=asyncio.FIRST_COMPLETED,
+                    timeout=_BASH_PROGRESS_INTERVAL_SEC,
                 )
+                if not done:
+                    performance_logger.info(
+                        "stage=tool_wait tool=bash pid=%s seconds=%.3f outcome=running",
+                        getattr(proc, "pid", "?"), loop.time() - started,
+                    )
                 if not read_task.done():
                     continue
             else:

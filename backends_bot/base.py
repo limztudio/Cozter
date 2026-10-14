@@ -135,6 +135,8 @@ _STATUS_OPERATION_TIMEOUT_SEC = 4.0
 _STATUS_EDIT_INTERVAL_SEC = 1.5
 # Ack is cosmetic; bound it.
 _INJECT_ACK_TIMEOUT_SEC = 8.0
+_ATTACHMENT_TAIL_WAIT_SEC = 5.0
+_ATTACHMENT_UPLOAD_CONCURRENCY = 3
 _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
 _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
 # Precompiled for state save/load.
@@ -4857,28 +4859,28 @@ class BotPlatform(ABC):
         return ws
 
     async def _await_attachment_tail(self, chat_id: str) -> None:
-        """Wait for earlier background uploads to the same chat, in order.
+        """Give earlier pictures a short head start without stranding text.
 
-        Called at the start of ``_send_result`` so a follow-up reply's
-        texts never overtake the previous reply's pictures. The wait
-        happens after the agent already finished, so the previous turn's
-        uploads overlapped this turn's agent work — only a still-running
-        tail blocks, preserving conversational order.
+        The upload chain retains its own ordering and cancellation owner.
+        Timing out or cancelling this wait must never cancel that chain.
         """
         tail = self._attachment_tails.get(chat_id)
         if tail is None or tail.done():
             return
-        try:
-            await asyncio.shield(tail)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            pass
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        settled, _ = await asyncio.wait({tail}, timeout=_ATTACHMENT_TAIL_WAIT_SEC)
+        # asyncio.wait does not propagate an older upload's exception or
+        # cancel it when this foreground wait is cancelled or times out.
+        performance_logger.info(
+            "stage=attachment_tail_wait outcome=%s elapsed_seconds=%.3f",
+            "settled" if settled else "timeout", loop.time() - started,
+        )
 
     def _track_attachment_upload(
         self, owner: str, chat_id: str, paths: list[str],
     ) -> asyncio.Task[None]:
-        """Launch parallel background uploads chained after the tail."""
+        """Own a bounded upload pool, preserving per-chat batch order."""
         tail = self._attachment_tails.get(chat_id)
         if tail is not None and tail.done():
             tail = None
@@ -4902,11 +4904,29 @@ class BotPlatform(ABC):
                 try:
                     await asyncio.shield(tail)
                 except asyncio.CancelledError:
-                    raise
+                    # Cancelling this owner must stop its batch. Cancellation
+                    # of an earlier owner's tail merely releases the chain.
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise
                 except Exception:
                     pass
-            # Parallel uploads: clients serialize the sends.
-            await asyncio.gather(*(_send_one(path) for path in paths))
+            remaining = iter(paths)
+
+            async def worker() -> None:
+                for path in remaining:
+                    await _send_one(path)
+
+            workers = [asyncio.create_task(
+                worker(), name=f"{self.platform_id}:upload-file:{index}",
+            ) for index in range(min(_ATTACHMENT_UPLOAD_CONCURRENCY, len(paths)))]
+            try:
+                await asyncio.gather(*workers)
+            finally:
+                for worker_task in workers:
+                    if not worker_task.done():
+                        worker_task.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
 
         task: asyncio.Task[None] = create_background_task(
             _run(),
@@ -4973,8 +4993,8 @@ class BotPlatform(ABC):
         first, then pictures upload in a per-chat background chain. The
         turn returns as soon as texts are out, so the per-user lock
         releases and the next queued turn's agent work overlaps the
-        uploads. The next reply's texts wait for the earlier tail first,
-        preserving conversational order without blocking agent work.
+        uploads. The next reply's texts give the earlier tail at most five
+        seconds to finish; attachment batches retain their own order.
         Attachments stay best-effort: a crash mid-upload loses only the
         pictures, never the staged text payload.
         """

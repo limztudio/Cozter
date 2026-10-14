@@ -61,6 +61,18 @@ class _TurnBudgetExhaustedError(Exception):
 
 CONTINUATION_CHECKPOINT_CHARS = 64_000
 _CONTINUATION_CHECKPOINT_ITEMS = flexible.MAX_SUBTASKS * 4
+_DEFAULT_PENDING_SCOPE = "Verify completion of the full original request and finish any remaining work."
+
+
+def _checkpoint_scope(instruction: str, request: str) -> str:
+    """Keep a complete transport request out of scope metadata.
+
+    The canonical request is saved separately. A fallback worker can receive
+    that entire request, including a previous checkpoint, as its instruction;
+    copying it into pending scope or report labels would nest resume payloads.
+    Exact equality preserves independently authored instructions verbatim.
+    """
+    return _DEFAULT_PENDING_SCOPE if instruction == request else instruction
 
 
 def _current_task_or_none() -> asyncio.Task | None:
@@ -87,6 +99,10 @@ class TurnBudget:
     captured: list[weakref.ReferenceType[AgentResult]] = dataclasses.field(default_factory=list)
     latest_draft: str = ""
     owner: asyncio.Task | None = dataclasses.field(default_factory=_current_task_or_none)
+    auto_attachment_files: int = 0
+    auto_attachment_bytes: int = 0
+    auto_attachment_sources: set[str] = dataclasses.field(default_factory=set)
+    auto_attachment_omitted_sources: set[str] = dataclasses.field(default_factory=set)
 
     def start(self) -> None:
         # Start after the workspace run lock; time spent queuing is excluded.
@@ -131,11 +147,14 @@ class TurnBudget:
 
     def checkpoint(self, reason: str, turn: "_InterruptedTurn") -> ContinuationCheckpoint:
         """Keep worker evidence and actionable scope outside the reply's small preview."""
-        reports = self.reports[-_CONTINUATION_CHECKPOINT_ITEMS:]
-        pending = list(dict.fromkeys(self.pending))[:_CONTINUATION_CHECKPOINT_ITEMS]
+        reports = [(_checkpoint_scope(instruction, turn.prompt), report)
+                   for instruction, report in self.reports[-_CONTINUATION_CHECKPOINT_ITEMS:]]
+        pending = list(dict.fromkeys(
+            _checkpoint_scope(instruction, turn.prompt) for instruction in self.pending
+        ))[:_CONTINUATION_CHECKPOINT_ITEMS]
         additions = turn.injected[:_CONTINUATION_CHECKPOINT_ITEMS]
         if not pending:
-            pending = ["Verify completion of the full original request and finish any remaining work."]
+            pending = [_DEFAULT_PENDING_SCOPE]
         streamed = next((
             event.content for event in reversed(turn.events)
             if event.kind == "text" and event.content.strip()
@@ -425,6 +444,12 @@ _ATTACHMENT_SCAN_SKIP_DIRS = {
     ".git", ".hg", ".svn", ".venv", "venv", "node_modules",
     "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
 }
+_AUTO_ATTACHMENT_SKIP_DIRS = {
+    "__cmake", "build", "builds", ".build", "_build", "_builds", "cmakefiles",
+    "testing", "test-results", "test-artifacts", "test-output", "_deps", ".cache",
+}
+_AUTO_ATTACHMENT_MAX_FILES = 8
+_AUTO_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024
 _EXTERNAL_ATTACHMENT_ROOTS_ENV = "COZTER_ATTACHMENT_ROOTS"
 
 
@@ -761,13 +786,20 @@ def _prepare_resolved_attachment(
     return _copy_generated_image_into_workspace(real, workspace_path)
 
 
+def _skip_automatic_image_directory(name: str) -> bool:
+    normalized = name.casefold()
+    return (normalized in _ATTACHMENT_SCAN_SKIP_DIRS
+            or normalized in _AUTO_ATTACHMENT_SKIP_DIRS
+            or normalized.startswith("cmake-build-"))
+
+
 def _iter_image_files(root: str) -> list[str]:
     paths: list[str] = []
     try:
         root_real = os.path.realpath(root)
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [
-                dirname for dirname in dirnames if dirname not in _ATTACHMENT_SCAN_SKIP_DIRS
+                dirname for dirname in dirnames if not _skip_automatic_image_directory(dirname)
             ]
             for filename in filenames:
                 ext = os.path.splitext(filename)[1].lower()
@@ -775,7 +807,11 @@ def _iter_image_files(root: str) -> list[str]:
                     continue
                 path = os.path.realpath(os.path.join(dirpath, filename))
                 # os.walk follows file symlinks; stay workspace-only.
-                if is_path_within(path, root_real) and os.path.isfile(path):
+                if not is_path_within(path, root_real) or not os.path.isfile(path):
+                    continue
+                relative_parts = os.path.relpath(path, root_real).split(os.sep)[:-1]
+                # A file link can point into a skipped tree inside the workspace.
+                if not any(_skip_automatic_image_directory(part) for part in relative_parts):
                     paths.append(path)
     except OSError:
         logger.warning("Failed to scan image artifacts under %s", root,
@@ -807,13 +843,23 @@ def _snapshot_attachment_images(
     return snapshot
 
 
+@dataclass
+class _AutomaticImageSelection:
+    total_bytes: int = 0
+    selected_sources: set[str] = dataclasses.field(default_factory=set)
+    omitted_sources: set[str] = dataclasses.field(default_factory=set)
+
+
 def _collect_new_attachment_images(
     before: dict[str, tuple[int, int]],
     workspace_path: str,
     *,
     exclude_sources: set[str] | None = None,
+    max_files: int = _AUTO_ATTACHMENT_MAX_FILES,
+    max_bytes: int = _AUTO_ATTACHMENT_MAX_BYTES,
+    selection: _AutomaticImageSelection | None = None,
 ) -> list[str]:
-    """Return workspace images created or modified during this run."""
+    """Select a bounded set of changed output images, excluding generated trees."""
     after = _snapshot_attachment_images(workspace_path)
     changed = [
         path for path, stamp in after.items()
@@ -822,6 +868,7 @@ def _collect_new_attachment_images(
     ordered = sorted(changed, key=lambda path: (after[path][0], path))
 
     copied: list[str] = []
+    chosen = selection if selection is not None else _AutomaticImageSelection()
     excluded = exclude_sources or set()
     seen_sources: set[str] = set()
     seen_destinations: set[str] = set()
@@ -829,11 +876,17 @@ def _collect_new_attachment_images(
         if src in excluded or src in seen_sources:
             continue
         seen_sources.add(src)
+        size = after[src][1]
+        if len(copied) >= max_files or size > max_bytes - chosen.total_bytes:
+            chosen.omitted_sources.add(src)
+            continue
         dest = prepare_attachment_path(src, workspace_path)
         if not dest or dest in seen_destinations:
             continue
         seen_destinations.add(dest)
         copied.append(dest)
+        chosen.selected_sources.add(src)
+        chosen.total_bytes += size
     return copied
 
 
@@ -842,15 +895,49 @@ async def _append_new_attachment_images(
     before: dict[str, tuple[int, int]],
     workspace_path: str,
 ) -> None:
-    """Append this phase's changed images after excluding explicit sources."""
+    """Bound automatic output images across this attempt; explicit files are separate."""
     explicit_sources = _explicit_attachment_sources(result.events, workspace_path)
+    if result.text:
+        explicit_sources.update(extract_attachment_sources(result.text, workspace_path)[1])
+    budget = _TURN_BUDGET.get()
+    excluded = explicit_sources | (budget.auto_attachment_sources if budget else set())
+    selection = _AutomaticImageSelection()
     paths = await asyncio.to_thread(
         _collect_new_attachment_images,
         before,
         workspace_path,
-        exclude_sources=explicit_sources,
+        exclude_sources=excluded,
+        max_files=max(0, _AUTO_ATTACHMENT_MAX_FILES - (budget.auto_attachment_files if budget else 0)),
+        max_bytes=max(0, _AUTO_ATTACHMENT_MAX_BYTES - (budget.auto_attachment_bytes if budget else 0)),
+        selection=selection,
     )
     result.events.extend(ChatEvent(kind="attachment", content=path) for path in paths)
+    if budget is not None:
+        budget.auto_attachment_files += len(paths)
+        budget.auto_attachment_bytes += selection.total_bytes
+        budget.auto_attachment_sources.update(selection.selected_sources)
+        budget.auto_attachment_omitted_sources.update(selection.omitted_sources)
+        budget.auto_attachment_omitted_sources.difference_update(
+            selection.selected_sources | explicit_sources,
+        )
+    omitted = len(budget.auto_attachment_omitted_sources if budget else selection.omitted_sources)
+    if paths or omitted:
+        performance_logger.info(
+            "stage=automatic_images selected_files=%d selected_bytes=%d omitted_files=%d",
+            len(paths), selection.total_bytes, omitted,
+        )
+    if omitted:
+        note = (
+            f"Automatic image attachments are limited to {_AUTO_ATTACHMENT_MAX_FILES} files "
+            f"and {_AUTO_ATTACHMENT_MAX_BYTES // (1024 * 1024)} MiB per attempt; "
+            f"{omitted} additional image(s) remain in the workspace. "
+            "Additional files can be attached explicitly."
+        )
+        if not any(event.kind == "text" and event.content == note for event in result.events):
+            if result.text and not any(event.kind == "text" for event in result.events):
+                result.events.append(ChatEvent(kind="text", content=result.text))
+            # This is delivery metadata, not another obligation for the judge.
+            result.events.append(ChatEvent(kind="text", content=note))
 
 
 _CONTEXT_TRUNCATION_MARKER = (
@@ -1757,8 +1844,6 @@ async def _run_flexible(
         return AgentResult(), True
     plan = flexible.parse_plan(raw_plan or "", request)
     budget = _TURN_BUDGET.get()
-    if budget is not None:
-        budget.pending = [task.instruction for task in plan.subtasks]
 
     # Only the planner may ask.
     if plan.question:
@@ -1772,6 +1857,9 @@ async def _run_flexible(
             append_text_result(result, f"{plan.question}\n\n[[await]]")
             return result, False
         plan = flexible.fallback_plan(request)
+
+    if budget is not None:
+        budget.pending = [_checkpoint_scope(task.instruction, request) for task in plan.subtasks]
 
     logger.info(
         "Flexible plan: %s",
@@ -1802,11 +1890,12 @@ async def _run_flexible(
         report, _ = _split_attach_markers(report)
         if sub_result.error:
             report += f"\n\n(the agent then failed: {sub_result.error})"
-        budget.reports.append((queue[index].instruction, flexible._truncate_report(report)))
-        if queue[index].instruction in budget.pending:
-            budget.pending.remove(queue[index].instruction)
+        scope = _checkpoint_scope(queue[index].instruction, request)
+        budget.reports.append((scope, flexible._truncate_report(report)))
+        if scope in budget.pending:
+            budget.pending.remove(scope)
         if sub_result.error and "tool budget exhausted" in sub_result.error.casefold():
-            budget.pending.insert(0, queue[index].instruction)
+            budget.pending.insert(0, scope)
             raise _TurnBudgetExhaustedError(sub_result.error)
 
     def can_inspect(index: int) -> bool:
@@ -1950,8 +2039,10 @@ async def _run_flexible(
                 if any((extra.tier, extra.instruction) == (queued.tier, queued.instruction)
                        for queued in queue):
                     continue
-                if budget is not None and extra.instruction not in budget.pending:
-                    budget.pending.append(extra.instruction)
+                if budget is not None:
+                    scope = _checkpoint_scope(extra.instruction, request)
+                    if scope not in budget.pending:
+                        budget.pending.append(scope)
                 if len(queue) < flexible.MAX_SUBTASKS * 2:
                     queue.append(extra)
                 elif extra not in unrun_followups:
@@ -2598,7 +2689,7 @@ async def _run_turn(
         assert budget is not None
         budget.start()
         if not budget.pending:
-            budget.pending = [prompt]
+            budget.pending = [_DEFAULT_PENDING_SCOPE]
         timer = asyncio.timeout_at(budget.deadline)
         token = _TURN_TIMEOUT.set(timer)
         try:
