@@ -54,7 +54,7 @@ class WebSearchTool(AgentTool):
     )
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        del workspace_path  # web tools don't need the workspace
+        del workspace_path
         query, error = require_nonempty_string_arg(args, "query", strip=True)
         if error:
             return error

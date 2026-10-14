@@ -49,9 +49,9 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
 
     def test_dirty_tree_skips_pull(self) -> None:
         calls = self._run_fetch_and_pull({
-            "origin": "",           # git fetch origin
-            "--porcelain": " M x",  # git status --porcelain -> dirty
-            "HEAD": "abc123",       # git rev-parse HEAD
+            "origin": "",
+            "--porcelain": " M x",
+            "HEAD": "abc123",
         })
         self.assertFalse(
             self._pulled(calls),
@@ -61,9 +61,9 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
     def test_local_ahead_skips_pull(self) -> None:
         calls = self._run_fetch_and_pull({
             "origin": "",
-            "--porcelain": "",         # clean
-            "@{u}": "origin/main",     # upstream resolves
-            "origin/main..HEAD": "2",  # 2 local commits ahead
+            "--porcelain": "",
+            "@{u}": "origin/main",
+            "origin/main..HEAD": "2",
             "HEAD": "abc123",
         })
         self.assertFalse(
@@ -74,10 +74,10 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
     def test_clean_and_current_pulls(self) -> None:
         calls = self._run_fetch_and_pull({
             "origin": "",
-            "--porcelain": "",         # clean
+            "--porcelain": "",
             "@{u}": "origin/main",
-            "origin/main..HEAD": "0",  # not ahead
-            "--ff-only": "",           # git pull --ff-only
+            "origin/main..HEAD": "0",
+            "--ff-only": "",
             "HEAD": "abc123",
         })
         self.assertTrue(

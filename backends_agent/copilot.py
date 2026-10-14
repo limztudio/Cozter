@@ -133,8 +133,6 @@ class CopilotBackend(Backend):
             return ()
         return self.effort_levels
 
-    # discovery
-
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
         """Named models enabled for the current-directory project.
@@ -518,8 +516,6 @@ class CopilotBackend(Backend):
         if event_type in self._NON_AGENT_TYPES:
             return None
         return self._assistant_text(event, event_type)
-
-    # event helpers
 
     def _assistant_text(self, event: dict, event_type: str) -> str | None:
         """Return the event's text content if it looks like assistant output."""

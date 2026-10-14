@@ -19,7 +19,7 @@ class CurrentTimeTool(AgentTool):
     }
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        del workspace_path  # not needed for this plugin
+        del workspace_path
         tz_name = args.get("timezone")
         if tz_name:
             if not isinstance(tz_name, str):

@@ -654,7 +654,6 @@ def _copy_to_unique_path(source: str, directory: str, filename: str) -> str | No
             directory,
             filename if index == 1 else f"{stem}-{index}{ext}",
         )
-        # Fast path only; publisher below is authoritative.
         if os.path.lexists(candidate):
             continue
         if copy_file_atomically(source, candidate):
@@ -923,7 +922,7 @@ def _bounded_context_list_block(
             "… [older items omitted — never treat this preview as full"
             " coverage; say PARTIAL + remainder when coverage is unclear]"
         )
-        # Drop oldest first; track lengths to stay O(n).
+        # Drop oldest first (lengths tracked for O(n)).
         line_lengths = [len(line) for line in lines]
         total = sum(line_lengths) + max(0, len(lines) - 1)
         start = 0
@@ -2008,10 +2007,9 @@ async def _run_flexible(
         ).strip()
         if result.error and len(worker_errors) < len(queue):
             final = "PARTIAL: task failures prevented full completion.\n\n" + final
-        # `final` cannot be empty here: every loop iteration appends one
-        # non-empty report (skipped workers get PARTIAL text, empty worker
-        # replies get a tier diagnostic), and the error prefix only adds
-        # text. The all-empty case is handled by the merge path below.
+        # Every iteration appends a non-empty report, so `final` is non-empty
+        # (empty workers get a tier diagnostic; the all-empty merge path below
+        # handles the rest).
         return finish(final, awaiting=bool(collaborative and blocked))
 
     # 3. Merge reports into the user reply.
@@ -2832,12 +2830,11 @@ async def _run_turn_impl(
         except BackendUnavailableError as e:
             return _error_result(session_id, str(e), inject_queue)
 
-        # Inject restart: drain shutdown pipes and injects.
         if restarting:
             await _announce_restart(
                 backend.name, injected, inject_queue, _stream_event,
             )
-            continue  # restart loop
+            continue
 
         await _append_new_attachment_images(result, attachment_images_before, workspace_path)
 
@@ -2968,14 +2965,14 @@ async def _run_turn_impl(
                             )
                 break
         if restarting:
-            continue  # restart loop
+            continue
 
         if _take_pending_injections(inject_queue, injected):
             await _announce_restart(
                 backend.name, injected, inject_queue, _stream_event,
             )
             continue
-        break  # normal completion
+        break
 
     # The completion deadline covers agent work, not durable reply/session writes.
     timer = _TURN_TIMEOUT.get()

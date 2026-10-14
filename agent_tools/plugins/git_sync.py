@@ -34,7 +34,7 @@ _ACTIONS = ("fetch", "pull", "push", "remotes")
 
 class GitSyncTool(AgentTool):
     name = "git_sync"
-    order = 22  # utility tools group, next to git_info/git_ops
+    order = 22
     requires_full_permission = True
     description = (
         "Git network sync: fetch/pull/push/remotes. "
@@ -115,7 +115,6 @@ class GitSyncTool(AgentTool):
             elif branch is not None:
                 return "Error: 'branch' needs 'remote' for pull"
             return tail
-        # push
         tail = ["push"]
         if args.get("upstream") is True:
             tail.append("-u")

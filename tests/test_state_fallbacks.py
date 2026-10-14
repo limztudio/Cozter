@@ -565,9 +565,9 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             ):
                 models = workspace.get_available_models(tmp)
 
-            self.assertEqual(models[0], "base-model")  # backend first
-            self.assertIn("private-codex-model", models)  # extra appended
-            self.assertEqual(models.count("base-model"), 1)  # no duplicate
+            self.assertEqual(models[0], "base-model")
+            self.assertIn("private-codex-model", models)
+            self.assertEqual(models.count("base-model"), 1)
 
     def test_authoritative_catalog_does_not_append_unverified_extras(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -788,7 +788,7 @@ class ScheduleParserTests(unittest.TestCase):
             self.assertIsNone(schedules.parse_iso("2026-01-05T10:00:00+00:00"))
 
     def test_most_recent_slot_ignores_malformed_schedule_fields(self) -> None:
-        now = datetime(2026, 1, 5, 10, 0)  # Monday
+        now = datetime(2026, 1, 5, 10, 0)
 
         self.assertIsNone(
             schedules.most_recent_slot(

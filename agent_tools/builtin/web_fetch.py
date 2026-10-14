@@ -111,11 +111,11 @@ class WebFetchTool(AgentTool):
     )
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        del workspace_path  # web tools don't need the workspace
+        del workspace_path
         url, error = require_nonempty_string_arg(args, "url", strip=True)
         if error:
             return error
-        assert url is not None  # non-None once error is None
+        assert url is not None
         validation_error = _validate_public_url(url)
         if validation_error:
             return validation_error

@@ -162,8 +162,6 @@ class GrokBackend(CachedModelCatalog, Backend):
         super().__init__()
         self._prompt_files = ProcessResourceMap()
 
-    # discovery
-
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
         """Return Grok models available to the currently authenticated CLI."""
@@ -263,8 +261,6 @@ class GrokBackend(CachedModelCatalog, Backend):
         path = self._prompt_files.pop(proc)
         if path is not None:
             _remove_prompt_file(path)
-
-    # events
 
     _FILE_TOOL_NAMES = frozenset(
         {

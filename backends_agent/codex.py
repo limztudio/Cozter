@@ -148,8 +148,6 @@ class CodexBackend(Backend):
         self._catalog_expires_at = 0.0
         self._model_catalog_lock = threading.Lock()
 
-    # discovery
-
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
         """Models accepted by the installed Codex CLI.

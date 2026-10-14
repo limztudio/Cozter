@@ -29,19 +29,15 @@ from ...utils import clip_status_value
 
 _NOTES_RELPATH = ".cozter/notes.md"
 
-# Size ceiling: past it trims oldest.
 _NOTES_MAX_BYTES = 64 * 1024
-# Newest material kept after a trim.
 _NOTES_KEEP_BYTES = 32 * 1024
-# Per-entry cap.
 _MAX_ENTRY_CHARS = 2_000
-# Tail sized to the result cap.
 _READ_TAIL_CHARS = 3_500
 
 
 class NotesTool(AgentTool):
     name = "notes"
-    order = 20  # pair with read_file in the model-facing ordering
+    order = 20
     description = "Workspace notes (survive compaction)."
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {

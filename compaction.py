@@ -29,7 +29,7 @@ _in_flight: set[tuple[str, str]] = set()
 
 KEEP_RECENT_AFTER_COMPACT = 5
 MAX_SUMMARY_CHARS = 80_000  # ~20K tokens
-COMPACT_TIMEOUT: float | None = 3600.0  # work cap
+COMPACT_TIMEOUT: float | None = 3600.0
 
 # Trigger before stored material crowds the reply.
 _MODEL_CONTEXT_COMPACT_FRACTION = 0.60

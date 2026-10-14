@@ -282,7 +282,6 @@ def _signal_tcp_address(endpoint: str) -> tuple[str, int] | None:
 class SignalBot(BotPlatform):
     """Signal group adapter backed by signal-cli."""
 
-    # Ten edits max: one visible status, minute-interval progress.
     status_update_interval_sec = 60.0
     status_update_limit = 10
     status_fallback_messages = False
@@ -345,8 +344,6 @@ class SignalBot(BotPlatform):
     def authorized(self, user_id: str, chat_id: str) -> bool:
         return str(chat_id) in self._group_ids
 
-    # send/edit
-
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
     ) -> MessageHandle | None:
@@ -405,8 +402,6 @@ class SignalBot(BotPlatform):
             "send", {"groupId": group_id, "attachment": path},
         )
 
-    # startup/shutdown
-
     async def start(self) -> None:
         self._stop_requested.clear()
         await self._outbound_journal.load()
@@ -462,8 +457,6 @@ class SignalBot(BotPlatform):
         await self._flush_outbound_journal()
         await self._stop_jsonrpc()
         logger.info("Signal bot stopped.")
-
-    # transport
 
     async def _open_jsonrpc_socket(
         self, *, timeout: float = 15.0,
@@ -683,20 +676,17 @@ class SignalBot(BotPlatform):
         """
         subscription = await self._subscribe_receive()
 
-        # Keep this transition await-free.
         self._receive_subscription = subscription
         self._receive_started = True
         self._receive_subscribed = True
         if self._jsonrpc_connected():
             return
 
-        # Clear the superseded subscription first.
         self._receive_subscription = None
         self._receive_subscribed = False
         try:
             await self._connect_jsonrpc(resubscribe=True)
         except BaseException:
-            # A retrying caller must not inherit partial state.
             self._receive_started = False
             raise
 
@@ -750,7 +740,6 @@ class SignalBot(BotPlatform):
                     # Close so the next request reconnects.
                     await self._close_jsonrpc_transport()
                     if method in _NON_IDEMPOTENT_RPC_METHODS:
-                        # May already be dispatched: surface.
                         raise
                     logger.warning(
                         "Signal JSON-RPC request %s failed; reconnecting: %s",
@@ -784,21 +773,16 @@ class SignalBot(BotPlatform):
             request["params"] = params
         line = json.dumps(request, separators=(",", ":")) + "\n"
         try:
-            # One deadline also bounds a busy writer and socket backpressure.
             async with asyncio.timeout(timeout):
                 async with self._jsonrpc_write_lock:
                     writer.write(line.encode("utf-8"))
                     await writer.drain()
                 response = await fut
         except BaseException:
-            # CancelledError is BaseException: pop it.
             self._jsonrpc_pending.pop(request_id, None)
             if not fut.done():
                 fut.cancel()
             elif not fut.cancelled():
-                # EOF can fail the response Future while drain() also fails.
-                # This path never awaits it, so consume its exception to avoid
-                # an unhandled-Future diagnostic.
                 fut.exception()
             raise
         if not isinstance(response, dict):
@@ -952,7 +936,6 @@ class SignalBot(BotPlatform):
 
         with reserve_upload_path(upload_dir, filename) as local_path:
             if source_path:
-                # Large attachments: bounded copy off-loop.
                 await copy_file_with_limit_async(
                     source_path,
                     local_path,
@@ -995,8 +978,6 @@ class SignalBot(BotPlatform):
             args=args,
             attachment=attachment,
         )
-
-    # helpers
 
     async def _resolve_group_ids(self) -> dict[str, str]:
         resolved: dict[str, str] = {}
@@ -1338,8 +1319,6 @@ class SignalBot(BotPlatform):
         group_id = str(params["groupId"])
         text = params.get("message")
         if isinstance(text, str) and text.strip():
-            # Cancellation, lost acknowledgements and daemon restarts can all
-            # precede the sent-sync echo. Refuse to send without provenance.
             await self._outbound_journal.remember(
                 [(group_id, "text", _echo_hash(text.strip()))],
             )
@@ -1347,8 +1326,6 @@ class SignalBot(BotPlatform):
         timestamp = _extract_timestamp_from_value(result)
         if timestamp:
             self._remember_own_sent_timestamp(group_id, timestamp)
-            # No await after a known ACK: cancellation here must not convert a
-            # confirmed delivery into a failed delivery which will be resent.
             task = create_background_task(
                 self._persist_acknowledged_timestamp(group_id, timestamp),
                 name="signal:outbound-journal", log=logger,

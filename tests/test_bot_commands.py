@@ -101,7 +101,6 @@ class BotCommandTests(unittest.TestCase):
 
         self._run(run())
 
-    # text command aliases
     def test_backslash_command_alias_dispatches_with_arguments(self) -> None:
         self._run(self.bot.dispatch_text(self._ctx(text=r"\context 8000")))
 
@@ -134,7 +133,6 @@ class BotCommandTests(unittest.TestCase):
         self.assertNotIn(self.uid, self.bot._pending_input)
         self.assertEqual(self._last(), "Cancelled.")
 
-    # /permission
     def test_permission_flow_sets_value(self) -> None:
         self._run(self.bot.cmd_permission(self._ctx()))
         self.assertIn("Available modes", self._last())
@@ -145,9 +143,8 @@ class BotCommandTests(unittest.TestCase):
     def test_permission_rejects_unknown(self) -> None:
         self._run(self.bot._receive_permission(self._ctx(text="bogus")))
         self.assertIn("Unknown mode", self._last())
-        self.assertEqual(workspace.get_permission(self.ws), "auto")  # default
+        self.assertEqual(workspace.get_permission(self.ws), "auto")
 
-    # /effort
     def test_effort_rejects_out_of_range(self) -> None:
         self._run(self.bot._receive_effort(self._ctx(text="500")))
         self.assertIn("Out of range", self._last())

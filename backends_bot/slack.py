@@ -367,8 +367,6 @@ class SlackBot(BotPlatform):
         """Slack authorization is channel-scoped: allow if *chat_id* is listed."""
         return str(chat_id) in self.notify_targets
 
-    # send/edit primitives
-
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
     ) -> MessageHandle | None:
@@ -436,8 +434,6 @@ class SlackBot(BotPlatform):
             filename=name,
         )
 
-    # lifecycle
-
     async def start(self) -> None:
         self.app = AsyncApp(token=self.bot_token)
 
@@ -469,8 +465,6 @@ class SlackBot(BotPlatform):
         self._handler = None
         self.app = None
         logger.info("Slack bot stopped.")
-
-    # events
 
     # Plain messages + file uploads only.
     _ALLOWED_SUBTYPES = frozenset({None, "file_share"})

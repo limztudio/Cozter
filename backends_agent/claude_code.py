@@ -826,8 +826,6 @@ class ClaudeCodeBackend(Backend):
         # Compaction prefers terminal result.result.
         return extract_messages_style_agent_text(event)
 
-    # helpers
-
     def _handle_user_tool_results(
         self, event: dict, result: AgentResult,
     ) -> None:

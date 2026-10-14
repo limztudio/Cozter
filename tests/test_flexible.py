@@ -401,8 +401,8 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(restarting)
         self.assertIn("Which retry path?", result.text)
         self.assertIn("[[await]]", result.text)
-        self.assertEqual(self.driven, [])  # no worker ran
-        self.assertEqual(self.internal, ["Flexible planner"])  # no merge
+        self.assertEqual(self.driven, [])
+        self.assertEqual(self.internal, ["Flexible planner"])
 
     async def test_an_autonomous_turn_never_stops_to_ask(self) -> None:
         self.plan_output = "[QUESTION]\nWhich retry path?\n[/QUESTION]"

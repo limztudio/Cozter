@@ -28,8 +28,7 @@ from aiohttp.resolver import DefaultResolver
 from ..utils import clip_status_value, is_path_within
 
 
-# Bound raw HTTP bodies.
-_MAX_FETCH_BYTES = 5 * 1024 * 1024  # 5 MB
+_MAX_FETCH_BYTES = 5 * 1024 * 1024
 HTTP_USER_AGENT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 compatible; CozterAgent/1.0; +https://local"
@@ -167,9 +166,6 @@ class AgentTool(ABC):
             print(f"Error: tool {cls.__name__} failed: {exc}", file=sys.stderr)
             sys.exit(1)
         print(result)
-
-
-# Shared helpers
 
 
 _TOOL_PERMISSION: ContextVar[str] = ContextVar("tool_permission", default="auto")
@@ -1359,7 +1355,7 @@ _HTML_TAG_WHITESPACE = frozenset(" \t\n\r\f")
 
 def _is_html_tag_start(value: str, index: int) -> bool:
     """Return whether ``value[index:]`` begins a conventional HTML tag."""
-    index += 1  # Skip '<'.
+    index += 1
     if index < len(value) and value[index] == "/":
         index += 1
     if index >= len(value):

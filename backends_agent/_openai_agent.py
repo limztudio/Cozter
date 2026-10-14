@@ -255,8 +255,6 @@ class OpenAIChatBackend(Backend):
     # Standard 4-level effort words.
     effort_levels: tuple[str, ...] = ("minimal", "low", "medium", "high")
 
-    # hooks for concrete backends
-
     def _chat_endpoint(self) -> str:
         """Full URL of the chat/completions endpoint."""
         raise NotImplementedError
@@ -729,8 +727,6 @@ class OpenAIChatBackend(Backend):
                         "tool-call turns and failed to produce a final answer."
                     ),
                 })
-
-    # events
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
         if not isinstance(event, dict):
@@ -1411,9 +1407,6 @@ def _merge_tool_call(
         buf["_argument_bytes"] = serialized_bytes
         return serialized_bytes - previous_bytes
     return 0
-
-
-# Vision
 
 
 def _vision_parts_for_prompt(

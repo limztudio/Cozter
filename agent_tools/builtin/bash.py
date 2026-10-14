@@ -20,8 +20,7 @@ from ...utils import (
 
 # Real-work cap; cancel stops instantly.
 
-# Output ceiling: kill the tree past it.
-_BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024  # 4 MB
+_BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 # Only applies once the shell has exited, not to commands still doing work.
 _BASH_POST_EXIT_DRAIN_TIMEOUT = 1.0
 

@@ -24,11 +24,11 @@ class OpenAIBackoffTests(unittest.TestCase):
     def test_parse_retry_after(self) -> None:
         self.assertEqual(oa._parse_retry_after("5"), 5.0)
         self.assertIsNone(oa._parse_retry_after(None))
-        self.assertIsNone(oa._parse_retry_after("soon"))  # HTTP-date form
+        self.assertIsNone(oa._parse_retry_after("soon"))
 
     def test_backoff_honors_retry_after_and_caps(self) -> None:
         self.assertEqual(oa._backoff_delay(1, 3.0), 3.0)
-        self.assertEqual(oa._backoff_delay(9, 100.0), 10.0)  # capped
+        self.assertEqual(oa._backoff_delay(9, 100.0), 10.0)
         self.assertGreaterEqual(oa._backoff_delay(3), oa._backoff_delay(1))
         self.assertLessEqual(oa._backoff_delay(20), 10.0 * 1.25)
 

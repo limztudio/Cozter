@@ -176,7 +176,7 @@ CONSOLIDATE_PROMPT = (
     "- <remaining session-specific item>\n"
     "[/SESSION]\n"
 )
-CONSOLIDATE_TIMEOUT: float | None = 3600.0  # work cap
+CONSOLIDATE_TIMEOUT: float | None = 3600.0
 CONSOLIDATE_MAX_INPUT_CHARS = 100_000
 # Reserve most of the prompt for session evidence.
 CONSOLIDATE_COLONY_CHARS = CONSOLIDATE_MAX_INPUT_CHARS // 4

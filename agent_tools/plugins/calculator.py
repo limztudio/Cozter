@@ -206,7 +206,7 @@ def _format(value: Any) -> str:
 
 class CalculatorTool(AgentTool):
     name = "calculator"
-    order = 20  # utility tools group
+    order = 20
     description = "Exact math."
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
@@ -217,13 +217,13 @@ class CalculatorTool(AgentTool):
     }
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        del workspace_path  # pure computation; no workspace access
+        del workspace_path
         expression, error = require_nonempty_string_arg(
             args, "expression", strip=True,
         )
         if error:
             return error
-        assert expression is not None  # non-None once error is None
+        assert expression is not None
         if len(expression) > _MAX_EXPRESSION_CHARS:
             return (
                 f"Error: expression exceeds {_MAX_EXPRESSION_CHARS}"

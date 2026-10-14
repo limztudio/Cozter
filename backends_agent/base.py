@@ -851,7 +851,6 @@ class Backend(ABC):
         (used only by the compaction code path)
     """
 
-    # Class-level metadata
     name: str = ""
     executable: str = ""  # binary name used in "CLI not found" messages
     available_models: tuple[str, ...] = ()
@@ -885,8 +884,6 @@ class Backend(ABC):
 
     # CLI permission flags (HTTP backends leave None).
     permission_arg_sets: dict[str, tuple[str, ...]] | None = None
-
-    # Behavior
 
     def health_check(self) -> tuple[bool, str]:
         """Report whether this backend is ready to run a turn.

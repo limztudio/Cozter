@@ -213,8 +213,6 @@ def _html_code_block(lines: list[str]) -> list[str]:
     return [f"<pre>{escaped}</pre>"]
 
 
-# Platform adapter
-
 class TelegramBot(BotPlatform):
     """One-to-one adapter around a python-telegram-bot Application."""
 
@@ -242,8 +240,6 @@ class TelegramBot(BotPlatform):
         if self.app is None:
             raise RuntimeError("platform_id is only valid after start()")
         return str(self.app.bot.id)
-
-    # send/edit
 
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -382,8 +378,6 @@ class TelegramBot(BotPlatform):
         assert last_exc is not None
         raise last_exc
 
-    # startup/shutdown
-
     async def start(self) -> None:
         self.app = (
             Application.builder()
@@ -452,8 +446,6 @@ class TelegramBot(BotPlatform):
                     await app.shutdown()
                     self.app = None
             logger.info("Telegram bot stopped.")
-
-    # events
 
     def _make_command_handler(self, name: str):
         async def handler(

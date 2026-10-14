@@ -248,7 +248,7 @@ class GitInfoToolTests(unittest.TestCase):
         with open(os.path.join(self.workspace, "a.txt"), "a") as file_handle:
             file_handle.write("more\n")
         status = self.invoke(action="status")
-        self.assertIn("##", status)  # branch line
+        self.assertIn("##", status)
         self.assertIn("a.txt", status)
 
     def test_log_lists_commit_subjects(self) -> None:

@@ -922,8 +922,6 @@ def set_history_budget(workspace_path: str, budget: int) -> None:
     )
 
 
-# Per-workspace lock
-
 _locks: dict[str, asyncio.Lock] = {}
 
 

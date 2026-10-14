@@ -1000,8 +1000,6 @@ class BotPlatform(ABC):
             label = "file: change"
         self.record_turn_progress(uid, kind=kind, label=label)
 
-    # dispatch hooks
-
     def authorized(self, user_id: str, _chat_id: str) -> bool:
         """Return True if an event from *(user_id, chat_id)* is allowed.
 
@@ -1224,8 +1222,6 @@ class BotPlatform(ABC):
         await self._persist_promote(uid, entry_id)
         logger.info("User %s answered while %s; queue resumed", uid, reason)
         return True
-
-    # commands
 
     async def cmd_start(self, ctx: BotContext) -> None:
         await ctx.reply_text("Cozter bot is running.")
@@ -2616,8 +2612,6 @@ class BotPlatform(ABC):
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
         )
 
-    # Durable queue: persist-then-enqueue.
-
     def _platform_state_file_path(self, stem: str) -> str:
         """Return a durable per-platform state path with a safe file name."""
         os.makedirs(workspace.CONFIG_DIR, exist_ok=True)
@@ -2886,8 +2880,6 @@ class BotPlatform(ABC):
 
         for uid in drained_users:
             self._start_queue_drain(uid)
-
-    # Durable final-reply delivery
 
     def _reply_deliveries_file_path(self) -> str:
         """Return the per-platform ledger for completed text replies."""
@@ -3218,8 +3210,6 @@ class BotPlatform(ABC):
     async def _check_reply_deliveries(self) -> None:
         for record in await self._list_reply_delivery_records():
             await self._deliver_staged_reply(record)
-
-    # Detached provider tasks
 
     def _detached_tasks_file_path(self) -> str:
         """Return this platform's durable detached-task ledger path."""
@@ -3835,8 +3825,6 @@ class BotPlatform(ABC):
                 await self._remove_detached_task_record(record["id"])
                 cancelled += 1
         return cancelled
-
-    # Scheduler loop
 
     async def start_scheduler(self) -> None:
         """Kick off the background scheduler task. Idempotent."""
@@ -5158,8 +5146,6 @@ class BotPlatform(ABC):
                 await self._persist_complete(uid, entry_id)
             finally:
                 self._cleanup_turn(uid, lock)
-
-    # internal helpers
 
     @staticmethod
     def _pick_option(

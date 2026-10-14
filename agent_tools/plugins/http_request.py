@@ -36,11 +36,8 @@ _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 5
 _CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie"})
-# Real-work cap.
 _DEFAULT_MAX_CHARS = 3_500
-# Tool-call arg, not a file upload.
 _MAX_BODY_CHARS = 100_000
-# Transport-managed; never echoed or proxied.
 _HOP_BY_HOP_HEADERS = frozenset({
     "host",
     "content-length",
@@ -54,7 +51,6 @@ _HOP_BY_HOP_HEADERS = frozenset({
 _TEXTUAL_TYPE_MARKERS = (
     "json", "xml", "html", "csv", "yaml", "javascript", "text", "x-www-form",
 )
-# Single alternation scan.
 _TEXTUAL_TYPE_RE = re.compile(
     "|".join(re.escape(marker) for marker in _TEXTUAL_TYPE_MARKERS),
 )
@@ -152,13 +148,10 @@ async def _request_following_redirects(
                 if validation_error:
                     raise _RequestRefusedError(validation_error)
                 if _url_origin(str(response.url)) != _url_origin(next_url):
-                    # Manual redirects bypass aiohttp's Authorization stripping.
-                    # Never forward explicit credentials to a different origin.
                     current_headers = {
                         key: value for key, value in current_headers.items()
                         if key.casefold() not in _CREDENTIAL_HEADERS
                     }
-                # 303 -> GET; 301/302 downgrade too.
                 if status == 303 or (
                     status in (301, 302) and current_method != "GET"
                 ):
@@ -208,11 +201,11 @@ class HttpRequestTool(AgentTool):
     )
 
     async def run(self, workspace_path: str, args: dict) -> str:
-        del workspace_path  # web tools don't need the workspace
+        del workspace_path
         url, error = require_nonempty_string_arg(args, "url", strip=True)
         if error:
             return error
-        assert url is not None  # non-None once error is None
+        assert url is not None
         validation_error = validate_public_url(url)
         if validation_error:
             return validation_error
@@ -265,7 +258,7 @@ class HttpRequestTool(AgentTool):
                 )
         except _RequestRefusedError as exc:
             return str(exc)
-        except Exception as exc:  # aiohttp raises bare Exception subclasses
+        except Exception as exc:
             return f"Request failed: {exc}"
 
         header = (

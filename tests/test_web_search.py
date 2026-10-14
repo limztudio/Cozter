@@ -61,7 +61,7 @@ class _FakeNet:
     def __call__(self, url: str, *,
                  allow_redirects: bool = True,
                  timeout: object = None):
-        del timeout, allow_redirects  # unused; the tool passes them
+        del timeout, allow_redirects
         self.urls.append(url)
         outcome = self.outcomes.pop(0)
         return self._enter(outcome)

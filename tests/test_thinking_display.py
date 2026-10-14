@@ -23,15 +23,15 @@ class ThinkingDisplayTests(unittest.TestCase):
         lines = [f"» step {step}" for step in range(8)]
         out = BotPlatform._compose_thinking_display(lines, "")
         self.assertIn("» step 7", out)
-        self.assertNotIn("» step 0", out)  # oldest dropped
+        self.assertNotIn("» step 0", out)
         self.assertIn("… [3 older update(s) omitted — preview only]", out)
 
     def test_truncates_long_text_keeping_tail(self) -> None:
         long_text = "HEAD" + "b" * 1000 + "TAIL"
         out = BotPlatform._compose_thinking_display([], long_text)
         self.assertIn("TAIL", out)
-        self.assertNotIn("HEAD", out)  # head dropped, tail kept
-        self.assertIn("… [preview]", out)  # visible cut marker, not bare "…"
+        self.assertNotIn("HEAD", out)
+        self.assertIn("… [preview]", out)
         self.assertLessEqual(len(out), 720)
 
     def test_short_id_clip_has_visible_marker(self) -> None:

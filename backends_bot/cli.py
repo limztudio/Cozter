@@ -62,8 +62,6 @@ class CliBot(BotPlatform):
         # Local binary implies shell access.
         return True
 
-    # send/edit
-
     async def send_text(
         self, chat_id: str, text: str, *, rich: bool = False,
     ) -> MessageHandle | None:
@@ -98,8 +96,6 @@ class CliBot(BotPlatform):
             print(f"\x1b[2;90m{text}\x1b[0m")
         else:
             print(text)
-
-    # startup/shutdown
 
     async def start(self) -> None:
         _prepare_console()
@@ -170,7 +166,7 @@ class CliBot(BotPlatform):
                 # Reprint the prompt below the last output.
                 print("> ", end="", flush=True)
                 line = await line_queue.get()
-                if line is None:  # EOF / Ctrl-D
+                if line is None:
                     break
                 line = line.strip()
                 if not line:
@@ -198,7 +194,6 @@ class CliBot(BotPlatform):
             parts = line[1:].split(None, 1) if line.startswith("\\") else []
             command = parts[0].split("@", 1)[0].lower() if parts else ""
             if _LOCAL_ID in self._pending_input or command in self._COMMANDS:
-                # Picker answers must finish before the next line replaces them.
                 await self.dispatch_text(self._ctx(text=line))
             else:
                 create_background_task(
@@ -223,8 +218,6 @@ class CliBot(BotPlatform):
         )
 
 
-# Helpers
-
 def _prepare_console() -> None:
     """Make stdout/stderr UTF-8 so tool/file emojis don't crash cp1252."""
     for stream in (sys.stdout, sys.stderr):
@@ -242,7 +235,6 @@ def _prepare_console() -> None:
             handler.setLevel(logging.WARNING)
 
 
-# ANSI status colors: TTYs only.
 _ansi_enabled = False
 
 
@@ -259,10 +251,8 @@ def _enable_ansi() -> None:
         _ansi_enabled = False
         return
     if sys.platform != "win32":
-        # POSIX terminals honor ANSI.
         _ansi_enabled = True
         return
-    # Windows: enable VT processing via SetConsoleMode.
     try:
         import ctypes
         kernel32 = ctypes.windll.kernel32
@@ -298,11 +288,10 @@ def _install_force_exit_on_sigint() -> None:
         # Newline-prefixed; flush (os._exit skips the flush).
         with contextlib.suppress(Exception):
             print("\n(interrupted)", flush=True)
-        os._exit(130)  # 128 + SIGINT
+        os._exit(130)
 
     try:
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(signal.SIGINT, _force_exit)
     except (NotImplementedError, RuntimeError):
-        # Windows: fall back to the synchronous signal API.
         signal.signal(signal.SIGINT, lambda *_: _force_exit())

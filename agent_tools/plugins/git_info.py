@@ -47,7 +47,7 @@ _ACTIONS = (
 
 class GitInfoTool(AgentTool):
     name = "git_info"
-    order = 20  # utility tools group
+    order = 20
     description = (
         "Git status/log/diff/branches/tags/stashes/show/blame. Read-only."
     )
@@ -170,7 +170,6 @@ class GitInfoTool(AgentTool):
                 "show", "--no-ext-diff", "--no-textconv", "--stat",
                 "--oneline", revision,
             ]
-        # blame
         pathspec = args.get("path")
         if not isinstance(pathspec, str) or not pathspec.strip():
             raise ValueError("'blame' needs 'path' (a workspace file)")

@@ -102,7 +102,7 @@ def _collect_pathspecs(
 
 class GitOpsTool(AgentTool):
     name = "git_ops"
-    order = 21  # utility tools group, next to git_info
+    order = 21
     description = (
         "Git local writes: add/unstage/commit/checkout/branch/stash/"
         "reset/merge/rebase/tag/discard/clean. Local-only, no network."

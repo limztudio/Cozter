@@ -72,14 +72,14 @@ class _ResponseSession:
 class WebFetchSecurityTests(unittest.TestCase):
     def test_rejects_credentials_and_nonpublic_numeric_hosts(self) -> None:
         blocked_urls = (
-            "http://127.0.0.1/",  # loopback
-            "http://10.0.0.1/",  # private
-            "http://169.254.1.1/",  # link-local
-            "http://240.0.0.1/",  # reserved
-            "http://224.0.0.1/",  # multicast
-            "http://[::1]/",  # IPv6 loopback
-            "http://2130706433/",  # legacy numeric loopback spelling
-            "http://127。0。0。1/",  # IDNA-normalized loopback spelling
+            "http://127.0.0.1/",
+            "http://10.0.0.1/",
+            "http://169.254.1.1/",
+            "http://240.0.0.1/",
+            "http://224.0.0.1/",
+            "http://[::1]/",
+            "http://2130706433/",
+            "http://127。0。0。1/",
         )
         for url in blocked_urls:
             with self.subTest(url=url):

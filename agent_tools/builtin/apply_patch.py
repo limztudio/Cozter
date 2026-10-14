@@ -30,9 +30,7 @@ _MAX_PATCH_BYTES = 1 * 1024 * 1024
 _MAX_PATCH_LINES = 20_000
 _MAX_FILE_BYTES = 1 * 1024 * 1024
 _MAX_FILE_LINES = 50_000
-# Precompiled per-hunk header.
 _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
-# Exact str.splitlines boundaries; consume CRLF as one line break.
 _LINE_BREAK_RE = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 
 
@@ -51,11 +49,11 @@ class _Hunk:
         old_count: int | None = None,
         new_count: int | None = None,
     ) -> None:
-        self.start = start  # 1-based line in the old file (a hint)
+        self.start = start
         self.old_count = old_count
         self.new_count = new_count
-        self.old: list[str] = []  # context + deleted lines (content only)
-        self.new: list[str] = []  # context + added lines (content only)
+        self.old: list[str] = []
+        self.new: list[str] = []
         # "No newline" owns the preceding EOF newline.
         self.last_marker: str | None = None
         self.new_ends_with_newline: bool | None = None
@@ -91,8 +89,8 @@ class _Hunk:
 
 class _FilePatch:
     def __init__(self, old_path: str | None, new_path: str | None) -> None:
-        self.old_path = old_path  # None == /dev/null (creation)
-        self.new_path = new_path  # None == /dev/null (deletion)
+        self.old_path = old_path
+        self.new_path = new_path
         self.hunks: list[_Hunk] = []
 
     def validate(self) -> None:
@@ -105,7 +103,6 @@ class _FilePatch:
                 )
             return
         for hunk in self.hunks:
-            # Creation diff has no old side.
             if hunk.old:
                 raise _PatchError(
                     "creation hunk contains old/context lines for /dev/null",
@@ -123,7 +120,7 @@ class _FilePatch:
 class ApplyPatchTool(AgentTool):
     name = "apply_patch"
     file_action = "edit"
-    order = 20  # group with the editing tools
+    order = 20
     description = (
         "Apply a unified diff; prefer for multi-file edits."
     )
@@ -170,9 +167,6 @@ class ApplyPatchTool(AgentTool):
             return "apply_patch (patch too large)"
         file_count = patch.count("\n+++ ") + (1 if patch.startswith("+++ ") else 0)
         return f"apply_patch ({file_count} file{'s' if file_count != 1 else ''})"
-
-
-# Parse
 
 
 def _validate_patch_limits(text: str) -> None:
@@ -316,9 +310,8 @@ def _parse_patch(
             current.hunks.append(hunk)
             continue
         if hunk is None:
-            continue  # preamble / "diff --git" / "index" lines
+            continue
         if not line:
-            # Empty line = empty context.
             hunk.old.append("")
             hunk.new.append("")
             hunk.last_marker = " "
@@ -333,7 +326,7 @@ def _parse_patch(
             hunk.new.append(content)
         else:
             hunk.validate()
-            hunk = None  # a non-body line ends this hunk
+            hunk = None
             continue
         hunk.last_marker = marker
 
@@ -349,13 +342,9 @@ def _parse_patch(
     return patches
 
 
-# Applying
-
-
 def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     label = fp.new_path or fp.old_path or "?"
 
-    # Deletion: +++ /dev/null
     if fp.new_path is None and fp.old_path is not None:
         try:
             # Delete the named entry; following a final symlink here would
@@ -387,7 +376,6 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
     except ValueError as exc:
         return f"{fp.new_path}: skipped ({exc})"
 
-    # Creation: --- /dev/null
     if fp.old_path is None:
         new_lines: list[str] = []
         for hunk in fp.hunks:
@@ -406,7 +394,6 @@ def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
             return f"{fp.new_path}: skipped (file already exists)"
         return f"{fp.new_path}: created ({len(new_lines)} lines)"
 
-    # Modification
     if not os.path.isfile(target):
         return f"{fp.new_path}: skipped (file not found)"
     try:

@@ -14,7 +14,6 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 DEFAULT_UPDATE_CHECK_INTERVAL = 300
 DEFAULT_RECENT_WORKSPACE_LIMIT = 10
 DEFAULT_MESSAGE_QUEUE_SIZE = 5000
-# Bound one attachment below quotas.
 DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _PERMISSION_LEVELS = frozenset({"full", "auto", "confirm", "deny"})
 
@@ -40,24 +39,17 @@ _DEFAULT_CONFIG = {
     "meta_base_url": "https://api.meta.ai/v1",
     "meta_socket_timeout": 3600,
     "meta_max_retries": 2,
-    # Real-work cap.
     "tool_timeout": 3600,
-    # Per-attempt allowance; unfinished jobs checkpoint and renew it.
     "agent_turn_timeout": 3600,
     "flexible_max_parallel_workers": 3,
-    # Stuck-turn diagnostic interval.
     "update_idle_timeout": 1200,
-    # Periodic faulthandler dump interval (0 disables).
     "dump_traceback_interval": 0,
-    # Five minutes avoids churn.
     "update_check_interval": DEFAULT_UPDATE_CHECK_INTERVAL,
     "recent_workspace_limit": DEFAULT_RECENT_WORKSPACE_LIMIT,
     "message_queue_size": DEFAULT_MESSAGE_QUEUE_SIZE,
     "max_upload_bytes": DEFAULT_MAX_UPLOAD_BYTES,
     "extra_models": {},
-    # Explicit capacities for undiscoverable models.
     "model_context_windows": {},
-    # CLI bypass needs operator opt-in via config.json.
     "max_permission": "auto",
     "show_usage": True,
 }

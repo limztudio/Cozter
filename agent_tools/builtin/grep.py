@@ -22,12 +22,9 @@ from ..base import (
     tool_permission_scope,
 )
 
-# Skip oversized files.
-_GREP_MAX_FILE_BYTES = 1_000_000  # 1 MB
+_GREP_MAX_FILE_BYTES = 1_000_000
 
-# Truncate match lines.
 _GREP_MAX_LINE_CHARS = 200
-# ``re`` has no deadline: scan in a killable process.
 _GREP_WORKER_JOIN_SECONDS = 0.5
 
 
@@ -53,7 +50,7 @@ class GrepTool(AgentTool):
         pattern_str, error = require_nonempty_string_arg(args, "pattern")
         if error:
             return error
-        assert pattern_str is not None  # non-None once error is None
+        assert pattern_str is not None
         try:
             regex = re.compile(pattern_str)
         except re.error as exc:
@@ -65,7 +62,7 @@ class GrepTool(AgentTool):
         )
         if path_error:
             return path_error
-        assert search_root is not None  # non-None once error is empty
+        assert search_root is not None
         if not os.path.isdir(search_root):
             return f"Not a directory: {raw_path}"
 
@@ -126,7 +123,7 @@ class GrepTool(AgentTool):
             if len(raw) > _GREP_MAX_FILE_BYTES:
                 continue
             if b"\x00" in raw[:8192]:
-                continue  # likely binary
+                continue
             content = raw.decode("utf-8", errors="replace")
             for lineno, line in enumerate(content.splitlines(), 1):
                 if regex.search(line):

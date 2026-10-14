@@ -20,7 +20,7 @@ ROUTER_PROMPT = (
     "- One line: bare session id, or NEW.\n"
     "- No tools; decide from the input.\n"
 )
-ROUTER_TIMEOUT: float | None = 3600.0  # work cap
+ROUTER_TIMEOUT: float | None = 3600.0
 ROUTER_MAX_SESSIONS = 12  # cap input size
 ROUTER_PER_SESSION_CHARS = 400
 ROUTER_PROMPT_PREVIEW_CHARS = 600

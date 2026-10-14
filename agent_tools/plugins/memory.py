@@ -36,7 +36,6 @@ _SESSIONS_RELPATH = ".cozter/sessions"
 _COLONY_RELPATH = ".cozter/colony.json"
 _ACTIONS = ("search", "list", "read")
 
-# Bounds sized to the result cap.
 _MATCH_LIMIT_DEFAULT = 8
 _MATCH_LIMIT_MAX = 20
 _EXCERPT_CHARS = 160
@@ -237,7 +236,7 @@ def _fit_output(
 
 class MemoryTool(AgentTool):
     name = "memory"
-    order = 20  # utility tools group, next to notes/git_info
+    order = 20
     description = "Chat memory (sessions, summaries, colony)."
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
