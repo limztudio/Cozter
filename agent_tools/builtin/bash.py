@@ -40,6 +40,10 @@ class BashTool(AgentTool):
         " the selected shell's redirection, then grep the FULL file for"
         " error/warning/exception/traceback — never eyeball tail only;"
         " a truncated preview is not proof of clean."
+        " Keep long validation resumable with full logs and per-case checkpoints."
+        " For interrupted CTest on an unchanged build, inspect prior pass/fail"
+        " evidence and use -F to resume; skipped or previously failed cases"
+        " still need valid passing evidence before claiming completion."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

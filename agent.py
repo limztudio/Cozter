@@ -219,6 +219,10 @@ class TurnBudget:
             "Continue the same original request from the retained checkpoint. "
             "Re-check saved files and artifacts; preserve verified completed work, "
             "finish every unfinished or unverified requirement, and verify full completion."
+            " Resume interrupted long validation from its per-case checkpoint "
+            "when inputs and build are unchanged (for example, CTest -F). "
+            "Inspect retained full logs for prior failures; a skipped case or "
+            "a successful remaining subset alone is not full passing evidence."
         )
         result.session_id = turn.session_id
         sections = [

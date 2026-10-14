@@ -396,8 +396,12 @@ completing it: Cozter saves the original request, prior worker evidence,
 remaining scope, workspace, session, artifacts, and accounting, then resumes
 the same job with a fresh execution allowance. Later queued jobs remain held
 until the whole request completes. A pending update may restart between
-attempts; the durable checkpoint restores the same job first. Provider
-failures, unavailable completion verification, or a required user answer
+attempts; the durable checkpoint restores the same job first.
+The continuation instruction asks workers to reuse per-case validation
+checkpoints when inputs and the build are unchanged, such as CTest `-F`,
+while checking retained full logs for prior failures. A successful remaining
+subset or a skipped case alone cannot establish that the whole suite passed.
+Provider failures, unavailable completion verification, or a required user answer
 pause that job and hold later work until guidance arrives or `/stop` cancels
 it. These limits do not change permissions, models, reasoning effort, or
 individual tool and provider limits. `update_idle_timeout` (default 1200s) controls how often
