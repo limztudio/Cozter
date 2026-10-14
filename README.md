@@ -370,7 +370,10 @@ The llama safety settings are read at the start of every llama turn:
 `llama_max_agent_turns` (default 60) limits tool-call turns before Cozter
 forces a final answer, and `llama_tool_repeat_limit` (default 3) skips an
 identical call after that many executions. Real work carries a 3600s cap:
-tool calls (`tool_timeout`, default 3600s) and generation streams
+tool calls (`tool_timeout`, default 3600s; read lazily per call so a config
+edit takes effect on the next call without a restart, and always applied
+unconditionally as the `asyncio.wait_for` bound with a 3600s fallback) and
+generation streams
 (`llama_socket_timeout`, `zai_socket_timeout`, `meta_socket_timeout`,
 each default 3600s) keep running up to that bound so slow work finishes
 instead of timing out and forcing a wasteful retry. `/stop` cancels active
@@ -1745,16 +1748,55 @@ ignored for local secrets and runtime queues.
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
   `llama.py`, `zai.py`, and `meta.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
-  the 17 files under `agent_tools/builtin/` (16 tools plus its
-  `__init__.py`), and user plugins plus their
-  README under `agent_tools/plugins/`
+  the 17 files under `agent_tools/builtin/` (`__init__.py`, `apply_patch.py`,
+  `bash.py`, `copy_file.py`, `delete_file.py`, `edit_file.py`, `glob.py`,
+  `grep.py`, `list_dir.py`, `make_dir.py`, `move_file.py`, `multi_edit.py`,
+  `read_file.py`, `tree.py`, `web_fetch.py`, `web_search.py`, `write_file.py`),
+  and the 11 files under `agent_tools/plugins/` (`__init__.py`,
+  `_git_common.py`, `calculator.py`, `current_time.py`, `git_info.py`,
+  `git_ops.py`, `git_sync.py`, `http_request.py`, `memory.py`, `notes.py`,
+  plus its `README.md`)
 - Project metadata, CI, and docs: `requirements.txt`, `py.typed`, `mypy.ini`,
   `pyproject.toml` (the Ruff E4/E7/E9/F lint contract), `.gitlab-ci.yml`,
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus focused
-  `unittest` modules covering config validation, agent attachments, prompts,
+- Tests (85 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 82 `test_*.py` modules:
+  `test_agent_attachments.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
+  `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
+  `test_apply_patch_limits.py`, `test_backend_audit_regressions.py`,
+  `test_backend_event_parsing.py`, `test_backend_repair.py`, `test_backends_agent.py`,
+  `test_bash_process_output.py`, `test_blocked_judge_runtime.py`, `test_bot_commands.py`,
+  `test_bot_recovery_and_lifecycle.py`, `test_claude_background_guard.py`,
+  `test_claude_model_capabilities.py`, `test_cli_commands.py`,
+  `test_cloud_model_capabilities.py`, `test_compaction.py`, `test_config.py`,
+  `test_detached_tasks.py`, `test_discovery_optimization.py`,
+  `test_discovery_pruning.py`, `test_discovery_tools_async.py`,
+  `test_edit_file_read_limits.py`, `test_flexible_parallel_plan.py`,
+  `test_flexible_parallel_runtime.py`, `test_flexible.py`,
+  `test_git_checkout_integrity.py`, `test_git_process_output.py`,
+  `test_http_body_sniff.py`, `test_http_latency.py`, `test_http_redirect_method.py`,
+  `test_inject.py`, `test_internal_backend_deadline.py`, `test_interrupted_turns.py`,
+  `test_job_continuation.py`, `test_job_prerequisite_retry.py`,
+  `test_jpeg_dimensions.py`, `test_judge_blocked.py`, `test_launch_process.py`,
+  `test_launcher_and_followups.py`, `test_memory_corrupt_state.py`,
+  `test_memory_preservation.py`, `test_openai_agent.py`,
+  `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
+  `test_platform_formatting.py`, `test_prerequisite_checkpoint.py`,
+  `test_prompt_subprocess.py`, `test_queue_persistence_latency.py`,
+  `test_reply_delivery.py`, `test_run_lock.py`, `test_runtime_diagnostics.py`,
+  `test_schedule_execution.py`, `test_session_picker.py`,
+  `test_session_write_latency.py`, `test_signal_attachment_decoding.py`,
+  `test_signal_feedback.py`, `test_signal_formatting.py`, `test_signal_status.py`,
+  `test_signal_transport.py`, `test_slack_commands.py`, `test_slack_formatting.py`,
+  `test_state_fallbacks.py`, `test_state_integrity.py`,
+  `test_status_and_shell_latency.py`, `test_status_latency.py`,
+  `test_thinking_display.py`, `test_titling.py`, `test_tool_permissions.py`,
+  `test_tool_runtime.py`, `test_tool_safety_and_output_limits.py`,
+  `test_tool_state_integrity.py`, `test_tools_audit_regressions.py`,
+  `test_turn_budget.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
+  `test_web_fetch.py`, `test_web_search.py`)
+  covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared
   catalog/result/content helpers, CLI tool summaries, process-resource maps,
