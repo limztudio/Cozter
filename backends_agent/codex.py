@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 # Discovery fallback: curated IDs + capabilities (0.162.1).
 _FALLBACK_MODEL_SPECS = (
-    ("gpt-6.1-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
+    ("gpt-6.1-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 500_000),
     ("gpt-6-astra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
