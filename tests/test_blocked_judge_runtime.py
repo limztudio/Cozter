@@ -1,4 +1,4 @@
-"""Missing external prerequisites must not create unlimited work retries."""
+"""Blocked verdicts retain work and autonomous recovery instructions."""
 
 import tempfile
 import unittest
@@ -7,33 +7,36 @@ from unittest import mock
 from Cozter import agent, flexible, session
 from Cozter.backends_agent.base import AgentResult
 from Cozter.backends_bot.base import BotPlatform
-from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
 
 
 class BlockedJudgeRuntimeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_durable_job_pauses_instead_of_renewing_the_same_blocked_work(self):
-        with tempfile.TemporaryDirectory() as ws:
-            bot = _ReplyDeliveryBot(ws, fail_final=False)
-            result = AgentResult(text="PARTIAL: graphics remain unverified")
-            agent._retain_blocked_verdict(result, flexible.JudgeVerdict(
-                False, "Visible desktop unavailable", "Supply an interactive desktop",
-                verified=False, blocked=True,
-            ))
-            worker = mock.AsyncMock(return_value=result)
-            with mock.patch.object(bot, "_run_turn_with_budget", worker):
-                complete = await bot._run_turn("u1", "chat", "Exercise required graphics paths")
-            self.assertFalse(complete)
-            self.assertEqual(worker.await_count, 1)
-            self.assertIn("u1", bot._paused_jobs)
-            self.assertIn("Supply an interactive desktop", bot.sent[-1])
+    async def test_blocked_result_retains_work_and_prerequisite_for_automatic_recovery(self):
+        for next_step in ("Recheck and recover the authorized interactive desktop", ""):
+            with self.subTest(next_step=next_step):
+                result = AgentResult(text="PARTIAL: graphics remain unverified; build passed")
+                result.continuation_reason = "judge_limit"
+                result.continue_instruction = "Previous continuation"
+                missing = "Visible desktop unavailable"
+                agent._retain_blocked_verdict(result, flexible.JudgeVerdict(
+                    False, missing, next_step, verified=False, blocked=True,
+                ))
+                self.assertEqual(result.continuation_reason, "prerequisite")
+                self.assertEqual(result.blocked_reason, missing)
+                self.assertTrue(result.continue_instruction)
+                self.assertFalse(result.completion_verified)
+                self.assertIn("build passed", result.text)
+                self.assertIn(missing, result.text)
+                self.assertTrue(BotPlatform._job_result_is_incomplete(result))
+                if next_step:
+                    self.assertIn(next_step, result.continue_instruction)
 
-    async def test_initial_and_tail_verdict_preserve_work_without_auto_continuation(self):
+    async def test_initial_and_tail_verdict_preserve_work_for_automatic_recovery(self):
         for tail in (False, True):
             with self.subTest(tail=tail), tempfile.TemporaryDirectory() as ws:
                 data = session.create_session(ws, name="Blocked execution")
                 blocked = flexible.JudgeVerdict(
                     False, "Required graphics checks have no visible desktop",
-                    "Provide a visible interactive desktop before resuming", verified=False, blocked=True,
+                    "Recheck and recover the authorized visible desktop", verified=False, blocked=True,
                 )
                 verdicts = ([(flexible.JudgeVerdict(True, "verify", "verify remaining checks"), False)]
                             if tail else []) + [(blocked, False)]
@@ -46,11 +49,12 @@ class BlockedJudgeRuntimeTests(unittest.IsolatedAsyncioTestCase):
                                              backend_name="meta", session_id=data["id"])
                 self.assertEqual(worker.await_count, 2 if tail else 1)
                 self.assertFalse(result.completion_verified)
-                self.assertIsNone(result.continuation_reason)
-                self.assertFalse(result.continue_instruction)
+                self.assertEqual(result.continuation_reason, "prerequisite")
+                self.assertEqual(result.blocked_reason, "Required graphics checks have no visible desktop")
+                self.assertIn("Recheck and recover the authorized visible desktop", result.continue_instruction)
                 self.assertIn("source changes retained", result.text)
                 self.assertIn("Required graphics checks have no visible desktop", result.text)
-                self.assertIn("Provide a visible interactive desktop", result.text)
+                self.assertIn("Recheck and recover the authorized visible desktop", result.text)
                 self.assertTrue(BotPlatform._job_result_is_incomplete(result))
                 await agent._wait_for_pending_session_writes(ws)
 

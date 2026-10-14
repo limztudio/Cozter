@@ -1221,9 +1221,22 @@ apply new context. A question ending with `[[await]]` keeps the current job
 pending; replying supplies guidance and resumes it ahead of later jobs.
 A judge can also return `BLOCKED` when required work needs a missing external
 prerequisite, such as a visible desktop for explicitly requested graphics checks.
-After other actionable work is finished, this pauses the unfinished job with its
-evidence and required next action. It does not renew attempts to recheck the same
-unchanged condition, discard the job, or release later queued work as if it finished.
+After other actionable work is finished, Cozter retains the unfinished job's
+evidence, missing prerequisite, and next recovery action. It automatically tries
+authorized remediation or rechecks availability with a durable delay increasing
+from 30 seconds to at most 5 minutes. The first unfinished job keeps its place;
+later queued jobs remain held. A restart retains the checkpoint and retry time.
+Completed audits and builds are reused when still valid, rather than repeated
+because the prerequisite remains unavailable. Required work is never marked
+complete merely because it is blocked.
+
+Routine recovery uses the request's existing authorization and configured
+permissions, including full permission when set; it does not ask for approval
+to continue. Missing credentials or facts only the user can provide remain an
+honestly stated information requirement. Cozter completes everything else it can
+and checks whether the prerequisite has become available; it never invents
+credentials or claims unavailable access. A genuine explicit `[[await]]` question
+still requests necessary information, instead of approval for routine work.
 
 Two behaviors are worth knowing. Under `/style collaborative`, the turn can
 stop and wait for you (`[[await]]`) at either end of the pipeline: the
@@ -1231,7 +1244,8 @@ planner may ask **one** clarifying question instead of guessing, and the
 merge step may end its reply on a question it genuinely needs answered
 before the work can continue. The workers in between never stop to ask,
 since nobody is reading them mid-pipeline. Under `/style autonomous` — and
-on scheduled `/reserve` runs, which are always autonomous — nothing pauses:
+on scheduled `/reserve` runs, which are always autonomous — routine work continues
+without waiting for approval:
 a question the merge model emits anyway is stripped rather than left to
 strand a run nobody is watching. Every agent turn preamble now also carries the whole-scope /
 doc-following / verify-with-evidence completeness rule (list every target first, do each,

@@ -167,13 +167,17 @@ _MERGE_QUESTION_RULE = (
     " Optional offers: no marker.\n"
 )
 
-# Workers run autonomously; BLOCKED needs a user answer.
+# An unavailable prerequisite retains work and schedules recovery, not approval.
 _MERGE_BLOCKED_RULE = (
-    "- A BLOCKED report needs a user answer: end with its question"
-    " plus \"[[await]]\" on its own line.\n"
+    "- A BLOCKED report leaves the job unfinished. Preserve completed evidence"
+    " and name the exact missing prerequisite plus an autonomous recovery step"
+    " or availability check. Do not ask permission merely to continue routine"
+    " work already authorized by the request and configured permissions."
+    " Use \"[[await]]\" only for specific information the user must supply,"
+    " after finishing everything else possible; never use it for routine approval.\n"
 )
 
-# Continue-judge: finish, continue actionable work, or name an external blocker.
+# Continue-judge: finish, continue actionable work, or retain a recoverable prerequisite.
 _JUDGE_RULES = (
     "Continue-judge: decide whether the draft below fully answers the"
     " user's request.\n\n"
@@ -185,15 +189,26 @@ _JUDGE_RULES = (
     "- CONTINUE for concrete missing requested work achievable in the current"
     " environment. Finish every remaining independently actionable item before"
     " declaring an external blocker.\n"
-    "- BLOCKED only when a necessary part of the explicit original scope cannot"
-    " proceed until a human or external environment changes. State the evidence"
-    " and exact missing prerequisite in MISSING; NEXT may name the required human"
-    " action or environment change. For example, required desktop interaction"
-    " cannot run in a non-interactive Session 0, or necessary credentials are"
-    " unavailable. BLOCKED leaves the job unfinished; do not mark it done.\n"
-    "- Do not repeatedly recheck an unchanged unavailable prerequisite. A draft"
-    " ending with [[await]] waits on the user; use BLOCKED when required work"
-    " remains behind that question.\n"
+    "- Use existing authorization and configured permissions for routine recovery"
+    " within the requested scope. When full permission already authorizes the"
+    " necessary action, continue without another approval. Never ask 'can I"
+    " continue' merely to resume authorized work.\n"
+    "- BLOCKED only when a necessary part of the explicit original scope is"
+    " currently unavailable after all independently actionable work is complete."
+    " State the evidence and exact missing prerequisite in MISSING; NEXT should"
+    " give an autonomous recovery step or a precise availability condition to"
+    " recheck. Try authorized remediation rather than asking the user to approve"
+    " continuation. For example, required desktop interaction cannot run in a"
+    " non-interactive Session 0; recover the authorized interactive environment"
+    " if possible, otherwise recheck its availability. BLOCKED leaves the job"
+    " unfinished; do not mark it done.\n"
+    "- BLOCKED retains progress for automatic recovery and availability rechecks"
+    " with backoff. Do not repeat completed audits, builds, or expensive work"
+    " merely because the prerequisite is still unavailable.\n"
+    "- Missing credentials or genuinely unknown user information must be named"
+    " honestly; never invent credentials or claim access that is absent. Finish"
+    " all possible work and recheck availability. An explicit [[await]] asks for"
+    " necessary information, not permission to simply continue.\n"
     "- A bounded draft excerpt may omit its middle. Omission alone is not"
     " evidence of unfinished work. CONTINUE requires a concrete missing"
     " requested item, not a demand to regenerate omitted text.\n"
@@ -224,7 +239,7 @@ _JUDGE_RULES = (
     "necessary requested scope, evidence it cannot proceed, and exact unavailable prerequisite\n"
     "[/MISSING]\n"
     "[NEXT]\n"
-    "required human action or external environment change (this block is optional)\n"
+    "autonomous recovery step or exact availability condition to recheck (this block is optional)\n"
     "[/NEXT]\n"
 )
 
@@ -655,7 +670,7 @@ def build_judge_prompt(request: str, draft: str) -> str:
 
     *request* is the bare user request; *draft* is the candidate reply.
     The judge never does the work itself: it returns DONE, a CONTINUE
-    step, or BLOCKED with the necessary unavailable external prerequisite.
+    step, or BLOCKED with the prerequisite for automatic recovery/rechecking.
     """
     parts = [
         _JUDGE_RULES,

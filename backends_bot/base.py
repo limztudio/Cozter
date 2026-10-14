@@ -18,6 +18,7 @@ import contextvars
 import functools
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -2650,6 +2651,8 @@ class BotPlatform(ABC):
             request = job.get("request") or entries[0].get("text", "")
             job["request"] = request + "\n\n[User guidance for the unfinished job]:\n" + guidance
             job["state"] = "running"
+            for key in ("next_retry_at", "retry_count", "retry_reason"):
+                job.pop(key, None)
             self._write_queue_file(data)
             return True
 
@@ -3325,6 +3328,7 @@ class BotPlatform(ABC):
     async def _detached_task_loop(self) -> None:
         while True:
             try:
+                await self._check_job_retries()
                 await self._check_reply_deliveries()
                 await self._check_detached_tasks()
             except asyncio.CancelledError:
@@ -3332,6 +3336,74 @@ class BotPlatform(ABC):
             except Exception:
                 logger.exception("Durable completion poll failed")
             await asyncio.sleep(_DETACHED_TASK_POLL_INTERVAL_SEC)
+
+    async def _check_job_retries(self) -> None:
+        """Wake due prerequisite recovery without occupying a foreground turn.
+
+        Only the durable head can be claimed. Admission and queue locks keep
+        a concurrent /stop or user update from resurrecting cancelled work.
+        Waiting is persisted, so a daemon restart preserves the retry time.
+        """
+        if self._update_restart_pending:
+            return
+        data = await _run_durable_file_operation(
+            self._queue_file_lock, self._read_queue_file,
+        )
+        now = time.time()
+        for uid, raw_entries in data.items():
+            entries = self._queue_entries(raw_entries)
+            if not entries:
+                continue
+            entry_id = entries[0].get("id")
+            if not isinstance(entry_id, str) or not entry_id or not self._job_retry_due(entries[0], now):
+                continue
+            generation = self._cancel_generations.get(uid, 0)
+            task_lock = self._ensure_task_lock(uid)
+            async with self._ensure_dispatch_admission_lock(uid):
+                def claim() -> bool:
+                    if (self._update_restart_pending
+                            or self._cancel_work_depths.get(uid, 0)
+                            or self._cancel_generations.get(uid, 0) != generation
+                            or task_lock.locked()):
+                        return False
+                    current = self._read_queue_file()
+                    rows = self._queue_entries(current.get(uid))
+                    if (not rows or rows[0].get("id") != entry_id
+                            or not self._job_retry_due(rows[0], time.time())):
+                        return False
+                    job = rows[0]["job"]
+                    job["state"] = "running"
+                    job.pop("next_retry_at", None)
+                    self._write_queue_file(current)
+                    return True
+
+                def claimed(ready: bool) -> None:
+                    if ready and self._cancel_generations.get(uid, 0) == generation:
+                        self._paused_jobs.discard(uid)
+
+                ready = await _run_durable_file_operation(
+                    self._queue_file_lock, claim, on_complete=claimed,
+                )
+                if (ready and self._cancel_generations.get(uid, 0) == generation
+                        and not self._cancel_work_depths.get(uid, 0)):
+                    await self._retain_job_entry(uid, entry_id)
+            if (ready and self._cancel_generations.get(uid, 0) == generation
+                    and not self._update_restart_pending
+                    and not self._cancel_work_depths.get(uid, 0)):
+                self._start_queue_drain(uid)
+
+    @staticmethod
+    def _job_retry_due(entry: dict, now: float) -> bool:
+        job = entry.get("job")
+        if not isinstance(job, dict) or job.get("state") != "paused":
+            return False
+        retry_at = job.get("next_retry_at")
+        if not isinstance(retry_at, (int, float)) or isinstance(retry_at, bool):
+            return False
+        try:
+            return math.isfinite(retry_at) and 0 <= retry_at <= now
+        except OverflowError:
+            return False
 
     async def _check_detached_tasks(self) -> None:
         for record in await self._list_detached_task_records():
@@ -4221,7 +4293,31 @@ class BotPlatform(ABC):
                 "state": "running" if resumable else "paused",
                 "output": self._job_output_record(result, ws),
             })
+            prerequisite_retry = result.continuation_reason == "prerequisite"
+            if prerequisite_retry:
+                previous_retries = job.get("retry_count", 0)
+                if (not isinstance(previous_retries, int) or isinstance(previous_retries, bool)
+                        or previous_retries < 0):
+                    previous_retries = 0
+                retries = min(previous_retries + 1, 1_000_000)
+                delay = min(30 * 2 ** min(retries - 1, 4), 300)
+                job.update({
+                    "state": "paused", "next_retry_at": time.time() + delay,
+                    "retry_count": retries,
+                    "retry_reason": result.blocked_reason or result.continue_instruction,
+                })
+                self._paused_jobs.add(uid)
             if queue_entry_id and not await self._save_job_checkpoint(uid, queue_entry_id, job):
+                return False
+            if prerequisite_retry:
+                self.start_detached_task_watcher()
+                await self._run_status_operation(
+                    self.send_status(
+                        chat_id, "Completed work is saved. Retrying prerequisite recovery "
+                        f"automatically in {delay} seconds; the current job keeps its place.",
+                    ),
+                    action="announcing automatic prerequisite recovery",
+                )
                 return False
             if not resumable:
                 self._paused_jobs.add(uid)

@@ -375,7 +375,7 @@ class DetachedTaskStatus:
 NO_RESPONSE_TEXT = "(no response)"
 
 
-ContinuationReason = Literal["time_budget", "worker_budget", "tool_budget", "judge_limit"]
+ContinuationReason = Literal["time_budget", "worker_budget", "tool_budget", "judge_limit", "prerequisite"]
 
 
 class ContinuationReport(TypedDict):
@@ -432,6 +432,9 @@ class AgentResult:
     continuation_checkpoint: ContinuationCheckpoint | None = None
     # None for raw backend results; agent orchestration requires an explicit DONE verdict.
     completion_verified: bool | None = None
+    # A required prerequisite can be recovered/rechecked automatically without
+    # turning an unfinished job into a completed response or an approval gate.
+    blocked_reason: str = ""
 
 
 def append_text_result(result: AgentResult, text: str) -> None:

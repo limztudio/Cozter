@@ -1545,16 +1545,36 @@ def _split_attach_markers(text: str) -> tuple[str, list[str]]:
     return _collapse_extra_blank_lines(cleaned), markers
 
 
-def _retain_blocked_verdict(result: AgentResult, verdict: flexible.JudgeVerdict) -> None:
-    """Keep a required external prerequisite unfinished without renewing work."""
+def _retain_blocked_verdict(
+    result: AgentResult, verdict: flexible.JudgeVerdict,
+    *, turn: "_InterruptedTurn | None" = None,
+) -> None:
+    """Retain unfinished work for automatic prerequisite recovery and retry."""
     result.completion_verified = False
-    result.continue_instruction = ""
-    result.continuation_reason = None
-    explanation = f"PARTIAL: blocked by a required prerequisite: {verdict.missing}"
+    result.blocked_reason = verdict.missing
+    result.continuation_reason = "prerequisite"
+    result.continue_instruction = (
+        "Continue the SAME unfinished job automatically. First recover or recheck "
+        "the remaining prerequisite using the current authorized tools and host "
+        "capabilities; routine recovery does not need permission to continue. "
+        "Preserve completed changes and valid build/test evidence. Do not repeat "
+        "whole audits or builds merely because this is a retry. If recovery is "
+        "still unavailable, report the exact prerequisite for automatic retry; "
+        "never fabricate credentials, required user information, or completion.\n"
+        f"Remaining prerequisite: {verdict.missing}"
+    )
+    explanation = f"PARTIAL: recovering a required prerequisite automatically: {verdict.missing}"
     if verdict.next_instruction:
-        explanation += f"\nRequired change before resuming: {verdict.next_instruction}"
+        result.continue_instruction += f"\nRecovery target: {verdict.next_instruction}"
+        explanation += f"\nRecovery target: {verdict.next_instruction}"
     append_text_result(result, "\n\n".join(filter(None, (result.text, explanation))))
-    performance_logger.info("stage=judge outcome=blocked automatic_continuation=false")
+    budget = _TURN_BUDGET.get()
+    if budget is not None and turn is not None:
+        budget.pending = [result.continue_instruction]
+        result.continuation_checkpoint = budget.checkpoint(
+            "A required prerequisite needs automatic recovery or a later availability check.", turn,
+        )
+    performance_logger.info("stage=judge outcome=blocked automatic_continuation=true")
 
 
 async def _judge_draft(
@@ -2789,7 +2809,7 @@ async def _run_turn_impl(
             if not verdict.should_continue:
                 result.completion_verified = verdict.verified
                 if verdict.blocked:
-                    _retain_blocked_verdict(result, verdict)
+                    _retain_blocked_verdict(result, verdict, turn=turn)
                 break
             judged_rounds += 1
             followup = (
@@ -2863,7 +2883,7 @@ async def _run_turn_impl(
                     break
                 result.completion_verified = _tail_verdict.verified and not _tail_verdict.should_continue
                 if _tail_verdict.blocked:
-                    _retain_blocked_verdict(result, _tail_verdict)
+                    _retain_blocked_verdict(result, _tail_verdict, turn=turn)
                 if _tail_verdict.should_continue:
                     _tail_next = (_tail_verdict.next_instruction or "").strip()
                     if _tail_next:

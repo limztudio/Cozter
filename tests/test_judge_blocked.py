@@ -1,4 +1,4 @@
-"""Unavailable required prerequisites pause a job without completing or retrying it."""
+"""Unavailable required prerequisites remain unfinished for automatic recovery."""
 
 import unittest
 
@@ -85,7 +85,31 @@ class BlockedJudgePromptTests(unittest.TestCase):
         self.assertIn("exact missing prerequisite", prompt)
         self.assertIn("BLOCKED leaves the job unfinished", prompt)
         self.assertIn("Finish every remaining independently actionable item", prompt)
-        self.assertIn("Do not repeatedly recheck an unchanged unavailable prerequisite", prompt)
+        self.assertIn("automatic recovery and availability rechecks with backoff", prompt)
+        self.assertIn("Do not repeat completed audits, builds, or expensive work", prompt)
         self.assertIn("[VERDICT]\nBLOCKED\n[/VERDICT]", prompt)
         self.assertIn("this block is optional", prompt)
+
+    def test_recovery_uses_existing_authorization_without_routine_approval_questions(self):
+        prompt = flexible.build_judge_prompt("Finish the authorized work", "Desktop unavailable")
+        self.assertIn("When full permission already authorizes the necessary action, continue without another approval", prompt)
+        self.assertIn("Never ask 'can I continue' merely to resume authorized work", prompt)
+        self.assertIn("autonomous recovery step or a precise availability condition to recheck", prompt)
+        self.assertIn("Try authorized remediation", prompt)
+
+    def test_missing_credentials_stay_honest_and_explicit_await_is_for_information(self):
+        prompt = flexible.build_judge_prompt("Complete the deployment", "Required credentials missing")
+        self.assertIn("never invent credentials or claim access that is absent", prompt)
+        self.assertIn("Finish all possible work and recheck availability", prompt)
+        self.assertIn("An explicit [[await]] asks for necessary information, not permission to simply continue", prompt)
+
+    def test_merge_does_not_turn_every_blocked_report_into_a_permission_question(self):
+        plan = flexible.Plan("Finish the requested checks", (flexible.Subtask("high", "verify UI"),))
+        prompt = flexible.build_merge_prompt(
+            "Verify UI", plan, ["BLOCKED: no interactive desktop"], collaborative=True, blocked={0},
+        )
+        self.assertIn("an autonomous recovery step or availability check", prompt)
+        self.assertIn("Do not ask permission merely to continue routine work", prompt)
+        self.assertIn('Use "[[await]]" only for specific information the user must supply', prompt)
+        self.assertNotIn("A BLOCKED report needs a user answer", prompt)
 
