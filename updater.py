@@ -36,7 +36,10 @@ def _git(*args: str) -> subprocess.CompletedProcess:
 def _git_str(*args: str, default: str = "") -> str:
     """Run a git command and return stripped stdout; `default` if unavailable."""
     try:
-        return _git(*args).stdout.strip() or default
+        result = _git(*args)
+        if result.returncode != 0:
+            return default
+        return result.stdout.strip() or default
     except (OSError, subprocess.TimeoutExpired):
         return default
 

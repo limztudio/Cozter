@@ -187,6 +187,15 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
             self.assertFalse(updater.check_for_update())
             self.assertFalse(updater.fetch_and_pull())
 
+    def test_failed_version_probe_does_not_publish_git_partial_stdout(self) -> None:
+        # An unborn checkout prints "HEAD" to stdout before rev-parse fails.
+        failed = subprocess.CompletedProcess(
+            [], 128, stdout="HEAD\n", stderr="fatal: ambiguous argument 'HEAD'",
+        )
+        with mock.patch.object(updater, "_git", return_value=failed):
+            self.assertEqual(updater.get_current_version(), "(unknown)")
+            self.assertEqual(updater._get_head_commit(), "")
+
     def test_pull_timeout_still_restarts_if_head_moved(self) -> None:
         with (
             mock.patch.object(updater, "_fetch_origin", return_value=True),

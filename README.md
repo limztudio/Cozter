@@ -1753,7 +1753,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 72 focused
+- Tests: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus focused
   `unittest` modules covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared

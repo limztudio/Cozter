@@ -571,6 +571,8 @@ class BotPlatform(ABC):
         self._detached_task_watcher: asyncio.Task | None = None
         self._detached_delivery_locks: dict[str, asyncio.Lock] = {}
         self._detached_delivery_tasks: dict[str, set[asyncio.Task]] = {}
+        # Pending explicit launches remain independently owned during foreground turns.
+        self._detached_launch_tasks: dict[str, set[asyncio.Task]] = {}
         # Non-sensitive per-turn progress for stuck-wait attribution
         # (backend/model, timestamps, tool/file kinds, redacted label, PIDs).
         self._turn_progress: dict[str, _TurnProgress] = {}
@@ -694,6 +696,8 @@ class BotPlatform(ABC):
         delivery resumes from the retained record via
         ``restore_reply_deliveries``.
         """
+        for owner in list(self._detached_launch_tasks):
+            await self._cancel_owned_deliveries(owner, self._detached_launch_tasks)
         await self.stop_detached_task_watcher()
         await self.stop_scheduler()
         for owner in list(self._attachment_tasks):
@@ -786,6 +790,8 @@ class BotPlatform(ABC):
         if self._cancel_work_depths:
             return True
         if any(not task.done() for task in self._running_tasks.values()):
+            return True
+        if any(not task.done() for owned in self._detached_launch_tasks.values() for task in owned):
             return True
         tasks = self._attachment_tasks
         if any(
@@ -1287,6 +1293,11 @@ class BotPlatform(ABC):
                 self._cancel_acknowledged.add(uid)
                 task.cancel()
 
+            launches = tuple(task for task in self._detached_launch_tasks.get(uid, ())
+                             if not task.done())
+            for launch in launches:
+                launch.cancel()
+
             # Signal outbound work before durable cleanup yields to the loop.
             for owned_tasks in (self._reply_delivery_tasks, self._detached_delivery_tasks):
                 for delivery in tuple(owned_tasks.get(uid, ())):
@@ -1298,6 +1309,9 @@ class BotPlatform(ABC):
             )
             for upload in uploads:
                 upload.cancel()
+
+            # Settle provider handoffs before clearing their possible ledger rows.
+            await self._cancel_owned_deliveries(uid, self._detached_launch_tasks)
 
             # Order the bump + clear against persists.
             admission_lock = self._ensure_dispatch_admission_lock(uid)
@@ -1318,7 +1332,7 @@ class BotPlatform(ABC):
             cleared = max(len(drained), persisted, delayed_replies)
             return task_running, bool(
                 was_awaiting or cleared or detached_cancelled
-                or cancelled_uploads
+                or cancelled_uploads or launches
             )
         finally:
             depth = self._cancel_work_depths[uid] - 1
@@ -2242,8 +2256,34 @@ class BotPlatform(ABC):
         if not task_prompt:
             await ctx.reply_text("Usage: /bg <task>")
             return
+        if self._cancel_work_depths.get(ctx.user_id, 0):
+            await ctx.reply_text("Cancellation is still finishing. Please retry /bg afterward.")
+            return
+        generation = self._cancel_generations.get(ctx.user_id, 0)
+        task = asyncio.create_task(self._run_background_command(ctx, task_prompt, generation))
+        tasks = self._detached_launch_tasks.setdefault(ctx.user_id, set())
+        tasks.add(task)
+        try:
+            await task
+        except asyncio.CancelledError:
+            while not task.done():
+                try:
+                    await asyncio.wait((task,))
+                except asyncio.CancelledError:
+                    continue
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+        finally:
+            tasks.discard(task)
+            if not tasks:
+                self._detached_launch_tasks.pop(ctx.user_id, None)
+
+    async def _run_background_command(
+        self, ctx: BotContext, task_prompt: str, generation: int,
+    ) -> None:
         ws = await self._require_ws(ctx)
-        if ws is None:
+        if ws is None or self._cancel_generations.get(ctx.user_id, 0) != generation:
             return
         backend_name, model, summary_model, permission, summary_backend = (
             workspace.get_run_config(ws)
@@ -2263,6 +2303,8 @@ class BotPlatform(ABC):
             await ctx.reply_text(f"Could not start background task: {exc}")
             return
         try:
+            if self._cancel_generations.get(ctx.user_id, 0) != generation:
+                raise asyncio.CancelledError
             tracked = await self._register_detached_task(
                 uid=ctx.user_id,
                 chat_id=ctx.chat_id,
@@ -2271,12 +2313,29 @@ class BotPlatform(ABC):
                 backend_name=launch.backend_name,
                 task_id=launch.task_id,
                 validate=True,
+                generation=generation,
             )
+            if self._cancel_generations.get(ctx.user_id, 0) != generation:
+                raise asyncio.CancelledError
+        except asyncio.CancelledError:
+            await self._cleanup_cancelled_detached_launch(ctx.user_id, ws, launch)
+            raise
         except Exception:
             logger.exception(
                 "Could not persist detached task %s", launch.task_id,
             )
             tracked = False
+        try:
+            await self._acknowledge_background_launch(ctx, launch, tracked, generation)
+        except asyncio.CancelledError:
+            await self._cleanup_cancelled_detached_launch(ctx.user_id, ws, launch)
+            raise
+
+    async def _acknowledge_background_launch(
+        self, ctx: BotContext, launch: agent.DetachedTaskLaunch, tracked: bool, generation: int,
+    ) -> None:
+        if self._cancel_generations.get(ctx.user_id, 0) != generation:
+            raise asyncio.CancelledError
         if tracked:
             await ctx.reply_text(
                 f"Started background task {launch.task_id}. "
@@ -2288,6 +2347,32 @@ class BotPlatform(ABC):
             "not verify it for completion delivery. Check it with "
             f"`claude agents` or `claude logs {launch.task_id}`.",
         )
+
+    async def _cleanup_cancelled_detached_launch(
+        self, uid: str, ws: str, launch: agent.DetachedTaskLaunch,
+    ) -> None:
+        cleanup = asyncio.create_task(self._stop_cancelled_detached_launch(uid, ws, launch))
+        while not cleanup.done():
+            try:
+                await asyncio.wait((cleanup,))
+            except asyncio.CancelledError:
+                continue
+        cleanup.result()
+
+    async def _stop_cancelled_detached_launch(
+        self, uid: str, ws: str, launch: agent.DetachedTaskLaunch,
+    ) -> None:
+        """Stop a known provider task cancelled during validation or persistence."""
+        try:
+            backend = backends_agent.get_backend(launch.backend_name)
+            stopped = await backend.stop_detached_task(ws, launch.task_id)
+            if stopped:
+                for record in await self._list_detached_task_records():
+                    if (record["user_id"] == uid and record["backend_name"] == launch.backend_name
+                            and record["task_id"] == launch.task_id):
+                        await self._remove_detached_task_record(record["id"])
+        except Exception:
+            logger.warning("Could not stop cancelled detached launch %s", launch.task_id, exc_info=True)
 
     # /inject
 
@@ -3206,6 +3291,7 @@ class BotPlatform(ABC):
         backend_name: str,
         task_id: str,
         validate: bool,
+        generation: int | None = None,
     ) -> bool:
         """Persist a task before any completion callback can be sent.
 
@@ -3213,6 +3299,10 @@ class BotPlatform(ABC):
         list first. That prevents a model/tool transcript from forging a
         ``backgrounded`` line that attaches Cozter to an unrelated session.
         """
+        if generation is None:
+            generation = self._cancel_generations.get(uid, 0)
+        if self._cancel_generations.get(uid, 0) != generation:
+            return False
         if validate:
             try:
                 backend = backends_agent.get_backend(backend_name)
@@ -3239,6 +3329,8 @@ class BotPlatform(ABC):
                 return False
 
         def register() -> bool:
+            if self._cancel_generations.get(uid, 0) != generation:
+                return False
             data = self._read_detached_tasks_file()
             records = self._detached_task_records(data.get("tasks"))
             if any(
@@ -3263,13 +3355,16 @@ class BotPlatform(ABC):
             return True
 
         def registered(created: bool) -> None:
-            if created:
+            if created and self._cancel_generations.get(uid, 0) == generation:
                 self.start_detached_task_watcher()
 
-        await _run_durable_file_operation(
-            self._detached_task_file_lock, register, on_complete=registered,
-        )
-        return True
+        async with self._ensure_dispatch_admission_lock(uid):
+            if self._cancel_generations.get(uid, 0) != generation:
+                return False
+            await _run_durable_file_operation(
+                self._detached_task_file_lock, register, on_complete=registered,
+            )
+        return self._cancel_generations.get(uid, 0) == generation
 
     async def _update_detached_task_record(
         self, record_id: str, **changes: object,
@@ -3645,6 +3740,7 @@ class BotPlatform(ABC):
             return
 
         for request in requests:
+            generation = self._cancel_generations.get(uid, 0)
             try:
                 launch = await agent.launch_detached(
                     request.prompt,
@@ -3671,7 +3767,13 @@ class BotPlatform(ABC):
                     backend_name=launch.backend_name,
                     task_id=launch.task_id,
                     validate=True,
+                    generation=generation,
                 )
+                if self._cancel_generations.get(uid, 0) != generation:
+                    raise asyncio.CancelledError
+            except asyncio.CancelledError:
+                await self._cleanup_cancelled_detached_launch(uid, workspace_path, launch)
+                raise
             except Exception:
                 logger.exception(
                     "Could not persist agent-requested detached task %s",

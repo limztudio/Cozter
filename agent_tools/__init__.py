@@ -207,7 +207,7 @@ def parse_openai_call(call: dict) -> tuple[str, dict]:
     elif isinstance(raw, str) and raw.strip():
         try:
             args = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             args = {}
     else:
         args = {}

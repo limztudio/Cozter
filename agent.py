@@ -63,6 +63,15 @@ CONTINUATION_CHECKPOINT_CHARS = 64_000
 _CONTINUATION_CHECKPOINT_ITEMS = flexible.MAX_SUBTASKS * 4
 
 
+def _current_task_or_none() -> asyncio.Task | None:
+    """Capture a task owner when running inside an event loop."""
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        # Budgets can be constructed before a synchronous caller starts a loop.
+        return None
+
+
 @dataclass
 class TurnBudget:
     """One execution attempt's allowance, shared by its immediate continuations."""
@@ -77,7 +86,7 @@ class TurnBudget:
     output: AgentResult = dataclasses.field(default_factory=AgentResult)
     captured: list[weakref.ReferenceType[AgentResult]] = dataclasses.field(default_factory=list)
     latest_draft: str = ""
-    owner: asyncio.Task | None = dataclasses.field(default_factory=asyncio.current_task)
+    owner: asyncio.Task | None = dataclasses.field(default_factory=_current_task_or_none)
 
     def start(self) -> None:
         # Start after the workspace run lock; time spent queuing is excluded.
@@ -242,7 +251,7 @@ _TURN_TIMEOUT: ContextVar[asyncio.Timeout | None] = ContextVar("cozter_turn_time
 def turn_budget(*, fresh: bool = False):
     """Reuse an attempt's budget, or explicitly start the next allowance."""
     current = _TURN_BUDGET.get()
-    if not fresh and current is not None and current.owner is asyncio.current_task():
+    if not fresh and current is not None and current.owner is _current_task_or_none():
         yield current
         return
     token = _TURN_BUDGET.set(TurnBudget(config.get_agent_turn_timeout()))
@@ -2135,7 +2144,10 @@ async def _resolve_or_create_user_session(
         )
     assert isinstance(session_id, str) and session_id
     # Explicit routing-time session choice wins for the next message.
-    if session.get_last_session(workspace_path, user_id) == last_session_id:
+    if (
+        session_id != last_session_id
+        and session.get_last_session(workspace_path, user_id) == last_session_id
+    ):
         session.set_last_session(workspace_path, user_id, session_id)
     return session_id, session_data
 
@@ -2159,6 +2171,37 @@ def _resolve_summary_model(
     if isinstance(default_summary_model, str) and default_summary_model:
         return default_summary_model
     return summary_model
+
+
+async def _settle_detached_operation(task: asyncio.Task[_StageResult]) -> _StageResult:
+    """Keep ownership of a provider operation through repeated cancellation."""
+    while not task.done():
+        try:
+            await asyncio.wait((task,))
+        except asyncio.CancelledError:
+            continue
+    return task.result()
+
+
+async def _stop_unclaimed_detached_task(backend, workspace_path: str, task_id: str) -> None:
+    """Stop a known task that cannot be handed to its durable bot owner."""
+    async def stop() -> None:
+        try:
+            stopped = await backend.stop_detached_task(workspace_path, task_id)
+        except (Exception, asyncio.CancelledError):
+            logger.warning(
+                "Failed to stop unclaimed %s background task %s",
+                backend.name, task_id, exc_info=True,
+            )
+        else:
+            if not stopped:
+                logger.warning(
+                    "%s did not accept cancellation of unclaimed background task %s",
+                    backend.name, task_id,
+                )
+
+    cleanup = asyncio.create_task(stop(), name=f"stop-unclaimed-detached:{task_id}")
+    await _settle_detached_operation(cleanup)
 
 
 async def launch_detached(
@@ -2202,7 +2245,10 @@ async def launch_detached(
             colony.get_items(workspace_path),
             budget=workspace_mod.get_history_budget(workspace_path),
         )
-        task_id = await backend.launch_detached(
+        # Once the provider starts work, cancellation must not discard the late
+        # identifier needed to stop it. Routing and workspace-lock waits above
+        # remain cancellable; only this provider handshake gets an owner.
+        handshake = asyncio.create_task(backend.launch_detached(
             workspace_path,
             _build_backend_prompt(
                 backend,
@@ -2213,21 +2259,41 @@ async def launch_detached(
             model,
             approval,
             effort=workspace_mod.get_reasoning_effort(workspace_path),
-        )
+        ), name=f"launch-detached:{backend.name}")
+        try:
+            await asyncio.wait((handshake,))
+            task_id = handshake.result()
+        except asyncio.CancelledError:
+            try:
+                task_id = await _settle_detached_operation(handshake)
+            except (Exception, asyncio.CancelledError):
+                # Observe a failed handshake without replacing the caller's stop.
+                logger.debug("Detached launch failed after cancellation", exc_info=True)
+            else:
+                await _stop_unclaimed_detached_task(backend, workspace_path, task_id)
+            raise
 
-        started = AgentResult(session_id=session_id)
-        append_text_result(
-            started,
-            f"Started detached {backend.name} task {task_id}. "
-            "Cozter will deliver its completion here.",
-        )
-        async with workspace_mod.get_lock(workspace_path):
-            _log_to_session(workspace_path, session_id, prompt, started)
-        return DetachedTaskLaunch(
-            backend_name=backend.name,
-            task_id=task_id,
-            session_id=session_id,
-        )
+        try:
+            started = AgentResult(session_id=session_id)
+            append_text_result(
+                started,
+                f"Started detached {backend.name} task {task_id}. "
+                "Cozter will deliver its completion here.",
+            )
+            async with workspace_mod.get_lock(workspace_path):
+                if not _log_to_session(workspace_path, session_id, prompt, started):
+                    raise RuntimeError("Could not log the detached task's session")
+            # Deliver cancellation requested during synchronous session logging
+            # before the task identifier leaves this cleanup owner's scope.
+            await asyncio.sleep(0)
+            return DetachedTaskLaunch(
+                backend_name=backend.name,
+                task_id=task_id,
+                session_id=session_id,
+            )
+        except BaseException:
+            await _stop_unclaimed_detached_task(backend, workspace_path, task_id)
+            raise
 
 
 async def log_detached_task_completion(

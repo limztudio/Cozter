@@ -401,7 +401,8 @@ class _GitRepoMixin(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.workspace = self._tmp.name
         subprocess.run(
-            ["git", "-C", self.workspace, "init", "-q"], check=True,
+            ["git", "-C", self.workspace, "init", "-q", "--initial-branch=master"],
+            check=True,
         )
         subprocess.run(
             ["git", "-C", self.workspace, "config", "user.email",
@@ -508,9 +509,17 @@ class GitOpsToolTests(_GitRepoMixin):
         self.write("b.txt", "side\n")
         self.invoke(action="add", paths=["b.txt"])
         self.invoke(action="commit", message="side work")
-        self.invoke(action="checkout", branch="master")
-        result = self.invoke(action="merge", branch="side")
-        self.assertFalse(result.startswith("Error:"))
+        checked_out = self.invoke(action="checkout", branch="master")
+        self.assertFalse(checked_out.startswith("Error:"), checked_out)
+        result = self.invoke(action="merge", branch="side", ff_only=True)
+        self.assertFalse(result.startswith("Error:"), result)
+        revisions = subprocess.run(
+            ["git", "-C", self.workspace, "rev-parse", "master", "side"],
+            capture_output=True, text=True, check=True,
+        ).stdout.splitlines()
+        self.assertEqual(revisions[0], revisions[1])
+        with open(os.path.join(self.workspace, "b.txt"), encoding="utf-8") as file_handle:
+            self.assertEqual(file_handle.read(), "side\n")
 
     def test_reset_and_discard(self) -> None:
         self.write("a.txt", "hello\n")

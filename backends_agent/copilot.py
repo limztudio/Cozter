@@ -73,15 +73,15 @@ def _create_isolated_copilot_home() -> str:
     copied so the CLI can still use the user's OS-backed authentication.
     """
     home = tempfile.mkdtemp(prefix="cozter-copilot-")
-    source_home = os.environ.get("COPILOT_HOME") or os.path.join(
-        os.path.expanduser("~"), ".copilot",
-    )
     try:
+        source_home = os.environ.get("COPILOT_HOME") or os.path.join(
+            os.path.expanduser("~"), ".copilot",
+        )
         for name in _COPILOT_HOME_FILES:
             source = os.path.join(source_home, name)
             if os.path.isfile(source):
                 shutil.copy2(source, os.path.join(home, name))
-    except OSError:
+    except BaseException:
         shutil.rmtree(home, ignore_errors=True)
         raise
     return home
@@ -367,10 +367,12 @@ class CopilotBackend(Backend):
             logger.debug("copilot ACP catalog probe failed (%s)", exc)
             return None
         finally:
-            if proc is not None:
-                _stop_acp_process(proc, kill_tree=owns_windows_tree)
-            if isolated_home is not None:
-                _remove_isolated_copilot_home(isolated_home)
+            try:
+                if proc is not None:
+                    _stop_acp_process(proc, kill_tree=owns_windows_tree)
+            finally:
+                if isolated_home is not None:
+                    _remove_isolated_copilot_home(isolated_home)
 
     async def launch(
         self,
@@ -403,9 +405,9 @@ class CopilotBackend(Backend):
             cmd += ["--attachment", _image_path]
 
         isolated_home = _create_isolated_copilot_home()
-        env = os.environ.copy()
-        env["COPILOT_HOME"] = isolated_home
         try:
+            env = os.environ.copy()
+            env["COPILOT_HOME"] = isolated_home
             proc = await create_prompt_subprocess(
                 cmd, prompt,
                 cwd=workspace_path,

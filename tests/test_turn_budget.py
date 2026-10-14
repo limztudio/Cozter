@@ -24,6 +24,24 @@ class TurnBudgetConfigTests(unittest.TestCase):
                 self.assertEqual(config.get_agent_turn_timeout(), expected)
 
 
+class SynchronousTurnBudgetTests(unittest.TestCase):
+    def test_budget_can_be_constructed_before_event_loop_startup(self):
+        budget = agent.TurnBudget(3600)
+        self.assertIsNone(budget.owner)
+        self.assertFalse(budget.started)
+        self.assertIsNone(budget.deadline)
+
+    def test_synchronous_context_reuses_and_restores_budget(self):
+        with mock.patch.object(config, "get_agent_turn_timeout", return_value=3600):
+            with agent.turn_budget() as budget:
+                with agent.turn_budget() as nested:
+                    self.assertIs(nested, budget)
+                with agent.turn_budget(fresh=True) as renewed:
+                    self.assertIsNot(renewed, budget)
+                self.assertIs(agent._TURN_BUDGET.get(), budget)
+        self.assertIsNone(agent._TURN_BUDGET.get())
+
+
 class _BlockingBackend:
     name = "budget-test"
     supports_typed_plugins = True

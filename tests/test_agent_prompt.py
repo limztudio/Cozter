@@ -208,7 +208,10 @@ class SessionResolutionTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             existing = session.create_session(tmp, name="Existing")
             session.set_last_session(tmp, "user", existing["id"])
-            with mock.patch.object(agent.router, "select_or_create_session") as route:
+            with (
+                mock.patch.object(agent.router, "select_or_create_session") as route,
+                mock.patch.object(session, "set_last_session") as persist_pointer,
+            ):
                 session_id, data = await agent._resolve_or_create_user_session(
                     "continue work", tmp, "user", "summary-model", "codex",
                 )
@@ -216,6 +219,7 @@ class SessionResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session_id, existing["id"])
         self.assertEqual(data["id"], existing["id"])
         route.assert_not_called()
+        persist_pointer.assert_not_called()
 
     async def test_missing_session_routes_and_persists_the_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

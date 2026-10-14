@@ -9,10 +9,26 @@ from collections.abc import Callable, Iterator
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _INLINE_CODE_RE = re.compile(r"`([^`]+?)`")
 _FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
+_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
+_BOLD_UNDER_RE = re.compile(r"__(.+?)__")
 
 
 LineRenderer = Callable[[str], str]
 CodeBlockRenderer = Callable[[list[str]], list[str]]
+
+
+def render_headings_and_bold(
+    text: str, replacement: str | Callable[[re.Match[str]], str],
+) -> str:
+    """Apply the shared heading/bold rules before platform-specific italics."""
+    if text[:1] == "#":
+        text = _HEADING_RE.sub(replacement, text)
+    if "**" in text:
+        text = _BOLD_STAR_RE.sub(replacement, text)
+    if "__" in text:
+        text = _BOLD_UNDER_RE.sub(replacement, text)
+    return text
 
 
 def render_inline_code(

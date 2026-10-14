@@ -151,7 +151,7 @@ class AgentTool(ABC):
         raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
         try:
             args = json.loads(raw)
-        except json.JSONDecodeError as exc:
+        except (ValueError, RecursionError) as exc:
             print(f"Error: invalid JSON args: {exc}", file=sys.stderr)
             sys.exit(2)
         if not isinstance(args, dict):

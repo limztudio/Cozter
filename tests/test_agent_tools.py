@@ -28,6 +28,7 @@ from Cozter.agent_tools.builtin.copy_file import CopyFileTool
 from Cozter.agent_tools.builtin.delete_file import DeleteFileTool
 from Cozter.agent_tools.builtin.edit_file import EditFileTool
 from Cozter.agent_tools.builtin.glob import GlobTool
+from Cozter.agent_tools.builtin import grep as grep_mod
 from Cozter.agent_tools.builtin.grep import GrepTool
 from Cozter.agent_tools.builtin.multi_edit import MultiEditTool
 from Cozter.agent_tools.builtin import move_file as move_file_mod
@@ -1034,16 +1035,34 @@ class DiscoveryToolTests(unittest.TestCase):
                 path = os.path.join(tmp, "slow.txt")
                 with open(path, "w", encoding="utf-8") as file_handle:
                     file_handle.write("a" * 30_000 + "!")
-                task = asyncio.create_task(GrepTool().run(
-                    tmp, {"pattern": "(a+)+$"},
-                ))
-                await asyncio.sleep(0.1)
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                self.assertTrue(task.cancelled() or task.done())
+                workers = []
+                start_worker = grep_mod._start_scan_worker
+
+                def record_worker(*args):
+                    proc, conn = start_worker(*args)
+                    workers.append(proc)
+                    return proc, conn
+
+                with mock.patch.object(grep_mod, "_start_scan_worker", record_worker):
+                    task = asyncio.create_task(GrepTool().run(
+                        tmp, {"pattern": "(a+)+$"},
+                    ))
+                    try:
+                        await asyncio.sleep(0.1)
+                        task.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await asyncio.wait_for(task, timeout=5)
+                        self.assertEqual(len(workers), 1)
+                        self.assertFalse(workers[0].is_alive())
+                        self.assertIsNotNone(workers[0].exitcode)
+                    finally:
+                        if not task.done():
+                            task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                        for worker in workers:
+                            if worker.is_alive():
+                                worker.kill()
+                                worker.join(timeout=5)
 
         asyncio.run(run())
 

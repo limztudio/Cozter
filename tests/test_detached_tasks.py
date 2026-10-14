@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from Cozter import agent, backends_agent, workspace
+from Cozter import agent, backends_agent, session, workspace
 from Cozter.backends_agent.base import (
     AgentResult,
     DetachedTaskRef,
@@ -61,6 +61,194 @@ class _DetachedBot(TestBot):
             raise RuntimeError("platform unavailable")
         self.sent.append(text)
         return None
+
+
+class _DelayedDetachedBackend:
+    name = "delayed-detached-test"
+    supports_detached_tasks = True
+    supports_typed_plugins = True
+    default_summary_model = "offline"
+
+    def __init__(self) -> None:
+        self.launch_started = asyncio.Event()
+        self.launch_release = asyncio.Event()
+        self.stop_started = asyncio.Event()
+        self.stop_release = asyncio.Event()
+        self.launch_cancelled = False
+        self.stop_cancelled = False
+        self.stopped: list[str] = []
+
+    async def launch_detached(self, *_args, **_kwargs) -> str:
+        self.launch_started.set()
+        try:
+            await self.launch_release.wait()
+        except asyncio.CancelledError:
+            self.launch_cancelled = True
+            raise
+        return "late-provider-id"
+
+    async def stop_detached_task(self, _workspace: str, task_id: str) -> bool:
+        self.stop_started.set()
+        try:
+            await self.stop_release.wait()
+        except asyncio.CancelledError:
+            self.stop_cancelled = True
+            raise
+        self.stopped.append(task_id)
+        return True
+
+
+class DetachedLaunchOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.ws = self.enterContext(tempfile.TemporaryDirectory())
+        self.data = await asyncio.to_thread(session.create_session, self.ws, name="Detached work")
+        self.backend = _DelayedDetachedBackend()
+        self.tasks: list[asyncio.Task] = []
+        self.enterContext(mock.patch.object(backends_agent, "get_backend", return_value=self.backend))
+        self.enterContext(mock.patch.object(
+            agent, "_resolve_or_create_user_session",
+            new=mock.AsyncMock(return_value=(self.data["id"], self.data)),
+        ))
+
+    async def asyncTearDown(self) -> None:
+        self.backend.launch_release.set()
+        self.backend.stop_release.set()
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+
+    def launch(self) -> asyncio.Task:
+        task = asyncio.create_task(agent.launch_detached(
+            "Run the requested work", self.ws, "user", backend_name=self.backend.name,
+        ))
+        self.tasks.append(task)
+        return task
+
+    async def test_cancelled_handshake_keeps_late_id_and_settles_stop_through_repeated_cancel(self):
+        task = self.launch()
+        await asyncio.wait_for(self.backend.launch_started.wait(), timeout=1)
+        for _ in range(2):
+            task.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(task.done())
+        self.assertFalse(self.backend.launch_cancelled)
+        self.backend.launch_release.set()
+        await asyncio.wait_for(self.backend.stop_started.wait(), timeout=1)
+        task.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        self.assertFalse(self.backend.stop_cancelled)
+        self.backend.stop_release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+        self.assertEqual(self.backend.stopped, ["late-provider-id"])
+        self.assertFalse(workspace.get_run_lock(self.ws).locked())
+        self.assertEqual(session.load_session(self.ws, self.data["id"])["messages"], [])
+
+    async def test_cancel_while_waiting_for_workspace_run_lock_never_starts_provider(self):
+        lock = workspace.get_run_lock(self.ws)
+        await lock.acquire()
+        try:
+            task = self.launch()
+            await asyncio.sleep(0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=.5)
+            self.assertFalse(self.backend.launch_started.is_set())
+            self.assertEqual(self.backend.stopped, [])
+            self.assertTrue(lock.locked())
+        finally:
+            lock.release()
+
+    async def test_cancel_during_session_resolution_does_not_shield_prelaunch_work(self):
+        resolving = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def route(*_args, **_kwargs):
+            resolving.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        with mock.patch.object(agent, "_resolve_or_create_user_session", route):
+            task = self.launch()
+            await asyncio.wait_for(resolving.wait(), timeout=1)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=.5)
+        self.assertTrue(cancelled.is_set())
+        self.assertFalse(self.backend.launch_started.is_set())
+        self.assertFalse(workspace.get_run_lock(self.ws).locked())
+
+    async def test_cancel_waiting_for_post_id_session_lock_stops_known_provider(self):
+        lock = workspace.get_lock(self.ws)
+        await lock.acquire()
+        self.backend.launch_release.set()
+        try:
+            task = self.launch()
+            await asyncio.wait_for(self.backend.launch_started.wait(), timeout=1)
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.wait_for(self.backend.stop_started.wait(), timeout=1)
+            task.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(task.done())
+            self.backend.stop_release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1)
+            self.assertEqual(self.backend.stopped, ["late-provider-id"])
+        finally:
+            lock.release()
+
+    async def test_failed_session_log_stops_provider_before_reporting_failure(self):
+        self.backend.launch_release.set()
+        self.backend.stop_release.set()
+        with mock.patch.object(agent, "_log_to_session", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "Could not log"):
+                await self.launch()
+        self.assertEqual(self.backend.stopped, ["late-provider-id"])
+        self.assertFalse(workspace.get_lock(self.ws).locked())
+        self.assertFalse(workspace.get_run_lock(self.ws).locked())
+
+    async def test_cancellation_requested_during_session_log_stops_before_id_handover(self):
+        self.backend.launch_release.set()
+        self.backend.stop_release.set()
+
+        def log(*_args):
+            asyncio.current_task().cancel()
+            return True
+
+        with mock.patch.object(agent, "_log_to_session", side_effect=log):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.launch()
+        self.assertEqual(self.backend.stopped, ["late-provider-id"])
+
+    async def test_late_handshake_failure_is_consumed_and_original_cancellation_survives(self):
+        async def launch(*_args, **_kwargs):
+            self.backend.launch_started.set()
+            await self.backend.launch_release.wait()
+            raise RuntimeError("provider rejected launch")
+
+        diagnostics = []
+        loop = asyncio.get_running_loop()
+        previous = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: diagnostics.append(context))
+        try:
+            with mock.patch.object(self.backend, "launch_detached", side_effect=launch):
+                task = self.launch()
+                await asyncio.wait_for(self.backend.launch_started.wait(), timeout=1)
+                task.cancel()
+                self.backend.launch_release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=1)
+            await asyncio.sleep(0)
+            self.assertEqual(self.backend.stopped, [])
+            self.assertEqual(diagnostics, [])
+        finally:
+            loop.set_exception_handler(previous)
+
 
 class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
     async def _mock_status(self, payload: list[dict]) -> DetachedTaskStatus:

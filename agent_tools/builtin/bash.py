@@ -59,19 +59,9 @@ class BashTool(AgentTool):
             return "Error: no shell available to run bash commands"
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *shell, command,
-                # Never inherit interactive stdin.
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=workspace_path,
-                start_new_session=os.name != "nt",
-            )
+            proc = await _spawn_command(shell, command, workspace_path)
         except FileNotFoundError:
             return "Error: shell not found"
-        if os.name != "nt":
-            mark_process_group_leader(proc)
 
         if proc.stdout is None:  # PIPE was requested, so this is defensive
             await _kill_command_tree(proc)
@@ -136,6 +126,54 @@ def _find_shell() -> list[str] | None:
     if sh:
         return [sh, "-c"]
     return None
+
+
+async def _spawn_command(
+    shell: list[str], command: str, workspace_path: str,
+) -> asyncio.subprocess.Process:
+    """Retain process ownership when cancellation races shell creation."""
+    async def create() -> asyncio.subprocess.Process:
+        proc = await asyncio.create_subprocess_exec(
+            *shell, command,
+            # Never inherit interactive stdin.
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=workspace_path,
+            start_new_session=os.name != "nt",
+        )
+        if os.name != "nt":
+            mark_process_group_leader(proc)
+        return proc
+
+    launch = asyncio.create_task(create())
+    try:
+        # wait() lets creation settle without forwarding cancellation to it.
+        await asyncio.wait((launch,))
+        return launch.result()
+    except asyncio.CancelledError:
+        cleanup = asyncio.create_task(_reap_cancelled_command_launch(launch))
+        while not cleanup.done():
+            try:
+                await asyncio.wait((cleanup,))
+            except asyncio.CancelledError:
+                # Repeated /stop must not abandon a process being handed over.
+                continue
+        cleanup.result()
+        raise
+
+
+async def _reap_cancelled_command_launch(
+    launch: asyncio.Task[asyncio.subprocess.Process],
+) -> None:
+    try:
+        proc = await launch
+    except (Exception, asyncio.CancelledError):
+        return
+    try:
+        await _kill_command_tree(proc)
+    finally:
+        close_subprocess_pipe(proc, 1)
 
 
 def _is_windows_bash_launcher(path: str) -> bool:

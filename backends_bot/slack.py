@@ -41,7 +41,10 @@ from .base import (
     upload_limit_message,
     upload_size_exceeds_limit,
 )
-from .formatting import escape_html_entities, render_fenced_markdown, render_inline_code
+from .formatting import (
+    escape_html_entities, render_fenced_markdown, render_headings_and_bold,
+    render_inline_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,12 +99,7 @@ def _mrkdwn_prose(line: str) -> str:
 
         bold_sub = collision_safe_bold_sub
 
-    if line[:1] == "#":
-        line = _SLACK_HEADING_RE.sub(bold_sub, line)
-    if "**" in line:
-        line = _SLACK_BOLD_STAR_RE.sub(bold_sub, line)
-    if "__" in line:
-        line = _SLACK_BOLD_UNDER_RE.sub(bold_sub, line)
+    line = render_headings_and_bold(line, bold_sub)
     # Italic: `*text*` -> `_text_`.
     if "*" in line:
         line = _SLACK_ITALIC_STAR_RE.sub(r"_\1_", line)
@@ -126,9 +124,6 @@ _SLACK_SEND_MAX_DELAY_SEC = 60.0
 _FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,}).*$")
 
 # Precompiled mrkdwn patterns.
-_SLACK_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
-_SLACK_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
-_SLACK_BOLD_UNDER_RE = re.compile(r"__(.+?)__")
 _SLACK_ITALIC_STAR_RE = re.compile(r"(?<!\w)\*([^*]+?)\*(?!\w)")
 _SLACK_STRIKE_RE = re.compile(r"~~(.+?)~~")
 

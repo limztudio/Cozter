@@ -46,6 +46,7 @@ from .base import (
 from .formatting import (
     escape_html_entities,
     render_fenced_markdown,
+    render_headings_and_bold,
     render_inline_code,
     strip_html_markup,
 )
@@ -79,9 +80,6 @@ def _telegram_message_id(handle: MessageHandle) -> int:
         ) from exc
 
 # Reply-line regexes: module-level.
-_TELEGRAM_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
-_TELEGRAM_BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
-_TELEGRAM_BOLD_UNDER_RE = re.compile(r"__(.+?)__")
 _TELEGRAM_ITALIC_STAR_RE = re.compile(r"(?<!\w)\*([^*]+?)\*(?!\w)")
 _TELEGRAM_ITALIC_UNDER_RE = re.compile(r"(?<!\w)_([^_]+?)_(?!\w)")
 _TELEGRAM_STRIKE_RE = re.compile(r"~~(.+?)~~")
@@ -200,12 +198,7 @@ def _html_line(line: str) -> str:
 def _html_prose(line: str) -> str:
     line = escape_html_entities(line)
     # Substring guards skip the regex for plain lines.
-    if line[:1] == "#":
-        line = _TELEGRAM_HEADING_RE.sub(r"<b>\1</b>", line)
-    if "**" in line:
-        line = _TELEGRAM_BOLD_STAR_RE.sub(r"<b>\1</b>", line)
-    if "__" in line:
-        line = _TELEGRAM_BOLD_UNDER_RE.sub(r"<b>\1</b>", line)
+    line = render_headings_and_bold(line, r"<b>\1</b>")
     if "*" in line:
         line = _TELEGRAM_ITALIC_STAR_RE.sub(r"<i>\1</i>", line)
     if "_" in line:

@@ -153,7 +153,7 @@ class _SignalOutboundJournal:
             raise SignalCliError("Signal outbound journal exceeds its size limit")
         try:
             payload = json.loads(raw)
-        except (ValueError, UnicodeError) as exc:
+        except (ValueError, UnicodeError, RecursionError) as exc:
             raise SignalCliError("Signal outbound journal is unreadable") from exc
         if (not isinstance(payload, dict) or payload.get("version") != 1
                 or not isinstance(payload.get("records"), list)):
@@ -170,7 +170,6 @@ class _SignalOutboundJournal:
                     or not isinstance(kind, str) or kind not in ("text", "timestamp")
                     or not isinstance(value, str)
                     or not isinstance(created, (int, float)) or isinstance(created, bool)
-                    or not math.isfinite(created)
                     or not now - _OUTGOING_ECHO_TTL <= created <= now + 300):
                 continue
             if ((kind == "text" and _SHA256_RE.fullmatch(value))
@@ -594,7 +593,7 @@ class SignalBot(BotPlatform):
                     break
                 try:
                     payload = json.loads(line.decode("utf-8", errors="replace"))
-                except json.JSONDecodeError:
+                except (ValueError, RecursionError):
                     logger.debug(
                         "Ignoring non-JSON signal-cli JSON-RPC line: %r",
                         line,
