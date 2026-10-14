@@ -44,6 +44,7 @@ _DEFAULT_CONFIG = {
     "tool_timeout": 3600,
     # Per-attempt allowance; unfinished jobs checkpoint and renew it.
     "agent_turn_timeout": 3600,
+    "flexible_max_parallel_workers": 3,
     # Stuck-turn diagnostic interval.
     "update_idle_timeout": 1200,
     # Periodic faulthandler dump interval (0 disables).
@@ -335,6 +336,14 @@ def get_update_idle_timeout() -> int:
 def get_agent_turn_timeout() -> int:
     """One execution attempt's time limit; 0 explicitly disables it."""
     return _get_int_at_least("agent_turn_timeout", 0)
+
+
+def get_flexible_max_parallel_workers() -> int:
+    """Concurrent independent read-only workers (1 disables; valid range 1-4)."""
+    value = _read_config_value("flexible_max_parallel_workers")
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 4:
+        return value
+    return cast(int, _DEFAULT_CONFIG["flexible_max_parallel_workers"])
 
 
 def get_dump_traceback_interval() -> int:

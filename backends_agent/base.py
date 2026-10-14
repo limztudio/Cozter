@@ -864,6 +864,10 @@ class Backend(ABC):
     # True = consumes TOOL_SCHEMA directly (OpenAI-shape HTTP).
     supports_typed_plugins: bool = False
 
+    # Explicit inspection workers may overlap only with an enforced read-only
+    # tool surface. Backends must opt in after their confirm mode provides it.
+    supports_read_only_workers: bool = False
+
     # Untyped bash/plugin prelude for CLIs.
     supports_plugin_prelude: bool = True
 

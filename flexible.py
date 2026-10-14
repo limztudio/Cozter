@@ -61,6 +61,23 @@ _PLANNER_RULES = (
     f"{_RUBRIC}\n\n"
     "Rules:\n"
     "- Simple request = ONE sub-task.\n"
+    "- For an audit followed by repairs, group independent inspection scopes first,"
+    " then use one cohesive repair-and-verification task for the related findings."
+    " Do not split enumeration, implementation, tests, and documentation into"
+    " separate workers when one worker can complete the related change.\n"
+    "- Mark a task [parallel-read] ONLY when it is read-only inspection AND"
+    " independent of every other consecutive task with that marker. Marked tasks"
+    " may use completed earlier reports, but cannot depend on another marked"
+    " task in the same consecutive group. Unmarked tasks run in order. Never"
+    " mark edits, builds, tests, process launches, repairs, commits, or pushes.\n"
+    "- Saved checkpoints and earlier reports identify completed work. Exclude"
+    " completed actions from the new plan; revalidate only concrete evidence"
+    " needed for the remaining requested scope, without repeating whole audits.\n"
+    "- Plan only the checkpoint's unfinished obligations. For example, when"
+    " builds and tests are verified and only commit/push remains, plan the"
+    " remaining commit/push and necessary targeted checks, not another audit"
+    " or rebuild. Reuse verified evidence when relevant inputs and environment"
+    " are unchanged; final verification still covers the full original scope.\n"
     f"- At most {MAX_SUBTASKS} sub-tasks, ordered (each needs only earlier"
     " results). If more scope remains, the plan still lists it as an"
     " explicit PARTIAL + remainder note after the numbered tasks.\n"
@@ -103,6 +120,9 @@ _PLANNER_FORMAT = (
     "1. [low|mid|high] first sub-task instruction\n"
     "2. [low|mid|high] second sub-task instruction\n"
     "[/PLAN]\n"
+    "For independent read-only inspection only, put [parallel-read] immediately"
+    " after the tier, for example: 1. [low] [parallel-read] inspect existing logs."
+    " Omit that marker for every task that changes or executes anything.\n"
 )
 
 _PLANNER_QUESTION_RULE = (
@@ -234,6 +254,8 @@ class Subtask:
     """One planned unit of work and the difficulty tier it routes to."""
     tier: str
     instruction: str
+    read_only: bool = False
+    independent: bool = False
 
 
 @dataclass(frozen=True)
@@ -264,6 +286,8 @@ _PLAN_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PARALLEL_READ_RE = re.compile(r"^\[\s*parallel-read\s*\]\s*", re.IGNORECASE)
+
 _REMAINDER_LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:PARTIAL\b|remainder\b)", re.IGNORECASE)
 
 
@@ -276,16 +300,22 @@ def normalize_tier(value: str) -> str | None:
     return tier if tier in TIERS else None
 
 
-def _parse_subtask_line(line: str, pattern: re.Pattern[str]) -> Subtask | None:
+def _parse_subtask_line(
+    line: str, pattern: re.Pattern[str], *, allow_parallel_read: bool = False,
+) -> Subtask | None:
     """Parse one tier/instruction line shared by plans and follow-ups."""
     match = pattern.match(line)
     if match is None:
         return None
     tier = normalize_tier(match.group("tier"))
     instruction = match.group("instruction").strip()
+    marker = _PARALLEL_READ_RE.match(instruction)
+    if marker is not None:
+        instruction = instruction[marker.end():].strip()
     if tier is None or not instruction:
         return None
-    return Subtask(tier=tier, instruction=instruction)
+    marked = allow_parallel_read and marker is not None
+    return Subtask(tier=tier, instruction=instruction, read_only=marked, independent=marked)
 
 
 def parse_followups(report: str) -> list[Subtask]:
@@ -339,18 +369,19 @@ def parse_plan(raw: str, request: str) -> Plan:
     # Scan the whole reply when the planner forgot the wrapper.
     block = extract_marker_block(raw, "PLAN") or raw
     subtasks: list[Subtask] = []
-    seen: set[Subtask] = set()
+    seen: set[tuple[str, str]] = set()
     capped = False
     for line in block.splitlines():
-        subtask = _parse_subtask_line(line, _PLAN_LINE_RE)
+        subtask = _parse_subtask_line(line, _PLAN_LINE_RE, allow_parallel_read=True)
         if subtask is None:
             continue
-        if subtask in seen:
+        key = (subtask.tier, subtask.instruction)
+        if key in seen:
             continue
         if len(subtasks) == MAX_SUBTASKS:
             capped = True
             break
-        seen.add(subtask)
+        seen.add(key)
         subtasks.append(subtask)
 
     if not subtasks:
@@ -395,7 +426,9 @@ def _render_plan(plan: Plan, *, current: int | None = None) -> str:
         if task_index == current and len(instruction) > len(placeholder):
             instruction = placeholder
         lines.append(
-            f"  {task_index + 1}. [{task.tier}] {instruction}{marker}"
+            f"  {task_index + 1}. [{task.tier}]"
+            + (" [parallel-read]" if task.read_only and task.independent else "")
+            + f" {instruction}{marker}"
         )
     return "\n".join(lines)
 
@@ -441,6 +474,30 @@ def build_subtask_prompt(
             " the remaining instructions without repeating completed actions."
         )
 
+    if task.read_only:
+        parts.append(
+            f"\nYour task: {task.instruction}\n"
+            "Inspection only: read existing files, logs, and metadata within this"
+            " task's scope. Do not write, edit, delete, apply fixes, create files,"
+            " build, run tests, launch or stop processes, commit, or push."
+            " Do not expand into the full original request. Use only inspection"
+            " tools; do not run commands that can change workspace or runtime state.\n"
+            "Consecutive [parallel-read] tasks may run together. You can use the"
+            " earlier reports above, but cannot rely on another concurrent task's"
+            " findings or file changes.\n"
+            "Inspect every item in your assigned scope, then report exact findings"
+            " and existing evidence, including file paths and relevant locations."
+            " Give precise repair recommendations and unresolved questions to the"
+            " later writer; leave implementation, execution, and verification to"
+            " that writer. Do not request redundant workflow stages or repeat"
+            " completed work from earlier reports or saved checkpoints.\n"
+            "If requested inspection is unfinished, say PARTIAL and identify the"
+            " exact remainder. Expected test diagnostics, platform skips, historical"
+            " failures, and unavailable services are not new defects. Progress is"
+            " Thinking... status only."
+        )
+        return "\n".join(parts)
+
     parts.append(
         f"\nYour task: {task.instruction}\n"
         "Finish ALL of it - never a sample. If it says all/entire/every,"
@@ -449,12 +506,23 @@ def build_subtask_prompt(
         "If it points at a doc/standard, enumerate every rule/section first"
         " (read fully via offset chunks + grep), apply each, never stop"
         " after first/last few.\n"
-        "Build/verify:"
+        "Build/verify, when needed and not already covered by still-valid evidence:"
         " enumerate targets, run canonical build/test with 3600s cap"
         " (cancel still stops instantly; capture output to file), grep FULL logs for"
         " unexpected errors/warnings/exceptions (never eyeball tail only), classify"
         " each hit, repair actual failures and verify; runtime means launch +"
         " exercise paths + check logs, not just compile.\n"
+        "For independent compilation or test targets, use the project's supported"
+        " jobs/parallel flag with a resource bound appropriate to available CPU"
+        " and memory. Never overlap configure/build commands that share a generated"
+        " tree or dependency metadata, including different configurations that use"
+        " the same generated state.\n"
+        "Reuse verified completed build/test evidence when relevant inputs and"
+        " environment are unchanged; rerun only invalidated checks. A handoff or"
+        " resume alone is not a reason to repeat whole audits or builds. Complete"
+        " only the checkpoint's remaining obligations, such as commit/push after"
+        " verified builds. Final verification must still cover the original scope;"
+        " distinguish valid retained evidence from anything unverified.\n"
         "Test names, expected negative-path diagnostics, platform skips, and historical"
         " log entries are not current defects. State unavailable environment or"
         " unconfigured-provider verification as limitations; do not provision services"

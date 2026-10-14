@@ -990,15 +990,33 @@ def _relevance_last(items: list, keywords: set[str]) -> list:
 
 
 def _planner_context(contextual_prompt: str, request: str) -> str:
-    if len(contextual_prompt) <= _PLANNER_CONTEXT_CAP:
+    """Bound historical context while retaining the current request in full.
+
+    Durable resumes can carry a checkpoint larger than the history allowance.
+    That current request is exempt from clipping; prepending another excerpt
+    of the same checkpoint only duplicates input without adding evidence.
+    """
+    if len(request) >= _PLANNER_CONTEXT_CAP:
+        return request
+    if len(contextual_prompt) <= _PLANNER_CONTEXT_CAP and (
+        not request or contextual_prompt.endswith(request)
+    ):
         return contextual_prompt
-    tail_reserve = min(len(request) + 200, _PLANNER_CONTEXT_CAP // 2)
-    head_budget = _PLANNER_CONTEXT_CAP - tail_reserve - len(_PLANNER_OMISSION_MARKER)
-    head = contextual_prompt[:max(0, head_budget)]
-    tail = contextual_prompt[len(contextual_prompt) - tail_reserve:]
-    if request and request not in tail:
-        return head + _PLANNER_OMISSION_MARKER + request
-    return head + _PLANNER_OMISSION_MARKER + tail
+    history = (
+        contextual_prompt[:-len(request)]
+        if request and contextual_prompt.endswith(request)
+        else contextual_prompt + ("\n\n" if request and contextual_prompt else "")
+    )
+    available = _PLANNER_CONTEXT_CAP - len(request)
+    if len(history) <= available:
+        return history + request
+    excerpt_budget = available - len(_PLANNER_OMISSION_MARKER)
+    if excerpt_budget <= 0:
+        return request
+    tail_reserve = min(200, excerpt_budget // 2)
+    head = history[:excerpt_budget - tail_reserve]
+    tail = history[-tail_reserve:] if tail_reserve else ""
+    return head + _PLANNER_OMISSION_MARKER + tail + request
 
 
 def _build_contextual_prompt(
@@ -1590,6 +1608,47 @@ async def _judge_draft(
     return flexible.parse_judge(raw or ""), False
 
 
+async def _run_parallel_flexible_workers(
+    calls: list[Awaitable[tuple[AgentResult, bool]]],
+    inject_queue: asyncio.Queue[str] | None,
+    injected: list[str],
+) -> tuple[list[tuple[AgentResult, bool]], bool]:
+    """Own a reader wave's tasks and its single injection channel.
+
+    Stop, a deadline, a failed launch, or an injection cancels and awaits
+    every sibling, including subprocess cleanup, before returning control.
+    """
+    tasks = [asyncio.ensure_future(call) for call in calls]
+    group = asyncio.gather(*tasks)
+
+    async def watch() -> None:
+        assert inject_queue is not None
+        injected.append(await inject_queue.get())
+
+    watcher = asyncio.create_task(watch()) if inject_queue is not None else None
+    try:
+        if watcher is not None:
+            waiters: set[asyncio.Future[Any]] = {group, watcher}
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            if watcher.done():
+                watcher.result()
+                return [], True
+            watcher.cancel()
+            await await_cancelled(watcher)
+            if _take_pending_injections(inject_queue, injected):
+                return [], True
+        return list(await group), False
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        # gather itself must also be observed if it failed or was cancelled.
+        await asyncio.gather(group, *tasks, *([watcher] if watcher else []),
+                             return_exceptions=True)
+
+
 async def _run_flexible(
     contextual_prompt: str,
     request: str,
@@ -1696,6 +1755,67 @@ async def _run_flexible(
     done = 0
     total = len(queue)
 
+    def retain_report(index: int, sub_result: AgentResult) -> None:
+        if budget is None:
+            return
+        report, _ = extract_await(sub_result.text)
+        report, _ = _split_attach_markers(report)
+        if sub_result.error:
+            report += f"\n\n(the agent then failed: {sub_result.error})"
+        budget.reports.append((queue[index].instruction, flexible._truncate_report(report)))
+        if queue[index].instruction in budget.pending:
+            budget.pending.remove(queue[index].instruction)
+        if sub_result.error and "tool budget exhausted" in sub_result.error.casefold():
+            budget.pending.insert(0, queue[index].instruction)
+            raise _TurnBudgetExhaustedError(sub_result.error)
+
+    def can_inspect(index: int) -> bool:
+        task = queue[index]
+        backend_name, _ = tiers[task.tier]
+        backend = backends_agent.get_backend(backend_name)
+        return bool(task.read_only and task.independent
+                    and getattr(backend, "supports_read_only_workers", False))
+
+    async def run_worker(
+        index: int, earlier: list[str], *, parallel: bool,
+    ) -> tuple[AgentResult, bool]:
+        task = queue[index]
+        backend_name, model = tiers[task.tier]
+        backend = backends_agent.get_backend(backend_name)
+        if budget is not None:
+            budget.claim_worker()
+        await status(
+            f"flexible [{index + 1}/{total}] {task.tier} ·"
+            f" {backend_name}/{model}: {task.instruction}"
+        )
+        # This is a worker role, not a change to the workspace permission.
+        # The coordinator and all editing workers retain the chosen approval.
+        worker_approval = (
+            "confirm" if can_inspect(index) and approval in {"auto", "full", "confirm"}
+            else approval
+        )
+        sub_result, restarting = await _run_with_stage_timing(_drive_backend(
+            backend, workspace_path,
+            _build_backend_prompt(
+                backend,
+                flexible.build_subtask_prompt(
+                    request, plan, index, earlier, previous_draft=previous_draft,
+                ),
+                collaborative=False, allow_detached_requests=False,
+            ),
+            model, worker_approval, effort=effort, on_event=on_event,
+            # A parallel wave has ONE inject watcher; it stops every sibling.
+            inject_queue=None if parallel else inject_queue,
+            injected=None if parallel else injected, on_process=on_process,
+        ), "flexible_worker", backend_name, model,
+            worker_index=index + 1, worker_count=total)
+        if budget is not None:
+            budget.capture(sub_result, workspace_path)
+        if not restarting:
+            retain_report(index, sub_result)
+        return sub_result, restarting
+
+    max_parallel = config.get_flexible_max_parallel_workers()
     while done < len(queue):
         task = queue[done]
         tier_backend_name, tier_model = tiers[task.tier]
@@ -1706,7 +1826,6 @@ async def _run_flexible(
                 f"flexible [{done + 1}/{total}] {task.tier} ·"
                 f" {tier_backend_name}/{tier_model}: skipping unavailable account/model"
             )
-            # Skipped slots still yield for /stop and honor accepted injects.
             await asyncio.sleep(0)
             if _take_pending_injections(inject_queue, injected):
                 return result, True
@@ -1718,106 +1837,95 @@ async def _run_flexible(
             )
             done += 1
             continue
-        tier_backend = backends_agent.get_backend(tier_backend_name)
+        end = done + 1
+        if can_inspect(done):
+            while (end < len(queue) and end - done < max_parallel
+                   and can_inspect(end) and tiers[queue[end].tier] not in unavailable_models):
+                end += 1
         if budget is not None:
-            budget.claim_worker()
-        await status(
-            f"flexible [{done + 1}/{total}] {task.tier} ·"
-            f" {tier_backend_name}/{tier_model}: {task.instruction}"
-        )
-        sub_result, restarting = await _run_with_stage_timing(_drive_backend(
-            tier_backend,
-            workspace_path,
-            _build_backend_prompt(
-                tier_backend,
-                flexible.build_subtask_prompt(
-                    # Planner instructions are self-contained.
-                    request, plan, done, reports,
-                    previous_draft=previous_draft,
-                ),
-                collaborative=False,
-                allow_detached_requests=False,
-            ),
-            tier_model,
-            approval,
-            effort=effort,
-            on_event=on_event,
-            inject_queue=inject_queue,
-            injected=injected,
-            on_process=on_process,
-        ), "flexible_worker", tier_backend_name, tier_model,
-            worker_index=done + 1, worker_count=total)
-        if budget is not None:
-            budget.capture(sub_result, workspace_path)
-        if restarting:
-            return result, True
-
-        # Worker text is internal (feeds the merge).
-        result.events.extend(
-            ev for ev in sub_result.events if ev.kind != "text"
-        )
-        for task_ref in sub_result.detached_tasks:
-            if task_ref not in result.detached_tasks:
-                result.detached_tasks.append(task_ref)
-        _accumulate_usage(usage_totals, sub_result.usage)
-
-        if sub_result.error:
-            worker_errors.append(sub_result.error)
-            if _account_provider_unavailable(sub_result.error):
-                unavailable_models[target] = sub_result.error
-            logger.warning(
-                "Flexible sub-task %d/%d (%s/%s) failed: %s",
-                done + 1, total, tier_backend_name, tier_model, sub_result.error,
+            remaining = budget.max_workers - budget.workers_started
+            if remaining <= 0:
+                budget.claim_worker()  # raises with the established checkpoint protocol
+            end = min(end, done + remaining)
+        earlier = list(reports)
+        if end - done > 1:
+            await status(f"flexible: inspecting {end - done} independent tasks in parallel")
+            values, restarting = await _run_parallel_flexible_workers(
+                [run_worker(index, earlier, parallel=True) for index in range(done, end)],
+                inject_queue, injected,
             )
-
-        report, worker_awaiting = extract_await(sub_result.text)
-        report, markers = _split_attach_markers(report)
-        attach_markers.extend(markers)
-        report = report.strip()
-
-        # Empty worker report: name the tier.
-        if not report:
-            report = (
-                f"(no output: {tier_backend_name}/{tier_model} ended the"
-                " sub-task without a reply"
-                + (f" - {sub_result.error}" if sub_result.error else "")
-                + ")"
+            if restarting:
+                return result, True
+        else:
+            values = [await run_worker(done, earlier, parallel=False)]
+        # Always merge in plan order, regardless of completion order.
+        for sub_result, restarting in values:
+            task = queue[done]
+            tier_backend_name, tier_model = tiers[task.tier]
+            target = (tier_backend_name, tier_model)
+            if restarting:
+                return result, True
+            # Worker text is internal (feeds the merge).
+            result.events.extend(
+                ev for ev in sub_result.events if ev.kind != "text"
             )
-        elif sub_result.error:
-            # Half answer + failure: tell the merge.
-            report += f"\n\n(the agent then failed: {sub_result.error})"
-        reports.append(report)
-        if budget is not None:
-            budget.reports.append((task.instruction, flexible._truncate_report(report)))
-            if task.instruction in budget.pending:
-                budget.pending.remove(task.instruction)
-            if sub_result.error and "tool budget exhausted" in sub_result.error.casefold():
-                budget.pending.insert(0, task.instruction)
-                raise _TurnBudgetExhaustedError(sub_result.error)
+            for task_ref in sub_result.detached_tasks:
+                if task_ref not in result.detached_tasks:
+                    result.detached_tasks.append(task_ref)
+            _accumulate_usage(usage_totals, sub_result.usage)
 
-        # Stuck worker: merge ends on its question.
-        if worker_awaiting:
-            blocked.append(done)
+            if sub_result.error:
+                worker_errors.append(sub_result.error)
+                if _account_provider_unavailable(sub_result.error):
+                    unavailable_models[target] = sub_result.error
+                logger.warning(
+                    "Flexible sub-task %d/%d (%s/%s) failed: %s",
+                    done + 1, total, tier_backend_name, tier_model, sub_result.error,
+                )
 
-        # [followup:<tier>] lines grow the queue live.
-        for extra in flexible.parse_followups(report):
-            if extra in queue:
-                continue
-            if budget is not None and extra.instruction not in budget.pending:
-                budget.pending.append(extra.instruction)
-            if len(queue) < flexible.MAX_SUBTASKS * 2:
-                queue.append(extra)
-            elif extra not in unrun_followups:
-                unrun_followups.append(extra)
-        if len(queue) != total:
-            total = len(queue)
-            plan = flexible.Plan(
-                understanding=plan.understanding,
-                subtasks=tuple(queue),
-                question=None,
-            )
-            await status(f"flexible: plan grew to {total} sub-tasks")
-        done += 1
+            report, worker_awaiting = extract_await(sub_result.text)
+            report, markers = _split_attach_markers(report)
+            attach_markers.extend(markers)
+            report = report.strip()
+
+            # Empty worker report: name the tier.
+            if not report:
+                report = (
+                    f"(no output: {tier_backend_name}/{tier_model} ended the"
+                    " sub-task without a reply"
+                    + (f" - {sub_result.error}" if sub_result.error else "")
+                    + ")"
+                )
+            elif sub_result.error:
+                # Half answer + failure: tell the merge.
+                report += f"\n\n(the agent then failed: {sub_result.error})"
+            reports.append(report)
+
+            # Stuck worker: merge ends on its question.
+            if worker_awaiting:
+                blocked.append(done)
+
+            # [followup:<tier>] lines grow the queue live.
+            for extra in flexible.parse_followups(report):
+                if any((extra.tier, extra.instruction) == (queued.tier, queued.instruction)
+                       for queued in queue):
+                    continue
+                if budget is not None and extra.instruction not in budget.pending:
+                    budget.pending.append(extra.instruction)
+                if len(queue) < flexible.MAX_SUBTASKS * 2:
+                    queue.append(extra)
+                elif extra not in unrun_followups:
+                    unrun_followups.append(extra)
+            if len(queue) != total:
+                total = len(queue)
+                plan = flexible.Plan(
+                    understanding=plan.understanding,
+                    subtasks=tuple(queue),
+                    question=None,
+                )
+                await status(f"flexible: plan grew to {total} sub-tasks")
+
+            done += 1
 
     remainder = ""
     if unrun_followups:

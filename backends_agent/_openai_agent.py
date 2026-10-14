@@ -247,6 +247,7 @@ class OpenAIChatBackend(Backend):
     streaming client are inherited.
     """
 
+    supports_read_only_workers = True
     # OpenAI-shape tools consumed directly.
     supports_typed_plugins = True
     supports_vision = True

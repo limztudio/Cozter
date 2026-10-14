@@ -321,6 +321,7 @@ example layout lives in `.config/config.example.json`):
 
   "tool_timeout": 3600,
   "agent_turn_timeout": 3600,
+  "flexible_max_parallel_workers": 3,
   "update_idle_timeout": 1200,
   "dump_traceback_interval": 0,
   "update_check_interval": 300,
@@ -1115,12 +1116,30 @@ hard. One turn is three phases:
    `/summarymodel`) restates what you asked for and splits it into
    up to 12 sub-tasks, grading each one `low`, `mid`, or `high`.
 2. **Route.** Each sub-task runs as a full agent turn — real tools, real
-   file edits — on the agent and model bound to its difficulty tier. They
-   run one at a time, in order, and each worker sees the reports of the
-   ones before it.
+   file edits — on the agent and model bound to its difficulty tier.
+   Tasks run in order unless the planner explicitly marks consecutive tasks
+   `[parallel-read]`: these inspect independent scopes together, with the
+   reports from completed earlier tasks. Changes and follow-up tasks run
+   serially; one later writer can repair and verify related findings together.
 3. **Merge.** The summary agent folds the workers' reports into the single
    reply you see. The workers' own text never reaches the chat; their tool
    and file events still stream into the live status display.
+
+`[parallel-read]` means both read-only and independent of the other consecutive
+marked tasks. For example, inspecting existing transport logs and reviewing an
+unrelated parser can run together before one repair worker consumes both reports.
+Inspection workers do not edit files, build, run tests, launch processes, commit,
+push, or expand their assignment into the full original task. Their reports give
+the later writer concrete findings and evidence. The runtime uses concurrency
+only for backends that can enforce the inspection restrictions; other backends
+run the marked work serially. An unmarked task or a dependency ends the group.
+
+`flexible_max_parallel_workers` in `.config/config.json` limits this inspection
+concurrency to **1-4**, with **3** as the default. Set it to **1** for serial
+execution. Missing or invalid values use the default. Ordinary plans without
+markers retain their ordered behavior. The planner prefers the fewest workers
+that cover the request and uses saved checkpoints to avoid repeating completed
+audits, revalidating only the evidence needed for remaining work.
 
 The grading rubric the planner is held to:
 
@@ -1156,10 +1175,11 @@ automatically (its `tier_models` table) — for `zai` that is
 `/doctor` print the current wiring. A tier can only point at a *direct* backend — never at
 `flexible` itself, which would plan forever.
 
-A flexible turn can make one planner call (input capped at 12,000
-characters with the request preserved; a middle-context omission marker is
-reserved inside that cap so the planner still sees it must cover every
-item/rule), up to 12 planned worker calls plus worker-discovered follow-ups
+A flexible turn can make one planner call (history and request normally fit
+within 12,000 characters, including a middle-context omission marker).
+A request or durable checkpoint that already exceeds that allowance is sent
+intact once, without an additional duplicate history excerpt. It can then make
+up to 12 planned worker calls plus worker-discovered follow-ups
 (each worker may report genuine leftovers as `[followup:<tier>]` lines,
 all of which are parsed and de-duplicated). Distinct follow-ups join the queue
 in reported order up to an execution cap of 24 worker tasks for that plan,
@@ -1187,6 +1207,10 @@ commands + exit codes + error/warning counts from full (not preview) logs
 with no unexpected failures remaining; expected negative-path diagnostics,
 test names, platform skips, and historical entries are classified separately.
 Missing evidence means PARTIAL + remainder.
+Workers reuse verified build and test evidence when the relevant inputs and
+environment remain unchanged, and rerun checks invalidated by later changes.
+They use the project's supported parallel jobs for independent compilation or
+tests, but serialize configure/build commands sharing generated dependency state.
 Each attempt also runs a continue-judge loop (up to 3 immediate follow-ups).
 When the judge still says CONTINUE after that limit, the job saves its
 progress and resumes in the same session with a fresh allowance. There is no

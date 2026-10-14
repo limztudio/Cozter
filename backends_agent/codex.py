@@ -118,6 +118,7 @@ def _stderr_preview(value: str | bytes | None) -> str:
 
 class CodexBackend(Backend):
     name = "codex"
+    supports_read_only_workers = True
     executable = "codex"
     supports_vision = True
     vision_mode = "cli_file_flag"
