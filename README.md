@@ -301,6 +301,7 @@ example layout lives in `.config/config.example.json`):
 
   "signal_group_urls": [],
   "signal_jsonrpc_socket": "",
+  "signal_own_device_id": 0,
 
   "llama_server_url": "http://127.0.0.1:8080",
   "llama_max_agent_turns": 60,
@@ -559,6 +560,23 @@ sends the final reply. Failed or slow status operations are best-effort
 and bounded to four seconds; they do not block streamed work or the final
 reply. If the initial message has no editable timestamp, Cozter skips
 further previews for that turn.
+
+Set `signal_own_device_id` to the numeric device ID used by this installation's
+signal-cli daemon after checking its account's `listDevices` response. The default
+`0` (or `null`) leaves device identification unset; Cozter never guesses from a
+device name. Messages synced from the configured daemon device are ignored before
+command, workspace-input, or queue handling. Commands from the primary phone and
+other linked devices remain usable, including text that repeats an earlier reply.
+
+When a source device is unknown, Signal echo protection uses a bounded durable
+`.config/signal_outbound.json` journal. Cozter records a hash of the group and
+rendered text before sending, then retains acknowledged timestamps. This catches
+duplicate or delayed own-message syncs after a restart or a lost send response.
+The journal contains no message plaintext and retains at most 8,192 records for
+seven days. A failed pre-send journal write prevents that send; a failure after
+an acknowledged send is logged without resending the confirmed message. Exact
+`Queued (number/number).` protocol acknowledgements, including the directory-input
+error template wrapping one, are never accepted as new tasks from any device.
 
 The Signal phone number, socket path, and `signal-cli` binary location are
 owned by that daemon/service setup rather than by Cozter's

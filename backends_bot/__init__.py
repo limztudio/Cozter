@@ -107,6 +107,7 @@ def create_platforms(config: dict) -> list[BotPlatform]:
                 max_queue_size=queue_size,
                 max_upload_bytes=max_upload_bytes,
                 jsonrpc_socket=signal_socket,
+                own_device_id=config.get("signal_own_device_id"),
             ),
         )
 

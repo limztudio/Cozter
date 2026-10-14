@@ -26,6 +26,7 @@ _DEFAULT_CONFIG = {
     "slack_channel_ids": [],
     "signal_group_urls": [],
     "signal_jsonrpc_socket": "",
+    "signal_own_device_id": 0,
     "llama_server_url": "http://127.0.0.1:8080",
     "llama_max_agent_turns": 60,
     "llama_tool_repeat_limit": 3,
@@ -495,6 +496,13 @@ def load_config() -> dict:
         os.path.expandvars(os.path.expanduser(signal_socket_raw.strip()))
         if isinstance(signal_socket_raw, str) else ""
     )
+    signal_device = cfg.get("signal_own_device_id")
+    if signal_device is not None and (
+        not isinstance(signal_device, int) or isinstance(signal_device, bool) or signal_device < 0
+    ):
+        print(f"ERROR: 'signal_own_device_id' in {CONFIG_PATH} must be a non-negative integer or null.")
+        sys.exit(1)
+    cfg["signal_own_device_id"] = signal_device or 0
 
     # Coerce IDs to strings.
     raw_user_ids = cfg.get("user_ids")

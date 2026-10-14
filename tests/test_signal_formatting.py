@@ -2,10 +2,12 @@ import asyncio
 import contextlib
 import gc
 import json
+import tempfile
 import unittest
 from unittest import mock
 from typing import Any
 
+from Cozter import workspace
 from Cozter.backends_bot.base import MessageHandle
 from Cozter.backends_bot.signal import (
     SignalCliError,
@@ -127,6 +129,11 @@ class _ResolvingSignalBot(SignalBot):
 
 
 class SignalSendFormattingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", temporary.name))
+
     def test_rich_send_uses_signal_text_styles_shape(self) -> None:
         async def run() -> _CapturingSignalBot:
             bot = _CapturingSignalBot()

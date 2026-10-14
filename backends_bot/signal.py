@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import hashlib
 import json
 import logging
 import math
@@ -16,6 +17,7 @@ import os
 import re
 import time
 from collections import deque
+from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -25,11 +27,12 @@ from ..config import (
     DEFAULT_RECENT_WORKSPACE_LIMIT,
 )
 from .. import schedules, session, workspace
-from ..utils import split_text_chunks, text_chunk_ranges
+from ..utils import create_background_task, save_json_object, split_text_chunks, text_chunk_ranges
 from .base import (
     AttachmentInfo,
     BotContext,
     BotPlatform,
+    _run_durable_file_operation,
     MessageHandle,
     UploadTooLargeError,
     attachment_kind_from_mime,
@@ -44,8 +47,16 @@ from .formatting import iter_fenced_markdown
 logger = logging.getLogger(__name__)
 
 _SIGNAL_TEXT_LIMIT = 4_000
-_OUTGOING_ECHO_TTL = 30.0
-_OUTGOING_ECHO_LIMIT = 200
+_OUTGOING_ECHO_TTL = 7 * 24 * 60 * 60
+_OUTGOING_ECHO_LIMIT = 8192
+_OUTGOING_JOURNAL_MAX_BYTES = 4 * 1024 * 1024
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_QUEUE_ACK_RE = re.compile(r"Queued \([0-9]+/[0-9]+\)\.")
+_DIRECTORY_REPLY_PREFIX = "Directory does not exist:\n"
+_DIRECTORY_REPLY_SUFFIXES = (
+    "\n\nPlease enter a valid directory (or /cancel):",
+    "\n\nUse /open to choose from recent workspaces.",
+)
 _INCOMING_DEDUPE_TTL = 120.0
 _INCOMING_DEDUPE_LIMIT = 500
 _LEGACY_SIGNAL_PLATFORM_PREFIX = "signal:"
@@ -99,6 +110,132 @@ _NON_IDEMPOTENT_RPC_METHODS = frozenset({"send"})
 
 class SignalCliError(RuntimeError):
     """Raised when the signal-cli JSON-RPC socket is unavailable."""
+
+
+def _echo_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_generated_control_message(text: str) -> bool:
+    """Reject exact bot protocol replies before an input-state handler sees them."""
+    while True:
+        if _QUEUE_ACK_RE.fullmatch(text):
+            return True
+        if not text.startswith(_DIRECTORY_REPLY_PREFIX):
+            return False
+        for suffix in _DIRECTORY_REPLY_SUFFIXES:
+            if text.endswith(suffix):
+                text = text[len(_DIRECTORY_REPLY_PREFIX):-len(suffix)].strip()
+                break
+        else:
+            return False
+
+
+class _SignalOutboundJournal:
+    """Bounded sent-message provenance; never retain plaintext chat content."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._loaded = False
+        self._records: dict[tuple[str, str, str], float] = {}
+
+    @staticmethod
+    def _path() -> str:
+        return os.path.join(workspace.CONFIG_DIR, "signal_outbound.json")
+
+    def _read(self) -> dict[tuple[str, str, str], float]:
+        try:
+            with open(self._path(), "rb") as source:
+                raw = source.read(_OUTGOING_JOURNAL_MAX_BYTES + 1)
+        except FileNotFoundError:
+            return {}
+        if len(raw) > _OUTGOING_JOURNAL_MAX_BYTES:
+            raise SignalCliError("Signal outbound journal exceeds its size limit")
+        try:
+            payload = json.loads(raw)
+        except (ValueError, UnicodeError) as exc:
+            raise SignalCliError("Signal outbound journal is unreadable") from exc
+        if (not isinstance(payload, dict) or payload.get("version") != 1
+                or not isinstance(payload.get("records"), list)):
+            raise SignalCliError("Invalid Signal outbound journal format")
+        records: dict[tuple[str, str, str], float] = {}
+        now = time.time()
+        for row in payload["records"]:
+            if not isinstance(row, dict):
+                continue
+            group, kind, value, created = (
+                row.get("group"), row.get("kind"), row.get("value"), row.get("created"),
+            )
+            if (not isinstance(group, str) or not _SHA256_RE.fullmatch(group)
+                    or not isinstance(kind, str) or kind not in ("text", "timestamp")
+                    or not isinstance(value, str)
+                    or not isinstance(created, (int, float)) or isinstance(created, bool)
+                    or not math.isfinite(created)
+                    or not now - _OUTGOING_ECHO_TTL <= created <= now + 300):
+                continue
+            if ((kind == "text" and _SHA256_RE.fullmatch(value))
+                    or (kind == "timestamp" and value.isascii() and value.isdigit()
+                        and len(value) <= 20)):
+                key = (group, kind, value)
+                records[key] = max(records.get(key, 0), float(created))
+        return self._bounded(records, now)
+
+    @staticmethod
+    def _bounded(
+        records: dict[tuple[str, str, str], float], now: float,
+    ) -> dict[tuple[str, str, str], float]:
+        fresh = ((key, created) for key, created in records.items()
+                 if now - _OUTGOING_ECHO_TTL <= created <= now + 300)
+        return dict(sorted(fresh, key=lambda item: item[1])[-_OUTGOING_ECHO_LIMIT:])
+
+    def _adopt(self, records: dict[tuple[str, str, str], float]) -> None:
+        self._records = records
+        self._loaded = True
+
+    async def load(self) -> None:
+        if self._loaded:
+            return
+        await _run_durable_file_operation(
+            self._lock,
+            lambda: self._records if self._loaded else self._read(),
+            on_complete=self._adopt,
+        )
+
+    async def remember(self, entries: Iterable[tuple[str, str, str]]) -> None:
+        keys = [(_echo_hash(group), kind, value) for group, kind, value in entries]
+        if not keys:
+            return
+
+        def write() -> dict[tuple[str, str, str], float]:
+            now = time.time()
+            records = dict(self._records) if self._loaded else self._read()
+            records.update((key, now) for key in keys)
+            records = self._bounded(records, now)
+            save_json_object(self._path(), {
+                "version": 1,
+                "records": [{"group": group, "kind": kind, "value": value,
+                             "created": created}
+                            for (group, kind, value), created in records.items()],
+            })
+            return records
+
+        await _run_durable_file_operation(self._lock, write, on_complete=self._adopt)
+
+    def contains(self, group_id: str, *, text: str, timestamp: str | None) -> bool:
+        group = _echo_hash(group_id)
+        cutoff = time.time() - _OUTGOING_ECHO_TTL
+        return any(created is not None and created >= cutoff
+                   for kind, value in (("text", _echo_hash(text)),
+                                       ("timestamp", timestamp or ""))
+                   if value and (kind != "text" or text)
+                   for created in (self._records.get((group, kind, value)),))
+
+
+async def seed_signal_outbound_echoes(messages: Iterable[tuple[str, str]]) -> None:
+    """Recover proven bot output from a quarantined queue without storing its text."""
+    journal = _SignalOutboundJournal()
+    await journal.remember((group, "text", _echo_hash(text.strip()))
+                           for group, text in messages if text.strip())
 
 
 def _signal_tcp_address(endpoint: str) -> tuple[str, int] | None:
@@ -159,6 +296,7 @@ class SignalBot(BotPlatform):
         max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
         max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
         jsonrpc_socket: str = "",
+        own_device_id: int | None = None,
     ):
         super().__init__(
             group_urls,
@@ -168,6 +306,12 @@ class SignalBot(BotPlatform):
         )
         self.group_urls = _dedupe_group_urls(group_urls)
         self.jsonrpc_socket = jsonrpc_socket.strip() if jsonrpc_socket else ""
+        if own_device_id is not None and (
+            not isinstance(own_device_id, int) or isinstance(own_device_id, bool)
+            or own_device_id < 0
+        ):
+            raise ValueError("signal_own_device_id must be a non-negative integer or null")
+        self.own_device_id = own_device_id or None
         if not self.jsonrpc_socket:
             raise ValueError("signal_jsonrpc_socket is required for Signal")
         self._jsonrpc_tcp_address = _signal_tcp_address(self.jsonrpc_socket)
@@ -186,9 +330,10 @@ class SignalBot(BotPlatform):
         self._receive_subscribed = False
         self._notification_tasks: set[asyncio.Task] = set()
         self._stop_requested = asyncio.Event()
-        self._own_sent_timestamps: set[str] = set()
-        self._own_sent_timestamp_order: deque[str] = deque()
-        self._recent_outgoing_texts: deque[tuple[float, str, str]] = deque()
+        self._own_sent_timestamps: set[tuple[str, str]] = set()
+        self._own_sent_timestamp_order: deque[tuple[str, str]] = deque()
+        self._outbound_journal = _SignalOutboundJournal()
+        self._outbound_journal_tasks: set[asyncio.Task] = set()
         self._recent_incoming_keys: set[str] = set()
         self._recent_incoming_key_order: deque[tuple[float, str]] = deque()
         self._send_lock = asyncio.Lock()
@@ -216,7 +361,6 @@ class SignalBot(BotPlatform):
         for chunk, styles in chunks:
             if not chunk:
                 continue
-            self._remember_outgoing_text(group_id, chunk)
             params: dict[str, Any] = {"groupId": group_id, "message": chunk}
             _add_signal_text_styles(params, styles)
             result = await self._send_rpc_and_remember("send", params)
@@ -237,7 +381,6 @@ class SignalBot(BotPlatform):
         )
         if not message:
             return
-        self._remember_outgoing_text(group_id, message)
         params: dict[str, Any] = {
             "groupId": group_id,
             "editTimestamp": _timestamp_rpc_param(handle.message_id),
@@ -267,6 +410,7 @@ class SignalBot(BotPlatform):
 
     async def start(self) -> None:
         self._stop_requested.clear()
+        await self._outbound_journal.load()
         await self._connect_jsonrpc(resubscribe=False)
         try:
             self._group_ids_by_url = await self._resolve_group_ids()
@@ -316,6 +460,7 @@ class SignalBot(BotPlatform):
             await asyncio.gather(
                 *self._notification_tasks, return_exceptions=True,
             )
+        await self._flush_outbound_journal()
         await self._stop_jsonrpc()
         logger.info("Signal bot stopped.")
 
@@ -698,11 +843,22 @@ class SignalBot(BotPlatform):
 
         text = str(data.get("message") or data.get("body") or "").strip()
         attachments = data.get("attachments") or []
+        if _is_generated_control_message(text):
+            return
         from_local_account = (
             is_sent_sync or _same_signal_id(sender_id, account_id)
         )
-        if self._is_own_sent_echo(data, group_id, text, from_local_account):
+        source_device = envelope.get("sourceDevice")
+        if not isinstance(source_device, int) or isinstance(source_device, bool) or source_device <= 0:
+            source_device = None
+        if from_local_account and self.own_device_id and source_device == self.own_device_id:
             return
+        known_other_device = bool(self.own_device_id and source_device
+                                  and source_device != self.own_device_id)
+        if not known_other_device:
+            await self._outbound_journal.load()
+            if self._is_own_sent_echo(data, group_id, text, from_local_account):
+                return
         incoming_key = _incoming_dedupe_key(
             data, group_id, sender_id, text, attachments,
         )
@@ -1164,17 +1320,14 @@ class SignalBot(BotPlatform):
             if moved:
                 logger.info("Migrated %d legacy Signal queued message(s).", moved)
 
-    def _remember_outgoing_text(self, group_id: str, text: str) -> None:
-        self._prune_outgoing_texts()
-        self._recent_outgoing_texts.append((time.monotonic(), group_id, text))
-        while len(self._recent_outgoing_texts) > _OUTGOING_ECHO_LIMIT:
-            self._recent_outgoing_texts.popleft()
-
-    def _remember_own_sent_timestamp(self, timestamp: str) -> None:
+    def _remember_own_sent_timestamp(self, group_id: str, timestamp: str) -> None:
         if not timestamp:
             return
-        self._own_sent_timestamps.add(timestamp)
-        self._own_sent_timestamp_order.append(timestamp)
+        key = (group_id, timestamp)
+        if key in self._own_sent_timestamps:
+            return
+        self._own_sent_timestamps.add(key)
+        self._own_sent_timestamp_order.append(key)
         while len(self._own_sent_timestamp_order) > _OUTGOING_ECHO_LIMIT:
             old = self._own_sent_timestamp_order.popleft()
             self._own_sent_timestamps.discard(old)
@@ -1182,17 +1335,38 @@ class SignalBot(BotPlatform):
     async def _send_rpc_and_remember(
         self, method: str, params: dict[str, Any],
     ) -> Any:
-        """Run a signal-cli RPC and, if it returned a timestamp, track it.
-
-        Every send/edit/attachment response carries the assigned message
-        timestamp, which later lets Cozter recognise its own echoed
-        messages and avoid processing them again.
-        """
+        """Persist text provenance before sending; retain acknowledged timestamps."""
+        group_id = str(params["groupId"])
+        text = params.get("message")
+        if isinstance(text, str) and text.strip():
+            # Cancellation, lost acknowledgements and daemon restarts can all
+            # precede the sent-sync echo. Refuse to send without provenance.
+            await self._outbound_journal.remember(
+                [(group_id, "text", _echo_hash(text.strip()))],
+            )
         result = await self._paced_rpc_request(method, params)
         timestamp = _extract_timestamp_from_value(result)
         if timestamp:
-            self._remember_own_sent_timestamp(timestamp)
+            self._remember_own_sent_timestamp(group_id, timestamp)
+            # No await after a known ACK: cancellation here must not convert a
+            # confirmed delivery into a failed delivery which will be resent.
+            task = create_background_task(
+                self._persist_acknowledged_timestamp(group_id, timestamp),
+                name="signal:outbound-journal", log=logger,
+            )
+            self._outbound_journal_tasks.add(task)
+            task.add_done_callback(self._outbound_journal_tasks.discard)
         return result
+
+    async def _persist_acknowledged_timestamp(self, group_id: str, timestamp: str) -> None:
+        try:
+            await self._outbound_journal.remember([(group_id, "timestamp", timestamp)])
+        except Exception:
+            logger.warning("Could not persist acknowledged Signal timestamp", exc_info=True)
+
+    async def _flush_outbound_journal(self) -> None:
+        if self._outbound_journal_tasks:
+            await asyncio.gather(*self._outbound_journal_tasks, return_exceptions=True)
 
     async def _paced_rpc_request(
         self, method: str, params: dict[str, Any],
@@ -1252,34 +1426,12 @@ class SignalBot(BotPlatform):
         text: str,
         from_local_account: bool,
     ) -> bool:
-        timestamp = _extract_timestamp_from_value(data)
-        if timestamp and timestamp in self._own_sent_timestamps:
-            return True
-        if not from_local_account or not text:
+        if not from_local_account:
             return False
-        return self._consume_recent_outgoing_text(group_id, text)
-
-    def _consume_recent_outgoing_text(self, group_id: str, text: str) -> bool:
-        self._prune_outgoing_texts()
-        kept: deque[tuple[float, str, str]] = deque()
-        matched = False
-        while self._recent_outgoing_texts:
-            item = self._recent_outgoing_texts.popleft()
-            _created_at, item_group_id, item_text = item
-            if not matched and item_group_id == group_id and item_text == text:
-                matched = True
-                continue
-            kept.append(item)
-        self._recent_outgoing_texts = kept
-        return matched
-
-    def _prune_outgoing_texts(self) -> None:
-        cutoff = time.monotonic() - _OUTGOING_ECHO_TTL
-        while (
-            self._recent_outgoing_texts
-            and self._recent_outgoing_texts[0][0] < cutoff
-        ):
-            self._recent_outgoing_texts.popleft()
+        timestamp = _extract_timestamp_from_value(data)
+        if timestamp and (group_id, timestamp) in self._own_sent_timestamps:
+            return True
+        return self._outbound_journal.contains(group_id, text=text, timestamp=timestamp)
 
     def _is_duplicate_incoming(self, key: str) -> bool:
         if not key:

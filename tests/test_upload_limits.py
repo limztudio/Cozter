@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
 
-from Cozter import config
+from Cozter import config, workspace
 from Cozter.backends_bot.base import (
     AttachmentInfo,
     BotContext,
@@ -670,11 +670,17 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
 class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
     """Outbound throttles wait-and-retry instead of failing the attach."""
 
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", temporary.name))
+
     async def test_signal_retry_after_sleeps_then_succeeds(self) -> None:
         bot = SignalBot(
             ["https://signal.group/#test"],
             jsonrpc_socket="/tmp/signal.sock",
         )
+        self.addAsyncCleanup(bot._flush_outbound_journal)
         bot._group_ids = {"group"}
         bot._rpc_request = mock.AsyncMock(side_effect=[
             SignalCliError(
@@ -703,6 +709,7 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
             ["https://signal.group/#test"],
             jsonrpc_socket="/tmp/signal.sock",
         )
+        self.addAsyncCleanup(bot._flush_outbound_journal)
         bot._group_ids = {"group"}
         bot._rpc_request = mock.AsyncMock(
             side_effect=SignalCliError("socket is not ready"),
@@ -720,6 +727,7 @@ class AttachmentThrottleRetryTests(unittest.IsolatedAsyncioTestCase):
             ["https://signal.group/#test"],
             jsonrpc_socket="/tmp/signal.sock",
         )
+        self.addAsyncCleanup(bot._flush_outbound_journal)
         bot._group_ids = {"group"}
         bot._rpc_request = mock.AsyncMock(return_value={"timestamp": "1"})
         with mock.patch(

@@ -66,17 +66,29 @@ class SignalStatusTests(unittest.IsolatedAsyncioTestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = tmp.name
+        self.bots: list[_StatusSignalBot] = []
+        self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.path))
         self.enterContext(mock.patch.object(workspace, "get_run_config", return_value=(
             "codex", "auto", "auto", "auto", "codex",
         )))
         self.enterContext(mock.patch.object(signal_module, "_SIGNAL_SEND_MIN_INTERVAL_SEC", 0))
         self.enterContext(mock.patch.object(bot_base, "_STATUS_EDIT_INTERVAL_SEC", 0))
+        # Feedback tests cover physical journal writes and cancellation. Keep
+        # these millisecond RPC/status timing fixtures independent of disk fsync.
+        self.enterContext(mock.patch.object(
+            signal_module._SignalOutboundJournal, "remember", new=mock.AsyncMock(),
+        ))
 
     def _bot(self, *, interval: float = 0.02) -> _StatusSignalBot:
         bot = _StatusSignalBot(self.path)
+        self.bots.append(bot)
         # Shorten only wall-clock waits; preserve the real Signal edit budget.
         bot.status_update_interval_sec = interval
         return bot
+
+    async def asyncTearDown(self) -> None:
+        for bot in self.bots:
+            await bot._flush_outbound_journal()
 
     async def test_visible_initial_status_and_coalesced_real_edit_payload(self) -> None:
         bot = self._bot(interval=0.05)
