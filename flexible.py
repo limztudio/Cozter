@@ -173,16 +173,27 @@ _MERGE_BLOCKED_RULE = (
     " plus \"[[await]]\" on its own line.\n"
 )
 
-# Continue-judge: names the missing item + next step, or DONE.
+# Continue-judge: finish, continue actionable work, or name an external blocker.
 _JUDGE_RULES = (
     "Continue-judge: decide whether the draft below fully answers the"
     " user's request.\n\n"
     "Rules:\n"
-    "- Read the request, then the draft. DONE when every actionable requested item"
-    " is answered with evidence, or the draft clearly states remaining verification"
-    " requires an unavailable platform or unconfigured service. CONTINUE only for"
-    " concrete missing requested work achievable in the current environment.\n"
-    "- A draft ending with [[await]] is DONE: it waits on the user.\n"
+    "- Read the original request, then the draft. DONE only when the requested"
+    " work is complete with evidence. Incidental expected skips and unavailable"
+    " checks outside the requested scope may be reported as limitations without"
+    " preventing DONE.\n"
+    "- CONTINUE for concrete missing requested work achievable in the current"
+    " environment. Finish every remaining independently actionable item before"
+    " declaring an external blocker.\n"
+    "- BLOCKED only when a necessary part of the explicit original scope cannot"
+    " proceed until a human or external environment changes. State the evidence"
+    " and exact missing prerequisite in MISSING; NEXT may name the required human"
+    " action or environment change. For example, required desktop interaction"
+    " cannot run in a non-interactive Session 0, or necessary credentials are"
+    " unavailable. BLOCKED leaves the job unfinished; do not mark it done.\n"
+    "- Do not repeatedly recheck an unchanged unavailable prerequisite. A draft"
+    " ending with [[await]] waits on the user; use BLOCKED when required work"
+    " remains behind that question.\n"
     "- A bounded draft excerpt may omit its middle. Omission alone is not"
     " evidence of unfinished work. CONTINUE requires a concrete missing"
     " requested item, not a demand to regenerate omitted text.\n"
@@ -204,6 +215,16 @@ _JUDGE_RULES = (
     "[/MISSING]\n"
     "[NEXT]\n"
     "one self-contained follow-up instruction for the worker\n"
+    "[/NEXT]\n\n"
+    "or:\n\n"
+    "[VERDICT]\n"
+    "BLOCKED\n"
+    "[/VERDICT]\n"
+    "[MISSING]\n"
+    "necessary requested scope, evidence it cannot proceed, and exact unavailable prerequisite\n"
+    "[/MISSING]\n"
+    "[NEXT]\n"
+    "required human action or external environment change (this block is optional)\n"
     "[/NEXT]\n"
 )
 
@@ -620,20 +641,21 @@ def merge_fallback(plan: Plan, results: list[str]) -> str:
 
 @dataclass(frozen=True)
 class JudgeVerdict:
-    """A continue-judge reply, distinguishing verified decisions from unavailable ones."""
+    """A judge decision separating completion, actionable work and external blockers."""
 
     should_continue: bool
     missing: str = ""
     next_instruction: str = ""
     verified: bool = True
+    blocked: bool = False
 
 
 def build_judge_prompt(request: str, draft: str) -> str:
     """Prompt the summary agent to judge one draft answer.
 
     *request* is the bare user request; *draft* is the candidate reply.
-    The judge never does the work itself - it returns DONE or one
-    CONTINUE step with the missing checklist item + next instruction.
+    The judge never does the work itself: it returns DONE, a CONTINUE
+    step, or BLOCKED with the necessary unavailable external prerequisite.
     """
     parts = [
         _JUDGE_RULES,
@@ -655,10 +677,15 @@ def parse_judge(raw: str) -> JudgeVerdict:
     verdict = (extract_marker_block(raw, "VERDICT") or "").strip().upper()
     if verdict == "DONE":
         return JudgeVerdict(should_continue=False)
-    if verdict != "CONTINUE":
+    if verdict not in {"CONTINUE", "BLOCKED"}:
         return JudgeVerdict(should_continue=False, verified=False)
     missing = (extract_marker_block(raw, "MISSING") or "").strip()
     followup = (extract_marker_block(raw, "NEXT") or "").strip()
+    if verdict == "BLOCKED":
+        return JudgeVerdict(
+            should_continue=False, missing=missing, next_instruction=followup,
+            verified=False, blocked=bool(missing),
+        )
     if not followup:
         return JudgeVerdict(should_continue=False, verified=False)
     return JudgeVerdict(

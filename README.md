@@ -1219,6 +1219,11 @@ or malformed completion verdict does not count as DONE. `/stop` explicitly
 cancels the job and its queued work; `/inject` interrupts its active phase to
 apply new context. A question ending with `[[await]]` keeps the current job
 pending; replying supplies guidance and resumes it ahead of later jobs.
+A judge can also return `BLOCKED` when required work needs a missing external
+prerequisite, such as a visible desktop for explicitly requested graphics checks.
+After other actionable work is finished, this pauses the unfinished job with its
+evidence and required next action. It does not renew attempts to recheck the same
+unchanged condition, discard the job, or release later queued work as if it finished.
 
 Two behaviors are worth knowing. Under `/style collaborative`, the turn can
 stop and wait for you (`[[await]]`) at either end of the pipeline: the

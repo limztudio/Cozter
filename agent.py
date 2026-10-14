@@ -1545,6 +1545,18 @@ def _split_attach_markers(text: str) -> tuple[str, list[str]]:
     return _collapse_extra_blank_lines(cleaned), markers
 
 
+def _retain_blocked_verdict(result: AgentResult, verdict: flexible.JudgeVerdict) -> None:
+    """Keep a required external prerequisite unfinished without renewing work."""
+    result.completion_verified = False
+    result.continue_instruction = ""
+    result.continuation_reason = None
+    explanation = f"PARTIAL: blocked by a required prerequisite: {verdict.missing}"
+    if verdict.next_instruction:
+        explanation += f"\nRequired change before resuming: {verdict.next_instruction}"
+    append_text_result(result, "\n\n".join(filter(None, (result.text, explanation))))
+    performance_logger.info("stage=judge outcome=blocked automatic_continuation=false")
+
+
 async def _judge_draft(
     request: str,
     draft: str,
@@ -2776,6 +2788,8 @@ async def _run_turn_impl(
                 break
             if not verdict.should_continue:
                 result.completion_verified = verdict.verified
+                if verdict.blocked:
+                    _retain_blocked_verdict(result, verdict)
                 break
             judged_rounds += 1
             followup = (
@@ -2848,6 +2862,8 @@ async def _run_turn_impl(
                     restarting = True
                     break
                 result.completion_verified = _tail_verdict.verified and not _tail_verdict.should_continue
+                if _tail_verdict.blocked:
+                    _retain_blocked_verdict(result, _tail_verdict)
                 if _tail_verdict.should_continue:
                     _tail_next = (_tail_verdict.next_instruction or "").strip()
                     if _tail_next:
