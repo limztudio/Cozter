@@ -2008,12 +2008,10 @@ async def _run_flexible(
         ).strip()
         if result.error and len(worker_errors) < len(queue):
             final = "PARTIAL: task failures prevented full completion.\n\n" + final
-        if not final:
-            final = (
-                "The worker produced no output for this turn. Check the agent"
-                " and model bound to each difficulty tier with"
-                " /agent_flexible_low, _mid, and _high."
-            )
+        # `final` cannot be empty here: every loop iteration appends one
+        # non-empty report (skipped workers get PARTIAL text, empty worker
+        # replies get a tier diagnostic), and the error prefix only adds
+        # text. The all-empty case is handled by the merge path below.
         return finish(final, awaiting=bool(collaborative and blocked))
 
     # 3. Merge reports into the user reply.

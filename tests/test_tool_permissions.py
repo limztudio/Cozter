@@ -487,7 +487,7 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
 
         tool = SimpleNamespace(name="failing_read", file_action=None, run=failing_read)
         with mock.patch.dict(agent_tools._BY_NAME, {"failing_read": tool}), mock.patch.object(
-            agent_tools, "_tool_timeout_seconds", return_value=None,
+            agent_tools, "_tool_timeout_seconds", return_value=3600.0,
         ):
             result = await self._execute("failing_read", {"path": str(self.outside_file)})
         self.assertIn("intentional test failure", result)
@@ -542,7 +542,7 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError("cancellation was swallowed")
 
         with mock.patch.dict(agent_tools._BY_NAME, {"waiting_read": tool}), mock.patch.object(
-            agent_tools, "_tool_timeout_seconds", return_value=None,
+            agent_tools, "_tool_timeout_seconds", return_value=3600.0,
         ):
             task = asyncio.create_task(cancelled_caller())
             try:

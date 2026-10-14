@@ -53,11 +53,13 @@ performance_logger = logging.getLogger("Cozter.performance")
 _TOOL_RESULT_MAX = 4_000
 
 
-def _tool_timeout_seconds() -> float | None:
+def _tool_timeout_seconds() -> float:
     """Return the real-work cap for one tool call (default 3600s).
 
     Read lazily so a config edit takes effect on the next tool call
     without a restart. Malformed/absent config falls back to 3600s.
+    Always positive: the caller applies it as the ``asyncio.wait_for``
+    bound unconditionally.
     """
     try:
         from .. import config as _cfg
@@ -66,7 +68,7 @@ def _tool_timeout_seconds() -> float | None:
     except Exception:
         return 3600.0
     try:
-        seconds = float(value) if value is not None else 3600.0
+        seconds = float(value)
     except (TypeError, ValueError):
         return 3600.0
     return seconds if seconds > 0 else 3600.0
@@ -291,12 +293,9 @@ async def execute_tool(
         )
         try:
             with tool_permission_scope(approval):
-                if cap is not None and cap > 0:
-                    raw_result: object = await asyncio.wait_for(
-                        tool.run(workspace_path, args), timeout=cap,
-                    )
-                else:
-                    raw_result = await tool.run(workspace_path, args)
+                raw_result: object = await asyncio.wait_for(
+                    tool.run(workspace_path, args), timeout=cap,
+                )
             if isinstance(raw_result, str):
                 result = raw_result
             else:
@@ -316,7 +315,7 @@ async def execute_tool(
             raise  # cancel is the only stop.
         except TimeoutError:
             outcome = "timeout"
-            limit_note = f" The configured tool limit is {cap:g}s." if cap else ""
+            limit_note = f" The configured tool limit is {cap:g}s."
             result = (
                 f"Tool {name} failed: timed out.{limit_note}"
                 " Inspect the command or service that stalled before retrying;"

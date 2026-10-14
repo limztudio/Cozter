@@ -215,7 +215,7 @@ def get_llama_tool_repeat_limit() -> int:
     return _get_int_at_least("llama_tool_repeat_limit", 1)
 
 
-def get_llama_socket_timeout() -> int | None:
+def get_llama_socket_timeout() -> int:
     """Real-work cap for llama generation streams (default 3600s).
 
     Slow providers keep streaming up to this bound instead of timing out
@@ -282,7 +282,7 @@ def get_zai_base_url() -> str:
     return _get_https_url("zai_base_url")
 
 
-def get_zai_socket_timeout() -> int | None:
+def get_zai_socket_timeout() -> int:
     """Real-work cap for zai generation streams (default 3600s). Cancel still stops instantly."""
     return _get_int_at_least("zai_socket_timeout", 1)
 
@@ -302,7 +302,7 @@ def get_meta_base_url() -> str:
     return _get_https_url("meta_base_url")
 
 
-def get_meta_socket_timeout() -> int | None:
+def get_meta_socket_timeout() -> int:
     """Real-work cap for Meta generation streams (default 3600s). Cancel still stops instantly."""
     return _get_int_at_least("meta_socket_timeout", 1)
 
@@ -312,7 +312,7 @@ def get_meta_max_retries() -> int:
     return _get_int_at_least("meta_max_retries", 0)
 
 
-def get_tool_timeout() -> int | None:
+def get_tool_timeout() -> int:
     """Real-work cap on a single tool call (default 3600s).
 
     Tools (search/build/fetch/...) run up to this bound instead of timing
