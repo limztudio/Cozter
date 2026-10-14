@@ -23,7 +23,7 @@ class MakeDirTool(AgentTool):
         )
         if path_error:
             return path_error
-        assert target is not None  # non-None once error is empty
+        assert target is not None
         if os.path.exists(target) and not os.path.isdir(target):
             return f"Path already exists as a file: {raw_path}"
         try:

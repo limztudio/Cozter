@@ -37,7 +37,7 @@ class ListDirTool(AgentTool):
         )
         if path_error:
             return path_error
-        assert target is not None  # non-None once error is empty
+        assert target is not None
         if not os.path.isdir(target):
             return f"Not a directory: {raw_path}"
 

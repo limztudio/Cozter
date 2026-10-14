@@ -44,7 +44,7 @@ class MultiEditTool(AgentTool):
         )
         if path_error:
             return path_error
-        assert target is not None  # non-None once error is empty
+        assert target is not None
         edits = args.get("edits")
         if not isinstance(edits, list) or not edits:
             return "Error: 'edits' must be a non-empty list"
