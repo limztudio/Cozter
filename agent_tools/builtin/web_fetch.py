@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import urllib.parse
 
 import aiohttp
+
+from ..html_scan import first_title_contents
 
 from ..base import (
     AgentTool,
@@ -27,8 +28,6 @@ _MAX_REDIRECTS = 10
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _FETCH_ATTEMPTS = 2
 _FETCH_RETRY_DELAY_SECONDS = 0.4
-# Precompiled for per-fetch run().
-_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 
 class _FetchRefusedError(Exception):
@@ -157,28 +156,33 @@ class WebFetchTool(AgentTool):
         except Exception as exc:
             return f"Fetch failed: {exc}"
 
-        title = ""
-        title_match = _TITLE_RE.search(body)
-        if title_match:
-            title = html_to_text(title_match.group(1))
-
-        is_html = "html" in content_type.casefold()
-        text = html_to_text(body) if is_html else body
-        text = text.strip()
-        # Mark after stripping HTML: a capped raw script/style/comment can
-        # otherwise swallow the footer along with its hidden contents.
-        text = with_fetch_cap_marker(text, fetch_capped)
-
-        if len(text) > max_chars:
-            text = truncate_with_marker(
-                text, max_chars, "say PARTIAL + remainder when coverage is unclear",
-            )
-
-        header = f"URL: {final_url}"
-        if title:
-            header += f"\nTitle: {title}"
-
-        return f"{header}\n\n{text}"
+        # Formatting is pure CPU work over the already bounded response body.
+        # A cancelled caller may leave this one bounded parse finishing on its
+        # thread; no network, file, or shared-state ownership moves with it.
+        return await asyncio.to_thread(
+            _format_fetch_result, final_url, content_type, body, fetch_capped, max_chars,
+        )
 
     def summarize(self, args: dict) -> str:
         return summarize_arg("web_fetch", args, "url")
+
+
+def _format_fetch_result(
+    final_url: str, content_type: str, body: str, fetch_capped: bool, max_chars: int,
+) -> str:
+    """Format one byte-capped fetch without doing I/O or changing shared state."""
+    title = html_to_text(first_title_contents(body))
+    is_html = "html" in content_type.casefold()
+    text = html_to_text(body) if is_html else body
+    text = text.strip()
+    # Mark after stripping HTML: a capped raw script/style/comment can
+    # otherwise swallow the footer along with its hidden contents.
+    text = with_fetch_cap_marker(text, fetch_capped)
+    if len(text) > max_chars:
+        text = truncate_with_marker(
+            text, max_chars, "say PARTIAL + remainder when coverage is unclear",
+        )
+    header = f"URL: {final_url}"
+    if title:
+        header += f"\nTitle: {title}"
+    return f"{header}\n\n{text}"

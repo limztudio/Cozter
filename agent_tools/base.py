@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import html
 import fnmatch
@@ -1354,9 +1355,91 @@ def validate_public_url(url: str) -> str | None:
     return None
 
 
+class _PublicHttpPool:
+    """Lazy connections owned by one HTTP worker, without shared sessions.
+
+    Each tool call gets its own cookies, headers and response contexts. Only
+    already checked sockets are reusable; each new connection still resolves
+    through PublicResolver with the connector's DNS cache disabled.
+    """
+
+    def __init__(self) -> None:
+        self._resolver: PublicResolver | None = None
+        self._connector: aiohttp.TCPConnector | None = None
+        self._closed = False
+
+    def connector(self) -> aiohttp.TCPConnector:
+        if self._closed:
+            raise RuntimeError("The owning HTTP worker has finished")
+        if self._connector is None:
+            self._resolver = PublicResolver()
+            self._connector = aiohttp.TCPConnector(
+                resolver=self._resolver,
+                use_dns_cache=False,
+                limit=8,
+                limit_per_host=4,
+            )
+        return self._connector
+
+    async def close(self) -> None:
+        self._closed = True
+        try:
+            if self._connector is not None:
+                await self._connector.close()
+        finally:
+            if self._resolver is not None:
+                await self._resolver.close()
+
+
+_PUBLIC_HTTP_POOL: ContextVar[_PublicHttpPool | None] = ContextVar(
+    "public_http_pool", default=None,
+)
+
+
+@asynccontextmanager
+async def public_http_pool_scope() -> AsyncIterator[None]:
+    """Give one worker its own lazy connection pool and settle its cleanup.
+
+    Always create a distinct owner, even when another worker's context was
+    inherited. Task-local borrowing therefore never crosses worker, workspace
+    or model runs. No resolver or connector is allocated unless a tool uses
+    the public HTTP helper.
+    """
+    pool = _PublicHttpPool()
+    token = _PUBLIC_HTTP_POOL.set(pool)
+    try:
+        yield
+    finally:
+        _PUBLIC_HTTP_POOL.reset(token)
+        cleanup = asyncio.create_task(pool.close(), name="close-public-http-pool")
+        cancelled = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup.result()
+        if cancelled:
+            raise asyncio.CancelledError
+
+
 @asynccontextmanager
 async def open_public_http_session() -> AsyncIterator[aiohttp.ClientSession]:
-    """Open one HTTP session whose every DNS answer is safety-checked."""
+    """Open an isolated session, borrowing only its worker's checked sockets."""
+    pool = _PUBLIC_HTTP_POOL.get()
+    if pool is not None:
+        async with aiohttp.ClientSession(
+            headers=HTTP_USER_AGENT_HEADERS,
+            connector=pool.connector(),
+            connector_owner=False,
+            trust_env=False,
+            timeout=aiohttp.ClientTimeout(total=3600),
+        ) as session:
+            yield session
+        return
+
+    # CLI plugins and callers outside a worker retain the original one-call
+    # lifetime, including their independently owned resolver and connector.
     resolver = PublicResolver()
     connector = aiohttp.TCPConnector(
         resolver=resolver,

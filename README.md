@@ -1118,7 +1118,15 @@ Shipped plugins:
   case-insensitive full-text with bounded excerpts, `list` shows
   sessions newest-first, `read` prints a session's recent messages by
   name, full id, id prefix, or `last`. Full IDs read only their own transcript;
-  names, prefixes, and newest aliases retain the existing resolution behavior.
+  names, prefixes, and newest aliases resolve through lightweight ordering
+  metadata and reload only the selected transcript. Search counts all matching
+  sections while retaining one transcript at a time, then reloads only sessions
+  intersecting the requested page. Created-time order, filename ties, section
+  order, colony placement, and exact total counts are preserved. A selected
+  transcript changing between passes requires a fresh page rather than mixing
+  counts and excerpts from different file versions.
+  Search and list also return continuation offsets, counting matches and
+  sessions respectively. Limits remain search 20, list 40, and read 100.
   Read pages return an `offset` for older messages, counting only rows actually
   shown after fitting the output budget; repeat with that offset to reach older
   history, restarting from zero if messages change. Individual message excerpts
@@ -1170,10 +1178,24 @@ and `lite` frontends concurrently, with two attempts per frontend and a short
 retry delay. It returns the first usable result page and cancels the remaining
 request, so a stalled frontend cannot delay healthy results. Sponsored (`ad_*`)
 and DuckDuckGo-internal links never become results.
+Title and search-anchor extraction use forward-only, quote-aware scanners in
+`agent_tools/html_scan.py`. Malformed opening tags and missing closing tags do
+not trigger repeated whole-suffix regex searches. Pure formatting and result
+parsing run on helper threads over the existing 5 MiB response cap; network
+contexts close on cancellation while that bounded CPU work can finish without
+side effects.
 `web_fetch` instead uses a public-network-only client with redirect targets
 validated individually, preventing redirects into private addresses.
 One HTTP session serves both fetch attempts so the retry reuses the
 connection pool instead of paying for a fresh connector + DNS validation pass.
+Inside an HTTP agent worker, `web_fetch` and `http_request` also borrow a lazy
+worker-owned connector across calls, bounded to eight connections total and
+four per host. Every call has its own session, cookies, and custom headers;
+workers never share pools. Connector DNS caching stays disabled, and every new
+connection still passes through the public-address resolver. The exact owned
+connector and resolver close on success, error, or cancellation, including
+repeated cancellation. Standalone CLI plugin calls retain their one-call
+session lifetime. `web_search` keeps its separate frontend request helper.
 Transient transport failures (connection reset, resolver hiccup)
 are retried once with a short delay; HTTP error statuses, refused content
 types, and redirect-loop or non-public redirect targets are final and are
@@ -1665,6 +1687,7 @@ Cozter/
     ├── base.py             AgentTool ABC; path/argument validation, shared HTTP
     │                       helpers, and the shared fetch-cap PARTIAL footer
     ├── discovery.py        bounded whole-match pages with continuation offsets
+    ├── html_scan.py        forward-only title and search-anchor extraction
     ├── builtin/            18 files: 17 built-in tools (bash, read_file, read_files, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch) plus __init__.py
     └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, git_ops, git_sync, memory, http_request shipped live; _git_common.py holds the git tools' shared runner/validation/truncation and is skipped by the loader)
 ```
@@ -1858,7 +1881,7 @@ ignored for local secrets and runtime queues.
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
   `llama.py`, `zai.py`, and `meta.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
-  `agent_tools/discovery.py`,
+  `agent_tools/discovery.py`, `agent_tools/html_scan.py`,
   the 18 files under `agent_tools/builtin/` (`__init__.py`, `apply_patch.py`,
   `bash.py`, `copy_file.py`, `delete_file.py`, `edit_file.py`, `glob.py`,
   `grep.py`, `list_dir.py`, `make_dir.py`, `move_file.py`, `multi_edit.py`,
@@ -1872,7 +1895,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (103 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 100 `test_*.py` modules:
+- Tests (106 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 103 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_backend_audit_regressions.py`,
@@ -1895,11 +1918,12 @@ ignored for local secrets and runtime queues.
   `test_job_continuation.py`, `test_job_prerequisite_retry.py`,
   `test_jpeg_dimensions.py`, `test_judge_blocked.py`, `test_launch_process.py`,
   `test_launcher_and_followups.py`, `test_memory_corrupt_state.py`,
-  `test_memory_preservation.py`, `test_openai_agent.py`,
+  `test_memory_preservation.py`, `test_memory_streamed_search.py`, `test_openai_agent.py`,
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
   `test_platform_formatting.py`, `test_prerequisite_checkpoint.py`,
   `test_plugin_memory_calculator_performance.py`, `test_plugin_parallelism.py`,
   `test_plugin_result_budgets.py`,
+  `test_public_http_pool.py`,
   `test_prompt_subprocess.py`, `test_queue_persistence_latency.py`,
   `test_prompt_payload_dedup.py`,
   `test_read_files.py`,
@@ -1915,7 +1939,7 @@ ignored for local secrets and runtime queues.
   `test_tool_runtime.py`, `test_tool_safety_and_output_limits.py`,
   `test_tool_state_integrity.py`, `test_tools_audit_regressions.py`,
   `test_turn_budget.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
-  `test_web_fetch.py`, `test_web_search.py`)
+  `test_web_fetch.py`, `test_web_html_latency.py`, `test_web_search.py`)
   covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared

@@ -34,6 +34,7 @@ from typing import Any
 import aiohttp
 
 from .. import agent_tools as tools
+from ..agent_tools.base import public_http_pool_scope
 from ..agent_tools.builtin.bash import shell_context
 from ..execution_state import current_run
 from ..utils import clip_status_value, iter_bounded_lines
@@ -470,6 +471,23 @@ class OpenAIChatBackend(Backend):
         return proc
 
     async def _run_agent(
+        self,
+        proc: HttpAgentProcess,
+        workspace_path: str,
+        prompt: str,
+        model: str | None,
+        approval: str,
+        compaction: bool,
+        effort: int,
+    ) -> None:
+        # Pool tool connections only inside this worker. Every borrow still
+        # creates a new session, keeping per-call cookies and auth isolated.
+        async with public_http_pool_scope():
+            await self._run_agent_impl(
+                proc, workspace_path, prompt, model, approval, compaction, effort,
+            )
+
+    async def _run_agent_impl(
         self,
         proc: HttpAgentProcess,
         workspace_path: str,

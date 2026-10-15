@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import html
-import re
 import urllib.parse
+
+from ..html_scan import iter_anchor_contents
 
 from ..base import (
     AgentTool,
@@ -30,10 +31,6 @@ _RETRY_DELAY_SECONDS = 0.5
 
 # Bound the anchor scan.
 _MAX_ANCHORS_SCANNED = 200
-_ANCHOR_RE = re.compile(
-    r'<a\b[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-    re.IGNORECASE | re.DOTALL,
-)
 # Sponsored markers live on /l/; results lack them.
 _AD_PARAMS = frozenset({"ad_provider", "ad_domain", "ad_tool"})
 _DDG_HOST_SUFFIX = "duckduckgo.com"
@@ -94,7 +91,11 @@ class WebSearchTool(AgentTool):
                             if _search_capped:
                                 body += "<!-- … [fetch capped at 5 MB — preview only] -->"
                             saw_local_page = True
-                            results = _parse_results(body, max_results)
+                            # This pure parse has a byte-capped input and
+                            # forward-only scanners. Cancellation closes the
+                            # response context while a bounded parse can finish
+                            # on its worker thread without side effects.
+                            results = await asyncio.to_thread(_parse_results, body, max_results)
                             if results:
                                 return results, local_failures, True
                             local_failures.append(f"{host}: no results parsed")
@@ -154,14 +155,14 @@ def _parse_results(body: str, max_results: int) -> list[str]:
     results: list[str] = []
     seen: set[str] = set()
     scan_capped = False
-    for index, match in enumerate(_ANCHOR_RE.finditer(body)):
+    for index, (href, contents) in enumerate(iter_anchor_contents(body)):
         if index >= _MAX_ANCHORS_SCANNED:
             scan_capped = True
             break
-        raw_href = html.unescape(match.group(1))
+        raw_href = html.unescape(href)
         if _is_ad_or_internal(raw_href):
             continue
-        title = html_to_text(match.group(2))
+        title = html_to_text(contents)
         if not title:
             continue
         url = _ddg_unwrap_url(raw_href)

@@ -75,10 +75,21 @@ Both inspection and sync disable terminal/credential-manager prompts locally
 to the child process and continue to use cached credentials.
 
 `memory` reads an exact session ID directly instead of loading unrelated
-transcripts. Read pages return the next `offset` for older messages, counting
+transcripts. Names, prefixes, and newest aliases retain lightweight ordering
+metadata and reload only the selected transcript. Search counts all matching
+sections one transcript at a time and renders excerpts only from sessions
+intersecting the requested page. Ordering and exact counts remain unchanged;
+changed selected transcripts require a fresh page. Search/list support
+`offset` paging by matches/sessions, with limits up to 20/40 respectively.
+Read pages return the next `offset` for older messages, counting
 only the rows actually emitted after the output budget is applied. Repeat with
 that offset and the same session, restarting from zero if messages change.
 Individual message excerpts retain their existing bound.
+HTTP-worker `http_request` calls borrow that worker's checked connection pool,
+with a separate session and cookies/headers per call. New connections still
+resolve through the public-address checker with DNS caching disabled. Pools
+close with their owner, including cancellation; standalone CLI plugin calls
+retain their original one-call session lifetime.
 `calculator` checks its existing 50,000-digit magnitude policy
 at every integer intermediate and before allocating oversized products.
 

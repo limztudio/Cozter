@@ -19,6 +19,7 @@ a root-package import (``session``/``workspace`` pull in
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import json
 import os
 from typing import Any, ClassVar
@@ -47,6 +48,74 @@ _READ_MESSAGES_MAX = 100
 _OUTPUT_BUDGET = 3_600
 
 _NEWEST_ALIASES = frozenset({"last", "latest", "newest", "current"})
+
+
+class _MemoryChangedError(Exception):
+    """A transcript changed between counting and rendering its result page."""
+
+
+def _iter_session_files(sessions_dir: str):
+    try:
+        names = sorted(os.listdir(sessions_dir))
+    except OSError:
+        return
+    for filename in names:
+        if not filename.endswith(".json"):
+            continue
+        try:
+            path = resolve_inside_workspace(sessions_dir, filename)
+        except ValueError:
+            continue
+        yield filename, path, filename[:-len(".json")]
+
+
+def _file_signature(path: str) -> tuple[int, int, int] | None:
+    try:
+        metadata = os.stat(path)
+    except OSError:
+        return None
+    return metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size
+
+
+def _load_session_metadata(sessions_dir: str, needle: str | None = None) -> list[dict]:
+    """Retain ordering/counts only; discard each transcript before the next."""
+    sessions: list[dict] = []
+    for filename, path, session_id in _iter_session_files(sessions_dir):
+        data = _load_session_file(path, session_id, capture_signature=True)
+        if data is None:
+            continue
+        metadata = {
+            "id": data["id"], "name": data["name"], "created": data["created"],
+            "has_summary": bool(data["summary"]),
+            "long_term_count": len(data["long_term"]),
+            "message_count": len(data["messages"]),
+            "_filename": filename, "_signature": data["_signature"],
+        }
+        if needle is not None:
+            # Counting never needs an excerpt or a Unicode source-offset map.
+            metadata["match_count"] = sum(
+                1 for _kind, text in _iter_search_texts(data)
+                if needle in text.casefold()
+            )
+        sessions.append(metadata)
+        del data
+    # The input is filename-sorted. Stable sorting preserves filename ties,
+    # exactly as the original eager transcript loader did.
+    sessions.sort(key=lambda item: item["created"] or "0000", reverse=True)
+    return sessions
+
+
+def _reload_session(sessions_dir: str, metadata: dict) -> dict:
+    try:
+        path = resolve_inside_workspace(sessions_dir, metadata["_filename"])
+    except ValueError as exc:
+        raise _MemoryChangedError from exc
+    if _file_signature(path) != metadata["_signature"]:
+        raise _MemoryChangedError
+    data = _load_session_file(path, metadata["id"])
+    if data is None or _file_signature(path) != metadata["_signature"]:
+        raise _MemoryChangedError
+    return data
 
 
 def _load_sessions(sessions_dir: str) -> list[dict]:
@@ -78,14 +147,23 @@ def _load_sessions(sessions_dir: str) -> list[dict]:
     return sessions
 
 
-def _load_session_file(path: str, session_id: str) -> dict | None:
+def _load_session_file(path: str, session_id: str, *, capture_signature: bool = False) -> dict | None:
     try:
         with open(path, encoding="utf-8") as file_handle:
+            # Handle metadata avoids two extra Windows path-stat round trips
+            # per transcript. Atomic replacement leaves this read coherent;
+            # a selected reread compares its saved signature with the path.
+            before = os.fstat(file_handle.fileno()) if capture_signature else None
             raw = json.load(file_handle)
+            after = os.fstat(file_handle.fileno()) if capture_signature else None
     except (OSError, ValueError, RecursionError):
         return None
     if not isinstance(raw, dict) or raw.get("id") != session_id:
         return None
+    if before is not None and after is not None and (
+        before.st_mtime_ns, before.st_ctime_ns, before.st_size
+    ) != (after.st_mtime_ns, after.st_ctime_ns, after.st_size):
+        raise _MemoryChangedError
 
     name = raw.get("name")
     created = raw.get("created")
@@ -103,7 +181,7 @@ def _load_session_file(path: str, session_id: str) -> dict | None:
                 "role": role if isinstance(role, str) and role else "?",
                 "content": content if isinstance(content, str) else "",
             })
-    return {
+    result: dict[str, Any] = {
         "id": session_id,
         "name": name if isinstance(name, str) and name else session_id[:8],
         "created": created if isinstance(created, str) else "",
@@ -117,6 +195,9 @@ def _load_session_file(path: str, session_id: str) -> dict | None:
         ],
         "messages": messages,
     }
+    if after is not None:
+        result["_signature"] = (after.st_mtime_ns, after.st_ctime_ns, after.st_size)
+    return result
 
 
 def _colony_items(workspace: str) -> list[str]:
@@ -234,6 +315,40 @@ def _fit_output(
     return result
 
 
+def _page_offset(args: dict) -> int | None:
+    offset = args.get("offset", 0)
+    return offset if isinstance(offset, int) and not isinstance(offset, bool) and offset >= 0 else None
+
+
+def _render_result_page(
+    rows: list[str], *, offset: int, total: int, limit: int, action: str,
+    header: Callable[[int, bool], str], tail: str = "",
+) -> str:
+    """Fit complete ordered rows and advance by the rows actually emitted."""
+    rows = list(rows)
+    while rows:
+        shown = len(rows)
+        more = offset + shown < total
+        parts = [header(shown, more), *rows]
+        if more:
+            parts.append(
+                f"(More {'matches' if action == 'search' else 'older sessions'} remain;"
+                f" repeat action={action} with the same query/workspace,"
+                f" offset={offset + shown}, and limit={limit}."
+                " Restart at offset=0 if memory changes.)"
+            )
+        if tail:
+            parts.append(tail)
+        result = "\n".join(parts)
+        if len(result) <= _OUTPUT_BUDGET:
+            return result
+        rows.pop()
+    return (
+        "Error: no complete result fits the memory output budget; narrow the"
+        " query or shorten the session name before retrying."
+    )
+
+
 class MemoryTool(AgentTool):
     name = "memory"
     order = 20
@@ -251,13 +366,13 @@ class MemoryTool(AgentTool):
             "session": {"type": "string"},
             "limit": {
                 "type": "integer",
-                "description": "max 20/100.",
+                "description": "Maximum: search 20, list 40, read 100.",
             },
             "offset": {
                 "type": "integer", "minimum": 0,
                 "description": (
-                    "Read only: newest messages already consumed. Use the"
-                    " returned offset to page toward older messages."
+                    "Results already consumed: search matches, listed sessions,"
+                    " or newest read messages. Use the returned offset to page."
                 ),
             },
         },
@@ -271,15 +386,18 @@ class MemoryTool(AgentTool):
         sessions_dir = _sessions_dir(workspace_path)
         if sessions_dir is None:
             return "Error: invalid workspace path"
-        if action == "search":
-            return await asyncio.to_thread(
-                self._search, sessions_dir, workspace_path, args,
-            )
-        if action == "list":
-            return await asyncio.to_thread(
-                self._list, sessions_dir, workspace_path,
-            )
-        return await asyncio.to_thread(self._read, sessions_dir, args)
+        try:
+            if action == "search":
+                return await asyncio.to_thread(
+                    self._search, sessions_dir, workspace_path, args,
+                )
+            if action == "list":
+                return await asyncio.to_thread(
+                    self._list, sessions_dir, workspace_path, args,
+                )
+            return await asyncio.to_thread(self._read, sessions_dir, args)
+        except _MemoryChangedError:
+            return "Error: memory changed while preparing this page; retry with offset=0."
 
     def _search(self, sessions_dir: str, workspace: str, args: dict) -> str:
         query, error = require_nonempty_string_arg(
@@ -288,6 +406,9 @@ class MemoryTool(AgentTool):
         if error:
             return error
         assert query is not None
+        offset = _page_offset(args)
+        if offset is None:
+            return "Error: 'offset' must be a non-negative integer for search"
         limit = coerce_int_arg(
             args.get("limit", _MATCH_LIMIT_DEFAULT),
             default=_MATCH_LIMIT_DEFAULT,
@@ -296,51 +417,87 @@ class MemoryTool(AgentTool):
         )
         needle = query.casefold()
 
-        matches: list[str] = []
-        total = 0
-        for data in _load_sessions(sessions_dir):
-            label = _session_label(data)
-            for kind, text in _iter_search_texts(data):
-                if not isinstance(text, str) or not text:
-                    continue
-                match = _casefold_match(text, needle)
-                if match is None:
-                    continue
-                total += 1
-                if len(matches) < limit:
-                    matches.append(
-                        f"- {label} {kind} {_excerpt(text, *match)}"
-                    )
-
-        for item in _colony_items(workspace):
-            if not isinstance(item, str) or not item:
-                continue
-            match = _casefold_match(item, needle)
-            if match is None:
-                continue
-            total += 1
-            if len(matches) < limit:
-                matches.append(f"- [Colony] {_excerpt(item, *match)}")
+        sessions = _load_session_metadata(sessions_dir, needle)
+        colony = _colony_items(workspace)
+        session_matches = sum(item["match_count"] for item in sessions)
+        total = session_matches + sum(needle in item.casefold() for item in colony)
 
         if not total:
             return (
                 f"No matches for '{query}' in any session, summary,"
                 " long-term note, or colony item."
             )
-        header = f"Found {total} match(es) for '{query}'"
-        if total > len(matches):
-            header += (
-                f" — showing the {len(matches)} newest"
-                " (raise *limit* to see more; never treat this preview"
-                " as full coverage; say PARTIAL + remainder"
-                " when coverage is unclear):"
-            )
-        else:
-            header += ":"
-        return _fit_output(matches, header)
+        if offset >= total:
+            return "No more memory matches remain for this query."
 
-    def _list(self, sessions_dir: str, workspace: str) -> str:
-        sessions = _load_sessions(sessions_dir)
+        matches: list[str] = []
+        consumed = 0
+        for metadata in sessions:
+            count = metadata["match_count"]
+            if not count:
+                continue
+            if consumed + count <= offset:
+                consumed += count
+                continue
+            if len(matches) == limit:
+                break
+            skip = max(0, offset - consumed)
+            data = _reload_session(sessions_dir, metadata)
+            label = _session_label(data)
+            for kind, text in _iter_search_texts(data):
+                match = _casefold_match(text, needle)
+                if match is None:
+                    continue
+                if skip:
+                    skip -= 1
+                    continue
+                matches.append(f"- {label} {kind} {_excerpt(text, *match)}")
+                if len(matches) == limit:
+                    break
+            consumed += count
+            del data
+        if len(matches) < limit:
+            skip = max(0, offset - session_matches)
+            for item in colony:
+                match = _casefold_match(item, needle)
+                if match is None:
+                    continue
+                if skip:
+                    skip -= 1
+                    continue
+                matches.append(f"- [Colony] {_excerpt(item, *match)}")
+                if len(matches) == limit:
+                    break
+
+        def header(shown: int, more: bool) -> str:
+            text = f"Found {total} match(es) for '{query}'"
+            if offset or more:
+                text += (
+                    f" — showing the {shown} newest" if offset == 0 else
+                    f" — showing {shown} match(es) after offset {offset}"
+                )
+            if more:
+                text += (
+                    " (never treat this preview as full coverage;"
+                    " say PARTIAL + remainder when coverage is unclear)"
+                )
+            return text + ":"
+
+        return _render_result_page(
+            matches, offset=offset, total=total, limit=limit,
+            action="search", header=header,
+        )
+
+    def _list(self, sessions_dir: str, workspace: str, args: dict | None = None) -> str:
+        args = args or {}
+        offset = _page_offset(args)
+        if offset is None:
+            return "Error: 'offset' must be a non-negative integer for list"
+        limit = coerce_int_arg(
+            args.get("limit", _LIST_SESSIONS_CAP), default=_LIST_SESSIONS_CAP,
+            minimum=1, maximum=_LIST_SESSIONS_CAP,
+        )
+        sessions = _load_session_metadata(sessions_dir)
         colony_count = len(_colony_items(workspace))
         if not sessions:
             if colony_count:
@@ -349,33 +506,33 @@ class MemoryTool(AgentTool):
                     f" Colony: {colony_count} items in .cozter/colony.json"
                 )
             return "No sessions recorded in this workspace yet."
+        if offset >= len(sessions):
+            return "No older sessions remain in this workspace."
         lines: list[str] = []
-        for data in sessions[:_LIST_SESSIONS_CAP]:
+        for data in sessions[offset:offset + limit]:
             flags = []
-            if data["summary"]:
+            if data["has_summary"]:
                 flags.append("summary")
-            if data["long_term"]:
-                flags.append(f"{len(data['long_term'])} long-term")
+            if data["long_term_count"]:
+                flags.append(f"{data['long_term_count']} long-term")
             flag_text = f", {', '.join(flags)}" if flags else ""
             lines.append(
                 f"- {data['name']} — id {data['id'][:8]},"
                 f" {data['created'][:10] or 'unknown date'},"
-                f" {len(data['messages'])} messages{flag_text}"
+                f" {data['message_count']} messages{flag_text}"
             )
-        header = "Sessions (newest first):"
-        omitted = len(sessions) - min(len(sessions), _LIST_SESSIONS_CAP)
-        if omitted > 0:
-            lines.append(
-                f"(…and {omitted} older session(s) omitted — this list"
-                " is a preview, not full coverage; raise the limit"
-                " / page further; say PARTIAL + remainder"
-                " when coverage is unclear)"
+
+        def header(_shown: int, more: bool) -> str:
+            return "Sessions (newest first):" + (
+                " (preview, not full coverage; say PARTIAL + remainder"
+                " when coverage is unclear)" if more else ""
             )
-        lines.append(
-            f"Colony: {colony_count}"
-            " items in .cozter/colony.json"
+
+        return _render_result_page(
+            lines, offset=offset, total=len(sessions), limit=limit,
+            action="list", header=header,
+            tail=f"Colony: {colony_count} items in .cozter/colony.json",
         )
-        return _fit_output(lines, header)
 
     def _read(self, sessions_dir: str, args: dict) -> str:
         target = args.get("session")
@@ -411,7 +568,9 @@ class MemoryTool(AgentTool):
                 data = _load_session_file(path, session_id)
         error = None
         if data is None:
-            data, error = _find_session(_load_sessions(sessions_dir), target)
+            selected, error = _find_session(_load_session_metadata(sessions_dir), target)
+            if selected is not None:
+                data = _reload_session(sessions_dir, selected)
         if error or data is None:
             return error or "Error: session not found"
 
