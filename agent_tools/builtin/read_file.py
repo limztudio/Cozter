@@ -198,6 +198,13 @@ def _skip_lines(file, count: int) -> bool:
     :class:`_OffsetScanLimitExceededError` when reaching the offset would require
     reading more than the bounded skip budget.
     """
+    if count > 128:
+        seekable = getattr(file, "seekable", None)
+        if callable(seekable) and seekable():
+            return _skip_lines_in_chunks(file, count)
+
+    # Preserve nonseekable/readline-only streams and avoid a cookie/rewind
+    # for the common small-offset case.
     remaining = _READ_FILE_MAX_SKIP_CHARS
     for _ in range(count):
         while True:
@@ -211,4 +218,34 @@ def _skip_lines(file, count: int) -> bool:
             remaining -= len(chunk)
             if chunk.endswith("\n"):
                 break
+    return True
+
+
+def _skip_lines_in_chunks(file, count: int) -> bool:
+    """Count large offsets in bounded decoded chunks instead of Python lines.
+
+    TextIO cookies preserve UTF-8 decoder and universal-newline state. Rewind
+    only the final chunk and consume its exact prefix, leaving the requested
+    range in the same position as readline, including replacement characters.
+    """
+    remaining = _READ_FILE_MAX_SKIP_CHARS
+    while count:
+        if remaining <= 0:
+            raise _OffsetScanLimitExceededError
+        cookie = file.tell()
+        chunk = file.read(min(_READ_FILE_SKIP_CHUNK_CHARS, remaining))
+        if not chunk:
+            return False
+        line_count = chunk.count("\n")
+        if line_count < count:
+            count -= line_count
+            remaining -= len(chunk)
+            continue
+
+        end = 0
+        for _ in range(count):
+            end = chunk.find("\n", end) + 1
+        file.seek(cookie)
+        file.read(end)
+        return True
     return True

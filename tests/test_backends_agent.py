@@ -1650,11 +1650,29 @@ warning: ignored after the catalog
             home = os.path.join(root, "private-home")
             os.mkdir(home)
             pids = {}
+            real_popen = subprocess.Popen
+
+            def launch_ready_fixture(*args, **kwargs):
+                proc = real_popen(*args, **kwargs)
+                if args and args[0][:2] == [node, launcher]:
+                    # Exercise timeout cleanup after the fixture owns a real
+                    # native child. Node cold startup on a busy Windows host
+                    # must not consume this separate 0.5-second ACP deadline.
+                    ready_deadline = time.monotonic() + 5
+                    while (not os.path.isfile(identities) and proc.poll() is None
+                           and time.monotonic() < ready_deadline):
+                        time.sleep(0.01)
+                    if not os.path.isfile(identities):
+                        copilot_mod._stop_acp_process(proc, kill_tree=True)
+                        self.fail("Node catalog fixture did not create its native child")
+                return proc
+
             try:
                 with (
                     mock.patch.object(copilot_mod.shutil, "which", return_value=node),
                     mock.patch.object(copilot_mod, "executable_command", return_value=[node, launcher]),
                     mock.patch.object(copilot_mod, "_create_isolated_copilot_home", return_value=home),
+                    mock.patch.object(copilot_mod.subprocess, "Popen", side_effect=launch_ready_fixture),
                     mock.patch.object(copilot_mod, "_MODEL_DISCOVERY_TIMEOUT_SEC", 0.5),
                 ):
                     self.assertIsNone(CopilotBackend()._discover_models(root))

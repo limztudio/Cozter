@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
+from .. import process_launch as _process_launch
 from ..utils import (
     clip_status_value,
     close_subprocess_pipe,
@@ -821,22 +822,9 @@ async def _await_process_launch(
     cancel_cleanup: Callable[[asyncio.subprocess.Process], Awaitable[None]],
 ) -> asyncio.subprocess.Process:
     """Transfer a started process, or finish ownership cleanup on cancel."""
-    try:
-        # wait() keeps the owned launch running when cancelled here.
-        await asyncio.wait((launch,))
-        return launch.result()
-    except asyncio.CancelledError:
-        cleanup = asyncio.create_task(_reap_cancelled_process_launch(
-            launch, cancel_cleanup,
-        ))
-        while not cleanup.done():
-            try:
-                await asyncio.wait((cleanup,))
-            except asyncio.CancelledError:
-                # A second /stop must not interrupt ownership cleanup.
-                continue
-        cleanup.result()
-        raise
+    return await _process_launch.await_process_launch(
+        launch, cancel_cleanup, reap_cancelled=_reap_cancelled_process_launch,
+    )
 
 
 async def _create_piped_subprocess(
@@ -848,33 +836,24 @@ async def _create_piped_subprocess(
     start_new_session: bool = False,
 ) -> asyncio.subprocess.Process:
     """Spawn a process whose stdout and stderr are always captured."""
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
+    return await _process_launch.create_piped_subprocess(
+        cmd,
         stdin=stdin,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
         env=env,
         start_new_session=start_new_session,
+        mark_group=mark_process_group_leader,
     )
-    if start_new_session:
-        mark_process_group_leader(proc)
-    return proc
 
 
 async def _reap_failed_prompt_subprocess(
     proc: asyncio.subprocess.Process,
 ) -> None:
     """Kill/reap a subprocess whose prompt could not be delivered."""
-    try:
-        if proc.returncode is None or has_managed_process_group(proc):
-            await kill_and_wait(proc)
-        # A populated returncode means the parent was already reaped. Its
-        # inherited output pipes may still be open; close them without waiting.
-    finally:
-        # No readers; release descriptors.
-        close_subprocess_pipe(proc, 1)
-        close_subprocess_pipe(proc, 2)
+    await _process_launch.reap_failed_subprocess(
+        proc, has_group=has_managed_process_group,
+        kill=kill_and_wait, close_pipe=close_subprocess_pipe,
+    )
 
 
 async def _reap_cancelled_process_launch(
@@ -882,12 +861,7 @@ async def _reap_cancelled_process_launch(
     cancel_cleanup: Callable[[asyncio.subprocess.Process], Awaitable[None]],
 ) -> None:
     """Reap a cancelled launch once subprocess creation has settled."""
-    try:
-        proc = await launch
-    except (Exception, asyncio.CancelledError):
-        # Failed process creation has no subprocess to transfer to a caller.
-        return
-    await cancel_cleanup(proc)
+    await _process_launch.reap_cancelled_process_launch(launch, cancel_cleanup)
 
 
 class Backend(ABC):

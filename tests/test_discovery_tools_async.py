@@ -134,7 +134,7 @@ class DiscoveryToolAsyncTests(unittest.TestCase):
             release = threading.Event()
             tool = TreeTool()
 
-            def slow_walk(*args) -> bool:
+            def slow_walk(*args, **_kwargs) -> bool:
                 started.set()
                 release.wait(timeout=1)
                 args[4].append("entry")

@@ -265,15 +265,27 @@ def _parallel_read_tool(name: str) -> bool:
 def _restore_http_messages(
     saved: object, pending: object,
 ) -> list[dict[str, Any]]:
-    """Close interrupted tool batches without replaying their side effects.
+    """Restore caller-owned history without retaining its mutable values."""
+    messages, _ = _restore_owned_http_messages(saved, pending)
+    return [copy.deepcopy(message) for message in messages]
+
+
+def _restore_owned_http_messages(
+    saved: object, pending: object,
+) -> tuple[list[dict[str, Any]], int]:
+    """Validate private history and return its restored messages and JSON size.
 
     Results are checkpointed individually and may complete out of order. The
     provider transcript always receives them in the original tool-call order.
     Missing outcomes require fresh verification, rather than assuming that a
     write or command failed when cancellation raced its completion.
+
+    The execution record's get() already returns an owned copy. Reusing it
+    avoids copying every nested call again; carrying its validated byte count
+    avoids immediately serializing the same unchanged history a second time.
     """
     if saved is None:
-        return []
+        return [], 0
     if not isinstance(saved, list):
         raise RuntimeError("Saved HTTP transcript is invalid; preserve it for recovery.")
     messages: list[dict[str, Any]] = []
@@ -289,12 +301,12 @@ def _restore_http_messages(
             raise RuntimeError("Saved HTTP transcript is not serializable.") from None
         if byte_count > _MAX_AGENT_MESSAGE_BYTES:
             raise RuntimeError("Saved HTTP transcript exceeds its safety limit.")
-        messages.append(copy.deepcopy(message))
+        messages.append(message)
     if not messages or messages[-1].get("role") != "assistant":
-        return messages
+        return messages, byte_count
     calls = messages[-1].get("tool_calls")
     if not isinstance(calls, list):
-        return messages
+        return messages, byte_count
     results = pending if isinstance(pending, dict) else {}
     for position, call in enumerate(calls):
         if not isinstance(call, dict):
@@ -310,11 +322,16 @@ def _restore_http_messages(
                 " deciding what remains. Do not automatically replay this"
                 " call or repeat completed side effects."
             )
-        messages.append({
+        tool_message = {
             "role": "tool", "tool_call_id": call.get("id", ""),
             "name": name, "content": result,
-        })
-    return messages
+        }
+        messages.append(tool_message)
+        # Recovery outcomes count toward the caller's full conversation cap,
+        # just as the existing initial recount did. The saved-history cap above
+        # retains its own validation/error behavior.
+        byte_count += _message_payload_bytes(tool_message)
+    return messages, byte_count
 
 
 class OpenAIChatBackend(Backend):
@@ -547,9 +564,10 @@ class OpenAIChatBackend(Backend):
         }).encode("utf-8")).hexdigest()
         prompt_digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         restored: list[dict[str, Any]] = []
+        restored_bytes = 0
         previous_prompt_digest: object = None
         if execution is not None and execution.get("http_identity") == identity:
-            restored = _restore_http_messages(
+            restored, restored_bytes = _restore_owned_http_messages(
                 execution.get("http_messages"),
                 execution.get("http_pending_results"),
             )
@@ -563,9 +581,11 @@ class OpenAIChatBackend(Backend):
             },
             *restored,
         ]
+        message_bytes = restored_bytes + _message_payload_bytes(messages[0])
         if not restored or previous_prompt_digest != prompt_digest:
-            messages.append({"role": "user", "content": user_content})
-        message_bytes = sum(_message_payload_bytes(message) for message in messages)
+            user_message = {"role": "user", "content": user_content}
+            messages.append(user_message)
+            message_bytes += _message_payload_bytes(user_message)
         pending_results: dict[str, str] = {}
 
         async def save_transcript() -> None:

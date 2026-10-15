@@ -188,6 +188,14 @@ class AgentTool(ABC):
         import asyncio
         import json
 
+        # CLI backends capture these streams as UTF-8. Windows redirected
+        # stdout otherwise uses the locale encoding, which can fail after a
+        # successful tool call when a path or result contains Unicode.
+        for stream in (sys.stdout, sys.stderr):
+            reconfigure = getattr(stream, "reconfigure", None)
+            if callable(reconfigure):
+                reconfigure(encoding="utf-8", errors=getattr(stream, "errors", None))
+
         raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
         if raw in ("--help", "-h"):
             # CLI backends can discover exact argument choices/ranges in one

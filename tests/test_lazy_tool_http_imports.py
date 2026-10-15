@@ -57,9 +57,9 @@ class LazyToolHttpImportTests(unittest.TestCase):
                     import sys
                     sys.argv[:] = ['-m', '--help']
                     runpy.run_module('Cozter.agent_tools.plugins.{plugin}', run_name='__main__')
-                    # Git helpers still initialize the backend package, which
-                    # needs aiohttp independently of the tool HTTP helpers.
-                    assert ('aiohttp' in sys.modules) is {plugin.startswith('git_')}
+                    # Git helpers share the lightweight process launcher and
+                    # do not initialize the provider registry or HTTP stack.
+                    assert 'aiohttp' not in sys.modules
                 """)
                 self.assertEqual(json.loads(output)["name"], plugin)
         output = self.run_fresh("""

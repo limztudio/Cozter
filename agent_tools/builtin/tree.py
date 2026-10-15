@@ -10,6 +10,7 @@ from ..base import (
     DISCOVERY_SKIP_DIRS,
     AgentTool,
     coerce_int_arg,
+    get_tool_permission,
     object_parameters,
     resolve_inside_workspace,
     summarize_path,
@@ -49,8 +50,13 @@ class TreeTool(AgentTool):
         )
 
         lines: list[str] = []
+        workspace_root = (
+            os.path.realpath(workspace_path)
+            if get_tool_permission() != "full" else None
+        )
         truncated = await asyncio.to_thread(
             self._walk, root, 0, depth, "", lines, max_entries,
+            workspace_root=workspace_root,
         )
         if not lines:
             return "(empty)"
@@ -66,6 +72,7 @@ class TreeTool(AgentTool):
     def _walk(
         self, path: str, level: int, max_depth: int,
         indent: str, lines: list[str], max_entries: int,
+        *, workspace_root: str | None = None,
     ) -> bool:
         """Append *path*'s tree to *lines*; return True if the cap was hit."""
         try:
@@ -95,15 +102,23 @@ class TreeTool(AgentTool):
             if len(lines) >= max_entries:
                 return True
             lines.append(f"{indent}{name}{'/' if is_dir else ''}")
-            if (
-                is_dir
-                and level + 1 < max_depth
-                and self._walk(
+            if is_dir and level + 1 < max_depth:
+                if workspace_root is not None:
+                    # Windows junctions can be directories even with
+                    # follow_symlinks=False. Keep their local entry visible,
+                    # but resolve each recursion target against the one
+                    # canonical workspace authority captured for this call.
+                    try:
+                        if os.path.commonpath((os.path.realpath(entry_path), workspace_root)) != workspace_root:
+                            continue
+                    except (OSError, ValueError):
+                        continue
+                if self._walk(
                     entry_path, level + 1, max_depth,
                     indent + "  ", lines, max_entries,
-                )
-            ):
-                return True
+                    workspace_root=workspace_root,
+                ):
+                    return True
         return truncated
 
     def summarize(self, args: dict) -> str:

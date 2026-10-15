@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..base import truncate_with_marker
-from ...backends_agent.base import create_captured_subprocess
+from ...process_launch import create_captured_subprocess
 from ...utils import (
     close_subprocess_pipe, has_managed_process_group, kill_and_wait,
     wait_for_process_exit,

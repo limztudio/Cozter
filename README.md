@@ -1050,7 +1050,8 @@ in waves of at most four, preserving result order and durable barriers before
 writes. This flag does not change permissions. CLI plugin guidance identifies
 the same independent reads so native agents can group them with their own tools.
 Run any plugin module with `--help` to inspect its full argument schema without
-executing the plugin.
+executing the plugin. Standalone plugins write UTF-8 to stdout and stderr,
+including when Windows redirects their output through a legacy locale.
 
 The default HTTP result budget is 4,000 characters. Plugin code can declare
 `max_result_chars` as a positive integer; the dispatcher limits it to 65,536
@@ -1662,6 +1663,7 @@ Cozter/
 ├── __init__.py           package marker
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
 ├── launch_process.py     Windows launcher job owns descendant lifetimes
+├── process_launch.py     shared subprocess launch and cancellation ownership
 ├── requirements.txt      Python runtime dependencies installed into .venv
 ├── py.typed              marks the package as typed for downstream checkers
 ├── pyproject.toml        Ruff E4/E7/E9/F lint contract
@@ -1905,7 +1907,7 @@ audit should use `git ls-files` so hidden tracked files, especially
 ignored for local secrets and runtime queues.
 
 - Package entry and runtime setup: `__init__.py`, `__main__.py`,
-  `launch_process.py`, `config.py`, `updater.py`, and `utils.py`
+  `launch_process.py`, `process_launch.py`, `config.py`, `updater.py`, and `utils.py`
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
   `colony.py`, `flexible.py`, `execution_state.py`, and `schedules.py`
@@ -1932,7 +1934,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (129 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 126 `test_*.py` modules:
+- Tests (134 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 131 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_attachment_preparation_ownership.py`,
@@ -1952,11 +1954,11 @@ ignored for local secrets and runtime queues.
   `test_flexible_instruction_identity.py`,
   `test_flexible_native_injection_continuation.py`,
   `test_flexible_parallel_runtime.py`, `test_flexible.py`, `test_format_marker_latency.py`,
-  `test_git_checkout_integrity.py`, `test_git_plugin_paging.py`, `test_git_process_output.py`,
+  `test_git_checkout_integrity.py`, `test_git_cold_launch.py`, `test_git_plugin_paging.py`, `test_git_process_output.py`,
   `test_grok_model_line_latency.py`,
   `test_http_body_sniff.py`, `test_http_event_framing.py`, `test_http_latency.py`, `test_http_redirect_method.py`,
   `test_http_execution_continuation.py`, `test_http_owned_mutation_cancellation.py`,
-  `test_http_pending_checkpoints.py`,
+  `test_http_pending_checkpoints.py`, `test_http_restore_accounting.py`,
   `test_image_snapshot_metadata.py`,
   `test_inject.py`, `test_internal_backend_deadline.py`, `test_interrupted_turns.py`,
   `test_job_continuation.py`, `test_job_prerequisite_retry.py`,
@@ -1967,11 +1969,11 @@ ignored for local secrets and runtime queues.
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
   `test_platform_formatting.py`, `test_prerequisite_checkpoint.py`,
   `test_plugin_memory_calculator_performance.py`, `test_plugin_parallelism.py`,
-  `test_plugin_result_budgets.py`,
+  `test_plugin_cli_unicode.py`, `test_plugin_result_budgets.py`,
   `test_public_http_pool.py`,
   `test_prompt_subprocess.py`, `test_queue_persistence_latency.py`,
   `test_prompt_payload_dedup.py`, `test_protocol_marker_latency.py`,
-  `test_read_files.py`,
+  `test_read_file_offset_chunks.py`, `test_read_files.py`,
   `test_reply_delivery.py`, `test_run_lock.py`, `test_runtime_diagnostics.py`,
   `test_schedule_execution.py`, `test_session_picker.py`,
   `test_session_write_latency.py`, `test_signal_attachment_decoding.py`,
@@ -1985,7 +1987,7 @@ ignored for local secrets and runtime queues.
   `test_thinking_display.py`, `test_titling.py`, `test_tool_permissions.py`,
   `test_tool_runtime.py`, `test_tool_safety_and_output_limits.py`,
   `test_tool_state_integrity.py`, `test_tools_audit_regressions.py`,
-  `test_turn_budget.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
+  `test_tree_junction_permissions.py`, `test_turn_budget.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
   `test_vision_marker_scanning.py`, `test_web_fetch.py`, `test_web_html_latency.py`, `test_web_search.py`)
   covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
