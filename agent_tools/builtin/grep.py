@@ -11,7 +11,6 @@ from typing import Any
 
 from ..base import (
     AgentTool,
-    capped_list_tail,
     coerce_int_arg,
     get_tool_permission,
     iter_workspace_files,
@@ -21,6 +20,7 @@ from ..base import (
     summarize_arg,
     tool_permission_scope,
 )
+from ..discovery import render_discovery_page
 
 _GREP_MAX_FILE_BYTES = 1_000_000
 
@@ -30,7 +30,10 @@ _GREP_WORKER_JOIN_SECONDS = 0.5
 
 class GrepTool(AgentTool):
     name = "grep"
-    description = "Regex-search files (`path:lineno: line`; page remainder when truncated)."
+    description = (
+        "Regex-search files (`path:lineno: line`). Use the returned offset to"
+        " page remaining matches; restart at offset=0 if files change."
+    )
     parameters = object_parameters(
         {
             "pattern": {
@@ -41,6 +44,10 @@ class GrepTool(AgentTool):
             "max_results": {
                 "type": "integer",
                 "description": "max 200.",
+            },
+            "offset": {
+                "type": "integer", "minimum": 0,
+                "description": "Matches to skip; use the next offset returned by the tool.",
             },
         },
         ["pattern"],
@@ -76,24 +83,23 @@ class GrepTool(AgentTool):
             minimum=1,
             maximum=200,
         )
+        offset = coerce_int_arg(args.get("offset", 0), default=0, minimum=0)
 
         # CPU-bound regex: killable process, 0.1s polls.
         try:
             results = await _scan_in_subprocess_async(
                 workspace_path, search_root, file_glob, regex, max_results,
+                offset,
             )
         except Exception as exc:
             return f"Grep failed: {exc}"
 
         if not results:
+            if offset:
+                return f"No more matches at offset {offset} for pattern: {pattern_str}"
             return f"No matches for pattern: {pattern_str}"
 
-        summary = "\n".join(results)
-        if len(results) >= max_results:
-            summary += capped_list_tail(
-                max_results, "max_results", "narrow path/glob",
-            )
-        return summary
+        return render_discovery_page(results, offset=offset, max_results=max_results)
 
     @staticmethod
     def _scan(
@@ -102,10 +108,14 @@ class GrepTool(AgentTool):
         file_glob: str,
         regex: re.Pattern[str],
         max_results: int,
+        offset: int = 0,
+        *, sort_entries: bool = False,
     ) -> list[str]:
         results: list[str] = []
+        skipped = 0
         for fpath, rel, _root_rel in iter_workspace_files(
             workspace_path, search_root, file_glob,
+            sort_entries=sort_entries,
         ):
             try:
                 metadata = os.stat(fpath)
@@ -127,6 +137,9 @@ class GrepTool(AgentTool):
             content = raw.decode("utf-8", errors="replace")
             for lineno, line in enumerate(content.splitlines(), 1):
                 if regex.search(line):
+                    if skipped < offset:
+                        skipped += 1
+                        continue
                     display_line = line
                     if len(line) > _GREP_MAX_LINE_CHARS:
                         display_line = (
@@ -150,12 +163,14 @@ def _scan_worker(
     regex: re.Pattern[str],
     max_results: int,
     approval: str = "auto",
+    offset: int = 0,
 ) -> None:
     """Run one scan in a child process and return its result."""
     try:
         with tool_permission_scope(approval):
             result_conn.send((True, GrepTool._scan(
                 workspace_path, search_root, file_glob, regex, max_results,
+                offset, sort_entries=True,
             )))
     except BaseException as exc:
         # Report scan failures, not false empties.
@@ -185,6 +200,7 @@ def _start_scan_worker(
     file_glob: str,
     regex: re.Pattern[str],
     max_results: int,
+    offset: int = 0,
 ) -> tuple[Any, Any]:
     """Spawn the grep worker; return ``(proc, receive_conn)``."""
     context = multiprocessing.get_context("spawn")
@@ -194,6 +210,7 @@ def _start_scan_worker(
         args=(
             send_conn, workspace_path, search_root, file_glob, regex,
             max_results, get_tool_permission(),
+            offset,
         ),
         daemon=True,
     )
@@ -226,14 +243,15 @@ async def _scan_in_subprocess_async(
     file_glob: str,
     regex: re.Pattern[str],
     max_results: int,
+    offset: int = 0,
 ) -> list[str]:
-    """Wait for the grep worker without stalling the event loop.
+    """Return up to ``max_results + 1`` matches, including page lookahead.
 
     ``poll()`` waits in 0.1s slices on a helper thread so /stop cancels
     promptly and the ``finally`` below still reaps the worker.
     """
     proc, receive_conn = _start_scan_worker(
-        workspace_path, search_root, file_glob, regex, max_results,
+        workspace_path, search_root, file_glob, regex, max_results + 1, offset,
     )
     try:
         while True:

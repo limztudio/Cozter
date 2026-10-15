@@ -8,7 +8,6 @@ from glob import has_magic
 
 from ..base import (
     AgentTool,
-    capped_list_tail,
     coerce_int_arg,
     iter_workspace_files,
     object_parameters,
@@ -16,11 +15,15 @@ from ..base import (
     resolve_inside_workspace,
     summarize_arg,
 )
+from ..discovery import render_discovery_page
 
 
 class GlobTool(AgentTool):
     name = "glob"
-    description = "Find files by glob (`**` recurses; page remainder when truncated)."
+    description = (
+        "Find files by glob (`**` recurses). Use the returned offset to page"
+        " remaining matches; restart at offset=0 if files change."
+    )
     parameters = object_parameters(
         {
             "pattern": {"type": "string"},
@@ -31,6 +34,10 @@ class GlobTool(AgentTool):
             "max_results": {
                 "type": "integer",
                 "description": "max 500.",
+            },
+            "offset": {
+                "type": "integer", "minimum": 0,
+                "description": "Matches to skip; use the next offset returned by the tool.",
             },
         },
         ["pattern"],
@@ -48,38 +55,33 @@ class GlobTool(AgentTool):
             minimum=1,
             maximum=500,
         )
+        offset = coerce_int_arg(args.get("offset", 0), default=0, minimum=0)
 
         abs_ws = os.path.realpath(workspace_path)
         try:
             root = resolve_inside_workspace(
                 abs_ws, args.get("path") or ".",
             )
-            if root == abs_ws:
-                matches = await asyncio.to_thread(
-                    self._find_matches, abs_ws, pattern, max_results,
-                )
-            else:
-                matches = await asyncio.to_thread(
-                    self._find_matches, abs_ws, pattern, max_results, root,
-                )
+            matches = await asyncio.to_thread(
+                self._find_matches, abs_ws, pattern, max_results + 1, root,
+                offset, sort_entries=True,
+            )
         except Exception as exc:
             return f"Glob failed: {exc}"
 
         if not matches:
+            if offset:
+                return f"No more files matched at offset {offset}: {pattern}"
             return f"No files matched: {pattern}"
 
-        matches.sort()
-        summary = "\n".join(matches)
-        if len(matches) >= max_results:
-            summary += capped_list_tail(
-                max_results, "max_results", "narrow pattern",
-            )
-        return summary
+        return render_discovery_page(matches, offset=offset, max_results=max_results)
 
     @staticmethod
     def _find_matches(
         workspace_path: str, pattern: str, max_results: int,
         search_root: str | None = None,
+        offset: int = 0,
+        *, sort_entries: bool = False,
     ) -> list[str]:
         """Synchronously scan for matches; called in a worker thread."""
         # Split off a literal prefix (anchors literal; never split magical ones).
@@ -93,9 +95,12 @@ class GlobTool(AgentTool):
             os.path.join(search_root or workspace_path, drive + prefix or "."),
         )
         matches: list[str] = []
-        for _path, rel, _root_rel in iter_workspace_files(
+        for index, (_path, rel, _root_rel) in enumerate(iter_workspace_files(
             workspace_path, root, search_pattern, discovery_pattern=pattern,
-        ):
+            sort_entries=sort_entries,
+        )):
+            if index < offset:
+                continue
             matches.append(rel)
             if len(matches) >= max_results:
                 break

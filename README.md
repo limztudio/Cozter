@@ -1389,11 +1389,17 @@ function-call deltas because that vision request schema does not accept
 `tool_stream`. The shared SSE parser merges
 either shape before executing a requested tool.
 The builtin `read_files` tool reads up to 16 independent file ranges in one
-model round trip, with at most four simultaneous reads, 8,192 characters per
-file preview and a 65,536-character aggregate cap. The dispatcher retains up
-to 32,768 characters for builtin `read_file` and 65,536 for `read_files`, with
-explicit paging markers. Other tools and plugins retain the 4,000-character
-limit. All backends receive guidance to batch independent inspections and
+model round trip, with at most four simultaneous reads, up to 32,768 characters
+per file preview and a 65,536-character aggregate cap shared fairly across the
+requested files. Complete files and batches have no truncation marker. The
+dispatcher retains up to 32,768 characters for builtin `read_file`, `glob`, and
+`grep`, and 65,536 for `read_files`. Discovery pages preserve complete matches
+and return the exact next `offset` when more results remain; offsets count
+matches in deterministic directory traversal order. Repeat the same search
+with that offset, or restart at zero if files change. Exact result limits do
+not imply a remainder unless a lookahead finds another match. Other tools and
+plugins retain the 4,000-character limit. All backends receive guidance to
+batch independent inspections and
 reuse still-valid verification evidence without weakening completion checks.
 
 Permission modes are backend-specific because a chat bot cannot answer a
@@ -1624,7 +1630,8 @@ Cozter/
 └── agent_tools/          tool surface for HTTP backends + plugin registry
     ├── base.py             AgentTool ABC; path/argument validation, shared HTTP
     │                       helpers, and the shared fetch-cap PARTIAL footer
-    ├── builtin/            17 files: 16 built-in tools (bash, read_file, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch) plus __init__.py
+    ├── discovery.py        bounded whole-match pages with continuation offsets
+    ├── builtin/            18 files: 17 built-in tools (bash, read_file, read_files, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch) plus __init__.py
     └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, git_ops, git_sync, memory, http_request shipped live; _git_common.py holds the git tools' shared runner/validation/truncation and is skipped by the loader)
 ```
 
@@ -1817,6 +1824,7 @@ ignored for local secrets and runtime queues.
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
   `llama.py`, `zai.py`, and `meta.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
+  `agent_tools/discovery.py`,
   the 18 files under `agent_tools/builtin/` (`__init__.py`, `apply_patch.py`,
   `bash.py`, `copy_file.py`, `delete_file.py`, `edit_file.py`, `glob.py`,
   `grep.py`, `list_dir.py`, `make_dir.py`, `move_file.py`, `multi_edit.py`,
@@ -1830,7 +1838,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (98 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 95 `test_*.py` modules:
+- Tests (99 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 96 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_backend_audit_regressions.py`,
@@ -1840,7 +1848,7 @@ ignored for local secrets and runtime queues.
   `test_claude_model_capabilities.py`, `test_checkpoint_scope.py`, `test_cli_commands.py`,
   `test_cli_native_continuation.py`,
   `test_cloud_model_capabilities.py`, `test_compaction.py`, `test_config.py`,
-  `test_detached_tasks.py`, `test_discovery_optimization.py`,
+  `test_detached_tasks.py`, `test_discovery_optimization.py`, `test_discovery_paging.py`,
   `test_discovery_pruning.py`, `test_discovery_tools_async.py`,
   `test_durable_poll_parallelism.py`,
   `test_edit_file_read_limits.py`, `test_flexible_parallel_plan.py`,

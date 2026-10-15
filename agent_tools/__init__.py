@@ -45,6 +45,7 @@ from typing import Any
 
 from .base import AgentTool
 from .base import tool_permission_scope, truncate_with_marker
+from .discovery import DISCOVERY_RESULT_MAX
 
 logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
@@ -333,7 +334,10 @@ async def execute_tool(
 
     result_limit = _TOOL_RESULT_MAX
     if tool is not None and not getattr(tool, "is_plugin", True):
-        result_limit = {"read_file": 32 * 1024, "read_files": 64 * 1024}.get(
+        result_limit = {
+            "read_file": 32 * 1024, "read_files": 64 * 1024,
+            "glob": DISCOVERY_RESULT_MAX, "grep": DISCOVERY_RESULT_MAX,
+        }.get(
             name, result_limit,
         )
     if len(result) > result_limit:

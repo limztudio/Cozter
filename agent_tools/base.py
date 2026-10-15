@@ -464,6 +464,8 @@ def truncate_with_marker(text: str, max_chars: int, hint: str) -> str:
     apart. *hint* is per-tool paging advice, e.g.
     ``"use read_file offset/limit ..."``.
     """
+    if len(text) <= max_chars:
+        return text
     suffix = (
         f"\n… [truncated, {len(text)} chars total; {hint};"
         " never treat this preview as full content;"
@@ -509,6 +511,7 @@ def iter_workspace_files(
     pattern: str = "**/*",
     *,
     discovery_pattern: str | None = None,
+    sort_entries: bool = False,
 ) -> Iterator[tuple[str, str, str]]:
     """Yield files under *root* that match *pattern*.
 
@@ -517,6 +520,8 @@ def iter_workspace_files(
     Common generated/cache directories are pruned unless the pattern
     explicitly names that directory segment. ``discovery_pattern`` preserves
     those explicit names when a caller strips a literal search prefix.
+    ``sort_entries`` gives paged callers a stable directory/file traversal
+    without changing the legacy ordering of unpaged internal callers.
     """
     abs_ws = os.path.realpath(workspace)
     abs_root = os.path.realpath(root)
@@ -560,7 +565,9 @@ def iter_workspace_files(
                         max_directory_depth,
                     )
                 ]
-        for filename in filenames:
+        if sort_entries:
+            dirnames.sort()
+        for filename in sorted(filenames) if sort_entries else filenames:
             fpath = os.path.join(dirpath, filename)
             root_rel = os.path.relpath(fpath, abs_root).replace(os.sep, "/")
             if not _match_glob_parts(pattern_parts, _glob_segments(root_rel)):

@@ -11,7 +11,7 @@ from .read_file import ReadFileTool
 
 _MAX_FILES = 16
 _MAX_PARALLEL_READS = 4
-_MAX_FILE_CHARS = 8 * 1024
+_MAX_FILE_CHARS = 32 * 1024
 _MAX_RESULT_CHARS = 64 * 1024
 _TRUNCATION = (
     "truncated file preview; use read_file with offset/limit for the remaining"
@@ -24,7 +24,7 @@ class ReadFilesTool(AgentTool):
     description = (
         "Read up to 16 independent UTF-8 files or line ranges together, with"
         " bounded parallel reads and results in request order. Each file is"
-        " a bounded preview (up to 8 KiB; total 64 KiB). Supply offset/limit"
+        " a bounded preview (up to 32K characters; total 64K). Supply offset/limit"
         " for targeted ranges and page any marked remainder with read_file."
         " Uses the same path permissions and image metadata as read_file."
     )

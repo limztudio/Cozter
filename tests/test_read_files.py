@@ -7,8 +7,26 @@ from pathlib import Path
 from unittest import mock
 
 from Cozter import agent_tools
-from Cozter.agent_tools.base import tool_permission_scope
+from Cozter.agent_tools.base import tool_permission_scope, truncate_with_marker
 from Cozter.agent_tools.builtin import read_files
+
+
+class TruncateWithMarkerTests(unittest.TestCase):
+    def test_complete_text_at_or_below_budget_is_unchanged(self):
+        for budget, text in ((0, ""), (256, ""), (256, "short"), (256, "x" * 256)):
+            with self.subTest(budget=budget, size=len(text)):
+                self.assertEqual(truncate_with_marker(text, budget, "page"), text)
+
+    def test_only_over_budget_text_gets_bounded_remainder_marker(self):
+        text = "x" * 257
+        clipped = truncate_with_marker(text, 256, "fetch the remaining range")
+        self.assertEqual(len(clipped), 256)
+        self.assertIn("truncated", clipped)
+        self.assertIn("fetch the remaining range", clipped)
+        self.assertNotEqual(clipped, text)
+        for budget in (0, 1, 8):
+            with self.subTest(budget=budget):
+                self.assertLessEqual(len(truncate_with_marker(text, budget, "page")), budget)
 
 
 class ReadFilesTests(unittest.IsolatedAsyncioTestCase):
@@ -27,6 +45,58 @@ class ReadFilesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("second\n", result)
         self.assertNotIn("third", result)
         self.assertIn("File not found", result)
+        self.assertNotIn("truncated", result)
+
+    async def test_small_batch_can_return_medium_files_completely(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = "first\n" * 1000
+            second = "second\n" * 2000
+            (root / "a.txt").write_text(first, encoding="utf-8")
+            (root / "b.txt").write_text(second, encoding="utf-8")
+            result = await read_files.ReadFilesTool().run(temp, {"files": [
+                {"path": "a.txt"}, {"path": "b.txt"},
+            ]})
+        self.assertEqual(result, f"=== a.txt ===\n{first}\n\n=== b.txt ===\n{second}")
+        self.assertNotIn("truncated", result)
+        self.assertLessEqual(len(result), read_files._MAX_RESULT_CHARS)
+
+    async def test_single_file_at_its_budget_does_not_claim_remainder(self):
+        with tempfile.TemporaryDirectory() as temp:
+            content = "x" * read_files._MAX_FILE_CHARS
+            (Path(temp) / "a.txt").write_text(content, encoding="utf-8")
+            result = await read_files.ReadFilesTool().run(temp, {"files": [{"path": "a.txt"}]})
+        self.assertEqual(result, "=== a.txt ===\n" + content)
+        self.assertNotIn("truncated", result)
+
+    async def test_true_file_clip_marks_only_that_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "a.txt").write_text("x" * 40_000, encoding="utf-8")
+            result = await read_files.ReadFilesTool().run(temp, {"files": [{"path": "a.txt"}]})
+        self.assertEqual(result.count("truncated file preview"), 1)
+        self.assertNotIn("truncated batch", result)
+        self.assertLessEqual(len(result), read_files._MAX_RESULT_CHARS)
+
+    async def test_large_batch_fairly_reserves_every_file_result(self):
+        files = [{"path": f"file-{index}.txt"} for index in range(4)]
+
+        async def read(_workspace, args):
+            return args["path"] + "\n" + "x" * 40_000
+
+        with mock.patch.object(read_files.ReadFileTool, "run", side_effect=read):
+            result = await read_files.ReadFilesTool().run("/workspace", {"files": files})
+        sizes = []
+        for index, item in enumerate(files):
+            label = f"=== {item['path']} ===\n"
+            start = result.index(label) + len(label)
+            end = result.index(f"\n\n=== {files[index + 1]['path']} ===\n") if index + 1 < len(files) else len(result)
+            section = result[start:end]
+            self.assertTrue(section.startswith(item["path"] + "\n"))
+            self.assertIn("truncated file preview", section)
+            sizes.append(len(section))
+        self.assertLessEqual(max(sizes) - min(sizes), 1)
+        self.assertLessEqual(len(result), read_files._MAX_RESULT_CHARS)
+        self.assertNotIn("truncated batch", result)
 
     async def test_workspace_escape_stays_blocked_in_auto_mode(self):
         with tempfile.TemporaryDirectory() as temp:
