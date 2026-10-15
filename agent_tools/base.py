@@ -595,9 +595,16 @@ def iter_workspace_files(
             root_rel = os.path.relpath(fpath, abs_root).replace(os.sep, "/")
             if not _match_glob_parts(pattern_parts, _glob_segments(root_rel)):
                 continue
-            # Bounded matches still follow symlinks via is_path_within.
-            if not full_access and not is_path_within(fpath, abs_ws):
-                continue
+            # Resolve every matching target, including symlinks, against the
+            # workspace authority captured for this scan. Re-resolving that
+            # canonical root for each file adds Windows path-handle calls and
+            # could silently move the authority if the root is replaced.
+            if not full_access:
+                try:
+                    if os.path.commonpath((os.path.realpath(fpath), abs_ws)) != abs_ws:
+                        continue
+                except (OSError, ValueError):
+                    continue
             # Lexical display containment, independent of the link target.
             try:
                 lexical_inside = os.path.normcase(

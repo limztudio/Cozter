@@ -1931,7 +1931,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (125 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 122 `test_*.py` modules:
+- Tests (126 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 123 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_attachment_preparation_ownership.py`,
@@ -1943,7 +1943,7 @@ ignored for local secrets and runtime queues.
   `test_claude_model_capabilities.py`, `test_checkpoint_scope.py`, `test_cli_commands.py`,
   `test_cli_native_continuation.py`,
   `test_cloud_model_capabilities.py`, `test_colony_streaming.py`, `test_compaction.py`, `test_config.py`,
-  `test_detached_tasks.py`, `test_discovery_optimization.py`, `test_discovery_paging.py`,
+  `test_detached_tasks.py`, `test_discovery_canonical_root.py`, `test_discovery_optimization.py`, `test_discovery_paging.py`,
   `test_discovery_pruning.py`, `test_discovery_tools_async.py`,
   `test_durable_poll_parallelism.py`,
   `test_edit_file_read_limits.py`, `test_flexible_parallel_plan.py`,
