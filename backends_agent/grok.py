@@ -101,8 +101,35 @@ _FALLBACK_MODEL_SPECS = (
     _FALLBACK_MODEL_EFFORT_LEVELS,
     _FALLBACK_MODEL_CONTEXT_WINDOWS,
 ) = fallback_model_tables(_FALLBACK_MODEL_SPECS)
-_MODEL_LINE_RE = re.compile(r"^\s*[*-]\s+(\S+)\s*(?:\([^)]*\))?\s*$")
+_MODEL_LINE_PREFIX_RE = re.compile(r"^\s*[*-]\s+(\S+)")
+_MODEL_NONSPACE_RE = re.compile(r"\S")
 _PROMPT_FILE_PREFIX = "cozter-grok-prompt-"
+
+
+def _model_line_id(line: str) -> str | None:
+    """Preserve the former model regex's greedy ID with bounded scans.
+
+    The first token is the longest possible ID. If a description is needed,
+    its final ')' must also be the first ')' after its opener. A rightmost
+    legal '(' inside the token reproduces greedy ID backtracking, including
+    attached parentheses, without repeatedly scanning a malformed suffix.
+    """
+    match = _MODEL_LINE_PREFIX_RE.match(line)
+    if match is None:
+        return None
+    start, token_end = match.span(1)
+    content_end = len(line.rstrip())
+    if token_end == content_end:
+        return line[start:token_end]
+    if line[content_end - 1] != ")":
+        return None
+    previous_close = line.rfind(")", start, content_end - 1)
+    after_token = _MODEL_NONSPACE_RE.search(line, token_end)
+    if (after_token is not None and after_token.start() > previous_close
+            and line[after_token.start()] == "("):
+        return line[start:token_end]
+    opener = line.rfind("(", max(start + 1, previous_close + 1), token_end)
+    return line[start:opener] if opener >= 0 else None
 
 
 def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
@@ -130,13 +157,13 @@ def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
             continue
         if not reading_models:
             continue
-        match = _MODEL_LINE_RE.match(line)
-        if match is None:
+        model = _model_line_id(line)
+        if model is None:
             # The list is contiguous; a blank/another heading ends it.
             if not line.strip() or not line.startswith((" ", "\t")):
                 break
             continue
-        model = match.group(1).strip().strip("`'\".,;:")
+        model = model.strip().strip("`'\".,;:")
         if model and model not in seen:
             seen.add(model)
             models.append(model)

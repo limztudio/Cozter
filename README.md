@@ -1916,7 +1916,8 @@ ignored for local secrets and runtime queues.
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
   `llama.py`, `zai.py`, and `meta.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
-  `agent_tools/owned_worker.py`,
+  `agent_tools/owned_worker.py`, `agent_tools/_http_types.py`,
+  `agent_tools/_public_resolver.py`,
   `agent_tools/discovery.py`, `agent_tools/html_scan.py`,
   the 18 files under `agent_tools/builtin/` (`__init__.py`, `apply_patch.py`,
   `bash.py`, `copy_file.py`, `delete_file.py`, `edit_file.py`, `glob.py`,
@@ -1931,7 +1932,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (126 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 123 `test_*.py` modules:
+- Tests (129 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 126 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_attachment_preparation_ownership.py`,
@@ -1952,13 +1953,15 @@ ignored for local secrets and runtime queues.
   `test_flexible_native_injection_continuation.py`,
   `test_flexible_parallel_runtime.py`, `test_flexible.py`, `test_format_marker_latency.py`,
   `test_git_checkout_integrity.py`, `test_git_plugin_paging.py`, `test_git_process_output.py`,
+  `test_grok_model_line_latency.py`,
   `test_http_body_sniff.py`, `test_http_event_framing.py`, `test_http_latency.py`, `test_http_redirect_method.py`,
   `test_http_execution_continuation.py`, `test_http_owned_mutation_cancellation.py`,
+  `test_http_pending_checkpoints.py`,
   `test_image_snapshot_metadata.py`,
   `test_inject.py`, `test_internal_backend_deadline.py`, `test_interrupted_turns.py`,
   `test_job_continuation.py`, `test_job_prerequisite_retry.py`,
   `test_jpeg_dimensions.py`, `test_judge_blocked.py`, `test_launch_process.py`,
-  `test_launcher_and_followups.py`, `test_maintenance_context.py`, `test_memory_corrupt_state.py`,
+  `test_launcher_and_followups.py`, `test_lazy_tool_http_imports.py`, `test_maintenance_context.py`, `test_memory_corrupt_state.py`,
   `test_memory_preservation.py`, `test_memory_streamed_search.py`, `test_notes_owned_worker.py`,
   `test_openai_agent.py`, `test_owned_file_mutations.py`,
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,

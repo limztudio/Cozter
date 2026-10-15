@@ -16,17 +16,45 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager, suppress
 from contextvars import ContextVar
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
-import aiohttp
 import ipaddress
 import re
 import socket
 import urllib.parse
-from aiohttp.abc import AbstractResolver
-from aiohttp.resolver import DefaultResolver
 
 from ..utils import clip_status_value, is_path_within
+from . import _http_types
+
+if TYPE_CHECKING:
+    import aiohttp
+    from aiohttp.abc import AbstractResolver as AbstractResolver
+    from aiohttp.resolver import DefaultResolver as DefaultResolver
+    from ._public_resolver import PublicResolver
+
+_HTTP_EXPORTS = ("aiohttp", "AbstractResolver", "DefaultResolver", "PublicResolver")
+
+
+def __getattr__(name: str) -> Any:
+    # Keep these public imports and patch targets as the real library objects,
+    # while non-HTTP CLI tools need not initialize the HTTP client stack.
+    if name not in _HTTP_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_http_types, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_HTTP_EXPORTS))
+
+
+def _load_http_dependencies() -> None:
+    # Explicit global reads in HTTP helpers do not call module __getattr__.
+    # Never replace an existing alias: callers may patch these public hooks.
+    for name in ("aiohttp", "PublicResolver"):
+        if name not in globals():
+            __getattr__(name)
 
 
 _MAX_FETCH_BYTES = 5 * 1024 * 1024
@@ -1161,7 +1189,7 @@ def _linux_rename_no_replace(source_path: str, target_path: str) -> bool:
 
 
 async def read_bounded_text(
-    resp: aiohttp.ClientResponse,
+    resp: _http_types.ClientResponse,
 ) -> tuple[str, bool]:
     """Read up to MAX_FETCH_BYTES; return ``(text, truncated)``.
 
@@ -1209,13 +1237,14 @@ async def open_http_response(
     *,
     allow_redirects: bool = True,
     timeout: int | None = 3600,
-) -> AsyncIterator[aiohttp.ClientResponse]:
+) -> AsyncIterator[_http_types.ClientResponse]:
     """Open one HTTP request with shared web-tool client settings.
 
     Real-work cap (up to 3600s); cancel stops instantly. Positive
     ``timeout`` overrides; 0/None means no client timeout.
     """
-    client_timeout: aiohttp.ClientTimeout | None = None
+    _load_http_dependencies()
+    client_timeout: _http_types.ClientTimeout | None = None
     if timeout is not None and timeout > 0:
         client_timeout = aiohttp.ClientTimeout(total=timeout)
     async with (
@@ -1236,35 +1265,6 @@ _HOST_LABEL_RE = re.compile(
 
 class NonPublicAddressError(OSError):
     """Raised when a request hostname resolves outside the public internet."""
-
-
-class PublicResolver(AbstractResolver):
-    """Resolve DNS normally, while allowing only globally routable answers."""
-
-    def __init__(self) -> None:
-        self._resolver: AbstractResolver = DefaultResolver()
-
-    async def resolve(
-        self,
-        host: str,
-        port: int = 0,
-        family: Any = socket.AF_UNSPEC,
-    ) -> list[Any]:
-        answers = await self._resolver.resolve(host, port, family=family)
-        if not answers:
-            raise NonPublicAddressError(
-                "URL host did not resolve to an address",
-            )
-        for answer in answers:
-            address = answer.get("host") if isinstance(answer, dict) else None
-            if not isinstance(address, str) or not _is_public_ip(address):
-                raise NonPublicAddressError(
-                    "URL host resolves to a non-public address",
-                )
-        return answers
-
-    async def close(self) -> None:
-        await self._resolver.close()
 
 
 def _is_public_ip(value: str) -> bool:
@@ -1371,14 +1371,15 @@ class _PublicHttpPool:
     """
 
     def __init__(self) -> None:
-        self._resolver: PublicResolver | None = None
-        self._connector: aiohttp.TCPConnector | None = None
+        self._resolver: _http_types.PublicResolver | None = None
+        self._connector: _http_types.TCPConnector | None = None
         self._closed = False
 
-    def connector(self) -> aiohttp.TCPConnector:
+    def connector(self) -> _http_types.TCPConnector:
         if self._closed:
             raise RuntimeError("The owning HTTP worker has finished")
         if self._connector is None:
+            _load_http_dependencies()
             self._resolver = PublicResolver()
             self._connector = aiohttp.TCPConnector(
                 resolver=self._resolver,
@@ -1431,8 +1432,9 @@ async def public_http_pool_scope() -> AsyncIterator[None]:
 
 
 @asynccontextmanager
-async def open_public_http_session() -> AsyncIterator[aiohttp.ClientSession]:
+async def open_public_http_session() -> AsyncIterator[_http_types.ClientSession]:
     """Open an isolated session, borrowing only its worker's checked sockets."""
+    _load_http_dependencies()
     pool = _PUBLIC_HTTP_POOL.get()
     if pool is not None:
         async with aiohttp.ClientSession(
@@ -1625,3 +1627,11 @@ def html_to_text(value: str) -> str:
             parts.append(" ")
 
     return " ".join(html.unescape("".join(parts)).split())
+
+
+# Preserve the original star-import surface as well as direct lazy imports.
+# A star import deliberately requests the HTTP exports and initializes them.
+__all__ = list(dict.fromkeys(
+    [name for name in globals() if not name.startswith("_") and name != "TYPE_CHECKING"]
+    + list(_HTTP_EXPORTS)
+))

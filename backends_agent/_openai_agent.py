@@ -580,6 +580,14 @@ class OpenAIChatBackend(Backend):
                     http_pending_results=dict(pending_results),
                 )
 
+        async def save_pending_results() -> None:
+            if execution is not None:
+                # The assistant intent already owns a durable private copy of
+                # this unchanged history, identity, and prompt digest. Update
+                # only outcomes during the batch; ExecutionRecord still writes
+                # the complete atomic snapshot before the next tool may start.
+                await execution.save(http_pending_results=dict(pending_results))
+
         def append_message(message: dict[str, Any]) -> bool:
             """Retain *message* only while the aggregate safety cap permits."""
             nonlocal message_bytes
@@ -719,7 +727,7 @@ class OpenAIChatBackend(Backend):
                             # A mutation's outcome must be durable before any
                             # later tool can begin. Independent reads instead
                             # share one checkpoint per bounded wave.
-                            await save_transcript()
+                            await save_pending_results()
 
                     _results: list[str | None] = [None] * len(tool_calls)
                     batch_started = time.monotonic()
@@ -764,14 +772,14 @@ class OpenAIChatBackend(Backend):
                             # Retain every read that finished before its wave
                             # was interrupted. Missing outcomes still recover
                             # as unknown and never trigger automatic replays.
-                            await save_transcript()
+                            await save_pending_results()
                             raise
                         if position < len(tool_calls):
                             # Also acts as the durability barrier before the
                             # next mutation. The final wave is saved below as
                             # the complete ordered transcript without writing
                             # an otherwise redundant pending-results snapshot.
-                            await save_transcript()
+                            await save_pending_results()
                     performance_logger.info(
                         "stage=tool_batch backend=%s seconds=%.3f calls=%d skipped=%d",
                         self.name, time.monotonic() - batch_started,

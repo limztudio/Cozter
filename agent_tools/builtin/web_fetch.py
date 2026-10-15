@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import urllib.parse
 
-import aiohttp
-
+from .. import _http_types
 from ..html_scan import first_title_contents
 
 from ..base import (
@@ -41,7 +40,7 @@ class _FetchRefusedError(Exception):
 
 
 async def _fetch_following_redirects(
-    session: aiohttp.ClientSession,
+    session: _http_types.ClientSession,
     url: str,
 ) -> tuple[str, str, str, bool]:
     """GET *url* with per-hop validation; return url/type/body/cap state.
@@ -120,6 +119,8 @@ class WebFetchTool(AgentTool):
         validation_error = _validate_public_url(url)
         if validation_error:
             return validation_error
+
+        import aiohttp
 
         max_chars = coerce_int_arg(
             args.get("max_chars", 12_000),
