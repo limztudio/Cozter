@@ -298,6 +298,94 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([m["tool_call_id"] for m in requests[1]["messages"] if m["role"] == "tool"],
                          [c["id"] for c in calls])
 
+    async def test_read_wave_uses_one_complete_checkpoint_instead_of_one_per_read(self):
+        record = _Record()
+        calls = [_call(str(i), path=str(i)) for i in range(4)]
+        requests = 0
+
+        async def stream(*args, **kwargs):
+            nonlocal requests
+            requests += 1
+            return ("", "", calls) if requests == 1 else ("done", "", [])
+
+        async def read(*args):
+            self.assertEqual(len(record.values["http_messages"][-1]["tool_calls"]), 4)
+            await asyncio.sleep(0)
+            return "read evidence"
+
+        with (
+            mock.patch.object(oa, "current_run", return_value=record),
+            mock.patch.object(oa, "_stream_completion", side_effect=stream),
+            mock.patch.object(oa.tools, "execute_tool", side_effect=read),
+        ):
+            await self._run()
+        # Initial request, durable call intent, complete ordered results, and
+        # final answer. A read's completion no longer rewrites the full history.
+        self.assertEqual(len(record.snapshots), 4)
+        self.assertEqual(sum(m["role"] == "tool" for m in record.values["http_messages"]), 4)
+
+    async def test_interrupted_read_wave_preserves_finished_read_and_settles_sibling(self):
+        record = _Record()
+        waiting = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def read(name, args, *unused):
+            if args["path"] == "finished":
+                return "completed read evidence"
+            waiting.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        with (
+            mock.patch.object(oa, "current_run", return_value=record),
+            mock.patch.object(oa, "_stream_completion", new_callable=mock.AsyncMock,
+                              return_value=("", "", [_call("one", path="finished"),
+                                                       _call("two", path="waiting")])),
+            mock.patch.object(oa.tools, "execute_tool", side_effect=read),
+        ):
+            task = asyncio.create_task(self._run())
+            await asyncio.wait_for(waiting.wait(), 2)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertTrue(stopped.is_set())
+        self.assertEqual(record.values["http_pending_results"], {"0": "completed read evidence"})
+        restored = oa._restore_http_messages(record.values["http_messages"],
+                                            record.values["http_pending_results"])
+        self.assertEqual(restored[-2]["content"], "completed read evidence")
+        self.assertIn("outcome is unknown", restored[-1]["content"])
+
+    async def test_read_wave_and_each_mutation_are_durable_before_later_mutations(self):
+        record = _Record()
+        calls = [_call(str(i), path=str(i)) for i in range(4)]
+        calls.extend([_call("write", "write_file"), _call("build", "bash")])
+        requests = 0
+
+        async def stream(*args, **kwargs):
+            nonlocal requests
+            requests += 1
+            return ("", "", calls) if requests == 1 else ("done", "", [])
+
+        async def execute(name, args, *unused):
+            if name == "write_file":
+                self.assertEqual(record.values["http_pending_results"],
+                                 {str(i): "read evidence" for i in range(4)})
+                return "mutation completed"
+            if name == "bash":
+                self.assertEqual(record.values["http_pending_results"]["4"],
+                                 "mutation completed")
+                return "build completed"
+            return "read evidence"
+
+        with (
+            mock.patch.object(oa, "current_run", return_value=record),
+            mock.patch.object(oa, "_stream_completion", side_effect=stream),
+            mock.patch.object(oa.tools, "execute_tool", side_effect=execute),
+        ):
+            await self._run()
+
     def test_plugin_shadowing_read_name_never_enables_parallel_execution(self):
         with mock.patch.dict(oa.tools._BY_NAME, {"read_file": SimpleNamespace(is_plugin=True)}):
             self.assertFalse(oa._parallel_read_tool("read_file"))

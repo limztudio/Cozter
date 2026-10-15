@@ -542,13 +542,15 @@ class OpenAIChatBackend(Backend):
             messages.append({"role": "user", "content": user_content})
         message_bytes = sum(_message_payload_bytes(message) for message in messages)
         pending_results: dict[str, str] = {}
-        checkpoint_lock = asyncio.Lock()
 
         async def save_transcript() -> None:
             if execution is not None:
                 await execution.save(
                     http_identity=identity,
-                    http_messages=copy.deepcopy(messages[1:]),
+                    # save() owns and validates its snapshot before returning;
+                    # duplicating the whole history here adds an event-loop
+                    # copy for every completed tool wave.
+                    http_messages=messages[1:],
                     http_prompt_digest=prompt_digest,
                     http_pending_results=dict(pending_results),
                 )
@@ -679,16 +681,19 @@ class OpenAIChatBackend(Backend):
                             tool_repeat_counts[call_signature] > tool_repeat_limit,
                         )
 
-                    async def run_tool_call(run_index: int) -> None:
+                    async def run_tool_call(run_index: int, *, checkpoint: bool = True) -> None:
                         # execute_tool owns permissions, status, truncation, timeout.
                         _name = _batch_names[run_index]
                         result = await tools.execute_tool(
                             _name, _batch_args[run_index], workspace_path, effective_approval,
                             proc.emit,
                         )
-                        async with checkpoint_lock:
-                            _results[run_index] = result
-                            pending_results[str(run_index)] = result
+                        _results[run_index] = result
+                        pending_results[str(run_index)] = result
+                        if checkpoint:
+                            # A mutation's outcome must be durable before any
+                            # later tool can begin. Independent reads instead
+                            # share one checkpoint per bounded wave.
                             await save_transcript()
 
                     _results: list[str | None] = [None] * len(tool_calls)
@@ -713,7 +718,7 @@ class OpenAIChatBackend(Backend):
                             position += 1
                         # Bounded task creation also bounds filesystem threads.
                         read_tasks = [
-                            asyncio.create_task(run_tool_call(index))
+                            asyncio.create_task(run_tool_call(index, checkpoint=False))
                             for index in read_indices
                         ]
                         try:
@@ -731,7 +736,17 @@ class OpenAIChatBackend(Backend):
                                     await asyncio.shield(cleanup)
                                 except asyncio.CancelledError:
                                     continue
+                            # Retain every read that finished before its wave
+                            # was interrupted. Missing outcomes still recover
+                            # as unknown and never trigger automatic replays.
+                            await save_transcript()
                             raise
+                        if position < len(tool_calls):
+                            # Also acts as the durability barrier before the
+                            # next mutation. The final wave is saved below as
+                            # the complete ordered transcript without writing
+                            # an otherwise redundant pending-results snapshot.
+                            await save_transcript()
                     performance_logger.info(
                         "stage=tool_batch backend=%s seconds=%.3f calls=%d skipped=%d",
                         self.name, time.monotonic() - batch_started,

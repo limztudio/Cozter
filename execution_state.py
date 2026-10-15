@@ -16,10 +16,11 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import tempfile
 from typing import Any
 import uuid
 
-from .utils import save_json_object
+from .utils import _fsync_directory
 
 logger = logging.getLogger(__name__)
 _MAX_STATE_BYTES = 64 * 1024 * 1024
@@ -42,6 +43,37 @@ async def _settle(task: asyncio.Task) -> Any:
     return task.result()
 
 
+def _copy_json_values(values: dict[str, Any]) -> dict[str, Any]:
+    """Normalize and own caller values without retaining mutable references."""
+    return json.loads(json.dumps(values, ensure_ascii=False, allow_nan=False))
+
+
+def _write_snapshot(path: str, snapshot: dict[str, Any]) -> None:
+    """Serialize once off the event loop, then atomically install bounded bytes."""
+    # Match the existing indented/escaped on-disk format and Windows newline
+    # translation. Check the actual bytes before opening a temporary file.
+    encoded = json.dumps(snapshot, indent=2, allow_nan=False)
+    payload = encoded.replace("\n", os.linesep).encode("utf-8")
+    if len(payload) > _MAX_STATE_BYTES:
+        raise ValueError("backend continuation exceeds the 64 MiB limit")
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        _fsync_directory(directory)
+    except BaseException:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            pass
+        raise
+
+
 @dataclass
 class ExecutionRecord:
     """One isolated JSON record, with cancellation-safe serialized writes."""
@@ -51,6 +83,8 @@ class ExecutionRecord:
     _values: dict[str, Any] = field(default_factory=dict)
     _revision: int = 0
     _written: int = 0
+    _operation: int = 0
+    _applied_operations: dict[str, int] = field(default_factory=dict)
     _writer: asyncio.Task | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -76,8 +110,28 @@ class ExecutionRecord:
 
     def set(self, **values: Any) -> None:
         # Reject non-JSON values synchronously, before a caller starts a tool.
-        copied = json.loads(json.dumps(values, ensure_ascii=False, allow_nan=False))
-        self._values.update(copied)
+        self._set_copied(_copy_json_values(values))
+
+    def _reserve_operation(self) -> int:
+        self._operation += 1
+        return self._operation
+
+    def _set_copied(self, copied: dict[str, Any], operation: int | None = None) -> None:
+        if operation is None:
+            operation = self._reserve_operation()
+        # Independent snapshot threads can finish out of order. A slow older
+        # save must not overwrite a newer save or a synchronous native event.
+        # Failed validation never marks a key applied, retaining earlier valid
+        # updates if a later invalid update is rejected.
+        accepted = {
+            key: value for key, value in copied.items()
+            if self._applied_operations.get(key, 0) < operation
+        }
+        if not accepted:
+            return
+        self._values.update(accepted)
+        for key in accepted:
+            self._applied_operations[key] = operation
         self._revision += 1
         if self._writer is None or self._writer.done():
             self._writer = asyncio.create_task(
@@ -85,9 +139,26 @@ class ExecutionRecord:
             )
 
     async def save(self, **values: Any) -> None:
-        if values:
-            self.set(**values)
-        await self.flush()
+        if not values:
+            await self.flush()
+            return
+        operation = self._reserve_operation()
+
+        async def snapshot_and_write() -> None:
+            # HTTP histories can be several MiB. Keep their JSON validation
+            # and copy out of event parsing/status dispatch. The owned task
+            # also ensures cancellation cannot drop a completed tool result
+            # while its snapshot is being prepared.
+            copied = await asyncio.to_thread(_copy_json_values, values)
+            self._set_copied(copied, operation)
+            await self.flush()
+
+        task = asyncio.create_task(snapshot_and_write(), name="save-execution-state")
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await _settle(task)
+            raise
 
     async def flush(self) -> None:
         writer = self._writer
@@ -106,18 +177,14 @@ class ExecutionRecord:
                 snapshot = {
                     "version": _VERSION,
                     "identity": self.key,
-                    "values": deepcopy(self._values),
+                    # Values are already privately copied on entry and get()
+                    # returns copies. Updates replace top-level values, so a
+                    # shallow snapshot remains immutable during thread I/O.
+                    "values": dict(self._values),
                 }
-                # Bound before invoking the filesystem writer. Retain older
-                # valid state on overflow, never silently truncate a transcript.
-                # Match utils.atomic_write's actual escaped, indented bytes.
-                encoded = json.dumps(snapshot, indent=2)
-                size = len(encoded.replace("\n", os.linesep).encode("utf-8"))
-                if size > _MAX_STATE_BYTES:
-                    raise ValueError("backend continuation exceeds the 64 MiB limit")
                 self.directory
                 path = str(self.path)
-                await asyncio.to_thread(save_json_object, path, snapshot)
+                await asyncio.to_thread(_write_snapshot, path, snapshot)
                 self._written = revision
 
 

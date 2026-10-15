@@ -26,11 +26,40 @@ def _fake_git(outputs: dict[str, str], calls: list[tuple[str, ...]]):
 
 
 class UpdaterAutoPullGuardTests(unittest.TestCase):
+    def setUp(self):
+        startup = mock.patch.object(updater, "_STARTUP_COMMIT", "abc123")
+        startup.start()
+        self.addCleanup(startup.stop)
+
     def test_git_probe_closes_stdin_instead_of_sharing_cli_input(self) -> None:
         with mock.patch.object(updater.subprocess, "run") as run:
             updater._git("rev-parse", "HEAD")
 
         self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_background_git_uses_cached_credentials_without_modifying_parent_environment(self):
+        with (mock.patch.dict(updater.os.environ, {
+                    "GIT_TERMINAL_PROMPT": "1", "GCM_INTERACTIVE": "1",
+                    "COZTER_TEST_ENV": "retained",
+                }), mock.patch.object(updater.subprocess, "run") as run):
+            updater._git("fetch", "origin")
+            child_env = run.call_args.kwargs["env"]
+            self.assertEqual(child_env["GIT_TERMINAL_PROMPT"], "0")
+            self.assertEqual(child_env["GCM_INTERACTIVE"], "0")
+            self.assertEqual(child_env["COZTER_TEST_ENV"], "retained")
+            self.assertEqual(updater.os.environ["GCM_INTERACTIVE"], "1")
+            self.assertEqual(updater.os.environ["GIT_TERMINAL_PROMPT"], "1")
+
+    def test_already_applied_local_update_does_not_wait_for_network(self):
+        with (mock.patch.object(updater, "_head_changed", return_value=True),
+              mock.patch.object(updater, "_fetch_origin", side_effect=AssertionError("network unnecessary"))):
+            self.assertTrue(updater.check_for_update())
+            self.assertTrue(updater.fetch_and_pull())
+
+    def test_local_update_during_fetch_is_still_detected(self):
+        with (mock.patch.object(updater, "_head_changed", side_effect=[False, True]),
+              mock.patch.object(updater, "_fetch_origin", return_value=False)):
+            self.assertTrue(updater.check_for_update())
 
     def _run_fetch_and_pull(
         self, outputs: dict[str, str],
@@ -204,7 +233,7 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
                 updater, "_git",
                 side_effect=subprocess.TimeoutExpired("git", 1),
             ),
-            mock.patch.object(updater, "_head_changed", return_value=True),
+            mock.patch.object(updater, "_head_changed", side_effect=[False, True]),
         ):
             self.assertTrue(updater.fetch_and_pull())
 

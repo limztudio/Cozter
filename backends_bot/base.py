@@ -27,7 +27,7 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from typing import BinaryIO, ClassVar, TypeVar
@@ -55,6 +55,35 @@ logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
 
 _FileResult = TypeVar("_FileResult")
+
+
+async def _run_owned_poll_tasks(tasks: list[asyncio.Task[None]]) -> None:
+    """Keep worker cleanup owned when shutdown is cancelled repeatedly."""
+    if not tasks:
+        return
+    group = asyncio.gather(*tasks)
+    interrupted: asyncio.CancelledError | None = None
+    try:
+        # wait() prevents parent cancellation from repeatedly cancelling a
+        # provider's already-running process/RPC cleanup through gather().
+        await asyncio.wait((group,))
+        group.result()
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        pending = {task for task in tasks if not task.done()}
+        while pending:
+            try:
+                _, pending = await asyncio.wait(pending)
+            except asyncio.CancelledError as error:
+                interrupted = error
+        # A child cancellation can finish gather before its siblings; all
+        # siblings have now settled and its exception must still be consumed.
+        with suppress(asyncio.CancelledError, Exception):
+            group.result()
+        if interrupted is not None:
+            raise interrupted
 
 
 async def _run_durable_file_operation(
@@ -138,6 +167,8 @@ _INJECT_ACK_TIMEOUT_SEC = 8.0
 _ATTACHMENT_TAIL_WAIT_SEC = 5.0
 _ATTACHMENT_UPLOAD_CONCURRENCY = 3
 _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
+# A stalled provider or chat must leave capacity for unrelated owners.
+_DURABLE_POLL_CONCURRENCY = 4
 _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
 # Precompiled for state save/load.
 _UNSAFE_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -717,6 +748,9 @@ class BotPlatform(ABC):
         self._reply_delivery_file_lock: asyncio.Lock = asyncio.Lock()
         # Per-user delivery-vs-cancel lock.
         self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
+        # Recovery poll classes run independently; outbound chunks for one
+        # owner still form one ordered delivery rather than interleaving.
+        self._recovery_delivery_locks: dict[str, asyncio.Lock] = {}
         self._reply_delivery_tasks: dict[str, set[asyncio.Task]] = {}
         self._pending_reply_delivery_users: set[str] = set()
         # Stop/cancel can overlap while durable file operations settle.
@@ -3102,6 +3136,9 @@ class BotPlatform(ABC):
         """Return the per-user lock for delivery/cancellation ordering."""
         return ensure_lock(self._reply_delivery_locks, uid)
 
+    def _recovery_delivery_lock(self, uid: str) -> asyncio.Lock:
+        return ensure_lock(self._recovery_delivery_locks, uid)
+
     async def _get_reply_delivery_record(
         self, record_id: str,
     ) -> dict | None:
@@ -3325,7 +3362,7 @@ class BotPlatform(ABC):
         record_id = record["id"]
         uid = record["user_id"]
         # Re-check under the lock before sending.
-        async with self._reply_delivery_lock(uid):
+        async with self._recovery_delivery_lock(uid), self._reply_delivery_lock(uid):
             record = await self._get_reply_delivery_record(record_id)
             if record is None:
                 return False
@@ -3377,8 +3414,49 @@ class BotPlatform(ABC):
         return True
 
     async def _check_reply_deliveries(self) -> None:
-        for record in await self._list_reply_delivery_records():
-            await self._deliver_staged_reply(record)
+        await self._poll_records_by_owner(
+            await self._list_reply_delivery_records(),
+            self._deliver_staged_reply,
+            label="completed reply",
+        )
+
+    async def _poll_records_by_owner(
+        self, records: list[dict], operation: Callable[[dict], Awaitable[object]],
+        *, label: str,
+    ) -> None:
+        """Poll independent owners concurrently, preserving each owner's order.
+
+        Fixed workers bound both live operations and task creation. A failed
+        staged reply returns False, holding later replies for that same owner
+        until recovery, while other owners can continue immediately.
+
+        This is one bounded parallel pass. Its next pass waits for the slowest
+        owner; existing provider/platform operation deadlines bound that wait.
+        The three recovery classes have independent polling cycles.
+        """
+        grouped: dict[str, list[dict]] = {}
+        for record in records:
+            grouped.setdefault(record["user_id"], []).append(record)
+        owners = iter(grouped.values())
+
+        async def worker() -> None:
+            for owner_records in owners:
+                for record in owner_records:
+                    try:
+                        if await operation(record) is False:
+                            break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.warning(
+                            "Could not poll %s %s", label, record["id"], exc_info=True,
+                        )
+                        break
+
+        workers = [asyncio.create_task(worker()) for _ in range(
+            min(_DURABLE_POLL_CONCURRENCY, len(grouped)),
+        )]
+        await _run_owned_poll_tasks(workers)
 
     def _detached_tasks_file_path(self) -> str:
         """Return this platform's durable detached-task ledger path."""
@@ -3580,16 +3658,25 @@ class BotPlatform(ABC):
             await await_cancelled(task)
 
     async def _detached_task_loop(self) -> None:
-        while True:
-            try:
-                await self._check_job_retries()
-                await self._check_reply_deliveries()
-                await self._check_detached_tasks()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Durable completion poll failed")
-            await asyncio.sleep(_DETACHED_TASK_POLL_INTERVAL_SEC)
+        async def poll(check: Callable[[], Awaitable[None]], label: str) -> None:
+            while True:
+                try:
+                    await check()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Durable %s poll failed", label)
+                await asyncio.sleep(_DETACHED_TASK_POLL_INTERVAL_SEC)
+
+        # A slow provider status or reply send must not postpone due job
+        # retries, nor stall another recovery class on every later cycle.
+        tasks = [asyncio.create_task(poll(check, label), name=f"{self.platform_id}:{label}")
+                 for check, label in (
+                     (self._check_job_retries, "job-retries"),
+                     (self._check_reply_deliveries, "reply-deliveries"),
+                     (self._check_detached_tasks, "detached-completions"),
+                 )]
+        await _run_owned_poll_tasks(tasks)
 
     async def _check_job_retries(self) -> None:
         """Wake due prerequisite recovery without occupying a foreground turn.
@@ -3605,6 +3692,8 @@ class BotPlatform(ABC):
         )
         now = time.time()
         for uid, raw_entries in data.items():
+            if uid in self._pending_reply_delivery_users:
+                continue
             entries = self._queue_entries(raw_entries)
             if not entries:
                 continue
@@ -3617,6 +3706,7 @@ class BotPlatform(ABC):
                 def claim() -> bool:
                     if (self._update_restart_pending
                             or self._cancel_work_depths.get(uid, 0)
+                            or uid in self._pending_reply_delivery_users
                             or self._cancel_generations.get(uid, 0) != generation
                             or task_lock.locked()):
                         return False
@@ -3660,8 +3750,10 @@ class BotPlatform(ABC):
             return False
 
     async def _check_detached_tasks(self) -> None:
-        for record in await self._list_detached_task_records():
-            await self._check_detached_task(record)
+        await self._poll_records_by_owner(
+            await self._list_detached_task_records(), self._check_detached_task,
+            label="detached task",
+        )
 
     async def _check_detached_task(self, record: dict) -> None:
         """Poll/deliver one record. A final payload is persisted before I/O."""
@@ -3778,7 +3870,10 @@ class BotPlatform(ABC):
                 self._detached_delivery_tasks.pop(uid, None)
 
     async def _report_live_blocked_detached_task(self, record: dict, message: str) -> None:
-        async with self._detached_task_delivery_lock(record["user_id"]):
+        uid = record["user_id"]
+        async with self._recovery_delivery_lock(uid), self._detached_task_delivery_lock(uid):
+            if uid in self._pending_reply_delivery_users:
+                return  # Keep the notification eligible after the owed reply.
             record = await self._get_detached_task_record(record["id"])
             if record is None or record.get("last_reported_state") == "blocked":
                 return
@@ -3814,7 +3909,10 @@ class BotPlatform(ABC):
         )
 
     async def _deliver_current_detached_task(self, record: dict, message: str) -> None:
-        async with self._detached_task_delivery_lock(record["user_id"]):
+        uid = record["user_id"]
+        async with self._recovery_delivery_lock(uid), self._detached_task_delivery_lock(uid):
+            if uid in self._pending_reply_delivery_users:
+                return  # Its staged payload remains durable for the next poll.
             live = await self._get_detached_task_record(record["id"])
             if live is None:
                 return

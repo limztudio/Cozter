@@ -84,7 +84,7 @@ class ExecutionStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancelled_save_settles_owned_write_before_returning(self):
         entered = threading.Event()
         release = threading.Event()
-        original = execution_state.save_json_object
+        original = execution_state._write_snapshot
 
         def slow_write(path, snapshot):
             entered.set()
@@ -94,7 +94,7 @@ class ExecutionStateTests(unittest.IsolatedAsyncioTestCase):
 
         async with execution_state.execution_scope(self.workspace, "job", "request"):
             record = await execution_state.record("plan")
-            with mock.patch.object(execution_state, "save_json_object", slow_write):
+            with mock.patch.object(execution_state, "_write_snapshot", slow_write):
                 save = asyncio.create_task(record.save(completed=["first"]))
                 for _ in range(100):
                     if entered.is_set():
@@ -109,6 +109,98 @@ class ExecutionStateTests(unittest.IsolatedAsyncioTestCase):
                     await save
             self.assertEqual(json.loads(record.path.read_bytes())["values"]["completed"],
                              ["first"])
+
+    async def test_large_async_snapshot_does_not_block_loop_or_lose_concurrent_set(self):
+        entered = threading.Event()
+        release = threading.Event()
+        main_thread = threading.get_ident()
+        original = execution_state._copy_json_values
+
+        def slow_copy(values):
+            if "history" in values:
+                self.assertNotEqual(threading.get_ident(), main_thread)
+                entered.set()
+                if not release.wait(5):
+                    raise RuntimeError("test failed to release snapshot")
+            return original(values)
+
+        async with execution_state.execution_scope(self.workspace, "job", "request"):
+            record = await execution_state.record("http")
+            with mock.patch.object(execution_state, "_copy_json_values", slow_copy):
+                task = asyncio.create_task(record.save(history=["x" * (8 * 1024 * 1024)]))
+                for _ in range(100):
+                    if entered.is_set():
+                        break
+                    await asyncio.sleep(.01)
+                self.assertTrue(entered.is_set())
+                # The loop and native event updates remain usable while a
+                # large transcript's owned snapshot is being prepared.
+                record.set(native_session_id="concurrent-session")
+                task.cancel()
+                await asyncio.sleep(0)
+                task.cancel()
+                await asyncio.sleep(.01)
+                self.assertFalse(task.done())
+                release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            saved = json.loads(record.path.read_bytes())["values"]
+            self.assertEqual(saved["native_session_id"], "concurrent-session")
+            self.assertEqual(len(saved["history"][0]), 8 * 1024 * 1024)
+
+    async def test_async_save_owns_values_after_return_and_serializes_off_loop(self):
+        main_thread = threading.get_ident()
+        original = execution_state._write_snapshot
+        threads = []
+
+        def write(path, snapshot):
+            threads.append(threading.get_ident())
+            return original(path, snapshot)
+
+        async with execution_state.execution_scope(self.workspace, "job", "request"):
+            record = await execution_state.record("http")
+            source = {"messages": [{"content": "saved"}]}
+            with mock.patch.object(execution_state, "_write_snapshot", write):
+                await record.save(history=source)
+                source["messages"][0]["content"] = "caller changed its copy"
+                await record.save(next_step=True)
+            self.assertTrue(threads)
+            self.assertNotIn(main_thread, threads)
+            expected = {"messages": [{"content": "saved"}]}
+            self.assertEqual(record.get("history"), expected)
+            self.assertEqual(json.loads(record.path.read_bytes())["values"]["history"], expected)
+
+    async def test_out_of_order_snapshot_threads_never_replace_newer_values(self):
+        entered = threading.Event()
+        release = threading.Event()
+        original = execution_state._copy_json_values
+
+        def slow_old_copy(values):
+            if values.get("history") == "old snapshot":
+                entered.set()
+                if not release.wait(5):
+                    raise RuntimeError("test failed to release snapshot")
+            return original(values)
+
+        async with execution_state.execution_scope(self.workspace, "job", "request"):
+            record = await execution_state.record("http")
+            with mock.patch.object(execution_state, "_copy_json_values", slow_old_copy):
+                old_save = asyncio.create_task(record.save(
+                    history="old snapshot", native_session_id="old session", older_only="retain",
+                ))
+                for _ in range(100):
+                    if entered.is_set():
+                        break
+                    await asyncio.sleep(.01)
+                self.assertTrue(entered.is_set())
+                await record.save(history="new snapshot")
+                record.set(native_session_id="new session")
+                release.set()
+                await old_save
+            saved = json.loads(record.path.read_bytes())["values"]
+            self.assertEqual(saved["history"], "new snapshot")
+            self.assertEqual(saved["native_session_id"], "new session")
+            self.assertEqual(saved["older_only"], "retain")
 
     async def test_non_json_and_oversized_state_fail_without_overwriting_valid_state(self):
         async with execution_state.execution_scope(self.workspace, "job", "request"):

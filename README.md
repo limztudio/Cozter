@@ -409,6 +409,19 @@ changed guidance joins the same conversation. Internal routing, summary and
 compaction calls stay stateless. Completed queue entries remove their owned
 execution state. Invalid saved state is preserved and reported rather than
 silently starting over. No schedule definition changes are needed.
+Large snapshots are privately copied and encoded on worker threads, with one
+serialization per atomic checkpoint write. Independent HTTP reads share a
+checkpoint per bounded wave, retaining completed results if that wave is
+interrupted. Each state-changing tool still records its result durably before
+the next tool begins. Concurrent saves use per-key ordering so a slow older
+snapshot cannot replace a newer native-session event or tool outcome.
+
+Durable prerequisite retries, staged replies and detached completions run on
+independent polling cycles. Reply and detached passes use at most four owner
+workers; one owner's records remain ordered, and an owed final reply takes
+priority over its detached notifications. Each bounded pass waits for its
+slowest owner before its next cycle, subject to existing provider/platform
+deadlines. A slow operation in one class leaves the other classes running.
 The continuation instruction asks workers to reuse per-case validation
 checkpoints when inputs and the build are unchanged, such as CTest `-F`,
 while checking retained full logs for prior failures. A successful remaining
@@ -419,6 +432,13 @@ it. These limits do not change permissions, models, reasoning effort, or
 individual tool and provider limits. `update_idle_timeout` (default 1200s) controls how often
 the auto-update loop dumps diagnostics while waiting for active turns; it
 keeps waiting instead of restarting through active work.
+An already-applied local commit is detected before contacting the remote, so
+network delays do not postpone recognition or activation of that update.
+Background updater Git processes retain cached credentials and disable
+interactive authentication prompts through process-local
+[`GIT_TERMINAL_PROMPT`](https://git-scm.com/docs/git#Documentation/git.adoc-GITTERMINALPROMPT)
+and [`GCM_INTERACTIVE`](https://github.com/git-ecosystem/git-credential-manager/blob/main/docs/environment.md#gcm_interactive).
+The operator's interactive Git environment and configuration stay unchanged.
 `dump_traceback_interval` (default 0) enables optional periodic thread dumps
 when set above zero; on-demand `SIGUSR1` diagnostics remain available either
 way.
@@ -1179,6 +1199,12 @@ obligations assigned to the same tier are combined into cohesive workers;
 all individual obligations and overflow remain explicit. Duplicate pending
 instructions are removed, while verification after changes and stronger-tier
 escalations remain distinct work.
+Fallback workers retain a full checkpoint request once, with an explicit
+reference instead of a second verbatim copy. Exactly identical long reports
+share their retained evidence while preserving every plan-item header and
+blocked marker. Judge continuations retain the prior draft before the exact
+current request suffix, preventing the planner from appending that request
+again. Distinct requirements and evidence remain present.
 
 The grading rubric the planner is held to:
 
@@ -1804,7 +1830,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (96 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 93 `test_*.py` modules:
+- Tests (98 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 95 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_backend_audit_regressions.py`,
@@ -1816,6 +1842,7 @@ ignored for local secrets and runtime queues.
   `test_cloud_model_capabilities.py`, `test_compaction.py`, `test_config.py`,
   `test_detached_tasks.py`, `test_discovery_optimization.py`,
   `test_discovery_pruning.py`, `test_discovery_tools_async.py`,
+  `test_durable_poll_parallelism.py`,
   `test_edit_file_read_limits.py`, `test_flexible_parallel_plan.py`,
   `test_execution_state.py`, `test_flexible_continuation.py`,
   `test_flexible_parallel_runtime.py`, `test_flexible.py`,
@@ -1830,6 +1857,7 @@ ignored for local secrets and runtime queues.
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
   `test_platform_formatting.py`, `test_prerequisite_checkpoint.py`,
   `test_prompt_subprocess.py`, `test_queue_persistence_latency.py`,
+  `test_prompt_payload_dedup.py`,
   `test_read_files.py`,
   `test_reply_delivery.py`, `test_run_lock.py`, `test_runtime_diagnostics.py`,
   `test_schedule_execution.py`, `test_session_picker.py`,

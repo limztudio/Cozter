@@ -24,12 +24,16 @@ WINDOWS_SUPERVISOR_ENV = "COZTER_WINDOWS_SUPERVISED"
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     """Run a git command with a timeout, returning the CompletedProcess."""
+    # Update checks cannot answer a terminal or credential-manager dialog.
+    # Cached credentials remain available; process-local overrides leave the
+    # operator's interactive Git configuration and environment unchanged.
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="0")
     return subprocess.run(
         ["git", *args],
         # Background probes must never share the CLI input reader's pipe.
         stdin=subprocess.DEVNULL,
         cwd=MODULE_ROOT, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
-        check=False,
+        check=False, env=env,
     )
 
 
@@ -208,6 +212,10 @@ def check_for_update() -> bool:
     live while this check runs. Pulling is deliberately deferred until the
     runtime has paused new turns and existing turns have finished.
     """
+    # An operator's already-applied update needs no network round trip before
+    # the runtime can begin its normal safe-boundary restart.
+    if _head_changed():
+        return True
     fetched = _fetch_origin()
     if _head_changed():
         return True
@@ -226,6 +234,8 @@ def fetch_and_pull() -> bool:
     that case, so a developer's own commit or manual pull is picked up and
     a restart is scheduled as before.
     """
+    if _head_changed():
+        return True
     if not _fetch_origin():
         return _head_changed()
     try:

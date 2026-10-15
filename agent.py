@@ -1126,6 +1126,28 @@ def _planner_context(contextual_prompt: str, request: str) -> str:
     return head + _PLANNER_OMISSION_MARKER + tail + request
 
 
+def _build_continuation_prompt(
+    contextual_prompt: str, request: str, draft: str, followup: str, *, draft_limit: int,
+) -> str:
+    """Retain history and evidence once, with the exact current request last.
+
+    The flexible planner recognizes the request as a suffix when budgeting
+    historical context. Inserting the previous draft between the original
+    request and its follow-up defeats that recognition and appends the whole
+    request a second time. Keep its evidence before the combined request.
+    """
+    history = (contextual_prompt[:-len(request)]
+               if request and contextual_prompt.endswith(request)
+               else contextual_prompt + ("\n\n" if contextual_prompt else ""))
+    return (
+        history
+        + "[Previous draft — continue its work and return the completed answer]:\n"
+        + flexible._bounded_draft_excerpt(draft, limit=draft_limit)
+        + "\n\nNew message:\n"
+        + request + followup
+    )
+
+
 def _build_contextual_prompt(
     prompt: str,
     session_data: dict | None,
@@ -3225,11 +3247,9 @@ async def _run_turn_impl(
                 _snapshot_attachment_images, workspace_path,
             )
             previous_result = result
-            continuation_prompt = (
-                contextual_prompt
-                + "\n\n[Previous draft — continue its work and return the completed answer]:\n"
-                + flexible._bounded_draft_excerpt(draft, limit=history_budget)
-                + followup
+            continuation_prompt = _build_continuation_prompt(
+                contextual_prompt, effective_prompt, draft, followup,
+                draft_limit=history_budget,
             )
             try:
                 result, restarting = await _run_phase(

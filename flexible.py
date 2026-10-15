@@ -563,6 +563,13 @@ def build_subtask_prompt(
     final evidence.
     """
     task = plan.subtasks[index]
+    # A fallback task is the entire request, including any durable checkpoint.
+    # Keep that payload once and point the actionable instruction back to it.
+    # Only exact equality is safe: a shorter or revised task still needs its
+    # full wording beside the execution rules below.
+    task_instruction = task.instruction
+    if len(task_instruction) >= 128 and task_instruction == context.strip():
+        task_instruction = "the complete user request above, including every saved obligation and constraint"
     parts = [context, ""]
     parts.append(
         f"[Sub-task {index + 1}/{len(plan.subtasks)}: {task.tier}]"
@@ -573,25 +580,37 @@ def build_subtask_prompt(
     parts.append("\nPlan:")
     parts.append(_render_plan(plan, current=index))
 
+    retained_reports: list[str] = []
     if results:
         parts.append("\nEarlier reports:")
         for result_index, text in enumerate(results):
+            excerpt = _truncate_report(text)
+            duplicate = next((earlier + 1 for earlier, retained in enumerate(results[:result_index])
+                              if len(excerpt) >= 128 and text == retained), None)
+            retained_reports.append(excerpt)
             parts.append(
                 f"\n--- report {result_index + 1} ---\n"
-                f"{_truncate_report(text)}"
+                + (f"Same evidence as report {duplicate} above (identical report)."
+                   if duplicate is not None else excerpt)
             )
 
     if previous_draft:
+        excerpt = _bounded_draft_excerpt(previous_draft)
+        already_retained = len(previous_draft) >= 128 and (
+            previous_draft in context or excerpt in context
+            or any(previous_draft in report or excerpt in report for report in retained_reports)
+        )
         parts.append(
             "\nPrevious draft and evidence from this turn:\n"
-            + _bounded_draft_excerpt(previous_draft)
+            + ("The same retained evidence already appears in the user request or earlier reports above."
+               if already_retained else excerpt)
             + "\nRetain completed work and verify its current state. Address"
             " the remaining instructions without repeating completed actions."
         )
 
     if task.read_only:
         parts.append(
-            f"\nYour task: {task.instruction}\n"
+            f"\nYour task: {task_instruction}\n"
             "Inspection only: read existing files, logs, and metadata within this"
             " task's scope. Do not write, edit, delete, apply fixes, create files,"
             " build, run tests, launch or stop processes, commit, or push."
@@ -614,7 +633,7 @@ def build_subtask_prompt(
         return "\n".join(parts)
 
     parts.append(
-        f"\nYour task: {task.instruction}\n"
+        f"\nYour task: {task_instruction}\n"
         "Finish ALL of it - never a sample. If it says all/entire/every,"
         " find every item first (glob/grep/list), handle each one, then"
         " re-check for leftovers.\n"
@@ -685,6 +704,7 @@ def build_merge_prompt(
     parts.append("\n--- reports ---")
     # Lengths may differ; index both sides instead of zip().
     report_count = max(len(plan.subtasks), len(results))
+    retained_reports: list[str] = []
     for report_index in range(report_count):
         task = plan.subtasks[report_index] if report_index < len(plan.subtasks) else None
         text = results[report_index] if report_index < len(results) else ""
@@ -695,9 +715,12 @@ def build_merge_prompt(
             if task is not None
             else f"\n--- {report_index + 1} [unknown]: (no sub-task){tag} ---\n"
         )
-        parts.append(
-            header + (_truncate_report(text) if text else "(no report)"),
-        )
+        excerpt = _truncate_report(text) if text else "(no report)"
+        duplicate = next((earlier + 1 for earlier, retained in enumerate(retained_reports)
+                          if len(excerpt) >= 128 and text and text == retained), None)
+        retained_reports.append(text)
+        parts.append(header + (f"Same evidence as report {duplicate} above (identical report)."
+                               if duplicate is not None else excerpt))
     parts.append("\n--- end ---\n\nWrite the user's reply.")
     return "\n".join(parts)
 
