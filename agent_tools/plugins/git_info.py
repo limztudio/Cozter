@@ -23,6 +23,8 @@ from ..base import (
 from ...utils import clip_status_value
 from ._git_common import (
     GitFailedError as _GitFailedError,
+    MAX_OUTPUT_CHARS,
+    _GitTextWindow,
     add_common_git_flags,
     append_stderr_note as _append_stderr_note,
     bounded as _bounded,
@@ -43,13 +45,55 @@ _ACTIONS = (
     "show",
     "blame",
 )
+_PAGE_CONTENT_CHARS = MAX_OUTPUT_CHARS - 1000
+
+
+def _output_offset(args: dict) -> int:
+    offset = args.get("offset", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError("'offset' must be a non-negative integer character offset")
+    return offset
+
+
+def _page_output(window: _GitTextWindow, stderr: str) -> str:
+    text = window.text()
+    end = window.offset + len(text)
+    more = end < window.total_chars
+    if not window.offset and not more and not window.incomplete:
+        return _bounded(_append_stderr_note(text.strip(), stderr))
+    if window.offset > window.total_chars:
+        location = f"offset {window.offset} is beyond {window.total_chars} output characters"
+    else:
+        location = f"characters {window.offset}:{end} of {window.total_chars}"
+    footer = f"\n[git_info output {location}; "
+    if more:
+        footer += (
+            f"truncated page; next_offset={end}. Repeat the same request"
+            f" with offset={end} to fetch the remainder; never treat this"
+            " preview as full content; say PARTIAL + remainder while output remains. "
+        )
+    elif window.incomplete:
+        footer += "output is incomplete because a child kept a pipe open. "
+    else:
+        footer += "end of output. "
+    if window.incomplete and more:
+        footer += "A child kept a pipe open; captured output may be incomplete. "
+    footer += (
+        "Combine pages only while the repository is unchanged;"
+        " restart at offset=0 after changes.]"
+    )
+    return _bounded(_append_stderr_note(text, stderr) + footer)
 
 
 class GitInfoTool(AgentTool):
     name = "git_info"
     order = 20
+    max_result_chars = MAX_OUTPUT_CHARS
+    parallel_safe = True
     description = (
         "Git status/log/diff/branches/tags/stashes/show/blame. Read-only."
+        " Long output is paged by character offset; follow next_offset with"
+        " the same request, restarting at zero if the repository changes."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
@@ -74,6 +118,14 @@ class GitInfoTool(AgentTool):
                 "type": "integer",
                 "description": "1-based line for blame; needs path.",
             },
+            "line_count": {
+                "type": "integer",
+                "description": "Blame range length (1–200); starts at line or 1.",
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Zero-based output character offset; use next_offset from the previous page.",
+            },
         },
         ["action"],
     )
@@ -88,16 +140,20 @@ class GitInfoTool(AgentTool):
 
         try:
             argv = self._build_argv(workspace_path, action, args)
+            offset = _output_offset(args)
         except ValueError as exc:
             return f"Error: {exc}"
 
         try:
-            stdout, stderr = await self._run_git(argv, workspace_path)
+            window = _GitTextWindow(offset, _PAGE_CONTENT_CHARS)
+            stdout, stderr = await self._run_git(
+                argv, workspace_path, stdout_window=window,
+            )
         except (FileNotFoundError, TimeoutError, _GitFailedError) as exc:
             return _finish_git_run_error(action, exc)
 
         text = stdout.strip()
-        if not text:
+        if not text and not offset and not window.total_chars and not window.incomplete:
             if action == "log":
                 return "No commits yet."
             if action == "diff":
@@ -107,7 +163,7 @@ class GitInfoTool(AgentTool):
             if action == "stashes":
                 return "No stashes."
             return "(no output)"
-        return _bounded(_append_stderr_note(text, stderr))
+        return _page_output(window, stderr)
 
     @staticmethod
     def _build_argv(
@@ -181,16 +237,27 @@ class GitInfoTool(AgentTool):
             if isinstance(ref, str) and ref.strip()
             else "HEAD"
         )
-        if line is None or line is False:
+        line_count = args.get("line_count")
+        if line_count is not None:
+            if (
+                isinstance(line_count, bool) or not isinstance(line_count, int)
+                or not 1 <= line_count <= 200
+            ):
+                raise ValueError("'line_count' must be an integer between 1 and 200")
+        if (line is None or line is False) and line_count is None:
             return argv + ["blame", "--no-textconv", revision, "--", resolved]
-        number = coerce_int_arg(line, default=0, minimum=1, maximum=1_000_000)
+        number = coerce_int_arg(line, default=1, minimum=1, maximum=1_000_000)
+        last = number + (line_count or 1) - 1
         return argv + [
-            "blame", "--no-textconv", "-L", f"{number},{number}",
+            "blame", "--no-textconv", "-L", f"{number},{last}",
             revision, "--", resolved,
         ]
 
     @staticmethod
-    async def _run_git(argv: list[str], workspace: str) -> tuple[str, str]:
+    async def _run_git(
+        argv: list[str], workspace: str,
+        *, stdout_window: _GitTextWindow | None = None,
+    ) -> tuple[str, str]:
         """Run a fixed read-only git argv and return decoded output.
 
         The argv is built here from constants plus the caller's workspace,
@@ -200,11 +267,13 @@ class GitInfoTool(AgentTool):
         fsmonitor daemon spawn, and no locale-dependent path quoting.
         """
         is_diff = len(argv) > 3 and argv[3] == "diff"
-        env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+        env = {
+            **os.environ, "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "0",
+        }
         argv = add_common_git_flags(argv)
-        stdout, stderr, returncode = await _git_once(
-            argv, workspace, env,
-        )
+        capture = {"stdout_window": stdout_window} if stdout_window is not None else {}
+        stdout, stderr, returncode = await _git_once(argv, workspace, env, **capture)
         if returncode != 0 and is_diff and "HEAD" in argv:
             head_failure = any(
                 marker in stderr.casefold()
@@ -215,9 +284,7 @@ class GitInfoTool(AgentTool):
                 rebuilt = [
                     "--cached" if arg == "HEAD" else arg for arg in argv
                 ]
-                stdout, stderr, returncode = await _git_once(
-                    rebuilt, workspace, env,
-                )
+                stdout, stderr, returncode = await _git_once(rebuilt, workspace, env, **capture)
         if returncode != 0:
             raise _GitFailedError(first_stderr_line(stderr))
         return stdout, stderr

@@ -237,6 +237,7 @@ def _fit_output(
 class MemoryTool(AgentTool):
     name = "memory"
     order = 20
+    parallel_safe = True
     description = "Chat memory (sessions, summaries, colony)."
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {
@@ -251,6 +252,13 @@ class MemoryTool(AgentTool):
             "limit": {
                 "type": "integer",
                 "description": "max 20/100.",
+            },
+            "offset": {
+                "type": "integer", "minimum": 0,
+                "description": (
+                    "Read only: newest messages already consumed. Use the"
+                    " returned offset to page toward older messages."
+                ),
             },
         },
         ["action"],
@@ -376,31 +384,89 @@ class MemoryTool(AgentTool):
                 "Error: 'session' is required for read (a name, an id or"
                 " unique prefix, or 'last')"
             )
+        offset = args.get("offset", 0)
+        if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+            return "Error: 'offset' must be a non-negative integer for read"
         count = coerce_int_arg(
             args.get("limit", _READ_MESSAGES_DEFAULT),
             default=_READ_MESSAGES_DEFAULT,
             minimum=1,
             maximum=_READ_MESSAGES_MAX,
         )
-        data, error = _find_session(_load_sessions(sessions_dir), target)
+        # A full durable id already identifies its file. Reading every other
+        # transcript first makes this bounded operation grow with all history.
+        # Names, prefixes and newest aliases retain the existing resolver.
+        data = None
+        session_id = target.strip()
+        if (
+            session_id.casefold() not in _NEWEST_ALIASES
+            and session_id not in {".", ".."}
+            and not any(character in session_id for character in "\x00/\\:")
+        ):
+            try:
+                path = resolve_inside_workspace(sessions_dir, f"{session_id}.json")
+            except ValueError:
+                pass
+            else:
+                data = _load_session_file(path, session_id)
+        error = None
+        if data is None:
+            data, error = _find_session(_load_sessions(sessions_dir), target)
         if error or data is None:
             return error or "Error: session not found"
 
         total = len(data["messages"])
-        window = data["messages"][-count:]
-        shown_from = total - len(window) + 1
-        header = (
-            f"Session: {data['name']} (id {data['id'][:8]},"
-            f" {data['created'][:10] or 'unknown date'},"
-            f" {total} message(s), showing last {len(window)})"
-        )
-        lines = []
-        for offset, msg in enumerate(window):
+        end = max(0, total - offset)
+        if offset and end == 0:
+            return "No older messages remain in this session."
+        window = data["messages"][max(0, end - count):end]
+        shown_from = end - len(window) + 1
+        lines: list[str] = []
+        for index, msg in enumerate(window):
             content = msg["content"]
             if len(content) > _LINE_CAP:
                 content = content[:_LINE_CAP] + "… [line clipped]"
-            lines.append(f"{shown_from + offset}. {msg['role'].capitalize()}: {content}")
-        return _fit_output(lines, header, keep_newest=True)
+            lines.append(f"{shown_from + index}. {msg['role'].capitalize()}: {content}")
+        while True:
+            shown = len(lines)
+            shown_text = (
+                f"showing last {shown}" if offset == 0 else
+                f"showing {shown} older message(s) after offset {offset}"
+            )
+            header = (
+                f"Session: {data['name']} (id {data['id'][:8]},"
+                f" {data['created'][:10] or 'unknown date'},"
+                f" {total} message(s), {shown_text})"
+            )
+            if total and not shown:
+                # Oversized legacy names can consume the entire budget. Do
+                # not return a continuation cursor that cannot make progress.
+                return truncate_with_marker(
+                    "Error: session metadata leaves no room for a message;"
+                    " shorten the session name before retrying.\n" + header,
+                    _OUTPUT_BUDGET, "shorten the session name before retrying",
+                )
+            parts = [header, *lines]
+            next_offset = offset + shown
+            if shown and next_offset < total:
+                parts.append(
+                    "(Older messages remain; continue action=read with the"
+                    f" same session, offset={next_offset}, and limit={count}."
+                    " Offsets count newest messages already consumed;"
+                    " restart at offset=0 if messages change. Say"
+                    " PARTIAL + remainder if needed history remains unread.)"
+                )
+            result = "\n".join(parts)
+            if len(result) <= _OUTPUT_BUDGET:
+                return result
+            if not lines:
+                return truncate_with_marker(
+                    result, _OUTPUT_BUDGET,
+                    "shorten the session name before retrying",
+                )
+            # Keep the newest complete rows in this page. Recompute both the
+            # visible count and cursor after each removal, so no row is skipped.
+            lines.pop(0)
 
 
 def _find_session(

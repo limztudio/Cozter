@@ -246,11 +246,18 @@ def _is_blocked_tool_result(result: str) -> bool:
 
 
 def _parallel_read_tool(name: str) -> bool:
-    """Only trusted builtins can cross another read in the same batch."""
+    """Group trusted builtin reads and explicit whole-tool read-only opt-ins.
+
+    Plugin names alone never grant concurrency: a replacement for a builtin
+    must declare its own contract, and mixed-action tools remain barriers.
+    Permission checks still run independently inside execute_tool.
+    """
     tool = tools._BY_NAME.get(name)
     return (
-        tool is not None and not tool.is_plugin
-        and name in tools.READ_ONLY_TOOL_NAMES
+        tool is not None and (
+            getattr(tool, "parallel_safe", False) is True
+            or not tool.is_plugin and name in tools.READ_ONLY_TOOL_NAMES
+        )
     )
 
 
@@ -664,8 +671,8 @@ class OpenAIChatBackend(Backend):
                     pending_results.clear()
                     await save_transcript()
 
-                    # Batch consecutive reads; writes and unknown plugins are
-                    # ordered barriers even if the provider groups them.
+                    # Batch consecutive reads and whole-tool read-only plugin
+                    # opt-ins; writes and undeclared plugins remain barriers.
                     _batch_names: list[str] = []
                     _batch_args: list[dict] = []
                     _batch_skipped: list[bool] = []
@@ -1663,8 +1670,9 @@ def _system_prompt(
     if tool_names:
         parts.append(
             f"Tools: {', '.join(tool_names)}."
-            " You may call multiple independent tools in one turn;"
-            " they run concurrently (results return in order)."
+            " Group independent read-only calls in one turn; eligible reads"
+            " run in bounded parallel waves with results in request order."
+            " Writes and mixed-action tools run in request order."
             " One pass; don't repeat calls."
         )
         if "bash" in tool_names:

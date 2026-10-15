@@ -8,6 +8,7 @@ builders, and permission levels stay in their own modules.
 from __future__ import annotations
 
 import asyncio
+import codecs
 import os
 import re
 from dataclasses import dataclass, field
@@ -47,6 +48,50 @@ class _GitCapture:
         if self.truncated:
             text += f"\n… [git output truncated; {TRUNCATION_MARKER}]"
         return text
+
+
+@dataclass
+class _GitTextWindow:
+    """Retain a character window while draining and counting all UTF-8 output.
+
+    Incremental decoding keeps offsets stable when a multibyte character spans
+    pipe reads. Only the requested window, one read chunk, and decoder state
+    remain in memory, including when the requested offset is far into a patch.
+    """
+
+    offset: int
+    limit: int
+    parts: list[str] = field(default_factory=list)
+    total_chars: int = 0
+    retained_chars: int = 0
+    incomplete: bool = False
+
+    def reset(self) -> None:
+        self.parts.clear()
+        self.total_chars = 0
+        self.retained_chars = 0
+        self.incomplete = False
+
+    def _accept_text(self, text: str) -> None:
+        chunk_start = self.total_chars
+        self.total_chars += len(text)
+        remaining = self.limit - self.retained_chars
+        if remaining <= 0 or self.total_chars <= self.offset:
+            return
+        start = max(0, self.offset - chunk_start)
+        selected = text[start:start + remaining]
+        if selected:
+            self.parts.append(selected)
+            self.retained_chars += len(selected)
+
+    async def drain(self, stream: asyncio.StreamReader) -> None:
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        while chunk := await stream.read(64 * 1024):
+            self._accept_text(decoder.decode(chunk))
+        self._accept_text(decoder.decode(b"", final=True))
+
+    def text(self) -> str:
+        return "".join(self.parts)
 
 # Allowed ref chars; markers/edge checks below reject git-special cases.
 REF_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
@@ -118,11 +163,18 @@ async def git_once(
     argv: list[str],
     workspace: str,
     env: dict[str, str],
+    *,
+    stdout_window: _GitTextWindow | None = None,
 ) -> tuple[str, str, int]:
     """Run Git with bounded capture and an exited parent's drain grace."""
     proc = await _spawn_git(argv, workspace, env)
     assert proc.stdout is not None and proc.stderr is not None
-    stdout = _GitCapture(_GIT_STDOUT_BYTES)
+    stdout: _GitCapture | _GitTextWindow
+    if stdout_window is None:
+        stdout = _GitCapture(_GIT_STDOUT_BYTES)
+    else:
+        stdout_window.reset()
+        stdout = stdout_window
     stderr = _GitCapture(_GIT_STDERR_BYTES)
     readers = (
         asyncio.create_task(stdout.drain(proc.stdout)),
@@ -163,10 +215,13 @@ async def git_once(
         await asyncio.gather(*readers, exited, return_exceptions=True)
     output = stdout.text()
     if incomplete:
-        output += (
-            "\n… [git exited while a child kept an output pipe open;"
-            " output may be incomplete]"
-        )
+        if stdout_window is not None:
+            stdout_window.incomplete = True
+        else:
+            output += (
+                "\n… [git exited while a child kept an output pipe open;"
+                " output may be incomplete]"
+            )
     return (
         output,
         stderr.text(),
@@ -256,6 +311,7 @@ async def run_git(argv: list[str], workspace: str) -> tuple[str, str]:
     env = {
         **os.environ,
         "GIT_TERMINAL_PROMPT": "0",
+        "GCM_INTERACTIVE": "0",
         "GIT_OPTIONAL_LOCKS": "1",
     }
     argv = add_common_git_flags(argv)

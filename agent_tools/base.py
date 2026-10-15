@@ -76,6 +76,13 @@ class AgentTool(ABC):
         ``full`` mode before this tool can be exposed or executed. Use this
         for tools that can escape Cozter's workspace-bounded safety model
         (for example, a direct host shell). Defaults to ``False``.
+      - ``parallel_safe``: opt into bounded parallel tool waves only when
+        every supported action is an independent read-only operation. The
+        default is ``False``; tools with writes, state-changing commands, or
+        mixed actions must leave it false. This never changes permissions.
+      - ``max_result_chars``: requested HTTP tool-result character budget,
+        defaulting to 4,000. The dispatcher validates and caps overrides;
+        tools should still bound their own reads and mark any truncation.
       - ``summarize(args)``: one-line status-display formatter. The
         default returns just the tool name.
 
@@ -91,6 +98,8 @@ class AgentTool(ABC):
     file_action: ClassVar[str | None] = None
     order: ClassVar[int] = 100
     requires_full_permission: ClassVar[bool] = False
+    parallel_safe: ClassVar[bool] = False
+    max_result_chars: ClassVar[int] = 4_000
 
     # Set per instance by the loader.
     is_plugin: bool = False
@@ -137,6 +146,9 @@ class AgentTool(ABC):
         ``-C``), and prints the result to stdout. Errors go to stderr
         with a non-zero exit code.
 
+        ``--help`` or ``-h`` prints the argument schema without executing
+        the tool or touching workspace state.
+
         A plugin file at ``agent_tools/plugins/<name>.py`` becomes
         invocable as ``python -m Cozter.agent_tools.plugins.<name>``
         by ending the file with::
@@ -148,6 +160,16 @@ class AgentTool(ABC):
         import json
 
         raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
+        if raw in ("--help", "-h"):
+            # CLI backends can discover exact argument choices/ranges in one
+            # cheap call instead of guessing or loading the plugin source.
+            print(json.dumps({
+                "name": cls.name, "description": cls.description,
+                "parameters": cls.parameters,
+                "parallel_safe": cls.parallel_safe is True,
+                "max_result_chars": cls.max_result_chars,
+            }, ensure_ascii=False, indent=2))
+            return
         try:
             args = json.loads(raw)
         except (ValueError, RecursionError) as exc:

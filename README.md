@@ -1006,7 +1006,7 @@ through that CLI's own shell/tool policy.
 
 - **HTTP backends** (`llama`, `meta`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
-  the 16 built-in tools under `agent_tools/builtin/` (`bash`, `read_file`,
+  the 17 built-in tools under `agent_tools/builtin/` (`bash`, `read_file`, `read_files`,
   `write_file`, `edit_file`, `multi_edit`, `apply_patch`, `delete_file`,
   `copy_file`, `move_file`, `make_dir`, `list_dir`, `tree`, `glob`, `grep`,
   `web_search`, and `web_fetch`)
@@ -1029,6 +1029,23 @@ remains available in `auto`. This flag controls HTTP-tool availability only;
 it does not sandbox trusted plugin code or alter CLI-backend shell behavior.
 Tool names are global, so choose a unique `name`: a later plugin registration
 replaces any earlier tool with the same name, including a built-in.
+
+Plugins default to serial execution. A trusted plugin may declare
+`parallel_safe = True` only when every supported action is an independent
+read-only operation. The shipped `current_time`, `calculator`, `memory`, and
+`git_info` plugins opt in; HTTP backends can run consecutive independent reads
+in waves of at most four, preserving result order and durable barriers before
+writes. This flag does not change permissions. CLI plugin guidance identifies
+the same independent reads so native agents can group them with their own tools.
+Run any plugin module with `--help` to inspect its full argument schema without
+executing the plugin.
+
+The default HTTP result budget is 4,000 characters. Plugin code can declare
+`max_result_chars` as a positive integer; the dispatcher limits it to 65,536
+characters. Call arguments cannot raise this budget. Shipped Git plugins retain
+their own 12,000-character results, and `http_request` allows 16,384 characters
+for its advertised body preview plus response metadata. Plugins still bound
+their own output and explicitly mark any omitted content.
 
 Plugin template:
 
@@ -1066,6 +1083,8 @@ Shipped plugins:
 - `calculator` - exact arithmetic through a whitelisted AST evaluator
   (`+ - * / // % **`, sqrt/log/trig, factorial, pi/e/tau/phi), with
   magnitude guards so `9**9**9` is refused instead of wedging the host.
+  The 50,000-digit magnitude policy also applies to integer intermediates;
+  multiplication refuses oversized products before allocating them.
 - `notes` - persistent workspace notes at `.cozter/notes.md`
   (`append`/`read`/`clear`). Notes survive compaction, `/stop`, and
   restarts, so an agent can record progress and resume cleanly; the
@@ -1076,7 +1095,11 @@ Shipped plugins:
   `stashes`/`show`/`blame` inspection of the workspace repository, so
   HTTP backends without a shell can still see repo state; the argv is
   fixed and read-only, and `path` arguments must stay inside the
-  workspace.
+  workspace. Long results have a character `next_offset`: repeat the same
+  request with that `offset` to fetch the remainder, restarting at zero after
+  repository changes. `blame` can inspect a range with `line` and `line_count`
+  (up to 200 lines) instead of requiring one call per line. Output capture
+  retains only the requested bounded window while draining the child process.
 - `git_ops` - local-only Git writes (`add`/`unstage`/`commit`/
   `checkout`/`branch-*`/`stash-*`/`reset`/`merge`/`rebase`/`tag-*`/
   `discard`/`clean`) with a fixed argv: branch/tag/ref names are
@@ -1084,7 +1107,9 @@ Shipped plugins:
   confirmation, and `push` never appears here. Available in `auto`.
 - `git_sync` - network Git sync (`fetch`/`pull`/`push`/`remotes`) with a
   fixed argv, `--ff-only` pulls, and `--force-with-lease` instead of
-  `--force`. Full permission only; prompts stay disabled.
+  `--force`. Full permission only; terminal and credential-manager prompts stay
+  disabled through process-local settings, while cached credentials remain
+  available. Read-only Git operations use the same prompt policy.
 - `memory` - search/read the workspace's durable chat memory (capped colony
   lists, excerpts, result counts, and session lists carry explicit
   PARTIAL/remainder pointers instead of silent cuts): past
@@ -1092,7 +1117,13 @@ Shipped plugins:
   the shared colony notes (all under `.cozter/`). `search` is
   case-insensitive full-text with bounded excerpts, `list` shows
   sessions newest-first, `read` prints a session's recent messages by
-  name, id prefix, or `last`. Read-only and self-contained.
+  name, full id, id prefix, or `last`. Full IDs read only their own transcript;
+  names, prefixes, and newest aliases retain the existing resolution behavior.
+  Read pages return an `offset` for older messages, counting only rows actually
+  shown after fitting the output budget; repeat with that offset to reach older
+  history, restarting from zero if messages change. Individual message excerpts
+  remain bounded.
+  Read-only and self-contained.
 - `http_request` - call HTTP APIs on public hosts with any
   GET/POST/PUT/PATCH/DELETE, optional headers and body (Content-Type
   auto-sniffed for JSON). Reuses `web_fetch`'s public-network-only
@@ -1378,9 +1409,10 @@ no-key fallback, Bearer fetch,
 provider non-chat filter, empty-catalog fallback; each backend keeps a
 per-module `fetch_model_ids` alias) and its shared key health check.
 That loop reuses one HTTP session for the
-turn's tool calls and retries. Consecutive trusted builtin read-only calls run
-in groups of at most four, with results retained in request order. Writes,
-shell/build commands and unknown plugins form serial barriers;
+turn's provider requests and retries. Consecutive trusted builtin reads and
+explicitly opted-in read-only plugins run in groups of at most four, with
+results retained in request order. Writes, shell/build commands, mixed-action
+plugins, and undeclared plugins form serial barriers;
 the loop advertises `parallel_tool_calls` so the model may batch independent
 calls in a single turn. Z.ai's text chat-completion models from GLM-4.6
 onward, plus multimodal `glm-5.3-flash`/`glm-5.3-flashx`, opt into Z.ai's incremental
@@ -1393,13 +1425,15 @@ model round trip, with at most four simultaneous reads, up to 32,768 characters
 per file preview and a 65,536-character aggregate cap shared fairly across the
 requested files. Complete files and batches have no truncation marker. The
 dispatcher retains up to 32,768 characters for builtin `read_file`, `glob`, and
-`grep`, and 65,536 for `read_files`. Discovery pages preserve complete matches
+`grep`, 32,768 for `web_fetch` (including its URL/title), and 65,536 for
+`read_files`. Discovery pages preserve complete matches
 and return the exact next `offset` when more results remain; offsets count
 matches in deterministic directory traversal order. Repeat the same search
 with that offset, or restart at zero if files change. Exact result limits do
 not imply a remainder unless a lookahead finds another match. Other tools and
-plugins retain the 4,000-character limit. All backends receive guidance to
-batch independent inspections and
+plugins retain the 4,000-character default unless their code explicitly declares
+another bounded budget. All backends receive guidance to batch independent
+inspections and
 reuse still-valid verification evidence without weakening completion checks.
 
 Permission modes are backend-specific because a chat bot cannot answer a
@@ -1838,7 +1872,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (99 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 96 `test_*.py` modules:
+- Tests (103 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 100 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_backend_audit_regressions.py`,
@@ -1854,7 +1888,7 @@ ignored for local secrets and runtime queues.
   `test_edit_file_read_limits.py`, `test_flexible_parallel_plan.py`,
   `test_execution_state.py`, `test_flexible_continuation.py`,
   `test_flexible_parallel_runtime.py`, `test_flexible.py`,
-  `test_git_checkout_integrity.py`, `test_git_process_output.py`,
+  `test_git_checkout_integrity.py`, `test_git_plugin_paging.py`, `test_git_process_output.py`,
   `test_http_body_sniff.py`, `test_http_latency.py`, `test_http_redirect_method.py`,
   `test_http_execution_continuation.py`,
   `test_inject.py`, `test_internal_backend_deadline.py`, `test_interrupted_turns.py`,
@@ -1864,6 +1898,8 @@ ignored for local secrets and runtime queues.
   `test_memory_preservation.py`, `test_openai_agent.py`,
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
   `test_platform_formatting.py`, `test_prerequisite_checkpoint.py`,
+  `test_plugin_memory_calculator_performance.py`, `test_plugin_parallelism.py`,
+  `test_plugin_result_budgets.py`,
   `test_prompt_subprocess.py`, `test_queue_persistence_latency.py`,
   `test_prompt_payload_dedup.py`,
   `test_read_files.py`,

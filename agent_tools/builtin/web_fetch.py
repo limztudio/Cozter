@@ -98,6 +98,8 @@ async def _fetch_following_redirects(
 
 class WebFetchTool(AgentTool):
     name = "web_fetch"
+    # Preserve max_chars=30,000 plus the URL/title through shared dispatch.
+    max_result_chars = 32 * 1024
     description = "Fetch a public URL as text."
     parameters = object_parameters(
         {

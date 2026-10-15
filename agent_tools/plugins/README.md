@@ -52,6 +52,40 @@ sandbox plugin code. Plugin calls carry the 3600s real-work cap (cancel still
 stops instantly), while CLI-backend plugin scripts follow that
 CLI's own shell/tool policy instead.
 
+## Throughput and result bounds
+
+`parallel_safe = True` opts a plugin into bounded HTTP execution waves of at
+most four calls. Declare it only if every supported action is an independent
+read-only operation. The default is false; mixed-action tools and mutations
+remain ordered barriers. The shipped `calculator`, `current_time`, `memory`,
+and `git_info` tools opt in. Permission checks remain unchanged. CLI plugin
+guidance identifies the same independent reads for native agents.
+
+Plugin code can declare a positive integer `max_result_chars` to retain more
+than the default 4,000-character HTTP result. Overrides are capped at 65,536
+characters and cannot be chosen through model arguments. Git plugins declare
+12,000; `http_request` declares 16,384 for its body preview and response
+metadata. Each plugin must still bound its own work and show any remainder.
+
+`git_info` returns `next_offset` for long output. Repeat the same request with
+that character `offset`, and restart at zero if the repository changes. Blame
+also supports `line_count` up to 200, starting at `line` or 1. Git output
+capture retains a bounded character window while fully draining the subprocess.
+Both inspection and sync disable terminal/credential-manager prompts locally
+to the child process and continue to use cached credentials.
+
+`memory` reads an exact session ID directly instead of loading unrelated
+transcripts. Read pages return the next `offset` for older messages, counting
+only the rows actually emitted after the output budget is applied. Repeat with
+that offset and the same session, restarting from zero if messages change.
+Individual message excerpts retain their existing bound.
+`calculator` checks its existing 50,000-digit magnitude policy
+at every integer intermediate and before allocating oversized products.
+
+For any plugin module, `--help` (or `-h`) prints its argument schema and
+metadata without executing it. This lets CLI agents discover enum choices and
+paging arguments without reading the implementation or retrying guessed calls.
+
 ## Template
 
 ```python

@@ -9,6 +9,7 @@ from ..base import AgentTool
 
 
 class CurrentTimeTool(AgentTool):
+    parallel_safe = True
     name = "current_time"
     description = "Current date/time (ISO 8601)."
     parameters: ClassVar[dict[str, Any]] = {

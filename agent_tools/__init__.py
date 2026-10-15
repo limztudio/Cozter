@@ -333,19 +333,26 @@ async def execute_tool(
             )
 
     result_limit = _TOOL_RESULT_MAX
+    if tool is not None:
+        declared_limit = getattr(tool, "max_result_chars", _TOOL_RESULT_MAX)
+        if (
+            isinstance(declared_limit, int) and not isinstance(declared_limit, bool)
+            and declared_limit > 0
+        ):
+            # Plugin code explicitly opts in; arguments never choose this cap.
+            # Keep undeclared/replacement plugins at the default and bound even
+            # an incorrectly configured plugin to the largest builtin budget.
+            result_limit = min(declared_limit, 64 * 1024)
     if tool is not None and not getattr(tool, "is_plugin", True):
-        result_limit = {
+        result_limit = max(result_limit, {
             "read_file": 32 * 1024, "read_files": 64 * 1024,
             "glob": DISCOVERY_RESULT_MAX, "grep": DISCOVERY_RESULT_MAX,
-        }.get(
-            name, result_limit,
-        )
+        }.get(name, 0))
     if len(result) > result_limit:
         result = truncate_with_marker(
             result, result_limit,
-            "truncated — use read_file offset/limit or grep to fetch"
-            " remainder (page until no truncation marker remains);"
-            " say PARTIAL + remainder when work is left",
+            "request a narrower result or use this tool's paging options"
+            " if supported; say PARTIAL + remainder when work is left",
         )
 
     return _emit_tool_result(emit, name, result)
@@ -383,7 +390,12 @@ def cli_plugin_prelude() -> str:
     if not plugins:
         return ""
 
-    lines = ["Plugins (bash):", ""]
+    lines = [
+        "Plugins (bash):",
+        "Use a module's --help to inspect its argument schema. Calls marked"
+        " independent read-only may run together; keep other calls ordered.",
+        "",
+    ]
     for tool in plugins:
         props = tool.parameters.get("properties", {})
         required = set(tool.parameters.get("required", []))
@@ -396,7 +408,11 @@ def cli_plugin_prelude() -> str:
         )
         # Real __module__ so python -m works.
         module_path = tool.__class__.__module__
-        lines.append(f"- {tool.name}: {tool.description}")
+        parallel_hint = (
+            " [independent read-only]"
+            if getattr(tool, "parallel_safe", False) is True else ""
+        )
+        lines.append(f"- {tool.name}{parallel_hint}: {tool.description}")
         lines.append(f"  {args_summary} | python -m {module_path} '<JSON>'")
         lines.append("")
     return "\n".join(lines).rstrip()

@@ -22,10 +22,40 @@ from ...utils import clip_status_value
 _MAX_EXPRESSION_CHARS = 1_000
 _MAX_EXPONENT = 10_000
 _MAX_FACTORIAL_ARG = 500
+_MAX_RESULT_DIGITS = 50_000
+# Keep the existing power magnitude policy for every integer intermediate.
+# Comparing integers avoids both float overflow and decimal conversion limits.
+_MAX_INTEGER_MAGNITUDE = 10 ** _MAX_RESULT_DIGITS
+_MAX_INTEGER_BITS = _MAX_INTEGER_MAGNITUDE.bit_length()
 
 
 class _CalculationError(Exception):
     """A model-facing evaluation refusal."""
+
+
+def _bounded_integer(value: Any) -> Any:
+    if isinstance(value, int) and not isinstance(value, bool):
+        bits = value.bit_length()
+        if bits > _MAX_INTEGER_BITS or (
+            bits == _MAX_INTEGER_BITS and abs(value) > _MAX_INTEGER_MAGNITUDE
+        ):
+            raise _CalculationError(
+                f"intermediate result would exceed {_MAX_RESULT_DIGITS:,} digits;"
+                " reduce the operands",
+            )
+    return value
+
+
+def _guarded_multiply(left: Any, right: Any) -> Any:
+    if isinstance(left, int) and isinstance(right, int) and left and right:
+        # A nonzero integer product needs at least this many bits. Refuse
+        # before allocating a product already known to exceed the policy.
+        if left.bit_length() + right.bit_length() - 1 > _MAX_INTEGER_BITS:
+            raise _CalculationError(
+                f"intermediate result would exceed {_MAX_RESULT_DIGITS:,} digits;"
+                " reduce the operands",
+            )
+    return _bounded_integer(left * right)
 
 
 def _guarded_pow(base: Any, exponent: Any) -> Any:
@@ -47,9 +77,9 @@ def _guarded_pow(base: Any, exponent: Any) -> Any:
                 f"exponent magnitude is capped at {_MAX_EXPONENT:,}",
             )
         magnitude = abs(base)
-        if magnitude > 1 and exponent * math.log10(magnitude) > 50_000:
+        if magnitude > 1 and exponent * math.log10(magnitude) > _MAX_RESULT_DIGITS:
             raise _CalculationError(
-                "result would exceed 50,000 digits; reduce the operands",
+                f"result would exceed {_MAX_RESULT_DIGITS:,} digits; reduce the operands",
             )
     try:
         return base ** exponent
@@ -72,7 +102,7 @@ def _guarded_factorial(value: Any) -> int:
 _BIN_OPS: dict[type[ast.operator], Callable[[Any, Any], Any]] = {
     ast.Add: op.add,
     ast.Sub: op.sub,
-    ast.Mult: op.mul,
+    ast.Mult: _guarded_multiply,
     ast.Div: op.truediv,
     ast.FloorDiv: op.floordiv,
     ast.Mod: op.mod,
@@ -148,7 +178,7 @@ def _evaluate(node: ast.AST) -> Any:
         right = _evaluate(node.right)
         if isinstance(left, bool) or isinstance(right, bool):
             raise _CalculationError("boolean operands are not allowed")
-        return operation(left, right)
+        return _bounded_integer(operation(left, right))
     if isinstance(node, ast.UnaryOp):
         unary_operation = _UNARY_OPS.get(type(node.op))
         if unary_operation is None:
@@ -158,7 +188,7 @@ def _evaluate(node: ast.AST) -> Any:
         operand = _evaluate(node.operand)
         if isinstance(operand, bool):
             raise _CalculationError("boolean operands are not allowed")
-        return unary_operation(operand)
+        return _bounded_integer(unary_operation(operand))
     if isinstance(node, ast.Name):
         if node.id in _CONSTANTS:
             return _CONSTANTS[node.id]
@@ -181,7 +211,7 @@ def _evaluate(node: ast.AST) -> Any:
         if node.keywords:
             raise _CalculationError("keyword arguments are not supported")
         arguments = [_evaluate(arg) for arg in node.args]
-        return function(*arguments)
+        return _bounded_integer(function(*arguments))
     raise _CalculationError(
         f"syntax '{type(node).__name__}' is not supported; use plain"
         " arithmetic like (2 + 3) * sqrt(16) / 7",
@@ -207,6 +237,7 @@ def _format(value: Any) -> str:
 class CalculatorTool(AgentTool):
     name = "calculator"
     order = 20
+    parallel_safe = True
     description = "Exact math."
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

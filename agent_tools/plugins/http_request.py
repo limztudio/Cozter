@@ -177,6 +177,8 @@ async def _request_following_redirects(
 
 class HttpRequestTool(AgentTool):
     name = "http_request"
+    # Includes the advertised 12,000-character body and response metadata.
+    max_result_chars = 16 * 1024
     description = "HTTP API calls; bounded reply."
     parameters: ClassVar[dict[str, Any]] = object_parameters(
         {

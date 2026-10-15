@@ -22,6 +22,7 @@ from ..base import (
 from ...utils import clip_status_value
 from ._git_common import (
     GitFailedError as _GitFailedError,
+    MAX_OUTPUT_CHARS,
     clean_ref as _clean_name,
     finish_git_output as _finish_git_output,
     finish_git_run_error as _finish_git_run_error,
@@ -35,6 +36,7 @@ _ACTIONS = ("fetch", "pull", "push", "remotes")
 class GitSyncTool(AgentTool):
     name = "git_sync"
     order = 22
+    max_result_chars = MAX_OUTPUT_CHARS
     requires_full_permission = True
     description = (
         "Git network sync: fetch/pull/push/remotes. "
