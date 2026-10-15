@@ -856,12 +856,11 @@ notifies the chat; use `claude agents` and `claude attach` in the workspace
 to continue that interactive session.
 
 Schedules are stored per workspace in `.cozter/schedules.json` and use
-the host's local time. New schedules explicitly store their creating
-`platform_id`; records tagged for another platform cannot run, appear in the
-schedule picker, or be deleted through that picker. One persisted-state
-compatibility reader remains: existing schedules with a missing or empty
-`platform_id` are accepted until their stored ownership can be explicitly
-canonicalized. Cozter does not rewrite those definitions automatically.
+the host's local time. Each schedule explicitly stores its creating
+`platform_id`. Only records tagged for the current platform can run, appear in
+the schedule picker, or be deleted through that picker. Missing or empty
+platform identities are not adopted. Cozter does not rewrite schedule
+definitions automatically.
 A shared-lock check prevents concurrent ticks from firing the same slot twice. On Telegram, Slack, and Signal, the scheduler checks
 every 30 seconds and records `last_fired`, so a missed slot fires once after
 restart instead of being lost. Offset-bearing persisted timestamps are

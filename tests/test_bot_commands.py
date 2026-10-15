@@ -184,7 +184,7 @@ class BotCommandTests(unittest.TestCase):
         self.assertEqual(entries[0]["command"], "run report")
         self.assertEqual(entries[0]["platform_id"], self.bot.platform_id)
 
-    def test_scheduler_preserves_other_platforms_schedule(self) -> None:
+    def test_scheduler_requires_explicit_matching_platform(self) -> None:
         for schedule_id, platform_id in (
             ("foreign", "another:bot"), ("own", self.bot.platform_id), ("unscoped", None), ("empty", ""),
         ):
@@ -200,20 +200,29 @@ class BotCommandTests(unittest.TestCase):
         with mock.patch.object(self.bot, "_fire_schedule", new=mock.AsyncMock()) as fire:
             self._run(self.bot._scheduler_tick())
 
-        self.assertEqual({call.args[1]["id"] for call in fire.await_args_list}, {"own", "unscoped", "empty"})
+        self.assertEqual({call.args[1]["id"] for call in fire.await_args_list}, {"own"})
         self.assertNotIn("last_fired", schedules.list_schedules(self.ws, self.uid)[0])
 
     def test_schedule_picker_lists_and_deletes_only_this_platforms_entries(self):
-        for schedule_id, platform_id in (("foreign", "another:bot"), ("own", self.bot.platform_id)):
-            schedules.add_schedule(self.ws, self.uid, {
-                "id": schedule_id, "platform_id": platform_id,
-                "days": ["mon"], "time": "09:00", "command": schedule_id,
-            })
+        for schedule_id, platform_id in (
+            ("foreign", "another:bot"), ("own", self.bot.platform_id),
+            ("unscoped", None), ("empty", ""),
+        ):
+            record = {
+                "id": schedule_id, "days": ["mon"], "time": "09:00", "command": schedule_id,
+            }
+            if platform_id is not None:
+                record["platform_id"] = platform_id
+            schedules.add_schedule(self.ws, self.uid, record)
 
         self._run(self.bot.cmd_schedules(self._ctx()))
-        self.assertNotIn("foreign", self._last())
+        for hidden in ("foreign", "unscoped", "empty"):
+            self.assertNotIn(hidden, self._last())
         self._run(self.bot._receive_schedules(self._ctx(text="1")))
-        self.assertEqual([item["id"] for item in schedules.list_schedules(self.ws, self.uid)], ["foreign"])
+        self.assertEqual(
+            [item["id"] for item in schedules.list_schedules(self.ws, self.uid)],
+            ["foreign", "unscoped", "empty"],
+        )
 
     def test_concurrent_scheduler_ticks_claim_a_due_slot_once(self):
         schedules.add_schedule(self.ws, self.uid, {

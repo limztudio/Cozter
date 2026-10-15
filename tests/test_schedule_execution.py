@@ -62,7 +62,8 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.tmp.cleanup)
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.tmp.name))
         self.bot = _ScheduleBot(self.tmp.name)
-        self.schedule = {"command": "scheduled work", "chat_id": "chat"}
+        self.schedule = {"command": "scheduled work", "chat_id": "chat",
+                         "platform_id": self.bot.platform_id}
 
     async def asyncTearDown(self) -> None:
         self.bot.foreground_release.set()
@@ -73,6 +74,25 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def _finish_drains(self) -> None:
         await asyncio.wait_for(asyncio.gather(*self.bot.drains), timeout=1)
+
+    async def test_direct_admission_requires_explicit_matching_platform(self) -> None:
+        with (
+            mock.patch.object(self.bot, "_persist_admitted_dispatch_entry", new=mock.AsyncMock()) as persist,
+            mock.patch.object(self.bot, "_current_workspace_for_turn", new=mock.AsyncMock()) as workspace_lookup,
+            mock.patch.object(self.bot, "authorized") as authorized,
+        ):
+            for platform in (None, "", "other-platform", True, 1):
+                with self.subTest(platform=platform):
+                    schedule = {key: value for key, value in self.schedule.items() if key != "platform_id"}
+                    if platform is not None:
+                        schedule["platform_id"] = platform
+                    await self.bot._fire_schedule("u1", schedule)
+            persist.assert_not_awaited()
+            workspace_lookup.assert_not_awaited()
+            authorized.assert_not_called()
+        self.assertEqual(self.bot.notices, [])
+        self.assertEqual(self.bot.drains, [])
+        self.assertEqual(self.bot._read_queue_file(), {})
 
     async def test_queue_notice_follows_durable_and_in_memory_admission(self) -> None:
         await self.bot._fire_schedule("u1", self.schedule)

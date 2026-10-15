@@ -2727,10 +2727,10 @@ class BotPlatform(ABC):
     # /schedules (list/delete)
 
     def _platform_schedules(self, ws: str, uid: str) -> list[dict]:
-        """Filter tagged schedules; retain untagged records pending canonicalization."""
+        """Return only schedules explicitly owned by this platform."""
         return [
             record for record in schedules.list_schedules(ws, uid)
-            if record.get("platform_id") in (None, "", self.platform_id)
+            if record.get("platform_id") == self.platform_id
         ]
 
     async def cmd_schedules(self, ctx: BotContext) -> None:
@@ -4196,7 +4196,7 @@ class BotPlatform(ABC):
         command = sched.get("command", "")
         chat_id = sched.get("chat_id", "")
         generation = self._cancel_generations.get(uid, 0)
-        if sched.get("platform_id") not in (None, "", self.platform_id):
+        if sched.get("platform_id") != self.platform_id:
             return
         if not command or not chat_id:
             return

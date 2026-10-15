@@ -96,7 +96,8 @@ class ScheduleWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.bot = _ReplyDeliveryBot(self.origin, fail_final=False)
 
     async def test_admission_pins_origin_before_first_execution_and_restart(self):
-        schedule = {'command': 'scheduled work', 'chat_id': 'chat'}
+        schedule = {'command': 'scheduled work', 'chat_id': 'chat',
+                    'platform_id': self.bot.platform_id}
         with mock.patch.object(self.bot, "_start_queue_drain"):
             await self.bot._fire_schedule("u1", schedule, workspace_path=self.origin)
         entry = self.bot._read_queue_file()['u1'][0]
