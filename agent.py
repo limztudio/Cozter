@@ -10,6 +10,7 @@ import logging
 import math
 import os
 import re
+import stat
 import weakref
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from contextlib import contextmanager
@@ -888,10 +889,18 @@ def _skip_automatic_image_directory(name: str) -> bool:
             or normalized.startswith("cmake-build-"))
 
 
-def _iter_image_files(root: str) -> list[str]:
-    paths: list[str] = []
+def _iter_image_file_metadata(
+    root: str, *, resolved_root: str | None = None,
+) -> Iterator[tuple[str, os.stat_result]]:
+    """Yield contained regular images and reuse each file's metadata.
+
+    Canonicalize each candidate once before comparing its boundary. The
+    workspace snapshot already supplies its canonical root; resolving both
+    canonical values again for every image adds Windows path-handle calls
+    without strengthening the boundary. Send/copy resolution remains separate.
+    """
     try:
-        root_real = os.path.realpath(root)
+        root_real = resolved_root if resolved_root is not None else os.path.realpath(root)
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [
                 dirname for dirname in dirnames if not _skip_automatic_image_directory(dirname)
@@ -902,16 +911,26 @@ def _iter_image_files(root: str) -> list[str]:
                     continue
                 path = os.path.realpath(os.path.join(dirpath, filename))
                 # os.walk follows file symlinks; stay workspace-only.
-                if not is_path_within(path, root_real) or not os.path.isfile(path):
+                try:
+                    if os.path.commonpath((path, root_real)) != root_real:
+                        continue
+                    metadata = os.stat(path)
+                except (OSError, ValueError):
+                    continue
+                if not stat.S_ISREG(metadata.st_mode):
                     continue
                 relative_parts = os.path.relpath(path, root_real).split(os.sep)[:-1]
                 # A file link can point into a skipped tree inside the workspace.
                 if not any(_skip_automatic_image_directory(part) for part in relative_parts):
-                    paths.append(path)
+                    yield path, metadata
     except OSError:
         logger.warning("Failed to scan image artifacts under %s", root,
                        exc_info=True)
-    return paths
+
+
+def _iter_image_files(root: str) -> list[str]:
+    """Keep the existing path-list helper contract for discovery callers."""
+    return [path for path, _metadata in _iter_image_file_metadata(root)]
 
 
 def _snapshot_attachment_images(
@@ -929,12 +948,8 @@ def _snapshot_attachment_images(
     ws_real = os.path.realpath(workspace_path)
     if not os.path.isdir(ws_real):
         return snapshot
-    for path in _iter_image_files(ws_real):
-        try:
-            st = os.stat(path)
-        except OSError:
-            continue
-        snapshot[path] = (st.st_mtime_ns, st.st_size)
+    for path, metadata in _iter_image_file_metadata(ws_real, resolved_root=ws_real):
+        snapshot[path] = (metadata.st_mtime_ns, metadata.st_size)
     return snapshot
 
 
@@ -1981,16 +1996,42 @@ async def _run_flexible(
     summary_backend = backends_agent.get_backend(summary_backend_name)
     tiers = workspace_mod.get_flexible_run_config(workspace_path)
     execution = execution_state.current_execution()
-    signature = flexible.state_signature({
-        "request": execution.original_request if execution is not None else request,
-        "injected": injected, "tiers": tiers, "approval": approval, "effort": effort,
+    original_request = execution.original_request if execution is not None else request
+    signature_context = {
+        "tiers": tiers, "approval": approval, "effort": effort,
         "summary_backend": summary_backend_name, "summary_model": summary_model,
         "collaborative": collaborative,
-    })
+    }
+
+    def request_signature(original: str, additions: list[str]) -> str:
+        return flexible.state_signature({
+            "request": original, "injected": additions, **signature_context,
+        })
+
+    signature = request_signature(original_request, injected)
+    folded_signatures = []
+    if injected:
+        # BotPlatform._run_turn moves accepted guidance into its canonical
+        # request after an allowance ends. These are its two exact renderings:
+        # normal checkpoint additions, or full session recovery when additions
+        # were clipped. Record only proven equivalents; never parse or normalize
+        # arbitrary user text, whitespace, message order, or requested settings.
+        folded_signatures = sorted({
+            request_signature(original_request + "".join(
+                "\n\n[Added while working]:\n" + addition for addition in injected if addition
+            ), []),
+            request_signature(original_request + "\n\n[Added while you were thinking]:\n"
+                              + "\n".join(injected), []),
+        })
     saved_plan = await execution_state.record("flexible_plan")
+    saved_folded_signatures = saved_plan.get("folded_signatures", []) if saved_plan is not None else []
+    if (not isinstance(saved_folded_signatures, list) or len(saved_folded_signatures) > 2
+            or not all(isinstance(value, str) for value in saved_folded_signatures)):
+        saved_folded_signatures = []
     restored_tasks = (flexible.restore_tasks(saved_plan.get("queue"))
                       if saved_plan is not None and saved_plan.get("active")
-                      and saved_plan.get("signature") == signature else None)
+                      and (saved_plan.get("signature") == signature
+                           or signature in saved_folded_signatures) else None)
     cursor = saved_plan.get("cursor", 0) if restored_tasks and saved_plan is not None else 0
     saved_reports = saved_plan.get("reports", []) if restored_tasks and saved_plan is not None else []
     restored = bool(restored_tasks and isinstance(cursor, int) and not isinstance(cursor, bool)
@@ -2013,6 +2054,10 @@ async def _run_flexible(
     # the pending worker without another planner or replaying completed work.
     if restored:
         assert restored_tasks is not None and saved_plan is not None
+        if not injected:
+            # Further allowances still represent the same accepted requirements.
+            # Retain the original bounded proof, without accumulating aliases.
+            folded_signatures = saved_folded_signatures
         plan = flexible.Plan(str(saved_plan.get("understanding", "")), tuple(restored_tasks))
         previous_draft = saved_plan.get("phase_previous_draft")
         await status(f"flexible: resuming saved plan at {cursor + 1}/{len(restored_tasks)}")
@@ -2154,6 +2199,7 @@ async def _run_flexible(
             return
         await saved_plan.save(
             active=True, signature=signature, understanding=plan.understanding,
+            folded_signatures=folded_signatures,
             queue=[flexible.task_record(task) for task in queue], cursor=done,
             reports=[flexible._truncate_report(report) for report in reports],
             output=encode_output(result), usage_processed_audit=usage_audit,
