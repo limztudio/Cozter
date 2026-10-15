@@ -7,21 +7,15 @@ import os
 import re
 import shutil
 import sys
-import tempfile
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
-from .. import process_launch as _process_launch
 from ..utils import (
     clip_status_value,
-    close_subprocess_pipe,
-    has_managed_process_group,
-    kill_and_wait,
-    mark_process_group_leader,
 )
 
 # Shared catalog refresh cadence.
@@ -268,10 +262,10 @@ _ATTACHMENT_SAVED_WORD_RE = re.compile("attachment saved to:", re.IGNORECASE)
 
 
 def _attachment_saved_relpaths(prompt: str) -> Iterator[str]:
-    """Yield the legacy marker's stripped captures without regex rescans.
+    """Yield inbound attachment marker paths without regex rescans.
 
     A marker cannot cross its first closing bracket. Within that window,
-    the original greedy prefix chooses the last usable keyword after the
+    the greedy prefix chooses the last usable keyword after the
     first opening bracket on a line. Whitespace may surround the path,
     including newlines, but a newline inside the stripped path rejects it.
     Each scan below advances through disjoint ranges, including malformed
@@ -426,7 +420,7 @@ class DetachedTaskStatus:
 NO_RESPONSE_TEXT = "(no response)"
 
 
-ContinuationReason = Literal["time_budget", "worker_budget", "tool_budget", "judge_limit", "prerequisite"]
+ContinuationReason = Literal["worker_budget", "tool_budget", "judge_limit", "prerequisite"]
 
 
 class ContinuationReport(TypedDict):
@@ -752,116 +746,6 @@ def summarize_cli_tool(name: object, tool_input: object) -> str:
     if isinstance(path, str) and path:
         return f"{clip_status_value(label, 40)}: {clip_status_value(path)}"
     return clip_status_value(label, 40)
-
-
-async def create_prompt_subprocess(
-    cmd: list[str],
-    prompt: str,
-    *,
-    cwd: str | None = None,
-    env: dict[str, str] | None = None,
-) -> asyncio.subprocess.Process:
-    """Spawn a JSONL CLI with the exact UTF-8 prompt available on stdin.
-
-    File-backed stdin lets launch return before the child consumes its input.
-    Waiting for a prompt pipe to flush first can deadlock when the child fills
-    stdout or stderr before reading stdin, because our output readers start
-    only after launch returns. The CLI still reads the same bytes and EOF;
-    it must support redirected stdin rather than requiring a terminal.
-
-    TemporaryFile leaves no application-managed prompt path. The child's
-    inherited handle remains valid after we close ours, and the OS removes
-    the backing file when the last handle closes (immediately unlinked on
-    POSIX, delete-on-close on Windows).
-    """
-    with tempfile.TemporaryFile(mode="w+b") as prompt_input:
-        prompt_input.write(prompt.encode("utf-8"))
-        prompt_input.seek(0)
-        launch = asyncio.create_task(_create_piped_subprocess(
-            cmd,
-            stdin=prompt_input.fileno(),
-            cwd=cwd,
-            env=env,
-            # New session so /stop or /inject kills the group.
-            start_new_session=os.name != "nt",
-        ))
-        # Keep stdin alive until creation settles, even on cancellation.
-        return await _await_process_launch(launch, _reap_failed_prompt_subprocess)
-
-
-async def create_captured_subprocess(
-    cmd: list[str],
-    *,
-    cwd: str | None = None,
-    env: dict[str, str] | None = None,
-    start_new_session: bool = False,
-    cancel_cleanup: Callable[[asyncio.subprocess.Process], Awaitable[None]] | None = None,
-) -> asyncio.subprocess.Process:
-    """Spawn a short control command with closed stdin and captured output.
-
-    Claude detached-task controls and Grok prompt-file runs need this
-    process shape. Cancellation during startup settles process creation and
-    reaps the child before returning. Control launchers that must preserve
-    provider-owned workers can supply a launcher-only ``cancel_cleanup``.
-    The caller owns communication, timeouts, and cleanup after launch.
-    """
-    launch = asyncio.create_task(_create_piped_subprocess(
-        cmd,
-        stdin=asyncio.subprocess.DEVNULL,
-        cwd=cwd,
-        env=env,
-        start_new_session=start_new_session,
-    ))
-    return await _await_process_launch(
-        launch, cancel_cleanup or _reap_failed_prompt_subprocess,
-    )
-
-
-async def _await_process_launch(
-    launch: asyncio.Task[asyncio.subprocess.Process],
-    cancel_cleanup: Callable[[asyncio.subprocess.Process], Awaitable[None]],
-) -> asyncio.subprocess.Process:
-    """Transfer a started process, or finish ownership cleanup on cancel."""
-    return await _process_launch.await_process_launch(
-        launch, cancel_cleanup, reap_cancelled=_reap_cancelled_process_launch,
-    )
-
-
-async def _create_piped_subprocess(
-    cmd: list[str],
-    *,
-    stdin: int,
-    cwd: str | None = None,
-    env: dict[str, str] | None = None,
-    start_new_session: bool = False,
-) -> asyncio.subprocess.Process:
-    """Spawn a process whose stdout and stderr are always captured."""
-    return await _process_launch.create_piped_subprocess(
-        cmd,
-        stdin=stdin,
-        cwd=cwd,
-        env=env,
-        start_new_session=start_new_session,
-        mark_group=mark_process_group_leader,
-    )
-
-
-async def _reap_failed_prompt_subprocess(
-    proc: asyncio.subprocess.Process,
-) -> None:
-    """Kill/reap a subprocess whose prompt could not be delivered."""
-    await _process_launch.reap_failed_subprocess(
-        proc, has_group=has_managed_process_group,
-        kill=kill_and_wait, close_pipe=close_subprocess_pipe,
-    )
-
-
-async def _reap_cancelled_process_launch(
-    launch: asyncio.Task[asyncio.subprocess.Process],
-    cancel_cleanup: Callable[[asyncio.subprocess.Process], Awaitable[None]],
-) -> None:
-    """Reap a cancelled launch once subprocess creation has settled."""
-    await _process_launch.reap_cancelled_process_launch(launch, cancel_cleanup)
 
 
 class Backend(ABC):

@@ -14,7 +14,6 @@ from Cozter import agent, colony, config, router, schedules, session, workspace
 from Cozter import titling
 from Cozter.agent_tools.builtin import web_search as web_search_mod
 from Cozter.backends_agent.base import ChatEvent
-from Cozter.backends_bot import slack as slack_mod
 from Cozter.backends_bot.base import BotContext, BotPlatform, ensure_upload_dir
 from Cozter.tests.helpers import TestBot, temporary_config
 
@@ -155,32 +154,6 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                 self.assertEqual(
                     workspace.iter_current_workspaces("bot"),
                     [("u3", workspace.canonicalize_workspace_path("/tmp/ws"))],
-                )
-            finally:
-                workspace.WORKSPACE_STATE_PATH = old_path
-
-    def test_workspace_migration_normalizes_target_current(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "workspaces.json")
-            with open(path, "w", encoding="utf-8") as file_handle:
-                json.dump({
-                    "source": {"current": {"bot": "/tmp/ws"}},
-                    "target": {"current": "not-object", "recent": []},
-                }, file_handle)
-
-            old_path = workspace.WORKSPACE_STATE_PATH
-            workspace.WORKSPACE_STATE_PATH = path
-            try:
-                self.assertTrue(
-                    workspace.migrate_current_workspace(
-                        "source", "target", "bot",
-                    )
-                )
-                with open(path, encoding="utf-8") as file_handle:
-                    data = json.load(file_handle)
-                self.assertEqual(
-                    data["target"]["current"]["bot"],
-                    workspace.canonicalize_workspace_path("/tmp/ws"),
                 )
             finally:
                 workspace.WORKSPACE_STATE_PATH = old_path
@@ -730,7 +703,7 @@ class ConfigFallbackTests(unittest.TestCase):
 
 class RuntimeHardeningConfigTests(unittest.TestCase):
     """Defaults, overrides, and malformed-value fallback for the
-    tool/update-idle/dump-traceback config getters added by the
+    update-idle/dump-traceback config getters added by the
     runtime-hardening work."""
 
     def test_dump_traceback_interval_allows_zero_but_rejects_negative(self) -> None:
@@ -747,7 +720,6 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
 
     def test_positive_getters_reject_zero_and_non_ints(self) -> None:
         for key, getter, default in [
-            ("tool_timeout", config.get_tool_timeout, 3600),
             ("update_idle_timeout", config.get_update_idle_timeout, 1200),
         ]:
             for bad in (0, -1, True, "forever", None):
@@ -820,7 +792,6 @@ class ScheduleParserTests(unittest.TestCase):
 
             self.assertEqual(schedules.list_schedules(tmp, "u1"), [])
             self.assertEqual(schedules.list_schedules(tmp, "u2"), [{"id": "ok"}])
-            self.assertEqual(schedules.list_schedule_user_ids(tmp), ["u2"])
 
             schedules.add_schedule(tmp, "u1", {"id": "new"})
             self.assertEqual(schedules.list_schedules(tmp, "u1"), [{"id": "new"}])
@@ -848,32 +819,6 @@ class ScheduleParserTests(unittest.TestCase):
             self.assertTrue(schedules.remove_schedule(tmp, "u1", "a"))
             self.assertEqual(schedules.list_schedules(tmp, "u1"), [])
 
-    def test_schedule_migration_ignores_unhashable_persisted_ids(self) -> None:
-        """One malformed schedule ID must not abort legacy-key migration."""
-        with tempfile.TemporaryDirectory() as tmp:
-            os.makedirs(os.path.join(tmp, ".cozter"))
-            path = os.path.join(tmp, ".cozter", "schedules.json")
-            with open(path, "w", encoding="utf-8") as file_handle:
-                json.dump({
-                    "legacy": [
-                        {"id": ["bad"], "chat_id": "old"},
-                        {"id": "valid", "chat_id": "old"},
-                    ],
-                    "target": [{"id": {"bad": "target"}}],
-                }, file_handle)
-
-            moved = schedules.migrate_schedules(
-                tmp, ["legacy"], "target",
-                source_chat_id="old", target_chat_id="new",
-            )
-
-            self.assertEqual(moved, 2)
-            migrated = schedules.list_schedules(tmp, "target")
-            self.assertEqual(len(migrated), 3)
-            self.assertEqual(migrated[-2]["id"], ["bad"])
-            self.assertEqual(migrated[-1]["id"], "valid")
-            self.assertEqual(migrated[-1]["chat_id"], "new")
-
     def test_scheduler_skips_schedule_without_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ws = os.path.join(tmp, "ws")
@@ -891,6 +836,7 @@ class ScheduleParserTests(unittest.TestCase):
                         "created": "2000-01-01T00:00:00",
                         "chat_id": "u1",
                         "user_id": "u1",
+                "platform_id": "test:queue",
                     }],
                 }, file_handle)
 
@@ -924,6 +870,7 @@ class ScheduleParserTests(unittest.TestCase):
                             "created": 0,
                             "chat_id": "u1",
                             "user_id": "u1",
+                            "platform_id": "test:queue",
                         },
                         {
                             "id": "string-created",
@@ -932,6 +879,7 @@ class ScheduleParserTests(unittest.TestCase):
                             "created": "2000-01-01T00:00:00",
                             "chat_id": "u1",
                             "user_id": "u1",
+                            "platform_id": "test:queue",
                         },
                     ],
                 }, file_handle)
@@ -964,6 +912,7 @@ class ScheduleParserTests(unittest.TestCase):
                 "created": "2000-01-01T00:00:00",
                 "chat_id": "u1",
                 "user_id": "u1",
+                "platform_id": "test:queue",
             }
             schedules.add_schedule(ws, "u1", schedule)
 
@@ -1129,7 +1078,7 @@ class SessionStateFallbackTests(unittest.TestCase):
                 [{"role": "user", "content": str(index)} for index in range(5)],
             )
             # Negative retain-count clamps to 0.
-            session.set_summary(tmp, data["id"], "s", keep_recent=-3)
+            session.set_summary(tmp, data["id"], "s", keep_recent=-3, summarized_count=5)
             loaded = session.load_session(tmp, data["id"])
             assert loaded is not None
             self.assertEqual(loaded["messages"], [])
@@ -1780,12 +1729,6 @@ class RuntimeInputValidationTests(unittest.TestCase):
             self.assertEqual(rest, [("short",)])
 
         asyncio.run(run())
-
-    def test_slack_markdown_block_check_ignores_non_dict_response(self) -> None:
-        err = SimpleNamespace(response=["not-a-dict"])
-        self.assertFalse(
-            slack_mod._markdown_block_rejected(err),  # type: ignore[arg-type]
-        )
 
     def test_router_session_block_rejects_junk_id(self) -> None:
         self.assertEqual(router._build_session_block({"id": 123}), "")

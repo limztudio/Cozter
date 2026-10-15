@@ -1,12 +1,13 @@
 """Lightweight subprocess launch and cancellation ownership.
 
-Git plugins use this module without initializing the provider registry. Backend
-adapters retain wrappers around the same helpers for their existing patch hooks.
+Native backends and standalone tools use the same ownership helpers without
+initializing the provider registry.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable, Coroutine
-from typing import Any
+import os
+import tempfile
+from collections.abc import Awaitable, Callable
 
 from .utils import (
     close_subprocess_pipe,
@@ -16,9 +17,41 @@ from .utils import (
 )
 
 ProcessCleanup = Callable[[asyncio.subprocess.Process], Awaitable[None]]
-CancelledLaunchCleanup = Callable[
-    [asyncio.Task[asyncio.subprocess.Process], ProcessCleanup], Coroutine[Any, Any, None],
-]
+
+
+async def create_prompt_subprocess(
+    cmd: list[str],
+    prompt: str,
+    *,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+) -> asyncio.subprocess.Process:
+    """Spawn a JSONL CLI with the exact UTF-8 prompt available on stdin.
+
+    File-backed stdin lets launch return before the child consumes its input.
+    Waiting for a prompt pipe to flush first can deadlock when the child fills
+    stdout or stderr before reading stdin, because our output readers start
+    only after launch returns. The CLI still reads the same bytes and EOF;
+    it must support redirected stdin rather than requiring a terminal.
+
+    TemporaryFile leaves no application-managed prompt path. The child's
+    inherited handle remains valid after we close ours, and the OS removes
+    the backing file when the last handle closes (immediately unlinked on
+    POSIX, delete-on-close on Windows).
+    """
+    with tempfile.TemporaryFile(mode="w+b") as prompt_input:
+        prompt_input.write(prompt.encode("utf-8"))
+        prompt_input.seek(0)
+        launch = asyncio.create_task(create_piped_subprocess(
+            cmd,
+            stdin=prompt_input.fileno(),
+            cwd=cwd,
+            env=env,
+            # New session so /stop or /inject kills the group.
+            start_new_session=os.name != "nt",
+        ))
+        # Keep stdin alive until creation settles, even on cancellation.
+        return await await_process_launch(launch, reap_failed_subprocess)
 
 
 async def create_captured_subprocess(
@@ -45,18 +78,14 @@ async def create_captured_subprocess(
 async def await_process_launch(
     launch: asyncio.Task[asyncio.subprocess.Process],
     cancel_cleanup: ProcessCleanup,
-    *,
-    reap_cancelled: CancelledLaunchCleanup | None = None,
 ) -> asyncio.subprocess.Process:
     """Transfer a started process, or finish ownership cleanup on cancel."""
-    if reap_cancelled is None:
-        reap_cancelled = reap_cancelled_process_launch
     try:
         # wait() keeps the owned launch running when cancelled here.
         await asyncio.wait((launch,))
         return launch.result()
     except asyncio.CancelledError:
-        cleanup = asyncio.create_task(reap_cancelled(launch, cancel_cleanup))
+        cleanup = asyncio.create_task(reap_cancelled_process_launch(launch, cancel_cleanup))
         while not cleanup.done():
             try:
                 await asyncio.wait((cleanup,))
@@ -74,7 +103,6 @@ async def create_piped_subprocess(
     cwd: str | None = None,
     env: dict[str, str] | None = None,
     start_new_session: bool = False,
-    mark_group: Callable[[asyncio.subprocess.Process], None] | None = None,
 ) -> asyncio.subprocess.Process:
     """Spawn a process whose stdout and stderr are always captured."""
     proc = await asyncio.create_subprocess_exec(
@@ -87,37 +115,21 @@ async def create_piped_subprocess(
         start_new_session=start_new_session,
     )
     if start_new_session:
-        if mark_group is None:
-            mark_group = mark_process_group_leader
-        mark_group(proc)
+        mark_process_group_leader(proc)
     return proc
 
 
 async def reap_failed_subprocess(
     proc: asyncio.subprocess.Process,
-    *,
-    has_group: Callable[[asyncio.subprocess.Process], bool] | None = None,
-    kill: ProcessCleanup | None = None,
-    close_pipe: Callable[[asyncio.subprocess.Process, int], None] | None = None,
 ) -> None:
-    """Kill/reap a failed launch and close both owned output pipes.
-
-    Optional callbacks keep the backend wrapper's existing patch hooks local
-    while sharing the launch-ownership implementation with standalone tools.
-    """
-    if has_group is None:
-        has_group = has_managed_process_group
-    if kill is None:
-        kill = kill_and_wait
-    if close_pipe is None:
-        close_pipe = close_subprocess_pipe
+    """Kill/reap a failed launch and close both owned output pipes."""
     try:
-        if proc.returncode is None or has_group(proc):
-            await kill(proc)
+        if proc.returncode is None or has_managed_process_group(proc):
+            await kill_and_wait(proc)
         # An exited parent can still have inherited output pipes open.
     finally:
-        close_pipe(proc, 1)
-        close_pipe(proc, 2)
+        close_subprocess_pipe(proc, 1)
+        close_subprocess_pipe(proc, 2)
 
 
 async def reap_cancelled_process_launch(

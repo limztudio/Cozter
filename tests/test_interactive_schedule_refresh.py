@@ -78,7 +78,7 @@ class InteractiveContinuationTests(unittest.IsolatedAsyncioTestCase):
             if len(flags) == 1:
                 return AgentResult(
                     text="PARTIAL: verification remains", session_id=self.sid,
-                    continuation_reason="time_budget", continue_instruction="Verify remaining work",
+                    continuation_reason="worker_budget", continue_instruction="Verify remaining work",
                 )
             return AgentResult(text="Completed", session_id=self.sid)
 

@@ -376,8 +376,7 @@ class CopilotParseTests(unittest.TestCase):
 
     def test_assistant_text(self) -> None:
         result = _run(self.backend, [
-            {"type": "assistant_message", "role": "assistant",
-             "text": "answer"},
+            {"type": "assistant.message", "data": {"content": "answer"}},
         ])
         self.assertEqual(result.text, "answer")
 
@@ -409,8 +408,7 @@ class CopilotParseTests(unittest.TestCase):
 
     def test_late_error_preserves_streamed_text(self) -> None:
         result = _run(self.backend, [
-            {"type": "assistant_message", "role": "assistant",
-             "text": "answer"},
+            {"type": "assistant.message", "data": {"content": "answer"}},
             {"type": "error", "message": "bad"},
         ])
         self.assertEqual(result.text, "answer")

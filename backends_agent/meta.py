@@ -9,7 +9,7 @@ the configured API key, the model, and the Muse chat-model fallback list.
 Config: ``config.json``'s ``meta_api_key`` (required to use it),
 ``meta_base_url`` (default ``https://api.meta.ai/v1``, already includes
 the version so only ``/chat/completions`` is appended),
-``meta_socket_timeout``, and ``meta_max_retries``. Pick the model with
+and ``meta_max_retries``. Pick the model with
 ``/model`` (or set the workspace default); add private or preview model ids
 via ``extra_models`` in config without editing source.
 """
@@ -142,16 +142,6 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
     def _auto_continue_after_tool_limit(self) -> bool:
         # Muse Spark handles long runs; continue in a fresh segment.
         return True
-
-    def _socket_timeout(self) -> int | None:
-        # Slow streams run up to meta_socket_timeout (default 3600s).
-        try:
-            return cfg.get_meta_socket_timeout()
-        except Exception:
-            return 3600
-
-    def _socket_timeout_setting(self) -> str:
-        return "meta_socket_timeout"
 
     def _max_retries(self) -> int:
         return cfg.get_meta_max_retries()

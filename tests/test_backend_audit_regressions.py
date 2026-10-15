@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from Cozter.backends_agent import base, claude_code, grok, _openai_agent as oa
+from Cozter import process_launch
 from Cozter import utils
 
 
@@ -49,7 +50,7 @@ class HttpAttachmentMarkerTests(unittest.IsolatedAsyncioTestCase):
 
 class CapturedLaunchCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancelled_captured_creation_reaps_process_before_return(self):
-        original = base._create_piped_subprocess
+        original = process_launch.create_piped_subprocess
         started, release = asyncio.Event(), asyncio.Event()
         processes = []
 
@@ -60,8 +61,8 @@ class CapturedLaunchCancellationTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             return proc
 
-        with mock.patch.object(base, "_create_piped_subprocess", side_effect=delayed_creation):
-            launch = asyncio.create_task(base.create_captured_subprocess(
+        with mock.patch.object(process_launch, "create_piped_subprocess", side_effect=delayed_creation):
+            launch = asyncio.create_task(process_launch.create_captured_subprocess(
                 [_FIXTURE_PYTHON, "-B", "-c", "import time; time.sleep(120)"],
             ))
             try:
@@ -96,9 +97,9 @@ class CapturedLaunchCancellationTests(unittest.IsolatedAsyncioTestCase):
             return proc
 
         with (
-            mock.patch.object(base, "_create_piped_subprocess", side_effect=delayed_creation),
+            mock.patch.object(process_launch, "create_piped_subprocess", side_effect=delayed_creation),
             mock.patch.object(claude_code, "_stop_claude_command_launcher", new=mock.AsyncMock()) as stop,
-            mock.patch.object(base, "_reap_failed_prompt_subprocess", new=mock.AsyncMock()) as reap_tree,
+            mock.patch.object(process_launch, "reap_failed_subprocess", new=mock.AsyncMock()) as reap_tree,
         ):
             launch = asyncio.create_task(claude_code._run_claude_command(["fixture"], cwd="."))
             try:
@@ -117,7 +118,7 @@ class CapturedLaunchCancellationTests(unittest.IsolatedAsyncioTestCase):
         reap_tree.assert_not_awaited()
 
     async def test_grok_cancelled_creation_keeps_prompt_until_process_is_reaped(self):
-        original = base._create_piped_subprocess
+        original = process_launch.create_piped_subprocess
         started, release = asyncio.Event(), asyncio.Event()
         processes, prompt_paths = [], []
 
@@ -132,7 +133,7 @@ class CapturedLaunchCancellationTests(unittest.IsolatedAsyncioTestCase):
             return proc
 
         with tempfile.TemporaryDirectory() as workspace, mock.patch.object(
-            base, "_create_piped_subprocess", side_effect=delayed_creation,
+            process_launch, "create_piped_subprocess", side_effect=delayed_creation,
         ):
             launch = asyncio.create_task(grok.GrokBackend().launch(workspace, "fixture", None, "deny"))
             try:

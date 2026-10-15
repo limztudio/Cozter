@@ -449,7 +449,7 @@ class BotContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage, {"input_tokens": 30})
         self.assertTrue(any(event.kind == "attachment" and event.content == artifact for event in result.events))
 
-    async def test_chain_cap_does_not_end_an_unfinished_job(self):
+    async def test_repeated_continuations_finish_original_job(self):
         with tempfile.TemporaryDirectory() as ws:
             bot = TestBot(["u1"])
 
@@ -466,7 +466,6 @@ class BotContinuationTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(bot, "_send_result", new_callable=mock.AsyncMock) as send,
                 mock.patch.object(agent, "run", side_effect=run),
                 mock.patch.object(agent.workspace_mod, "get_run_config", return_value=("codex", None, None, "auto", "codex")),
-                mock.patch.object(flexible, "MAX_AUTO_CHAIN_TURNS", 1),
             ):
                 await bot._run_turn("u1", "chat", "original task")
             result = send.await_args.args[2]

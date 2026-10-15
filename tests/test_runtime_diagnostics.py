@@ -125,7 +125,7 @@ class VenvBootstrapTests(unittest.TestCase):
         install.assert_called_once()
         args, kwargs = install.call_args
         self.assertEqual(args[0][:4], [main.sys.executable, "-m", "pip", "install"])
-        self.assertEqual(kwargs["timeout"], main._DEPENDENCY_INSTALL_TIMEOUT_SEC)
+        self.assertNotIn("timeout", kwargs)
 
     def test_dependency_check_detects_an_outdated_declared_version(self) -> None:
         main = _load_main_module()
@@ -145,7 +145,7 @@ class VenvBootstrapTests(unittest.TestCase):
             issues, ["aiohttp 3.14.1 does not satisfy <4,>=3.14.3"],
         )
 
-    def test_dependency_bootstrap_reports_a_bounded_install_timeout(self) -> None:
+    def test_dependency_bootstrap_reports_install_failure(self) -> None:
         main = _load_main_module()
         with (
             mock.patch.object(
@@ -154,8 +154,8 @@ class VenvBootstrapTests(unittest.TestCase):
             mock.patch.object(
                 main.subprocess,
                 "check_call",
-                side_effect=subprocess.TimeoutExpired("pip", 1),
-            ),self.assertRaisesRegex(RuntimeError, "Timed out installing")
+                side_effect=subprocess.CalledProcessError(1, "pip"),
+            ), self.assertRaises(subprocess.CalledProcessError)
         ):
             main._install_deps()
 

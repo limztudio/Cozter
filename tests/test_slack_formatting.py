@@ -82,15 +82,12 @@ class SlackFormattingTests(unittest.IsolatedAsyncioTestCase):
             "channel": "C1", "text": "# Plain",
         }])
 
-    async def test_rich_reply_falls_back_when_markdown_blocks_are_rejected(self):
+    async def test_rich_reply_propagates_native_markdown_rejection(self):
         self.client = _MarkdownRejectingClient()
         self.bot.app = SimpleNamespace(client=self.client)
-
-        await self.bot.send_text("C1", "# Title", rich=True)
-
-        self.assertEqual(self.client.posts, [{
-            "channel": "C1", "text": "*Title*",
-        }])
+        with self.assertRaises(SlackApiError):
+            await self.bot.send_text("C1", "# Title", rich=True)
+        self.assertEqual(self.client.posts, [])
 
     async def test_rich_edit_uses_native_markdown_block(self) -> None:
         markdown = "## Working\n\n- [ ] Running"
@@ -106,28 +103,22 @@ class SlackFormattingTests(unittest.IsolatedAsyncioTestCase):
             "blocks": [{"type": "markdown", "text": markdown}],
         }])
 
-    async def test_sdk_response_rejections_fall_back_for_posts_and_edits(self):
+    async def test_sdk_response_rejections_propagate_for_posts_and_edits(self):
         self.client = _MarkdownRejectingClient(sdk_response=True)
         self.bot.app = SimpleNamespace(client=self.client)
-        with self.assertLogs("Cozter.backends_bot.slack", level="WARNING"):
+        with self.assertRaises(SlackApiError):
             await self.bot.send_text("C1", "# Title", rich=True)
+        with self.assertRaises(SlackApiError):
             await self.bot.edit_text(MessageHandle("C1", "10.0"), "# Working", rich=True)
-        self.assertEqual(self.client.posts, [{"channel": "C1", "text": "*Title*"}])
-        self.assertEqual(self.client.updates, [{
-            "channel": "C1", "ts": "10.0", "text": "*Working*",
-        }])
+        self.assertEqual(self.client.posts, [])
+        self.assertEqual(self.client.updates, [])
 
-    async def test_rich_edit_falls_back_when_markdown_blocks_are_rejected(self):
+    async def test_rich_edit_propagates_native_markdown_rejection(self):
         self.client = _MarkdownRejectingClient()
         self.bot.app = SimpleNamespace(client=self.client)
-
-        await self.bot.edit_text(
-            MessageHandle("C1", "10.0"), "# Working", rich=True,
-        )
-
-        self.assertEqual(self.client.updates, [{
-            "channel": "C1", "ts": "10.0", "text": "*Working*",
-        }])
+        with self.assertRaises(SlackApiError):
+            await self.bot.edit_text(MessageHandle("C1", "10.0"), "# Working", rich=True)
+        self.assertEqual(self.client.updates, [])
 
     def test_long_markdown_is_split_with_fences_balanced(self) -> None:
         source = "```python\n" + ("print('x')\n" * 1_500) + "```\n"

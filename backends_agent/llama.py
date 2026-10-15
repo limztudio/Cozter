@@ -66,15 +66,5 @@ class LlamaBackend(CachedOpenAIChatBackend):
     def _tool_repeat_limit(self) -> int:
         return cfg.get_llama_tool_repeat_limit()
 
-    def _socket_timeout(self) -> int | None:
-        # Real-work cap; cancel stops instantly.
-        try:
-            return cfg.get_llama_socket_timeout()
-        except Exception:
-            return 3600
-
-    def _socket_timeout_setting(self) -> str:
-        return "llama_socket_timeout"
-
     def _max_retries(self) -> int:
         return cfg.get_llama_max_retries()

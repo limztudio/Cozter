@@ -87,12 +87,12 @@ class LazyToolHttpImportTests(unittest.TestCase):
                     assert base._PUBLIC_HTTP_POOL.get()._connector is None
             asyncio.run(run())
             assert 'aiohttp' not in sys.modules
-            assert {'aiohttp', 'AbstractResolver', 'DefaultResolver', 'PublicResolver'} <= set(dir(base))
+            assert {'aiohttp', 'AbstractResolver', 'DefaultResolver', 'PublicResolver'}.isdisjoint(dir(base))
             assert 'aiohttp' not in sys.modules
             assert not hasattr(base, 'not_an_http_export')
         """)
 
-    def test_annotations_and_public_exports_are_the_real_stable_types(self):
+    def test_annotations_and_current_http_exports_are_the_real_stable_types(self):
         self.run_fresh("""
             from concurrent.futures import ThreadPoolExecutor
             from collections.abc import AsyncIterator
@@ -101,24 +101,24 @@ class LazyToolHttpImportTests(unittest.TestCase):
             import threading
             import typing
             sys.argv[0] = '-m'
-            from Cozter.agent_tools import base
+            from Cozter.agent_tools import base, _http_types
             from Cozter.agent_tools.builtin import web_fetch
             assert 'aiohttp' not in sys.modules
             barrier = threading.Barrier(8)
             def first_use(index):
                 barrier.wait()
-                return base.PublicResolver, base.AbstractResolver, base.DefaultResolver, base.aiohttp
+                return _http_types.PublicResolver, _http_types.aiohttp
             with ThreadPoolExecutor(max_workers=8) as workers:
                 values = list(workers.map(first_use, range(8)))
             assert all(all(a is b for a, b in zip(value, values[0])) for value in values)
             import aiohttp
             from aiohttp.abc import AbstractResolver
             from aiohttp.resolver import DefaultResolver
-            from Cozter.agent_tools.base import PublicResolver
-            assert base.aiohttp is aiohttp
-            assert base.AbstractResolver is AbstractResolver
-            assert base.DefaultResolver is DefaultResolver
-            assert base.PublicResolver is PublicResolver
+            from Cozter.agent_tools._public_resolver import PublicResolver, AbstractResolver as ResolverBase, DefaultResolver as ResolverDefault
+            assert _http_types.aiohttp is aiohttp
+            assert ResolverBase is AbstractResolver
+            assert ResolverDefault is DefaultResolver
+            assert _http_types.PublicResolver is PublicResolver
             assert issubclass(PublicResolver, AbstractResolver)
             assert not inspect.isabstract(PublicResolver)
             assert typing.get_type_hints(base.read_bounded_text)['resp'] is aiohttp.ClientResponse
@@ -128,8 +128,9 @@ class LazyToolHttpImportTests(unittest.TestCase):
             assert typing.get_type_hints(web_fetch._fetch_following_redirects)['session'] is aiohttp.ClientSession
             namespace = {}
             exec('from Cozter.agent_tools.base import *', namespace)
-            for name in ('aiohttp', 'AbstractResolver', 'DefaultResolver', 'PublicResolver', 'AgentTool', 'NonPublicAddressError'):
+            for name in ('AgentTool', 'NonPublicAddressError'):
                 assert namespace[name] is getattr(base, name)
+            assert {'aiohttp', 'AbstractResolver', 'DefaultResolver', 'PublicResolver'}.isdisjoint(namespace)
         """)
 
     def test_type_introspection_itself_can_be_the_first_http_use(self):
@@ -139,10 +140,11 @@ class LazyToolHttpImportTests(unittest.TestCase):
             sys.argv[0] = '-m'
             from Cozter.agent_tools import base
             assert 'aiohttp' not in sys.modules
+            namespace = {}
+            exec('from Cozter.agent_tools.base import *', namespace)
+            assert 'aiohttp' not in sys.modules
+            assert {'aiohttp', 'AbstractResolver', 'DefaultResolver', 'PublicResolver'}.isdisjoint(namespace)
             hint = typing.get_type_hints(base.read_bounded_text)['resp']
             import aiohttp
             assert hint is aiohttp.ClientResponse
-            namespace = {}
-            exec('from Cozter.agent_tools.base import *', namespace)
-            assert namespace['aiohttp'] is aiohttp
         """)

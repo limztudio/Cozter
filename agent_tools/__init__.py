@@ -54,27 +54,6 @@ performance_logger = logging.getLogger("Cozter.performance")
 _TOOL_RESULT_MAX = 4_000
 
 
-def _tool_timeout_seconds() -> float:
-    """Return the real-work cap for one tool call (default 3600s).
-
-    Read lazily so a config edit takes effect on the next tool call
-    without a restart. Malformed/absent config falls back to 3600s.
-    Always positive: the caller applies it as the ``asyncio.wait_for``
-    bound unconditionally.
-    """
-    try:
-        from .. import config as _cfg
-
-        value = _cfg.get_tool_timeout()
-    except Exception:
-        return 3600.0
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError):
-        return 3600.0
-    return seconds if seconds > 0 else 3600.0
-
-
 # Import siblings to trigger self-registration.
 
 
@@ -286,13 +265,13 @@ async def execute_tool(
     if tool is None:
         result = f"Unknown tool: {name}"
     else:
-        # Real-work cap; mutation tools settle owned disk work before cancellation.
-        cap = _tool_timeout_seconds()
+        # Tools run until completion or cancellation. Mutation tools settle
+        # owned disk work before acknowledging cancellation.
         started = time.monotonic()
         outcome = "ok"
         tool_task: asyncio.Task[Any] | None = None
         performance_logger.info(
-            "stage=tool_start tool=%s limit_seconds=%s", name, cap,
+            "stage=tool_start tool=%s", name,
         )
         try:
             with tool_permission_scope(approval):
@@ -300,16 +279,7 @@ async def execute_tool(
                 # wait() never forwards caller cancellation to that owner, so
                 # this layer can cancel it once and settle it explicitly.
                 tool_task = asyncio.create_task(tool.run(workspace_path, args))
-                completed, _pending = await asyncio.wait((tool_task,), timeout=cap)
-                if not completed:
-                    if not tool_task.cancelling():
-                        tool_task.cancel()
-                    await asyncio.wait((tool_task,))
-                    try:
-                        tool_task.result()
-                    except BaseException:
-                        pass
-                    raise TimeoutError
+                await asyncio.wait((tool_task,))
                 raw_result: object = tool_task.result()
             if isinstance(raw_result, str):
                 result = raw_result
@@ -344,9 +314,8 @@ async def execute_tool(
             raise  # cancel is the only stop.
         except TimeoutError:
             outcome = "timeout"
-            limit_note = f" The configured tool limit is {cap:g}s."
             result = (
-                f"Tool {name} failed: timed out.{limit_note}"
+                f"Tool {name} failed: the requested operation timed out."
                 " Inspect the command or service that stalled before retrying;"
                 " preserve completed work and report any unfinished part."
             )

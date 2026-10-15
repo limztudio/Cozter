@@ -156,7 +156,6 @@ class FileMutationDispatchTests(unittest.IsolatedAsyncioTestCase):
                 with (
                     mock.patch.object(tool, "run", observe_run),
                     mock.patch.object(tool, "_run_sync", write_body),
-                    mock.patch.object(agent_tools, "_tool_timeout_seconds", return_value=30),
                 ):
                     task = asyncio.create_task(provider())
                     try:
@@ -204,13 +203,12 @@ class FileMutationDispatchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(observed), 1)
                 self.assertNotEqual(observed[0], loop_thread)
 
-    async def test_dispatcher_timeout_cannot_overtake_the_actual_write(self):
+    async def test_dispatcher_waits_for_the_actual_write_without_a_deadline(self):
         started = threading.Event()
         release = threading.Event()
         inner_tasks = []
         order = []
         results = []
-        emitted = []
         tool = agent_tools._BY_NAME["write_file"]
         original_run = tool.run
 
@@ -232,20 +230,19 @@ class FileMutationDispatchTests(unittest.IsolatedAsyncioTestCase):
                 for path in ("first.txt", "second.txt"):
                     results.append(await agent_tools.execute_tool(
                         "write_file", {"path": path, "content": path},
-                        workspace, "full", emitted.append,
+                        workspace, "full", lambda event: None,
                     ))
 
             with (
                 mock.patch.object(tool, "run", observe_run),
                 mock.patch.object(tool, "_run_sync", write_body),
-                mock.patch.object(agent_tools, "_tool_timeout_seconds", side_effect=(.001, 30)),
             ):
                 task = asyncio.create_task(provider())
                 try:
                     self.assertTrue(await asyncio.to_thread(started.wait, 5))
-                    async with asyncio.timeout(5):
-                        while not inner_tasks[0].cancelling():
-                            await asyncio.sleep(0)
+                    for _ in range(10):
+                        await asyncio.sleep(0)
+                    self.assertEqual(inner_tasks[0].cancelling(), 0)
                     self.assertFalse(task.done())
                     self.assertEqual(order, [])
                     self.assertEqual(results, [])
@@ -253,11 +250,7 @@ class FileMutationDispatchTests(unittest.IsolatedAsyncioTestCase):
                     release.set()
                     await task
                     self.assertEqual(order, ["first.txt", "second.txt"])
-                    self.assertIn("timed out", results[0])
-                    self.assertEqual(results[1], "Wrote fixture content")
-                    self.assertNotIn("Wrote fixture content", next(
-                        event["output"] for event in emitted if event["type"] == "tool_result"
-                    ))
+                    self.assertEqual(results, ["Wrote fixture content"] * 2)
                 finally:
                     release.set()
                     await asyncio.gather(task, return_exceptions=True)

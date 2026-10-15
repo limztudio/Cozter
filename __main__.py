@@ -30,14 +30,14 @@ def _require_supported_python(
 _require_supported_python()
 
 
-_CLI_MODE_FLAGS = frozenset({"-cli", "--cli"})
+_CLI_MODE_FLAGS = frozenset({"--cli"})
 _HELP_FLAGS = frozenset({"-h", "--help"})
 _USAGE = """Usage: python -m Cozter [OPTION]
 
 Start Cozter's daemon chat surface by default.
 
 Options:
-  -cli, --cli  run the local terminal chat surface
+  --cli       run the local terminal chat surface
   -h, --help   show this help and exit
 """
 
@@ -63,25 +63,14 @@ def _validate_launch_args(args: list[str]) -> None:
 
 
 if __name__ == "__main__":
+    if not __package__:
+        print("Start Cozter as a module: python -m Cozter", file=sys.stderr)
+        raise SystemExit(2)
     _validate_launch_args(sys.argv[1:])
     if os.name == "nt":
         # Task Scheduler terminates the entry process, not subprocess.call's
         # module/venv descendants. Tie that entire chain to this first owner.
-        import_module(
-            f"{__package__}.launch_process" if __package__ else "launch_process",
-        ).ensure_launch_job()
-
-# Relaunch as module when run as `python Cozter`.
-if __name__ == "__main__" and not __package__:
-    module_dir = os.path.dirname(os.path.abspath(__file__))
-    module_name = os.path.basename(module_dir)
-    parent_dir = os.path.dirname(module_dir)
-    sys.exit(
-        subprocess.call(
-            [sys.executable, "-m", module_name, *sys.argv[1:]],
-            cwd=parent_dir,
-        )
-    )
+        import_module(f"{__package__}.launch_process").ensure_launch_job()
 
 
 # Expose Cozter to spawned CLIs/bash.
@@ -96,8 +85,6 @@ if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
 
 _VENV_REEXEC_ENV = "COZTER_VENV_REEXEC"
 _WINDOWS_CHILD_RESTART_DELAY_SEC = 1
-# Fresh-venv recovery only.
-_DEPENDENCY_INSTALL_TIMEOUT_SEC = 3600
 _REQUIRED_RUNTIME_MODULES = (
     "aiohttp",
     "slack_bolt",
@@ -246,22 +233,15 @@ def _install_deps() -> None:
     if not issues:
         return
 
-    try:
-        print(
-            "Cozter: installing required runtime dependencies: "
-            + "; ".join(issues),
-            file=sys.stderr,
-        )
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "-q", "-r", req_file],
-            stdin=subprocess.DEVNULL,
-            timeout=_DEPENDENCY_INSTALL_TIMEOUT_SEC,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            "Timed out installing missing runtime dependencies after "
-            f"{_DEPENDENCY_INSTALL_TIMEOUT_SEC}s: {', '.join(issues)}"
-        ) from exc
+    print(
+        "Cozter: installing required runtime dependencies: "
+        + "; ".join(issues),
+        file=sys.stderr,
+    )
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "-q", "-r", req_file],
+        stdin=subprocess.DEVNULL,
+    )
 
 
 _install_deps()
@@ -598,7 +578,7 @@ async def update_loop(
 
 
 def _cli_mode_requested() -> bool:
-    """Return True if the user passed -cli / --cli on the command line."""
+    """Return True if the user passed --cli on the command line."""
     return any(arg in _CLI_MODE_FLAGS for arg in sys.argv[1:])
 
 

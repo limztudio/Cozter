@@ -19,7 +19,7 @@ from ...utils import (
     wait_for_process_exit,
 )
 
-# Real-work cap; cancel stops instantly.
+# Commands run until completion or cancellation.
 
 _BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 # Only applies once the shell has exited, not to commands still doing work.
@@ -34,7 +34,7 @@ class BashTool(AgentTool):
     requires_full_permission = True
     description = (
         "Run a host shell command using the shell stated in the system prompt"
-        " (cwd = workspace, 3600s real-work cap — runs until done or cancelled)."
+        " (cwd = workspace; runs until done or cancelled)."
         " On Windows the shell may be PowerShell or cmd; use its syntax."
         " For build/test/verify: capture output to a workspace file using"
         " the selected shell's redirection, then grep the FULL file for"

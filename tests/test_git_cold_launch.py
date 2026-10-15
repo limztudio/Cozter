@@ -13,7 +13,6 @@ import unittest
 from unittest import mock
 
 from Cozter import process_launch, utils
-from Cozter.backends_agent import base
 
 
 _FIXTURE_PYTHON = getattr(sys, "_base_executable", None) or sys.executable
@@ -152,14 +151,14 @@ class SharedProcessLaunchTests(unittest.IsolatedAsyncioTestCase):
         cleanup.assert_awaited_once_with(proc)
         kill.assert_not_awaited()
 
-    async def test_backend_cleanup_hooks_remain_live_and_close_exited_group_pipes(self):
+    async def test_cleanup_closes_exited_managed_group_pipes(self):
         proc = mock.Mock(returncode=0)
         with (
-            mock.patch.object(base, "has_managed_process_group", return_value=True) as has_group,
-            mock.patch.object(base, "kill_and_wait", new=mock.AsyncMock()) as kill,
-            mock.patch.object(base, "close_subprocess_pipe") as close_pipe,
+            mock.patch.object(process_launch, "has_managed_process_group", return_value=True) as has_group,
+            mock.patch.object(process_launch, "kill_and_wait", new=mock.AsyncMock()) as kill,
+            mock.patch.object(process_launch, "close_subprocess_pipe") as close_pipe,
         ):
-            await base._reap_failed_prompt_subprocess(proc)
+            await process_launch.reap_failed_subprocess(proc)
         has_group.assert_called_once_with(proc)
         kill.assert_awaited_once_with(proc)
         self.assertEqual(close_pipe.call_args_list, [mock.call(proc, 1), mock.call(proc, 2)])
@@ -179,14 +178,14 @@ class SharedProcessLaunchTests(unittest.IsolatedAsyncioTestCase):
         kill.assert_awaited_once_with(proc)
         self.assertEqual(close_pipe.call_args_list, [mock.call(proc, 1), mock.call(proc, 2)])
 
-    async def test_backend_spawn_hook_keeps_group_marking_and_exact_arguments(self):
+    async def test_spawn_keeps_group_marking_and_exact_arguments(self):
         proc = mock.Mock(returncode=None)
         with (
-            mock.patch.object(base.asyncio, "create_subprocess_exec", new=mock.AsyncMock(return_value=proc)) as create,
-            mock.patch.object(base, "mark_process_group_leader") as mark_group,
+            mock.patch.object(process_launch.asyncio, "create_subprocess_exec", new=mock.AsyncMock(return_value=proc)) as create,
+            mock.patch.object(process_launch, "mark_process_group_leader") as mark_group,
         ):
             mark_group.__bool__.return_value = False
-            result = await base._create_piped_subprocess(
+            result = await process_launch.create_piped_subprocess(
                 ["synthetic-command", "arg"], stdin=7, cwd="synthetic-workspace",
                 env={"SYNTHETIC_ENV": "value"}, start_new_session=True,
             )

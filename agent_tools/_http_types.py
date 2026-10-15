@@ -12,8 +12,6 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession as ClientSession
     from aiohttp import ClientTimeout as ClientTimeout
     from aiohttp import TCPConnector as TCPConnector
-    from aiohttp.abc import AbstractResolver as AbstractResolver
-    from aiohttp.resolver import DefaultResolver as DefaultResolver
     from ._public_resolver import PublicResolver as PublicResolver
 
 
@@ -21,12 +19,6 @@ def __getattr__(name: str) -> Any:
     if name == "PublicResolver":
         from ._public_resolver import PublicResolver
         value: Any = PublicResolver
-    elif name == "AbstractResolver":
-        from aiohttp.abc import AbstractResolver
-        value = AbstractResolver
-    elif name == "DefaultResolver":
-        from aiohttp.resolver import DefaultResolver
-        value = DefaultResolver
     elif name in {"aiohttp", "ClientResponse", "ClientSession", "ClientTimeout", "TCPConnector"}:
         import aiohttp
         value = aiohttp if name == "aiohttp" else getattr(aiohttp, name)

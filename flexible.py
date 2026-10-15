@@ -40,16 +40,8 @@ TIER_DESCRIPTIONS = {
 MAX_SUBTASKS = 12
 MAX_FOLLOWUP_TASKS_PER_REPORT = len(TIERS)
 
-# Work cap: 3600s.
-PLAN_TIMEOUT: float | None = 3600.0
-MERGE_TIMEOUT: float | None = 3600.0
-
 # Continue-judge bounds per backend per turn.
 JUDGE_MAX_CONTINUES = 3
-JUDGE_TIMEOUT: float | None = 3600.0
-
-# Auto-chain bounds for judge-exhausted CONTINUE.
-MAX_AUTO_CHAIN_TURNS = 3
 
 # The rubric the planner grades each sub-task against.
 _RUBRIC = (
@@ -101,7 +93,7 @@ _PLANNER_RULES = (
     " repair, re-run, and runtime verification in one cohesive task for"
     " each target or related target group. Split only when distinct scope"
     " or difficulty requires another worker, not merely for workflow stages."
-    " Require the 3600s cap (cancel still stops instantly; capture to file),"
+    " Run commands to completion (cancel still stops them; capture to file),"
     " inspect full logs, classify actual unexpected failures, fix and verify them,"
     " then runtime launch/exercise/log-check. Each task states evidence"
     " required (commands + exit codes + actual failures), never one vague 'check build' task.\n"
@@ -316,8 +308,6 @@ _FOLLOWUP_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_TIER_ALIASES = {"medium": "mid", "med": "mid", "middle": "mid"}
-
 _PLAN_LINE_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?"      # optional bullet / "3." numbering
     r"\[\s*(?P<tier>[A-Za-z]+)\s*\]\s*"     # [high]
@@ -335,7 +325,6 @@ def normalize_tier(value: str) -> str | None:
     if not isinstance(value, str):
         return None
     tier = value.strip().lower()
-    tier = _TIER_ALIASES.get(tier, tier)
     return tier if tier in TIERS else None
 
 
@@ -686,7 +675,7 @@ def build_subtask_prompt(
         " (read fully via offset chunks + grep), apply each, never stop"
         " after first/last few.\n"
         "Build/verify, when needed and not already covered by still-valid evidence:"
-        " enumerate targets, run canonical build/test with 3600s cap"
+        " enumerate targets, run canonical build/test to completion"
         " (cancel still stops instantly; capture output to file), grep FULL logs for"
         " unexpected errors/warnings/exceptions (never eyeball tail only), classify"
         " each hit, repair actual failures and verify; runtime means launch +"

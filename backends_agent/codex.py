@@ -11,11 +11,12 @@ import time
 import uuid
 
 
+from ..process_launch import create_prompt_subprocess
 from .base import (
     CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
     attachment_image_paths,
-    create_prompt_subprocess, executable_command, fallback_model_tables,
+    executable_command, fallback_model_tables,
     record_backend_error,
     truncate_status_text,
 )
@@ -204,7 +205,7 @@ class CodexBackend(Backend):
 
         Do not start a blocking discovery just to launch a turn.  The picker
         normally warms this cache; until then, use the conservative fallback
-        vocabulary for compatibility with existing direct model settings. An
+        vocabulary for direct model settings. An
         expired catalog is likewise not safe to use: the next picker refresh
         may reflect a changed account policy or CLI model set.
         """

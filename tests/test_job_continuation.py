@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from Cozter import agent, flexible, session, workspace
+from Cozter import agent, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
 
@@ -39,10 +39,10 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
             events=[ChatEvent(kind="text", content=text)],
         )
 
-    def partial(self, *, reason="time_budget", sid=None):
+    def partial(self, *, reason="worker_budget", sid=None):
         return AgentResult(
             text="PARTIAL: repair completed; release remains unfinished",
-            error="Turn budget exhausted after 3600s.",
+            error="Worker allowance exhausted.",
             continue_instruction="Verify all targets, then commit and push the completed work",
             continuation_reason=reason,
             continuation_checkpoint={
@@ -55,8 +55,8 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
             session_id=sid or self.sid,
         )
 
-    async def test_real_timeout_gets_fresh_attempt_before_next_job(self):
-        """Exercise the real timeout envelope, rather than just fake PARTIAL text."""
+    async def test_worker_exhaustion_gets_fresh_attempt_before_next_job(self):
+        """Exercise worker exhaustion with a real saved continuation before later work."""
         original = "Repair every source and verify, commit, and push all work"
         later = "Start an unrelated scheduled optimization"
         await self.enqueue(original)
@@ -72,8 +72,7 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
                 budget = agent._TURN_BUDGET.get()
                 budget.pending = ["Verify every source", "Commit and push the completed work"]
                 budget.reports = [("Repair every source", "All repairs are retained")]
-                agent._TURN_TIMEOUT.get().reschedule(asyncio.get_running_loop().time() + 0.01)
-                await asyncio.Event().wait()
+                raise agent._TurnBudgetExhaustedError("worker allowance reached")
             if prompt == later:
                 return self.final("Later task completed", sid=turn.session_id)
             return self.final(sid=turn.session_id)
@@ -90,15 +89,15 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[1][2], self.sid)
         self.assertEqual(calls[2][0], later)
         self.assertIsNot(budgets[0], budgets[1])
-        self.assertGreater(budgets[1].deadline, budgets[0].deadline)
+        self.assertFalse(hasattr(budgets[1], "deadline"))
         self.assertLess(self.bot.sent.index("Full original request completed"),
                         self.bot.sent.index("Later task completed"))
         self.assertEqual(self.bot._read_queue_file(), {})
 
-    async def test_judge_continuation_can_finish_beyond_old_chain_limit(self):
+    async def test_judge_continuations_finish_before_next_job(self):
         await self.enqueue("Finish the entire original request")
         await self.enqueue("Later request")
-        attempts = flexible.MAX_AUTO_CHAIN_TURNS + 2
+        attempts = 5
         calls = []
         budgets = []
 

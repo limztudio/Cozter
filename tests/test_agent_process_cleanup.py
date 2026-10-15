@@ -8,6 +8,7 @@ import time
 import unittest
 from unittest import mock
 
+from Cozter import process_launch
 from Cozter import agent, session, utils
 from Cozter.backends_agent import base as backend_base
 from Cozter.backends_agent.base import ChatEvent, append_detached_task
@@ -59,7 +60,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                         "print('provider connection lost', file=sys.stderr)\n"
                         "sys.exit(7)\n"
                     )
-                    return await backend_base.create_captured_subprocess(
+                    return await process_launch.create_captured_subprocess(
                         [sys.executable, "-c", script],
                     )
 
@@ -85,7 +86,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                 "print('stdin-closed=' + str(sys.stdin.read() == ''))\n"
                 "print('stderr-output', file=sys.stderr)\n"
             )
-            proc = await backend_base.create_captured_subprocess(
+            proc = await process_launch.create_captured_subprocess(
                 [sys.executable, "-c", script],
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
@@ -178,7 +179,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                 "sys.exit(2)\n"
             )
             proc = await asyncio.wait_for(
-                backend_base.create_prompt_subprocess(
+                process_launch.create_prompt_subprocess(
                     [sys.executable, "-c", script], "x" * (1024 * 1024),
                 ), timeout=5,
             )
@@ -196,11 +197,11 @@ class AgentProcessCleanupTests(unittest.TestCase):
             proc.returncode = None
             with (
                 mock.patch.object(
-                    backend_base, "kill_and_wait", new_callable=mock.AsyncMock,
+                    process_launch, "kill_and_wait", new_callable=mock.AsyncMock,
                 ) as kill_and_wait,
-                mock.patch.object(backend_base, "close_subprocess_pipe") as close,
+                mock.patch.object(process_launch, "close_subprocess_pipe") as close,
             ):
-                await backend_base._reap_failed_prompt_subprocess(proc)
+                await process_launch.reap_failed_subprocess(proc)
 
             kill_and_wait.assert_awaited_once_with(proc)
             self.assertEqual(
@@ -262,7 +263,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                             f"open({pid_path!r}, 'w').write(str(child.pid))\n"
                             "print(json.dumps({'type': 'message'}), flush=True)\n"
                         )
-                        return await backend_base.create_captured_subprocess(
+                        return await process_launch.create_captured_subprocess(
                             [sys.executable, "-c", script],
                             start_new_session=True,
                         )
@@ -326,7 +327,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                             f"open({pid_path!r}, 'w').write(str(child.pid))\n"
                             "print(json.dumps({'type': 'message'}), flush=True)\n"
                         )
-                        return await backend_base.create_captured_subprocess(
+                        return await process_launch.create_captured_subprocess(
                             [sys.executable, "-c", script],
                             start_new_session=True,
                         )
@@ -378,7 +379,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                         "    print(json.dumps({'type': 'message', "
                         "'number': number}), flush=True)\n"
                     )
-                    return await backend_base.create_captured_subprocess(
+                    return await process_launch.create_captured_subprocess(
                         [sys.executable, "-c", script],
                         start_new_session=os.name != "nt",
                     )
@@ -429,7 +430,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                             f"open({pid_path!r}, 'w').write(str(child.pid))\n"
                             "print(json.dumps({'type': 'detached'}), flush=True)\n"
                         )
-                        return await backend_base.create_captured_subprocess(
+                        return await process_launch.create_captured_subprocess(
                             [sys.executable, "-c", script],
                             start_new_session=True,
                         )
@@ -501,7 +502,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                             f"open({pid_path!r}, 'w').write(str(child.pid))\n"
                             "print(json.dumps({'type': 'message'}), flush=True)\n"
                         )
-                        return await backend_base.create_captured_subprocess(
+                        return await process_launch.create_captured_subprocess(
                             [sys.executable, "-c", script],
                             start_new_session=True,
                         )
@@ -555,7 +556,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                     f"open({pid_path!r}, 'w').write(str(child.pid))\n"
                     "print(json.dumps({'text': 'summary'}), flush=True)\n"
                 )
-                proc = await backend_base.create_captured_subprocess(
+                proc = await process_launch.create_captured_subprocess(
                     [sys.executable, "-c", script],
                     start_new_session=True,
                 )
@@ -615,7 +616,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
                             f"open({pid_path!r}, 'w').write(str(child.pid))\n"
                             "print(json.dumps({'type': 'message'}), flush=True)\n"
                         )
-                        return await backend_base.create_captured_subprocess(
+                        return await process_launch.create_captured_subprocess(
                             [sys.executable, "-c", script],
                             start_new_session=True,
                         )

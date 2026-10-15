@@ -15,7 +15,6 @@ from unittest import mock
 
 from Cozter import schedules, session, workspace
 from Cozter.backends_bot.base import BotContext
-from Cozter.backends_bot.signal import SignalBot
 from Cozter.tests.helpers import TestBot
 
 
@@ -187,7 +186,7 @@ class BotCommandTests(unittest.TestCase):
 
     def test_scheduler_preserves_other_platforms_schedule(self) -> None:
         for schedule_id, platform_id in (
-            ("foreign", "another:bot"), ("own", self.bot.platform_id), ("legacy", None),
+            ("foreign", "another:bot"), ("own", self.bot.platform_id), ("unscoped", None), ("empty", ""),
         ):
             schedule = {
                 "id": schedule_id, "days": list(schedules.DAY_ABBREV),
@@ -201,7 +200,7 @@ class BotCommandTests(unittest.TestCase):
         with mock.patch.object(self.bot, "_fire_schedule", new=mock.AsyncMock()) as fire:
             self._run(self.bot._scheduler_tick())
 
-        self.assertEqual({call.args[1]["id"] for call in fire.await_args_list}, {"own", "legacy"})
+        self.assertEqual({call.args[1]["id"] for call in fire.await_args_list}, {"own", "unscoped", "empty"})
         self.assertNotIn("last_fired", schedules.list_schedules(self.ws, self.uid)[0])
 
     def test_schedule_picker_lists_and_deletes_only_this_platforms_entries(self):
@@ -218,7 +217,7 @@ class BotCommandTests(unittest.TestCase):
 
     def test_concurrent_scheduler_ticks_claim_a_due_slot_once(self):
         schedules.add_schedule(self.ws, self.uid, {
-            "id": "once", "days": list(schedules.DAY_ABBREV),
+            "id": "once", "platform_id": self.bot.platform_id, "days": list(schedules.DAY_ABBREV),
             "time": "00:00", "created": "2000-01-01T00:00:00",
             "chat_id": "c1", "command": "run",
         })
@@ -241,7 +240,7 @@ class BotCommandTests(unittest.TestCase):
     def test_scheduler_rechecks_edited_time_after_waiting_for_workspace_lock(self) -> None:
         async def run(updated_time: str, expected_slot: str | None) -> None:
             schedules._save_all(self.ws, {self.uid: [{
-                "id": "edited", "days": list(schedules.DAY_ABBREV),
+                "id": "edited", "platform_id": self.bot.platform_id, "days": list(schedules.DAY_ABBREV),
                 "time": "08:30", "created": "2026-10-12T08:00:00",
                 "chat_id": "c1", "command": "run",
             }]})
@@ -281,23 +280,6 @@ class BotCommandTests(unittest.TestCase):
         ):
             with self.subTest(updated_time=updated_time):
                 self._run(run(updated_time, expected_slot))
-
-    def test_signal_legacy_adoption_preserves_other_platforms_schedules(self):
-        bot = SignalBot(["https://signal.group/#test"], jsonrpc_socket="/tmp/signal.sock")
-        bot._group_ids = {"group"}
-        target_uid = "signal-group:group"
-        workspace.select_workspace(target_uid, self.ws, bot.platform_id)
-        schedules.add_schedule(self.ws, self.uid, {"id": "foreign", "platform_id": self.bot.platform_id})
-        schedules.add_schedule(self.ws, self.uid, {"id": "legacy"})
-
-        moved = bot._migrate_legacy_workspace_schedules(self.ws, target_uid, "group")
-
-        self.assertEqual(moved, 1)
-        self.assertEqual([record["id"] for record in schedules.list_schedules(self.ws, self.uid)], ["foreign"])
-        migrated = schedules.list_schedules(self.ws, target_uid)
-        self.assertEqual(migrated[0]["id"], "legacy")
-        self.assertEqual(migrated[0]["platform_id"], "signal")
-        self.assertEqual(migrated[0]["chat_id"], "group")
 
     # /agent
     def test_agent_picker_reserves_zero_for_flexible(self) -> None:

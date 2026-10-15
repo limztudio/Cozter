@@ -35,16 +35,18 @@ class OpenAIBackoffTests(unittest.TestCase):
 
 class HttpErrorTranslatorTests(unittest.TestCase):
     def test_timeout_reports_request_failure(self) -> None:
-        async def fail() -> None:
-            async with http_error_translator(
-                "Z.ai", 30, "zai_socket_timeout",
-            ):
-                raise TimeoutError("timed out")
+        for operation_timeout in (None, 0, 30):
+            with self.subTest(operation_timeout=operation_timeout):
+                async def fail() -> None:
+                    async with http_error_translator("Z.ai", operation_timeout):
+                        raise TimeoutError("timed out")
 
-        with self.assertRaisesRegex(
-            RuntimeError, r"Z\.ai request timed out",
-        ):
-            asyncio.run(fail())
+                with self.assertRaisesRegex(RuntimeError, r"Z\.ai request timed out") as caught:
+                    asyncio.run(fail())
+                if operation_timeout:
+                    self.assertIn("after 30s", str(caught.exception))
+                else:
+                    self.assertNotIn("after", str(caught.exception))
 
 
 class HttpAgentProcessCancellationTests(unittest.IsolatedAsyncioTestCase):
@@ -254,7 +256,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         self.assertEqual(timeout.sock_connect, 30)
         self.assertEqual(timeout.connect, 30)
 
-    def test_stream_once_honors_explicit_sock_read_for_compatibility(self) -> None:
+    def test_stream_once_honors_explicit_operation_timeout(self) -> None:
         captured: list[object] = []
 
         class RecordingSession(_SSESession):

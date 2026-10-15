@@ -22,7 +22,6 @@ TITLE_PROMPT = (
     " punctuation/quotes. Dominant topic. Output only the title.\n\n"
     "No tools; the input below is everything."
 )
-TITLE_TIMEOUT: float | None = 3600.0
 TITLE_MAX_CHARS = 60
 TITLE_CONTEXT_CHARS = 4_000
 
@@ -133,9 +132,8 @@ async def generate(
     parts: list[str] = []
     parts_len = 0  # joined length of parts (newline between items)
     summary = data.get("summary")
-    if summary:
-        # Best-effort: coerce legacy values.
-        summary_text = summary if isinstance(summary, str) else str(summary)
+    if isinstance(summary, str) and summary:
+        summary_text = summary
         summary_prefix = "Previous summary:\n"
         recent_header = "Recent messages:"
         # The summary block and ``join`` each supply a newline.
@@ -182,7 +180,6 @@ async def generate(
         workspace_path,
         full_prompt,
         summary_model,
-        timeout=TITLE_TIMEOUT,
         label=f"Title (session {session_id})",
         log=logger,
         missing_executable_message=(

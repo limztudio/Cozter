@@ -74,7 +74,7 @@ _COMPLETION_TAIL_DRAIN_SECONDS = 0.05
 _COMPLETION_TAIL_DRAIN_BYTES = 64 * 1024
 _BLOCKED_TOOL_ROUND_LIMIT = 3
 _PARALLEL_READ_TOOLS = 4
-# 3600s real-work cap; bound error bodies.
+# Bound error bodies without imposing a generation deadline.
 _MAX_HTTP_ERROR_BODY_BYTES = 8 * 1024
 _EOF_SUCCESS_FINISH_REASONS = frozenset({
     "stop", "length", "tool_calls", "function_call", "content_filter",
@@ -438,14 +438,6 @@ class OpenAIChatBackend(Backend):
         """
         return 8
 
-    def _socket_timeout(self) -> int | None:
-        # Real-work cap hook: subclass socket timeout.
-        return 3600
-
-    def _socket_timeout_setting(self) -> str:
-        """Config setting to mention in a request error (legacy label)."""
-        return "the configured socket timeout"
-
     def _max_retries(self) -> int:
         return 2
 
@@ -516,8 +508,6 @@ class OpenAIChatBackend(Backend):
     ) -> None:
         endpoint = self._chat_endpoint()
         headers = self._auth_headers()
-        sock_read = self._socket_timeout()
-        timeout_setting = self._socket_timeout_setting()
         max_retries = self._max_retries()
         # Per-turn caps, read fresh.
         max_agent_turns = self._max_agent_turns()
@@ -669,8 +659,8 @@ class OpenAIChatBackend(Backend):
                 str, str, list[dict],
             ]:
                 return await _stream_completion(
-                    endpoint, payload, headers, sock_read, max_retries,
-                    self.name, timeout_setting, session=http_session,
+                    endpoint, payload, headers, None, max_retries,
+                    self.name, session=http_session,
                 )
 
             segment = 1
@@ -735,7 +725,7 @@ class OpenAIChatBackend(Backend):
                         )
 
                     async def run_tool_call(run_index: int, *, checkpoint: bool = True) -> None:
-                        # execute_tool owns permissions, status, truncation, timeout.
+                        # execute_tool owns permissions, status and truncation.
                         _name = _batch_names[run_index]
                         result = await tools.execute_tool(
                             _name, _batch_args[run_index], workspace_path, effective_approval,
@@ -1111,10 +1101,9 @@ async def _stream_completion(
     endpoint: str,
     payload: dict,
     headers: dict[str, str],
-    sock_read: int | None,
+    timeout_seconds: float | None,
     max_retries: int,
     label: str,
-    timeout_setting: str = "the configured socket timeout",
     session: aiohttp.ClientSession | None = None,
 ) -> tuple[str, str, list[dict]]:
     """POST the chat/completions endpoint (streaming); retry transient fails.
@@ -1123,12 +1112,12 @@ async def _stream_completion(
     and HTTP 429/5xx are retried with exponential backoff up to
     *max_retries* times - retrying a completion is safe because tool side
     effects only run *after* this returns. A bad status or malformed
-    response is not retried. Real-work cap: the stream runs up to the
-    ``sock_read`` bound (default 3600s), shared across retries and backoff,
-    or until the turn is cancelled. Heartbeats cannot extend this budget.
+    response is not retried. Worker generation has no imposed deadline.
+    A positive explicit ``timeout_seconds`` bounds this operation across
+    retries and backoff; cancellation always stops it.
     """
     started = time.monotonic()
-    deadline = started + sock_read if sock_read is not None and sock_read > 0 else None
+    deadline = started + timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None
     retries = 0
     outcome = "error"
 
@@ -1137,7 +1126,7 @@ async def _stream_completion(
         while True:
             try:
                 return await _stream_once(
-                    endpoint, payload, headers, sock_read, label,
+                    endpoint, payload, headers, timeout_seconds, label,
                     session=session, deadline=deadline,
                 )
             except _RetryableError as exc:
@@ -1153,9 +1142,9 @@ async def _stream_completion(
                 await asyncio.sleep(delay)
 
     try:
-        async with http_error_translator(label, sock_read, timeout_setting):
-            if sock_read is not None and sock_read > 0:
-                result = await asyncio.wait_for(with_retries(), timeout=sock_read)
+        async with http_error_translator(label, timeout_seconds):
+            if timeout_seconds is not None and timeout_seconds > 0:
+                result = await asyncio.wait_for(with_retries(), timeout=timeout_seconds)
             else:
                 result = await with_retries()
         outcome = "ok"
@@ -1175,7 +1164,7 @@ async def _stream_once(
     endpoint: str,
     payload: dict,
     headers: dict[str, str],
-    sock_read: int | None,
+    timeout_seconds: float | None,
     label: str,
     session: aiohttp.ClientSession | None = None,
     deadline: float | None = None,
@@ -1183,17 +1172,16 @@ async def _stream_once(
     """One streaming attempt; raise _RetryableError for transient failures.
 
     Parses Server-Sent Events. ``data:`` lines carry JSON deltas;
-    ``data: [DONE]`` terminates the stream. Real-work cap: the stream runs
-    up to the subclass-provided ``sock_read`` bound (default 3600s) or
-    until the turn is cancelled; cancel still stops instantly.
+    ``data: [DONE]`` terminates the stream. Generation runs until completion
+    or cancellation unless the caller explicitly requests an operation timeout.
     """
-    if sock_read is not None and sock_read > 0:
+    if timeout_seconds is not None and timeout_seconds > 0:
         if deadline is None:
-            deadline = time.monotonic() + sock_read
+            deadline = time.monotonic() + timeout_seconds
         timeout = aiohttp.ClientTimeout(
-            total=sock_read, sock_read=sock_read,
-            connect=min(_HTTP_CONNECT_TIMEOUT, sock_read),
-            sock_connect=min(_HTTP_CONNECT_TIMEOUT, sock_read),
+            total=timeout_seconds, sock_read=timeout_seconds,
+            connect=min(_HTTP_CONNECT_TIMEOUT, timeout_seconds),
+            sock_connect=min(_HTTP_CONNECT_TIMEOUT, timeout_seconds),
         )
     else:
         timeout = aiohttp.ClientTimeout(
@@ -1203,7 +1191,7 @@ async def _stream_once(
     if session is None:
         async with aiohttp.ClientSession(json_serialize=_compact_json) as owned_session:
             return await _stream_once(
-                endpoint, payload, headers, sock_read, label,
+                endpoint, payload, headers, timeout_seconds, label,
                 session=owned_session, deadline=deadline,
             )
     return await _post_completion_stream(

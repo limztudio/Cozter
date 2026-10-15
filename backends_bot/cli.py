@@ -1,6 +1,6 @@
 """CLI adapter: turns the launching terminal into a chat surface.
 
-Activated by running ``python -m Cozter -cli`` (or ``--cli``). No tokens,
+Activated by running ``python -m Cozter --cli``. No tokens,
 no networking - the bot reads commands and messages from stdin and prints
 replies to stdout. Used for local development and for users who don't
 want to set up Telegram or Slack.

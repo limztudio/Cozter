@@ -12,7 +12,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -34,17 +33,17 @@ jobs:
       - name: Install dependencies
         working-directory: Cozter
         run: |
-          timeout 3600s python -m pip install --upgrade pip
-          timeout 3600s python -m pip install -r requirements.txt ruff mypy
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt ruff mypy
 
       - name: Lint (ruff)
         working-directory: Cozter
-        run: timeout 3600s ruff check .
+        run: ruff check .
 
       - name: Type check (mypy)
         # Run from parent so `Cozter` resolves; pass matrix version (mypy.ini defaults locally).
-        run: PYTHONPATH="$PWD" timeout 3600s mypy --config-file Cozter/mypy.ini --python-version ${{ matrix.python-version }} -p Cozter
+        run: PYTHONPATH="$PWD" mypy --config-file Cozter/mypy.ini --python-version ${{ matrix.python-version }} -p Cozter
 
       - name: Tests (unittest)
         # Verbose output records every executed and skipped test in the job log.
-        run: PYTHONPATH="$PWD" timeout 3600s python -m unittest discover -s Cozter/tests -v
+        run: PYTHONPATH="$PWD" python -m unittest discover -s Cozter/tests -v

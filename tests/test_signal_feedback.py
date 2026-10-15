@@ -37,8 +37,6 @@ class SignalFeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.bots.append(bot)
         bot._group_ids = {"group", "other-group"}
         bot._rpc_request = mock.AsyncMock(return_value={"timestamp": "12345"})
-        bot._migrate_group_workspace_state = mock.Mock()
-        bot._migrate_group_workspace_files = mock.AsyncMock()
         bot.dispatch_text = mock.AsyncMock()
         bot.dispatch_command = mock.AsyncMock()
         return bot
@@ -122,7 +120,6 @@ class SignalFeedbackTests(unittest.IsolatedAsyncioTestCase):
             await bot._handle_received_item(self.message(text, timestamp=timestamp, device=2, sync=False))
         bot.dispatch_text.assert_not_awaited()
         bot.dispatch_command.assert_not_awaited()
-        bot._migrate_group_workspace_state.assert_not_called()
         self.assertFalse(os.path.exists(self.path))
 
     async def test_primary_and_other_linked_device_can_repeat_proven_bot_output(self) -> None:
@@ -168,7 +165,6 @@ class SignalFeedbackTests(unittest.IsolatedAsyncioTestCase):
                 await bot._handle_received_item(self.message(text, local=local, sync=local))
         handler.assert_not_awaited()
         self.assertIn(uid, bot._pending_input)
-        bot._migrate_group_workspace_state.assert_not_called()
         bot.dispatch_command.assert_not_awaited()
         self.assertFalse(os.path.exists(self.path))
         await bot._handle_received_item(self.message("C:\\MyWorkspace", timestamp=77777))

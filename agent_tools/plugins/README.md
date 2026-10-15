@@ -3,7 +3,7 @@
 Drop a `.py` file here to add a new tool to every agent. One file
 serves both modes:
 
-- **HTTP backends** (`llama`, `zai`, future Mistral/Gemini/etc.) see plugins
+- **HTTP backends** (`llama`, `meta`, `zai`, and future API backends) see plugins
   as typed tools — same schema as the built-in toolkit in `../builtin/`.
 - **CLI backends** (`codex`, `claude_code`, `copilot`, `grok`) can't have
   external tools injected, so the bot tells the model about each
@@ -48,7 +48,8 @@ plugin unless its class sets `requires_full_permission = True`. Set that flag
 for any capability that can access host resources outside Cozter's
 workspace-bounded tool model, such as arbitrary paths, commands, credentials,
 or sockets. The flag only controls HTTP-tool availability; it does not
-sandbox plugin code. Plugin calls carry the 3600s real-work cap. Cancellation
+sandbox plugin code. Plugin calls have no global execution deadline and run
+until completion, explicit cancellation, or failure. Cancellation
 stops cancellable work promptly; notes append and clear first wait for an
 already-started disk mutation to finish, so a subsequent operation cannot race
 an abandoned write or deletion. Their complete transactions also share a

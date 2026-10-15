@@ -82,15 +82,6 @@ class StateValidationAndRecoveryTests(unittest.TestCase):
             self.assertEqual(load.call_count, 3)
             self.assertNotIn(paths[0], [call.args[0] for call in load.call_args_list])
 
-    def test_last_session_migration_repairs_unsafe_target_pointer(self) -> None:
-        with tempfile.TemporaryDirectory() as ws:
-            data = session.create_session(ws)
-            session._save_last_session_map(ws, {
-                "target": "../unsafe", "source": data["id"],
-            })
-            self.assertTrue(session.migrate_last_session(ws, ["source"], "target"))
-            self.assertEqual(session.get_last_session(ws, "target"), data["id"])
-
     def test_state_path_rejects_windows_stream_and_drive_components(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             for component in ("settings.json:stream", "C:relative"):

@@ -115,30 +115,6 @@ def set_last_session(
     _save_last_session_map(workspace, data)
 
 
-def migrate_last_session(
-    workspace: str,
-    source_user_ids: list[int | str] | tuple[int | str, ...],
-    target_user_id: int | str,
-) -> bool:
-    """Copy the first legacy last-session pointer to a new user key."""
-    data = _load_last_session_map(workspace)
-    target_key = str(target_user_id)
-    if _is_safe_session_id(data.get(target_key)):
-        return False
-
-    for source_user_id in source_user_ids:
-        source_key = str(source_user_id)
-        if source_key == target_key:
-            continue
-        session_id = data.get(source_key)
-        if not _is_safe_session_id(session_id):
-            continue
-        data[target_key] = session_id
-        _save_last_session_map(workspace, data)
-        return True
-    return False
-
-
 def _safe_text(value: object, default: str = "") -> str:
     """Return a string for persisted free-text fields."""
     if isinstance(value, str):
@@ -597,8 +573,8 @@ def set_summary(
     keep_recent: int = 10,
     long_term_rewrite: list[str] | None = None,
     title: str | None = None,
-    summarized_count: int | None = None,
     *,
+    summarized_count: int,
     first_message_tail: str | None = None,
 ) -> None:
     """Store a compacted summary, keeping only the last *keep_recent* messages.
@@ -616,14 +592,20 @@ def set_summary(
     the workspace lock, so a concurrent turn can append messages while the
     summary is being computed; trimming against the *current* length would
     drop those newer, un-summarized messages. Trimming against the snapshot
-    count instead keeps everything appended since. None (manual/legacy callers)
-    falls back to the current length.
+    count instead keeps everything appended since. Callers must provide the
+    nonnegative snapshot count explicitly.
 
     first_message_tail is an internal lossless-compaction escape hatch for an
     oversized oldest message. When supplied with summarized_count=0, the
     summary covers only a bounded prefix while this replaces the same raw
     message with its unseen suffix in the one durable write.
     """
+    if (
+        isinstance(summarized_count, bool)
+        or not isinstance(summarized_count, int)
+        or summarized_count < 0
+    ):
+        raise ValueError("summarized_count must be a nonnegative integer")
     data = load_session(workspace, session_id)
     if data is None:
         return
@@ -635,15 +617,7 @@ def set_summary(
     if isinstance(keep_recent, bool) or not isinstance(keep_recent, int):
         keep_recent = 0
     keep_recent = max(0, keep_recent)
-    if (
-        summarized_count is not None
-        and (isinstance(summarized_count, bool)
-             or not isinstance(summarized_count, int))
-    ):
-        summarized_count = None
-    basis = len(msgs) if summarized_count is None else min(
-        summarized_count, len(msgs),
-    )
+    basis = min(summarized_count, len(msgs))
     trimmed = max(0, basis - keep_recent)
     data["compacted_count"] = data.get("compacted_count", 0) + trimmed
     # Keep the trim point onward.

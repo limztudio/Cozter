@@ -5,17 +5,15 @@ streams JSONL events to stdout. Cozter's Copilot integration:
   - reads a redirected stdin prompt when `-p` is omitted. File-backed stdin
     preserves the full UTF-8 prompt, including newlines, without platform
     argv limits or Windows cmd.exe/.cmd quoting and forwarding changes.
-  - supports `-C <dir>`, but Cozter uses the subprocess `cwd` parameter so
-    the launch path stays compatible with older CLI versions
+  - uses subprocess `cwd` to launch inside the selected workspace
   - requires an explicit ``--allow-all-tools`` for autonomous headless work;
     restricted calls use ``--available-tools ""`` to expose no tools at all
   - can export a session to GitHub web and mobile; Cozter explicitly disables
     that for its private, workspace-owned runs
 
-The JSONL event schema is not formally documented. ``parse_event`` and
-``extract_agent_text`` use best-effort key probing (``text``/``content``
-for assistant messages, ``tool_use``/``tool_call`` for tool invocations)
-and log unknown event types so the schema can be refined.
+The current JSONL assistant reply is ``assistant.message`` with a nested
+``data`` payload. ``parse_event`` and ``extract_agent_text`` require that
+envelope and log unknown event types so the schema can be refined.
 
 For the model picker, the CLI's help text is deliberately *not* used: it
 lists model names understood by the binary, including names disabled for an
@@ -41,10 +39,11 @@ import time
 import uuid
 from typing import TYPE_CHECKING
 
+from ..process_launch import create_prompt_subprocess
 from .base import (
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, ProcessResourceMap,
     append_text_result, attachment_image_paths,
-    create_prompt_subprocess, executable_command, fresh_model_catalog,
+    executable_command, fresh_model_catalog,
     record_backend_error, summarize_cli_tool, truncate_status_text,
 )
 from ..utils import is_path_within, terminate_windows_process_tree
@@ -202,9 +201,8 @@ class CopilotBackend(Backend):
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
         """Named models enabled for the current-directory project.
 
-        Callers that know the selected workspace should use
-        :meth:`available_models_for_workspace`; this compatibility property
-        retains the base backend interface for non-workspace callers.
+        Workspace-aware callers use :meth:`available_models_for_workspace`;
+        this property implements the backend's current-directory interface.
         """
         return self.available_models_for_workspace(os.getcwd())
 
@@ -533,20 +531,14 @@ class CopilotBackend(Backend):
     _TOOL_RESULT_TYPES = ("tool_result", "tool_output", "tool_end")
     _FILE_TYPES = ("file_change", "edit", "file")
     _ERROR_TYPES = ("error", "turn.failed", "failed", "session.error")
-    _ASSISTANT_TYPES = (
-        "assistant_message", "agent_message", "message",
-        "completion", "response", "text", "assistant.message",
-    )
-    _NON_AGENT_TYPES = frozenset(
-        _TOOL_USE_TYPES + _TOOL_RESULT_TYPES + _FILE_TYPES + _ERROR_TYPES
-    )
+    _ASSISTANT_TYPES = ("assistant.message",)
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
         from .. import execution_state
 
         if not isinstance(event, dict):
             return
-        event_type = event.get("type") or event.get("event") or ""
+        event_type = event.get("type")
         if not isinstance(event_type, str):
             return
         record = execution_state.current_run()
@@ -620,7 +612,7 @@ class CopilotBackend(Backend):
             record_backend_error(result, msg)
             return
 
-        # Fall through on assistant-like text.
+        # Only a current final assistant message carries the visible reply.
         text = self._assistant_text(event, event_type)
         if text:
             append_text_result(result, text)
@@ -632,55 +624,40 @@ class CopilotBackend(Backend):
     def extract_agent_text(self, event: dict) -> str | None:
         if not isinstance(event, dict):
             return None
-        event_type = event.get("type") or event.get("event") or ""
+        event_type = event.get("type")
         if not isinstance(event_type, str):
-            return None
-        # Tool/file/error events never carry the final reply.
-        if event_type in self._NON_AGENT_TYPES:
             return None
         return self._assistant_text(event, event_type)
 
     def _assistant_text(self, event: dict, event_type: str) -> str | None:
-        """Return the event's text content if it looks like assistant output."""
-        role = event.get("role")
-        if role and role not in ("assistant", "model", "agent"):
-            return None
-        is_assistant_type = (
-            event_type in self._ASSISTANT_TYPES
-            or event_type == ""
-            or event_type == "item.completed"
-        )
-        if not is_assistant_type:
+        """Read only the current final assistant message envelope."""
+        if event_type != "assistant.message":
             return None
         return self._extract_text(event)
 
     @staticmethod
     def _extract_text(event: dict) -> str | None:
-        """Pull text content from an event using best-effort key probing."""
-        # Accept both pre/post-1.0.70 shapes.
-        payloads = [event]
-        data = event.get("data")
-        if isinstance(data, dict):
-            payloads.append(data)
-        for payload in payloads:
-            for key in ("text", "content", "message"):
-                val = payload.get(key)
-                if isinstance(val, str) and val.strip():
-                    return val
-                if isinstance(val, dict):
-                    inner = val.get("text") or val.get("content")
-                    if isinstance(inner, str) and inner.strip():
-                        return inner
+        """Read visible text from the current CLI's nested data payload."""
+        payload = event.get("data")
+        if not isinstance(payload, dict):
+            return None
+        for key in ("text", "content", "message"):
+            val = payload.get(key)
+            if isinstance(val, str) and val.strip():
+                return val
+            if isinstance(val, dict):
+                inner = val.get("text") or val.get("content")
+                if isinstance(inner, str) and inner.strip():
+                    return inner
         return None
 
 
 def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
     """Extract the ACP session's account-aware model selector.
 
-    Copilot has exposed the legacy session model state in both
-    ``models.availableModels`` and top-level ``availableModels`` forms. Both
-    contain exact, account- and workspace-policy-scoped IDs, so prefer either
-    one over ACP's standard ``configOptions`` model selector. The category is
+    Prefer Copilot's account- and workspace-policy-scoped
+    ``models.availableModels`` over ACP's standard ``configOptions`` model
+    selector. The category is
     optional, so recognize the protocol's usual ``model``/``models`` selector
     IDs and labels as well.
     """
@@ -694,11 +671,6 @@ def _parse_acp_model_options(payload: object) -> tuple[str, ...]:
         )
         if models:
             return models
-
-    # Compat: old ACP SDKs put SessionModelState on session/new.
-    models = _catalog_model_ids(payload.get("availableModels"), key="modelId")
-    if models:
-        return models
 
     config_options = payload.get("configOptions")
     if not isinstance(config_options, list):

@@ -204,20 +204,20 @@ class ApplyPatchLimitsTests(unittest.TestCase):
         reader().read.assert_called_once_with(9)
 
     def test_locate_is_slice_free_and_keeps_hint_first_behavior(self) -> None:
-        hunk = _Hunk(start=2_001)
+        hunk = _Hunk(start=2_001, old_count=2_001, new_count=0)
         hunk.old = ["a"] * 2_000 + ["b"]
         lines = _NoSliceList(["a"] * 4_000 + ["b"])
 
         self.assertEqual(_locate(lines, hunk), 2_000)
 
-        hunk = _Hunk(start=3)
+        hunk = _Hunk(start=3, old_count=1, new_count=0)
         hunk.old = ["exact"]
         self.assertEqual(
             _locate(_NoSliceList(["exact", "other", "exact"]), hunk),
             2,
         )
 
-        hunk = _Hunk(start=3)
+        hunk = _Hunk(start=3, old_count=1, new_count=0)
         hunk.old = ["match"]
         self.assertEqual(
             _locate(_NoSliceList(["match ", "other", "match\t"]), hunk),
@@ -225,7 +225,7 @@ class ApplyPatchLimitsTests(unittest.TestCase):
         )
 
     def test_locate_keeps_exact_matches_ahead_of_fuzzy_hint(self) -> None:
-        hunk = _Hunk(start=1)
+        hunk = _Hunk(start=1, old_count=1, new_count=0)
         hunk.old = ["match"]
 
         self.assertEqual(_locate(_NoSliceList(["match ", "match"]), hunk), 1)

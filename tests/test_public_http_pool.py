@@ -15,7 +15,7 @@ from unittest import mock
 import aiohttp
 from aiohttp import web
 
-from Cozter.agent_tools import base
+from Cozter.agent_tools import base, _http_types, _public_resolver
 from Cozter.agent_tools.plugins.http_request import HttpRequestTool
 from Cozter.backends_agent import _openai_agent as oa
 
@@ -104,8 +104,8 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unused_scope_does_not_allocate_http_resources(self):
         with (
-            mock.patch.object(base, "PublicResolver") as resolver,
-            mock.patch.object(base.aiohttp, "TCPConnector") as connector,
+            mock.patch.object(_http_types, "PublicResolver") as resolver,
+            mock.patch.object(_http_types.aiohttp, "TCPConnector") as connector,
         ):
             async with base.public_http_pool_scope():
                 await asyncio.sleep(0)
@@ -113,7 +113,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
             connector.assert_not_called()
 
     async def test_connections_reuse_without_sharing_headers_or_cookies(self):
-        with mock.patch.object(base, "PublicResolver", side_effect=self._resolver):
+        with mock.patch.object(_http_types, "PublicResolver", side_effect=self._resolver):
             async with base.public_http_pool_scope():
                 pool = base._PUBLIC_HTTP_POOL.get()
                 result = await HttpRequestTool().run("/unused", {
@@ -141,18 +141,18 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_borrowed_sessions_ignore_proxy_environment(self):
         with (
-            mock.patch.object(base, "PublicResolver", side_effect=self._resolver),
+            mock.patch.object(_http_types, "PublicResolver", side_effect=self._resolver),
             mock.patch.dict("os.environ", {"HTTP_PROXY": "http://127.0.0.1:1"}),
         ):
             async with base.public_http_pool_scope():
                 async with base.open_public_http_session() as session:
                     self.assertFalse(session.trust_env)
-                    self.assertEqual(session.timeout.total, 3600)
+                    self.assertIsNone(session.timeout.total)
                     async with session.get(self.url) as response:
                         self.assertEqual(await response.text(), "offline fixture")
 
     async def test_each_new_connection_resolves_again(self):
-        with mock.patch.object(base, "PublicResolver", side_effect=self._resolver):
+        with mock.patch.object(_http_types, "PublicResolver", side_effect=self._resolver):
             async with base.public_http_pool_scope():
                 await self._get("/close")
                 await self._get("/close")
@@ -167,7 +167,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
             }]),
             close=mock.AsyncMock(),
         )
-        with mock.patch.object(base, "DefaultResolver", return_value=resolver):
+        with mock.patch.object(_public_resolver, "DefaultResolver", return_value=resolver):
             async with base.public_http_pool_scope():
                 with self.assertRaises(aiohttp.ClientConnectorError):
                     await self._get()
@@ -176,7 +176,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
         resolver.close.assert_awaited_once()
 
     async def test_same_host_connection_concurrency_is_bounded(self):
-        with mock.patch.object(base, "PublicResolver", side_effect=self._resolver):
+        with mock.patch.object(_http_types, "PublicResolver", side_effect=self._resolver):
             async with base.public_http_pool_scope():
                 tasks = [asyncio.create_task(self._get("/hold")) for _ in range(8)]
                 try:
@@ -191,7 +191,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.connections), 4)
 
     async def test_nested_scopes_restore_outer_owner(self):
-        with mock.patch.object(base, "PublicResolver", side_effect=self._resolver):
+        with mock.patch.object(_http_types, "PublicResolver", side_effect=self._resolver):
             async with base.public_http_pool_scope():
                 outer = base._PUBLIC_HTTP_POOL.get()
                 await self._get()
@@ -207,7 +207,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.connections), 2)
 
     async def test_unscoped_calls_keep_independent_original_lifetimes(self):
-        with mock.patch.object(base, "PublicResolver", side_effect=self._resolver):
+        with mock.patch.object(_http_types, "PublicResolver", side_effect=self._resolver):
             await self._get()
             await self._get()
         self.assertEqual(len(self.resolvers), 2)
@@ -215,7 +215,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([resolver.closes for resolver in self.resolvers], [1, 1])
 
     async def test_cancelling_a_borrow_does_not_close_its_workers_pool(self):
-        with mock.patch.object(base, "PublicResolver", side_effect=self._resolver):
+        with mock.patch.object(_http_types, "PublicResolver", side_effect=self._resolver):
             async with base.public_http_pool_scope():
                 pool = base._PUBLIC_HTTP_POOL.get()
                 task = asyncio.create_task(self._get("/wait"))
@@ -254,7 +254,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
                 body_entered.set()
                 await asyncio.Event().wait()
 
-        with mock.patch.object(base, "PublicResolver", return_value=fixture):
+        with mock.patch.object(_http_types, "PublicResolver", return_value=fixture):
             task = asyncio.create_task(owner())
             try:
                 await asyncio.wait_for(body_entered.wait(), 3)
@@ -275,7 +275,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(pools[0]._connector.closed)
 
     async def test_success_and_error_both_close_resources(self):
-        with mock.patch.object(base, "PublicResolver", side_effect=self._resolver):
+        with mock.patch.object(_http_types, "PublicResolver", side_effect=self._resolver):
             for failure in (False, True):
                 with self.subTest(failure=failure):
                     try:
@@ -319,7 +319,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with (
-            mock.patch.object(base, "PublicResolver", side_effect=self._resolver),
+            mock.patch.object(_http_types, "PublicResolver", side_effect=self._resolver),
             mock.patch.object(oa, "current_run", return_value=None),
             mock.patch.object(oa, "_stream_completion", side_effect=stream),
             mock.patch.object(oa.tools, "execute_tool", side_effect=execute),

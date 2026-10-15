@@ -36,6 +36,7 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
             updater._git("rev-parse", "HEAD")
 
         self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertNotIn("timeout", run.call_args.kwargs)
 
     def test_background_git_uses_cached_credentials_without_modifying_parent_environment(self):
         with (mock.patch.dict(updater.os.environ, {
@@ -225,13 +226,13 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
             self.assertEqual(updater.get_current_version(), "(unknown)")
             self.assertEqual(updater._get_head_commit(), "")
 
-    def test_pull_timeout_still_restarts_if_head_moved(self) -> None:
+    def test_pull_error_still_restarts_if_head_moved(self) -> None:
         with (
             mock.patch.object(updater, "_fetch_origin", return_value=True),
             mock.patch.object(updater, "_skip_pull_reason", return_value=None),
             mock.patch.object(
                 updater, "_git",
-                side_effect=subprocess.TimeoutExpired("git", 1),
+                side_effect=PermissionError("synthetic Git failure"),
             ),
             mock.patch.object(updater, "_head_changed", side_effect=[False, True]),
         ):
@@ -264,17 +265,17 @@ class UpdaterRequirementsTests(unittest.TestCase):
         ):
             updater.install_requirements()
 
-        self.assertEqual(run.call_args.kwargs["timeout"], updater._PIP_INSTALL_TIMEOUT)
+        self.assertNotIn("timeout", run.call_args.kwargs)
         self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 
-    def test_updated_requirements_timeout_is_reported(self) -> None:
+    def test_updated_requirements_failure_is_reported(self) -> None:
         with (
             mock.patch.object(updater.os.path, "exists", return_value=True),
             mock.patch.object(
                 updater.subprocess,
                 "run",
-                side_effect=subprocess.TimeoutExpired("pip", 1),
-            ),self.assertRaisesRegex(RuntimeError, "pip install timed out")
+                return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="synthetic pip failure"),
+            ), self.assertRaisesRegex(RuntimeError, "pip install failed")
         ):
             updater.install_requirements()
 

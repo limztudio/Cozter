@@ -46,7 +46,6 @@ class MaintenanceContextTests(unittest.IsolatedAsyncioTestCase):
             budget = agent._TURN_BUDGET.get()
             self.assertIsNotNone(execution)
             self.assertIsNotNone(budget)
-            self.assertIsNotNone(agent._TURN_TIMEOUT.get())
             self.assertEqual(execution.execution_id, "durable-job")
             self.assertEqual(probe.get(), "foreground")
             execution_refs.append(weakref.ref(execution))
@@ -70,7 +69,7 @@ class MaintenanceContextTests(unittest.IsolatedAsyncioTestCase):
         async def compact(path, session_id, summary_model, **kwargs):
             maintenance.append((
                 execution_state.current_execution(), execution_state.current_run(),
-                agent._TURN_BUDGET.get(), agent._TURN_TIMEOUT.get(), probe.get(),
+                agent._TURN_BUDGET.get(), probe.get(),
                 path, session_id, summary_model, kwargs,
             ))
             started.set()
@@ -105,14 +104,13 @@ class MaintenanceContextTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(result.text, "finished")
                         self.assertEqual(len(tasks), 1)
                         self.assertFalse(tasks[0].done())
-                        self.assertEqual(maintenance[0][:5], (None, None, None, None, "default"))
-                        self.assertEqual(maintenance[0][5:8], (workspace, data["id"], "summary-model"))
-                        self.assertEqual(maintenance[0][8]["backend_name"], _Backend.name)
-                        self.assertEqual(maintenance[0][8]["context_targets"], ((_Backend.name, None),))
+                        self.assertEqual(maintenance[0][:4], (None, None, None, "default"))
+                        self.assertEqual(maintenance[0][4:7], (workspace, data["id"], "summary-model"))
+                        self.assertEqual(maintenance[0][7]["backend_name"], _Backend.name)
+                        self.assertEqual(maintenance[0][7]["context_targets"], ((_Backend.name, None),))
                         self.assertIsNone(execution_state.current_execution())
                         self.assertIsNone(execution_state.current_run())
                         self.assertIsNone(agent._TURN_BUDGET.get())
-                        self.assertIsNone(agent._TURN_TIMEOUT.get())
                         self.assertEqual(probe.get(), "foreground")
                         disk = json.loads(Path(foreground[0]).read_bytes())
                         self.assertEqual(disk["values"]["native_session_id"], "saved-provider-session")

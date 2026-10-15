@@ -31,6 +31,7 @@ import tempfile
 import uuid
 
 
+from ..process_launch import create_captured_subprocess
 from .base import (
     CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
     AgentResult,
@@ -41,7 +42,6 @@ from .base import (
     apply_messages_assistant_content,
     apply_terminal_result_event,
     attachment_image_paths,
-    create_captured_subprocess,
     executable_command,
     extract_messages_style_agent_text,
     fallback_model_tables,

@@ -46,12 +46,6 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
         self.outside_file = self.outside / "outside.txt"
         self.inside_file.write_text("inside content\n", encoding="utf-8")
         self.outside_file.write_text("outside needle\n", encoding="utf-8")
-        # Do not consult a running instance's configuration during tests.
-        timeout = mock.patch.object(
-            agent_tools, "_tool_timeout_seconds", return_value=10.0,
-        )
-        timeout.start()
-        self.addCleanup(timeout.stop)
 
     async def _execute(
         self, name: str, args: dict, approval: str = "full",
@@ -486,9 +480,7 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("intentional test failure")
 
         tool = SimpleNamespace(name="failing_read", file_action=None, run=failing_read)
-        with mock.patch.dict(agent_tools._BY_NAME, {"failing_read": tool}), mock.patch.object(
-            agent_tools, "_tool_timeout_seconds", return_value=3600.0,
-        ):
+        with mock.patch.dict(agent_tools._BY_NAME, {"failing_read": tool}):
             result = await self._execute("failing_read", {"path": str(self.outside_file)})
         self.assertIn("intentional test failure", result)
         self.assertIn("escapes workspace", await ReadFileTool().run(
@@ -498,20 +490,19 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
             "read_file", {"path": str(self.outside_file)}, "auto",
         ))
 
-    async def test_timed_out_full_call_does_not_leak_permission(self) -> None:
+    async def test_explicit_operation_timeout_does_not_leak_permission(self) -> None:
         async def waiting_read(workspace: str, args: dict) -> str:
             self.assertEqual(await ReadFileTool().run(workspace, args), "outside needle\n")
-            await asyncio.Event().wait()
-            return "unreachable"
+            raise TimeoutError("requested operation deadline")
 
         tool = SimpleNamespace(name="waiting_read", file_action=None, run=waiting_read)
-        with mock.patch.dict(agent_tools._BY_NAME, {"waiting_read": tool}), mock.patch.object(
-            agent_tools, "_tool_timeout_seconds", return_value=0.02,
-        ), self.assertLogs("Cozter.performance", level="INFO") as timings:
+        with mock.patch.dict(agent_tools._BY_NAME, {"waiting_read": tool}), self.assertLogs(
+            "Cozter.performance", level="INFO",
+        ) as timings:
             result = await self._execute("waiting_read", {"path": str(self.outside_file)})
         self.assertTrue(result.startswith("Tool waiting_read failed"), result)
         self.assertIn("timed out", result)
-        self.assertIn("0.02s", result)
+        self.assertIn("requested operation", result)
         self.assertIn("before retrying", result)
         self.assertTrue(any("stage=tool_start" in entry for entry in timings.output))
         self.assertTrue(any("outcome=timeout" in entry for entry in timings.output))
@@ -541,9 +532,7 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError("cancellation was swallowed")
 
-        with mock.patch.dict(agent_tools._BY_NAME, {"waiting_read": tool}), mock.patch.object(
-            agent_tools, "_tool_timeout_seconds", return_value=3600.0,
-        ):
+        with mock.patch.dict(agent_tools._BY_NAME, {"waiting_read": tool}):
             task = asyncio.create_task(cancelled_caller())
             try:
                 await asyncio.wait_for(started.wait(), timeout=2)

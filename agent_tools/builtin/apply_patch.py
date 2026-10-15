@@ -31,7 +31,9 @@ _MAX_PATCH_BYTES = 1 * 1024 * 1024
 _MAX_PATCH_LINES = 20_000
 _MAX_FILE_BYTES = 1 * 1024 * 1024
 _MAX_FILE_LINES = 50_000
-_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+_HUNK_HEADER_RE = re.compile(
+    r"\A@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?:[ \t].*)?\Z",
+)
 _LINE_BREAK_RE = re.compile(r"\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 
 
@@ -47,8 +49,8 @@ class _Hunk:
     def __init__(
         self,
         start: int,
-        old_count: int | None = None,
-        new_count: int | None = None,
+        old_count: int,
+        new_count: int,
     ) -> None:
         self.start = start
         self.old_count = old_count
@@ -63,9 +65,7 @@ class _Hunk:
     def complete(self) -> bool:
         """Whether the declared old/new line counts have been consumed."""
         return (
-            self.old_count is not None
-            and self.new_count is not None
-            and len(self.old) == self.old_count
+            len(self.old) == self.old_count
             and len(self.new) == self.new_count
         )
 
@@ -73,13 +73,9 @@ class _Hunk:
         """Reject a hunk whose body does not match its declared line counts.
 
         A truncated diff must never be treated as a smaller valid edit: doing
-        so can silently apply only the first part of a requested change.  Keep
-        count-less fallback headers permissive for backwards compatibility,
-        but validate every normal unified-diff hunk before it can reach the
-        file writer.
+        so can silently apply only the first part of a requested change.
+        Validate every hunk before it can reach the file writer.
         """
-        if self.old_count is None or self.new_count is None:
-            return
         if len(self.old) != self.old_count or len(self.new) != self.new_count:
             raise _PatchError(
                 "hunk line counts do not match its header "
@@ -108,11 +104,11 @@ class _FilePatch:
                 raise _PatchError(
                     "creation hunk contains old/context lines for /dev/null",
                 )
-            if hunk.old_count not in (None, 0):
+            if hunk.old_count != 0:
                 raise _PatchError(
                     "creation hunk must declare zero old-file lines",
                 )
-            if hunk.old_count == 0 and hunk.start != 0:
+            if hunk.start != 0:
                 raise _PatchError(
                     "creation hunk must start at old-file line 0",
                 )
@@ -221,17 +217,22 @@ def _header_path(raw: str) -> str | None:
 
 def _parse_hunk_header(
     header: str,
-) -> tuple[int, int | None, int | None]:
+) -> tuple[int, int, int]:
     """Return the old start and declared old/new counts from a hunk header."""
     match = _HUNK_HEADER_RE.match(header)
     if match is None:
-        return 1, None, None
+        raise _PatchError(
+            "invalid hunk header; expected @@ -start[,count] +start[,count] @@",
+        )
     try:
         start = int(match.group(1))
         old_count = int(match.group(2) or "1")
-        new_count = int(match.group(3) or "1")
+        new_start = int(match.group(3))
+        new_count = int(match.group(4) or "1")
     except ValueError as exc:
         raise _PatchError("hunk header contains an invalid line count") from exc
+    if (start == 0 and old_count != 0) or (new_start == 0 and new_count != 0):
+        raise _PatchError("hunk line 0 requires a zero line count")
     if old_count > _MAX_PATCH_LINES or new_count > _MAX_PATCH_LINES:
         raise _PatchError(
             "hunk declares more lines than the "

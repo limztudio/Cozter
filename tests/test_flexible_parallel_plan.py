@@ -13,7 +13,7 @@ class ParallelReadPlanTests(unittest.TestCase):
         plan = flexible.parse_plan(
             "[PLAN]\n"
             "1. [low] [parallel-read] inspect transport logs\n"
-            "2. [medium] [PARALLEL-READ] inspect parser boundaries\n"
+            "2. [mid] [PARALLEL-READ] inspect parser boundaries\n"
             "3. [high] repair related findings and verify\n"
             "[/PLAN]", "inspect and repair",
         )
@@ -39,7 +39,7 @@ class ParallelReadPlanTests(unittest.TestCase):
         ):
             with self.subTest(first=first):
                 plan = flexible.parse_plan(
-                    f"1. [medium] {first}\n2. [mid] {second}\n3. [high] apply the fix",
+                    f"1. [mid] {first}\n2. [mid] {second}\n3. [high] apply the fix",
                     "inspect logs and repair",
                 )
                 self.assertEqual(len(plan.subtasks), 2)

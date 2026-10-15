@@ -88,11 +88,9 @@ def _current_task_or_none() -> asyncio.Task | None:
 
 @dataclass
 class TurnBudget:
-    """One execution attempt's allowance, shared by its immediate continuations."""
+    """Worker allowance and retained evidence shared by immediate continuations."""
 
-    timeout_seconds: int
     max_workers: int = flexible.MAX_SUBTASKS * 2
-    deadline: float | None = None
     started: bool = False
     workers_started: int = 0
     pending: list[str] = dataclasses.field(default_factory=list)
@@ -107,14 +105,11 @@ class TurnBudget:
     auto_attachment_omitted_sources: set[str] = dataclasses.field(default_factory=set)
 
     def start(self) -> None:
-        # Start after the workspace run lock; time spent queuing is excluded.
+        # Start after the workspace run lock.
         if not self.started:
             self.started = True
-            if self.timeout_seconds:
-                self.deadline = asyncio.get_running_loop().time() + self.timeout_seconds
             performance_logger.info(
-                "stage=turn_budget event=start timeout_seconds=%d max_workers=%d",
-                self.timeout_seconds, self.max_workers,
+                "stage=turn_budget event=start max_workers=%d", self.max_workers,
             )
 
     def claim_worker(self) -> None:
@@ -269,7 +264,6 @@ class TurnBudget:
 
 
 _TURN_BUDGET: ContextVar[TurnBudget | None] = ContextVar("cozter_turn_budget", default=None)
-_TURN_TIMEOUT: ContextVar[asyncio.Timeout | None] = ContextVar("cozter_turn_timeout", default=None)
 
 
 @contextmanager
@@ -279,7 +273,7 @@ def turn_budget(*, fresh: bool = False):
     if not fresh and current is not None and current.owner is _current_task_or_none():
         yield current
         return
-    token = _TURN_BUDGET.set(TurnBudget(config.get_agent_turn_timeout()))
+    token = _TURN_BUDGET.set(TurnBudget())
     try:
         yield _TURN_BUDGET.get()
     finally:
@@ -387,7 +381,7 @@ _COMPLETENESS_RULE = (
     f"{WHOLE_SCOPE_RULE}"
     f" {DOC_FOLLOWING_RULE}"
     " Verify-with-evidence: build/test/verify = enumerate targets, run"
-    " canonical commands with 3600s cap (cancel still stops instantly; capture"
+    " canonical commands to completion (cancel still stops instantly; capture"
     " to file), grep full logs for error/warning/exception, fix each,"
     " re-run until zero; runtime = launch + exercise paths + check logs;"
     " report commands + exit codes + counts; never claim clean from"
@@ -446,7 +440,7 @@ _MAX_DETACHED_TASK_PROMPT_CHARS = 12_000
 
 
 def _iter_attachment_markers(text: str) -> Iterator[tuple[int, int, str]]:
-    """Yield legacy attach ranges/captures without overlapping suffix scans."""
+    """Yield attachment ranges/captures without overlapping suffix scans."""
     cursor = 0
     boundary = -1
     tail_boundary = -1
@@ -458,8 +452,8 @@ def _iter_attachment_markers(text: str) -> Iterator[tuple[int, int, str]]:
         if content_start == len(text):
             return
         if text[content_start] == "]":
-            # Legacy \s* can backtrack to give its required capture one
-            # whitespace character, but the capture cannot contain a newline.
+            # Optional whitespace can give the required capture one whitespace
+            # character, but the capture cannot contain a newline.
             capture_start = content_start - 1
             while capture_start >= prefix.end() and text[capture_start] == "\n":
                 capture_start -= 1
@@ -1896,7 +1890,6 @@ async def _judge_draft(
                 workspace_path,
                 flexible.build_judge_prompt(request, cleaned),
                 summary_model,
-                timeout=flexible.JUDGE_TIMEOUT,
                 label="Continue judge",
                 log=logger,
                 missing_executable_message=(
@@ -2074,7 +2067,6 @@ async def _run_flexible(
                     collaborative=collaborative,
                 ),
                 summary_model,
-                timeout=flexible.PLAN_TIMEOUT,
                 label="Flexible planner",
                 log=logger,
                 missing_executable_message=(
@@ -2505,7 +2497,6 @@ async def _run_flexible(
                 collaborative=collaborative, blocked=blocked,
             ),
             summary_model,
-            timeout=flexible.MERGE_TIMEOUT,
             label="Flexible merge",
             log=logger,
             missing_executable_message=(
@@ -3108,29 +3099,21 @@ async def _run_turn(
         budget.start()
         if not budget.pending:
             budget.pending = [_DEFAULT_PENDING_SCOPE]
-        timer = asyncio.timeout_at(budget.deadline)
-        token = _TURN_TIMEOUT.set(timer)
         try:
-            async with timer:
-                return await _run_turn_impl(
-                    turn, prompt, workspace_path, user_id,
-                    model=model,
-                    summary_model=summary_model,
-                    approval=approval,
-                    on_event=on_event,
-                    inject_queue=inject_queue,
-                    backend_name=backend_name,
-                    summary_backend_name=summary_backend_name,
-                    session_id=session_id,
-                    on_process=on_process,
-                    on_session=on_session,
-                    is_scheduled=is_scheduled,
-                )
-        except TimeoutError:
-            if not timer.expired():
-                raise
-            reason = f"the {budget.timeout_seconds}s whole-turn time limit was reached"
-            limit_kind = "time"
+            return await _run_turn_impl(
+                turn, prompt, workspace_path, user_id,
+                model=model,
+                summary_model=summary_model,
+                approval=approval,
+                on_event=on_event,
+                inject_queue=inject_queue,
+                backend_name=backend_name,
+                summary_backend_name=summary_backend_name,
+                session_id=session_id,
+                on_process=on_process,
+                on_session=on_session,
+                is_scheduled=is_scheduled,
+            )
         except _TurnBudgetExhaustedError as exc:
             reason = str(exc)
             limit_kind = "tools" if "tool budget exhausted" in reason.casefold() else "workers"
@@ -3138,12 +3121,8 @@ async def _run_turn(
             # /stop and daemon shutdown retain their original cancellation contract.
             _log_interrupted_turn(turn)
             raise
-        finally:
-            _TURN_TIMEOUT.reset(token)
-
         continuation_reason: ContinuationReason = (
-            "time_budget" if limit_kind == "time"
-            else "tool_budget" if limit_kind == "tools"
+            "tool_budget" if limit_kind == "tools"
             else "worker_budget"
         )
         # An accepted message is part of this request even if the allowance
@@ -3154,8 +3133,8 @@ async def _run_turn(
             turn.prompt = prompt + "\n\n[Added while you were thinking]:\n" + "\n".join(turn.injected)
         result = budget.finish(reason, turn, continuation_reason=continuation_reason)
         performance_logger.info(
-            "stage=turn_budget outcome=exhausted limit=%s workers_started=%d timeout_seconds=%d",
-            limit_kind, budget.workers_started, budget.timeout_seconds,
+            "stage=turn_budget outcome=exhausted limit=%s workers_started=%d",
+            limit_kind, budget.workers_started,
         )
         if turn.session_id:
             budget_session_id = turn.session_id
@@ -3483,10 +3462,6 @@ async def _run_turn_impl(
             continue
         break
 
-    # The completion deadline covers agent work, not durable reply/session writes.
-    timer = _TURN_TIMEOUT.get()
-    if timer is not None:
-        timer.reschedule(None)
     # Close before session/reply yields.
     _close_inject_queue(inject_queue)
     # Discard Queue messages after the final answer.

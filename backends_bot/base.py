@@ -1075,16 +1075,9 @@ class BotPlatform(ABC):
     def _describe_running_task(
         self, uid: str, task: asyncio.Task, now: float,
     ) -> str:
-        """Render one running turn with its non-sensitive attribution.
-
-        Falls back to the legacy ``uid(cancelled=...)`` shape when no
-        progress record exists (turns started before tracking, or tests
-        that register ``_running_tasks`` directly).
-        """
+        """Render one running turn with a consistent non-sensitive attribution."""
         base = f"{uid}(cancelled={task.cancelled()})"
-        progress = self._turn_progress.get(uid)
-        if progress is None:
-            return base
+        progress = self._turn_progress.get(uid, _TurnProgress())
         elapsed = max(0.0, now - progress.started) if progress.started else 0.0
         detail = f"backend={progress.backend or '?'}"
         detail += f" model={progress.model or '?'}"
@@ -2734,7 +2727,7 @@ class BotPlatform(ABC):
     # /schedules (list/delete)
 
     def _platform_schedules(self, ws: str, uid: str) -> list[dict]:
-        """Keep legacy schedules and records created by this platform."""
+        """Filter tagged schedules; retain untagged records pending canonicalization."""
         return [
             record for record in schedules.list_schedules(ws, uid)
             if record.get("platform_id") in (None, "", self.platform_id)
@@ -5085,7 +5078,7 @@ class BotPlatform(ABC):
         job = await self._load_job_checkpoint(uid, queue_entry_id) if queue_entry_id else {}
         ws = job.get("workspace_path")
         if not isinstance(ws, str) or not ws:
-            # A legacy/corrupt durable entry has no trustworthy origin. Pause
+            # A durable entry without a workspace has no trustworthy origin. Pause
             # rather than assigning the user's current workspace after restart.
             ws = (await self._current_workspace_for_turn(uid, chat_id)
                   if queue_entry_id is None else None)

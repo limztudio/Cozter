@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager, suppress
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
 import ipaddress
 import re
@@ -25,37 +25,6 @@ import urllib.parse
 
 from ..utils import clip_status_value, is_path_within
 from . import _http_types
-
-if TYPE_CHECKING:
-    import aiohttp
-    from aiohttp.abc import AbstractResolver as AbstractResolver
-    from aiohttp.resolver import DefaultResolver as DefaultResolver
-    from ._public_resolver import PublicResolver
-
-_HTTP_EXPORTS = ("aiohttp", "AbstractResolver", "DefaultResolver", "PublicResolver")
-
-
-def __getattr__(name: str) -> Any:
-    # Keep these public imports and patch targets as the real library objects,
-    # while non-HTTP CLI tools need not initialize the HTTP client stack.
-    if name not in _HTTP_EXPORTS:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(_http_types, name)
-    globals()[name] = value
-    return value
-
-
-def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_HTTP_EXPORTS))
-
-
-def _load_http_dependencies() -> None:
-    # Explicit global reads in HTTP helpers do not call module __getattr__.
-    # Never replace an existing alias: callers may patch these public hooks.
-    for name in ("aiohttp", "PublicResolver"):
-        if name not in globals():
-            __getattr__(name)
-
 
 _MAX_FETCH_BYTES = 5 * 1024 * 1024
 HTTP_USER_AGENT_HEADERS = {
@@ -580,7 +549,7 @@ def iter_workspace_files(
     explicitly names that directory segment. ``discovery_pattern`` preserves
     those explicit names when a caller strips a literal search prefix.
     ``sort_entries`` gives paged callers a stable directory/file traversal
-    without changing the legacy ordering of unpaged internal callers.
+    while preserving the ordering of unpaged internal callers.
     """
     abs_ws = os.path.realpath(workspace)
     abs_root = os.path.realpath(root)
@@ -1246,17 +1215,17 @@ async def open_http_response(
     url: str,
     *,
     allow_redirects: bool = True,
-    timeout: int | None = 3600,
+    timeout: int | float | None = None,
 ) -> AsyncIterator[_http_types.ClientResponse]:
     """Open one HTTP request with shared web-tool client settings.
 
-    Real-work cap (up to 3600s); cancel stops instantly. Positive
-    ``timeout`` overrides; 0/None means no client timeout.
+    Requests run until completion or cancellation. A caller may explicitly
+    request a positive operation ``timeout``; 0/None leaves it unbounded.
     """
-    _load_http_dependencies()
-    client_timeout: _http_types.ClientTimeout | None = None
-    if timeout is not None and timeout > 0:
-        client_timeout = aiohttp.ClientTimeout(total=timeout)
+    aiohttp = _http_types.aiohttp
+    client_timeout = aiohttp.ClientTimeout(
+        total=timeout if timeout is not None and timeout > 0 else None,
+    )
     async with (
         aiohttp.ClientSession(headers=HTTP_USER_AGENT_HEADERS) as session,
         session.get(
@@ -1389,9 +1358,8 @@ class _PublicHttpPool:
         if self._closed:
             raise RuntimeError("The owning HTTP worker has finished")
         if self._connector is None:
-            _load_http_dependencies()
-            self._resolver = PublicResolver()
-            self._connector = aiohttp.TCPConnector(
+            self._resolver = _http_types.PublicResolver()
+            self._connector = _http_types.aiohttp.TCPConnector(
                 resolver=self._resolver,
                 use_dns_cache=False,
                 limit=8,
@@ -1444,7 +1412,7 @@ async def public_http_pool_scope() -> AsyncIterator[None]:
 @asynccontextmanager
 async def open_public_http_session() -> AsyncIterator[_http_types.ClientSession]:
     """Open an isolated session, borrowing only its worker's checked sockets."""
-    _load_http_dependencies()
+    aiohttp = _http_types.aiohttp
     pool = _PUBLIC_HTTP_POOL.get()
     if pool is not None:
         async with aiohttp.ClientSession(
@@ -1452,14 +1420,14 @@ async def open_public_http_session() -> AsyncIterator[_http_types.ClientSession]
             connector=pool.connector(),
             connector_owner=False,
             trust_env=False,
-            timeout=aiohttp.ClientTimeout(total=3600),
+            timeout=aiohttp.ClientTimeout(total=None),
         ) as session:
             yield session
         return
 
     # CLI plugins and callers outside a worker retain the original one-call
     # lifetime, including their independently owned resolver and connector.
-    resolver = PublicResolver()
+    resolver = _http_types.PublicResolver()
     connector = aiohttp.TCPConnector(
         resolver=resolver,
         # Re-resolve per connection.
@@ -1470,9 +1438,8 @@ async def open_public_http_session() -> AsyncIterator[_http_types.ClientSession]
             headers=HTTP_USER_AGENT_HEADERS,
             connector=connector,
             trust_env=False,
-            # The library's implicit 300s timeout would stop a valid fetch
-            # before the tool dispatcher reaches its documented work cap.
-            timeout=aiohttp.ClientTimeout(total=3600),
+            # Override the library's implicit 300s request deadline.
+            timeout=aiohttp.ClientTimeout(total=None),
         ) as session:
             yield session
     finally:
@@ -1637,11 +1604,3 @@ def html_to_text(value: str) -> str:
             parts.append(" ")
 
     return " ".join(html.unescape("".join(parts)).split())
-
-
-# Preserve the original star-import surface as well as direct lazy imports.
-# A star import deliberately requests the HTTP exports and initializes them.
-__all__ = list(dict.fromkeys(
-    [name for name in globals() if not name.startswith("_") and name != "TYPE_CHECKING"]
-    + list(_HTTP_EXPORTS)
-))

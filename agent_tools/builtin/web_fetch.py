@@ -35,7 +35,7 @@ class _FetchRefusedError(Exception):
     Covers HTTP error statuses, refused content types, refused redirect
     targets, and redirect loops. Transport failures (connection resets,
     DNS hiccups) stay ordinary exceptions so the caller can retry them
-    once. Real-work cap: requests run up to 3600s or until cancelled.
+    once. Requests run until completion or cancellation.
     """
 
 

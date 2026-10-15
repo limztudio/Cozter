@@ -111,21 +111,19 @@ class HttpAgentProcess:
 @contextlib.asynccontextmanager
 async def http_error_translator(
     label: str,
-    sock_read_timeout: int | None = None,
-    timeout_setting: str = "the configured socket timeout",
+    timeout_seconds: float | None = None,
 ) -> AsyncIterator[None]:
     """Map aiohttp client errors to user-facing ``RuntimeError`` messages.
 
     Wrap the request lifecycle (post + body read) to get clear bot-side
     error messages instead of raw aiohttp exception strings::
 
-        async with http_error_translator(f"X at {url}", sock_read):
+        async with http_error_translator(f"X at {url}", timeout_seconds):
             async with sess.post(...) as resp:
                 ...
 
-    *label* names the service in each error message. *sock_read_timeout*
-    and *timeout_setting* name the real-work cap (default 3600s) shown in
-    timeout errors; cancel still stops instantly.
+    *label* names the service. When the caller explicitly requested an
+    operation timeout, its duration is included in timeout errors.
     """
     try:
         yield
@@ -142,10 +140,9 @@ async def http_error_translator(
             f"{label} dropped the connection mid-response"
         ) from exc
     except TimeoutError as exc:
-        if sock_read_timeout is not None:
+        if timeout_seconds is not None and timeout_seconds > 0:
             raise RuntimeError(
-                f"{label} request timed out after {sock_read_timeout}s"
-                f" ({timeout_setting}): {exc}"
+                f"{label} request timed out after {timeout_seconds:g}s: {exc}"
             ) from exc
         raise RuntimeError(
             f"{label} request timed out: {exc}"

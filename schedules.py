@@ -8,7 +8,7 @@ File shape:
     {"<user_id>": [<schedule_dict>, ...], ...}
 
 Each ``<schedule_dict>``:
-    {id, days, time, command, created, chat_id, user_id, platform_id?, last_fired?}
+    {id, days, time, command, created, chat_id, user_id, platform_id, last_fired?}
 """
 
 import copy
@@ -124,97 +124,6 @@ def list_schedules(
         schedule for schedule in _schedule_list(_load_all(workspace), user_id)
         if isinstance(schedule, dict)
     ]
-
-
-def list_schedule_user_ids(workspace: str) -> list[str]:
-    """Return user keys that currently own schedules in *workspace*."""
-    return [
-        str(uid)
-        for uid, entries in _load_all(workspace).items()
-        if isinstance(entries, list)
-    ]
-
-
-def migrate_schedules(
-    workspace: str,
-    source_user_ids: list[str | int] | tuple[str | int, ...],
-    target_user_id: str | int,
-    *,
-    source_chat_id: str = "",
-    target_chat_id: str = "",
-    source_platform_id: str = "",
-) -> int:
-    """Move legacy schedules to a new user key, returning moved count."""
-    data = _load_all(workspace)
-    target_key = str(target_user_id)
-    target = data.get(target_key, [])
-    if not isinstance(target, list):
-        target = []
-    # Persisted IDs may be hand-edited; never abort migration.
-    seen_ids = {
-        found_id
-        for schedule in target
-        if isinstance(schedule, dict)
-        and isinstance((found_id := schedule.get("id")), str)
-        and found_id
-    }
-
-    moved = 0
-    changed = False
-    for source_user_id in source_user_ids:
-        source_key = str(source_user_id)
-        if source_key == target_key:
-            continue
-        source = data.get(source_key)
-        if not isinstance(source, list) or not source:
-            continue
-
-        remaining: list[dict] = []
-        for sched in source:
-            if not isinstance(sched, dict):
-                remaining.append(sched)
-                continue
-            if source_platform_id and sched.get("platform_id") not in (
-                None, "", source_platform_id,
-            ):
-                remaining.append(sched)
-                continue
-            sched_chat_id = str(sched.get("chat_id") or "")
-            if source_chat_id and sched_chat_id != source_chat_id:
-                remaining.append(sched)
-                continue
-            raw_sched_id = sched.get("id")
-            sched_id = (
-                raw_sched_id
-                if isinstance(raw_sched_id, str) and raw_sched_id
-                else None
-            )
-            if sched_id is not None and sched_id in seen_ids:
-                changed = True
-                continue
-
-            migrated = dict(sched)
-            migrated["user_id"] = target_key
-            if source_platform_id:
-                migrated["platform_id"] = source_platform_id
-            if target_chat_id:
-                migrated["chat_id"] = target_chat_id
-            target.append(migrated)
-            if sched_id is not None:
-                seen_ids.add(sched_id)
-            moved += 1
-            changed = True
-
-        if remaining:
-            data[source_key] = remaining
-        else:
-            data.pop(source_key, None)
-
-    if changed:
-        if target:
-            data[target_key] = target
-        _save_all(workspace, data)
-    return moved
 
 
 def update_schedule_fired(

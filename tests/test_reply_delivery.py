@@ -521,17 +521,18 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(sensitive, diag)
         self.assertIn("file: change", diag)
 
-    async def test_stuck_diag_without_progress_keeps_legacy_shape(
+    async def test_stuck_diag_without_progress_uses_current_unknown_fields(
         self,
     ) -> None:
-        """Turns without a progress record render as before."""
+        """Missing progress uses explicit unknown fields in the current diagnostic format."""
         bot = _ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
         task = asyncio.current_task()
         assert task is not None
         bot._running_tasks["u1"] = task
         diag = bot.stuck_turn_diagnostics()
         self.assertIn("u1(cancelled=False)", diag)
-        self.assertNotIn("backend=", diag)
+        self.assertIn("backend=? model=? pid=? elapsed=0.0s", diag)
+        self.assertIn("last=<no progress events yet>", diag)
 
     async def test_turn_progress_cleared_on_cleanup(self) -> None:
         """Finished/cancelled turns drop their attribution record."""

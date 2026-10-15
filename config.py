@@ -29,18 +29,13 @@ _DEFAULT_CONFIG = {
     "llama_server_url": "http://127.0.0.1:8080",
     "llama_max_agent_turns": 60,
     "llama_tool_repeat_limit": 3,
-    "llama_socket_timeout": 3600,
     "llama_max_retries": 2,
     "zai_api_key": "",
     "zai_base_url": "https://api.z.ai/api/paas/v4",
-    "zai_socket_timeout": 3600,
     "zai_max_retries": 2,
     "meta_api_key": "",
     "meta_base_url": "https://api.meta.ai/v1",
-    "meta_socket_timeout": 3600,
     "meta_max_retries": 2,
-    "tool_timeout": 3600,
-    "agent_turn_timeout": 3600,
     "flexible_max_parallel_workers": 3,
     "update_idle_timeout": 1200,
     "dump_traceback_interval": 0,
@@ -64,8 +59,7 @@ _CONFIG_CACHE_DATA: dict | None = None
 def _load_config_object() -> dict:
     """Read config.json and require the top-level JSON value to be an object.
 
-    Results are cached by path + mtime + size so hot paths (per-tool
-    ``tool_timeout`` reads, per-turn socket-timeout getters) avoid
+    Results are cached by path + mtime + size so runtime getters avoid
     re-parsing the file on every call. A config edit changes mtime/size
     and takes effect on the next getter without a restart.
     """
@@ -207,15 +201,6 @@ def get_llama_tool_repeat_limit() -> int:
     return _get_int_at_least("llama_tool_repeat_limit", 1)
 
 
-def get_llama_socket_timeout() -> int:
-    """Real-work cap for llama generation streams (default 3600s).
-
-    Slow providers keep streaming up to this bound instead of timing out
-    early and forcing a wasteful retry. Cancel still stops instantly.
-    """
-    return _get_int_at_least("llama_socket_timeout", 1)
-
-
 def get_llama_max_retries() -> int:
     """Retry attempts for transient llama HTTP failures (>= 0; 0 disables).
 
@@ -274,11 +259,6 @@ def get_zai_base_url() -> str:
     return _get_https_url("zai_base_url")
 
 
-def get_zai_socket_timeout() -> int:
-    """Real-work cap for zai generation streams (default 3600s). Cancel still stops instantly."""
-    return _get_int_at_least("zai_socket_timeout", 1)
-
-
 def get_zai_max_retries() -> int:
     """Retry attempts for transient zai HTTP failures (>= 0; 0 disables)."""
     return _get_int_at_least("zai_max_retries", 0)
@@ -294,25 +274,9 @@ def get_meta_base_url() -> str:
     return _get_https_url("meta_base_url")
 
 
-def get_meta_socket_timeout() -> int:
-    """Real-work cap for Meta generation streams (default 3600s). Cancel still stops instantly."""
-    return _get_int_at_least("meta_socket_timeout", 1)
-
-
 def get_meta_max_retries() -> int:
     """Retry attempts for transient Meta Model API failures (>= 0)."""
     return _get_int_at_least("meta_max_retries", 0)
-
-
-def get_tool_timeout() -> int:
-    """Real-work cap on a single tool call (default 3600s).
-
-    Tools (search/build/fetch/...) run up to this bound instead of timing
-    out early and forcing a wasteful retry. Cancel (/stop, new message,
-    [[await]]) still stops instantly. Chat-reply paths keep their own
-    short timeouts.
-    """
-    return _get_int_at_least("tool_timeout", 1)
 
 
 def get_update_idle_timeout() -> int:
@@ -323,11 +287,6 @@ def get_update_idle_timeout() -> int:
     restarting through active work. Defaults to 1200s.
     """
     return _get_int_at_least("update_idle_timeout", 1)
-
-
-def get_agent_turn_timeout() -> int:
-    """One execution attempt's time limit; 0 explicitly disables it."""
-    return _get_int_at_least("agent_turn_timeout", 0)
 
 
 def get_flexible_max_parallel_workers() -> int:

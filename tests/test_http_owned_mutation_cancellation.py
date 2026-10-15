@@ -135,8 +135,9 @@ class HttpOwnedMutationCancellationTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(Path(workspace, "second.txt").exists())
 
 
-class ToolDispatchDeadlineTests(unittest.IsolatedAsyncioTestCase):
-    async def _run_late_plugin(self, *, cancel_outer):
+class ToolDispatchCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_repeated_outer_cancel_does_not_interrupt_owned_plugin_cleanup(self):
+        started = asyncio.Event()
         cancelling = asyncio.Event()
         release = asyncio.Event()
         settled = asyncio.Event()
@@ -145,6 +146,7 @@ class ToolDispatchDeadlineTests(unittest.IsolatedAsyncioTestCase):
 
         async def run(*args):
             children.append(asyncio.current_task())
+            started.set()
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
@@ -154,46 +156,27 @@ class ToolDispatchDeadlineTests(unittest.IsolatedAsyncioTestCase):
                 return "late success after swallowing cancellation"
 
         plugin = SimpleNamespace(run=run, file_action=None, is_plugin=True)
-        with (
-            mock.patch.dict(agent_tools._BY_NAME, {"late_plugin": plugin}),
-            mock.patch.object(agent_tools, "_tool_timeout_seconds", return_value=.001),
-        ):
+        with mock.patch.dict(agent_tools._BY_NAME, {"late_plugin": plugin}):
             owner = asyncio.create_task(agent_tools.execute_tool(
                 "late_plugin", {}, "/unused", "full", events.append,
             ))
             try:
+                await asyncio.wait_for(started.wait(), 3)
+                self.assertEqual(children[0].cancelling(), 0)
+                owner.cancel("outer cancellation")
                 await asyncio.wait_for(cancelling.wait(), 3)
                 self.assertFalse(owner.done())
-                self.assertEqual(children[0].cancelling(), 1)
-                if cancel_outer:
-                    owner.cancel("outer cancellation during timeout cleanup")
+                owner.cancel("repeated outer cancellation")
+                for _ in range(5):
                     await asyncio.sleep(0)
-                    owner.cancel("repeated outer cancellation")
-                    for _ in range(5):
-                        await asyncio.sleep(0)
-                    self.assertFalse(owner.done())
-                    # Deadline already cancelled the plugin once. External
-                    # cancellation must not interrupt its owned cleanup again.
-                    self.assertEqual(children[0].cancelling(), 1)
+                self.assertFalse(owner.done())
+                self.assertEqual(children[0].cancelling(), 1)
                 release.set()
-                if cancel_outer:
-                    with self.assertRaises(asyncio.CancelledError) as caught:
-                        await owner
-                    self.assertEqual(caught.exception.args,
-                                     ("outer cancellation during timeout cleanup",))
-                    self.assertFalse(any(event["type"] == "tool_result" for event in events))
-                else:
-                    result = await owner
-                    self.assertIn("timed out", result)
-                    self.assertNotIn("late success", result)
-                    self.assertEqual(events[-1]["output"], result)
+                with self.assertRaises(asyncio.CancelledError) as caught:
+                    await owner
+                self.assertEqual(caught.exception.args, ("outer cancellation",))
+                self.assertFalse(any(event["type"] == "tool_result" for event in events))
                 self.assertTrue(settled.is_set())
             finally:
                 release.set()
                 await asyncio.gather(owner, *children, return_exceptions=True)
-
-    async def test_deadline_is_retained_when_a_plugin_swallows_cancellation(self):
-        await self._run_late_plugin(cancel_outer=False)
-
-    async def test_repeated_outer_cancel_does_not_interrupt_already_cancelled_plugin_cleanup(self):
-        await self._run_late_plugin(cancel_outer=True)

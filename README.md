@@ -49,7 +49,7 @@ works across every backend.
   - Slack (Socket Mode; native Markdown rendering for AI replies; same
     launcher, set `slack_bot_token` in config)
   - Signal (same launcher, set `signal_group_urls` and the daemon socket)
-  - CLI (`python -m Cozter -cli`) — the terminal becomes the chat
+  - CLI (`python -m Cozter --cli`) — the terminal becomes the chat
 - **Per-workspace state**, scoped to `<workspace>/.cozter/`:
   sessions, last-session pointers, compaction history, agent choice,
   model, permission, interaction style, reasoning effort, summary backend,
@@ -141,19 +141,12 @@ task. Authenticate the selected CLI separately: `/doctor` checks executable,
 endpoint, or API-key availability, not account authorization or a successful
 agent turn.
 
-If you are already inside `Cozter/`, this compatibility launcher re-execs
-through the same package entry point:
+Launch from the checkout's parent with `python -m Cozter`; add `--cli` for
+the terminal surface. Use `-h` or `--help` to print the launcher usage without
+creating configuration or bootstrapping the virtual environment. Unrecognized
+options exit with an error rather than starting a daemon.
 
-```bash
-python __main__.py --cli
-```
-
-`-cli` and `--cli` are equivalent. Use `-h` or `--help` to print the
-launcher usage without creating configuration or bootstrapping the virtual
-environment; unrecognized options exit with an error rather than starting a
-daemon.
-
-For Telegram, Slack, or Signal daemon mode, run without `-cli`:
+For Telegram, Slack, or Signal daemon mode, run without `--cli`:
 
 ```bash
 python -m Cozter
@@ -190,10 +183,9 @@ Point the task at the deployment's own checkout (for example
 unrelated source tree, and keep that deployment on a clean tracking branch so
 `updater.check_for_update()` (every `update_check_interval` seconds, five
 minutes by default) can fast-forward-pull and hand exit code 75 back to this
-same supervisor loop. A global `python.exe C:\...\Cozter` task action still
-restarts through the launcher's built-in Windows supervision loop, but that
-path nests extra Python parents per layer instead of the single supervised
-process above, so prefer `run_cozter.ps1` for long-running deployments.
+same supervisor loop. A direct `python -m Cozter` launch uses the launcher's
+built-in Windows supervision loop; `run_cozter.ps1` starts the venv directly
+for a single supervisor layer.
 
 Use absolute paths for the task action and its **Start in** directory, both
 from the same deployment. The supervisor derives its project root from its
@@ -211,7 +203,7 @@ dedicated non-privileged `cozter` user, first create the venv and config
 file with an initial daemon-mode launch, then fill in `.config/config.json`:
 
 ```bash
-sudo -u cozter -H sh -c 'cd /srv/Cozter && python __main__.py'
+sudo -u cozter -H sh -c 'cd /srv && python -m Cozter'
 ```
 
 Create `/etc/systemd/system/cozter.service` with the checkout's *parent* as
@@ -244,7 +236,7 @@ CLI mode intentionally skips daemon configuration at startup: it neither
 requires nor creates `.config/config.json`, and it uses the stable local
 platform key `cli:local` for workspace/session state. If that file already
 exists, an agent turn can still read shared backend, tool, and permission
-limits from it. Daemon mode (`python -m Cozter` without `-cli`) validates
+limits from it. Daemon mode (`python -m Cozter` without `--cli`) validates
 `.config/config.json` before any platform starts.
 
 ## Requirements
@@ -308,21 +300,16 @@ example layout lives in `.config/config.example.json`):
   "llama_server_url": "http://127.0.0.1:8080",
   "llama_max_agent_turns": 60,
   "llama_tool_repeat_limit": 3,
-  "llama_socket_timeout": 3600,
   "llama_max_retries": 2,
 
   "zai_api_key": "",
   "zai_base_url": "https://api.z.ai/api/paas/v4",
-  "zai_socket_timeout": 3600,
   "zai_max_retries": 2,
 
   "meta_api_key": "",
   "meta_base_url": "https://api.meta.ai/v1",
-  "meta_socket_timeout": 3600,
   "meta_max_retries": 2,
 
-  "tool_timeout": 3600,
-  "agent_turn_timeout": 3600,
   "flexible_max_parallel_workers": 3,
   "update_idle_timeout": 1200,
   "dump_traceback_interval": 0,
@@ -371,32 +358,28 @@ accepted from or sent to Telegram, Slack, and Signal.
 The llama safety settings are read at the start of every llama turn:
 `llama_max_agent_turns` (default 60) limits tool-call turns before Cozter
 forces a final answer, and `llama_tool_repeat_limit` (default 3) skips an
-identical call after that many executions. Real work carries a 3600s cap:
-tool calls (`tool_timeout`, default 3600s; read lazily per call so a config
-edit takes effect on the next call without a restart, and always applied
-unconditionally as the `asyncio.wait_for` bound with a 3600s fallback) and
-generation streams
-(`llama_socket_timeout`, `zai_socket_timeout`, `meta_socket_timeout`,
-each default 3600s) keep running up to that bound so slow work finishes
-instead of timing out and forcing a wasteful retry. `/stop` cancels active
-work, and `/inject` interrupts its active phase to apply new context; ordinary
-messages queue for the next turn. A generation-stream
-timeout surfaces as `<service> request timed out after <N>s
-(<socket-timeout-setting>)`, naming the real-work bound and the config key
-that controls it, so the message itself points at the knob to raise.
-Chat-reply paths
-(Signal RPC, model discovery, stream drains) keep their own short timeouts.
+identical call after that many executions.
 
-Each execution attempt has an `agent_turn_timeout` (default 3600s) covering
-planning, workers, merging, judge follow-ups, and injected replanning. Set it
-to `0` to disable that time limit. Waiting for the workspace run lock does not
-consume the allowance. Flexible attempts also have a maximum of 24 workers.
-Time, worker, and backend tool limits checkpoint the current job instead of
-completing it: Cozter saves the original request, prior worker evidence,
-remaining scope, workspace, session, artifacts, and accounting, then resumes
-the same job with a fresh execution allowance. Later queued jobs remain held
-until the whole request completes. A pending update may restart between
-attempts; the durable checkpoint restores the same job first.
+Cozter imposes no fixed execution deadline on foreground turns, planning,
+flexible workers, merging, completion judging, routing, compaction, colony
+consolidation, or titling. Built-in and plugin tools, HTTP provider generation,
+updater Git commands, and dependency installation likewise run until completion,
+explicit cancellation, or an actual failure. `/stop` cancels active work, and
+`/inject` interrupts its active phase to apply new context; ordinary messages
+queue for the next turn. Cancellation retains ownership of an already-started
+file mutation until that write finishes, preventing a later operation from
+racing it. Connection establishment, Signal RPC, model discovery, post-exit
+pipe drains, and retry counts retain their separate transport safeguards.
+Low-level callers may explicitly request an operation timeout; normal agent
+execution supplies no such deadline.
+
+Flexible attempts retain their maximum of 24 workers. Worker-count and backend
+tool-round limits checkpoint the current job instead of completing it: Cozter
+saves the original request, prior worker evidence, remaining scope, workspace,
+session, artifacts, and accounting, then resumes the same job with a fresh
+worker/tool allowance. Later queued jobs remain held until the whole request
+completes. A pending update may restart between those attempts; the durable
+checkpoint restores the same job first.
 Actual workers also retain execution state under `.cozter/executions/`,
 separate from schedules. Codex, Claude Code, Copilot and Grok resume an exact
 provider session; Copilot keeps its private session home with that job.
@@ -408,7 +391,7 @@ by workspace, queue entry, worker, backend, model, permission and effort;
 changed guidance joins the same conversation. Internal routing, summary and
 compaction calls stay stateless. Completed queue entries remove their owned
 execution state. Invalid saved state is preserved and reported rather than
-silently starting over. No schedule definition changes are needed.
+silently starting over.
 Large snapshots are privately copied and encoded on worker threads, with one
 serialization per atomic checkpoint write. Independent HTTP reads share a
 checkpoint per bounded wave, retaining completed results if that wave is
@@ -420,17 +403,18 @@ Durable prerequisite retries, staged replies and detached completions run on
 independent polling cycles. Reply and detached passes use at most four owner
 workers; one owner's records remain ordered, and an owed final reply takes
 priority over its detached notifications. Each bounded pass waits for its
-slowest owner before its next cycle, subject to existing provider/platform
-deadlines. A slow operation in one class leaves the other classes running.
+slowest owner before its next cycle; chat-delivery and control-RPC operations
+retain their own safeguards. A slow operation in one class leaves the other classes running.
 The continuation instruction asks workers to reuse per-case validation
 checkpoints when inputs and the build are unchanged, such as CTest `-F`,
 while checking retained full logs for prior failures. A successful remaining
 subset or a skipped case alone cannot establish that the whole suite passed.
 Provider failures, unavailable completion verification, or a required user answer
 pause that job and hold later work until guidance arrives or `/stop` cancels
-it. These limits do not change permissions, models, reasoning effort, or
-individual tool and provider limits. `update_idle_timeout` (default 1200s) controls how often
-the auto-update loop dumps diagnostics while waiting for active turns; it
+it. These count limits do not change permissions, models, reasoning effort,
+context/output bounds, or provider quotas. `update_idle_timeout` (default 1200s)
+controls how often the auto-update loop dumps diagnostics while waiting for
+active turns; it
 keeps waiting instead of restarting through active work.
 An already-applied local commit is detected before contacting the remote, so
 network delays do not postpone recognition or activation of that update.
@@ -508,9 +492,8 @@ summary/low tier). Private or preview IDs can be added via `extra_models`
 overridable per model via `model_context_windows`.
 `meta_max_retries` (default 2) mirrors the other cloud retry knob.
 
-`zai_socket_timeout` (default 3600s) is the real-work cap for zai generation
-streams (cancel still stops instantly); `zai_max_retries` (default 2) mirrors the llama retry behavior for
-the cloud call. Select `zai`
+`zai_max_retries` (default 2) mirrors the llama retry behavior for the cloud
+call. Z.ai generation has no imposed elapsed-time deadline. Select `zai`
 with `/agent`, pick a model with `/model` (default `glm-5.3`), and add private
 or regional GLM ids via `extra_models` (`{"zai": ["glm-…"]}`). Long z.ai
 coding turns automatically continue into another tool-enabled segment when
@@ -671,7 +654,10 @@ queues live beside it as `queue_<platform>.json`.
 Signal intentionally scopes runtime state to the configured group rather than
 the individual sender. Everyone in the same Signal group therefore shares its
 selected workspace, active session pointer, and pending-turn queue; use a
-separate configured group when that shared context is not appropriate.
+separate configured group when that shared context is not appropriate. Workspace
+selections, session pointers, and queues use the exact current platform and
+owner keys. Startup and incoming messages do not migrate or adopt state from
+another key.
 
 When a workspace is selected, Cozter canonicalizes its path. Opening the
 same directory through `.`, `..`, a trailing slash, or a symlink therefore
@@ -870,16 +856,19 @@ notifies the chat; use `claude agents` and `claude attach` in the workspace
 to continue that interactive session.
 
 Schedules are stored per workspace in `.cozter/schedules.json` and use
-the host's local time. New schedules retain their creating platform so another
-bot sharing the workspace cannot run, list, or delete them. Legacy untagged
-schedules remain available, and a shared-lock check prevents concurrent ticks
-from firing the same slot twice. On Telegram, Slack, and Signal, the scheduler checks
+the host's local time. New schedules explicitly store their creating
+`platform_id`; records tagged for another platform cannot run, appear in the
+schedule picker, or be deleted through that picker. One persisted-state
+compatibility reader remains: existing schedules with a missing or empty
+`platform_id` are accepted until their stored ownership can be explicitly
+canonicalized. Cozter does not rewrite those definitions automatically.
+A shared-lock check prevents concurrent ticks from firing the same slot twice. On Telegram, Slack, and Signal, the scheduler checks
 every 30 seconds and records `last_fired`, so a missed slot fires once after
 restart instead of being lost. Offset-bearing persisted timestamps are
 normalized to that local basis, and malformed schedule fields are ignored.
 Each schedule carries a unique id (minted at creation when missing or
 already taken), and firing stamps every record sharing that id, so a
-legacy duplicate id cannot leave a stale twin due forever and refiring
+duplicate id cannot leave a stale twin due forever and refiring
 every tick.
 Scheduled prompts run through the same persistent queue as user messages,
 but use a job-owned session that is deleted after full completion or explicit cancellation; they do
@@ -986,11 +975,11 @@ turns in status and diagnostics.
 ## Plugins
 
 The built-in HTTP-toolkit includes filesystem, shell, search, and fetch
-tools: `bash`, `read_file`, `write_file`, `edit_file`, `multi_edit`,
+tools: `bash`, `read_file`, `read_files`, `write_file`, `edit_file`, `multi_edit`,
 `apply_patch`, `delete_file`, `copy_file`, `move_file`, `make_dir`,
 `list_dir`, `tree`, `glob`, `grep`, `web_search`, and `web_fetch`.
 For build/test/verify work the `bash` tool description directs the model
-to run with the 3600s real-work cap (cancel still stops instantly), capture output to a file,
+to run until completion or cancellation, capture output to a file,
 grep the full log for error/warning/exception/traceback, and never claim
 clean from a truncated tail-only preview.
 
@@ -1010,11 +999,12 @@ temporary parent containing the `Cozter` symlink. See
 Treat plugins as trusted bot code: discovery imports their modules in the
 Cozter process, so module-level code runs at startup and any dependencies must
 be installed in the project environment. Restart after adding, removing, or
-changing a plugin. Plugin calls carry the 3600s real-work cap (cancel still
-stops instantly); trusted plugin code that blocks the event loop
-synchronously can still stall the process and must isolate blocking work
-itself. It does not sandbox plugin code. CLI-backend plugins run
-through that CLI's own shell/tool policy.
+changing a plugin. Plugin calls have no global execution deadline. Cancellation
+stops cancellable work promptly; an already-started mutation settles before its
+owner returns. Trusted plugin code that blocks the event loop synchronously
+can still stall the process and must isolate blocking work itself. Cozter does
+not sandbox plugin code. CLI-backend plugins run through that CLI's own
+shell/tool policy.
 
 - **HTTP backends** (`llama`, `meta`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
@@ -1051,7 +1041,7 @@ writes. This flag does not change permissions. CLI plugin guidance identifies
 the same independent reads so native agents can group them with their own tools.
 Run any plugin module with `--help` to inspect its full argument schema without
 executing the plugin. Standalone plugins write UTF-8 to stdout and stderr,
-including when Windows redirects their output through a legacy locale.
+including when Windows redirects their output through a non-UTF-8 locale.
 
 The default HTTP result budget is 4,000 characters. Plugin code can declare
 `max_result_chars` as a positive integer; the dispatcher limits it to 65,536
@@ -1383,7 +1373,7 @@ strand a run nobody is watching. Every agent turn preamble now also carries the 
 doc-following / verify-with-evidence completeness rule (list every target first, do each,
 re-check leftovers; enumerate every rule/section when told to follow a
 doc; build/test/verify means enumerate targets, run canonical commands
-with 3600s cap (cancel still stops instantly) captured to a file, grep the
+until completion or cancellation, captured to a file, grep the
 full logs for error/warning/exception, classify each hit, repair unexpected
 failures, and re-run the affected checks,
 exercise runtime paths and check logs, and report commands + exit codes +
@@ -1443,8 +1433,8 @@ and points at Z.ai's endpoint; `meta` adds Meta's Bearer header and compat
 endpoint. `meta` and `zai` model discovery also share that module's Bearer
 `/models` probe (`discover_bearer_models`: non-HTTP(S) catalog-URL refusal,
 no-key fallback, Bearer fetch,
-provider non-chat filter, empty-catalog fallback; each backend keeps a
-per-module `fetch_model_ids` alias) and its shared key health check.
+provider non-chat filter, empty-catalog fallback) and its shared key health
+check.
 That loop reuses one HTTP session for the
 turn's provider requests and retries. Consecutive trusted builtin reads and
 explicitly opted-in read-only plugins run in groups of at most four, with
@@ -1479,8 +1469,7 @@ reuse still-valid verification evidence without weakening completion checks.
 Filesystem mutations (`write_file`, `edit_file`, `multi_edit`, `apply_patch`,
 `copy_file`, `move_file`, `delete_file`, and `make_dir`) run on worker threads,
 so disk writes and patch matching do not block status updates or unrelated
-reads. Each call retains ownership until its worker finishes. Cancellation or
-a tool timeout waits for an already-started mutation to settle before returning;
+reads. Each call retains ownership until its worker finishes. Cancellation waits for an already-started mutation to settle before returning;
 later operations in the same tool sequence cannot overtake it. This preserves
 ordered writes and existing atomic replacement behavior. The notes plugin uses
 the same ownership rule for append and clear, and serializes their complete
@@ -1558,10 +1547,9 @@ applies to the picker and stored-model check.
 Its prompt keeps the leading system preamble (including the whole-scope /
 doc-following / verify-with-evidence coverage rule) and the complete composed
 context intact through redirected stdin.
-Its picker also accepts ACP's provider-grouped model selectors and both legacy
-session metadata forms (`models.availableModels` and top-level
-`availableModels`), so account-approved models stay visible without a
-hard-coded catalog. The `copilot` backend supplies its prompt through the
+Its picker accepts ACP's provider-grouped model selectors and
+`models.availableModels` session metadata, so account-approved models stay
+visible without a hard-coded catalog. The `copilot` backend supplies its prompt through the
 CLI's [piped-prompt support](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference),
 omitting `-p`. File-backed stdin sends the exact UTF-8 bytes and EOF without
 trimming for platform argv limits or passing newlines, quotes, and shell
@@ -1747,8 +1735,7 @@ output before closing a pipe still held by a background child and marking the
 captured output as potentially incomplete. Git tools use the same one-second
 post-exit allowance for stdout and stderr together. They drain both streams
 concurrently, retaining bounded previews even for verbose hooks or large
-diffs; excess output does not stop an ongoing Git operation. Running commands
-retain their configured real-work limit.
+diffs; excess output does not stop an ongoing Git operation. Running commands continue until completion or cancellation.
 Live chat status streams mark their own trims too: only the newest few
 status lines are kept (older updates flagged omitted), over-long reply
 previews carry a `… [preview]` marker, and long tool-content lines and
@@ -1767,10 +1754,11 @@ on an owned worker, settling an in-flight copy before cancellation unwinds.
 
 Internal LLM jobs (routing, session titling, compaction, and colony
 consolidation) all go through `utils.run_internal_backend()`. The shared
-runner applies a configured positive deadline to startup and response together,
-so a stalled launch cannot escape the helper's budget. It consumes
-stdout and stderr without pipe deadlocks, kills cancelled children, and
-logs stderr when a backend exits without an assistant response. Streamed
+runner imposes no deadline on these jobs. A low-level caller that explicitly
+requests a positive operation timeout applies it to startup and response
+together. The runner consumes stdout and stderr without pipe deadlocks, kills
+cancelled children, and logs stderr when a backend exits without an assistant
+response. Streamed
 backend events retain an already-buffered final backlog, including when chat
 delivery is slow. Once the parent exits, the remaining backlog has a byte
 limit and a stalled reader has a short drain allowance, so continuously ready
@@ -1824,9 +1812,12 @@ existing symlink cannot escape the workspace. Content tools follow a safe
 in-workspace final symlink; `delete_file` and `move_file` instead operate on
 that final link itself, while still rejecting a link that resolves outside the
 workspace.
-Normal unified-diff hunks must also match the line counts declared in their
-headers before any target is written, so a malformed or truncated patch is
-rejected instead of being treated as a smaller valid edit.
+Every patch hunk requires a complete unified-diff header of the form
+`@@ -start[,count] +start[,count] @@`; an omitted count means one line.
+The body must match both declared counts, and line zero requires a zero
+count. Bare, malformed, truncated, or overfull headers/hunks reject the entire
+patch before any target is written. Optional section context follows the
+closing `@@` after a space or tab.
 Likewise, a lone file header, a file header without a hunk, or extra hunk-body
 content beyond its declared counts rejects the entire patch before any target
 is touched.
@@ -1941,73 +1932,71 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (134 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 131 `test_*.py` modules:
-  `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
-  `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
-  `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_attachment_preparation_ownership.py`,
-  `test_backend_audit_regressions.py`,
-  `test_backend_event_parsing.py`, `test_backend_repair.py`, `test_backends_agent.py`,
-  `test_bash_process_output.py`, `test_bash_progress.py`, `test_blocked_judge_runtime.py`, `test_bot_commands.py`,
-  `test_bot_recovery_and_lifecycle.py`, `test_calculator_responsiveness.py`,
+- Tests (144 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 141 `test_*.py` modules:
+  `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
+  `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
+  `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
+  `test_attachment_delivery_latency.py`, `test_attachment_preparation_ownership.py`,
+  `test_backend_audit_regressions.py`, `test_backend_event_parsing.py`, `test_backend_repair.py`,
+  `test_backends_agent.py`, `test_bash_process_output.py`, `test_bash_progress.py`,
+  `test_blocked_judge_runtime.py`, `test_bot_commands.py`, `test_bot_recovery_and_lifecycle.py`,
+  `test_calculator_responsiveness.py`, `test_canonical_platform_state.py`, `test_checkpoint_scope.py`,
   `test_claude_background_detection.py`, `test_claude_background_guard.py`,
-  `test_claude_model_capabilities.py`, `test_checkpoint_scope.py`, `test_cli_commands.py`,
-  `test_cli_native_continuation.py`,
-  `test_cloud_model_capabilities.py`, `test_colony_streaming.py`, `test_compaction.py`, `test_config.py`,
-  `test_detached_tasks.py`, `test_discovery_canonical_root.py`, `test_discovery_optimization.py`, `test_discovery_paging.py`,
-  `test_discovery_pruning.py`, `test_discovery_tools_async.py`,
-  `test_durable_poll_parallelism.py`,
-  `test_edit_file_read_limits.py`, `test_flexible_parallel_plan.py`,
-  `test_execution_state.py`, `test_flexible_continuation.py`, `test_flexible_injection_continuation.py`,
-  `test_flexible_instruction_identity.py`,
-  `test_flexible_native_injection_continuation.py`,
-  `test_flexible_parallel_runtime.py`, `test_flexible.py`, `test_format_marker_latency.py`,
-  `test_git_checkout_integrity.py`, `test_git_cold_launch.py`, `test_git_plugin_paging.py`, `test_git_process_output.py`,
-  `test_grok_model_line_latency.py`,
-  `test_http_body_sniff.py`, `test_http_event_framing.py`, `test_http_latency.py`, `test_http_redirect_method.py`,
-  `test_http_execution_continuation.py`, `test_http_owned_mutation_cancellation.py`,
-  `test_http_pending_checkpoints.py`, `test_http_restore_accounting.py`,
-  `test_image_snapshot_metadata.py`,
-  `test_inject.py`, `test_internal_backend_deadline.py`, `test_interrupted_turns.py`,
-  `test_job_continuation.py`, `test_job_prerequisite_retry.py`,
-  `test_jpeg_dimensions.py`, `test_judge_blocked.py`, `test_launch_process.py`,
-  `test_launcher_and_followups.py`, `test_lazy_tool_http_imports.py`, `test_maintenance_context.py`, `test_memory_corrupt_state.py`,
-  `test_memory_preservation.py`, `test_memory_streamed_search.py`, `test_notes_owned_worker.py`,
-  `test_openai_agent.py`, `test_owned_file_mutations.py`,
-  `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
-  `test_platform_formatting.py`, `test_prerequisite_checkpoint.py`,
-  `test_plugin_memory_calculator_performance.py`, `test_plugin_parallelism.py`,
-  `test_plugin_cli_unicode.py`, `test_plugin_result_budgets.py`,
-  `test_public_http_pool.py`,
-  `test_prompt_subprocess.py`, `test_queue_persistence_latency.py`,
-  `test_prompt_payload_dedup.py`, `test_protocol_marker_latency.py`,
-  `test_read_file_offset_chunks.py`, `test_read_files.py`,
-  `test_reply_delivery.py`, `test_run_lock.py`, `test_runtime_diagnostics.py`,
-  `test_schedule_execution.py`, `test_session_picker.py`,
-  `test_session_write_latency.py`, `test_signal_attachment_decoding.py`,
-  `test_signal_feedback.py`, `test_signal_formatting.py`, `test_signal_inline_latency.py`,
-  `test_signal_literal_runs.py`,
-  `test_signal_send_observability.py`, `test_signal_span_projection.py`,
-  `test_signal_status.py`, `test_signal_status_recovery.py`,
-  `test_signal_transport.py`, `test_slack_commands.py`, `test_slack_formatting.py`,
-  `test_state_fallbacks.py`, `test_state_integrity.py`,
-  `test_status_and_shell_latency.py`, `test_status_latency.py`,
-  `test_thinking_display.py`, `test_titling.py`, `test_tool_permissions.py`,
-  `test_tool_runtime.py`, `test_tool_safety_and_output_limits.py`,
-  `test_tool_state_integrity.py`, `test_tools_audit_regressions.py`,
-  `test_tree_junction_permissions.py`, `test_turn_budget.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
-  `test_vision_marker_scanning.py`, `test_web_fetch.py`, `test_web_html_latency.py`, `test_web_search.py`)
+  `test_claude_model_capabilities.py`, `test_cli_commands.py`, `test_cli_native_continuation.py`,
+  `test_cloud_model_capabilities.py`, `test_colony_streaming.py`, `test_compaction.py`,
+  `test_config.py`, `test_copilot_catalog_cleanup.py`, `test_detached_tasks.py`,
+  `test_discovery_canonical_root.py`, `test_discovery_optimization.py`, `test_discovery_paging.py`,
+  `test_discovery_pruning.py`, `test_discovery_tools_async.py`, `test_durable_poll_parallelism.py`,
+  `test_edit_file_read_limits.py`, `test_execution_state.py`, `test_flexible.py`,
+  `test_flexible_continuation.py`, `test_flexible_injection_continuation.py`,
+  `test_flexible_instruction_identity.py`, `test_flexible_native_injection_continuation.py`,
+  `test_flexible_parallel_plan.py`, `test_flexible_parallel_runtime.py`,
+  `test_format_marker_latency.py`, `test_git_checkout_integrity.py`, `test_git_cold_launch.py`,
+  `test_git_plugin_paging.py`, `test_git_process_output.py`, `test_grok_model_line_latency.py`,
+  `test_http_body_sniff.py`, `test_http_event_framing.py`, `test_http_execution_continuation.py`,
+  `test_http_latency.py`, `test_http_owned_mutation_cancellation.py`,
+  `test_http_pending_checkpoints.py`, `test_http_redirect_method.py`, `test_http_restore_accounting.py`,
+  `test_image_snapshot_metadata.py`, `test_inject.py`, `test_interactive_schedule_refresh.py`,
+  `test_internal_backend_deadline.py`, `test_interrupted_turns.py`, `test_job_continuation.py`,
+  `test_job_prerequisite_retry.py`, `test_jpeg_dimensions.py`, `test_judge_blocked.py`,
+  `test_launch_process.py`, `test_launcher_and_followups.py`, `test_lazy_tool_http_imports.py`,
+  `test_maintenance_context.py`, `test_memory_corrupt_state.py`, `test_memory_preservation.py`,
+  `test_memory_repair_regressions.py`, `test_memory_streamed_search.py`,
+  `test_native_current_protocol.py`, `test_native_launch_contract.py`, `test_notes_owned_worker.py`,
+  `test_notes_transactions.py`, `test_openai_agent.py`, `test_owned_file_mutations.py`,
+  `test_patch_limit_optimization.py`, `test_planner_context_latency.py`, `test_platform_formatting.py`,
+  `test_plugin_cli_unicode.py`, `test_plugin_memory_calculator_performance.py`,
+  `test_plugin_parallelism.py`, `test_plugin_result_budgets.py`, `test_prerequisite_checkpoint.py`,
+  `test_prompt_payload_dedup.py`, `test_prompt_subprocess.py`, `test_protocol_marker_latency.py`,
+  `test_public_http_pool.py`, `test_queue_persistence_latency.py`, `test_read_file_character_cursor.py`,
+  `test_read_file_offset_chunks.py`, `test_read_files.py`, `test_reply_delivery.py`, `test_run_lock.py`,
+  `test_runtime_diagnostics.py`, `test_schedule_execution.py`, `test_session_picker.py`,
+  `test_session_write_latency.py`, `test_signal_attachment_decoding.py`, `test_signal_feedback.py`,
+  `test_signal_formatting.py`, `test_signal_inline_latency.py`, `test_signal_literal_runs.py`,
+  `test_signal_send_observability.py`, `test_signal_span_projection.py`, `test_signal_status.py`,
+  `test_signal_status_recovery.py`, `test_signal_transport.py`, `test_slack_commands.py`,
+  `test_slack_formatting.py`, `test_state_fallbacks.py`, `test_state_integrity.py`,
+  `test_status_and_shell_latency.py`, `test_status_latency.py`, `test_thinking_display.py`,
+  `test_titling.py`, `test_tool_permissions.py`, `test_tool_runtime.py`,
+  `test_tool_safety_and_output_limits.py`, `test_tool_state_integrity.py`,
+  `test_tools_audit_regressions.py`, `test_tree_junction_permissions.py`, `test_turn_budget.py`,
+  `test_unbounded_tool_http_execution.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
+  `test_vision_marker_scanning.py`, `test_web_fetch.py`, `test_web_html_latency.py`,
+  `test_web_search.py`)
   covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared
   catalog/result/content helpers, CLI tool summaries, process-resource maps,
   event parsing, and the shared OpenAI-compatible retry/backoff loop; bot,
-  CLI, and Slack commands, including native stdin ownership, restored-queue
+  CLI, and Slack commands, including canonical native APIs/protocols, strict
+  unified-patch headers, exact platform ownership, explicit compaction snapshots,
+  unbounded tool/provider execution with cancellation, native stdin ownership, restored-queue
   FIFO/reference preservation, and schedule edits while waiting for a lock;
   scheduled-job admission versus execution; Windows launcher descendant
   lifetimes; compaction and durable memory preservation across partially
   covered maintenance input; the flexible meta-agent including all reported
   follow-ups and the 24-worker (`MAX_SUBTASKS * 2`) execution cap plus the
-  per-attempt budgets with durable continuation of unfinished jobs before
+  per-attempt worker/tool-count limits with durable continuation of unfinished jobs before
   later queue entries, including restart recovery and blocked-work handling;
   inject (including the bounded confirmation send); run locks, session picking, and
   auto-titling; platform, Slack,
@@ -2017,8 +2006,8 @@ ignored for local secrets and runtime queues.
   status latency (including chat status I/O, shell/Signal latency, and
   thinking-status display) and Signal transport/status/attachment-decoding
   regressions; native shell/Git subprocess output draining with inherited
-  pipes, prompt-subprocess delivery, internal-backend deadlines, and HTTP
-  streaming deadlines; updater behavior; utilities
+  pipes, prompt-subprocess delivery, unbounded internal/backend execution with
+  explicit operation-timeout coverage and cancellation; updater behavior; utilities
   including the shared lock helper and image-dimension probing; upload limits; tool permissions; and
   the built-in/plugin tool surface, including patch/edit bounds, output-limit
   and state-integrity regressions, off-event-loop discovery scans that continue after
@@ -2146,9 +2135,8 @@ upstream; if any of those are unavailable, it safely skips the auto-pull.
 
 Only when an update is available does Cozter pause new AI turns, wait for
 active turns to finish, fast-forward-pull, install any changed
-`requirements.txt`, and broadcast a "restarting" message. If a pull fails or
-times out after already moving HEAD, Cozter still restarts for that new
-commit rather than keeping the running process on the old one. On POSIX, the
+`requirements.txt`, and broadcast a "restarting" message. If a pull fails after
+already moving HEAD, Cozter still restarts for that new commit rather than keeping the running process on the old one. On POSIX, the
 daemon then re-execs itself in place. On Windows, it exits for the bootstrap
 or `run_cozter.ps1` supervisor to relaunch it. Manual pulls and local commits
 while the bot is running also trigger this safe restart path. A service
@@ -2180,15 +2168,16 @@ Quiet shell commands emit a `stage=tool_wait` entry every 60 seconds with the
 process ID and elapsed time. This heartbeat leaves the command and its output
 capture running. Waits for earlier attachment uploads record whether they
 settled or reached the five-second limit.
-Tool timeouts identify the configured limit and ask the worker to inspect the
-stall before retrying. Prompts, responses, tool arguments and API keys
-are excluded. The timing log rotates at 5 MiB with three backups.
-HTTP connection attempts are bounded at 30 seconds (or the shorter configured
-socket timeout). A positive socket timeout also caps the entire completion,
-including retries and backoff; streaming heartbeats cannot extend that budget.
+Tool failures record their outcome without imposing an execution deadline.
+Prompts, responses, tool arguments and API keys are excluded. The timing log
+rotates at 5 MiB with three backups.
+HTTP provider connection attempts are bounded at 30 seconds. Generation and
+retry backoff have no global elapsed-time deadline; retries still respect their
+configured count. A low-level caller's explicit positive operation timeout,
+when supplied, covers the complete operation including retries and backoff.
 Recognized successful completion events retain their final content and tool
 arguments before finishing; a stalled trailer cannot turn completed work into
-a full-timeout wait or retry. Requests use equivalent compact JSON, and plain
+an unbounded trailer wait or retry. Requests use equivalent compact JSON, and plain
 text prompts avoid the vision-preparation thread hop.
 Normal completion trailers get a short drain (at most 50 ms and 64 KiB) to
 preserve connection reuse; the drain is skipped near the request deadline.
@@ -2203,7 +2192,7 @@ turn's maintenance waits for the earlier pipeline, then checks current state,
 so it can use the compactor's title without launching a competing title request.
 These background waits do not delay the foreground answer.
 Maintenance starts in a fresh task context with its inputs passed explicitly,
-so it cannot retain a finished execution's worker transcripts or turn budget
+so it cannot retain a finished execution's worker transcripts or worker allowance
 while waiting for the session pipeline or a summary response.
 When a worker reports an explicit exhausted quota or authentication failure,
 later plan items for that exact backend and model are marked unrun for the

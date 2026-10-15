@@ -27,12 +27,12 @@ import uuid
 from dataclasses import dataclass, field
 
 
+from ..process_launch import create_captured_subprocess, create_prompt_subprocess
 from .base import (
     AgentResult, Backend, ChatEvent, DetachedTaskStatus,
     append_detached_task, apply_messages_assistant_content,
     apply_terminal_result_event, attachment_image_paths,
-    create_captured_subprocess,
-    create_prompt_subprocess, executable_command,
+    executable_command,
     extract_messages_style_agent_text,
     record_error_event, truncate_status_text,
 )
@@ -150,7 +150,7 @@ _DETACHED_OUTPUT_TRUNCATION_MARKER = (
 )
 
 def _is_background_bash(command: str) -> bool:
-    """Detect the legacy same-line launcher/flag pair with bounded scans."""
+    """Detect a same-line launcher/flag pair with bounded scans."""
     start = 0
     while True:
         end = command.find("\n", start)
@@ -822,11 +822,16 @@ class ClaudeCodeBackend(Backend):
         task_id: str,
     ) -> str:
         """Retrieve a detached task's visible result without terminal ANSI."""
+        if _local_background_state(workspace_path, task_id) is None:
+            raise RuntimeError(
+                "Claude Code background task has no trusted local job state "
+                "for this workspace",
+            )
         local = _local_background_output(workspace_path, task_id)
         if local:
             return local
 
-        # Fallback for old CLIs without the job/transcript layout.
+        # Recover output not yet available in this trusted current job's files.
         cmd = [*executable_command(self.executable), "logs", task_id]
         returncode, stdout, stderr = await _run_claude_command(
             cmd, cwd=workspace_path,

@@ -20,7 +20,6 @@ ROUTER_PROMPT = (
     "- One line: bare session id, or NEW.\n"
     "- No tools; decide from the input.\n"
 )
-ROUTER_TIMEOUT: float | None = 3600.0
 ROUTER_MAX_SESSIONS = 12  # cap input size
 ROUTER_PER_SESSION_CHARS = 400
 ROUTER_PROMPT_PREVIEW_CHARS = 600
@@ -181,7 +180,6 @@ async def select_or_create_session(
         workspace_path,
         full_prompt,
         summary_model,
-        timeout=ROUTER_TIMEOUT,
         label="Router",
         log=logger,
         missing_executable_message="%s CLI not found - router falling back to NEW",

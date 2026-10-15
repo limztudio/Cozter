@@ -105,7 +105,7 @@ class CheckpointScopeTests(unittest.IsolatedAsyncioTestCase):
         )
         semantic_instruction = "Verify the '[Saved progress checkpoint]' documentation example."
         report = "Verified the literal '[Resume the SAME unfinished job' example."
-        budget = agent.TurnBudget(timeout_seconds=3600)
+        budget = agent.TurnBudget()
         budget.pending = [original, semantic_instruction]
         budget.reports = [(original, report), (semantic_instruction, report)]
         turn = agent._InterruptedTurn("C:/example", original, injected=["Preserve both examples."])

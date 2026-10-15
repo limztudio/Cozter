@@ -279,37 +279,17 @@ def _split_slack_markdown(
     return chunks
 
 
-def _markdown_block_rejected(error: SlackApiError) -> bool:
-    """Whether Slack rejected the new Markdown block type for this app."""
-    response = getattr(error, "response", None)
-    data = response if isinstance(response, dict) else getattr(response, "data", None)
-    code = data.get("error") if isinstance(data, dict) else None
-    return code in {"invalid_arguments", "invalid_blocks"}
-
-
 async def _call_rich_markdown(method, markdown: str, **kwargs):
-    """Call a Slack message method with native Markdown and mrkdwn fallback."""
-    try:
-        return await method(
-            text=markdown,
-            blocks=[{"type": "markdown", "text": markdown}],
-            **kwargs,
-        )
-    except SlackApiError as error:
-        if not _markdown_block_rejected(error):
-            raise
-        logger.warning(
-            "Slack Markdown blocks unavailable; falling back to mrkdwn: %s",
-            error,
-        )
-        return await method(
-            text=_md_to_mrkdwn(markdown),
-            **kwargs,
-        )
+    """Call a Slack message method with the native Markdown payload."""
+    return await method(
+        text=markdown,
+        blocks=[{"type": "markdown", "text": markdown}],
+        **kwargs,
+    )
 
 
 async def _post_rich_markdown(client, chat_id: str, markdown: str) -> dict:
-    """Post one native-Markdown payload, falling back to legacy mrkdwn."""
+    """Post one native-Markdown payload."""
     return await _call_rich_markdown(
         client.chat_postMessage, markdown, channel=chat_id,
     )
@@ -318,7 +298,7 @@ async def _post_rich_markdown(client, chat_id: str, markdown: str) -> dict:
 async def _update_rich_markdown(
     client, handle: MessageHandle, markdown: str,
 ) -> None:
-    """Update a short rich message, with legacy mrkdwn fallback."""
+    """Update a short native-Markdown message."""
     await _call_rich_markdown(
         client.chat_update,
         markdown,

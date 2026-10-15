@@ -18,13 +18,20 @@ from Cozter.backends_agent.base import AgentResult, ChatEvent, append_detached_t
 
 
 class PlanParsingTests(unittest.TestCase):
+    def test_tier_names_use_current_schema(self) -> None:
+        for tier in flexible.TIERS:
+            self.assertEqual(flexible.normalize_tier(f" {tier.upper()} "), tier)
+        for obsolete in ("medium", "med", "middle"):
+            with self.subTest(tier=obsolete):
+                self.assertIsNone(flexible.normalize_tier(obsolete))
+
     def test_parses_understanding_and_tiers(self) -> None:
         raw = (
             "[UNDERSTANDING]\nUser wants the retry bug fixed.\n"
             "[/UNDERSTANDING]\n"
             "[PLAN]\n"
             "1. [low] add a validation check\n"
-            "2. [medium] write unit tests for the helper\n"
+            "2. [mid] write unit tests for the helper\n"
             "3. [high] debug the non-obvious retry race\n"
             "[/PLAN]\n"
         )
@@ -50,7 +57,7 @@ class PlanParsingTests(unittest.TestCase):
     def test_exact_duplicate_tasks_are_removed_in_first_seen_order(self) -> None:
         plan = flexible.parse_plan(
             "[PLAN]\n1. [low] inspect status\n2. [mid] repair code\n"
-            "3. [low] inspect status\n4. [medium] repair code\n"
+            "3. [low] inspect status\n4. [mid] repair code\n"
             "5. [high] inspect status\n6. [low] inspect logs\n[/PLAN]",
             "inspect and repair",
         )

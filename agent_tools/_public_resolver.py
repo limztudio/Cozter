@@ -4,6 +4,7 @@ import socket
 from typing import Any
 
 from aiohttp.abc import AbstractResolver
+from aiohttp.resolver import DefaultResolver
 
 from . import base
 
@@ -12,8 +13,7 @@ class PublicResolver(AbstractResolver):
     """Resolve DNS normally, while allowing only globally routable answers."""
 
     def __init__(self) -> None:
-        # Keep the original base.DefaultResolver patch hook for callers/tests.
-        self._resolver: AbstractResolver = base.DefaultResolver()
+        self._resolver: AbstractResolver = DefaultResolver()
 
     async def resolve(
         self,

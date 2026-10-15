@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from Cozter.backends_agent import base as backend_base
+from Cozter import process_launch
 from Cozter import utils
 
 
@@ -84,7 +85,7 @@ class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):
             files.append(handle)
             return handle
 
-        return files, mock.patch.object(backend_base.tempfile, "TemporaryFile", side_effect=create)
+        return files, mock.patch.object(process_launch.tempfile, "TemporaryFile", side_effect=create)
 
     async def _finish_fixture(self, proc):
         if proc.returncode is None:
@@ -104,7 +105,7 @@ class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(prompt=prompt):
                 files, track = self._track_temporary_input()
                 with track:
-                    proc = await asyncio.wait_for(backend_base.create_prompt_subprocess(
+                    proc = await asyncio.wait_for(process_launch.create_prompt_subprocess(
                         [_FIXTURE_PYTHON, "-B", "-c", script], prompt,
                     ), timeout=5)
                 try:
@@ -132,7 +133,7 @@ class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):
         # A size threshold would leave the small-prompt wait_closed risk.
         for prompt in ("small prompt", "서울 😀\n" * 100_000):
             with self.subTest(prompt_bytes=len(prompt.encode("utf-8"))):
-                proc = await asyncio.wait_for(backend_base.create_prompt_subprocess(
+                proc = await asyncio.wait_for(process_launch.create_prompt_subprocess(
                     [_FIXTURE_PYTHON, "-B", "-c", script], prompt,
                 ), timeout=5)
                 try:
@@ -151,24 +152,24 @@ class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):
         files, track = self._track_temporary_input()
         failure = FileNotFoundError("fixture CLI is missing")
         with track, mock.patch.object(
-            backend_base, "_create_piped_subprocess", side_effect=failure,
+            process_launch, "create_piped_subprocess", side_effect=failure,
         ):
             with self.assertRaises(FileNotFoundError) as raised:
-                await backend_base.create_prompt_subprocess(["fixture-cli"], "private fixture prompt")
+                await process_launch.create_prompt_subprocess(["fixture-cli"], "private fixture prompt")
         self.assertIs(raised.exception, failure)
         self.assertEqual(len(files), 1)
         self.assertTrue(files[0].closed)
 
     async def test_prompt_encoding_failure_closes_input_without_spawning(self) -> None:
         files, track = self._track_temporary_input()
-        with track, mock.patch.object(backend_base, "_create_piped_subprocess") as spawn:
+        with track, mock.patch.object(process_launch, "create_piped_subprocess") as spawn:
             with self.assertRaises(UnicodeEncodeError):
-                await backend_base.create_prompt_subprocess(["fixture-cli"], "\ud800")
+                await process_launch.create_prompt_subprocess(["fixture-cli"], "\ud800")
         spawn.assert_not_called()
         self.assertTrue(files[0].closed)
 
     async def test_cancellation_during_creation_reaps_child_and_closes_input(self) -> None:
-        original = backend_base._create_piped_subprocess
+        original = process_launch.create_piped_subprocess
         created = []
         started, release = asyncio.Event(), asyncio.Event()
         files, track = self._track_temporary_input()
@@ -180,8 +181,8 @@ class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             return proc
 
-        with track, mock.patch.object(backend_base, "_create_piped_subprocess", side_effect=delayed_spawn):
-            launch = asyncio.create_task(backend_base.create_prompt_subprocess(
+        with track, mock.patch.object(process_launch, "create_piped_subprocess", side_effect=delayed_spawn):
+            launch = asyncio.create_task(process_launch.create_prompt_subprocess(
                 [_FIXTURE_PYTHON, "-B", "-c", "import time; time.sleep(120)"], "fixture prompt",
             ))
             try:
@@ -219,8 +220,8 @@ class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             raise OSError("fixture spawn failed after cancellation")
 
-        with track, mock.patch.object(backend_base, "_create_piped_subprocess", side_effect=fail_creation):
-            launch = asyncio.create_task(backend_base.create_prompt_subprocess(["fixture-cli"], "fixture"))
+        with track, mock.patch.object(process_launch, "create_piped_subprocess", side_effect=fail_creation):
+            launch = asyncio.create_task(process_launch.create_prompt_subprocess(["fixture-cli"], "fixture"))
             try:
                 await asyncio.wait_for(started.wait(), timeout=1)
                 launch.cancel()
@@ -257,11 +258,11 @@ class PromptSubprocessTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             track,
-            mock.patch.object(backend_base, "_create_piped_subprocess", side_effect=exited_parent),
-            mock.patch.object(backend_base, "has_managed_process_group", return_value=False),
-            mock.patch.object(backend_base, "close_subprocess_pipe") as close,
+            mock.patch.object(process_launch, "create_piped_subprocess", side_effect=exited_parent),
+            mock.patch.object(process_launch, "has_managed_process_group", return_value=False),
+            mock.patch.object(process_launch, "close_subprocess_pipe") as close,
         ):
-            launch = asyncio.create_task(backend_base.create_prompt_subprocess(["fixture-cli"], "fixture"))
+            launch = asyncio.create_task(process_launch.create_prompt_subprocess(["fixture-cli"], "fixture"))
             try:
                 await asyncio.wait_for(started.wait(), timeout=1)
                 launch.cancel()

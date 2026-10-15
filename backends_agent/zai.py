@@ -9,7 +9,7 @@ API key, the model, and the GLM model list.
 Config: ``config.json``'s ``zai_api_key`` (required to use it),
 ``zai_base_url`` (default ``https://api.z.ai/api/paas/v4``, already
 includes the version so only ``/chat/completions`` is appended),
-``zai_socket_timeout``, and ``zai_max_retries``. Pick the model with
+and ``zai_max_retries``. Pick the model with
 ``/model`` (or set the workspace default); add private or regional GLM ids via
 ``extra_models`` in config without editing source.
 """
@@ -271,16 +271,6 @@ class ZaiBackend(CachedOpenAIChatBackend):
     def _auto_continue_after_tool_limit(self) -> bool:
         # Long runs may need more tool turns: continue in a fresh segment.
         return True
-
-    def _socket_timeout(self) -> int | None:
-        # Real-work cap; cancel stops instantly.
-        try:
-            return cfg.get_zai_socket_timeout()
-        except Exception:
-            return 3600
-
-    def _socket_timeout_setting(self) -> str:
-        return "zai_socket_timeout"
 
     def _max_retries(self) -> int:
         return cfg.get_zai_max_retries()

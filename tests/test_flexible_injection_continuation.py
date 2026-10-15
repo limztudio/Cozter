@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from Cozter import agent, config, execution_state, flexible, session, workspace
+from Cozter import agent, execution_state, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
 
@@ -17,7 +17,6 @@ class FlexibleInjectionContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.ws = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.ws))
         self.enterContext(mock.patch.object(agent, "_run_post_turn_maintenance", mock.AsyncMock()))
-        self.enterContext(mock.patch.object(config, "get_agent_turn_timeout", return_value=3600))
         for tier in flexible.TIERS:
             workspace.set_flexible_backend_name(self.ws, tier, "meta")
         self.sid = session.create_session(self.ws, name="Injected continuation fixture")["id"]
@@ -88,10 +87,7 @@ class FlexibleInjectionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 return AgentResult(), True
             if index in (2, 3) and index not in interrupted:
                 interrupted.add(index)
-                deadline = asyncio.get_running_loop().time() + .02
-                agent._TURN_BUDGET.get().deadline = deadline
-                agent._TURN_TIMEOUT.get().reschedule(deadline)
-                await asyncio.Event().wait()
+                raise agent._TurnBudgetExhaustedError("worker allowance reached")
             return AgentResult(
                 text=f"Retained verification evidence {index}",
                 events=[ChatEvent(kind="attachment", content=artifact)] if index == 1 else [],

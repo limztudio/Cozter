@@ -9,36 +9,29 @@ import unittest
 import weakref
 from unittest import mock
 
-from Cozter import agent, config, flexible, session, workspace
+from Cozter import agent, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent, append_text_result
 from Cozter.backends_bot.base import _InjectQueue
-from Cozter.tests.helpers import create_python_script_process, temporary_config
+from Cozter.tests.helpers import create_python_script_process
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
 
 
-class TurnBudgetConfigTests(unittest.TestCase):
-    def test_default_explicit_disable_and_invalid_overrides(self):
-        for value, expected in ((None, 3600), (0, 0), (1800, 1800),
-                                (False, 3600), (-1, 3600), ("0", 3600)):
-            with self.subTest(value=value), temporary_config({"agent_turn_timeout": value}):
-                self.assertEqual(config.get_agent_turn_timeout(), expected)
 
 
 class SynchronousTurnBudgetTests(unittest.TestCase):
     def test_budget_can_be_constructed_before_event_loop_startup(self):
-        budget = agent.TurnBudget(3600)
+        budget = agent.TurnBudget()
         self.assertIsNone(budget.owner)
         self.assertFalse(budget.started)
-        self.assertIsNone(budget.deadline)
+        self.assertFalse(hasattr(budget, "deadline"))
 
     def test_synchronous_context_reuses_and_restores_budget(self):
-        with mock.patch.object(config, "get_agent_turn_timeout", return_value=3600):
-            with agent.turn_budget() as budget:
-                with agent.turn_budget() as nested:
-                    self.assertIs(nested, budget)
-                with agent.turn_budget(fresh=True) as renewed:
-                    self.assertIsNot(renewed, budget)
-                self.assertIs(agent._TURN_BUDGET.get(), budget)
+        with agent.turn_budget() as budget:
+            with agent.turn_budget() as nested:
+                self.assertIs(nested, budget)
+            with agent.turn_budget(fresh=True) as renewed:
+                self.assertIsNot(renewed, budget)
+            self.assertIs(agent._TURN_BUDGET.get(), budget)
         self.assertIsNone(agent._TURN_BUDGET.get())
 
 
@@ -74,7 +67,6 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             workspace.set_flexible_backend_name(self.ws, tier, "meta")
         workspace.set_reasoning_effort(self.ws, 100)
         self.enterContext(mock.patch.object(agent, "_run_post_turn_maintenance", mock.AsyncMock()))
-        self.enterContext(mock.patch.object(config, "get_agent_turn_timeout", return_value=3600))
 
     async def asyncTearDown(self):
         await agent._wait_for_pending_session_writes(self.ws)
@@ -145,73 +137,70 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         judge.assert_not_awaited()
         self.assertIn("revised scope", result.text)
 
-    async def test_expiry_cancels_backend_and_retains_completed_reports_and_usage(self):
+    async def test_turn_waits_for_completion_without_a_wall_clock_timeout(self):
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def implementation(turn, *_args, **_kwargs):
+            turn.session_id = self.data["id"]
+            started.set()
+            await release.wait()
+            return AgentResult(text="Completed", session_id=turn.session_id)
+
+        with (
+            mock.patch.object(agent, "_run_turn_impl", implementation),
+            mock.patch.object(asyncio, "timeout_at", side_effect=AssertionError("unexpected turn timer")),
+        ):
+            active = asyncio.create_task(self.run_flexible())
+            await asyncio.wait_for(started.wait(), 1)
+            for _ in range(20):
+                await asyncio.sleep(0)
+            self.assertFalse(active.done())
+            release.set()
+            result = await asyncio.wait_for(active, 1)
+        self.assertEqual(result.text, "Completed")
+        self.assertFalse(result.continue_instruction)
+        self.assertFalse(hasattr(agent, "_TURN_TIMEOUT"))
+
+    async def test_explicit_cancel_reaps_native_worker_and_retains_session_progress(self):
         backend = _BlockingBackend()
-        original_driver = agent._drive_backend
-        calls = 0
+        with mock.patch.object(agent.backends_agent, "get_backend", return_value=backend):
+            active = asyncio.create_task(agent.run(
+                "Keep working until completion", self.ws, 1,
+                backend_name=backend.name, session_id=self.data["id"],
+            ))
 
-        async def drive(*args, **kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                return AgentResult(text="Completed repair evidence", usage={"input_tokens": 10}), False
-            return await original_driver(backend, *args[1:], **kwargs)
+            async def wait_for_output():
+                while not backend.saw_output:
+                    await asyncio.sleep(0.01)
 
-        with agent.turn_budget() as budget:
-            budget.started = True
-            budget.deadline = asyncio.get_running_loop().time() + 1
-            with (
-                mock.patch.object(agent, "run_internal_backend", mock.AsyncMock(return_value=
-                    "[PLAN]\n1. [low] repair code\n2. [low] verify runtime\n3. [low] final release check\n[/PLAN]")),
-                mock.patch.object(agent, "_drive_backend", side_effect=drive),
-                mock.patch.object(agent, "_judge_draft", mock.AsyncMock()) as judge,
-            ):
-                async with asyncio.timeout(4):
-                    result = await self.run_flexible()
-        self.assertTrue(backend.saw_output)
+            await asyncio.wait_for(wait_for_output(), 3)
+            active.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(active, 3)
+        await agent._wait_for_pending_session_writes(self.ws)
         self.assertIsNotNone(backend.proc.returncode)
-        judge.assert_not_awaited()
-        self.assertIn("Completed repair evidence", result.text)
-        self.assertIn("Active partial output", result.text)
-        self.assertIn("verify runtime", result.text)
-        self.assertIn("final release check", result.text)
-        self.assertEqual(result.usage, {"input_tokens": 12})
-        self.assertTrue(any(event.kind == "attachment" for event in result.events))
-        self.assertEqual(result.continuation_reason, "time_budget")
-        self.assertEqual(result.continuation_checkpoint["pending"], ["verify runtime", "final release check"])
-        self.assertEqual(result.continuation_checkpoint["reports"], [{
-            "instruction": "repair code", "report": "Completed repair evidence",
-        }])
-        self.assertEqual(result.continuation_checkpoint["streamed_output"], "Active partial output")
+        messages = session.load_session(self.ws, self.data["id"])["messages"]
+        self.assertIn("Keep working until completion", messages[-2]["content"])
+        self.assertIn("Active partial output", messages[-1]["content"])
 
-    async def test_expiry_during_merge_preserves_worker_reports(self):
+    async def test_worker_exhaustion_during_merge_preserves_worker_reports(self):
         async def internal(*_args, label, **_kwargs):
             if label == "Flexible planner":
                 return "[PLAN]\n1. [low] first\n2. [low] second\n[/PLAN]"
-            # Expire in the stage this test covers, independently of durable
-            # execution-state fsync latency before the workers start.
-            deadline = asyncio.get_running_loop().time() + .03
-            agent._TURN_BUDGET.get().deadline = deadline
-            agent._TURN_TIMEOUT.get().reschedule(deadline)
-            await asyncio.Event().wait()
+            raise agent._TurnBudgetExhaustedError("worker allowance reached")
 
-        with agent.turn_budget() as budget:
-            budget.started = True
-            budget.deadline = asyncio.get_running_loop().time() + 5
-            with (
-                mock.patch.object(agent, "run_internal_backend", internal),
-                mock.patch.object(agent, "_drive_backend", mock.AsyncMock(side_effect=[
-                    (AgentResult(text="First verification evidence"), False),
-                    (AgentResult(text="Second verification evidence"), False),
-                ])),
-            ):
-                result = await self.run_flexible()
+        with (
+            mock.patch.object(agent, "run_internal_backend", internal),
+            mock.patch.object(agent, "_drive_backend", mock.AsyncMock(side_effect=[
+                (AgentResult(text="First verification evidence"), False),
+                (AgentResult(text="Second verification evidence"), False),
+            ])),
+        ):
+            result = await self.run_flexible()
         self.assertIn("First verification evidence", result.text)
         self.assertIn("Second verification evidence", result.text)
-        self.assertIn("completion verification remains unfinished", result.text)
-        self.assertEqual(result.continuation_checkpoint["pending"], [
-            "Verify completion of the full original request and finish any remaining work.",
-        ])
+        self.assertEqual(result.continuation_reason, "worker_budget")
+        self.assertEqual(result.continuation_checkpoint["pending"], [agent._DEFAULT_PENDING_SCOPE])
 
     async def test_tool_budget_retains_partial_and_pending_scope_for_next_attempt(self):
         with (
@@ -249,7 +238,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.continuation_checkpoint["latest_draft"], "Repair evidence")
         self.assertEqual(result.continuation_checkpoint["pending"], [agent._DEFAULT_PENDING_SCOPE])
 
-    async def test_artifact_discovered_after_result_capture_survives_judge_timeout(self):
+    async def test_artifact_discovered_after_result_capture_survives_worker_exhaustion(self):
         artifact = os.path.join(self.ws, "late.txt")
         with open(artifact, "w", encoding="utf-8") as output:
             output.write("late artifact")
@@ -260,8 +249,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             return result, False
 
         async def judge(*_args, **_kwargs):
-            agent._TURN_TIMEOUT.get().reschedule(asyncio.get_running_loop().time() + 0.03)
-            await asyncio.Event().wait()
+            raise agent._TurnBudgetExhaustedError("worker allowance reached")
 
         with (
             mock.patch.object(agent.backends_agent, "get_backend", return_value=_BlockingBackend()),
@@ -310,13 +298,13 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event.content for event in result.events if event.kind == "attachment"], [artifact])
         self.assertEqual(result.text, "Full scope completed")
 
-    async def test_expired_shared_deadline_retains_pinned_session(self):
+    async def test_exhausted_worker_allowance_retains_pinned_session(self):
+        async def exhausted(*_args, **_kwargs):
+            agent._TURN_BUDGET.get().claim_worker()
+
         with agent.turn_budget() as budget:
-            budget.started = True
-            budget.deadline = asyncio.get_running_loop().time() - 1
-            async def blocked(*_args, **_kwargs):
-                await asyncio.Event().wait()
-            with mock.patch.object(agent, "_run_turn_impl", blocked):
+            budget.max_workers = 0
+            with mock.patch.object(agent, "_run_turn_impl", exhausted):
                 result = await self.run_flexible()
         self.assertEqual(result.session_id, self.data["id"])
         self.assertIn("PARTIAL", session.load_session(self.ws, self.data["id"])["messages"][-1]["content"])
@@ -324,7 +312,6 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_fresh_attempt_replaces_allowance_and_restores_outer_scope(self):
         with agent.turn_budget() as original:
             original.started = True
-            original.deadline = asyncio.get_running_loop().time() - 1
             original.workers_started = original.max_workers
             with agent.turn_budget(fresh=True) as following:
                 self.assertIsNot(following, original)
@@ -540,32 +527,35 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             write_release.set()
             await agent._wait_for_pending_session_writes(self.ws)
 
-    async def test_timed_out_request_finishes_remainder_before_next_queue_entry(self):
+    async def test_long_request_completes_before_next_queue_entry(self):
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.ws))
         bot = _ReplyDeliveryBot(self.ws, fail_final=False)
-        started = []
+        started, release = asyncio.Event(), asyncio.Event()
+        prompts = []
 
         async def implementation(turn, prompt, *_args, **_kwargs):
-            started.append(prompt)
+            prompts.append(prompt)
             turn.session_id = self.data["id"]
-            if prompt == "slow task" and len(started) == 1:
-                timer = agent._TURN_TIMEOUT.get()
-                timer.reschedule(asyncio.get_running_loop().time() + 0.03)
-                await asyncio.Event().wait()
-            answer = "Slow task completed" if "slow task" in prompt else "Next task completed"
+            if prompt == "slow task":
+                started.set()
+                await release.wait()
+            answer = "Slow task completed" if prompt == "slow task" else "Next task completed"
             return AgentResult(text=answer, events=[ChatEvent(kind="text", content=answer)], session_id=self.data["id"])
 
         for text in ("slow task", "next task"):
             entry = await bot._persist_enqueue("u1", text, "chat")
             bot._ensure_message_queue("u1").put_nowait((text, "chat", entry, False))
-        with (mock.patch.object(agent, "_run_turn_impl", implementation),
-              mock.patch.object(workspace, "get_run_config", return_value=("flexible", "", "", "full", "meta"))):
-            await asyncio.wait_for(bot._drain_message_queue("u1"), timeout=2)
-        self.assertEqual(started[0], "slow task")
-        self.assertIn("slow task", started[1])
-        self.assertEqual(started[2], "next task")
+        with (
+            mock.patch.object(agent, "_run_turn_impl", implementation),
+            mock.patch.object(workspace, "get_run_config", return_value=("flexible", "", "", "full", "meta")),
+        ):
+            drain = asyncio.create_task(bot._drain_message_queue("u1"))
+            await asyncio.wait_for(started.wait(), 1)
+            self.assertEqual(prompts, ["slow task"])
+            release.set()
+            await asyncio.wait_for(drain, 2)
+        self.assertEqual(prompts, ["slow task", "next task"])
         self.assertLess(bot.sent.index("Slow task completed"), bot.sent.index("Next task completed"))
-        self.assertIn("Next task completed", bot.sent)
         self.assertEqual(bot._read_queue_file(), {})
         self.assertEqual(await bot._list_reply_delivery_records(), [])
 

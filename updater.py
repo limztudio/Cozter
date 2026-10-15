@@ -13,17 +13,13 @@ REQUIREMENTS_PATH = os.path.join(MODULE_ROOT, "requirements.txt")
 _STARTUP_COMMIT: str | None = None
 
 
-_GIT_TIMEOUT = 3600  # seconds; real-work cap
-# Installs run on requirement changes.
-_PIP_INSTALL_TIMEOUT = 3600
-
 # Non-zero so supervisors restart on it.
 WINDOWS_SUPERVISOR_RESTART_EXIT_CODE = 75
 WINDOWS_SUPERVISOR_ENV = "COZTER_WINDOWS_SUPERVISED"
 
 
 def _git(*args: str) -> subprocess.CompletedProcess:
-    """Run a git command with a timeout, returning the CompletedProcess."""
+    """Run a git command, returning the CompletedProcess."""
     # Update checks cannot answer a terminal or credential-manager dialog.
     # Cached credentials remain available; process-local overrides leave the
     # operator's interactive Git configuration and environment unchanged.
@@ -32,7 +28,7 @@ def _git(*args: str) -> subprocess.CompletedProcess:
         ["git", *args],
         # Background probes must never share the CLI input reader's pipe.
         stdin=subprocess.DEVNULL,
-        cwd=MODULE_ROOT, capture_output=True, text=True, timeout=_GIT_TIMEOUT,
+        cwd=MODULE_ROOT, capture_output=True, text=True,
         check=False, env=env,
     )
 
@@ -44,7 +40,7 @@ def _git_str(*args: str, default: str = "") -> str:
         if result.returncode != 0:
             return default
         return result.stdout.strip() or default
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         return default
 
 
@@ -64,7 +60,7 @@ def _working_tree_dirty() -> bool:
     """
     try:
         result = _git("status", "--porcelain")
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         return True
     if result.returncode != 0:
         return True
@@ -84,7 +80,7 @@ def _local_ahead_of_upstream() -> bool:
         upstream_result = _git(
             "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}",
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         return True
     # No upstream configured: skip pull.
     if upstream_result.returncode != 0:
@@ -96,7 +92,7 @@ def _local_ahead_of_upstream() -> bool:
         count_result = _git(
             "rev-list", "--count", f"{upstream}..HEAD",
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         return True
     # Indeterminate compare: treat as ahead.
     if count_result.returncode != 0:
@@ -135,7 +131,7 @@ def _head_changed() -> bool:
 
 
 # One wording for every git-transport failure path.
-_GIT_UNAVAILABLE_MSG = "git not available or timed out, skipping update check"
+_GIT_UNAVAILABLE_MSG = "git not available, skipping update check"
 
 
 def _log_git_unavailable() -> None:
@@ -146,7 +142,7 @@ def _fetch_origin() -> bool:
     """Refresh remote refs without modifying the working tree."""
     try:
         fetch = _git("fetch", "origin")
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         _log_git_unavailable()
         return False
     if fetch.returncode != 0:
@@ -200,7 +196,7 @@ def _remote_update_available() -> bool:
             return int(behind_result.stdout.strip()) > 0
         except ValueError:
             return False
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         _log_git_unavailable()
         return False
 
@@ -246,7 +242,7 @@ def fetch_and_pull() -> bool:
             pull = _git("pull", "--ff-only")
             if pull.returncode != 0:
                 logger.warning("git pull failed: %s", pull.stderr.strip())
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         _log_git_unavailable()
         return _head_changed()
 
@@ -267,7 +263,7 @@ def requirements_changed_since_startup() -> bool:
         result = _git(
             "diff", "--quiet", _STARTUP_COMMIT, "HEAD", "--", "requirements.txt",
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         return True
     if result.returncode == 0:
         return False
@@ -288,21 +284,14 @@ def install_requirements() -> None:
         logger.info("Requirements unchanged since startup; skipping pip install.")
         return
     logger.info("Installing updated requirements...")
-    try:
-        pip = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_PATH],
-            stdin=subprocess.DEVNULL,
-            cwd=MODULE_ROOT,
-            capture_output=True,
-            text=True,
-            timeout=_PIP_INSTALL_TIMEOUT,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        logger.error(
-            "pip install timed out after %ds", _PIP_INSTALL_TIMEOUT,
-        )
-        raise RuntimeError("pip install timed out") from exc
+    pip = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS_PATH],
+        stdin=subprocess.DEVNULL,
+        cwd=MODULE_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     if pip.returncode != 0:
         logger.error("pip install failed: %s", pip.stderr.strip())
         raise RuntimeError("pip install failed")

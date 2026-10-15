@@ -236,7 +236,7 @@ class TelegramBot(BotPlatform):
 
     @property
     def platform_id(self) -> str:
-        # Numeric bot id keeps old workspace state compatible.
+        # Each Telegram bot has its own stable numeric platform identity.
         if self.app is None:
             raise RuntimeError("platform_id is only valid after start()")
         return str(self.app.bot.id)
