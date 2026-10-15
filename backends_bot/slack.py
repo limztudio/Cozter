@@ -44,6 +44,7 @@ from .base import (
 from .formatting import (
     escape_html_entities, render_fenced_markdown, render_headings_and_bold,
     render_inline_code,
+    unused_format_marker,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,10 +90,8 @@ def _mrkdwn_prose(line: str) -> str:
     bold_open, bold_close = _BOLD_OPEN, _BOLD_CLOSE
     bold_sub = _bold_sub
     if bold_open in line or bold_close in line:
-        while bold_open in line:
-            bold_open += "\x00"
-        while bold_close in line:
-            bold_close += "\x00"
+        bold_open = unused_format_marker(line, bold_open)
+        bold_close = unused_format_marker(line, bold_close)
 
         def collision_safe_bold_sub(match: re.Match) -> str:
             return bold_open + match.group(1) + bold_close

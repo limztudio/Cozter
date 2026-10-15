@@ -22,6 +22,10 @@ CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.
 _STDERR_CAPTURE_BYTES = 64 * 1024
 # Malformed CLIs can emit endless lines.
 _MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024
+# HTTP workers already bound completion text/tool arguments before emitting
+# local JSON events. A 4 MiB string can need 24 MiB when JSON escapes controls.
+HTTP_EVENT_LINE_MAX_BYTES = 32 * 1024 * 1024
+_HTTP_EVENT_STREAM_TOKEN = object()
 # Keep decoded state safe for deepcopy, normalization, and JSON serialization.
 _MAX_JSON_NESTING_DEPTH = 100
 # A spawned CLI leads the group.
@@ -638,6 +642,15 @@ def validate_json_nesting(value: object) -> None:
         stack.append(iter(children))
 
 
+def mark_http_event_stream(stream: asyncio.StreamReader) -> None:
+    """Mark a locally owned HTTP adapter stream, never untrusted CLI output."""
+    setattr(stream, "_cozter_http_event_stream_token", _HTTP_EVENT_STREAM_TOKEN)
+
+
+def _is_http_event_stream(stream: asyncio.StreamReader) -> bool:
+    return getattr(stream, "_cozter_http_event_stream_token", None) is _HTTP_EVENT_STREAM_TOKEN
+
+
 async def iter_stream_lines(
     stream: asyncio.StreamReader, chunk_size: int = 64 * 1024,
 ) -> AsyncIterator[str]:
@@ -651,9 +664,10 @@ async def iter_stream_lines(
         while chunk := await stream.read(chunk_size):
             yield chunk
 
+    line_limit = HTTP_EVENT_LINE_MAX_BYTES if _is_http_event_stream(stream) else _MAX_STREAM_LINE_BYTES
     async for line in iter_bounded_lines(
         chunks(),
-        max_line_bytes=_MAX_STREAM_LINE_BYTES,
+        max_line_bytes=line_limit,
         source="backend stdout",
     ):
         yield line
@@ -770,6 +784,14 @@ async def iter_process_json_events(
     """
     stream = proc.stdout
     assert stream is not None
+    if _is_http_event_stream(stream):
+        # These bytes come from our in-process adapter, whose owned driver
+        # always feeds EOF when it finishes or is cancelled. There can be no
+        # descendant inheriting this Python buffer, so native post-exit drain
+        # limits would only discard valid, already bounded HTTP events.
+        async for event in iter_json_events(stream, on_invalid=on_invalid):
+            yield event
+        return
     parent_exited = False
     post_exit_bytes = 0
 

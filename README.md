@@ -607,6 +607,12 @@ coalesced into the latest preview. Status work is owned by the current turn
 and stopped before its final reply, preserving task cancellation and queue
 processing.
 
+Signal formatting caches failed inline-marker searches and projects each style
+only onto message chunks it overlaps. Long identifier inventories and heavily
+formatted replies therefore avoid repeated whole-reply scans. Telegram and Slack
+choose collision-free inline-code/bold placeholders in one pass, preserving
+literal user text even when it contains the private marker characters.
+
 Set `signal_own_device_id` to the numeric device ID used by this installation's
 signal-cli daemon after checking its account's `listDevices` response. The default
 `0` (or `null`) leaves device identification unset; Cozter never guesses from a
@@ -718,6 +724,12 @@ Colony consolidation includes sessions whose long-term list is empty, so their
 names still help it retire stale workspace memory. If a workspace has no
 sessions left, a colony pass clears its shared memory rather than carrying
 deleted-session facts into later conversations.
+The consolidation snapshot retains session identity, name, date, and memory
+only, parsing one transcript at a time. Snapshot reads run outside the event
+loop; stale checks and actual writes run as one owned worker operation while
+the workspace writer lock remains held through cancellation. Unchanged memory
+lists skip their full-transcript reread and rewrite. Session-block parsing
+advances forward through malformed or incomplete model output.
 
 Maintenance prompts treat persisted model output as recovery data, not as an
 unbounded source of context, and every budget reserves its truncation marker
@@ -1738,6 +1750,12 @@ statuses) clip with a visible marker instead of a silent cut. Backends that stag
 prompt file, Copilot's private home) remember that path by process-object
 identity and delete it in `cleanup_process` after the child is reaped.
 
+Attachment, background-request, and saved-upload markers use forward scans
+that preserve their existing captures and whitespace rules. Unfinished markers
+and long whitespace runs cannot trigger repeated whole-suffix searches.
+External-image attachment preparation retains its ordered validation and copy
+on an owned worker, settling an in-flight copy before cancellation unwinds.
+
 Internal LLM jobs (routing, session titling, compaction, and colony
 consolidation) all go through `utils.run_internal_backend()`. The shared
 runner applies a configured positive deadline to startup and response together,
@@ -1751,6 +1769,13 @@ stdout cannot bypass cleanup.
 HTTP backends expose the same
 process-shaped contract through `backends_agent/_http_process.py`, so the
 orchestrator uses one cleanup model for CLI and API agents.
+Its local event transport uses compact UTF-8 JSON and a separately marked
+32 MiB frame budget, enough for the JSON escaping of existing 4 MiB text or
+tool-argument limits. Lone JSON surrogates retain their escaped representation.
+Locally owned HTTP streams drain to their guaranteed EOF, so already completed
+responses cannot be dropped by native descendant-pipe guards. Native CLI line
+and post-exit limits retain their existing bounds. An oversized local frame
+fails explicitly before any bytes are added to the stream.
 HTTP task cancellation stays on its owning event loop. Native Windows
 process-tree cleanup runs blocking `taskkill` in a worker thread so the loop
 remains responsive; POSIX group signals run directly on the loop.
@@ -1906,24 +1931,26 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (110 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 107 `test_*.py` modules:
+- Tests (120 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 117 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
-  `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_backend_audit_regressions.py`,
+  `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_attachment_preparation_ownership.py`,
+  `test_backend_audit_regressions.py`,
   `test_backend_event_parsing.py`, `test_backend_repair.py`, `test_backends_agent.py`,
   `test_bash_process_output.py`, `test_bash_progress.py`, `test_blocked_judge_runtime.py`, `test_bot_commands.py`,
-  `test_bot_recovery_and_lifecycle.py`, `test_claude_background_guard.py`,
+  `test_bot_recovery_and_lifecycle.py`, `test_calculator_responsiveness.py`,
+  `test_claude_background_detection.py`, `test_claude_background_guard.py`,
   `test_claude_model_capabilities.py`, `test_checkpoint_scope.py`, `test_cli_commands.py`,
   `test_cli_native_continuation.py`,
-  `test_cloud_model_capabilities.py`, `test_compaction.py`, `test_config.py`,
+  `test_cloud_model_capabilities.py`, `test_colony_streaming.py`, `test_compaction.py`, `test_config.py`,
   `test_detached_tasks.py`, `test_discovery_optimization.py`, `test_discovery_paging.py`,
   `test_discovery_pruning.py`, `test_discovery_tools_async.py`,
   `test_durable_poll_parallelism.py`,
   `test_edit_file_read_limits.py`, `test_flexible_parallel_plan.py`,
   `test_execution_state.py`, `test_flexible_continuation.py`,
-  `test_flexible_parallel_runtime.py`, `test_flexible.py`,
+  `test_flexible_parallel_runtime.py`, `test_flexible.py`, `test_format_marker_latency.py`,
   `test_git_checkout_integrity.py`, `test_git_plugin_paging.py`, `test_git_process_output.py`,
-  `test_http_body_sniff.py`, `test_http_latency.py`, `test_http_redirect_method.py`,
+  `test_http_body_sniff.py`, `test_http_event_framing.py`, `test_http_latency.py`, `test_http_redirect_method.py`,
   `test_http_execution_continuation.py`, `test_http_owned_mutation_cancellation.py`,
   `test_inject.py`, `test_internal_backend_deadline.py`, `test_interrupted_turns.py`,
   `test_job_continuation.py`, `test_job_prerequisite_retry.py`,
@@ -1937,12 +1964,13 @@ ignored for local secrets and runtime queues.
   `test_plugin_result_budgets.py`,
   `test_public_http_pool.py`,
   `test_prompt_subprocess.py`, `test_queue_persistence_latency.py`,
-  `test_prompt_payload_dedup.py`,
+  `test_prompt_payload_dedup.py`, `test_protocol_marker_latency.py`,
   `test_read_files.py`,
   `test_reply_delivery.py`, `test_run_lock.py`, `test_runtime_diagnostics.py`,
   `test_schedule_execution.py`, `test_session_picker.py`,
   `test_session_write_latency.py`, `test_signal_attachment_decoding.py`,
-  `test_signal_feedback.py`, `test_signal_formatting.py`, `test_signal_send_observability.py`,
+  `test_signal_feedback.py`, `test_signal_formatting.py`, `test_signal_inline_latency.py`,
+  `test_signal_send_observability.py`, `test_signal_span_projection.py`,
   `test_signal_status.py`, `test_signal_status_recovery.py`,
   `test_signal_transport.py`, `test_slack_commands.py`, `test_slack_formatting.py`,
   `test_state_fallbacks.py`, `test_state_integrity.py`,
@@ -1951,7 +1979,7 @@ ignored for local secrets and runtime queues.
   `test_tool_runtime.py`, `test_tool_safety_and_output_limits.py`,
   `test_tool_state_integrity.py`, `test_tools_audit_regressions.py`,
   `test_turn_budget.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
-  `test_web_fetch.py`, `test_web_html_latency.py`, `test_web_search.py`)
+  `test_vision_marker_scanning.py`, `test_web_fetch.py`, `test_web_html_latency.py`, `test_web_search.py`)
   covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared

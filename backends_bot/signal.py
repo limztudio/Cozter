@@ -7,6 +7,7 @@ Unix or TCP socket. The daemon lifecycle is owned outside Cozter.
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_left, bisect_right
 import base64
 import contextlib
 import hashlib
@@ -1498,12 +1499,27 @@ def _signal_rich_text_chunks(
     body, spans = _md_to_signal_body_and_spans(text)
     if not body:
         return []
+    ranges = text_chunk_ranges(body, limit)
+    if len(ranges) == 1:
+        return [(body, _signal_style_strings_for_chunk(body, spans, 0, len(body)))]
+    # Preserve the renderer's original (including nested/postorder) span order
+    # while visiting only chunks each span actually overlaps. Scanning every
+    # span again for every chunk was quadratic for large formatted replies.
+    chunk_starts = [start for start, _end in ranges]
+    chunk_ends = [end for _start, end in ranges]
+    chunk_spans: list[list[tuple[int, int, str]]] = [[] for _ in ranges]
+    for span in spans:
+        start, length, _style = span
+        first_chunk = bisect_right(chunk_ends, start)
+        after_last_chunk = bisect_left(chunk_starts, start + length)
+        for chunk_index in range(first_chunk, after_last_chunk):
+            chunk_spans[chunk_index].append(span)
     return [
         (
             chunk,
-            _signal_style_strings_for_chunk(body, spans, start, end),
+            _signal_style_strings_for_chunk(body, chunk_spans[index], start, end),
         )
-        for start, end in text_chunk_ranges(body, limit)
+        for index, (start, end) in enumerate(ranges)
         if (chunk := body[start:end])
     ]
 
@@ -1537,6 +1553,11 @@ def _md_to_signal_body_and_spans(
 
     def parse_inline(inline_src: str) -> None:
         offset = 0
+        # Each parse scope advances monotonically. Retain the next valid
+        # single-character closer (or a known exhausted search) so unmatched
+        # identifiers cannot rescan every later underscore/star at each opener.
+        # Nested scopes have their own source string and their own tiny cache.
+        single_closes: dict[str, int] = {}
         while offset < len(inline_src):
             marker = _signal_inline_marker_at(inline_src, offset)
             if marker is None:
@@ -1545,7 +1566,15 @@ def _md_to_signal_body_and_spans(
                 continue
 
             open_marker, close_marker, style, parse_nested = marker
-            close_at = _find_signal_inline_close(inline_src, close_marker, offset)
+            if close_marker in ("*", "_"):
+                cached = single_closes.get(close_marker)
+                if cached is not None and (cached < 0 or cached >= offset + len(open_marker)):
+                    close_at = cached
+                else:
+                    close_at = _find_signal_inline_close(inline_src, close_marker, offset)
+                    single_closes[close_marker] = close_at
+            else:
+                close_at = _find_signal_inline_close(inline_src, close_marker, offset)
             if close_at < 0:
                 append(inline_src[offset])
                 offset += 1

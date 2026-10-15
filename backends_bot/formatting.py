@@ -18,6 +18,25 @@ LineRenderer = Callable[[str], str]
 CodeBlockRenderer = Callable[[list[str]], list[str]]
 
 
+def unused_format_marker(text: str, marker: str) -> str:
+    """Append the shortest NUL suffix absent from *text*, in one scan.
+
+    Formatting markers contain a non-NUL character, so a trailing NUL run
+    cannot itself contain another marker. Include overlapping occurrences:
+    two inline-code markers can share their boundary NUL.
+    """
+    longest_tail = -1
+    start = text.find(marker)
+    while start >= 0:
+        end = start + len(marker)
+        tail_end = end
+        while tail_end < len(text) and text[tail_end] == "\x00":
+            tail_end += 1
+        longest_tail = max(longest_tail, tail_end - end)
+        start = text.find(marker, start + 1)
+    return marker + "\x00" * (longest_tail + 1)
+
+
 def render_headings_and_bold(
     text: str, replacement: str | Callable[[re.Match[str]], str],
 ) -> str:
@@ -37,9 +56,7 @@ def render_inline_code(
     """Keep inline code literal while formatting the surrounding Markdown."""
     if "`" not in text:
         return render_prose(text)
-    marker = "\x00CODE\x00"
-    while marker in text:
-        marker += "\x00"
+    marker = unused_format_marker(text, "\x00CODE\x00")
     blocks: list[str] = []
 
     def protect(match: re.Match[str]) -> str:

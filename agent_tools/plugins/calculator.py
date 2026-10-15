@@ -11,6 +11,7 @@ can never touch the host.
 from __future__ import annotations
 
 import ast
+import asyncio
 import math
 import operator as op
 from collections.abc import Callable
@@ -234,6 +235,42 @@ def _format(value: Any) -> str:
     return str(value)
 
 
+def _calculate(args: dict) -> str:
+    """Parse, evaluate and format one bounded expression without side effects."""
+    expression, error = require_nonempty_string_arg(
+        args, "expression", strip=True,
+    )
+    if error:
+        return error
+    assert expression is not None
+    if len(expression) > _MAX_EXPRESSION_CHARS:
+        return (
+            f"Error: expression exceeds {_MAX_EXPRESSION_CHARS}"
+            " characters"
+        )
+
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        return f"Error: invalid expression: {exc.msg}"
+    except (ValueError, MemoryError, RecursionError) as exc:
+        return f"Error: could not parse expression: {exc}"
+
+    try:
+        value = _evaluate(tree)
+        return _format(value)
+    except _CalculationError as exc:
+        return f"Error: {exc}"
+    except ZeroDivisionError:
+        return "Error: division by zero"
+    except (OverflowError, ValueError) as exc:
+        return f"Error: {exc}"
+    except RecursionError:
+        return "Error: expression is nested too deeply"
+    except TypeError as exc:
+        return f"Error: invalid operands: {exc}"
+
+
 class CalculatorTool(AgentTool):
     name = "calculator"
     order = 20
@@ -249,38 +286,11 @@ class CalculatorTool(AgentTool):
 
     async def run(self, workspace_path: str, args: dict) -> str:
         del workspace_path
-        expression, error = require_nonempty_string_arg(
-            args, "expression", strip=True,
-        )
-        if error:
-            return error
-        assert expression is not None
-        if len(expression) > _MAX_EXPRESSION_CHARS:
-            return (
-                f"Error: expression exceeds {_MAX_EXPRESSION_CHARS}"
-                " characters"
-            )
-
-        try:
-            tree = ast.parse(expression, mode="eval")
-        except SyntaxError as exc:
-            return f"Error: invalid expression: {exc.msg}"
-        except (ValueError, MemoryError, RecursionError) as exc:
-            return f"Error: could not parse expression: {exc}"
-
-        try:
-            value = _evaluate(tree)
-            return _format(value)
-        except _CalculationError as exc:
-            return f"Error: {exc}"
-        except ZeroDivisionError:
-            return "Error: division by zero"
-        except (OverflowError, ValueError) as exc:
-            return f"Error: {exc}"
-        except RecursionError:
-            return "Error: expression is nested too deeply"
-        except TypeError as exc:
-            return f"Error: invalid operands: {exc}"
+        # Valid large-integer math can occupy hundreds of milliseconds. Keep
+        # status dispatch and independent tool calls progressing between its
+        # bounded C operations. Cancellation may leave only pure CPU work
+        # finishing; this helper never performs I/O or changes shared state.
+        return await asyncio.to_thread(_calculate, args)
 
     def summarize(self, args: dict) -> str:
         expression = (

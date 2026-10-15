@@ -94,6 +94,10 @@ close with their owner, including cancellation; standalone CLI plugin calls
 retain their original one-call session lifetime.
 `calculator` checks its existing 50,000-digit magnitude policy
 at every integer intermediate and before allocating oversized products.
+Its bounded validation, parsing, evaluation, and formatting run on a worker
+thread so large valid arithmetic does not block the event loop. Cancelling
+the caller may leave pure computation finishing briefly, with no filesystem
+or network side effects; arithmetic limits and results are unchanged.
 
 For any plugin module, `--help` (or `-h`) prints its argument schema and
 metadata without executing it. This lets CLI agents discover enum choices and

@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
@@ -263,6 +263,57 @@ _ATTACHMENT_SAVED_PATTERN = (
 )
 # Compiled once.
 _ATTACHMENT_SAVED_RE = re.compile(_ATTACHMENT_SAVED_PATTERN, re.IGNORECASE)
+_ATTACHMENT_SAVED_WORD_RE = re.compile("attachment saved to:", re.IGNORECASE)
+
+
+def _attachment_saved_relpaths(prompt: str) -> Iterator[str]:
+    """Yield the legacy marker's stripped captures without regex rescans.
+
+    A marker cannot cross its first closing bracket. Within that window,
+    the original greedy prefix chooses the last usable keyword after the
+    first opening bracket on a line. Whitespace may surround the path,
+    including newlines, but a newline inside the stripped path rejects it.
+    Each scan below advances through disjoint ranges, including malformed
+    nested openers and long whitespace runs.
+    """
+    start = 0
+    while (end := prompt.find("]", start)) >= 0:
+        last_nonspace = end - 1
+        while last_nonspace >= start and prompt[last_nonspace].isspace():
+            last_nonspace -= 1
+        last_newline = prompt.rfind("\n", start, last_nonspace + 1)
+        first_open = -1
+        cursor = start
+        chosen_open = -1
+        chosen_start = end
+        for keyword in _ATTACHMENT_SAVED_WORD_RE.finditer(prompt, start, end):
+            newline = prompt.rfind("\n", cursor, keyword.start())
+            if newline >= 0:
+                first_open = prompt.find("[", newline + 1, keyword.start())
+            elif first_open < 0:
+                first_open = prompt.find("[", cursor, keyword.start())
+            cursor = keyword.end()
+            if chosen_open >= 0 and first_open != chosen_open:
+                break
+            if first_open < 0:
+                continue
+            path_start = keyword.end()
+            if path_start > last_nonspace:
+                # A whitespace-only capture is possible unless the suffix
+                # is empty or consists solely of excluded LF characters.
+                if not any(prompt[index] != "\n" for index in range(path_start, end)):
+                    continue
+                path_start = end
+            else:
+                while prompt[path_start].isspace():
+                    path_start += 1
+                if last_newline >= path_start:
+                    continue
+            chosen_open = first_open
+            chosen_start = path_start
+        if chosen_open >= 0 and chosen_start <= last_nonspace:
+            yield prompt[chosen_start:last_nonspace + 1]
+        start = end + 1
 
 
 def attachment_image_paths(
@@ -284,8 +335,7 @@ def attachment_image_paths(
         root = os.path.realpath(workspace_path)
     except OSError:
         return []
-    for match in _ATTACHMENT_SAVED_RE.finditer(prompt):
-        rel = match.group(1).strip()
+    for rel in _attachment_saved_relpaths(prompt):
         if not rel or rel in seen:
             continue
         seen.add(rel)

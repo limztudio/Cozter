@@ -22,11 +22,13 @@ compaction; when ``compact_count % colony_interval == 0`` we run the
 consolidation pass.
 """
 
+import asyncio
 import logging
 import re
 
 from . import backends_agent, session
 from . import workspace as workspace_mod
+from .agent_tools.owned_worker import run_owned_worker
 from .utils import (
     create_background_task,
     extract_marker_block,
@@ -181,9 +183,7 @@ CONSOLIDATE_MAX_INPUT_CHARS = 100_000
 # Reserve most of the prompt for session evidence.
 CONSOLIDATE_COLONY_CHARS = CONSOLIDATE_MAX_INPUT_CHARS // 4
 
-_SESSION_BLOCK_RE = re.compile(
-    r"\[SESSION:([^\]\s]+)\](.*?)\[/SESSION\]", re.DOTALL,
-)
+_SESSION_ID_END_RE = re.compile(r"[\]\s]")
 
 _CONSOLIDATE_TRUNCATION_NOTE = (
     "… [input truncated for budget — this is a preview, not full coverage;"
@@ -212,9 +212,25 @@ def _parse_consolidate_output(
     )
 
     per_session: dict[str, list[str]] = {}
-    for block_match in _SESSION_BLOCK_RE.finditer(text):
-        sid = block_match.group(1).strip()
-        per_session[sid] = parse_bullets(block_match.group(2))
+    position = 0
+    while (start := text.find("[SESSION:", position)) >= 0:
+        id_start = start + len("[SESSION:")
+        delimiter = _SESSION_ID_END_RE.search(text, id_start)
+        if delimiter is None:
+            break
+        id_end = delimiter.start()
+        if id_end == id_start or text[id_end] != "]":
+            # Every nested opener before this whitespace shares the same
+            # invalid ID tail. Skip the whole run once instead of retrying
+            # its suffix for each '[SESSION:' prefix. Empty IDs also fail.
+            position = delimiter.end()
+            continue
+        close = text.find("[/SESSION]", delimiter.end())
+        if close < 0:
+            break
+        sid = text[id_start:id_end].strip()
+        per_session[sid] = parse_bullets(text[delimiter.end():close])
+        position = close + len("[/SESSION]")
 
     return new_colony, per_session
 
@@ -383,15 +399,9 @@ async def _consolidate_inner(
     backend_name: str | None,
 ) -> bool:
     backend = backends_agent.get_backend(backend_name)
-    existing_colony = get_items(workspace_path)
-
-    # Include empty sessions; items must retire.
-    inputs: list[tuple[str, str, list[str]]] = []
-    for data in session.list_sessions_with_data(workspace_path):
-        long_term = data.get("long_term") or []
-        sid = data["id"]
-        name = data.get("name") or sid[:8]
-        inputs.append((sid, name, long_term))
+    existing_colony, inputs = await asyncio.to_thread(
+        _consolidation_snapshot, workspace_path,
+    )
 
     if not inputs:
         if not existing_colony:
@@ -399,13 +409,10 @@ async def _consolidate_inner(
             return False
         # No sessions: drop memory deterministically.
         async with workspace_mod.get_lock(workspace_path):
-            if (
-                session.list_sessions_with_data(workspace_path)
-                or get_items(workspace_path) != existing_colony
+            if not await run_owned_worker(
+                _clear_empty_colony, workspace_path, existing_colony,
             ):
-                logger.info("Colony pass: memory changed before cleanup, skipping")
                 return False
-            set_items(workspace_path, [])
         logger.info(
             "Colony pass: cleared %d stale item(s); no sessions remain in %s",
             len(existing_colony), workspace_path,
@@ -488,39 +495,74 @@ async def _consolidate_inner(
 
     # Re-check under the writer lock; edits/deletes since make this stale.
     async with workspace_mod.get_lock(workspace_path):
-        latest_memory = {
-            data["id"]: data["long_term"]
-            for data in session.list_sessions_with_data(workspace_path)
-        }
-        snapshot_memory = {sid: long_term for sid, _name, long_term in inputs}
-        if (
-            get_items(workspace_path) != existing_colony
-            or latest_memory != snapshot_memory
+        if not await run_owned_worker(
+            _apply_consolidation, workspace_path, existing_colony, inputs,
+            new_colony, per_session, fully_shown,
         ):
-            logger.warning(
-                "Skipping stale colony consolidation for %s; memory or sessions changed",
-                workspace_path,
-            )
             return False
-        set_items(workspace_path, new_colony)
-        for sid, new_long_term in per_session.items():
-            session_data = session.load_session(workspace_path, sid)
-            if session_data is None:
-                continue
-            if sid not in fully_shown:
-                # Preserve the original list when only a preview was shown.
-                cleaned = session.merge_partial_memory(
-                    session_data["long_term"], new_long_term, session.LONG_TERM_CAP,
-                )
-            else:
-                cleaned = list(dict.fromkeys(
-                    item for item in new_long_term if item
-                ))[-session.LONG_TERM_CAP:]
-            session_data["long_term"] = cleaned
-            session.save_session(workspace_path, sid, session_data)
 
     logger.info(
-        "Colony consolidated for %s: %d colony item(s); %d session(s) rewritten",
+        "Colony consolidated for %s: %d colony item(s); %d session(s) processed",
         workspace_path, len(new_colony), len(per_session),
     )
+    return True
+
+
+def _consolidation_snapshot(workspace_path: str) -> tuple[list[str], list[tuple[str, str, list[str]]]]:
+    existing_colony = get_items(workspace_path)
+    # Empty local lists remain evidence for retiring old shared facts.
+    inputs = [
+        (data["id"], data.get("name") or data["id"][:8], data["long_term"])
+        for data in session.list_session_memory(workspace_path)
+    ]
+    return existing_colony, inputs
+
+
+def _clear_empty_colony(workspace_path: str, existing_colony: list[str]) -> bool:
+    if session.list_session_memory(workspace_path) or get_items(workspace_path) != existing_colony:
+        logger.info("Colony pass: memory changed before cleanup, skipping")
+        return False
+    set_items(workspace_path, [])
+    return True
+
+
+def _apply_consolidation(
+    workspace_path: str, existing_colony: list[str],
+    inputs: list[tuple[str, str, list[str]]], new_colony: list[str],
+    per_session: dict[str, list[str]], fully_shown: set[str],
+) -> bool:
+    """Recheck and save the complete writer transaction while its lock is held."""
+    latest_memory = {
+        data["id"]: data["long_term"]
+        for data in session.list_session_memory(workspace_path)
+    }
+    snapshot_memory = {sid: long_term for sid, _name, long_term in inputs}
+    if get_items(workspace_path) != existing_colony or latest_memory != snapshot_memory:
+        logger.warning(
+            "Skipping stale colony consolidation for %s; memory or sessions changed",
+            workspace_path,
+        )
+        return False
+    if new_colony != existing_colony:
+        set_items(workspace_path, new_colony)
+    for sid, new_long_term in per_session.items():
+        current_memory = latest_memory.get(sid)
+        if current_memory is None:
+            continue
+        if sid not in fully_shown:
+            cleaned = session.merge_partial_memory(
+                current_memory, new_long_term, session.LONG_TERM_CAP,
+            )
+        else:
+            cleaned = list(dict.fromkeys(item for item in new_long_term if item))[-session.LONG_TERM_CAP:]
+        if cleaned == current_memory:
+            continue
+        # Reload changed sessions inside the writer transaction so appended
+        # messages and renames survive. Unchanged lists need no transcript
+        # reread or write after their projected memory passed the stale guard.
+        session_data = session.load_session(workspace_path, sid)
+        if session_data is None:
+            continue
+        session_data["long_term"] = cleaned
+        session.save_session(workspace_path, sid, session_data)
     return True

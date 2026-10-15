@@ -39,6 +39,7 @@ from .. import (
     agent, backends_agent, colony, config, schedules, session, updater,
     workspace,
 )
+from ..agent_tools.owned_worker import run_owned_worker
 from ..utils import await_cancelled
 from ..utils import create_background_task
 from ..utils import drain_queue as _drain_queue
@@ -5304,7 +5305,10 @@ class BotPlatform(ABC):
 
         for ev in result.events:
             if ev.kind == "attachment":
-                collect_attachment(ev.content)
+                # Explicit generated images can require a large atomic copy.
+                # Keep that I/O off-loop and owned until it physically settles,
+                # so cancellation cannot acknowledge while a copy still writes.
+                await run_owned_worker(collect_attachment, ev.content)
                 continue
             if ev.kind != "text":
                 continue
@@ -5317,7 +5321,7 @@ class BotPlatform(ABC):
             if text:
                 await self.send_text(chat_id, text, rich=True)
             for path in attach_paths:
-                collect_attachment(path)
+                await run_owned_worker(collect_attachment, path)
 
         # Compact per-turn token/cost footer.
         if result.usage and config.get_show_usage():

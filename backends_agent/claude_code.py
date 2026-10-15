@@ -126,6 +126,10 @@ _BACKGROUND_BASH_RE = re.compile(
     r"(?:^|[\s;&|])claude\b[^\n]*--(?:bg|background)\b",
     re.IGNORECASE,
 )
+_BACKGROUND_BASH_PREFIX_RE = re.compile(
+    r"(?:^|[\s;&|])claude\b", re.IGNORECASE,
+)
+_BACKGROUND_BASH_FLAG_RE = re.compile(r"--(?:bg|background)\b", re.IGNORECASE)
 _SAFE_BACKGROUND_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _DETACHED_COMMAND_TIMEOUT_SEC = 30
 _BACKGROUND_GUARD_TIMEOUT_SEC = 5
@@ -144,6 +148,25 @@ _DETACHED_OUTPUT_TRUNCATION_MARKER = (
     "\n… [truncated: remainder omitted — never treat this preview as full"
     " content; say PARTIAL + remainder when coverage is unclear]"
 )
+
+def _is_background_bash(command: str) -> bool:
+    """Detect the legacy same-line launcher/flag pair with bounded scans."""
+    start = 0
+    while True:
+        end = command.find("\n", start)
+        if end < 0:
+            end = len(command)
+        # Include the preceding LF: it is a valid launcher separator in the
+        # original regex. Other Unicode whitespace remains inside this line.
+        launcher = _BACKGROUND_BASH_PREFIX_RE.search(command, max(0, start - 1), end)
+        if launcher is not None and _BACKGROUND_BASH_FLAG_RE.search(command, launcher.end(), end):
+            return True
+        if end == len(command):
+            return False
+        # If no flag follows the first launcher, none can follow a later
+        # launcher on this line. Never rescan that shared suffix.
+        start = end + 1
+
 
 def _background_guard_settings() -> str:
     """Return the session-only Claude hook that blocks orphaned Bash jobs."""
@@ -965,7 +988,7 @@ class ClaudeCodeBackend(Backend):
             if (
                 isinstance(cmd, str)
                 and isinstance(tool_use_id, str)
-                and _BACKGROUND_BASH_RE.search(cmd)
+                and _is_background_bash(cmd)
             ):
                 result.detached_task_tool_use_ids.add(tool_use_id)
             result.events.append(ChatEvent(

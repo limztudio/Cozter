@@ -352,6 +352,16 @@ def list_sessions_with_data(workspace: str) -> list[dict]:
     return _list_sessions_with_data(workspace, limit=None)
 
 
+def list_session_memory(workspace: str) -> list[dict]:
+    """Return normalized identity/name/date/memory without retaining transcripts.
+
+    Each file still passes the same containment, JSON, and identity checks as
+    a full session load. Projection happens before the next file is parsed;
+    sorting preserves the full loader's created-date and directory tie order.
+    """
+    return _list_sessions_with_data(workspace, limit=None, memory_only=True)
+
+
 def list_newest_sessions_with_data(
     workspace: str, limit: int,
 ) -> tuple[list[dict], int]:
@@ -367,18 +377,18 @@ def list_newest_sessions_with_data(
 
 @overload
 def _list_sessions_with_data(
-    workspace: str, limit: None,
+    workspace: str, limit: None, *, memory_only: bool = False,
 ) -> list[dict]: ...
 
 
 @overload
 def _list_sessions_with_data(
-    workspace: str, limit: int,
+    workspace: str, limit: int, *, memory_only: bool = False,
 ) -> tuple[list[dict], int]: ...
 
 
 def _list_sessions_with_data(
-    workspace: str, limit: int | None,
+    workspace: str, limit: int | None, *, memory_only: bool = False,
 ) -> list[dict] | tuple[list[dict], int]:
     sessions_dir = _sessions_dir(workspace)
     if not os.path.isdir(sessions_dir):
@@ -401,6 +411,8 @@ def _list_sessions_with_data(
             file_path, expected_id, log_corrupt=False,
         )
         if data is not None:
+            if memory_only:
+                data = {key: data[key] for key in ("id", "name", "created", "long_term")}
             out.append(data)
             if limit is not None and len(out) >= limit:
                 break

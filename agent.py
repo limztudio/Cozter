@@ -11,7 +11,7 @@ import math
 import os
 import re
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -433,18 +433,103 @@ def _is_collaborative_turn(
     )
 
 
-_ATTACH_RE = re.compile(
-    r"\[\[attach:\s*([^\]\n]+?)\s*\]\]", re.IGNORECASE,
-)
+_ATTACH_PREFIX_RE = re.compile(r"\[\[attach:", re.IGNORECASE)
+_ATTACH_BOUNDARY_RE = re.compile(r"[\]\n]")
 _AWAIT_RE = re.compile(r"\[\[await\]\]", re.IGNORECASE)
-_DETACHED_TASK_REQUEST_RE = re.compile(
-    r"(?ims)^[ \t]*\[\[background:\s*(?P<prompt>.*?)\s*\]\]"
-    r"[ \t]*(?:\r?\n|$)",
-)
+_DETACHED_TASK_PREFIX_RE = re.compile(r"^[ \t]*\[\[background:", re.IGNORECASE | re.MULTILINE)
 _EXTRA_BLANK_LINES_RE = re.compile(r"\n{3,}")
 _SAFE_IMAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _MAX_DETACHED_TASK_REQUESTS = 3
 _MAX_DETACHED_TASK_PROMPT_CHARS = 12_000
+
+
+def _iter_attachment_markers(text: str) -> Iterator[tuple[int, int, str]]:
+    """Yield legacy attach ranges/captures without overlapping suffix scans."""
+    cursor = 0
+    boundary = -1
+    tail_boundary = -1
+    tail_end = -1
+    while prefix := _ATTACH_PREFIX_RE.search(text, cursor):
+        content_start = prefix.end()
+        while content_start < len(text) and text[content_start].isspace():
+            content_start += 1
+        if content_start == len(text):
+            return
+        if text[content_start] == "]":
+            # Legacy \s* can backtrack to give its required capture one
+            # whitespace character, but the capture cannot contain a newline.
+            capture_start = content_start - 1
+            while capture_start >= prefix.end() and text[capture_start] == "\n":
+                capture_start -= 1
+            if text.startswith("]]", content_start) and capture_start >= prefix.end():
+                end = content_start + 2
+                yield prefix.start(), end, text[capture_start:capture_start + 1]
+                cursor = end
+            else:
+                cursor = prefix.end()
+            continue
+
+        if boundary < content_start:
+            stop = _ATTACH_BOUNDARY_RE.search(text, content_start)
+            if stop is None:
+                return
+            boundary = stop.start()
+        closing = boundary
+        if text[boundary] == "\n":
+            if tail_boundary != boundary:
+                tail_boundary = boundary
+                tail_end = boundary
+                while tail_end < len(text) and text[tail_end].isspace():
+                    tail_end += 1
+            closing = tail_end
+        if not text.startswith("]]", closing):
+            cursor = prefix.end()
+            continue
+        end = closing + 2
+        yield prefix.start(), end, text[content_start:boundary].rstrip()
+        cursor = end
+
+
+def _iter_detached_task_markers(text: str) -> Iterator[tuple[int, int, str]]:
+    """Yield complete line-anchored background requests with linear searches."""
+    cursor = 0
+    while prefix := _DETACHED_TASK_PREFIX_RE.search(text, cursor):
+        closing = text.find("]]", prefix.end())
+        while closing >= 0:
+            end = closing + 2
+            while end < len(text) and text[end] in " \t":
+                end += 1
+            if end == len(text):
+                break
+            if text[end] == "\n":
+                end += 1
+                break
+            if text.startswith("\r\n", end):
+                end += 2
+                break
+            closing = text.find("]]", closing + 1)
+        if closing < 0:
+            return
+        start = prefix.end()
+        while start < closing and text[start].isspace():
+            start += 1
+        yield prefix.start(), end, text[start:closing].rstrip()
+        cursor = end
+
+
+def _remove_protocol_markers(
+    text: str, markers: Iterable[tuple[int, int, str]],
+    on_capture: Callable[[str], None] | None = None,
+) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for start, end, capture in markers:
+        parts.append(text[cursor:start])
+        cursor = end
+        if on_capture is not None:
+            on_capture(capture)
+    parts.append(text[cursor:])
+    return "".join(parts)
 
 _IMAGE_MAGIC = (
     (b"\x89PNG\r\n\x1a\n", ".png"),
@@ -483,21 +568,20 @@ def extract_attachment_sources(text: str, workspace_path: str) -> tuple[str, lis
     paths: list[str] = []
     seen_sources: set[str] = set()
 
-    def _sub(match: re.Match) -> str:
-        rel = match.group(1).strip()
+    def _sub(capture: str) -> None:
+        rel = capture.strip()
         if not rel:
-            return ""
+            return
         source = _resolve_attachment_source(rel, workspace_path)
         if source is None:
-            return ""
+            return
         source_path, _ = source
         if source_path in seen_sources:
-            return ""
+            return
         seen_sources.add(source_path)
         paths.append(source_path)
-        return ""
 
-    cleaned = _ATTACH_RE.sub(_sub, text)
+    cleaned = _remove_protocol_markers(text, _iter_attachment_markers(text), _sub)
     return _collapse_extra_blank_lines(cleaned), paths
 
 
@@ -547,8 +631,8 @@ def extract_detached_task_requests(text: str) -> tuple[str, list[str]]:
         return "", []
     prompts: list[str] = []
 
-    def _take(match: re.Match) -> str:
-        prompt = match.group("prompt").strip()
+    def _take(capture: str) -> None:
+        prompt = capture.strip()
         if len(prompt) > _MAX_DETACHED_TASK_PROMPT_CHARS:
             logger.warning("Ignoring oversized detached task request")
         elif prompt and prompt not in prompts:
@@ -556,9 +640,8 @@ def extract_detached_task_requests(text: str) -> tuple[str, list[str]]:
                 prompts.append(prompt)
             else:
                 logger.warning("Ignoring excess detached task request")
-        return ""
 
-    cleaned = _DETACHED_TASK_REQUEST_RE.sub(_take, text)
+    cleaned = _remove_protocol_markers(text, _iter_detached_task_markers(text), _take)
     return _collapse_extra_blank_lines(cleaned), prompts
 
 
@@ -1715,10 +1798,11 @@ def _split_attach_markers(text: str) -> tuple[str, list[str]]:
     """
     if not isinstance(text, str):
         return "", []
-    markers = [match.group(0) for match in _ATTACH_RE.finditer(text)]
-    if not markers:
+    ranges = list(_iter_attachment_markers(text))
+    if not ranges:
         return text, []
-    cleaned = _ATTACH_RE.sub("", text)
+    markers = [text[start:end] for start, end, _capture in ranges]
+    cleaned = _remove_protocol_markers(text, ranges)
     return _collapse_extra_blank_lines(cleaned), markers
 
 

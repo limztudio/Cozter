@@ -23,7 +23,7 @@ from collections.abc import AsyncIterator, Awaitable
 
 import aiohttp
 
-from ..utils import await_cancelled
+from ..utils import HTTP_EVENT_LINE_MAX_BYTES, await_cancelled, mark_http_event_stream
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ class HttpAgentProcess:
         """*label* is used only in the crash log message."""
         self._label = label
         self.stdout: asyncio.StreamReader = asyncio.StreamReader()
+        mark_http_event_stream(self.stdout)
         self.stderr: asyncio.StreamReader = asyncio.StreamReader()
         # No stderr on HTTP: EOF readers.
         self.stderr.feed_eof()
@@ -51,8 +52,17 @@ class HttpAgentProcess:
         self._task: asyncio.Task | None = None
 
     def emit(self, event: dict) -> None:
-        """Push an event line into stdout for the orchestrator to read."""
-        line = (json.dumps(event) + "\n").encode("utf-8")
+        """Emit complete bounded JSON, preserving Unicode and escaped controls."""
+        try:
+            line = (json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        except UnicodeEncodeError:
+            # Lone JSON surrogates are accepted by the existing decoder. Keep
+            # their escaped spelling rather than replacing or losing text.
+            line = (json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(line) > HTTP_EVENT_LINE_MAX_BYTES:
+            # Fail before adding any bytes. The driver emits a short error and
+            # a nonzero return code, instead of a reader silently dropping it.
+            raise RuntimeError("HTTP agent event exceeded the 32 MiB transport limit")
         self.stdout.feed_data(line)
 
     def kill(self) -> None:
