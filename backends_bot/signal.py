@@ -86,6 +86,7 @@ _SIGNAL_ATTACH_ASCII_WHITESPACE_DELETE = {
 }
 _SIGNAL_MD_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
 _SIGNAL_WORD_CHAR_RE = re.compile(r"\w")
+_SIGNAL_INLINE_START_RE = re.compile(r"[`*_~|]")
 
 
 def _signal_rate_limit_delay(exc: BaseException) -> float | None:
@@ -1561,8 +1562,13 @@ def _md_to_signal_body_and_spans(
         while offset < len(inline_src):
             marker = _signal_inline_marker_at(inline_src, offset)
             if marker is None:
-                append(inline_src[offset])
-                offset += 1
+                # Ordinary prose contains no inline control markers. Append
+                # that whole run instead of testing/storing each character;
+                # every potential marker still uses the existing parser.
+                next_marker = _SIGNAL_INLINE_START_RE.search(inline_src, offset + 1)
+                end = next_marker.start() if next_marker is not None else len(inline_src)
+                append(inline_src[offset:end])
+                offset = end
                 continue
 
             open_marker, close_marker, style, parse_nested = marker

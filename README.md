@@ -1931,7 +1931,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (123 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 120 `test_*.py` modules:
+- Tests (125 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 122 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_attachment_preparation_ownership.py`,
@@ -1948,6 +1948,7 @@ ignored for local secrets and runtime queues.
   `test_durable_poll_parallelism.py`,
   `test_edit_file_read_limits.py`, `test_flexible_parallel_plan.py`,
   `test_execution_state.py`, `test_flexible_continuation.py`, `test_flexible_injection_continuation.py`,
+  `test_flexible_instruction_identity.py`,
   `test_flexible_native_injection_continuation.py`,
   `test_flexible_parallel_runtime.py`, `test_flexible.py`, `test_format_marker_latency.py`,
   `test_git_checkout_integrity.py`, `test_git_plugin_paging.py`, `test_git_process_output.py`,
@@ -1972,6 +1973,7 @@ ignored for local secrets and runtime queues.
   `test_schedule_execution.py`, `test_session_picker.py`,
   `test_session_write_latency.py`, `test_signal_attachment_decoding.py`,
   `test_signal_feedback.py`, `test_signal_formatting.py`, `test_signal_inline_latency.py`,
+  `test_signal_literal_runs.py`,
   `test_signal_send_observability.py`, `test_signal_span_projection.py`,
   `test_signal_status.py`, `test_signal_status_recovery.py`,
   `test_signal_transport.py`, `test_slack_commands.py`, `test_slack_formatting.py`,

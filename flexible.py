@@ -373,11 +373,56 @@ def parse_followups(report: str) -> list[Subtask]:
     return found
 
 
+_INSTRUCTION_QUOTE_START_RE = re.compile(r"[`'\"]")
+_INSTRUCTION_QUOTE_DELIMITERS = {
+    "'": re.compile(r"['\\]"),
+    '"': re.compile(r'["\\]'),
+}
+
+
 def instruction_identity(instruction: str) -> str:
-    """Normalize formatting, preserving case and whitespace in quoted targets."""
-    pieces = re.split(r"(`[^`]*`|'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")", instruction)
-    normalized = "".join(piece if index % 2 else re.sub(r"\s+", " ", piece)
-                         for index, piece in enumerate(pieces)).strip()
+    """Normalize formatting, preserving case and whitespace in quoted targets.
+
+    Search for the same first complete quoted spans as the previous split
+    regex. An unmatched escaped-quote run used to restart that regex at every
+    quote. Remember each failed run's boundary instead, so each quote style
+    scans any input character at most once even for malformed instructions.
+    """
+    pieces = []
+    plain_start = search_from = 0
+    failed_until = {"'": 0, '"': 0}
+    while match := _INSTRUCTION_QUOTE_START_RE.search(instruction, search_from):
+        start = match.start()
+        quote = match.group()
+        search_from = start + 1
+        if quote == "`":
+            close = instruction.find("`", search_from)
+            end = close + 1 if close >= 0 else None
+        else:
+            if start < failed_until[quote]:
+                continue
+            end = None
+            position = search_from
+            while delimiter := _INSTRUCTION_QUOTE_DELIMITERS[quote].search(instruction, position):
+                if delimiter.group() == quote:
+                    end = delimiter.end()
+                    break
+                escaped = delimiter.end()
+                if escaped == len(instruction) or instruction[escaped] == "\n":
+                    # A regex dot cannot consume LF. Every same-style quote
+                    # encountered before this invalid escape was itself escaped;
+                    # starting there would fail at this identical boundary too.
+                    failed_until[quote] = escaped + 1
+                    break
+                position = escaped + 1
+            else:
+                failed_until[quote] = len(instruction)
+        if end is not None:
+            pieces.append(re.sub(r"\s+", " ", instruction[plain_start:start]))
+            pieces.append(instruction[start:end])
+            plain_start = search_from = end
+    pieces.append(re.sub(r"\s+", " ", instruction[plain_start:]))
+    normalized = "".join(pieces).strip()
     # A polite request prefix does not create another obligation. Everything
     # identifying a target or action remains case-sensitive and unchanged.
     return re.sub(r"^Please\s+", "", normalized)
