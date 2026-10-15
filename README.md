@@ -815,7 +815,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
 | `/sessions [number\|name]` | List this workspace's sessions, or switch to one |
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
-| `/refresh` | Drop the workspace's `.codex/` cache (use after an upgrade) |
+| `/refresh` | Report disposable CLI-cache availability for the selected backend; preserve project configuration and job-owned sessions |
 | `/stop` | Cancel the running agent turn and clear queued work |
 | `/bg <task>` or `/background <task>` | Start a restart-safe detached task with the selected compatible backend |
 | `/inject <text>` | Add context to the running turn; Cozter abandons its active phase and restarts with it |
@@ -1163,11 +1163,13 @@ notices state the retained transcript is a truncated preview. HTTP-backend tool 
 model, keeping accidental huge outputs from consuming the whole context.
 Every cap reserves its truncation marker inside the advertised budget, so a
 clipped result always arrives visibly marked as a PARTIAL preview with a
-remainder pointer (for example `read_file` offset/limit or `grep` to page
+remainder pointer (for example `read_file` offset/limit/char_offset or `grep` to page
 further) instead of a silent bare cut — and budgets too tight for the full
-marker keep a visible ellipsis. `read_file` reads at most 128 KiB per call;
-its line-offset scan is also
-bounded at 16 MiB so a pathological offset cannot leave a worker thread
+marker keep a visible ellipsis. `read_file` returns at most 32,768 characters
+per call, including its continuation marker. `offset` still counts lines;
+follow the returned `char_offset` with unchanged `offset`/`limit` to recover
+the remainder of a long line or selected range. Its line-offset and
+character-offset scans are bounded at 16 MiB so a pathological offset cannot leave a worker thread
 walking an enormous file.
 Session transcript lines (`session.format_msg_line`) carry the same honesty
 contract: capped content keeps a `… [truncated N chars total … PARTIAL +
@@ -1458,7 +1460,10 @@ either shape before executing a requested tool.
 The builtin `read_files` tool reads up to 16 independent file ranges in one
 model round trip, with at most four simultaneous reads, up to 32,768 characters
 per file preview and a 65,536-character aggregate cap shared fairly across the
-requested files. Complete files and batches have no truncation marker. The
+requested files. A free read slot starts the next file immediately while
+results retain request order. Each truncated file retains its `char_offset`
+cursor within its assigned budget; use it with `read_file` and the same
+`offset`/`limit` to retrieve the remainder. Complete files and batches have no truncation marker. The
 dispatcher retains up to 32,768 characters for builtin `read_file`, `glob`, and
 `grep`, 32,768 for `web_fetch` (including its URL/title), and 65,536 for
 `read_files`. Discovery pages preserve complete matches
@@ -1478,7 +1483,9 @@ reads. Each call retains ownership until its worker finishes. Cancellation or
 a tool timeout waits for an already-started mutation to settle before returning;
 later operations in the same tool sequence cannot overtake it. This preserves
 ordered writes and existing atomic replacement behavior. The notes plugin uses
-the same ownership rule for append and clear.
+the same ownership rule for append and clear, and serializes their complete
+transactions across CLI processes using a lock keyed by the canonical notes
+path. A cancelled owner retains the lock until its mutation finishes.
 
 Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its

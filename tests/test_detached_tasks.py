@@ -215,14 +215,17 @@ class DetachedLaunchOwnershipTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancellation_requested_during_session_log_stops_before_id_handover(self):
         self.backend.launch_release.set()
         self.backend.stop_release.set()
+        loop = asyncio.get_running_loop()
+        owner = None
 
         def log(*_args):
-            asyncio.current_task().cancel()
+            loop.call_soon_threadsafe(owner.cancel)
             return True
 
         with mock.patch.object(agent, "_log_to_session", side_effect=log):
+            owner = self.launch()
             with self.assertRaises(asyncio.CancelledError):
-                await self.launch()
+                await owner
         self.assertEqual(self.backend.stopped, ["late-provider-id"])
 
     async def test_late_handshake_failure_is_consumed_and_original_cancellation_survives(self):

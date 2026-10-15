@@ -1607,7 +1607,9 @@ warning: ignored after the catalog
                 mock.patch.object(copilot_mod, "_stop_acp_process") as stop,
             ):
                 self.assertIsNone(CopilotBackend()._discover_models(root))
-            stop.assert_called_once_with(process, kill_tree=True)
+            stop.assert_called_once_with(
+                process, kill_tree=True, reader=None, reader_stop=mock.ANY,
+            )
             self.assertFalse(os.path.exists(home))
 
     def test_copilot_node_catalog_launch_reaps_its_native_child(self) -> None:

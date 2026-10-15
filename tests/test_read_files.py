@@ -146,6 +146,28 @@ class ReadFilesTests(unittest.IsolatedAsyncioTestCase):
         for index in range(16):
             self.assertIn(f"=== file-{index}.txt ===", result)
 
+    async def test_next_read_starts_while_an_earlier_slot_is_still_busy(self):
+        first_release, fifth_started = asyncio.Event(), asyncio.Event()
+
+        async def read(_workspace, args):
+            if args["path"] == "0.txt":
+                await first_release.wait()
+            if args["path"] == "4.txt":
+                fifth_started.set()
+            return args["path"]
+
+        with mock.patch.object(read_files.ReadFileTool, "run", side_effect=read):
+            task = asyncio.create_task(read_files.ReadFilesTool().run("/workspace", {
+                "files": [{"path": f"{index}.txt"} for index in range(5)],
+            }))
+            try:
+                await asyncio.wait_for(fifth_started.wait(), 2)
+                self.assertFalse(task.done())
+            finally:
+                first_release.set()
+                result = await task
+        self.assertLess(result.index("=== 0.txt"), result.index("=== 4.txt"))
+
     async def test_confirm_dispatcher_exposes_batch_read_and_retains_batch_limit(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

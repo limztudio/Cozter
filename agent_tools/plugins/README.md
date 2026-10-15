@@ -51,7 +51,9 @@ or sockets. The flag only controls HTTP-tool availability; it does not
 sandbox plugin code. Plugin calls carry the 3600s real-work cap. Cancellation
 stops cancellable work promptly; notes append and clear first wait for an
 already-started disk mutation to finish, so a subsequent operation cannot race
-an abandoned write or deletion. CLI-backend plugin scripts follow that
+an abandoned write or deletion. Their complete transactions also share a
+canonical-path lock across CLI processes, preventing simultaneous appends
+from overwriting one another. CLI-backend plugin scripts follow that
 CLI's own shell/tool policy instead.
 
 ## Throughput and result bounds

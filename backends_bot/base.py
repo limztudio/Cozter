@@ -21,11 +21,11 @@ import logging
 import math
 import os
 import re
-import shutil
 import tempfile
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -434,7 +434,8 @@ class _RecoverableTurnStatus:
         self.chat_id = chat_id
         self.handle: MessageHandle | None = None
         self.pending: str | None = None
-        self.lines: list[str] = []
+        self.lines: deque[str] = deque(maxlen=5)
+        self.total_lines = 0
         self.latest_text = ""
         self.updates = 0
         self.last_edit = 0.0
@@ -471,9 +472,12 @@ class _RecoverableTurnStatus:
             clipped = (content[:80 - len("… [clipped]")] + "… [clipped]"
                        if len(content) > 80 else content)
             self.lines.append(f"» {clipped}")
+            self.total_lines += 1
         else:
             return
-        self.pending = self.platform._compose_thinking_display(self.lines, self.latest_text)
+        self.pending = self.platform._compose_thinking_display(
+            self.lines, self.latest_text, total_status_lines=self.total_lines,
+        )
         self.wake.set()
 
     async def _wait_until(self, deadline: float) -> None:
@@ -2144,24 +2148,14 @@ class BotPlatform(ABC):
         ws = await self._require_ws(ctx)
         if ws is None:
             return
-        codex_dir = os.path.join(ws, ".codex")
-        cleared = False
-        if os.path.isdir(codex_dir):
-            shutil.rmtree(codex_dir, ignore_errors=True)
-            logger.info("Cleared codex session dir: %s", codex_dir)
-            cleared = True
         backend_name = workspace.get_backend_name(ws)
-        if cleared:
-            msg = (
-                f"{backend_name} CLI session refreshed."
-                " Your conversation history is preserved."
-            )
-        else:
-            msg = (
-                f"{backend_name} has no workspace-local state to clear."
-                " Your conversation history is preserved."
-            )
-        await ctx.reply_text(msg)
+        # CLI continuation is owned by durable jobs under .cozter/executions;
+        # removing it would lose their saved evidence. Project .codex settings
+        # are user configuration, not a disposable cache owned by this command.
+        await ctx.reply_text(
+            f"{backend_name} has no disposable workspace CLI cache to clear."
+            " Job-owned CLI sessions and your conversation history are preserved."
+        )
 
     # /compact
 
@@ -2942,13 +2936,18 @@ class BotPlatform(ABC):
     async def _persist_enqueue(
         self, uid: str, text: str, chat_id: str,
         *, ephemeral: bool = False,
+        workspace_path: str | None = None,
     ) -> str:
+        if ephemeral and workspace_path is None:
+            workspace_path = await self._current_workspace_for_turn(uid, chat_id)
         entry_id = uuid.uuid4().hex[:12]
         entry = {
             "id": entry_id, "text": text, "chat_id": chat_id,
         }
         if ephemeral:
             entry["ephemeral"] = True
+        if workspace_path is not None:
+            entry["job"] = {"workspace_path": workspace_path}
         def enqueue() -> None:
             data = self._read_queue_file()
             entries = self._queue_entries(data.get(uid))
@@ -2967,6 +2966,7 @@ class BotPlatform(ABC):
         generation: int,
         *,
         ephemeral: bool = False,
+        workspace_path: str | None = None,
     ) -> str | None:
         """Persist a pre-cancellation dispatch, or reject it as stale.
 
@@ -2981,6 +2981,7 @@ class BotPlatform(ABC):
                 return None
             return await self._persist_enqueue(
                 uid, text, chat_id, ephemeral=ephemeral,
+                **({"workspace_path": workspace_path} if workspace_path is not None else {}),
             )
 
     async def _persist_complete(
@@ -4187,9 +4188,11 @@ class BotPlatform(ABC):
                 )
             # Re-check under the lock; snapshots can go stale.
             if claimed_schedule is not None:
-                await self._fire_schedule(uid, claimed_schedule)
+                await self._fire_schedule(uid, claimed_schedule, workspace_path=ws)
 
-    async def _fire_schedule(self, uid: str, sched: dict) -> None:
+    async def _fire_schedule(
+        self, uid: str, sched: dict, *, workspace_path: str | None = None,
+    ) -> None:
         """Push a scheduled command onto the user's message queue.
 
         The queue entry is flagged ``ephemeral=True`` so the drain loop
@@ -4213,6 +4216,13 @@ class BotPlatform(ABC):
             )
             return
 
+        # Capture the originating workspace before admission can yield. A
+        # later /open must not redirect an admitted schedule to another tree.
+        if workspace_path is None:
+            workspace_path = await self._current_workspace_for_turn(uid, chat_id)
+        if workspace_path is None:
+            return
+
         # Scheduler can fire before first input.
         self._ensure_task_lock(uid)
         msg_queue = self._ensure_message_queue(uid)
@@ -4229,6 +4239,7 @@ class BotPlatform(ABC):
 
         entry_id = await self._persist_admitted_dispatch_entry(
             uid, command, chat_id, generation, ephemeral=True,
+            workspace_path=workspace_path,
         )
         if entry_id is None:
             return
@@ -4512,7 +4523,8 @@ class BotPlatform(ABC):
 
     @staticmethod
     def _compose_thinking_display(
-        status_lines: list[str], latest_text: str,
+        status_lines: list[str] | deque[str], latest_text: str,
+        *, total_status_lines: int | None = None,
     ) -> str:
         """Build the live 'Thinking...' preview.
 
@@ -4523,12 +4535,13 @@ class BotPlatform(ABC):
         """
         parts = ["Thinking..."]
         if status_lines:
-            if len(status_lines) > 5:
+            total = len(status_lines) if total_status_lines is None else total_status_lines
+            if total > 5:
                 parts.append(
-                    f"… [{len(status_lines) - 5} older update(s) omitted"
+                    f"… [{total - 5} older update(s) omitted"
                     " — preview only]",
                 )
-            parts.append("\n".join(status_lines[-5:]))
+            parts.append("\n".join(list(status_lines)[-5:]))
         text = latest_text.strip()
         if text:
             if len(text) > 600:
@@ -4541,6 +4554,7 @@ class BotPlatform(ABC):
         self, uid: str, chat_id: str, text: str,
         *, session_id: str | None = None,
         queue_entry_id: str | None = None,
+        is_scheduled: bool = False,
     ) -> bool:
         """Keep one job current until its full scope is complete.
 
@@ -4607,6 +4621,7 @@ class BotPlatform(ABC):
                     workspace_path=ws, previous_result=previous,
                     on_session=session_ready,
                     original_request=request,
+                    is_scheduled=is_scheduled,
                 )
             if result is None:
                 self._paused_jobs.discard(uid)
@@ -4802,12 +4817,13 @@ class BotPlatform(ABC):
         previous_result: agent.AgentResult | None = None,
         on_session: Callable[[str], Awaitable[None]] | None = None,
         original_request: str | None = None,
+        is_scheduled: bool = False,
     ) -> agent.AgentResult | None:
         """Send a "Thinking..." status, run the agent, then post the reply.
 
-        ``session_id`` pins the run to a specific session — used by
-        ``_run_ephemeral_turn`` to route a scheduled command into a
-        throwaway session. When None, ``agent.run`` routes the prompt
+        ``session_id`` pins the run to a specific session, including resumed
+        interactive jobs. ``is_scheduled`` independently identifies unattended
+        work routed by ``_run_ephemeral_turn``. When None, ``agent.run`` routes the prompt
         to the best-matching session via ``router.select_or_create_session``.
 
         ``_running_tasks`` is already populated by the caller
@@ -4851,7 +4867,8 @@ class BotPlatform(ABC):
             if isinstance(thinking_result, MessageHandle) else None
         )
 
-        status_lines: list[str] = []
+        status_lines: deque[str] = deque(maxlen=5)
+        total_status_lines = 0
         latest_text = ""
         last_edit = (
             asyncio.get_running_loop().time()
@@ -4902,7 +4919,7 @@ class BotPlatform(ABC):
                 last_edit = loop.time()
 
         async def on_event(ev: agent.ChatEvent) -> None:
-            nonlocal latest_text
+            nonlocal latest_text, total_status_lines
             nonlocal pending_status, status_edit_task
             self._record_turn_event_progress(uid, ev)
             if recovering_status is not None:
@@ -4931,6 +4948,7 @@ class BotPlatform(ABC):
                     if len(content) > 80 else content
                 )
                 status_lines.append(f"» {clipped}")
+                total_status_lines += 1
             else:
                 return
             if thinking_handle is None:
@@ -4942,6 +4960,7 @@ class BotPlatform(ABC):
                 # One Thinking message, edited in place.
                 pending_status = self._compose_thinking_display(
                     status_lines, latest_text,
+                    total_status_lines=total_status_lines,
                 )
             if status_edit_task is None or status_edit_task.done():
                 status_edit_task = create_background_task(
@@ -4964,6 +4983,7 @@ class BotPlatform(ABC):
                 on_session=on_session,
                 execution_id=queue_entry_id,
                 original_request=original_request,
+                is_scheduled=is_scheduled,
                 on_process=lambda proc, uid=uid: self._note_turn_process(
                     uid, getattr(proc, "pid", None),
                 ),
@@ -4983,7 +5003,7 @@ class BotPlatform(ABC):
                 return result  # checkpoint first; never enter the final reply ledger
 
             # Start durable provider jobs here (interactive turns only).
-            if session_id is None:
+            if not is_scheduled:
                 try:
                     await self._launch_result_detached_tasks(
                         uid,
@@ -5010,7 +5030,7 @@ class BotPlatform(ABC):
                     ws,
                     result,
                     session_id=(
-                        None if session_id is not None else result.session_id
+                        None if is_scheduled else result.session_id
                     ),
                 )
             except Exception:
@@ -5041,20 +5061,20 @@ class BotPlatform(ABC):
         if queue_entry_id is None:
             await self._send_result(
                 chat_id, ws, result,
-                uid=uid if session_id is None else None,
+                uid=uid if not is_scheduled else None,
             )
             return
 
         # Preserve the reply: a failed send must not rerun the agent.
         record = await self._stage_reply_delivery(
             uid, queue_entry_id, chat_id, ws, result,
-            allow_await=session_id is None,
+            allow_await=not is_scheduled,
         )
         await self._deliver_staged_reply(
             record,
             ws=ws,
             result=result,
-            awaiting_uid=uid if session_id is None else None,
+            awaiting_uid=uid if not is_scheduled else None,
         )
 
     async def _run_ephemeral_turn(
@@ -5065,8 +5085,11 @@ class BotPlatform(ABC):
         job = await self._load_job_checkpoint(uid, queue_entry_id) if queue_entry_id else {}
         ws = job.get("workspace_path")
         if not isinstance(ws, str) or not ws:
-            ws = await self._current_workspace_for_turn(uid, chat_id)
-        if ws is None:
+            # A legacy/corrupt durable entry has no trustworthy origin. Pause
+            # rather than assigning the user's current workspace after restart.
+            ws = (await self._current_workspace_for_turn(uid, chat_id)
+                  if queue_entry_id is None else None)
+        if ws is None or not os.path.isdir(ws):
             if queue_entry_id:
                 job.update({"state": "paused", "request": text,
                             "instruction": "Restore the scheduled job's workspace and finish its original scope."})
@@ -5106,6 +5129,7 @@ class BotPlatform(ABC):
             outcome = await self._run_turn(
                 uid, chat_id, text, session_id=sid,
                 queue_entry_id=queue_entry_id,
+                is_scheduled=True,
             )
             completed = outcome is not False
             return completed

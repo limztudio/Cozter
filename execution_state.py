@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import shutil
@@ -20,11 +21,19 @@ import tempfile
 from typing import Any
 import uuid
 
-from .utils import _fsync_directory
+from .utils import _fsync_directory, validate_json_nesting
 
 logger = logging.getLogger(__name__)
 _MAX_STATE_BYTES = 64 * 1024 * 1024
 _VERSION = 1
+
+
+def _finite_json_float(value: str) -> float:
+    """Reject both nonstandard constants and overflowing numeric literals."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("backend continuation contains a nonfinite number")
+    return number
 
 
 def _digest(value: object) -> str:
@@ -216,8 +225,12 @@ class Execution:
             if path.stat().st_size > _MAX_STATE_BYTES:
                 raise RuntimeError("Saved backend continuation is oversized; preserve and inspect it before resuming")
             try:
-                data = json.loads(path.read_bytes())
-            except (OSError, ValueError) as exc:
+                data = json.loads(
+                    path.read_bytes(), parse_constant=_finite_json_float,
+                    parse_float=_finite_json_float,
+                )
+                validate_json_nesting(data)
+            except (OSError, ValueError, RecursionError) as exc:
                 raise RuntimeError("Saved backend continuation is unreadable; preserve and inspect it before resuming") from exc
             if (not isinstance(data, dict) or data.get("version") != _VERSION
                     or data.get("identity") != key

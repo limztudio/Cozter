@@ -14,7 +14,7 @@ _MAX_PARALLEL_READS = 4
 _MAX_FILE_CHARS = 32 * 1024
 _MAX_RESULT_CHARS = 64 * 1024
 _TRUNCATION = (
-    "truncated file preview; use read_file with offset/limit for the remaining"
+    "truncated file preview; use read_file with offset/limit/char_offset for the remaining"
     " lines before treating this file as fully inspected"
 )
 
@@ -25,7 +25,8 @@ class ReadFilesTool(AgentTool):
         "Read up to 16 independent UTF-8 files or line ranges together, with"
         " bounded parallel reads and results in request order. Each file is"
         " a bounded preview (up to 32K characters; total 64K). Supply offset/limit"
-        " for targeted ranges and page any marked remainder with read_file."
+        " for targeted ranges and page any marked remainder with read_file"
+        " using its returned char_offset cursor and unchanged offset/limit."
         " Uses the same path permissions and image metadata as read_file."
     )
     parameters: ClassVar[dict[str, Any]] = object_parameters({
@@ -35,6 +36,7 @@ class ReadFilesTool(AgentTool):
                 "path": path_property(),
                 "offset": {"type": "integer"},
                 "limit": {"type": "integer"},
+                "char_offset": {"type": "integer", "minimum": 0},
             }, ["path"]),
         },
     }, ["files"])
@@ -60,20 +62,17 @@ class ReadFilesTool(AgentTool):
         ]
         available = _MAX_RESULT_CHARS - sum(map(len, labels)) - len(files) * 2
         per_file = min(_MAX_FILE_CHARS, max(128, available // len(files)))
-        reader = ReadFileTool()
+        reader = ReadFileTool(result_budget=per_file)
+        slots = asyncio.Semaphore(_MAX_PARALLEL_READS)
 
         async def read_one(index: int) -> str:
-            result = await reader.run(workspace_path, files[index])
+            async with slots:
+                result = await reader.run(workspace_path, files[index])
             return labels[index] + truncate_with_marker(
                 result, per_file, _TRUNCATION,
             )
 
-        results: list[str] = []
-        for start in range(0, len(files), _MAX_PARALLEL_READS):
-            results.extend(await asyncio.gather(*(
-                read_one(index)
-                for index in range(start, min(start + _MAX_PARALLEL_READS, len(files)))
-            )))
+        results = await asyncio.gather(*(read_one(index) for index in range(len(files))))
         return truncate_with_marker(
             "\n\n".join(results), _MAX_RESULT_CHARS,
             "truncated batch; request smaller file ranges for the remainder",

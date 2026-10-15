@@ -79,6 +79,42 @@ class BackgroundLaunchMechanismTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNone(guard.background_launch_mechanism({"command": command}))
 
+    def test_rejects_executable_substitutions_in_quotes_and_expanding_heredocs(self) -> None:
+        commands = (
+            'echo "$(sleep 60 >/dev/null &)"',
+            'echo "`sleep 60 >/dev/null &`"',
+            'echo "$(printf "%s" "$(sleep 60 >/dev/null &)")"',
+            'echo "$(nohup task)"',
+            'echo "`claude --bg task`"',
+            'echo $(( $(sleep 60 >/dev/null &) + 1 ))',
+            "cat <<EOF\n$(sleep 60 >/dev/null &)\nEOF\n",
+            "cat <<EOF\n'$(nohup task)'\nEOF\n",
+            'cat <<EOF\n"`claude --bg task`"\nEOF\n',
+            "cat <<-EOF\n\t$(\nsleep 60 >/dev/null &\n)\n\tEOF\n",
+            "cat <<'LITERAL' <<EXPAND\n$(sleep 60 &)\nLITERAL\n$(nohup task)\nEXPAND\n",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIsNotNone(guard.background_launch_mechanism({"command": command}))
+
+    def test_literal_expansion_markers_and_heredoc_data_remain_allowed(self) -> None:
+        commands = (
+            "echo '$(sleep 60 &) `nohup task`'",
+            r'echo "\$(sleep 60 &) \`nohup task\`"',
+            'echo "$(printf "%s" "literal &")"',
+            "cat <<EOF\nliteral & nohup task\nEOF\n",
+            "cat <<EOF\n\\$(sleep 60 &) \\`nohup task\\`\nEOF\n",
+            "cat <<'EOF'\n$(sleep 60 &) `nohup task`\nEOF\n",
+            'cat <<"EOF"\n$(sleep 60 &) `nohup task`\nEOF\n',
+            "cat <<E'OF'\n$(sleep 60 &) `nohup task`\nEOF\n",
+            "cat <<\\EOF\n$(sleep 60 &) `nohup task`\nEOF\n",
+            "cat <<''\n$(sleep 60 &) `nohup task`\n\n",
+            'echo ready # "$(nohup task)"\ntrue',
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIsNone(guard.background_launch_mechanism({"command": command}))
+
 
 class PreToolUseHookTests(unittest.TestCase):
     def test_bash_background_request_returns_claude_deny_shape(self) -> None:

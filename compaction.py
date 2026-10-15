@@ -16,6 +16,7 @@ import logging
 
 from . import backends_agent, colony, config, session, titling
 from . import workspace as workspace_mod
+from .agent_tools.owned_worker import run_owned_worker
 from .utils import (
     extract_marker_block, parse_bullets, run_internal_backend,
     strip_marker_block, take_recent_lines,
@@ -372,13 +373,13 @@ async def _maybe_compact_under_maintenance_lock(
     context_targets: tuple[tuple[str, str | None], ...] | None,
 ) -> None:
     """Run one compaction while no colony rewrite can race its snapshot."""
-    data = session.load_session(workspace_path, session_id)
+    data = await run_owned_worker(session.load_session, workspace_path, session_id)
     if data is None:
         return
     msgs = data.get("messages", [])
     model_window = _context_window_tokens(context_targets)
     trigger = (
-        _context_trigger(data, workspace_path, model_window)
+        await run_owned_worker(_context_trigger, data, workspace_path, model_window)
         if model_window is not None else None
     )
     if trigger is not None:
@@ -478,62 +479,12 @@ async def _maybe_compact_under_maintenance_lock(
                 + new_summary
             )
     async with workspace_mod.get_lock(workspace_path):
-        # Never let a stale title overwrite a rename.
-        latest = session.load_session(workspace_path, session_id)
-        if latest is None:
+        colony_count = await run_owned_worker(
+            _apply_compaction, workspace_path, session_id, data, covered_count,
+            new_summary, new_long_term, new_title, oversized_first, keep_recent,
+        )
+        if colony_count is None:
             return
-        # Appended turns only trim the covered prefix; an edited prefix is a
-        # different snapshot the compactor never saw.
-        if (
-            latest["messages"][:covered_count] != data["messages"][:covered_count]
-            or latest.get("summary") != data.get("summary")
-            or latest.get("long_term") != data.get("long_term")
-        ):
-            logger.warning(
-                "Skipping stale compaction for session %s; history or memory changed",
-                session_id,
-            )
-            return
-        title_to_save = new_title
-        if latest.get("name") != data.get("name"):
-            title_to_save = None
-            logger.debug(
-                "Skipping stale compaction title for session %s", session_id,
-            )
-        if oversized_first is None:
-            session.set_summary(
-                workspace_path, session_id, new_summary,
-                keep_recent=keep_recent,
-                long_term_rewrite=new_long_term,
-                title=title_to_save,
-                # Trim only the prefix actually sent; later messages stay raw.
-                summarized_count=covered_count,
-            )
-        else:
-            original_content, consumed_chars = oversized_first
-            messages = latest.get("messages")
-            if (
-                not isinstance(messages, list)
-                or not messages
-                or not isinstance(messages[0], dict)
-                or messages[0].get("content") != original_content
-            ):
-                # Concurrent write won; keep raw over stale suffix.
-                logger.warning(
-                    "Skipping stale oversized-message compaction for "
-                    "session %s", session_id,
-                )
-                return
-            # One durable write; no raw entry is trimmed.
-            session.set_summary(
-                workspace_path, session_id, new_summary,
-                keep_recent=KEEP_RECENT_AFTER_COMPACT,
-                long_term_rewrite=new_long_term,
-                title=title_to_save,
-                summarized_count=0,
-                first_message_tail=original_content[consumed_chars:],
-            )
-        colony_count = colony.bump_compact_count(workspace_path)
     long_term_count = len(new_long_term) if new_long_term is not None else "?"
     logger.info(
         "Session %s compacted, summary %d chars, long_term %s items",
@@ -543,6 +494,70 @@ async def _maybe_compact_under_maintenance_lock(
         workspace_path, colony_count, summary_model,
         backend_name=backend_name,
     )
+
+
+def _apply_compaction(
+    workspace_path: str, session_id: str, data: dict, covered_count: int,
+    new_summary: str, new_long_term: list[str] | None, new_title: str | None,
+    oversized_first: tuple[str, int] | None, keep_recent: int,
+) -> int | None:
+    """Recheck and persist a snapshot while its caller retains the writer lock."""
+    # Never let a stale title overwrite a rename.
+    latest = session.load_session(workspace_path, session_id)
+    if latest is None:
+        return None
+    # Appended turns only trim the covered prefix; an edited prefix is a
+    # different snapshot the compactor never saw.
+    if (
+        latest["messages"][:covered_count] != data["messages"][:covered_count]
+        or latest.get("summary") != data.get("summary")
+        or latest.get("long_term") != data.get("long_term")
+    ):
+        logger.warning(
+            "Skipping stale compaction for session %s; history or memory changed",
+            session_id,
+        )
+        return None
+    title_to_save = new_title
+    if latest.get("name") != data.get("name"):
+        title_to_save = None
+        logger.debug(
+            "Skipping stale compaction title for session %s", session_id,
+        )
+    if oversized_first is None:
+        session.set_summary(
+            workspace_path, session_id, new_summary,
+            keep_recent=keep_recent,
+            long_term_rewrite=new_long_term,
+            title=title_to_save,
+            # Trim only the prefix actually sent; later messages stay raw.
+            summarized_count=covered_count,
+        )
+    else:
+        original_content, consumed_chars = oversized_first
+        messages = latest.get("messages")
+        if (
+            not isinstance(messages, list)
+            or not messages
+            or not isinstance(messages[0], dict)
+            or messages[0].get("content") != original_content
+        ):
+            # Concurrent write won; keep raw over stale suffix.
+            logger.warning(
+                "Skipping stale oversized-message compaction for "
+                "session %s", session_id,
+            )
+            return None
+        # One durable write; no raw entry is trimmed.
+        session.set_summary(
+            workspace_path, session_id, new_summary,
+            keep_recent=KEEP_RECENT_AFTER_COMPACT,
+            long_term_rewrite=new_long_term,
+            title=title_to_save,
+            summarized_count=0,
+            first_message_tail=original_content[consumed_chars:],
+        )
+    return colony.bump_compact_count(workspace_path)
 
 
 def _take_oldest_message_lines(messages: list[dict], budget: int) -> list[str]:
@@ -600,7 +615,9 @@ async def compact_session(
     (used by maybe_compact which loads the data to check the interval).
     """
     backend = backends_agent.get_backend(backend_name)
-    data = _preloaded_data or session.load_session(workspace_path, session_id)
+    data = _preloaded_data if _preloaded_data is not None else await run_owned_worker(
+        session.load_session, workspace_path, session_id,
+    )
     if data is None:
         return ("", None, None, 0)
     messages = data.get("messages", [])

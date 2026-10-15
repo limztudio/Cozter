@@ -28,6 +28,7 @@ from ..config import (
     DEFAULT_RECENT_WORKSPACE_LIMIT,
 )
 from .. import schedules, session, workspace
+from ..agent_tools.owned_worker import run_owned_worker
 from ..utils import create_background_task, save_json_object, split_text_chunks, text_chunk_ranges
 from .base import (
     AttachmentInfo,
@@ -950,9 +951,9 @@ class SignalBot(BotPlatform):
                 result = await self._rpc_request(
                     "getAttachment", {"id": attachment_id, "groupId": group_id},
                 )
-                payload = _strip_attachment_whitespace(_attachment_payload(result))
-                data = _decode_attachment_payload(payload, self.max_upload_bytes)
-                write_bytes_atomically(local_path, data)
+                await run_owned_worker(
+                    _write_attachment_payload, local_path, result, self.max_upload_bytes,
+                )
 
         return AttachmentInfo(
             local_path,
@@ -2027,6 +2028,13 @@ def _decode_attachment_payload(payload: str, max_upload_bytes: int) -> bytes:
     if upload_size_exceeds_limit(len(data), max_upload_bytes):
         raise UploadTooLargeError(max_upload_bytes)
     return data
+
+
+def _write_attachment_payload(local_path: str, result: Any, max_upload_bytes: int) -> None:
+    """Normalize, decode and publish under the caller's upload ownership."""
+    payload = _strip_attachment_whitespace(_attachment_payload(result))
+    data = _decode_attachment_payload(payload, max_upload_bytes)
+    write_bytes_atomically(local_path, data)
 
 
 def _find_key(value: Any, key: str) -> Any:

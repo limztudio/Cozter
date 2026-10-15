@@ -32,6 +32,16 @@ class ApplyPatchLimitsTests(unittest.TestCase):
     def _run(self, workspace: str, patch: str) -> str:
         return asyncio.run(ApplyPatchTool().run(workspace, {"patch": patch}))
 
+    def test_new_file_with_long_valid_component_uses_short_temporary_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            name = "x" * 226 + ".txt"
+            patch = f"--- /dev/null\n+++ b/{name}\n@@ -0,0 +1 @@\n+content\n"
+            result = self._run(tmp, patch)
+            self.assertIn(": created (1 lines)", result)
+            with open(os.path.join(tmp, name), encoding="utf-8") as file_handle:
+                self.assertEqual(file_handle.read(), "content\n")
+            self.assertEqual(os.listdir(tmp), [name], "temporary files were not cleaned up")
+
     def _assert_zero_context_patch(self, original: str, expected: str) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "data.txt")

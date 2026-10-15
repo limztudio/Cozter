@@ -45,8 +45,9 @@ class _ScheduleBot(TestBot):
     async def _run_turn(
         self, _uid: str, _chat_id: str, text: str, *,
         session_id: str | None = None, queue_entry_id: str | None = None,
+        is_scheduled: bool = False,
     ) -> None:
-        self.ran.append(("scheduled" if session_id else "normal", text))
+        self.ran.append(("scheduled" if is_scheduled else "normal", text))
         if text == "active":
             self.foreground_started.set()
             await self.foreground_release.wait()

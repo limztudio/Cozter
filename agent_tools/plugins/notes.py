@@ -13,7 +13,14 @@ output.
 from __future__ import annotations
 
 import asyncio
+import errno
+import hashlib
 import os
+import sys
+import tempfile
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, ClassVar
 
@@ -71,11 +78,20 @@ class NotesTool(AgentTool):
         except ValueError as exc:
             return f"Error: {exc}"
 
-        if action == "clear":
-            return await run_owned_worker(self._clear, target)
         if action == "read":
             return await asyncio.to_thread(self._read, target)
-        return await run_owned_worker(self._append, target, args)
+        return await run_owned_worker(self._mutate, target, action, args)
+
+    def _mutate(self, target: str, action: str, args: dict) -> str:
+        # Own the complete transaction, including waiting for another CLI
+        # process, until it settles even when our asyncio caller is cancelled.
+        try:
+            with _notes_transaction(target):
+                if action == "clear":
+                    return self._clear(target)
+                return self._append(target, args)
+        except OSError as exc:
+            return f"Error: could not lock notes: {exc}"
 
     def _append(self, target: str, args: dict) -> str:
         text = args.get("text")
@@ -166,6 +182,53 @@ def _read_notes_text(target: str) -> str:
     except FileNotFoundError:
         return ""
     return raw.decode("utf-8", errors="replace")
+
+
+@contextmanager
+def _notes_transaction(target: str) -> Iterator[None]:
+    """Serialize read/modify/replace and clear across threads and processes.
+
+    A separate stable inode is required because publication replaces notes.md.
+    Never unlink the lock file: a waiter may still own its old inode. Resolve
+    aliases to the same key, including when clear removes a symlink entry.
+    """
+    canonical = os.path.normcase(os.path.realpath(target))
+    key = hashlib.sha256(os.fsencode(canonical)).hexdigest()
+    directory = os.path.join(tempfile.gettempdir(), "cozter-notes-locks")
+    os.makedirs(directory, exist_ok=True)
+    descriptor = os.open(os.path.join(directory, key + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            # Windows byte locks need a real byte and remain owned by this
+            # descriptor. Nonblocking retries avoid LK_LOCK's ten-retry cap.
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            while True:
+                try:
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                        raise
+                    time.sleep(0.01)
+            try:
+                yield
+            finally:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
 
 
 def _fit_entries(parts: list[str]) -> str:

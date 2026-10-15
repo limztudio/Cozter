@@ -69,12 +69,29 @@ def _iter_session_files(sessions_dir: str):
         yield filename, path, filename[:-len(".json")]
 
 
-def _file_signature(path: str) -> tuple[int, int, int] | None:
+def _stat_signature(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    # Windows 3.12 can report creation time through stat().st_ctime_ns while
+    # fstat().st_ctime_ns reports change time. Use the explicitly named birth
+    # time when available so path and handle snapshots describe the same data.
+    # Older Windows versions expose birth time as ctime; POSIX keeps its real
+    # change time. File identity also detects equal-size atomic replacements
+    # whose modification timestamp was preserved.
+    change_time = (
+        getattr(metadata, "st_birthtime_ns", metadata.st_ctime_ns)
+        if os.name == "nt" else metadata.st_ctime_ns
+    )
+    return (
+        metadata.st_mtime_ns, change_time, metadata.st_size,
+        metadata.st_dev, metadata.st_ino,
+    )
+
+
+def _file_signature(path: str) -> tuple[int, int, int, int, int] | None:
     try:
         metadata = os.stat(path)
     except OSError:
         return None
-    return metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size
+    return _stat_signature(metadata)
 
 
 def _load_session_metadata(sessions_dir: str, needle: str | None = None) -> list[dict]:
@@ -160,9 +177,7 @@ def _load_session_file(path: str, session_id: str, *, capture_signature: bool = 
         return None
     if not isinstance(raw, dict) or raw.get("id") != session_id:
         return None
-    if before is not None and after is not None and (
-        before.st_mtime_ns, before.st_ctime_ns, before.st_size
-    ) != (after.st_mtime_ns, after.st_ctime_ns, after.st_size):
+    if before is not None and after is not None and _stat_signature(before) != _stat_signature(after):
         raise _MemoryChangedError
 
     name = raw.get("name")
@@ -196,7 +211,7 @@ def _load_session_file(path: str, session_id: str, *, capture_signature: bool = 
         "messages": messages,
     }
     if after is not None:
-        result["_signature"] = (after.st_mtime_ns, after.st_ctime_ns, after.st_size)
+        result["_signature"] = _stat_signature(after)
     return result
 
 

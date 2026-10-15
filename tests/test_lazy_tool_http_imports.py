@@ -13,7 +13,10 @@ import unittest
 class LazyToolHttpImportTests(unittest.TestCase):
     def run_fresh(self, source):
         env = os.environ.copy()
-        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        env["PYTHONPATH"] = os.pathsep.join(
+            entry for entry in (str(Path(__file__).resolve().parents[2]),
+                                env.get("PYTHONPATH", "")) if entry
+        )
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run(
                 [sys.executable, "-B", "-c", textwrap.dedent(source)],

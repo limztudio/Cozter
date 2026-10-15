@@ -11,6 +11,7 @@ import logging
 
 from . import backends_agent, session
 from . import workspace as workspace_mod
+from .agent_tools.owned_worker import run_owned_worker
 from .utils import run_internal_backend
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ async def maybe_auto_title(
         return
     _in_flight.add(key)
     try:
-        data = session.load_session(workspace_path, session_id)
+        data = await run_owned_worker(session.load_session, workspace_path, session_id)
         if data is None:
             return
         if not session.is_default_name(data.get("name")):
@@ -87,21 +88,25 @@ async def maybe_auto_title(
         if not title:
             return
         async with workspace_mod.get_lock(workspace_path):
-            # A rename may land mid-request; re-check under the writer lock.
-            latest = session.load_session(workspace_path, session_id)
-            if latest is None or not session.is_default_name(
-                latest.get("name"),
+            if not await run_owned_worker(
+                _apply_auto_title, workspace_path, session_id, title,
             ):
-                logger.debug(
-                    "Skipping stale auto-title for session %s", session_id,
-                )
                 return
-            session.set_session_name(workspace_path, session_id, title)
         logger.info("Session %s auto-titled: %s", session_id, title)
     except Exception:
         logger.warning("Auto-title failed", exc_info=True)
     finally:
         _in_flight.discard(key)
+
+
+def _apply_auto_title(workspace_path: str, session_id: str, title: str) -> bool:
+    """Recheck a concurrent rename and persist without releasing writer ownership."""
+    latest = session.load_session(workspace_path, session_id)
+    if latest is None or not session.is_default_name(latest.get("name")):
+        logger.debug("Skipping stale auto-title for session %s", session_id)
+        return False
+    session.set_session_name(workspace_path, session_id, title)
+    return True
 
 
 async def generate(
@@ -114,7 +119,9 @@ async def generate(
 ) -> str | None:
     """Run a small backend call to title a session. Returns None on failure."""
     backend = backends_agent.get_backend(backend_name)
-    data = _preloaded_data or session.load_session(workspace_path, session_id)
+    data = _preloaded_data if _preloaded_data is not None else await run_owned_worker(
+        session.load_session, workspace_path, session_id,
+    )
     if data is None:
         return None
 

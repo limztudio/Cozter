@@ -1,9 +1,13 @@
 """Offline regressions for Signal attachment whitespace normalization."""
 
+import asyncio
 import base64
 import binascii
 import re
+import tempfile
+import threading
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from Cozter.backends_bot import signal
@@ -67,6 +71,85 @@ class SignalAttachmentWhitespaceTests(unittest.TestCase):
                 normalized = signal._strip_attachment_whitespace(payload)
                 self.assertEqual(normalized, "")
                 self.assertEqual(signal._decode_attachment_payload(normalized, 0), b"")
+
+
+class SignalAttachmentWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_decode_and_atomic_publish_yield_loop_and_preserve_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bot = signal.SignalBot([], jsonrpc_socket="tcp://127.0.0.1:7583")
+            bot._rpc_request = mock.AsyncMock(return_value={"data": " YW Jj\n"})
+            started = asyncio.Event()
+            release = threading.Event()
+            loop = asyncio.get_running_loop()
+            main_thread = threading.get_ident()
+            threads = []
+            decode = signal._decode_attachment_payload
+
+            def blocked_decode(*args):
+                threads.append(threading.get_ident())
+                loop.call_soon_threadsafe(started.set)
+                if not release.wait(5):
+                    raise AssertionError("attachment decode never released")
+                return decode(*args)
+
+            with mock.patch.object(signal, "_decode_attachment_payload", blocked_decode):
+                task = asyncio.create_task(bot._materialize_attachment(
+                    {"id": "fixture", "filename": "fixture.bin"}, "group", directory, "caption",
+                ))
+                try:
+                    await asyncio.wait_for(started.wait(), 2)
+                    self.assertFalse(task.done())
+                    self.assertNotEqual(threads, [main_thread])
+                    release.set()
+                    attachment = await asyncio.wait_for(task, 2)
+                finally:
+                    release.set()
+                    await asyncio.gather(task, return_exceptions=True)
+            self.assertIsNotNone(attachment)
+            self.assertEqual(Path(attachment.local_path).read_bytes(), b"abc")
+
+    async def test_repeated_cancel_settles_writer_before_reservation_cleanup(self):
+        for late_failure in (False, True):
+            with self.subTest(late_failure=late_failure), tempfile.TemporaryDirectory() as directory:
+                bot = signal.SignalBot([], jsonrpc_socket="tcp://127.0.0.1:7583")
+                bot._rpc_request = mock.AsyncMock(return_value={"data": "YWJj"})
+                started = asyncio.Event()
+                release = threading.Event()
+                settled = threading.Event()
+                loop = asyncio.get_running_loop()
+                write = signal.write_bytes_atomically
+
+                def blocked_write(*args):
+                    loop.call_soon_threadsafe(started.set)
+                    try:
+                        if not release.wait(5):
+                            raise AssertionError("attachment writer never released")
+                        write(*args)
+                        if late_failure:
+                            raise OSError("late attachment publish failure")
+                    finally:
+                        settled.set()
+
+                with mock.patch.object(signal, "write_bytes_atomically", blocked_write):
+                    task = asyncio.create_task(bot._materialize_attachment(
+                        {"id": "fixture", "filename": "fixture.bin"}, "group", directory, "",
+                    ))
+                    try:
+                        await asyncio.wait_for(started.wait(), 2)
+                        task.cancel()
+                        await asyncio.sleep(0)
+                        task.cancel()
+                        await asyncio.sleep(0)
+                        self.assertFalse(task.done())
+                        self.assertFalse(settled.is_set())
+                        release.set()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await task
+                    finally:
+                        release.set()
+                        await asyncio.gather(task, return_exceptions=True)
+                self.assertTrue(settled.is_set())
+                self.assertEqual(list(Path(directory).iterdir()), [])
 
 
 if __name__ == "__main__":

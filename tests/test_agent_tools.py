@@ -738,8 +738,9 @@ class ReadFileToolTests(unittest.TestCase):
 
                 self.assertEqual(
                     result,
-                    "abcdefgh\n… [truncated at 8 characters; use offset"
-                    " and limit to read another range; never treat"
+                    "abcdefgh\n… [truncated file preview at 8 characters;"
+                    " continue with offset=0, char_offset=8; keep"
+                    " offset/limit unchanged; never treat"
                     " this preview as full content; say PARTIAL + remainder"
                     " when work is left]",
                 )
@@ -764,7 +765,7 @@ class ReadFileToolTests(unittest.TestCase):
                     )
 
                 self.assertTrue(result.startswith("x" * 8), result)
-                self.assertIn("truncated at 8 characters", result)
+                self.assertIn("truncated file preview at 8 characters", result)
 
         asyncio.run(run())
 

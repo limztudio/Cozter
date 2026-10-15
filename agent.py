@@ -26,6 +26,7 @@ from . import (
 )
 from . import workspace as workspace_mod
 from .agent_tools.base import copy_file_atomically
+from .agent_tools.owned_worker import run_owned_worker
 from .backends_agent.base import (
     DOC_FOLLOWING_RULE, NO_RESPONSE_TEXT, WHOLE_SCOPE_RULE, AgentResult,
     ChatEvent, ContinuationCheckpoint, ContinuationReason, ContinuationReport,
@@ -424,11 +425,11 @@ def _capability_hint(
 
 
 def _is_collaborative_turn(
-    workspace_path: str, *, explicit_session: bool,
+    workspace_path: str, *, is_scheduled: bool,
 ) -> bool:
     """Return whether this turn may pause for a live user answer."""
     return (
-        not explicit_session
+        not is_scheduled
         and workspace_mod.get_interaction_style(workspace_path)
         == "collaborative"
     )
@@ -2555,6 +2556,7 @@ async def run(
     on_session: Callable[[str], Awaitable[None]] | None = None,
     execution_id: str | None = None,
     original_request: str | None = None,
+    is_scheduled: bool = False,
 ) -> AgentResult:
     """Run a turn, serialized per workspace.
 
@@ -2571,6 +2573,7 @@ async def run(
     PID for stuck-wait attribution. It is never given prompts or args.
     *on_session* is awaited after routing and before agent work so callers
     can durably pin the conversation used by a recoverable queued request.
+    *is_scheduled* controls unattended policy independently of a pinned session.
     """
     async with (
         workspace_mod.get_run_lock(workspace_path),
@@ -2593,6 +2596,7 @@ async def run(
             session_id=session_id,
             on_process=on_process,
             on_session=on_session,
+            is_scheduled=is_scheduled,
         )
 
 
@@ -2762,10 +2766,12 @@ async def launch_detached(
                 f"Started detached {backend.name} task {task_id}. "
                 "Cozter will deliver its completion here.",
             )
-            async with workspace_mod.get_lock(workspace_path):
-                if not _log_to_session(workspace_path, session_id, prompt, started):
-                    raise RuntimeError("Could not log the detached task's session")
-            # Deliver cancellation requested during synchronous session logging
+            if not await _persist_detached_session_write(
+                workspace_path,
+                lambda: _log_to_session(workspace_path, session_id, prompt, started),
+            ):
+                raise RuntimeError("Could not log the detached task's session")
+            # Deliver cancellation requested during session logging
             # before the task identifier leaves this cleanup owner's scope.
             await asyncio.sleep(0)
             return DetachedTaskLaunch(
@@ -2787,13 +2793,28 @@ async def log_detached_task_completion(
     if not session_id:
         return
     try:
-        async with workspace_mod.get_lock(workspace_path):
-            session.append_messages(workspace_path, session_id, [{
+        await _persist_detached_session_write(
+            workspace_path,
+            lambda: session.append_messages(workspace_path, session_id, [{
                 "role": "assistant",
                 "content": text,
-            }])
+            }]) > 0,
+        )
     except Exception:
         logger.error("Failed to log detached task completion", exc_info=True)
+
+
+async def _persist_detached_session_write(
+    workspace_path: str, write: Callable[[], bool],
+) -> bool:
+    """Keep detached transcript I/O off-loop and own an admitted write to completion.
+
+    Waiting for the session lock remains cancellable before a write starts.
+    Once admitted, cancellation must settle the worker while retaining the lock,
+    before launch cleanup can stop the provider or another writer reads state.
+    """
+    async with workspace_mod.get_lock(workspace_path):
+        return await run_owned_worker(write)
 
 
 def _track_session_write_task(
@@ -3054,6 +3075,7 @@ async def _run_turn(
     session_id: str | None = None,
     on_process: Callable[[Any], None] | None = None,
     on_session: Callable[[str], Awaitable[None]] | None = None,
+    is_scheduled: bool = False,
 ) -> AgentResult:
     """Run the selected agent backend with session history prepended.
 
@@ -3061,8 +3083,9 @@ async def _run_turn(
     default backend is used. The workspace's configured backend should be
     passed in by the caller.
 
-    session_id pins the run to a specific session (used for ephemeral
-    schedule sessions). When None, the user's last session is resumed if
+    session_id pins the run to a specific session, including resumed interactive
+    jobs and ephemeral scheduled sessions. is_scheduled selects unattended
+    policy independently of that routing choice. When None, the user's last session is resumed if
     available; otherwise ``select_or_create_session`` routes the prompt to
     an existing session or creates a new one when none is a good fit.
 
@@ -3101,6 +3124,7 @@ async def _run_turn(
                     session_id=session_id,
                     on_process=on_process,
                     on_session=on_session,
+                    is_scheduled=is_scheduled,
                 )
         except TimeoutError:
             if not timer.expired():
@@ -3171,6 +3195,7 @@ async def _run_turn_impl(
     session_id: str | None = None,
     on_process: Callable[[Any], None] | None = None,
     on_session: Callable[[str], Awaitable[None]] | None = None,
+    is_scheduled: bool = False,
 ) -> AgentResult:
     """Drive the backend phases of one turn, updating *turn* as it goes.
 
@@ -3230,7 +3255,7 @@ async def _run_turn_impl(
 
     # Scheduled/ephemeral turns run autonomous.
     collaborative = _is_collaborative_turn(
-        workspace_path, explicit_session=explicit_session,
+        workspace_path, is_scheduled=is_scheduled,
     )
 
     # Prepended context-block budget.
@@ -3274,7 +3299,7 @@ async def _run_turn_impl(
             _build_backend_prompt(
                 backend, phase_prompt,
                 collaborative=collaborative,
-                allow_detached_requests=not explicit_session,
+                allow_detached_requests=not is_scheduled,
             ),
             model, approval,
             effort=effort,

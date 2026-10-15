@@ -948,7 +948,9 @@ def _new_text_temp_file(parent: str, target_path: str) -> tuple[int, str]:
     0666 masked by the process umask, so reserve our random temporary name
     with that same mode before it becomes the final hard-linked file.
     """
-    prefix = f".{os.path.basename(target_path) or 'new'}"
+    # A valid target component may already approach NAME_MAX. Including its
+    # basename here would make our temporary component exceed that limit.
+    prefix = ".cozter"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     for _ in range(100):
         tmp_path = os.path.join(parent, f"{prefix}.{uuid.uuid4().hex}.tmp")

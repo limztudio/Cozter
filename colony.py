@@ -481,6 +481,13 @@ async def _consolidate_inner(
     if new_colony is None:
         logger.warning("Colony output missing [COLONY] block; aborting")
         return False
+    new_colony = list(dict.fromkeys(normalize_string_list(new_colony)))
+    if len(new_colony) > COLONY_CAP:
+        logger.warning(
+            "Colony replacement exceeds cap (%d > %d); preserving all memory",
+            len(new_colony), COLONY_CAP,
+        )
+        return False
 
     # Ignore model-invented sessions.
     included_set = set(included)
@@ -489,9 +496,14 @@ async def _consolidate_inner(
     }
     if colony_truncated or len(fully_shown) != len(inputs):
         # Partial evidence cannot retire unseen shared facts reliably.
-        new_colony = session.merge_partial_memory(
-            existing_colony, new_colony, COLONY_CAP,
-        )
+        merged = list(dict.fromkeys([*existing_colony, *new_colony]))
+        if len(merged) > COLONY_CAP:
+            logger.warning(
+                "Partial colony replacement exceeds cap (%d > %d); preserving all memory",
+                len(merged), COLONY_CAP,
+            )
+            return False
+        new_colony = merged
 
     # Re-check under the writer lock; edits/deletes since make this stale.
     async with workspace_mod.get_lock(workspace_path):
@@ -532,6 +544,10 @@ def _apply_consolidation(
     per_session: dict[str, list[str]], fully_shown: set[str],
 ) -> bool:
     """Recheck and save the complete writer transaction while its lock is held."""
+    new_colony = list(dict.fromkeys(normalize_string_list(new_colony)))
+    if len(new_colony) > COLONY_CAP:
+        logger.warning("Colony transaction exceeds cap; preserving all memory")
+        return False
     latest_memory = {
         data["id"]: data["long_term"]
         for data in session.list_session_memory(workspace_path)

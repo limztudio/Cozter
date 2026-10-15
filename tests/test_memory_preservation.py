@@ -43,8 +43,11 @@ class PartialMemoryPreservationTests(unittest.IsolatedAsyncioTestCase):
                 "[COLONY]\n- New shared fact.\n[/COLONY]\n"
                 f"[SESSION:{data['id']}]\n- New local fact.\n[/SESSION]"
             )
-            with mock.patch.object(colony, "run_internal_backend", new=mock.AsyncMock(return_value=output)):
-                self.assertTrue(await colony.consolidate(ws, backend_name="codex"))
+            with (
+                mock.patch.object(colony, "run_internal_backend", new=mock.AsyncMock(return_value=output)),
+                self.assertLogs(colony.logger, level="WARNING"),
+            ):
+                self.assertFalse(await colony.consolidate(ws, backend_name="codex"))
             self.assertEqual(colony.get_items(ws), shared)
             self.assertEqual(session.load_session(ws, data["id"])["long_term"], local)
 

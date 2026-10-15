@@ -51,9 +51,12 @@ def _validated_read_bound(
 
 class ReadFileTool(AgentTool):
     name = "read_file"
+    max_result_chars = 32 * 1024
     description = (
-        "Read a UTF-8 text file (128 KiB/call; page remainder via"
-        " offset/limit). For image files (png/jpg/gif/webp/bmp), returns"
+        "Read a UTF-8 text file (up to 32K characters/call). offset skips"
+        " lines; limit bounds lines. Follow any returned char_offset cursor"
+        " with the same offset/limit to recover even a long single line."
+        " For image files (png/jpg/gif/webp/bmp), returns"
         " verified dimensions/format/size instead of binary noise —"
         " vision-capable backends already receive the pixels natively."
     )
@@ -66,9 +69,18 @@ class ReadFileTool(AgentTool):
             "limit": {
                 "type": "integer",
             },
+            "char_offset": {
+                "type": "integer", "minimum": 0,
+                "description": "Characters already read after the line offset; keep offset/limit unchanged when paging.",
+            },
         },
         ["path"],
     )
+
+    def __init__(self, result_budget: int = 32 * 1024) -> None:
+        # Batch callers give each file its final budget before reading, so
+        # neither their formatter nor the dispatcher can discard its cursor.
+        self._result_budget = max(256, min(result_budget, 32 * 1024))
 
     async def run(self, workspace_path: str, args: dict) -> str:
         try:
@@ -101,10 +113,18 @@ class ReadFileTool(AgentTool):
             return f"Error: {exc}"
         if count is not None and count < 0:
             return "Error: 'limit' must be >= 0"
+        try:
+            position = _validated_read_bound(args.get("char_offset"), "char_offset", default=0)
+            assert position is not None
+        except ValueError as exc:
+            return f"Error: {exc}"
+        if position < 0:
+            return "Error: 'char_offset' must be >= 0"
 
         try:
             text, truncated = await asyncio.to_thread(
-                _read_text_range, target, start, count,
+                _read_text_range, target, start, count, position,
+                min(_READ_FILE_MAX_CHARS, self._result_budget),
             )
         except _OffsetScanLimitExceededError:
             return (
@@ -116,12 +136,20 @@ class ReadFileTool(AgentTool):
             return f"Read failed: {exc}"
 
         if truncated:
-            text += (
-                f"\n… [truncated at {_READ_FILE_MAX_CHARS} characters;"
-                " use offset and limit to read another range; never treat"
-                " this preview as full content; say PARTIAL + remainder"
-                " when work is left]"
-            )
+            def marker(length: int) -> str:
+                return (
+                    f"\n… [truncated file preview at {length} characters;"
+                    f" continue with offset={start}, char_offset={position + length}"
+                    "; keep offset/limit unchanged; never treat"
+                    " this preview as full content; say PARTIAL + remainder"
+                    " when work is left]"
+                )
+
+            suffix = marker(len(text))
+            while len(text) + len(suffix) > self._result_budget:
+                text = text[:max(0, self._result_budget - len(suffix))]
+                suffix = marker(len(text))
+            text += suffix
         return text
 
     def summarize(self, args: dict) -> str:
@@ -153,7 +181,8 @@ def _describe_image_file(target: str, shown_path: object) -> str:
 
 
 def _read_text_range(
-    path: str, start: int, count: int | None,
+    path: str, start: int, count: int | None, char_offset: int = 0,
+    max_chars: int | None = None,
 ) -> tuple[str, bool]:
     """Read one bounded text range without blocking the event loop.
 
@@ -163,20 +192,36 @@ def _read_text_range(
     """
     if count == 0:
         return "", False
+    if max_chars is None:
+        max_chars = _READ_FILE_MAX_CHARS
 
     with open(path, encoding="utf-8", errors="replace") as file_handle:
         if not _skip_lines(file_handle, start):
             return "", False
 
+        if char_offset > _READ_FILE_MAX_SKIP_CHARS:
+            raise _OffsetScanLimitExceededError
+        # Character cursors are relative to the original line range. Account
+        # for skipped newlines so paging cannot escape an explicit line limit.
+        while char_offset:
+            chunk = file_handle.read(min(_READ_FILE_SKIP_CHUNK_CHARS, char_offset))
+            if not chunk:
+                return "", False
+            char_offset -= len(chunk)
+            if count is not None:
+                count -= chunk.count("\n")
+                if count <= 0:
+                    return "", False
+
         if count is None:
-            text = file_handle.read(_READ_FILE_MAX_CHARS + 1)
+            text = file_handle.read(max_chars + 1)
             return (
-                text[:_READ_FILE_MAX_CHARS],
-                len(text) > _READ_FILE_MAX_CHARS,
+                text[:max_chars],
+                len(text) > max_chars,
             )
 
         chunks: list[str] = []
-        remaining = _READ_FILE_MAX_CHARS
+        remaining = max_chars
         for _ in range(count):
             if remaining == 0:
                 return "".join(chunks), bool(file_handle.read(1))

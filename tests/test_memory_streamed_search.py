@@ -1,10 +1,12 @@
 """Memory discovery pages retain ordering and counts without all transcripts."""
 
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
 import tracemalloc
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -123,6 +125,57 @@ class StreamedMemorySearchTests(unittest.IsolatedAsyncioTestCase):
                 return metadata
 
             with mock.patch.object(memory, "_load_session_metadata", side_effect=change_after_counting):
+                result = await memory.MemoryTool().run(tmp, {"action": "search", "query": "needle"})
+            self.assertTrue(result.startswith("Error: memory changed"), result)
+            self.assertNotIn("Found 1 match", result)
+
+    async def test_unchanged_transcript_with_distinct_creation_and_modification_times_is_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp, ".cozter", "sessions")
+            _write_session(directory, "aaaaaaaa1111", name="Timestamp fixture", summary="needle original")
+            path = directory / "aaaaaaaa1111.json"
+            # Keep modification and creation times distinct. Simulate the
+            # observed Windows 3.12 handle/path ctime disagreement explicitly
+            # so the regression does not depend on filesystem clock ticks.
+            os.utime(path, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+            original_fstat = os.fstat
+            path_ctime = path.stat().st_ctime_ns
+
+            def handle_stat(descriptor):
+                metadata = original_fstat(descriptor)
+                if os.name != "nt":
+                    return metadata
+                return SimpleNamespace(
+                    st_mtime_ns=metadata.st_mtime_ns,
+                    st_ctime_ns=path_ctime + 1,
+                    st_birthtime_ns=getattr(metadata, "st_birthtime_ns", path_ctime),
+                    st_size=metadata.st_size, st_dev=metadata.st_dev, st_ino=metadata.st_ino,
+                )
+
+            with mock.patch.object(memory.os, "fstat", side_effect=handle_stat):
+                searched = await memory.MemoryTool().run(tmp, {"action": "search", "query": "needle"})
+                self.assertIn("Found 1 match(es)", searched)
+                self.assertIn("needle original", searched)
+                read = await memory.MemoryTool().run(tmp, {"action": "read", "session": "Timestamp fixture"})
+                self.assertIn("Session: Timestamp fixture", read)
+
+    async def test_same_size_atomic_replacement_with_preserved_mtime_requires_fresh_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp, ".cozter", "sessions")
+            _write_session(directory, "aaaaaaaa1111", summary="needle old")
+            path = directory / "aaaaaaaa1111.json"
+            original = memory._load_session_metadata
+
+            def replace_after_counting(*args):
+                metadata = original(*args)
+                stamp = path.stat()
+                replacement = path.with_suffix(".tmp")
+                replacement.write_text(path.read_text(encoding="utf-8").replace("needle old", "needle new"), encoding="utf-8")
+                os.utime(replacement, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                os.replace(replacement, path)
+                return metadata
+
+            with mock.patch.object(memory, "_load_session_metadata", side_effect=replace_after_counting):
                 result = await memory.MemoryTool().run(tmp, {"action": "search", "query": "needle"})
             self.assertTrue(result.startswith("Error: memory changed"), result)
             self.assertNotIn("Found 1 match", result)

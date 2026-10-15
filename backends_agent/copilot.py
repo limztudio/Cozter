@@ -24,12 +24,16 @@ the authenticated account's model selector instead.
 """
 
 import asyncio
+import codecs
+from collections.abc import Iterator
 import json
 import logging
 import re
 import os
 import queue
+import select
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -326,11 +330,9 @@ class CopilotBackend(Backend):
             logger.debug("copilot not on PATH; model picker is auto-only")
             return None
         prefix = executable_command(self.executable)
-        # Both cmd shims and direct Node loaders can own a native CLI child.
-        # Catalog-only launches own all their descendants on Windows.
-        owns_windows_tree = os.name == "nt"
-
         proc: subprocess.Popen[str] | None = None
+        reader: threading.Thread | None = None
+        reader_stop = threading.Event()
         isolated_home: str | None = None
         try:
             isolated_home = _create_isolated_copilot_home()
@@ -355,6 +357,9 @@ class CopilotBackend(Backend):
                 errors="replace",
                 cwd=workspace_path,
                 env=env,
+                # Retain group ownership even if the catalog parent exits
+                # before a descendant releases the captured stdout pipe.
+                start_new_session=os.name != "nt",
             )
             if proc.stdout is None:
                 logger.debug("copilot ACP started without stdout")
@@ -364,12 +369,13 @@ class CopilotBackend(Backend):
             messages: queue.Queue[str | None] = queue.Queue(
                 maxsize=_MAX_ACP_MESSAGES_PER_REQUEST,
             )
-            reader = threading.Thread(
+            pending_reader = threading.Thread(
                 target=_read_acp_stdout,
-                args=(proc.stdout, messages),
+                args=(proc.stdout, messages, reader_stop),
                 daemon=True,
             )
-            reader.start()
+            pending_reader.start()
+            reader = pending_reader
             deadline = time.monotonic() + _MODEL_DISCOVERY_TIMEOUT_SEC
 
             initialized = _acp_request(
@@ -428,7 +434,9 @@ class CopilotBackend(Backend):
         finally:
             try:
                 if proc is not None:
-                    _stop_acp_process(proc, kill_tree=owns_windows_tree)
+                    _stop_acp_process(
+                        proc, kill_tree=True, reader=reader, reader_stop=reader_stop,
+                    )
             finally:
                 if isolated_home is not None:
                     _remove_isolated_copilot_home(isolated_home)
@@ -773,20 +781,51 @@ def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
     return ("auto", *models) if models or "auto" in seen else ()
 
 
+def _poll_acp_lines(stdout: object, stop: threading.Event) -> Iterator[str]:
+    """Read POSIX pipes without holding a buffered readline lock indefinitely."""
+    try:
+        fd = getattr(stdout, "fileno")()
+    except (AttributeError, OSError, ValueError):
+        # In-memory streams used by offline protocol fixtures are finite.
+        readline = getattr(stdout, "readline", None)
+        if callable(readline):
+            yield from iter(lambda: readline(_MAX_ACP_LINE_CHARS + 1), "")
+        return
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    pending = ""
+    while not stop.is_set():
+        ready, _, _ = select.select([fd], [], [], 0.1)
+        if not ready:
+            continue
+        data = os.read(fd, 64 * 1024)
+        pending += decoder.decode(data, final=not data)
+        while "\n" in pending:
+            line, pending = pending.split("\n", 1)
+            yield line + "\n"
+        if len(pending) > _MAX_ACP_LINE_CHARS:
+            yield pending
+            return
+        if not data:
+            if pending:
+                yield pending
+            return
+
+
 def _read_acp_stdout(
     stdout: object, messages: queue.Queue[str | None],
+    stop: threading.Event | None = None,
 ) -> None:
     """Move ACP's line-delimited stdout into a timeout-capable queue."""
     # Loosely typed so tests can stub the stream.
     try:
-        readline = getattr(stdout, "readline", None)
-        if not callable(readline):
-            return
-        while True:
-            try:
-                line = readline(_MAX_ACP_LINE_CHARS + 1)
-            except (OSError, ValueError):
+        if os.name != "nt" and stop is not None:
+            lines = _poll_acp_lines(stdout, stop)
+        else:
+            readline = getattr(stdout, "readline", None)
+            if not callable(readline):
                 return
+            lines = iter(lambda: readline(_MAX_ACP_LINE_CHARS + 1), "")
+        for line in lines:
             if not line:
                 return
             if isinstance(line, str):
@@ -801,7 +840,16 @@ def _read_acp_stdout(
                 except queue.Full:
                     logger.debug("copilot ACP stdout queue exceeded its limit")
                     return
+    except (OSError, ValueError):
+        return
     finally:
+        if stop is not None:
+            # Only the reader closes its buffered stream. Closing it from the
+            # cleanup thread can otherwise wait forever for readline's lock.
+            try:
+                getattr(stdout, "close")()
+            except (AttributeError, OSError, ValueError):
+                pass
         # EOF fails fast instead of waiting out the discovery timeout.
         try:
             messages.put_nowait(None)
@@ -923,6 +971,8 @@ def _close_acp_session_if_supported(
 
 def _stop_acp_process(
     proc: subprocess.Popen[str], *, kill_tree: bool = False,
+    reader: threading.Thread | None = None,
+    reader_stop: threading.Event | None = None,
 ) -> None:
     """Close and terminate a short-lived catalog-only ACP process."""
     if proc.stdin is not None:
@@ -931,8 +981,15 @@ def _stop_acp_process(
         except OSError:
             pass
     if kill_tree:
-        # Windows cmd shims and Node loaders may own a native CLI child.
-        terminate_windows_process_tree(proc.pid)
+        if os.name == "nt":
+            # Windows cmd shims and Node loaders may own a native CLI child.
+            terminate_windows_process_tree(proc.pid)
+        else:
+            try:
+                if proc.pid != getattr(os, "getpgid")(0):
+                    getattr(os, "killpg")(proc.pid, getattr(signal, "SIGKILL"))
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
     try:
         if proc.poll() is None:
             proc.terminate()
@@ -943,7 +1000,14 @@ def _stop_acp_process(
             proc.wait(timeout=2)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    for stream in (proc.stdout, proc.stderr):
+    if reader_stop is not None:
+        reader_stop.set()
+    if reader is not None:
+        reader.join(timeout=2)
+    # A Windows descendant outside the original tree can retain stdout. Its
+    # daemon reader owns closure; never acquire its buffered lock here.
+    streams = (proc.stderr,) if reader is not None else (proc.stdout, proc.stderr)
+    for stream in streams:
         if stream is not None:
             try:
                 stream.close()

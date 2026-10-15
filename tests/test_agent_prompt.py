@@ -130,18 +130,18 @@ class PromptPolicyTests(unittest.TestCase):
         )
         self.assertIn("TARGETWORD deployment facts", out)
 
-    def test_explicit_session_turn_is_autonomous(self) -> None:
+    def test_scheduled_turn_is_autonomous(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace.set_interaction_style(tmp, "collaborative")
 
             self.assertTrue(
                 agent._is_collaborative_turn(
-                    tmp, explicit_session=False,
+                    tmp, is_scheduled=False,
                 ),
             )
             self.assertFalse(
                 agent._is_collaborative_turn(
-                    tmp, explicit_session=True,
+                    tmp, is_scheduled=True,
                 ),
             )
 

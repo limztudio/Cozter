@@ -625,9 +625,11 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[3], "Later request")
         self.assertEqual(self.bot._read_queue_file(), {})
 
-    async def test_scheduled_missing_workspace_pauses_and_resumes_before_backlog_after_open(self):
+    async def test_scheduled_missing_workspace_pauses_and_resumes_after_origin_is_restored(self):
         original = "Finish scheduled repairs and all release verification"
         entry = await self.enqueue(original, ephemeral=True)
+        origin = os.path.join(self.tmp, "temporarily-unavailable-origin")
+        await self.bot._save_job_checkpoint("u1", entry, {"workspace_path": origin})
         await self.enqueue("Later request")
         with (mock.patch.object(self.bot, "_current_workspace_for_turn", mock.AsyncMock(return_value=None)),
               mock.patch.object(agent, "run", mock.AsyncMock()) as run):
@@ -642,6 +644,7 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
 
         reopened_ws = self.enterContext(tempfile.TemporaryDirectory())
         self.bot.workspace_path = reopened_ws
+        os.mkdir(origin)
         calls = []
 
         async def resumed(prompt, ws, **kwargs):
@@ -651,17 +654,17 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
         with (mock.patch.object(agent, "run", resumed),
               mock.patch.object(self.bot, "_start_queue_drain")):
             await asyncio.wait_for(self.bot._dispatch_ai(
-                self.bot.make_context("u1", "chat"), "Workspace reopened; continue the full scheduled job",
+                self.bot.make_context("u1", "chat"), "Origin restored; continue the full scheduled job",
             ), timeout=2)
             await asyncio.wait_for(self.bot._drain_message_queue("u1"), timeout=2)
 
         self.assertEqual(len(calls), 2)
         self.assertIn(original, calls[0][0])
-        self.assertIn("Workspace reopened", calls[0][0])
-        self.assertEqual(calls[0][1], reopened_ws)
+        self.assertIn("Origin restored", calls[0][0])
+        self.assertEqual(calls[0][1], origin)
         self.assertIsNotNone(calls[0][2])
         self.assertEqual(calls[1][0:2], ("Later request", reopened_ws))
-        self.assertIsNone(session.load_session(reopened_ws, calls[0][2]))
+        self.assertIsNone(session.load_session(origin, calls[0][2]))
         self.assertEqual(self.bot._read_queue_file(), {})
 
 

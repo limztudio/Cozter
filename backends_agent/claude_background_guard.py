@@ -45,6 +45,11 @@ def _advance_shell_quote_or_escape(
     when one scanner is tightened without the other.
     """
     char = text[index]
+    if quote != "'":
+        if text.startswith("$(", index):
+            return _substitution_end(text, index) + 1, quote
+        if char == "`":
+            return _backtick_end(text, index) + 1, quote
     if quote:
         if char == "\\" and quote == '"':
             return index + 2, quote
@@ -58,7 +63,7 @@ def _advance_shell_quote_or_escape(
     return None
 
 
-def _heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
+def _heredoc_delimiters(line: str) -> list[tuple[str, bool, bool]]:
     """Find straightforward here-document delimiters on one command line.
 
     The hook only needs to avoid mistaking literal ``&`` characters in a
@@ -67,7 +72,7 @@ def _heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
     delimiters cover the normal ``cat <<'EOF'``/``python <<PY`` forms agents
     use to write source files.
     """
-    delimiters: list[tuple[str, bool]] = []
+    delimiters: list[tuple[str, bool, bool]] = []
     quote = ""
     index = 0
     while index < len(line):
@@ -90,69 +95,148 @@ def _heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
             cursor += 1
         if cursor >= len(line):
             break
-        if line[cursor] in "\"'":
-            delimiter_quote = line[cursor]
-            cursor += 1
-            end = line.find(delimiter_quote, cursor)
-            if end == -1:
+        # Quoting any part of the delimiter disables body expansion, including
+        # mixed forms such as E'OF' and escaped forms such as \EOF.
+        delimiter_parts: list[str] = []
+        delimiter_quote = ""
+        literal = False
+        while cursor < len(line):
+            char = line[cursor]
+            if not delimiter_quote and (char.isspace() or char in ";|&()<>"):
                 break
-            delimiter = line[cursor:end]
-            cursor = end + 1
-        else:
-            start = cursor
-            while (
-                cursor < len(line)
-                and not line[cursor].isspace()
-                and line[cursor] not in ";|&()<>'\""
-            ):
+            if char == "\\" and delimiter_quote != "'" and cursor + 1 < len(line):
+                literal = True
                 cursor += 1
-            delimiter = line[start:cursor].replace("\\", "")
-        if delimiter:
-            delimiters.append((delimiter, strip_tabs))
+                delimiter_parts.append(line[cursor])
+            elif char in "\"'" and (not delimiter_quote or char == delimiter_quote):
+                literal = True
+                delimiter_quote = "" if delimiter_quote else char
+            else:
+                delimiter_parts.append(char)
+            cursor += 1
+        delimiter = "".join(delimiter_parts)
+        if delimiter or literal:
+            delimiters.append((delimiter, strip_tabs, not literal))
         index = max(cursor, index + 2)
     return delimiters
 
 
 def _without_heredoc_bodies(command: str) -> str:
-    """Replace here-document bodies with newlines before scanning operators."""
-    pending: deque[tuple[str, bool]] = deque()
+    """Keep executable substitutions from expanding heredocs, but discard data."""
+    pending: deque[tuple[str, bool, bool]] = deque()
     kept: list[str] = []
+    body: list[str] = []
     for line in command.splitlines(keepends=True):
         if pending:
-            delimiter, strip_tabs = pending[0]
+            delimiter, strip_tabs, expand = pending[0]
             body_line = line.rstrip("\r\n")
             if strip_tabs:
                 body_line = body_line.lstrip("\t")
             # Preserve line count; bodies must not mimic operators.
             kept.append("\n" if line.endswith("\n") else "")
             if body_line == delimiter:
+                if expand:
+                    for substitution in _command_substitutions("".join(body), literal_text=True):
+                        kept.extend(("\n", substitution, "\n"))
+                body.clear()
                 pending.popleft()
+            elif expand:
+                body.append(line)
             continue
         kept.append(line)
         pending.extend(_heredoc_delimiters(line))
+    if pending and pending[0][2]:
+        for substitution in _command_substitutions("".join(body), literal_text=True):
+            kept.extend(("\n", substitution, "\n"))
     return "".join(kept)
 
 
-def _skip_arithmetic_expansion(command: str, index: int) -> int:
-    """Skip a ``$((...))`` expression so bitwise ``&`` is not misread."""
-    depth = 1
-    cursor = index + 3  # after the opening ``$((``
+def _backtick_end(command: str, index: int) -> int:
+    cursor = index + 1
     while cursor < len(command):
-        if command.startswith("((", cursor):
-            depth += 1
-            cursor += 2
-            continue
-        if command.startswith("))", cursor):
-            depth -= 1
-            cursor += 2
-            if depth == 0:
-                return cursor
-            continue
         if command[cursor] == "\\":
             cursor += 2
+        elif command[cursor] == "`":
+            return cursor
+        else:
+            cursor += 1
+    return len(command)
+
+
+def _substitution_end(command: str, index: int) -> int:
+    """Match a command substitution with its own quote and parenthesis scope."""
+    cursor = index + 2
+    depth = 1
+    quote = ""
+    parents: list[tuple[int, str]] = []
+    while cursor < len(command):
+        char = command[cursor]
+        if char == "\\" and quote != "'":
+            cursor += 2
             continue
+        if quote == "'":
+            if char == "'":
+                quote = ""
+        elif command.startswith("$(", cursor):
+            parents.append((depth, quote))
+            depth, quote = 1, ""
+            cursor += 2
+            continue
+        elif char == "`":
+            cursor = _backtick_end(command, cursor) + 1
+            continue
+        elif char in "\"'" and (not quote or char == quote):
+            quote = "" if quote else char
+        elif not quote:
+            if char == "#" and _starts_shell_comment(command, cursor):
+                newline = command.find("\n", cursor)
+                cursor = len(command) if newline == -1 else newline + 1
+                continue
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    if not parents:
+                        return cursor
+                    depth, quote = parents.pop()
         cursor += 1
     return len(command)
+
+
+def _command_substitutions(command: str, *, literal_text: bool = False) -> list[str]:
+    """Extract executable $() and backticks, including inside double quotes.
+
+    Quotes inside an expanding heredoc body are data, so they do not suppress
+    its substitutions. Escaped expansion markers remain literal in both modes.
+    """
+    substitutions: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if char == "\\" and (literal_text or quote != "'"):
+            index += 2
+            continue
+        if literal_text or quote != "'":
+            if command.startswith("$(", index) and not command.startswith("$((", index):
+                end = _substitution_end(command, index)
+                substitutions.append(command[index + 2:end])
+                index = end + 1
+                continue
+            if char == "`":
+                end = _backtick_end(command, index)
+                substitutions.append(command[index + 1:end])
+                index = end + 1
+                continue
+            if not literal_text and not quote and char == "#" and _starts_shell_comment(command, index):
+                newline = command.find("\n", index)
+                index = len(command) if newline == -1 else newline + 1
+                continue
+        if not literal_text and char in "\"'" and (not quote or char == quote):
+            quote = "" if quote else char
+        index += 1
+    return substitutions
 
 
 def _has_background_operator(command: str) -> bool:
@@ -174,9 +258,6 @@ def _has_background_operator(command: str) -> bool:
         if char == "#" and _starts_shell_comment(command, index):
             newline = command.find("\n", index + 1)
             index = len(command) if newline == -1 else newline + 1
-            continue
-        if command.startswith("$((", index):
-            index = _skip_arithmetic_expansion(command, index)
             continue
         if char != "&":
             index += 1
@@ -209,7 +290,12 @@ def _shell_tokens(command: str) -> list[str]:
         advanced = _advance_shell_quote_or_escape(command, index, quote)
         if advanced is not None:
             next_index, quote = advanced
-            fragments.append(command[index:next_index])
+            if command.startswith("$(", index) or command[index] == "`":
+                # Each substitution is inspected in its own shell scope.
+                # Its inner quotes must not alter the surrounding token.
+                fragments.append("__cozter_substitution__")
+            else:
+                fragments.append(command[index:next_index])
             index = next_index
             continue
         char = command[index]
@@ -343,6 +429,10 @@ def _background_mechanism(command: str) -> str | None:
     """Return the first ordinary background-launch mechanism in *command*."""
     if _has_background_operator(command):
         return "a shell `&` background operator"
+    for substitution in _command_substitutions(_without_heredoc_bodies(command)):
+        mechanism = _background_mechanism(substitution)
+        if mechanism is not None:
+            return mechanism
     for segment in _command_segments(_shell_tokens(command)):
         mechanism = _segment_background_mechanism(segment)
         if mechanism is not None:
