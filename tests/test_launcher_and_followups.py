@@ -1,5 +1,6 @@
 """Regression coverage for audit findings in launcher and orchestration."""
 
+import re
 import unittest
 from unittest import mock
 
@@ -41,6 +42,8 @@ class FollowupCoverageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_queue_limit_keeps_unrun_tasks_in_the_final_reply(self):
         calls = []
+        reported = set()
+        executed = set()
 
         async def internal(*_args, **kwargs):
             if kwargs["label"] == "Flexible planner":
@@ -49,12 +52,20 @@ class FollowupCoverageTests(unittest.IsolatedAsyncioTestCase):
 
         async def drive(*_args, **_kwargs):
             calls.append(1)
+            if task := re.search(r"\nYour task: issue (\d+)\n", _args[2]):
+                executed.add(int(task[1]))
             result = AgentResult()
-            append_text_result(result, (
-                "Reviewed.\n" + "\n".join(
-                    f"[followup:low] issue {i}" for i in range(27)
-                ) if len(calls) == 1 else "Reviewed."
-            ))
+            text = "Reviewed."
+            if len(calls) <= 8:
+                # Alternating tiers cannot be combined into one worker without
+                # changing providers or dependency order. Eight reports also
+                # exceed the global queue cap, independently of the per-report cap.
+                issues = range((len(calls) - 1) * 27, len(calls) * 27)
+                reported.update(issues)
+                text += "\n" + "\n".join(
+                    f"[followup:{flexible.TIERS[i % 3]}] issue {i}" for i in issues
+                )
+            append_text_result(result, text)
             return result, False
 
         with (
@@ -75,5 +86,9 @@ class FollowupCoverageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls), flexible.MAX_SUBTASKS * 2)
         self.assertIn("PARTIAL", result.text)
         self.assertIn("these tasks were not run", result.text)
-        for issue in range(23, 27):
-            self.assertIn(f"- [low] issue {issue}", result.text)
+        self.assertEqual(len(reported), 216)
+        self.assertEqual(len(executed), 23)
+        remainder = {line for line in result.text.splitlines() if line.startswith("- [")}
+        self.assertEqual(remainder, {
+            f"- [{flexible.TIERS[issue % 3]}] issue {issue}" for issue in reported - executed
+        })

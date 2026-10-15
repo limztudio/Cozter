@@ -28,7 +28,7 @@ from Cozter.backends_agent import claude_background_guard as guard
 
 BUILTIN_NAMES = frozenset({
     "apply_patch", "bash", "copy_file", "delete_file", "edit_file", "glob",
-    "grep", "list_dir", "make_dir", "move_file", "multi_edit", "read_file",
+    "grep", "list_dir", "make_dir", "move_file", "multi_edit", "read_file", "read_files",
     "tree", "web_fetch", "web_search", "write_file",
 })
 PLUGIN_NAMES = frozenset({
@@ -199,6 +199,7 @@ class IsolatedToolsRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await invoke("make_dir", {"path": "src"}, "Directory ready")
                 await invoke("write_file", {"path": "src/a.txt", "content": "alpha\nbeta\n"}, "Wrote")
                 await invoke("read_file", {"path": "src/a.txt", "offset": 1, "limit": 1}, "beta")
+                await invoke("read_files", {"files": [{"path": "src/a.txt", "limit": 1}]}, "alpha")
                 await invoke("edit_file", {"path": "src/a.txt", "old_string": "alpha", "new_string": "gamma"}, "Replaced")
                 await invoke("multi_edit", {"path": "src/a.txt", "edits": [{"old_string": "beta", "new_string": "delta"}]}, "Applied")
                 await invoke("copy_file", {"source": "src/a.txt", "destination": "src/copy.txt"}, "Copied")

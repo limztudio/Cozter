@@ -12,6 +12,8 @@ output parsing. The orchestration loop lives in :mod:`agent`, which owns
 the backend subprocess driver the workers run on.
 """
 
+import hashlib
+import json
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -36,6 +38,7 @@ TIER_DESCRIPTIONS = {
 
 # Cap fan-out: each sub-task is a turn.
 MAX_SUBTASKS = 12
+MAX_FOLLOWUP_TASKS_PER_REPORT = len(TIERS)
 
 # Work cap: 3600s.
 PLAN_TIMEOUT: float | None = 3600.0
@@ -370,6 +373,82 @@ def parse_followups(report: str) -> list[Subtask]:
     return found
 
 
+def instruction_identity(instruction: str) -> str:
+    """Normalize formatting, preserving case and whitespace in quoted targets."""
+    pieces = re.split(r"(`[^`]*`|'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")", instruction)
+    normalized = "".join(piece if index % 2 else re.sub(r"\s+", " ", piece)
+                         for index, piece in enumerate(pieces)).strip()
+    # A polite request prefix does not create another obligation. Everything
+    # identifying a target or action remains case-sensitive and unchanged.
+    return re.sub(r"^Please\s+", "", normalized)
+
+
+def state_signature(value: object) -> str:
+    encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def task_identity(task: Subtask) -> str:
+    return task.tier + ":" + instruction_identity(task.instruction)
+
+
+def task_record(task: Subtask) -> dict:
+    return {"tier": task.tier, "instruction": task.instruction,
+            "read_only": task.read_only, "independent": task.independent}
+
+
+def restore_tasks(value: object, *, limit: int | None = MAX_SUBTASKS * 2) -> list[Subtask] | None:
+    if not isinstance(value, list) or (limit is not None and len(value) > limit):
+        return None
+    tasks = []
+    for row in value:
+        if (not isinstance(row, dict) or row.get("tier") not in TIERS
+                or not isinstance(row.get("instruction"), str) or not row["instruction"].strip()
+                or not isinstance(row.get("read_only", False), bool)
+                or not isinstance(row.get("independent", False), bool)):
+            return None
+        tasks.append(Subtask(row["tier"], row["instruction"],
+                             row.get("read_only", False), row.get("independent", False)))
+    return tasks
+
+
+def coalesce_followups(report: str, known: set[str]) -> tuple[list[Subtask], list[Subtask], dict[str, list[str]]]:
+    """Bound new workers, grouping consecutive obligations of the same tier.
+
+    Only identical instructions (apart from harmless formatting/politeness)
+    are deduplicated. Grouped obligations remain verbatim and retain their
+    requested tier, so consolidation neither changes providers nor loses scope.
+    """
+    grouped: list[list[Subtask]] = []
+    added: set[str] = set()
+    for task in parse_followups(report):
+        identity = task_identity(task)
+        if identity in known or identity in added:
+            continue
+        added.add(identity)
+        if grouped and grouped[-1][0].tier == task.tier:
+            grouped[-1].append(task)
+        else:
+            grouped.append([task])
+    tasks = []
+    members = {}
+    for obligations in grouped:
+        tier = obligations[0].tier
+        if len(obligations) == 1:
+            tasks.append(obligations[0])
+        else:
+            instruction = (
+                "Finish these remaining obligations together as one cohesive task. "
+                "Retain completed repairs and evidence; do not restart the whole audit. "
+                "Complete and verify every item below:\n"
+                + "\n".join(f"{index}. {task.instruction}"
+                            for index, task in enumerate(obligations, 1))
+            )
+            tasks.append(Subtask(tier, instruction))
+        members[task_identity(tasks[-1])] = [task_identity(task) for task in obligations]
+    return tasks[:MAX_FOLLOWUP_TASKS_PER_REPORT], tasks[MAX_FOLLOWUP_TASKS_PER_REPORT:], members
+
+
 def fallback_plan(request: str) -> Plan:
     """The whole request as one sub-task on the strongest tier."""
     if isinstance(request, str):
@@ -573,7 +652,11 @@ def build_subtask_prompt(
         "New work discovered while doing this task: list each item on its own"
         " line as [followup:<low|mid|high>] <instruction> (self-contained, one"
         " line each). Only genuine leftovers found inside this task - never"
-        " restate the plan. Never write 'Next turn should:' or any other"
+        " restate the plan or completed/queued scope. Prefer finishing related"
+        " repairs and their verification together; do not create speculative"
+        " audits or separate follow-ups for each workflow step. Related leftovers"
+        " of one consecutive tier group will run in one cohesive worker, preserving every item."
+        " Never write 'Next turn should:' or any other"
         " handoff/planning note; the followup lines above are the only"
         " carry-forward mechanism."
     )

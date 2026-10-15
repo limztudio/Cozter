@@ -126,6 +126,7 @@ _BY_NAME: dict[str, AgentTool] = {tool.name: tool for tool in _TOOLS}
 # Read-only surface for confirm mode.
 READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
     "read_file",
+    "read_files",
     "list_dir",
     "tree",
     "glob",
@@ -330,9 +331,14 @@ async def execute_tool(
                 name, time.monotonic() - started, outcome,
             )
 
-    if len(result) > _TOOL_RESULT_MAX:
+    result_limit = _TOOL_RESULT_MAX
+    if tool is not None and not getattr(tool, "is_plugin", True):
+        result_limit = {"read_file": 32 * 1024, "read_files": 64 * 1024}.get(
+            name, result_limit,
+        )
+    if len(result) > result_limit:
         result = truncate_with_marker(
-            result, _TOOL_RESULT_MAX,
+            result, result_limit,
             "truncated — use read_file offset/limit or grep to fetch"
             " remainder (page until no truncation marker remains);"
             " say PARTIAL + remainder when work is left",

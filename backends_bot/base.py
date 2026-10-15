@@ -2951,7 +2951,7 @@ class BotPlatform(ABC):
     async def _persist_complete(
         self, uid: str, entry_id: str,
     ) -> None:
-        def complete() -> None:
+        def complete() -> str | None:
             data = self._read_queue_file()
             entries = self._queue_entries(data.get(uid))
             if not entries:
@@ -2959,6 +2959,9 @@ class BotPlatform(ABC):
                     data.pop(uid, None)
                     self._write_queue_file(data)
                 return
+            completed = next((entry for entry in entries if entry.get("id") == entry_id), {})
+            job = completed.get("job", {})
+            workspace_path = job.get("workspace_path") if isinstance(job, dict) else None
             remaining = [entry for entry in entries if entry.get("id") != entry_id]
             if len(remaining) == len(entries):
                 return  # entry already gone
@@ -2967,8 +2970,15 @@ class BotPlatform(ABC):
             else:
                 data.pop(uid, None)
             self._write_queue_file(data)
+            return workspace_path if isinstance(workspace_path, str) else None
 
-        await _run_durable_file_operation(self._queue_file_lock, complete)
+        completed_workspace = await _run_durable_file_operation(self._queue_file_lock, complete)
+        if completed_workspace:
+            from .. import execution_state
+            try:
+                await execution_state.discard_execution(completed_workspace, entry_id)
+            except (OSError, ValueError):
+                logger.warning("Could not clean completed backend continuation", exc_info=True)
 
     async def _clear_persistent_queue(self, uid: str) -> int:
         running = self._running_tasks.get(uid)
@@ -4497,6 +4507,7 @@ class BotPlatform(ABC):
                     queue_entry_id=queue_entry_id,
                     workspace_path=ws, previous_result=previous,
                     on_session=session_ready,
+                    original_request=request,
                 )
             if result is None:
                 self._paused_jobs.discard(uid)
@@ -4691,6 +4702,7 @@ class BotPlatform(ABC):
         workspace_path: str | None = None,
         previous_result: agent.AgentResult | None = None,
         on_session: Callable[[str], Awaitable[None]] | None = None,
+        original_request: str | None = None,
     ) -> agent.AgentResult | None:
         """Send a "Thinking..." status, run the agent, then post the reply.
 
@@ -4851,6 +4863,8 @@ class BotPlatform(ABC):
                 summary_backend_name=summary_backend,
                 session_id=session_id,
                 on_session=on_session,
+                execution_id=queue_entry_id,
+                original_request=original_request,
                 on_process=lambda proc, uid=uid: self._note_turn_process(
                     uid, getattr(proc, "pid", None),
                 ),

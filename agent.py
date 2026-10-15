@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any, TypeVar
 
 from . import (
-    agent_tools, backends_agent, colony, compaction, config, flexible, router,
+    agent_tools, backends_agent, colony, compaction, config, execution_state, flexible, router,
     session, titling,
 )
 from . import workspace as workspace_mod
@@ -393,6 +393,14 @@ _COMPLETENESS_RULE = (
     " Progress is tool status (Thinking... preview, done/total may grow"
     " as follow-ups join); interim progress is never a chat reply."
     " Notify DONE only when everything is done."
+    " Work efficiently: batch independent searches and file ranges into one"
+    " tool round trip (read_files when available, or native parallel reads)."
+    " Run independent read-only inspections concurrently with bounded fan-out;"
+    " serialize dependent edits and builds sharing output directories."
+    " Reuse still-valid completed worker evidence and saved validation logs;"
+    " recheck changed inputs, failed checks and unfinished scope rather than"
+    " repeating completed setup or the full verification after each handoff."
+    " Keep all requested obligations and completion evidence."
 )
 
 
@@ -1353,6 +1361,54 @@ async def _drive_backend(
     close_inject_on_completion: bool = False,
     on_process: Callable[[Any], None] | None = None,
 ) -> tuple[AgentResult, bool]:
+    async with execution_state.backend_scope(
+        backend.name, model or getattr(backend, "default_model", None), approval, effort,
+    ) as state:
+        result, restarting = await _drive_backend_impl(
+            backend, workspace_path, full_prompt, model, approval, effort=effort,
+            on_event=on_event, inject_queue=inject_queue, injected=injected,
+            close_inject_on_completion=False, on_process=on_process,
+        )
+        if (not restarting and state is not None and state.get("native_resume_unavailable")
+                and not state.get("native_tools_started")
+                and not any(event.kind in {"tool", "file", "attachment"}
+                            or event.kind == "text" and event.content.strip() not in {
+                                result.error, f"Error: {result.error}",
+                            } for event in result.events) and not result.detached_tasks):
+            # Only a provider-confirmed missing exact session, before any
+            # activity, permits one fresh launch. Never retry ambiguous work.
+            await state.save(native_resume_unavailable=False, native_session_id=None)
+            logger.info("%s exact native session unavailable before work; recovering from saved evidence", backend.name)
+            result, restarting = await _drive_backend_impl(
+                backend, workspace_path,
+                full_prompt + "\n\n[The exact provider session was unavailable before any new work began. "
+                "Inspect existing workspace changes and saved evidence; continue unfinished work "
+                "without repeating completed changes or commands with an unknown outcome.]",
+                model, approval, effort=effort, on_event=on_event,
+                inject_queue=inject_queue, injected=injected,
+                close_inject_on_completion=False, on_process=on_process,
+            )
+        if not restarting and _take_pending_injections(inject_queue, injected):
+            restarting = True
+        if not restarting and close_inject_on_completion:
+            _close_inject_queue(inject_queue)
+        return result, restarting
+
+
+async def _drive_backend_impl(
+    backend,
+    workspace_path: str,
+    full_prompt: str,
+    model: str | None,
+    approval: str,
+    *,
+    effort: int,
+    on_event: Callable[[ChatEvent], Awaitable[None]] | None = None,
+    inject_queue: asyncio.Queue[str] | None = None,
+    injected: list[str] | None = None,
+    close_inject_on_completion: bool = False,
+    on_process: Callable[[Any], None] | None = None,
+) -> tuple[AgentResult, bool]:
     """Launch *backend*, stream its events, and collect the result.
 
     Returns ``(result, restarting)``. *restarting* is True when a message
@@ -1813,40 +1869,73 @@ async def _run_flexible(
     process (planner/merge/judge phases run through
     :func:`run_internal_backend` without a foreground process to report).
     """
+    from . import execution_state
+    from .backends_agent.base import DetachedTaskRef
+
     summary_backend = backends_agent.get_backend(summary_backend_name)
     tiers = workspace_mod.get_flexible_run_config(workspace_path)
+    execution = execution_state.current_execution()
+    signature = flexible.state_signature({
+        "request": execution.original_request if execution is not None else request,
+        "injected": injected, "tiers": tiers, "approval": approval, "effort": effort,
+        "summary_backend": summary_backend_name, "summary_model": summary_model,
+        "collaborative": collaborative,
+    })
+    saved_plan = await execution_state.record("flexible_plan")
+    restored_tasks = (flexible.restore_tasks(saved_plan.get("queue"))
+                      if saved_plan is not None and saved_plan.get("active")
+                      and saved_plan.get("signature") == signature else None)
+    cursor = saved_plan.get("cursor", 0) if restored_tasks and saved_plan is not None else 0
+    saved_reports = saved_plan.get("reports", []) if restored_tasks and saved_plan is not None else []
+    restored = bool(restored_tasks and isinstance(cursor, int) and not isinstance(cursor, bool)
+                    and 0 <= cursor <= len(restored_tasks) and isinstance(saved_reports, list)
+                    and len(saved_reports) == cursor and all(isinstance(text, str) for text in saved_reports))
+
+    async def invalidate() -> None:
+        if saved_plan is not None:
+            await saved_plan.save(active=False)
+
+    async def restart(value: AgentResult) -> tuple[AgentResult, bool]:
+        await invalidate()
+        return value, True
 
     async def status(text: str) -> None:
         if on_event:
             await on_event(ChatEvent(kind="tool", content=text))
 
-    # Plan.
-    await status(
-        f"flexible: planning with {summary_backend.name}/{summary_model}"
-    )
-    raw_plan, restarting = await _run_with_stage_timing(_run_with_inject_watch(
-        run_internal_backend(
-            summary_backend,
-            workspace_path,
-            flexible.build_plan_prompt(
-                _planner_context(contextual_prompt, request),
-                collaborative=collaborative,
+    # A durable cursor is authoritative across allowance boundaries. Resume
+    # the pending worker without another planner or replaying completed work.
+    if restored:
+        assert restored_tasks is not None and saved_plan is not None
+        plan = flexible.Plan(str(saved_plan.get("understanding", "")), tuple(restored_tasks))
+        previous_draft = saved_plan.get("phase_previous_draft")
+        await status(f"flexible: resuming saved plan at {cursor + 1}/{len(restored_tasks)}")
+    else:
+        await invalidate()
+        await status(f"flexible: planning with {summary_backend.name}/{summary_model}")
+        raw_plan, restarting = await _run_with_stage_timing(_run_with_inject_watch(
+            run_internal_backend(
+                summary_backend,
+                workspace_path,
+                flexible.build_plan_prompt(
+                    _planner_context(contextual_prompt, request),
+                    collaborative=collaborative,
+                ),
+                summary_model,
+                timeout=flexible.PLAN_TIMEOUT,
+                label="Flexible planner",
+                log=logger,
+                missing_executable_message=(
+                    "%s CLI not found - flexible falling back to a single task"
+                ),
+                missing_level=logging.WARNING,
             ),
-            summary_model,
-            timeout=flexible.PLAN_TIMEOUT,
-            label="Flexible planner",
-            log=logger,
-            missing_executable_message=(
-                "%s CLI not found - flexible falling back to a single task"
-            ),
-            missing_level=logging.WARNING,
-        ),
-        inject_queue,
-        injected,
-    ), "flexible_planner", summary_backend.name, summary_model)
-    if restarting:
-        return AgentResult(), True
-    plan = flexible.parse_plan(raw_plan or "", request)
+            inject_queue,
+            injected,
+        ), "flexible_planner", summary_backend.name, summary_model)
+        if restarting:
+            return await restart(AgentResult())
+        plan = flexible.parse_plan(raw_plan or "", request)
     budget = _TURN_BUDGET.get()
 
     # Only the planner may ask.
@@ -1854,16 +1943,13 @@ async def _run_flexible(
         if collaborative:
             # A planner question ends the turn pre-merge.
             if _take_pending_injections(inject_queue, injected):
-                return AgentResult(), True
+                return await restart(AgentResult())
             if close_inject_on_completion:
                 _close_inject_queue(inject_queue)
             result = AgentResult()
             append_text_result(result, f"{plan.question}\n\n[[await]]")
             return result, False
         plan = flexible.fallback_plan(request)
-
-    if budget is not None:
-        budget.pending = [_checkpoint_scope(task.instruction, request) for task in plan.subtasks]
 
     logger.info(
         "Flexible plan: %s",
@@ -1879,6 +1965,7 @@ async def _run_flexible(
     reports: list[str] = []
     attach_markers: list[str] = []
     usage_totals: dict = {}
+    usage_audit: dict = {}
     blocked: list[int] = []
     worker_errors: list[str] = []
     unavailable_models: dict[tuple[str, str | None], str] = {}
@@ -1886,6 +1973,96 @@ async def _run_flexible(
     queue: list[flexible.Subtask] = list(plan.subtasks)
     done = 0
     total = len(queue)
+    worker_outputs: dict[str, dict] = {}
+    restored_outputs: set[str] = set()
+    scope_members: dict[str, list[str]] = {}
+    completed_read_scopes: set[str] = set()
+
+    def encode_output(value: AgentResult, *, text: bool = False) -> dict:
+        encoded: dict[str, Any] = {
+            "events": [dataclasses.asdict(event) for event in value.events
+                       if event.kind in {"attachment", "file"}],
+            "detached_tasks": [dataclasses.asdict(task) for task in value.detached_tasks],
+            "error": value.error, "usage": value.usage,
+        }
+        if text:
+            encoded.update({
+                "text": flexible._truncate_report(value.text),
+                "followups": "\n".join(f"[followup:{task.tier}] {task.instruction}"
+                                       for task in flexible.parse_followups(value.text)),
+                "awaiting": extract_await(value.text)[1],
+                "attach_markers": _split_attach_markers(value.text)[1],
+                "complete": not (value.error and "tool budget exhausted" in value.error.casefold()),
+            })
+        return encoded
+
+    def decode_output(value: dict) -> AgentResult:
+        text = value.get("text", "")
+        for marker in value.get("attach_markers", []):
+            if marker not in text:
+                text += "\n" + marker
+        return AgentResult(
+            text=text, error=value.get("error"), usage=value.get("usage"),
+            events=[ChatEvent(**row) for row in value.get("events", [])],
+            detached_tasks=[DetachedTaskRef(**row) for row in value.get("detached_tasks", [])],
+        )
+
+    if restored:
+        assert saved_plan is not None
+        done = cursor
+        reports = list(saved_reports)
+        result = decode_output(saved_plan.get("output", {}))
+        result.usage = None  # Bot already carries earlier allowance usage.
+        usage_audit = saved_plan.get("usage_processed_audit", {})
+        attach_markers = saved_plan.get("attach_markers", [])
+        blocked = saved_plan.get("blocked", [])
+        worker_errors = saved_plan.get("worker_errors", [])
+        unavailable_models = {(row["backend"], row["model"]): row["cause"]
+                              for row in saved_plan.get("unavailable_models", [])}
+        unrun_followups = flexible.restore_tasks(saved_plan.get("unrun_followups", []), limit=None) or []
+        worker_outputs = saved_plan.get("worker_outputs", {})
+        restored_outputs = set(worker_outputs)
+        scope_members = saved_plan.get("scope_members", {})
+        completed_read_scopes = set(saved_plan.get("completed_read_scopes", []))
+        for value in worker_outputs.values():
+            retained = decode_output(value)
+            result.events.extend(event for event in retained.events if event not in result.events)
+            result.detached_tasks.extend(task for task in retained.detached_tasks
+                                         if task not in result.detached_tasks)
+        saved_markers = attach_markers + [marker for value in worker_outputs.values()
+                                         for marker in value.get("attach_markers", [])]
+        carry_forward_turn_output(AgentResult(text="\n".join(saved_markers)), result, workspace_path)
+        if budget is not None:
+            budget.reports.extend((_checkpoint_scope(queue[index].instruction, request), report)
+                                  for index, report in enumerate(reports))
+            retained = AgentResult(text="\n".join(attach_markers), events=result.events,
+                                   detached_tasks=result.detached_tasks)
+            budget.capture(retained, workspace_path, account_usage=False)
+
+    if budget is not None:
+        budget.pending = [_checkpoint_scope(task.instruction, request) for task in queue[done:]]
+        budget.pending.extend(task.instruction for task in unrun_followups)
+
+    async def save_progress() -> None:
+        if saved_plan is None:
+            return
+        await saved_plan.save(
+            active=True, signature=signature, understanding=plan.understanding,
+            queue=[flexible.task_record(task) for task in queue], cursor=done,
+            reports=[flexible._truncate_report(report) for report in reports],
+            output=encode_output(result), usage_processed_audit=usage_audit,
+            attach_markers=attach_markers, blocked=blocked, worker_errors=worker_errors,
+            unavailable_models=[{"backend": target[0], "model": target[1], "cause": cause}
+                                for target, cause in unavailable_models.items()],
+            unrun_followups=[flexible.task_record(task) for task in unrun_followups],
+            worker_outputs=dict(worker_outputs),
+            phase_previous_draft=(flexible._bounded_draft_excerpt(previous_draft)
+                                  if previous_draft is not None else None),
+            scope_members=scope_members,
+            completed_read_scopes=sorted(completed_read_scopes),
+        )
+
+    await save_progress()
 
     def retain_report(index: int, sub_result: AgentResult) -> None:
         if budget is None:
@@ -1915,6 +2092,18 @@ async def _run_flexible(
         task = queue[index]
         backend_name, model = tiers[task.tier]
         backend = backends_agent.get_backend(backend_name)
+        if not can_inspect(index):
+            # A writer can invalidate previously inspected inputs even if it
+            # is interrupted before producing a completed report.
+            completed_read_scopes.clear()
+        cached = worker_outputs.get(str(index))
+        if cached is not None and cached.get("complete"):
+            sub_result = decode_output(cached)
+            if budget is not None:
+                budget.capture(sub_result, workspace_path, account_usage=False)
+            retain_report(index, sub_result)
+            return sub_result, False
+        restored_outputs.discard(str(index))
         if budget is not None:
             budget.claim_worker()
         await status(
@@ -1927,29 +2116,49 @@ async def _run_flexible(
             "confirm" if can_inspect(index) and approval in {"auto", "full", "confirm"}
             else approval
         )
-        sub_result, restarting = await _run_with_stage_timing(_drive_backend(
-            backend, workspace_path,
-            _build_backend_prompt(
-                backend,
-                flexible.build_subtask_prompt(
-                    request, plan, index, earlier, previous_draft=previous_draft,
+        # The plan changes when guidance changes, but an identical remaining
+        # role can keep its native conversation and receive that new guidance.
+        # Backend records separately isolate provider/model/approval/effort.
+        scope = "flexible:" + flexible.state_signature({
+            "tier": task.tier, "instruction": flexible.instruction_identity(task.instruction),
+            "read_only": task.read_only, "independent": task.independent,
+        })
+        with execution_state.worker_scope(scope):
+            sub_result, restarting = await _run_with_stage_timing(_drive_backend(
+                backend, workspace_path,
+                _build_backend_prompt(
+                    backend,
+                    flexible.build_subtask_prompt(
+                        request, plan, index, earlier, previous_draft=previous_draft,
+                    ),
+                    collaborative=False, allow_detached_requests=False,
                 ),
-                collaborative=False, allow_detached_requests=False,
-            ),
-            model, worker_approval, effort=effort, on_event=on_event,
-            # A parallel wave has ONE inject watcher; it stops every sibling.
-            inject_queue=None if parallel else inject_queue,
-            injected=None if parallel else injected, on_process=on_process,
-        ), "flexible_worker", backend_name, model,
-            worker_index=index + 1, worker_count=total)
+                model, worker_approval, effort=effort, on_event=on_event,
+                # A parallel wave has ONE inject watcher; it stops every sibling.
+                inject_queue=None if parallel else inject_queue,
+                injected=None if parallel else injected, on_process=on_process,
+            ), "flexible_worker", backend_name, model,
+                worker_index=index + 1, worker_count=total)
         if budget is not None:
             budget.capture(sub_result, workspace_path)
         if not restarting:
-            retain_report(index, sub_result)
+            worker_outputs[str(index)] = encode_output(sub_result, text=True)
+            try:
+                retain_report(index, sub_result)
+            except _TurnBudgetExhaustedError:
+                await save_progress()
+                raise
+            if parallel:
+                # Siblings save independently, so one cancelled reader cannot
+                # erase another reader's completed evidence. Serial workers
+                # save once below, after advancing the durable cursor.
+                await save_progress()
         return sub_result, restarting
 
     max_parallel = config.get_flexible_max_parallel_workers()
     while done < len(queue):
+        if _take_pending_injections(inject_queue, injected):
+            return await restart(result)
         task = queue[done]
         tier_backend_name, tier_model = tiers[task.tier]
         target = (tier_backend_name, tier_model)
@@ -1961,7 +2170,7 @@ async def _run_flexible(
             )
             await asyncio.sleep(0)
             if _take_pending_injections(inject_queue, injected):
-                return result, True
+                return await restart(result)
             reports.append(
                 f"PARTIAL: sub-task {done + 1} was not run: {task.instruction}\n"
                 f"The earlier {tier_backend_name}/{tier_model} worker reported"
@@ -1969,6 +2178,7 @@ async def _run_flexible(
                 "This plan item remains unfinished."
             )
             done += 1
+            await save_progress()
             continue
         end = done + 1
         if can_inspect(done):
@@ -1988,7 +2198,7 @@ async def _run_flexible(
                 inject_queue, injected,
             )
             if restarting:
-                return result, True
+                return await restart(result)
         else:
             values = [await run_worker(done, earlier, parallel=False)]
         # Always merge in plan order, regardless of completion order.
@@ -1997,7 +2207,7 @@ async def _run_flexible(
             tier_backend_name, tier_model = tiers[task.tier]
             target = (tier_backend_name, tier_model)
             if restarting:
-                return result, True
+                return await restart(result)
             # Worker text is internal (feeds the merge).
             result.events.extend(
                 ev for ev in sub_result.events if ev.kind != "text"
@@ -2005,7 +2215,9 @@ async def _run_flexible(
             for task_ref in sub_result.detached_tasks:
                 if task_ref not in result.detached_tasks:
                     result.detached_tasks.append(task_ref)
-            _accumulate_usage(usage_totals, sub_result.usage)
+            if str(done) not in restored_outputs:
+                _accumulate_usage(usage_totals, sub_result.usage)
+            _accumulate_usage(usage_audit, sub_result.usage)
 
             if sub_result.error:
                 worker_errors.append(sub_result.error)
@@ -2017,7 +2229,9 @@ async def _run_flexible(
                 )
 
             report, worker_awaiting = extract_await(sub_result.text)
+            worker_awaiting = worker_awaiting or worker_outputs.get(str(done), {}).get("awaiting", False)
             report, markers = _split_attach_markers(report)
+            markers.extend(worker_outputs.get(str(done), {}).get("attach_markers", []))
             attach_markers.extend(markers)
             report = report.strip()
 
@@ -2038,11 +2252,25 @@ async def _run_flexible(
             if worker_awaiting:
                 blocked.append(done)
 
-            # [followup:<tier>] lines grow the queue live.
-            for extra in flexible.parse_followups(report):
-                if any((extra.tier, extra.instruction) == (queued.tier, queued.instruction)
-                       for queued in queue):
-                    continue
+            # Keep every distinct leftover, but consolidate compatible adjacent
+            # scopes instead of multiplying a report into dozens of workers.
+            followup_report = worker_outputs.get(str(done), {}).get("followups", report)
+            # Completed checks may need a legitimate rerun after a repair.
+            # Only still-queued scope and duplicates inside this report can
+            # be elided without assuming unchanged inputs.
+            if can_inspect(done) and not sub_result.error and not worker_awaiting:
+                completed_read_scopes.add(flexible.task_identity(task))
+            known_scopes = set(completed_read_scopes)
+            for pending in queue[done + 1:] + unrun_followups:
+                identity = flexible.task_identity(pending)
+                known_scopes.add(identity)
+                known_scopes.update(scope_members.get(identity, []))
+            followups, overflow, members = flexible.coalesce_followups(followup_report, known_scopes)
+            scope_members.update(members)
+            unrun_followups.extend(overflow)
+            if budget is not None:
+                budget.pending.extend(task.instruction for task in overflow)
+            for extra in followups:
                 if budget is not None:
                     scope = _checkpoint_scope(extra.instruction, request)
                     if scope not in budget.pending:
@@ -2061,6 +2289,8 @@ async def _run_flexible(
                 await status(f"flexible: plan grew to {total} sub-tasks")
 
             done += 1
+            worker_outputs.pop(str(done - 1), None)
+            await save_progress()
 
     remainder = ""
     if unrun_followups:
@@ -2078,7 +2308,7 @@ async def _run_flexible(
         # Terminal worker failures must not become new judge/auto-chain work.
         result.error = "; ".join(dict.fromkeys(worker_errors))
 
-    def finish(final: str, *, awaiting: bool) -> tuple[AgentResult, bool]:
+    async def finish(final: str, *, awaiting: bool) -> tuple[AgentResult, bool]:
         """Apply the same output protocol to merged and fallback replies."""
         for marker in attach_markers:
             if marker not in final:
@@ -2089,11 +2319,13 @@ async def _run_flexible(
             final += "\n\n" + remainder
         append_text_result(result, final)
         result.usage = usage_totals or None
+        # A completed phase must never be returned again to a judge CONTINUE.
+        await invalidate()
         return result, False
 
     if len(queue) == 1 or result.error:
         if _take_pending_injections(inject_queue, injected):
-            return AgentResult(), True
+            return await restart(AgentResult())
         if close_inject_on_completion:
             _close_inject_queue(inject_queue)
         final = (
@@ -2105,7 +2337,7 @@ async def _run_flexible(
         # Every iteration appends a non-empty report, so `final` is non-empty
         # (empty workers get a tier diagnostic; the all-empty merge path below
         # handles the rest).
-        return finish(final, awaiting=bool(collaborative and blocked))
+        return await finish(final, awaiting=bool(collaborative and blocked))
 
     # 3. Merge reports into the user reply.
     await status(
@@ -2133,7 +2365,7 @@ async def _run_flexible(
         close_inject_on_completion=close_inject_on_completion,
     ), "flexible_merge", summary_backend.name, summary_model)
     if restarting:
-        return AgentResult(), True
+        return await restart(AgentResult())
     final = (merged or "").strip() or flexible.merge_fallback(plan, reports)
 
     # Only the merge may end on a question.
@@ -2152,7 +2384,7 @@ async def _run_flexible(
             " /agent_flexible_low, _mid, and _high."
         )
 
-    return finish(final, awaiting=bool(collaborative and (merge_awaiting or blocked)))
+    return await finish(final, awaiting=bool(collaborative and (merge_awaiting or blocked)))
 
 
 async def run(
@@ -2169,6 +2401,8 @@ async def run(
     session_id: str | None = None,
     on_process: Callable[[Any], None] | None = None,
     on_session: Callable[[str], Awaitable[None]] | None = None,
+    execution_id: str | None = None,
+    original_request: str | None = None,
 ) -> AgentResult:
     """Run a turn, serialized per workspace.
 
@@ -2186,7 +2420,12 @@ async def run(
     *on_session* is awaited after routing and before agent work so callers
     can durably pin the conversation used by a recoverable queued request.
     """
-    async with workspace_mod.get_run_lock(workspace_path):
+    async with (
+        workspace_mod.get_run_lock(workspace_path),
+        execution_state.execution_scope(
+            workspace_path, execution_id, original_request if original_request is not None else prompt,
+        ),
+    ):
         await _wait_for_pending_session_writes(workspace_path)
         return await _run_turn(
             prompt,

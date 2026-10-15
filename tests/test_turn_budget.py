@@ -188,11 +188,16 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
         async def internal(*_args, label, **_kwargs):
             if label == "Flexible planner":
                 return "[PLAN]\n1. [low] first\n2. [low] second\n[/PLAN]"
+            # Expire in the stage this test covers, independently of durable
+            # execution-state fsync latency before the workers start.
+            deadline = asyncio.get_running_loop().time() + .03
+            agent._TURN_BUDGET.get().deadline = deadline
+            agent._TURN_TIMEOUT.get().reschedule(deadline)
             await asyncio.Event().wait()
 
         with agent.turn_budget() as budget:
             budget.started = True
-            budget.deadline = asyncio.get_running_loop().time() + 0.05
+            budget.deadline = asyncio.get_running_loop().time() + 5
             with (
                 mock.patch.object(agent, "run_internal_backend", internal),
                 mock.patch.object(agent, "_drive_backend", mock.AsyncMock(side_effect=[

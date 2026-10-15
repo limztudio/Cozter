@@ -1181,17 +1181,19 @@ async def run_internal_backend(
     string when it runs without producing an agent response.
     """
     async def launch_and_drain() -> str | None:
-        try:
-            proc = await backend.launch(
-                workspace_path, prompt, model, approval="deny", compaction=True,
-            )
-        except FileNotFoundError:
-            log.log(missing_level, missing_executable_message, backend.executable)
-            return None
-        except (OSError, RuntimeError) as exc:
-            log.error("%s could not start: %s", label, exc)
-            return ""
-        return await drain_llm_subprocess(proc, backend, label, log=log)
+        from . import execution_state
+        with execution_state.suspended_run():
+            try:
+                proc = await backend.launch(
+                    workspace_path, prompt, model, approval="deny", compaction=True,
+                )
+            except FileNotFoundError:
+                log.log(missing_level, missing_executable_message, backend.executable)
+                return None
+            except (OSError, RuntimeError) as exc:
+                log.error("%s could not start: %s", label, exc)
+                return ""
+            return await drain_llm_subprocess(proc, backend, label, log=log)
 
     if timeout is None or timeout <= 0:
         return await launch_and_drain()

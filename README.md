@@ -397,6 +397,18 @@ remaining scope, workspace, session, artifacts, and accounting, then resumes
 the same job with a fresh execution allowance. Later queued jobs remain held
 until the whole request completes. A pending update may restart between
 attempts; the durable checkpoint restores the same job first.
+Actual workers also retain execution state under `.cozter/executions/`,
+separate from schedules. Codex, Claude Code, Copilot and Grok resume an exact
+provider session; Copilot keeps its private session home with that job.
+Meta, Z.ai and llama restore their assistant/tool transcript and completed
+tool results. An interrupted command with no recorded result is reported to
+the resumed model as having an unknown outcome, requiring inspection before
+repeating it. No saved tool call is automatically replayed. State is isolated
+by workspace, queue entry, worker, backend, model, permission and effort;
+changed guidance joins the same conversation. Internal routing, summary and
+compaction calls stay stateless. Completed queue entries remove their owned
+execution state. Invalid saved state is preserved and reported rather than
+silently starting over. No schedule definition changes are needed.
 The continuation instruction asks workers to reuse per-case validation
 checkpoints when inputs and the build are unchanged, such as CTest `-F`,
 while checking retained full logs for prior failures. A successful remaining
@@ -1160,6 +1172,13 @@ execution. Missing or invalid values use the default. Ordinary plans without
 markers retain their ordered behavior. The planner prefers the fewest workers
 that cover the request and uses saved checkpoints to avoid repeating completed
 audits, revalidating only the evidence needed for remaining work.
+The active plan, completed reports and worker cursor are saved before another
+worker starts. A later execution allowance resumes pending work without
+another planning call or replaying completed workers. Consecutive follow-up
+obligations assigned to the same tier are combined into cohesive workers;
+all individual obligations and overflow remain explicit. Duplicate pending
+instructions are removed, while verification after changes and stronger-tier
+escalations remain distinct work.
 
 The grading rubric the planner is held to:
 
@@ -1333,9 +1352,9 @@ no-key fallback, Bearer fetch,
 provider non-chat filter, empty-catalog fallback; each backend keeps a
 per-module `fetch_model_ids` alias) and its shared key health check.
 That loop reuses one HTTP session for the
-turn's tool calls and retries. One turn's `tool_calls` run concurrently via
-`asyncio.gather` (results re-ordered to request order before appending), so
-independent reads/searches overlap instead of running strictly sequentially;
+turn's tool calls and retries. Consecutive trusted builtin read-only calls run
+in groups of at most four, with results retained in request order. Writes,
+shell/build commands and unknown plugins form serial barriers;
 the loop advertises `parallel_tool_calls` so the model may batch independent
 calls in a single turn. Z.ai's text chat-completion models from GLM-4.6
 onward, plus multimodal `glm-5.3-flash`/`glm-5.3-flashx`, opt into Z.ai's incremental
@@ -1343,6 +1362,13 @@ tool-call argument stream; older vision models use their standard streamed
 function-call deltas because that vision request schema does not accept
 `tool_stream`. The shared SSE parser merges
 either shape before executing a requested tool.
+The builtin `read_files` tool reads up to 16 independent file ranges in one
+model round trip, with at most four simultaneous reads, 8,192 characters per
+file preview and a 65,536-character aggregate cap. The dispatcher retains up
+to 32,768 characters for builtin `read_file` and 65,536 for `read_files`, with
+explicit paging markers. Other tools and plugins retain the 4,000-character
+limit. All backends receive guidance to batch independent inspections and
+reuse still-valid verification evidence without weakening completion checks.
 
 Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its
@@ -1757,7 +1783,7 @@ ignored for local secrets and runtime queues.
   `launch_process.py`, `config.py`, `updater.py`, and `utils.py`
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
-  `colony.py`, `flexible.py`, and `schedules.py`
+  `colony.py`, `flexible.py`, `execution_state.py`, and `schedules.py`
 - Chat-platform adapters: `backends_bot/__init__.py`, `base.py`, `formatting.py`,
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/__init__.py`, `base.py`, `_http_process.py`,
@@ -1765,10 +1791,10 @@ ignored for local secrets and runtime queues.
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
   `llama.py`, `zai.py`, and `meta.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
-  the 17 files under `agent_tools/builtin/` (`__init__.py`, `apply_patch.py`,
+  the 18 files under `agent_tools/builtin/` (`__init__.py`, `apply_patch.py`,
   `bash.py`, `copy_file.py`, `delete_file.py`, `edit_file.py`, `glob.py`,
   `grep.py`, `list_dir.py`, `make_dir.py`, `move_file.py`, `multi_edit.py`,
-  `read_file.py`, `tree.py`, `web_fetch.py`, `web_search.py`, `write_file.py`),
+  `read_file.py`, `read_files.py`, `tree.py`, `web_fetch.py`, `web_search.py`, `write_file.py`),
   and the 11 files under `agent_tools/plugins/` (`__init__.py`,
   `_git_common.py`, `calculator.py`, `current_time.py`, `git_info.py`,
   `git_ops.py`, `git_sync.py`, `http_request.py`, `memory.py`, `notes.py`,
@@ -1778,7 +1804,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (91 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 88 `test_*.py` modules:
+- Tests (96 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 93 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_backend_audit_regressions.py`,
@@ -1786,13 +1812,16 @@ ignored for local secrets and runtime queues.
   `test_bash_process_output.py`, `test_bash_progress.py`, `test_blocked_judge_runtime.py`, `test_bot_commands.py`,
   `test_bot_recovery_and_lifecycle.py`, `test_claude_background_guard.py`,
   `test_claude_model_capabilities.py`, `test_checkpoint_scope.py`, `test_cli_commands.py`,
+  `test_cli_native_continuation.py`,
   `test_cloud_model_capabilities.py`, `test_compaction.py`, `test_config.py`,
   `test_detached_tasks.py`, `test_discovery_optimization.py`,
   `test_discovery_pruning.py`, `test_discovery_tools_async.py`,
   `test_edit_file_read_limits.py`, `test_flexible_parallel_plan.py`,
+  `test_execution_state.py`, `test_flexible_continuation.py`,
   `test_flexible_parallel_runtime.py`, `test_flexible.py`,
   `test_git_checkout_integrity.py`, `test_git_process_output.py`,
   `test_http_body_sniff.py`, `test_http_latency.py`, `test_http_redirect_method.py`,
+  `test_http_execution_continuation.py`,
   `test_inject.py`, `test_internal_backend_deadline.py`, `test_interrupted_turns.py`,
   `test_job_continuation.py`, `test_job_prerequisite_retry.py`,
   `test_jpeg_dimensions.py`, `test_judge_blocked.py`, `test_launch_process.py`,
@@ -1801,6 +1830,7 @@ ignored for local secrets and runtime queues.
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
   `test_platform_formatting.py`, `test_prerequisite_checkpoint.py`,
   `test_prompt_subprocess.py`, `test_queue_persistence_latency.py`,
+  `test_read_files.py`,
   `test_reply_delivery.py`, `test_run_lock.py`, `test_runtime_diagnostics.py`,
   `test_schedule_execution.py`, `test_session_picker.py`,
   `test_session_write_latency.py`, `test_signal_attachment_decoding.py`,

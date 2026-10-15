@@ -2,8 +2,8 @@
 
 llama-server, Z.ai (GLM), and any other server that speaks OpenAI-style
 ``/chat/completions`` with streaming + tool calls share one tool-calling
-loop: send messages + tools, execute the ``tool_calls`` the model returns
-concurrently via asyncio.gather (results re-ordered before appending),
+loop: send messages + tools, execute independent read-only ``tool_calls``
+in bounded batches while preserving state-changing tool barriers,
 append the results, and re-call until the model stops calling tools. The
 loop runs inside a fake ``asyncio.subprocess.Process`` (HttpAgentProcess)
 so agent.py consumes its events the same way it does the CLI backends'.
@@ -17,9 +17,12 @@ name is resolved, and the per-loop safety limits.
 from __future__ import annotations
 
 import asyncio
+import copy
+import hashlib
 import json
 import logging
 import math
+import os
 import random
 import time
 import urllib.parse
@@ -32,6 +35,7 @@ import aiohttp
 
 from .. import agent_tools as tools
 from ..agent_tools.builtin.bash import shell_context
+from ..execution_state import current_run
 from ..utils import clip_status_value, iter_bounded_lines
 from ._http_process import HttpAgentProcess, http_error_translator
 from .base import (
@@ -68,6 +72,7 @@ _HTTP_CONNECT_TIMEOUT = 30.0
 _COMPLETION_TAIL_DRAIN_SECONDS = 0.05
 _COMPLETION_TAIL_DRAIN_BYTES = 64 * 1024
 _BLOCKED_TOOL_ROUND_LIMIT = 3
+_PARALLEL_READ_TOOLS = 4
 # 3600s real-work cap; bound error bodies.
 _MAX_HTTP_ERROR_BODY_BYTES = 8 * 1024
 _EOF_SUCCESS_FINISH_REASONS = frozenset({
@@ -238,6 +243,70 @@ def _is_blocked_tool_result(result: str) -> bool:
         ": skipped (path escapes workspace:" in line and line.endswith(")")
         for line in lines
     )
+
+
+def _parallel_read_tool(name: str) -> bool:
+    """Only trusted builtins can cross another read in the same batch."""
+    tool = tools._BY_NAME.get(name)
+    return (
+        tool is not None and not tool.is_plugin
+        and name in tools.READ_ONLY_TOOL_NAMES
+    )
+
+
+def _restore_http_messages(
+    saved: object, pending: object,
+) -> list[dict[str, Any]]:
+    """Close interrupted tool batches without replaying their side effects.
+
+    Results are checkpointed individually and may complete out of order. The
+    provider transcript always receives them in the original tool-call order.
+    Missing outcomes require fresh verification, rather than assuming that a
+    write or command failed when cancellation raced its completion.
+    """
+    if saved is None:
+        return []
+    if not isinstance(saved, list):
+        raise RuntimeError("Saved HTTP transcript is invalid; preserve it for recovery.")
+    messages: list[dict[str, Any]] = []
+    byte_count = 0
+    for message in saved:
+        if not isinstance(message, dict) or message.get("role") not in {
+            "user", "assistant", "tool",
+        }:
+            raise RuntimeError("Saved HTTP transcript contains an invalid message.")
+        try:
+            byte_count += _message_payload_bytes(message)
+        except (TypeError, ValueError):
+            raise RuntimeError("Saved HTTP transcript is not serializable.") from None
+        if byte_count > _MAX_AGENT_MESSAGE_BYTES:
+            raise RuntimeError("Saved HTTP transcript exceeds its safety limit.")
+        messages.append(copy.deepcopy(message))
+    if not messages or messages[-1].get("role") != "assistant":
+        return messages
+    calls = messages[-1].get("tool_calls")
+    if not isinstance(calls, list):
+        return messages
+    results = pending if isinstance(pending, dict) else {}
+    for position, call in enumerate(calls):
+        if not isinstance(call, dict):
+            raise RuntimeError("Saved HTTP transcript contains an invalid tool call.")
+        name, _ = tools.parse_openai_call(call)
+        result = results.get(str(position))
+        if not isinstance(result, str):
+            result = (
+                "Interrupted: this tool batch ended before a durable result"
+                " was recorded for this call. Its outcome is unknown; it may"
+                " already have changed files or started a process. Inspect"
+                " the actual files, process state, and existing logs before"
+                " deciding what remains. Do not automatically replay this"
+                " call or repeat completed side effects."
+            )
+        messages.append({
+            "role": "tool", "tool_call_id": call.get("id", ""),
+            "name": name, "content": result,
+        })
+    return messages
 
 
 class OpenAIChatBackend(Backend):
@@ -440,7 +509,26 @@ class OpenAIChatBackend(Backend):
             if vision_parts is not None:
                 user_content = vision_parts
 
-        # Stateless: workspace goes in the prompt.
+        # The execution record is scoped to this queued job/worker/provider.
+        # Compaction calls remain stateless and never acquire tool history.
+        execution = None if compaction else current_run()
+        identity = hashlib.sha256(_compact_json({
+            "backend": self.name,
+            "workspace": os.path.normcase(os.path.realpath(workspace_path)),
+            "model": request_model,
+            "approval": effective_approval,
+            "effort": effort_fields,
+            "endpoint": endpoint,
+        }).encode("utf-8")).hexdigest()
+        prompt_digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        restored: list[dict[str, Any]] = []
+        previous_prompt_digest: object = None
+        if execution is not None and execution.get("http_identity") == identity:
+            restored = _restore_http_messages(
+                execution.get("http_messages"),
+                execution.get("http_pending_results"),
+            )
+            previous_prompt_digest = execution.get("http_prompt_digest")
         messages: list[dict] = [
             {
                 "role": "system",
@@ -448,9 +536,22 @@ class OpenAIChatBackend(Backend):
                     workspace_path, enabled_tool_names, effective_approval,
                 ),
             },
-            {"role": "user", "content": user_content},
+            *restored,
         ]
+        if not restored or previous_prompt_digest != prompt_digest:
+            messages.append({"role": "user", "content": user_content})
         message_bytes = sum(_message_payload_bytes(message) for message in messages)
+        pending_results: dict[str, str] = {}
+        checkpoint_lock = asyncio.Lock()
+
+        async def save_transcript() -> None:
+            if execution is not None:
+                await execution.save(
+                    http_identity=identity,
+                    http_messages=copy.deepcopy(messages[1:]),
+                    http_prompt_digest=prompt_digest,
+                    http_pending_results=dict(pending_results),
+                )
 
         def append_message(message: dict[str, Any]) -> bool:
             """Retain *message* only while the aggregate safety cap permits."""
@@ -483,7 +584,9 @@ class OpenAIChatBackend(Backend):
         stopped_on_budget = False
         stop_reason = "Tool limit reached."
         tool_rounds = 0
-        has_preserved_reasoning = False
+        has_preserved_reasoning = preserve_reasoning and any(
+            message.get("reasoning_content") for message in restored
+        )
         # One session per turn.
 
         def completion_payload(
@@ -505,6 +608,7 @@ class OpenAIChatBackend(Backend):
                 payload.update(self._tool_request_fields(request_model))
             return payload
 
+        await save_transcript()
         async with aiohttp.ClientSession(json_serialize=_compact_json) as http_session:
             async def stream_completion(payload: dict[str, Any]) -> tuple[
                 str, str, list[dict],
@@ -544,6 +648,10 @@ class OpenAIChatBackend(Backend):
                         })
 
                     if not tool_calls:
+                        if not append_message(assistant_msg):
+                            emit_message_limit_error()
+                            return
+                        await save_transcript()
                         return
                     tool_rounds += 1
 
@@ -551,8 +659,11 @@ class OpenAIChatBackend(Backend):
                     if not append_message(assistant_msg):
                         emit_message_limit_error()
                         return
+                    pending_results.clear()
+                    await save_transcript()
 
-                    # Run one turn's tool_calls concurrently.
+                    # Batch consecutive reads; writes and unknown plugins are
+                    # ordered barriers even if the provider groups them.
                     _batch_names: list[str] = []
                     _batch_args: list[dict] = []
                     _batch_skipped: list[bool] = []
@@ -568,36 +679,63 @@ class OpenAIChatBackend(Backend):
                             tool_repeat_counts[call_signature] > tool_repeat_limit,
                         )
 
-                    async def run_tool_call(
-                        _name: str, _args: dict,
-                    ) -> str:
+                    async def run_tool_call(run_index: int) -> None:
                         # execute_tool owns permissions, status, truncation, timeout.
-                        return await tools.execute_tool(
-                            _name, _args, workspace_path, effective_approval,
+                        _name = _batch_names[run_index]
+                        result = await tools.execute_tool(
+                            _name, _batch_args[run_index], workspace_path, effective_approval,
                             proc.emit,
                         )
+                        async with checkpoint_lock:
+                            _results[run_index] = result
+                            pending_results[str(run_index)] = result
+                            await save_transcript()
 
                     _results: list[str | None] = [None] * len(tool_calls)
-                    runnable_indices: list[int] = [
-                        batch_index for batch_index, _skip in enumerate(_batch_skipped)
-                        if not _skip
-                    ]
                     batch_started = time.monotonic()
-                    if runnable_indices:
-                        _gathered = await asyncio.gather(
-                            *(
-                                run_tool_call(
-                                    _batch_names[run_index], _batch_args[run_index],
-                                )
-                                for run_index in runnable_indices
-                            ),
-                        )
-                        for _pos, _res in zip(runnable_indices, _gathered, strict=True):
-                            _results[_pos] = _res
+                    position = 0
+                    while position < len(tool_calls):
+                        if _batch_skipped[position]:
+                            position += 1
+                            continue
+                        if not _parallel_read_tool(_batch_names[position]):
+                            await run_tool_call(position)
+                            position += 1
+                            continue
+                        read_indices: list[int] = []
+                        while (
+                            position < len(tool_calls)
+                            and _parallel_read_tool(_batch_names[position])
+                            and len(read_indices) < _PARALLEL_READ_TOOLS
+                        ):
+                            if not _batch_skipped[position]:
+                                read_indices.append(position)
+                            position += 1
+                        # Bounded task creation also bounds filesystem threads.
+                        read_tasks = [
+                            asyncio.create_task(run_tool_call(index))
+                            for index in read_indices
+                        ]
+                        try:
+                            await asyncio.gather(*read_tasks)
+                        except BaseException:
+                            # gather does not cancel siblings after an I/O or
+                            # checkpoint error. Settle this batch before its
+                            # execution record can leave the owning worker.
+                            for task in read_tasks:
+                                if not task.done():
+                                    task.cancel()
+                            cleanup = asyncio.gather(*read_tasks, return_exceptions=True)
+                            while not cleanup.done():
+                                try:
+                                    await asyncio.shield(cleanup)
+                                except asyncio.CancelledError:
+                                    continue
+                            raise
                     performance_logger.info(
                         "stage=tool_batch backend=%s seconds=%.3f calls=%d skipped=%d",
                         self.name, time.monotonic() - batch_started,
-                        len(tool_calls), len(tool_calls) - len(runnable_indices),
+                        len(tool_calls), sum(_batch_skipped),
                     )
                     batch_results: list[str] = []
                     for _i, call in enumerate(tool_calls):
@@ -633,6 +771,8 @@ class OpenAIChatBackend(Backend):
                         if not append_message(tool_message):
                             emit_message_limit_error()
                             return
+                    pending_results.clear()
+                    await save_transcript()
 
                     # A skipped-only round cannot add evidence. Do not spend
                     # hundreds of completions asking for the same blocked calls.
@@ -683,6 +823,7 @@ class OpenAIChatBackend(Backend):
                 if not append_message(continuation_message):
                     emit_message_limit_error()
                     return
+                await save_transcript()
 
             # Fall out of the loop: force one final no-tools response.
             final_request_message = {
@@ -695,11 +836,16 @@ class OpenAIChatBackend(Backend):
             if not append_message(final_request_message):
                 emit_message_limit_error()
                 return
+            await save_transcript()
 
             payload = completion_payload(None)
             assistant_text, _, _ = await stream_completion(payload)
 
             if assistant_text:
+                if not append_message({"role": "assistant", "content": assistant_text}):
+                    emit_message_limit_error()
+                    return
+                await save_transcript()
                 proc.emit({"type": "assistant_text", "text": assistant_text})
                 if stopped_on_budget:
                     # The final report survives, but another judge must not
@@ -808,7 +954,7 @@ def _completion_payload(
     payload.update(effort_fields)
     if tools_schema is not None:
         payload["tools"] = tools_schema
-        # One turn's tool_calls via gather.
+        # Providers can group independent reads; execution preserves writes.
         payload["parallel_tool_calls"] = True
     return payload
 

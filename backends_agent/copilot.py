@@ -26,6 +26,7 @@ the authenticated account's model selector instead.
 import asyncio
 import json
 import logging
+import re
 import os
 import queue
 import shutil
@@ -33,6 +34,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
+from typing import TYPE_CHECKING
 
 from .base import (
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, ProcessResourceMap,
@@ -40,9 +43,67 @@ from .base import (
     create_prompt_subprocess, executable_command, fresh_model_catalog,
     record_backend_error, summarize_cli_tool, truncate_status_text,
 )
-from ..utils import terminate_windows_process_tree
+from ..utils import is_path_within, terminate_windows_process_tree
+
+if TYPE_CHECKING:
+    from .. import execution_state
 
 logger = logging.getLogger(__name__)
+
+
+def _native_session_id(value: object) -> str | None:
+    """Require a complete UUID so resume cannot select a prefix/name/latest."""
+    if not isinstance(value, str) or len(value) != 36:
+        return None
+    try:
+        parsed = str(uuid.UUID(value))
+    except ValueError:
+        return None
+    return parsed if parsed == value.lower() else None
+
+
+def _record_missing_native_session(message: object) -> None:
+    """Permit portable recovery only for an exact missing ID before activity."""
+    from .. import execution_state
+
+    record = execution_state.current_run()
+    if (record is None or not record.get("native_resume_attempted")
+            or record.get("native_tools_started") or not isinstance(message, str)):
+        return
+    native_id = _native_session_id(record.get("native_session_id"))
+    if native_id is None:
+        return
+    escaped = re.escape(native_id)
+    missing = re.fullmatch(
+        rf"\s*(?:No (?:saved )?(?:session|conversation) found (?:with |for )?"
+        rf"(?:(?:session )?ID[: ]+)?['\"]?{escaped}['\"]?"
+        rf"|(?:Session|Conversation)(?: ID)?[: ]+['\"]?{escaped}['\"]? (?:was )?not found"
+        rf"|Session not found[: ]+['\"]?{escaped}['\"]?)\.?\s*",
+        message, re.IGNORECASE,
+    )
+    if missing:
+        record.set(native_session_id=None, native_resume_attempted=False,
+                   native_resume_unavailable=True, native_unavailable_session_id=native_id)
+
+
+def _native_copilot_home(record: "execution_state.ExecutionRecord") -> str:
+    """Keep native state inside this execution, separate from user history."""
+    home = os.fspath(record.directory / "copilot-home")
+    if os.path.islink(home) or not is_path_within(home, os.fspath(record.directory)):
+        raise RuntimeError("Copilot execution home must remain inside its execution directory")
+    os.makedirs(home, exist_ok=True)
+    source_home = os.environ.get("COPILOT_HOME") or os.path.join(
+        os.path.expanduser("~"), ".copilot",
+    )
+    for name in (*_COPILOT_HOME_FILES, "session-state"):
+        target = os.path.join(home, name)
+        if os.path.islink(target) or not is_path_within(target, home):
+            raise RuntimeError("Copilot native state must remain inside its execution home")
+        if name in _COPILOT_HOME_FILES and not os.path.exists(target):
+            source = os.path.join(source_home, name)
+            if os.path.isfile(source):
+                shutil.copy2(source, target)
+    return home
 
 _ACP_PROTOCOL_VERSION = 1
 _MODEL_DISCOVERY_TIMEOUT_SEC = 12
@@ -382,6 +443,21 @@ class CopilotBackend(Backend):
         compaction: bool = False,
         effort: int = 0,
     ) -> asyncio.subprocess.Process:
+        from .. import execution_state
+
+        record = None if compaction else execution_state.current_run()
+        native_id = _native_session_id(record.get("native_session_id")) if record else None
+        native_home = _native_copilot_home(record) if record is not None else None
+        if (native_id is not None and native_home is not None
+                and not is_path_within(os.path.join(native_home, "session-state", native_id), native_home)):
+            raise RuntimeError("Copilot session must remain inside its execution home")
+        if (native_id is not None and native_home is not None
+                and not os.path.isdir(os.path.join(native_home, "session-state", native_id))):
+            # This is our exact private home and documented native state path.
+            # Missing local persistence is known before any provider/tool runs.
+            assert record is not None
+            await record.save(native_session_id=None, native_unavailable_session_id=native_id)
+            native_id = None
         # Resolve images before launch; prompt bytes stay intact on stdin.
         image_paths = (
             attachment_image_paths(prompt, workspace_path)
@@ -397,12 +473,28 @@ class CopilotBackend(Backend):
             "--no-remote-export",
         ]
         self.append_launch_options(cmd, model, effort, approval)
+        if native_id is not None:
+            cmd += ["--resume", native_id]
+        elif record is not None:
+            # This client-selected UUID is not resumable until the CLI emits
+            # its matching session.start confirmation.
+            candidate_id = str(uuid.uuid4())
+            cmd += ["--session-id", candidate_id]
+            await record.save(native_candidate_session_id=candidate_id)
 
         # Native vision via --attachment flags.
         for _image_path in image_paths:
             cmd += ["--attachment", _image_path]
 
-        isolated_home = _create_isolated_copilot_home()
+        isolated_home = (
+            native_home if native_home is not None
+            else _create_isolated_copilot_home()
+        )
+        if record is not None:
+            await record.save(native_home="copilot-home", native_session_id=native_id,
+                              native_resume_supported=True,
+                              native_resume_attempted=native_id is not None,
+                              native_tools_started=False, native_resume_unavailable=False)
         try:
             env = os.environ.copy()
             env["COPILOT_HOME"] = isolated_home
@@ -412,11 +504,13 @@ class CopilotBackend(Backend):
                 env=env,
             )
         except BaseException:
-            _remove_isolated_copilot_home(isolated_home)
+            if record is None:
+                _remove_isolated_copilot_home(isolated_home)
             raise
 
         # Key by Process, not PID.
-        self._process_homes.remember(proc, isolated_home)
+        if record is None:
+            self._process_homes.remember(proc, isolated_home)
         return proc
 
     async def cleanup_process(
@@ -430,7 +524,7 @@ class CopilotBackend(Backend):
     _TOOL_USE_TYPES = ("tool_use", "tool_call", "tool_start", "tool")
     _TOOL_RESULT_TYPES = ("tool_result", "tool_output", "tool_end")
     _FILE_TYPES = ("file_change", "edit", "file")
-    _ERROR_TYPES = ("error", "turn.failed", "failed")
+    _ERROR_TYPES = ("error", "turn.failed", "failed", "session.error")
     _ASSISTANT_TYPES = (
         "assistant_message", "agent_message", "message",
         "completion", "response", "text", "assistant.message",
@@ -440,10 +534,28 @@ class CopilotBackend(Backend):
     )
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
+        from .. import execution_state
+
         if not isinstance(event, dict):
             return
         event_type = event.get("type") or event.get("event") or ""
         if not isinstance(event_type, str):
+            return
+        record = execution_state.current_run()
+        if (record is not None and not record.get("native_tools_started")
+                and (event_type in (*self._TOOL_USE_TYPES, *self._TOOL_RESULT_TYPES,
+                                    *self._FILE_TYPES, *self._ASSISTANT_TYPES)
+                     or event_type.startswith(("tool.", "tool.execution_", "assistant.")))):
+            record.set(native_tools_started=True)
+        if event_type in ("session.start", "session.resume"):
+            data = event.get("data")
+            native_id = _native_session_id(data.get("sessionId")) if isinstance(data, dict) else None
+            record = execution_state.current_run()
+            if record is not None and native_id is not None:
+                expected = (_native_session_id(record.get("native_session_id"))
+                            or _native_session_id(record.get("native_candidate_session_id")))
+                if native_id == expected:
+                    record.set(native_session_id=native_id, native_candidate_session_id=None)
             return
 
         # Typed branches first.
@@ -485,15 +597,18 @@ class CopilotBackend(Backend):
             return
 
         if event_type in self._ERROR_TYPES:
-            msg = event.get("message")
+            data = event.get("data")
+            payload = data if isinstance(data, dict) and event_type == "session.error" else event
+            msg = payload.get("message")
             if not msg:
-                err = event.get("error")
+                err = payload.get("error")
                 if isinstance(err, dict):
                     msg = err.get("message")
                 elif isinstance(err, str):
                     msg = err
             if not msg:
                 msg = "Unknown error"
+            _record_missing_native_session(msg)
             record_backend_error(result, msg)
             return
 

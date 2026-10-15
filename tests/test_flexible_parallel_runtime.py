@@ -188,6 +188,10 @@ class FlexibleParallelRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         async def drive(*args, **kwargs):
             calls.append(args[2])
+            if "[Sub-task 3/3:" in args[2]:
+                # The repair worker does not request a new inspection after
+                # changing inputs; that legitimate rerun has separate coverage.
+                return AgentResult(text="repairs verified"), False
             return AgentResult(text="findings\n[followup:low] inspect A"), False
 
         await self.run_flexible(drive)
