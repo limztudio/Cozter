@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..owned_worker import run_owned_worker
 from ..base import (
     AgentTool,
     copy_file_atomically,
@@ -19,6 +20,9 @@ class CopyFileTool(AgentTool):
     parameters = source_destination_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
+        return await run_owned_worker(self._run_sync, workspace_path, args)
+
+    def _run_sync(self, workspace_path: str, args: dict) -> str:
         paths = prepare_source_destination(
             workspace_path, args, file_action="copy",
         )

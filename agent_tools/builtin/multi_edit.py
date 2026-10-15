@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, ClassVar
 
+from ..owned_worker import run_owned_worker
 from ..base import (
     AgentTool,
     apply_string_replacement,
@@ -39,6 +40,9 @@ class MultiEditTool(AgentTool):
     }
 
     async def run(self, workspace_path: str, args: dict) -> str:
+        return await run_owned_worker(self._run_sync, workspace_path, args)
+
+    def _run_sync(self, workspace_path: str, args: dict) -> str:
         target, raw_path, path_error = resolve_tool_path(
             workspace_path, args.get("path", ""),
         )

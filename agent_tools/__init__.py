@@ -286,18 +286,31 @@ async def execute_tool(
     if tool is None:
         result = f"Unknown tool: {name}"
     else:
-        # Real-work cap; cancel stops instantly.
+        # Real-work cap; mutation tools settle owned disk work before cancellation.
         cap = _tool_timeout_seconds()
         started = time.monotonic()
         outcome = "ok"
+        tool_task: asyncio.Task[Any] | None = None
         performance_logger.info(
             "stage=tool_start tool=%s limit_seconds=%s", name, cap,
         )
         try:
             with tool_permission_scope(approval):
-                raw_result: object = await asyncio.wait_for(
-                    tool.run(workspace_path, args), timeout=cap,
-                )
+                # Keep the real tool owner reachable throughout cancellation.
+                # wait() never forwards caller cancellation to that owner, so
+                # this layer can cancel it once and settle it explicitly.
+                tool_task = asyncio.create_task(tool.run(workspace_path, args))
+                completed, _pending = await asyncio.wait((tool_task,), timeout=cap)
+                if not completed:
+                    if not tool_task.cancelling():
+                        tool_task.cancel()
+                    await asyncio.wait((tool_task,))
+                    try:
+                        tool_task.result()
+                    except BaseException:
+                        pass
+                    raise TimeoutError
+                raw_result: object = tool_task.result()
             if isinstance(raw_result, str):
                 result = raw_result
             else:
@@ -314,6 +327,20 @@ async def execute_tool(
                 )
         except asyncio.CancelledError:
             outcome = "cancelled"
+            if tool_task is not None:
+                if not tool_task.done() and not tool_task.cancelling():
+                    tool_task.cancel()
+                while not tool_task.done():
+                    try:
+                        await asyncio.wait((tool_task,))
+                    except asyncio.CancelledError:
+                        continue
+                try:
+                    tool_task.result()
+                except BaseException:
+                    # A late failure must be observed without replacing the
+                    # caller's original cancellation or reporting success.
+                    pass
             raise  # cancel is the only stop.
         except TimeoutError:
             outcome = "timeout"

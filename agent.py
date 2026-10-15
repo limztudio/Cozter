@@ -3359,8 +3359,11 @@ async def _run_turn_impl(
     await asyncio.wait((turn.normal_log_task,))
     turn.normal_log_task.result()
 
-    # Compaction runs post-turn.
-    create_background_task(
+    # Maintenance receives every input explicitly. Give its task a clean
+    # context so a slow compactor/title or pipeline-lock wait cannot retain
+    # completed backend transcripts, turn budgets, or expired timeout owners.
+    contextvars.Context().run(
+        create_background_task,
         _run_post_turn_maintenance(
             workspace_path,
             session_id,

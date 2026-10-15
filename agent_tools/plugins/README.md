@@ -48,8 +48,10 @@ plugin unless its class sets `requires_full_permission = True`. Set that flag
 for any capability that can access host resources outside Cozter's
 workspace-bounded tool model, such as arbitrary paths, commands, credentials,
 or sockets. The flag only controls HTTP-tool availability; it does not
-sandbox plugin code. Plugin calls carry the 3600s real-work cap (cancel still
-stops instantly), while CLI-backend plugin scripts follow that
+sandbox plugin code. Plugin calls carry the 3600s real-work cap. Cancellation
+stops cancellable work promptly; notes append and clear first wait for an
+already-started disk mutation to finish, so a subsequent operation cannot race
+an abandoned write or deletion. CLI-backend plugin scripts follow that
 CLI's own shell/tool policy instead.
 
 ## Throughput and result bounds

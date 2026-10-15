@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 
+from ..owned_worker import run_owned_worker
 from ..base import (
     AgentTool,
     create_text_file_atomically,
@@ -130,6 +131,9 @@ class ApplyPatchTool(AgentTool):
     )
 
     async def run(self, workspace_path: str, args: dict) -> str:
+        return await run_owned_worker(self._run_sync, workspace_path, args)
+
+    def _run_sync(self, workspace_path: str, args: dict) -> str:
         patch = args.get("patch")
         if not isinstance(patch, str):
             return "Error: 'patch' must be a non-empty unified diff"

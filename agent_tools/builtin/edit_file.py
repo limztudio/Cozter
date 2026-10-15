@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, ClassVar
 
+from ..owned_worker import run_owned_worker
 from ..base import (
     AgentTool,
     apply_string_replacement,
@@ -26,6 +27,9 @@ class EditFileTool(AgentTool):
     parameters: ClassVar[dict[str, Any]] = path_replacement_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
+        return await run_owned_worker(self._run_sync, workspace_path, args)
+
+    def _run_sync(self, workspace_path: str, args: dict) -> str:
         try:
             target = resolve_inside_workspace(
                 workspace_path, args.get("path", ""),

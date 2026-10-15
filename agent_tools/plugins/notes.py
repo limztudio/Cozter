@@ -25,6 +25,7 @@ from ..base import (
     resolve_workspace_entry,
     write_text_after_edit,
 )
+from ..owned_worker import run_owned_worker
 from ...utils import clip_status_value
 
 _NOTES_RELPATH = ".cozter/notes.md"
@@ -71,10 +72,10 @@ class NotesTool(AgentTool):
             return f"Error: {exc}"
 
         if action == "clear":
-            return await asyncio.to_thread(self._clear, target)
+            return await run_owned_worker(self._clear, target)
         if action == "read":
             return await asyncio.to_thread(self._read, target)
-        return await asyncio.to_thread(self._append, target, args)
+        return await run_owned_worker(self._append, target, args)
 
     def _append(self, target: str, args: dict) -> str:
         text = args.get("text")

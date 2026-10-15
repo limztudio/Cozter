@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from ..owned_worker import run_owned_worker
 from ..base import (
     AgentTool,
     path_parameters,
@@ -19,6 +20,9 @@ class DeleteFileTool(AgentTool):
     parameters = path_parameters()
 
     async def run(self, workspace_path: str, args: dict) -> str:
+        return await run_owned_worker(self._run_sync, workspace_path, args)
+
+    def _run_sync(self, workspace_path: str, args: dict) -> str:
         raw_path = args.get("path", "")
         # Unlink the link, not its target.
         try:

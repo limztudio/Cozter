@@ -1458,6 +1458,15 @@ another bounded budget. All backends receive guidance to batch independent
 inspections and
 reuse still-valid verification evidence without weakening completion checks.
 
+Filesystem mutations (`write_file`, `edit_file`, `multi_edit`, `apply_patch`,
+`copy_file`, `move_file`, `delete_file`, and `make_dir`) run on worker threads,
+so disk writes and patch matching do not block status updates or unrelated
+reads. Each call retains ownership until its worker finishes. Cancellation or
+a tool timeout waits for an already-started mutation to settle before returning;
+later operations in the same tool sequence cannot overtake it. This preserves
+ordered writes and existing atomic replacement behavior. The notes plugin uses
+the same ownership rule for append and clear.
+
 Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its
 workspace-write sandbox for `auto`, and a read-only sandbox for `confirm`
@@ -1688,6 +1697,7 @@ Cozter/
     │                       helpers, and the shared fetch-cap PARTIAL footer
     ├── discovery.py        bounded whole-match pages with continuation offsets
     ├── html_scan.py        forward-only title and search-anchor extraction
+    ├── owned_worker.py     blocking mutations with cancellation settlement
     ├── builtin/            18 files: 17 built-in tools (bash, read_file, read_files, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch) plus __init__.py
     └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, git_ops, git_sync, memory, http_request shipped live; _git_common.py holds the git tools' shared runner/validation/truncation and is skipped by the loader)
 ```
@@ -1881,6 +1891,7 @@ ignored for local secrets and runtime queues.
   `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
   `llama.py`, `zai.py`, and `meta.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
+  `agent_tools/owned_worker.py`,
   `agent_tools/discovery.py`, `agent_tools/html_scan.py`,
   the 18 files under `agent_tools/builtin/` (`__init__.py`, `apply_patch.py`,
   `bash.py`, `copy_file.py`, `delete_file.py`, `edit_file.py`, `glob.py`,
@@ -1895,7 +1906,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (106 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 103 `test_*.py` modules:
+- Tests (110 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 107 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`, `test_agent_post_turn.py`,
   `test_agent_process_cleanup.py`, `test_agent_prompt.py`, `test_agent_tools.py`,
   `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`, `test_backend_audit_regressions.py`,
@@ -1913,12 +1924,13 @@ ignored for local secrets and runtime queues.
   `test_flexible_parallel_runtime.py`, `test_flexible.py`,
   `test_git_checkout_integrity.py`, `test_git_plugin_paging.py`, `test_git_process_output.py`,
   `test_http_body_sniff.py`, `test_http_latency.py`, `test_http_redirect_method.py`,
-  `test_http_execution_continuation.py`,
+  `test_http_execution_continuation.py`, `test_http_owned_mutation_cancellation.py`,
   `test_inject.py`, `test_internal_backend_deadline.py`, `test_interrupted_turns.py`,
   `test_job_continuation.py`, `test_job_prerequisite_retry.py`,
   `test_jpeg_dimensions.py`, `test_judge_blocked.py`, `test_launch_process.py`,
-  `test_launcher_and_followups.py`, `test_memory_corrupt_state.py`,
-  `test_memory_preservation.py`, `test_memory_streamed_search.py`, `test_openai_agent.py`,
+  `test_launcher_and_followups.py`, `test_maintenance_context.py`, `test_memory_corrupt_state.py`,
+  `test_memory_preservation.py`, `test_memory_streamed_search.py`, `test_notes_owned_worker.py`,
+  `test_openai_agent.py`, `test_owned_file_mutations.py`,
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
   `test_platform_formatting.py`, `test_prerequisite_checkpoint.py`,
   `test_plugin_memory_calculator_performance.py`, `test_plugin_parallelism.py`,
@@ -2146,6 +2158,9 @@ Background compaction and titling run as one pipeline per session. A later
 turn's maintenance waits for the earlier pipeline, then checks current state,
 so it can use the compactor's title without launching a competing title request.
 These background waits do not delay the foreground answer.
+Maintenance starts in a fresh task context with its inputs passed explicitly,
+so it cannot retain a finished execution's worker transcripts or turn budget
+while waiting for the session pipeline or a summary response.
 When a worker reports an explicit exhausted quota or authentication failure,
 later plan items for that exact backend and model are marked unrun for the
 current turn. Other models and providers remain eligible. Temporary throttling
