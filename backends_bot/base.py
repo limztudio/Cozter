@@ -2625,9 +2625,10 @@ class BotPlatform(ABC):
             return
         await ctx.reply_text(
             "Select days for this schedule.\n"
-            "Use comma-separated names or numbers, or 'all'.\n"
-            "1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun\n\n"
-            "Examples: '1,3,5' or 'mon,wed,fri' or 'all'\n\n"
+            "Weekday names repeat weekly (e.g., 'mon,wed,fri').\n"
+            "Numbers 1-31 are dates every month (e.g., '1,15').\n"
+            "Use 'all' for daily, or combine them (e.g., 'mon,15').\n"
+            "Dates missing from a month are skipped.\n\n"
             "Enter days (or /cancel):"
         )
         self._expect_input(ctx.user_id, self._receive_reserve_days)
@@ -2637,13 +2638,14 @@ class BotPlatform(ABC):
         days = schedules.parse_days(text)
         if not days:
             await ctx.reply_text(
-                "Could not parse days. Try again (e.g., 'mon,wed,fri'"
-                " or '1,3,5') (or /cancel):"
+                "Could not parse days. Use weekday names for weekly,"
+                " dates 1-31 for monthly, or 'all' for daily"
+                " (e.g., 'mon,wed', '1,15', or 'mon,15') (or /cancel):"
             )
             self._expect_input(ctx.user_id, self._receive_reserve_days)
             return
         await ctx.reply_text(
-            f"Days: {', '.join(days)}\n\n"
+            f"Days: {schedules.format_days(days)}\n\n"
             "Enter time in HH:MM (24-hour) format (or /cancel):"
         )
 
@@ -2653,7 +2655,7 @@ class BotPlatform(ABC):
         )
 
     async def _receive_reserve_time(
-        self, ctx: BotContext, days: list[str],
+        self, ctx: BotContext, days: list[schedules.ScheduleDay],
     ) -> None:
         time_str = schedules.parse_time(ctx.text.strip())
         if time_str is None:
@@ -2682,7 +2684,7 @@ class BotPlatform(ABC):
         )
 
     async def _receive_reserve_command(
-        self, ctx: BotContext, days: list[str], time_str: str,
+        self, ctx: BotContext, days: list[schedules.ScheduleDay], time_str: str,
     ) -> None:
         command = ctx.text.strip()
         if not command:
@@ -2719,7 +2721,7 @@ class BotPlatform(ABC):
             schedules.add_schedule(ws, ctx.user_id, schedule)
         await ctx.reply_text(
             "Schedule created:\n"
-            f"  Days: {', '.join(days)}\n"
+            f"  Days: {schedules.format_days(days)}\n"
             f"  Time: {time_str}\n"
             f"  Command: {command}"
         )
@@ -2743,9 +2745,7 @@ class BotPlatform(ABC):
             return
         lines = ["Schedules:"]
         for schedule_index, schedule in enumerate(user_schedules, 1):
-            raw_days = schedule.get("days", [])
-            days = raw_days if isinstance(raw_days, list) else []
-            days_str = ",".join(day for day in days if isinstance(day, str))
+            days_str = schedules.format_days(schedule.get("days"))
             lines.append(
                 f"  {schedule_index}. [{days_str}] {schedule.get('time', '?')}"
                 f" — {schedule.get('command', '')}"
@@ -2786,10 +2786,8 @@ class BotPlatform(ABC):
             return
         async with workspace.get_lock(ws):
             schedules.remove_schedule(ws, ctx.user_id, schedule_id)
-        raw_days = removed.get("days", [])
-        days = raw_days if isinstance(raw_days, list) else []
         await ctx.reply_text(
-            f"Removed: [{','.join(day for day in days if isinstance(day, str))}]"
+            f"Removed: [{schedules.format_days(removed.get('days'))}]"
             f" {removed.get('time', '?')} — {removed.get('command', '')}"
         )
 

@@ -731,7 +731,7 @@ class ScheduleParserTests(unittest.TestCase):
     def test_parse_days_handles_case_and_spaces(self) -> None:
         self.assertEqual(
             schedules.parse_days(" Mon, WED, 5 "),
-            ["mon", "wed", "fri"],
+            ["mon", "wed", 5],
         )
 
     def test_schedule_parsers_ignore_malformed_values(self) -> None:

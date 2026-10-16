@@ -97,8 +97,8 @@ works across every backend.
   replies can upload workspace files or generated images back to chat, while
   CLI mode prints their local paths
 - **Recurring scheduled prompts on Telegram, Slack, and Signal**: `/reserve`
-  queues prompts on selected weekdays and runs them in throwaway sessions so
-  routine jobs do not pollute the user's active conversation
+  queues prompts on selected weekdays or dates every month and runs them in
+  throwaway sessions so routine jobs do not pollute the user's active conversation
 - **Auto-update**: the bot polls origin, fast-forward-pulls only when the
   checkout is clean and not locally ahead, then restarts safely: it re-execs
   in place on POSIX and hands off to the Windows supervisor on Windows
@@ -856,7 +856,33 @@ notifies the chat; use `claude agents` and `claude attach` in the workspace
 to continue that interactive session.
 
 Schedules are stored per workspace in `.cozter/schedules.json` and use
-the host's local time. Each schedule explicitly stores its creating
+the host's local time. In `/reserve`, weekday names such as `mon,wed,fri`
+repeat weekly; numbers such as `1,15,31` mean those dates every month.
+`all` means daily, and `mon,15` runs every Monday and on the 15th of each
+month. A date that does not exist in a month is skipped: a rule for `31`
+does not create an April 30 slot, and a rule for `29` creates no February slot
+in non-leap years. An earlier missed valid occurrence can still catch up once.
+When a weekly day and a monthly date coincide, the schedule runs once at
+its configured time. The wizard, schedule list, and deletion confirmation
+label each rule as `Daily`, `Weekly`, `Monthly`, or a combination.
+
+The `days` array stores weekday abbreviations as strings and monthly dates
+as JSON integers. For example:
+
+| `days` value | Recurrence |
+|---|---|
+| `["mon", "wed", "fri"]` | Every Monday, Wednesday, and Friday |
+| `[1, 15]` | The 1st and 15th of every month |
+| `[31]` | The 31st in months that have one |
+| `["mon", 15]` | Every Monday and the 15th of every month |
+| `["mon", "tue", "wed", "thu", "fri", "sat", "sun"]` | Daily (`all` in the wizard) |
+
+Numeric values are monthly dates, including `1` through `7`; use weekday
+names for a weekly rule. Existing weekday-string arrays keep their weekly
+meaning and need no conversion. Update every Cozter instance that reads a
+workspace before adding monthly dates to its schedules.
+
+Each schedule explicitly stores its creating
 `platform_id`. Only records tagged for the current platform can run, appear in
 the schedule picker, or be deleted through that picker. Missing or empty
 platform identities are not adopted. Cozter does not rewrite schedule
@@ -1931,7 +1957,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (144 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 141 `test_*.py` modules:
+- Tests (146 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 143 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
@@ -1961,6 +1987,7 @@ ignored for local secrets and runtime queues.
   `test_launch_process.py`, `test_launcher_and_followups.py`, `test_lazy_tool_http_imports.py`,
   `test_maintenance_context.py`, `test_memory_corrupt_state.py`, `test_memory_preservation.py`,
   `test_memory_repair_regressions.py`, `test_memory_streamed_search.py`,
+  `test_monthly_schedule_execution.py`, `test_monthly_schedules.py`,
   `test_native_current_protocol.py`, `test_native_launch_contract.py`, `test_notes_owned_worker.py`,
   `test_notes_transactions.py`, `test_openai_agent.py`, `test_owned_file_mutations.py`,
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`, `test_platform_formatting.py`,
@@ -1990,7 +2017,9 @@ ignored for local secrets and runtime queues.
   CLI, and Slack commands, including canonical native APIs/protocols, strict
   unified-patch headers, exact platform ownership, explicit compaction snapshots,
   unbounded tool/provider execution with cancellation, native stdin ownership, restored-queue
-  FIFO/reference preservation, and schedule edits while waiting for a lock;
+  FIFO/reference preservation, weekly/monthly/daily schedule parsing and presentation,
+  short-month and leap-year dates, mixed-rule deduplication, and schedule edits
+  while waiting for a lock;
   scheduled-job admission versus execution; Windows launcher descendant
   lifetimes; compaction and durable memory preservation across partially
   covered maintenance input; the flexible meta-agent including all reported

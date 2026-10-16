@@ -183,6 +183,99 @@ class BotCommandTests(unittest.TestCase):
         self.assertEqual(entries[0]["time"], "09:30")
         self.assertEqual(entries[0]["command"], "run report")
         self.assertEqual(entries[0]["platform_id"], self.bot.platform_id)
+        self.assertIn("Weekly: mon, wed", self._last())
+
+    def test_reserve_wizard_explains_weekly_monthly_and_daily_days(self) -> None:
+        self._run(self.bot.cmd_reserve(self._ctx()))
+
+        self.assertIn("Weekday names repeat weekly", self._last())
+        self.assertIn("Numbers 1-31 are dates every month", self._last())
+        self.assertIn("'all' for daily", self._last())
+        self.assertIn("Dates missing from a month are skipped", self._last())
+        self.assertNotIn("1=Mon", self._last())
+
+    def test_reserve_wizard_saves_monthly_dates_and_keeps_them_during_retries(self) -> None:
+        self._run(self.bot.cmd_reserve(self._ctx()))
+        self._run(self.bot.dispatch_text(self._ctx(text="31,1,15,1")))
+        self.assertIn("Monthly: 31, 1, 15", self._last())
+        self.assertIn("Enter time", self._last())
+
+        self._run(self.bot.dispatch_text(self._ctx(text="25:00")))
+        self.assertIn("Invalid time", self._last())
+        self._run(self.bot.dispatch_text(self._ctx(text="09:30")))
+        self._run(self.bot._pending_input[self.uid](self._ctx(text="   ")))
+        self.assertIn("Command cannot be empty", self._last())
+        self._run(self.bot.dispatch_text(self._ctx(text="monthly report")))
+
+        entries = schedules.list_schedules(self.ws, self.uid)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["days"], [31, 1, 15])
+        self.assertEqual(entries[0]["time"], "09:30")
+        self.assertEqual(entries[0]["command"], "monthly report")
+        self.assertIn("Days: Monthly: 31, 1, 15", self._last())
+
+    def test_reserve_wizard_saves_combined_weekly_and_monthly_days(self) -> None:
+        self._run(self.bot.cmd_reserve(self._ctx()))
+        self._run(self.bot.dispatch_text(self._ctx(text="15,Monday,mon")))
+        self.assertIn("Weekly: mon; Monthly: 15", self._last())
+        self._run(self.bot.dispatch_text(self._ctx(text="08:00")))
+        self._run(self.bot.dispatch_text(self._ctx(text="combined report")))
+
+        entries = schedules.list_schedules(self.ws, self.uid)
+        self.assertEqual(entries[0]["days"], [15, "mon"])
+        self.assertIn("Days: Weekly: mon; Monthly: 15", self._last())
+
+    def test_reserve_wizard_rejects_invalid_days_without_saving_a_partial_rule(self) -> None:
+        self._run(self.bot.cmd_reserve(self._ctx()))
+        for text in ("0", "32", "mon,32", "15,nope"):
+            with self.subTest(text=text):
+                self._run(self.bot.dispatch_text(self._ctx(text=text)))
+                self.assertIn("Could not parse days", self._last())
+                self.assertIn("dates 1-31 for monthly", self._last())
+                self.assertEqual(schedules.list_schedules(self.ws, self.uid), [])
+
+        self._run(self.bot.dispatch_text(self._ctx(text="all")))
+        self.assertIn("Days: Daily", self._last())
+        self.assertIn("Enter time", self._last())
+
+    def test_schedule_picker_displays_and_deletes_monthly_and_combined_days(self) -> None:
+        for schedule_id, days in (
+            ("monthly", [1, 15, 31]),
+            ("combined", ["mon", 15]),
+            ("weekly", ["wed", "fri"]),
+            ("daily", list(schedules.DAY_ABBREV)),
+        ):
+            schedules.add_schedule(self.ws, self.uid, {
+                "id": schedule_id, "platform_id": self.bot.platform_id,
+                "days": days, "time": "09:00", "command": schedule_id,
+            })
+
+        self._run(self.bot.cmd_schedules(self._ctx()))
+        self.assertIn("1. [Monthly: 1, 15, 31] 09:00", self._last())
+        self.assertIn("2. [Weekly: mon; Monthly: 15] 09:00", self._last())
+        self.assertIn("3. [Weekly: wed, fri] 09:00", self._last())
+        self.assertIn("4. [Daily] 09:00", self._last())
+
+        self._run(self.bot.dispatch_text(self._ctx(text="1")))
+        self.assertEqual(self._last(), "Removed: [Monthly: 1, 15, 31] 09:00 — monthly")
+        self._run(self.bot.cmd_schedules(self._ctx()))
+        self._run(self.bot.dispatch_text(self._ctx(text="1")))
+        self.assertEqual(self._last(), "Removed: [Weekly: mon; Monthly: 15] 09:00 — combined")
+        self.assertEqual(
+            [item["id"] for item in schedules.list_schedules(self.ws, self.uid)],
+            ["weekly", "daily"],
+        )
+
+    def test_schedule_picker_reports_invalid_days(self) -> None:
+        schedules.add_schedule(self.ws, self.uid, {
+            "id": "bad", "platform_id": self.bot.platform_id,
+            "days": [32], "time": "09:00", "command": "bad rule",
+        })
+
+        self._run(self.bot.cmd_schedules(self._ctx()))
+        self.assertIn("1. [?] 09:00 — bad rule", self._last())
+        self._run(self.bot.dispatch_text(self._ctx(text="1")))
+        self.assertEqual(self._last(), "Removed: [?] 09:00 — bad rule")
 
     def test_scheduler_requires_explicit_matching_platform(self) -> None:
         for schedule_id, platform_id in (

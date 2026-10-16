@@ -14,7 +14,8 @@ Each ``<schedule_dict>``:
 import copy
 import logging
 import uuid
-from datetime import datetime, time as dt_time, timedelta
+from datetime import datetime, time as dt_time
+from typing import TypeAlias
 
 from . import workspace as workspace_mod
 from .utils import load_json_object
@@ -30,6 +31,11 @@ SCHEDULES_FILE = "schedules.json"
 DAY_ABBREV: tuple[str, ...] = (
     "mon", "tue", "wed", "thu", "fri", "sat", "sun",
 )
+ScheduleDay: TypeAlias = str | int
+_DAY_NAMES = dict(zip(
+    ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"),
+    DAY_ABBREV,
+))
 
 
 def _path(workspace: str) -> str:
@@ -160,11 +166,44 @@ def update_schedule_fired(
 
 # Field parsers + time-slot computation
 
-def parse_days(text: object) -> list[str]:
-    """Parse a days spec into ordered, de-duplicated abbreviations.
+def _parse_day(value: object) -> ScheduleDay | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 1 <= value <= 31 else None
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    if value.isdecimal():
+        number = parse_decimal_int(value)
+        return number if number is not None and 1 <= number <= 31 else None
+    if value in DAY_ABBREV:
+        return value
+    return _DAY_NAMES.get(value)
 
-    Accepts ``"all"``, comma-separated names (``"mon,wed,fri"``), or
-    1-7 numbers (``"1,3,5"``). Returns ``[]`` on invalid input.
+
+def normalize_days(value: object) -> list[ScheduleDay]:
+    """Return valid persisted weekday names and monthly dates, in input order.
+
+    JSON integers and decimal strings mean dates of every month. Invalid
+    entries are ignored so a damaged entry does not hide valid occurrences.
+    """
+    if not isinstance(value, list):
+        return []
+    days: list[ScheduleDay] = []
+    for raw_day in value:
+        day = _parse_day(raw_day)
+        if day is not None and day not in days:
+            days.append(day)
+    return days
+
+
+def parse_days(text: object) -> list[ScheduleDay]:
+    """Parse comma-separated weekdays and monthly dates.
+
+    ``"mon,wed"`` runs weekly, ``"1,15"`` runs on those dates every month,
+    and ``"mon,15"`` combines both. ``"all"`` runs daily. A malformed
+    token rejects the entire input rather than creating a different schedule.
     """
     if not isinstance(text, str):
         return []
@@ -174,22 +213,29 @@ def parse_days(text: object) -> list[str]:
     parts = [part.strip() for part in text.split(",") if part.strip()]
     if not parts:
         return []
-    days: list[str] = []
+    days: list[ScheduleDay] = []
     for part in parts:
-        if part.isdecimal():
-            day_number = parse_decimal_int(part)
-            if day_number is None:
-                return []
-            if not (1 <= day_number <= 7):
-                return []
-            days.append(DAY_ABBREV[day_number - 1])
-        else:
-            abbr = part[:3]
-            if abbr not in DAY_ABBREV:
-                return []
-            days.append(abbr)
+        day = _parse_day(part)
+        if day is None:
+            return []
+        days.append(day)
     # dict.fromkeys dedups, preserving order.
     return list(dict.fromkeys(days))
+
+
+def format_days(value: object) -> str:
+    """Describe persisted schedule days without confusing dates and weekdays."""
+    days = normalize_days(value)
+    weekdays = [day for day in days if isinstance(day, str)]
+    monthdays = [str(day) for day in days if isinstance(day, int)]
+    if len(weekdays) == len(DAY_ABBREV) and not monthdays:
+        return "Daily"
+    labels = []
+    if weekdays:
+        labels.append(f"Weekly: {', '.join(weekdays)}")
+    if monthdays:
+        labels.append(f"Monthly: {', '.join(monthdays)}")
+    return "; ".join(labels) or "?"
 
 
 def parse_time(text: object) -> str | None:
@@ -234,28 +280,51 @@ def parse_iso(value: object) -> datetime | None:
 
 
 def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
-    """Return the latest (day, time) match <= now, or None."""
+    """Return the latest weekly or monthly occurrence at or before *now*.
+
+    Dates absent from a month are skipped. Looking back across calendar
+    months also preserves catch-up after a missed February 29 or 31st.
+    """
     parsed = parse_time(sched.get("time", ""))
     if parsed is None:
         return None
     hour, minute = map(int, parsed.split(":"))
     target = dt_time(hour, minute)
-    raw_days = sched.get("days", [])
-    if not isinstance(raw_days, list):
-        return None
-    days = [
-        day for day in raw_days
-        if isinstance(day, str) and day in DAY_ABBREV
-    ]
+    days = normalize_days(sched.get("days", []))
     if not days:
         return None
-    # Walk back 7 days for the most recent match.
-    for offset in range(8):
-        candidate_date = (now - timedelta(days=offset)).date()
-        day_name = DAY_ABBREV[candidate_date.weekday()]
-        if day_name not in days:
-            continue
-        candidate = datetime.combine(candidate_date, target)
-        if candidate <= now:
-            return candidate
-    return None
+    latest: datetime | None = None
+    for day in days:
+        candidate: datetime | None
+        if isinstance(day, str):
+            offset = (now.weekday() - DAY_ABBREV.index(day)) % 7
+            ordinal = now.toordinal() - offset
+            if ordinal < 1:
+                continue
+            candidate = datetime.combine(datetime.fromordinal(ordinal), target)
+            if candidate > now:
+                ordinal -= 7
+                if ordinal < 1:
+                    continue
+                candidate = datetime.combine(datetime.fromordinal(ordinal), target)
+        else:
+            year, month = now.year, now.month
+            while True:
+                try:
+                    candidate = datetime(year, month, day, hour, minute)
+                except ValueError:
+                    candidate = None
+                if candidate is not None and candidate <= now:
+                    break
+                if month > 1:
+                    month -= 1
+                elif year > 1:
+                    year -= 1
+                    month = 12
+                else:
+                    break
+            if candidate is None or candidate > now:
+                continue
+        if latest is None or candidate > latest:
+            latest = candidate
+    return latest
