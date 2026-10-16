@@ -166,6 +166,24 @@ def update_schedule_fired(
 
 # Field parsers + time-slot computation
 
+def _parse_year_day(value: str) -> str | None:
+    parts = value.split("/")
+    if len(parts) != 2 or any(
+        not (1 <= len(part) <= 2 and part.isdecimal()) for part in parts
+    ):
+        return None
+    month, day = (parse_decimal_int(part) for part in parts)
+    if month is None or day is None:
+        return None
+    try:
+        # A leap reference year admits February 29 without admitting dates
+        # that can never occur, such as February 30 or April 31.
+        datetime(2000, month, day)
+    except ValueError:
+        return None
+    return f"{month:02d}/{day:02d}"
+
+
 def _parse_day(value: object) -> ScheduleDay | None:
     if isinstance(value, bool):
         return None
@@ -177,16 +195,19 @@ def _parse_day(value: object) -> ScheduleDay | None:
     if value.isdecimal():
         number = parse_decimal_int(value)
         return number if number is not None and 1 <= number <= 31 else None
+    if "/" in value:
+        return _parse_year_day(value)
     if value in DAY_ABBREV:
         return value
     return _DAY_NAMES.get(value)
 
 
 def normalize_days(value: object) -> list[ScheduleDay]:
-    """Return valid persisted weekday names and monthly dates, in input order.
+    """Return valid weekly, monthly, and yearly rules, in input order.
 
-    JSON integers and decimal strings mean dates of every month. Invalid
-    entries are ignored so a damaged entry does not hide valid occurrences.
+    Integers and decimal strings mean dates of every month; month/day
+    strings mean yearly dates. Invalid entries are ignored so a damaged
+    entry does not hide valid occurrences.
     """
     if not isinstance(value, list):
         return []
@@ -199,11 +220,12 @@ def normalize_days(value: object) -> list[ScheduleDay]:
 
 
 def parse_days(text: object) -> list[ScheduleDay]:
-    """Parse comma-separated weekdays and monthly dates.
+    """Parse comma-separated weekdays, monthly dates, and yearly dates.
 
     ``"mon,wed"`` runs weekly, ``"1,15"`` runs on those dates every month,
-    and ``"mon,15"`` combines both. ``"all"`` runs daily. A malformed
-    token rejects the entire input rather than creating a different schedule.
+    and ``"12/25"`` runs yearly. Rules can be combined. ``"all"`` runs
+    daily. A malformed token rejects the entire input rather than creating
+    a different schedule.
     """
     if not isinstance(text, str):
         return []
@@ -226,15 +248,18 @@ def parse_days(text: object) -> list[ScheduleDay]:
 def format_days(value: object) -> str:
     """Describe persisted schedule days without confusing dates and weekdays."""
     days = normalize_days(value)
-    weekdays = [day for day in days if isinstance(day, str)]
+    weekdays = [day for day in days if isinstance(day, str) and day in DAY_ABBREV]
     monthdays = [str(day) for day in days if isinstance(day, int)]
-    if len(weekdays) == len(DAY_ABBREV) and not monthdays:
+    yeardays = [day for day in days if isinstance(day, str) and day not in DAY_ABBREV]
+    if len(weekdays) == len(DAY_ABBREV) and not monthdays and not yeardays:
         return "Daily"
     labels = []
     if weekdays:
         labels.append(f"Weekly: {', '.join(weekdays)}")
     if monthdays:
         labels.append(f"Monthly: {', '.join(monthdays)}")
+    if yeardays:
+        labels.append(f"Yearly: {', '.join(yeardays)}")
     return "; ".join(labels) or "?"
 
 
@@ -280,10 +305,10 @@ def parse_iso(value: object) -> datetime | None:
 
 
 def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
-    """Return the latest weekly or monthly occurrence at or before *now*.
+    """Return the latest weekly, monthly, or yearly occurrence <= *now*.
 
-    Dates absent from a month are skipped. Looking back across calendar
-    months also preserves catch-up after a missed February 29 or 31st.
+    Dates absent from a month or year are skipped. Looking back across
+    calendar boundaries preserves catch-up after a missed real occurrence.
     """
     parsed = parse_time(sched.get("time", ""))
     if parsed is None:
@@ -296,7 +321,7 @@ def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
     latest: datetime | None = None
     for day in days:
         candidate: datetime | None
-        if isinstance(day, str):
+        if isinstance(day, str) and day in DAY_ABBREV:
             offset = (now.weekday() - DAY_ABBREV.index(day)) % 7
             ordinal = now.toordinal() - offset
             if ordinal < 1:
@@ -307,7 +332,7 @@ def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
                 if ordinal < 1:
                     continue
                 candidate = datetime.combine(datetime.fromordinal(ordinal), target)
-        else:
+        elif isinstance(day, int):
             year, month = now.year, now.month
             while True:
                 try:
@@ -323,6 +348,21 @@ def most_recent_slot(sched: dict, now: datetime) -> datetime | None:
                     month = 12
                 else:
                     break
+            if candidate is None or candidate > now:
+                continue
+        else:
+            month, monthday = map(int, day.split("/"))
+            year = now.year
+            while True:
+                try:
+                    candidate = datetime(year, month, monthday, hour, minute)
+                except ValueError:
+                    candidate = None
+                if candidate is not None and candidate <= now:
+                    break
+                if year == 1:
+                    break
+                year -= 1
             if candidate is None or candidate > now:
                 continue
         if latest is None or candidate > latest:

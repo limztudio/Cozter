@@ -97,8 +97,8 @@ works across every backend.
   replies can upload workspace files or generated images back to chat, while
   CLI mode prints their local paths
 - **Recurring scheduled prompts on Telegram, Slack, and Signal**: `/reserve`
-  queues prompts on selected weekdays or dates every month and runs them in
-  throwaway sessions so routine jobs do not pollute the user's active conversation
+  queues prompts on selected weekdays, dates every month, or yearly dates and
+  runs them in throwaway sessions so routine jobs do not pollute the user's active conversation
 - **Auto-update**: the bot polls origin, fast-forward-pulls only when the
   checkout is clean and not locally ahead, then restarts safely: it re-execs
   in place on POSIX and hands off to the Windows supervisor on Windows
@@ -858,16 +858,20 @@ to continue that interactive session.
 Schedules are stored per workspace in `.cozter/schedules.json` and use
 the host's local time. In `/reserve`, weekday names such as `mon,wed,fri`
 repeat weekly; numbers such as `1,15,31` mean those dates every month.
-`all` means daily, and `mon,15` runs every Monday and on the 15th of each
-month. A date that does not exist in a month is skipped: a rule for `31`
+Dates in `MM/dd` format, such as `12/25`, repeat every year. Short input such
+as `2/9` is stored as `02/09`. `all` means daily, and `mon,15,12/25` runs
+every Monday, on the 15th of each month, and on December 25 every year.
+A date that does not exist in a month is skipped: a rule for `31`
 does not create an April 30 slot, and a rule for `29` creates no February slot
-in non-leap years. An earlier missed valid occurrence can still catch up once.
-When a weekly day and a monthly date coincide, the schedule runs once at
+in non-leap years. Yearly `02/29` runs only in leap years; impossible dates
+such as `02/30` are rejected. An earlier missed valid occurrence can still
+catch up once, including a leap-day occurrence after a restart in a later year.
+When weekly, monthly, or yearly rules coincide, the schedule runs once at
 its configured time. The wizard, schedule list, and deletion confirmation
-label each rule as `Daily`, `Weekly`, `Monthly`, or a combination.
+label each rule as `Daily`, `Weekly`, `Monthly`, `Yearly`, or a combination.
 
-The `days` array stores weekday abbreviations as strings and monthly dates
-as JSON integers. For example:
+The `days` array stores weekday abbreviations and yearly `MM/dd` dates as
+strings, and monthly dates as JSON integers. For example:
 
 | `days` value | Recurrence |
 |---|---|
@@ -875,12 +879,15 @@ as JSON integers. For example:
 | `[1, 15]` | The 1st and 15th of every month |
 | `[31]` | The 31st in months that have one |
 | `["mon", 15]` | Every Monday and the 15th of every month |
+| `["12/25"]` | December 25 every year |
+| `["02/29"]` | February 29 in leap years |
+| `["mon", 15, "12/25"]` | Every Monday, the 15th of every month, and December 25 every year |
 | `["mon", "tue", "wed", "thu", "fri", "sat", "sun"]` | Daily (`all` in the wizard) |
 
 Numeric values are monthly dates, including `1` through `7`; use weekday
 names for a weekly rule. Existing weekday-string arrays keep their weekly
 meaning and need no conversion. Update every Cozter instance that reads a
-workspace before adding monthly dates to its schedules.
+workspace before adding monthly or yearly dates to its schedules.
 
 Each schedule explicitly stores its creating
 `platform_id`. Only records tagged for the current platform can run, appear in
@@ -1957,7 +1964,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (146 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 143 `test_*.py` modules:
+- Tests (147 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 144 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
@@ -2008,7 +2015,7 @@ ignored for local secrets and runtime queues.
   `test_tools_audit_regressions.py`, `test_tree_junction_permissions.py`, `test_turn_budget.py`,
   `test_unbounded_tool_http_execution.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
   `test_vision_marker_scanning.py`, `test_web_fetch.py`, `test_web_html_latency.py`,
-  `test_web_search.py`)
+  `test_web_search.py`, `test_yearly_schedules.py`)
   covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared
@@ -2017,8 +2024,8 @@ ignored for local secrets and runtime queues.
   CLI, and Slack commands, including canonical native APIs/protocols, strict
   unified-patch headers, exact platform ownership, explicit compaction snapshots,
   unbounded tool/provider execution with cancellation, native stdin ownership, restored-queue
-  FIFO/reference preservation, weekly/monthly/daily schedule parsing and presentation,
-  short-month and leap-year dates, mixed-rule deduplication, and schedule edits
+  FIFO/reference preservation, weekly/monthly/yearly/daily schedule parsing and presentation,
+  short-month and leap-year dates, yearly catch-up, mixed-rule deduplication, and schedule edits
   while waiting for a lock;
   scheduled-job admission versus execution; Windows launcher descendant
   lifetimes; compaction and durable memory preservation across partially

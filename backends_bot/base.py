@@ -2627,8 +2627,9 @@ class BotPlatform(ABC):
             "Select days for this schedule.\n"
             "Weekday names repeat weekly (e.g., 'mon,wed,fri').\n"
             "Numbers 1-31 are dates every month (e.g., '1,15').\n"
-            "Use 'all' for daily, or combine them (e.g., 'mon,15').\n"
-            "Dates missing from a month are skipped.\n\n"
+            "MM/dd dates repeat yearly (e.g., '12/25' or '02/29').\n"
+            "Use 'all' for daily, or combine them (e.g., 'mon,15,12/25').\n"
+            "Dates missing from a month are skipped; '02/29' uses leap years.\n\n"
             "Enter days (or /cancel):"
         )
         self._expect_input(ctx.user_id, self._receive_reserve_days)
@@ -2639,8 +2640,9 @@ class BotPlatform(ABC):
         if not days:
             await ctx.reply_text(
                 "Could not parse days. Use weekday names for weekly,"
-                " dates 1-31 for monthly, or 'all' for daily"
-                " (e.g., 'mon,wed', '1,15', or 'mon,15') (or /cancel):"
+                " dates 1-31 for monthly, MM/dd for yearly, or 'all' for daily"
+                " (e.g., 'mon,15,12/25'). Use valid dates; '02/29' is allowed"
+                " (or /cancel):"
             )
             self._expect_input(ctx.user_id, self._receive_reserve_days)
             return

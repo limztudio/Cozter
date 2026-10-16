@@ -185,13 +185,15 @@ class BotCommandTests(unittest.TestCase):
         self.assertEqual(entries[0]["platform_id"], self.bot.platform_id)
         self.assertIn("Weekly: mon, wed", self._last())
 
-    def test_reserve_wizard_explains_weekly_monthly_and_daily_days(self) -> None:
+    def test_reserve_wizard_explains_weekly_monthly_yearly_and_daily_days(self) -> None:
         self._run(self.bot.cmd_reserve(self._ctx()))
 
         self.assertIn("Weekday names repeat weekly", self._last())
         self.assertIn("Numbers 1-31 are dates every month", self._last())
+        self.assertIn("MM/dd dates repeat yearly", self._last())
         self.assertIn("'all' for daily", self._last())
         self.assertIn("Dates missing from a month are skipped", self._last())
+        self.assertIn("'02/29' uses leap years", self._last())
         self.assertNotIn("1=Mon", self._last())
 
     def test_reserve_wizard_saves_monthly_dates_and_keeps_them_during_retries(self) -> None:
@@ -224,6 +226,74 @@ class BotCommandTests(unittest.TestCase):
         entries = schedules.list_schedules(self.ws, self.uid)
         self.assertEqual(entries[0]["days"], [15, "mon"])
         self.assertIn("Days: Weekly: mon; Monthly: 15", self._last())
+
+    def test_reserve_wizard_saves_canonical_yearly_dates_through_retries(self) -> None:
+        self._run(self.bot.cmd_reserve(self._ctx()))
+        self._run(self.bot.dispatch_text(self._ctx(text="2/9,02/09,2/29")))
+        self.assertIn("Yearly: 02/09, 02/29", self._last())
+        self.assertIn("Enter time", self._last())
+
+        self._run(self.bot.dispatch_text(self._ctx(text="25:00")))
+        self.assertIn("Invalid time", self._last())
+        self._run(self.bot.dispatch_text(self._ctx(text="09:30")))
+        self._run(self.bot._pending_input[self.uid](self._ctx(text="   ")))
+        self.assertIn("Command cannot be empty", self._last())
+        self._run(self.bot.dispatch_text(self._ctx(text="yearly report")))
+
+        entries = schedules.list_schedules(self.ws, self.uid)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["days"], ["02/09", "02/29"])
+        self.assertEqual(entries[0]["time"], "09:30")
+        self.assertEqual(entries[0]["command"], "yearly report")
+        self.assertIn("Days: Yearly: 02/09, 02/29", self._last())
+
+    def test_reserve_wizard_combines_weekly_monthly_and_yearly_dates(self) -> None:
+        self._run(self.bot.cmd_reserve(self._ctx()))
+        self._run(self.bot.dispatch_text(self._ctx(text="12/25,Monday,15,2/29")))
+        label = "Weekly: mon; Monthly: 15; Yearly: 12/25, 02/29"
+        self.assertIn(label, self._last())
+        self._run(self.bot.dispatch_text(self._ctx(text="08:00")))
+        self._run(self.bot.dispatch_text(self._ctx(text="combined yearly report")))
+
+        entries = schedules.list_schedules(self.ws, self.uid)
+        self.assertEqual(entries[0]["days"], ["12/25", "mon", 15, "02/29"])
+        self.assertIn(f"Days: {label}", self._last())
+
+    def test_reserve_wizard_rejects_invalid_yearly_dates_then_accepts_leap_day(self) -> None:
+        self._run(self.bot.cmd_reserve(self._ctx()))
+        for text in ("02/30", "04/31", "13/01", "00/01", "mon,02/30", "2026/12/25"):
+            with self.subTest(text=text):
+                self._run(self.bot.dispatch_text(self._ctx(text=text)))
+                self.assertIn("Could not parse days", self._last())
+                self.assertIn("MM/dd for yearly", self._last())
+                self.assertEqual(schedules.list_schedules(self.ws, self.uid), [])
+
+        self._run(self.bot.dispatch_text(self._ctx(text="02/29")))
+        self.assertIn("Days: Yearly: 02/29", self._last())
+        self.assertIn("Enter time", self._last())
+
+    def test_schedule_picker_displays_and_deletes_yearly_and_combined_days(self) -> None:
+        for schedule_id, days in (
+            ("yearly", ["12/25", "02/29"]),
+            ("combined", ["mon", 15, "12/25"]),
+        ):
+            schedules.add_schedule(self.ws, self.uid, {
+                "id": schedule_id, "platform_id": self.bot.platform_id,
+                "days": days, "time": "09:00", "command": schedule_id,
+            })
+
+        self._run(self.bot.cmd_schedules(self._ctx()))
+        self.assertIn("1. [Yearly: 12/25, 02/29] 09:00", self._last())
+        self.assertIn("2. [Weekly: mon; Monthly: 15; Yearly: 12/25] 09:00", self._last())
+
+        self._run(self.bot.dispatch_text(self._ctx(text="1")))
+        self.assertEqual(self._last(), "Removed: [Yearly: 12/25, 02/29] 09:00 — yearly")
+        self._run(self.bot.cmd_schedules(self._ctx()))
+        self._run(self.bot.dispatch_text(self._ctx(text="1")))
+        self.assertEqual(
+            self._last(), "Removed: [Weekly: mon; Monthly: 15; Yearly: 12/25] 09:00 — combined",
+        )
+        self.assertEqual(schedules.list_schedules(self.ws, self.uid), [])
 
     def test_reserve_wizard_rejects_invalid_days_without_saving_a_partial_rule(self) -> None:
         self._run(self.bot.cmd_reserve(self._ctx()))

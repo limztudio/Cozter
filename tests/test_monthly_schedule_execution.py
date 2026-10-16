@@ -1,4 +1,4 @@
-"""Monthly calendar rules through real scheduler claims and queue admission."""
+"""Monthly and yearly rules through real scheduler claims and queue admission."""
 
 import asyncio
 from datetime import datetime
@@ -227,3 +227,117 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             if "last_fired" in record
         }
         self.assertEqual(claimed, {"own"})
+
+    async def test_yearly_date_runs_at_time_and_repeats_only_next_year(self) -> None:
+        self._add(["10/16"])
+        await self._tick(datetime(2026, 10, 16, 8, 59))
+        self.assertEqual(self._entries(), [])
+        await self._tick(datetime(2026, 10, 16, 9, 0))
+        await self._tick(datetime(2026, 10, 16, 23, 59))
+        await self._tick(datetime(2026, 11, 16, 9, 0))
+        await self._tick(datetime(2027, 1, 1, 9, 0))
+        await self._tick(datetime(2027, 10, 16, 8, 59))
+        self.assertEqual(len(self._entries()), 1)
+        self.assertEqual(self._saved()["last_fired"], "2026-10-16T09:00:00")
+
+        await self._tick(datetime(2027, 10, 16, 9, 0))
+        self.assertEqual(len(self._entries()), 2)
+        self.assertEqual(self._saved()["last_fired"], "2027-10-16T09:00:00")
+
+    async def test_yearly_creation_guard_does_not_run_at_or_before_creation(self) -> None:
+        self._add(["10/16"], created="2026-10-16T09:00:00")
+        await self._tick(datetime(2026, 10, 16, 18, 0))
+        await self._tick(datetime(2027, 10, 16, 8, 59))
+        self.assertEqual(self._entries(), [])
+        self.assertNotIn("last_fired", self._saved())
+        await self._tick(datetime(2027, 10, 16, 9, 0))
+        self.assertEqual(len(self._entries()), 1)
+
+    async def test_yearly_catchup_claims_latest_year_once_even_after_restart(self) -> None:
+        self._add(["10/16"], created="2020-01-01T00:00:00")
+        await self._tick(datetime(2026, 12, 1, 9, 0))
+        self.assertEqual(len(self._entries()), 1)
+        self.assertEqual(self._saved()["last_fired"], "2026-10-16T09:00:00")
+        restarted = TestBot(["owner"])
+        with mock.patch.object(restarted, "_start_queue_drain"):
+            await self._tick(datetime(2026, 12, 2, 9, 0), restarted)
+            await self._tick(datetime(2027, 10, 16, 8, 59), restarted)
+            self.assertEqual(len(self._entries()), 1)
+            await self._tick(datetime(2027, 12, 1, 9, 0), restarted)
+        self.assertEqual(len(self._entries()), 2)
+        self.assertEqual(self._saved()["last_fired"], "2027-10-16T09:00:00")
+
+    async def test_yearly_leap_day_skips_century_gap_and_catches_next_real_slot(self) -> None:
+        self._add(["02/29"], created="2096-02-01T00:00:00")
+        await self._tick(datetime(2096, 2, 29, 8, 59))
+        self.assertEqual(self._entries(), [])
+        await self._tick(datetime(2096, 2, 29, 9, 0))
+        self.assertEqual(self._saved()["last_fired"], "2096-02-29T09:00:00")
+        # Neither other months' 29ths nor nonleap February create a slot.
+        for now in (
+            datetime(2096, 3, 29, 9, 0), datetime(2097, 3, 1, 9, 0),
+            datetime(2100, 3, 1, 9, 0), datetime(2103, 3, 1, 9, 0),
+        ):
+            await self._tick(now)
+        self.assertEqual(len(self._entries()), 1)
+        self.assertEqual(self._saved()["last_fired"], "2096-02-29T09:00:00")
+
+        # A restart after the next leap day catches up that one valid slot.
+        restarted = TestBot(["owner"])
+        with mock.patch.object(restarted, "_start_queue_drain"):
+            await self._tick(datetime(2104, 3, 1, 9, 0), restarted)
+            await self._tick(datetime(2104, 3, 2, 9, 0), restarted)
+        self.assertEqual(len(self._entries()), 2)
+        self.assertEqual(self._saved()["last_fired"], "2104-02-29T09:00:00")
+
+    async def test_weekly_monthly_and_yearly_overlap_admits_one_job(self) -> None:
+        self._add(["fri", 16, "10/16"])
+        # October 16 is Friday and matches both calendar rules.
+        await self._tick(datetime(2026, 10, 16, 9, 0))
+        await self._tick(datetime(2026, 10, 16, 23, 59))
+        self.assertEqual(len(self._entries()), 1)
+        self.assertEqual(self.bot._message_queues["owner"].qsize(), 1)
+        self.assertEqual(self._saved()["last_fired"], "2026-10-16T09:00:00")
+        await self._tick(datetime(2026, 10, 23, 9, 0))
+        self.assertEqual(len(self._entries()), 2)
+        # November 16 is Monday, so only the monthly rule matches.
+        await self._tick(datetime(2026, 11, 16, 9, 0))
+        self.assertEqual(len(self._entries()), 3)
+        self.assertEqual(self._saved()["last_fired"], "2026-11-16T09:00:00")
+
+    async def test_yearly_date_is_rechecked_after_waiting_for_workspace_lock(self) -> None:
+        for updated_days, expected_slot in (
+            (["10/17"], None),
+            (["10/15"], "2026-10-15T09:00:00"),
+        ):
+            with self.subTest(updated_days=updated_days):
+                schedules._save_all(self.ws, {})
+                self._add(["10/16"], created="2026-10-01T00:00:00")
+                lock = asyncio.Lock()
+                await lock.acquire()
+                with (
+                    mock.patch.object(workspace, "get_lock", return_value=lock),
+                    mock.patch.object(self.bot, "_fire_schedule", new=mock.AsyncMock()) as fire,
+                ):
+                    task = asyncio.create_task(self._tick(datetime(2026, 10, 16, 9, 0)))
+                    try:
+                        await asyncio.sleep(0)
+                        self.assertFalse(task.done())
+                        current = schedules._load_all(self.ws)
+                        current["owner"][0].update(days=updated_days, command="edited yearly work")
+                        schedules._save_all(self.ws, current)
+                        lock.release()
+                        await asyncio.wait_for(task, timeout=1)
+                    finally:
+                        if lock.locked():
+                            lock.release()
+                        if not task.done():
+                            task.cancel()
+                            await asyncio.gather(task, return_exceptions=True)
+                    if expected_slot is None:
+                        fire.assert_not_awaited()
+                        self.assertNotIn("last_fired", self._saved())
+                    else:
+                        fire.assert_awaited_once()
+                        self.assertEqual(fire.await_args.args[1]["last_fired"], expected_slot)
+                        self.assertEqual(fire.await_args.args[1]["command"], "edited yearly work")
