@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from Cozter.tests.helpers import persist_queue_entry
+
 from Cozter import agent, execution_state, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
@@ -50,7 +52,7 @@ class FlexibleInjectionContinuationTests(unittest.IsolatedAsyncioTestCase):
         original = "Repair all three parts and retain verification evidence."
         bot = _ReplyDeliveryBot(self.ws, fail_final=False)
         bot.supports_transient_status = False
-        entry = await bot._persist_enqueue("u1", original, "chat")
+        entry = await persist_queue_entry(bot, "u1", original, "chat")
         bot._ensure_message_queue("u1").put_nowait((original, "chat", entry, False))
         await bot._save_job_checkpoint("u1", entry, {
             "state": "running", "workspace_path": self.ws,

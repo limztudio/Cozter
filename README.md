@@ -595,11 +595,29 @@ report usage — `codex` (`turn.completed`) and `claude_code` / `grok`
 the footer.
 
 Pending chat turns on daemon platforms are persisted in
-`Cozter/.config/queue_<platform>.json`, so clean restarts, auto-updates,
+`Cozter/.config/queue_<platform>.sqlite3`, so clean restarts, auto-updates,
 and crash recovery do not drop already accepted messages. Platform IDs
 are sanitized for those filenames; for example the CLI's stable platform
-key `cli:local` maps to `queue_cli_local.json`. CLI mode does not restore
+key `cli:local` maps to `queue_cli_local.sqlite3`. CLI mode does not restore
 saved prompt-queue entries after a restart.
+
+Queue admission has one commit point for the job and its scheduled occurrence.
+All message and schedule producers share a serialized admission barrier; the
+configured limit applies to new waiting work, while restored accepted work
+remains runnable even if that limit was lowered. Queue completion and `/stop`
+retain schedule watermarks, so a failed `last_fired` projection cannot repeat
+an occurrence. The scheduler retries the human-readable `schedules.json`
+status projection independently; projection errors do not block execution or
+other schedules.
+
+On the first launch after the queue database upgrade, Cozter migrates the old
+`queue_<platform>.json` exactly once, preserving owner order, job IDs, native
+sessions and checkpoints. It saves an exact `.json.migrated.<sha256>` backup
+before committing, then removes the imported source. The versioned database
+is authoritative after migration; a subsequently recreated old JSON file is
+never imported. Include the database and its migration backup in operational
+backups. Corrupt input or an unsupported database version stops startup rather
+than silently replacing accepted work.
 
 Before Cozter sends a completed queued reply, it writes the reply text and
 any usage footer to `Cozter/.config/reply_deliveries_<platform>.json`. If the
@@ -633,6 +651,14 @@ Startup waits for transient Signal readiness failures with a retry delay
 that grows from one second to at most thirty seconds; shutdown cancels that
 wait. Invalid configuration remains an explicit error. Queues and schedules
 start after the group lookup and receive subscription are ready.
+
+Platform startup attempts run independently. A platform waiting for its
+transport does not delay a healthy platform's queues, startup announcement,
+or the updater. Retry requires successful cleanup of the failed attempt;
+configuration, durable-state and cleanup errors remain visible failures.
+Shutdown owns and joins startup attempts and queue consumers before closing
+transports. Cancelling an incoming handler leaves its accepted job with the
+owned consumer; `/stop` explicitly cancels that consumer and clears the work.
 
 For a Windows daemon serving one account, start `signal-cli` with
 `--data-dir <directory> -a <account> daemon ...` and enable Windows service
@@ -733,7 +759,7 @@ runs commands in it, and stores per-workspace state under
 
 Workspaces are recorded globally in `Cozter/.config/workspaces.json`
 (per-user current pick + the recent-workspaces list). Daemon-platform turn
-queues live beside it as `queue_<platform>.json`.
+queues live beside it as `queue_<platform>.sqlite3`.
 
 Signal intentionally scopes runtime state to the configured group rather than
 the individual sender. Everyone in the same Signal group therefore shares its
@@ -762,12 +788,12 @@ different authorized users and scheduled `/reserve` jobs. This prevents their
 file edits from interleaving; work in separate workspaces can still run
 independently.
 
-The global runtime files are deliberately small JSON documents:
+Global runtime settings and ledgers use JSON; the work queue uses SQLite:
 
 - `.config/config.json` — daemon chat-surface and backend settings
 - `.config/workspaces.json` — current/recent workspace selections per
   user and platform
-- `.config/queue_<platform>.json` — persisted pending daemon-platform turns
+- `.config/queue_<platform>.sqlite3` — persisted pending daemon-platform turns
   so accepted work survives restarts, crashes, and auto-updates
 - `.config/reply_deliveries_<platform>.json` — staged final text replies
   awaiting delivery, so a send failure does not repeat completed agent work
@@ -775,12 +801,13 @@ The global runtime files are deliberately small JSON documents:
   tasks and any completion message awaiting delivery
 
 Later updates to workspace selections and settings, sessions, colony memory,
-schedules, queues, reply-delivery records, and detached-task records are
+schedules, reply-delivery records, and detached-task records are
 written through a temporary file and atomically replaced. The new file is
 synced before replacement; on POSIX, Cozter also syncs the parent directory
 so a completed rename is durable across a power loss. An interrupted write can
 leave a harmless temporary file, but it cannot publish a half-written JSON
-state document.
+state document. Queue entries and schedule admission watermarks commit together
+in a SQLite transaction with full synchronization.
 
 The session router is only used when there is no valid
 `last_session.json` entry, such as a new workspace or a deleted session.
@@ -2314,12 +2341,13 @@ Everything else created by a running bot is local state.
 Do not commit these runtime artifacts:
 
 - `.config/config.json`, `.config/workspaces.json`,
-  `.config/queue_<platform>.json`, `.config/reply_deliveries_<platform>.json`,
+  `.config/queue_<platform>.sqlite3`, `.config/reply_deliveries_<platform>.json`,
+  `.config/queue_<platform>.json.migrated.*`, SQLite journal files,
   and `.config/detached_tasks_<platform>.json`
   - local tokens, workspace selections, persisted pending messages, staged
   replies, and detached-task state. Platform IDs are sanitized for queue
   filenames, so a runtime key like `cli:local` becomes a filesystem-safe
-  `queue_cli_local.json`.
+  `queue_cli_local.sqlite3`.
 - `.cozter/` — sessions, workspace settings, colony memory, schedules,
   uploads, and generated images; this directory can appear at the repo
   root when Cozter is used on its own checkout

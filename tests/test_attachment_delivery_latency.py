@@ -8,7 +8,7 @@ from unittest import mock
 from Cozter import workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot import base
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import persist_queue_entry, TestBot
 
 
 class _UploadProbe(TestBot):
@@ -82,7 +82,7 @@ class AttachmentDeliveryLatencyTests(unittest.IsolatedAsyncioTestCase):
         await tail
 
     async def test_tail_timeout_completes_durable_text_delivery_without_agent_reexecution(self):
-        entry_id = await self.bot._persist_enqueue("u1", "Completed request", "chat")
+        entry_id = await persist_queue_entry(self.bot, "u1", "Completed request", "chat")
         tail = self.bot._track_attachment_upload("u1", "chat", ["older-proof.png"])
         await asyncio.wait_for(self.bot.started.wait(), 1)
         result = self.reply()

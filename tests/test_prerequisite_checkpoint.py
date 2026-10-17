@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from Cozter.tests.helpers import persist_queue_entry
+
 from Cozter import agent, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
@@ -22,8 +24,8 @@ class PrerequisiteCheckpointTests(unittest.IsolatedAsyncioTestCase):
         bot = _ReplyDeliveryBot(ws, fail_final=False)
         sid = session.create_session(ws, name="Durable prerequisite recovery")["id"]
         original = "Repair sources, verify local tests and exercise the visible desktop."
-        entry = await bot._persist_enqueue("u1", original, "chat")
-        later = await bot._persist_enqueue("u1", "Later queued maintenance", "chat")
+        entry = await persist_queue_entry(bot, "u1", original, "chat")
+        later = await persist_queue_entry(bot, "u1", "Later queued maintenance", "chat")
         queue = bot._ensure_message_queue("u1")
         queue.put_nowait((original, "chat", entry, False))
         queue.put_nowait(("Later queued maintenance", "chat", later, False))

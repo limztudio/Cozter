@@ -10,6 +10,8 @@ from unittest import mock
 
 from Cozter import schedules, workspace
 from Cozter.tests.helpers import TestBot
+from Cozter.backends_bot.base import QueueCapacityError
+from Cozter.queue_store import ScheduledOccurrence
 
 
 class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -21,6 +23,8 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.enterContext(mock.patch.dict(schedules._SCHEDULES_CACHE, clear=True))
         self.bot = TestBot(["owner"])
+        self.store = self.bot._queue_store()
+        self.enterContext(mock.patch.object(self.bot, "_queue_store", return_value=self.store))
         self.enterContext(mock.patch.object(self.bot, "_start_queue_drain"))
         workspace.select_workspace("owner", self.ws, self.bot.platform_id)
 
@@ -67,13 +71,13 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(self.bot, "authorized", return_value=False):
             await self._tick(datetime(2026, 10, 16, 9, 0))
         self.assertNotIn("last_fired", self._saved())
-        persist = self.bot._persist_admitted_dispatch_entry
+        persist = self.bot._admit_queue_entry
 
         async def cancelled(*args, **kwargs):
             self.bot._cancel_generations["owner"] = 1
             return await persist(*args, **kwargs)
 
-        with mock.patch.object(self.bot, "_persist_admitted_dispatch_entry", side_effect=cancelled):
+        with mock.patch.object(self.bot, "_admit_queue_entry", side_effect=cancelled):
             await self._tick(datetime(2026, 10, 16, 9, 1))
         self.assertNotIn("last_fired", self._saved())
         self.assertEqual(self._entries(), [])
@@ -82,9 +86,8 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_queue_write_does_not_advance_schedule(self) -> None:
         self._add([16])
-        with mock.patch.object(self.bot, "_write_queue_file", side_effect=OSError("disk unavailable")):
-            with self.assertRaisesRegex(OSError, "disk unavailable"):
-                await self._tick(datetime(2026, 10, 16, 9, 0))
+        with mock.patch.object(self.store, "admit", side_effect=OSError("disk unavailable")):
+            await self._tick(datetime(2026, 10, 16, 9, 0))
         self.assertNotIn("last_fired", self._saved())
         self.assertEqual(self._entries(), [])
         await self._tick(datetime(2026, 10, 16, 9, 1))
@@ -93,13 +96,12 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_queue_receipt_recovers_failed_claim_without_duplicate_entry_or_notice(self) -> None:
         self._add([16])
         with mock.patch.object(schedules, "update_schedule_fired", side_effect=OSError("claim failed")):
-            with self.assertRaisesRegex(OSError, "claim failed"):
-                await self._tick(datetime(2026, 10, 16, 9, 0))
+            await self._tick(datetime(2026, 10, 16, 9, 0))
         self.assertNotIn("last_fired", self._saved())
         first = self._entries()[0]
         self.assertEqual(first["job"]["schedule_id"], "calendar")
         self.assertEqual(first["job"]["schedule_slot"], "2026-10-16T09:00:00")
-        self.assertTrue(self.bot._message_queues["owner"].empty())
+        self.assertEqual(self.bot._message_queues["owner"].qsize(), 1)
         with mock.patch.object(self.bot, "send_text", new=mock.AsyncMock()) as notice:
             await self._tick(datetime(2026, 10, 16, 9, 1))
             await self._tick(datetime(2026, 10, 16, 9, 2))
@@ -108,25 +110,67 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bot._message_queues["owner"].qsize(), 1)
         self.assertEqual(self._saved()["last_fired"], "2026-10-16T09:00:00")
 
-    async def test_restart_reconciles_durable_receipt_before_worker_can_remove_it(self) -> None:
+    async def test_restart_runs_work_even_while_schedule_projection_is_unavailable(self) -> None:
         self._add([16])
-        with mock.patch.object(self.bot, "_claim_scheduled_slot", side_effect=OSError("power lost after queue write")):
-            with self.assertRaisesRegex(OSError, "power lost"):
-                await self._tick(datetime(2026, 10, 16, 9, 0))
-        entry_id = self._entries()[0]["id"]
-        restarted = TestBot(["owner"])
-        starts = []
+        with mock.patch.object(schedules, "update_schedule_fired", side_effect=OSError("read-only definitions")):
+            await self._tick(datetime(2026, 10, 16, 9, 0))
+            entry_id = self._entries()[0]["id"]
+            restarted = TestBot(["owner"])
+            starts = []
 
-        def start(uid):
-            starts.append(uid)
-            self.assertEqual(self._saved()["last_fired"], "2026-10-16T09:00:00")
+            def start(uid):
+                starts.append(uid)
+                self.assertNotIn("last_fired", self._saved())
 
-        with mock.patch.object(restarted, "_start_queue_drain", side_effect=start):
-            await restarted.restore_queues()
-            await self._tick(datetime(2026, 10, 16, 9, 1), restarted)
-        self.assertEqual(starts, ["owner"])
-        self.assertEqual([entry["id"] for entry in self._entries()], [entry_id])
-        self.assertEqual(restarted._message_queues["owner"].qsize(), 1)
+            with mock.patch.object(restarted, "_start_queue_drain", side_effect=start):
+                await restarted.restore_queues()
+                await self._tick(datetime(2026, 10, 16, 9, 1), restarted)
+            self.assertEqual(starts, ["owner"])
+            self.assertEqual([entry["id"] for entry in self._entries()], [entry_id])
+            self.assertEqual(restarted._message_queues["owner"].qsize(), 1)
+        await self._tick(datetime(2026, 10, 16, 9, 2), restarted)
+        self.assertEqual(self._saved()["last_fired"], "2026-10-16T09:00:00")
+
+    async def test_completed_occurrence_cannot_reappear_after_failed_projection(self) -> None:
+        self._add([16])
+        with mock.patch.object(schedules, "update_schedule_fired", side_effect=OSError("read-only definitions")):
+            await self._tick(datetime(2026, 10, 16, 9, 0))
+            entry_id = self._entries()[0]["id"]
+            self.bot._message_queues["owner"].get_nowait()
+            await self.bot._persist_complete("owner", entry_id)
+            restarted = TestBot(["owner"])
+            with mock.patch.object(restarted, "_start_queue_drain") as wake:
+                await restarted.restore_queues()
+                await self._tick(datetime(2026, 10, 16, 9, 1), restarted)
+                wake.assert_not_called()
+        self.assertEqual(self._entries(), [])
+        await self._tick(datetime(2026, 10, 16, 9, 2), restarted)
+        self.assertEqual(self._saved()["last_fired"], "2026-10-16T09:00:00")
+        self.assertEqual(self._entries(), [])
+
+    async def test_failed_projection_does_not_starve_other_schedule_owners(self) -> None:
+        self._add([16])
+        workspace.select_workspace("other", self.ws, self.bot.platform_id)
+        schedules.add_schedule(self.ws, "other", {
+            "id": "other-calendar", "days": [16], "time": "09:00",
+            "created": "2026-10-01T00:00:00", "command": "other work",
+            "chat_id": "other room", "platform_id": self.bot.platform_id,
+        })
+        self.bot.notify_targets.append("other")
+        update = schedules.update_schedule_fired
+
+        def project(ws, uid, schedule_id, slot):
+            if uid == "owner":
+                raise OSError("owner projection unavailable")
+            return update(ws, uid, schedule_id, slot)
+
+        with mock.patch.object(schedules, "update_schedule_fired", side_effect=project):
+            await self._tick(datetime(2026, 10, 16, 9, 0))
+        rows = self.bot._read_queue_file()
+        self.assertEqual(len(rows["owner"]), 1)
+        self.assertEqual(len(rows["other"]), 1)
+        self.assertEqual(self.bot._message_queues["owner"].qsize(), 1)
+        self.assertEqual(self.bot._message_queues["other"].qsize(), 1)
 
     async def test_queue_ack_runs_after_workspace_lock_is_released_and_claim_commits(self) -> None:
         self._add([16])
@@ -149,40 +193,57 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         current.assert_not_awaited()
         self.assertEqual(self._entries()[0]["job"]["workspace_path"], workspace.canonicalize_workspace_path(self.ws))
 
-    async def test_competing_producer_filling_queue_during_commit_cannot_block_workspace(self) -> None:
+    async def test_scheduled_and_ordinary_admission_share_one_capacity_barrier(self) -> None:
         self._add([16])
         self.bot.max_queue_size = 1
-        queue = self.bot._ensure_message_queue("owner")
-        write = self.bot._write_queue_file
+        entered = asyncio.Event()
+        release = threading.Event()
+        admit = self.store.admit
         loop = asyncio.get_running_loop()
 
-        def concurrent_write(data):
-            loop.call_soon_threadsafe(queue.put_nowait, ("competing work", "room", "other-id", False))
-            write(data)
+        def blocked(*args, **kwargs):
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(2):
+                raise RuntimeError("Test did not release transaction")
+            return admit(*args, **kwargs)
 
-        with mock.patch.object(self.bot, "_write_queue_file", side_effect=concurrent_write):
-            await asyncio.wait_for(self._tick(datetime(2026, 10, 16, 9, 0)), timeout=1)
-        self.assertIs(self.bot._message_queues["owner"], queue)
-        self.assertEqual(queue.qsize(), 2)
-        self.assertEqual(queue.get_nowait()[2], "other-id")
-        self.assertEqual(queue.get_nowait()[2], self._entries()[0]["id"])
+        with mock.patch.object(self.store, "admit", side_effect=blocked):
+            scheduled = asyncio.create_task(self._tick(datetime(2026, 10, 16, 9, 0)))
+            ordinary = None
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                ordinary = asyncio.create_task(self.bot._admit_queue_entry(
+                    "owner", "ordinary work", "room", 0,
+                ))
+                await asyncio.sleep(0)
+                self.assertFalse(ordinary.done())
+                release.set()
+                await asyncio.wait_for(scheduled, timeout=1)
+                with self.assertRaises(QueueCapacityError):
+                    await asyncio.wait_for(ordinary, timeout=1)
+            finally:
+                release.set()
+                await asyncio.gather(*[task for task in (scheduled, ordinary) if task], return_exceptions=True)
+        self.assertEqual(len(self._entries()), 1)
+        self.assertEqual(self.bot._message_queues["owner"].qsize(), 1)
+        self.assertEqual(self.bot._message_queues["owner"].maxsize, 0)
         self.assertFalse(workspace.get_lock(self.ws).locked())
 
     async def test_cancellation_during_owned_commit_publishes_and_wakes_after_claim(self) -> None:
         self._add([16])
         started = asyncio.Event()
         release = threading.Event()
-        write = self.bot._write_queue_file
+        write = self.store.admit
         loop = asyncio.get_running_loop()
 
-        def slow_write(data):
+        def slow_write(*args, **kwargs):
             loop.call_soon_threadsafe(started.set)
             if not release.wait(2):
                 raise RuntimeError("Test did not release queue commit")
-            write(data)
+            return write(*args, **kwargs)
 
         with (
-            mock.patch.object(self.bot, "_write_queue_file", side_effect=slow_write),
+            mock.patch.object(self.store, "admit", side_effect=slow_write),
             mock.patch.object(self.bot, "_start_queue_drain") as wake,
         ):
             tick = asyncio.create_task(self._tick(datetime(2026, 10, 16, 9, 0)))
@@ -201,7 +262,8 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             wake.assert_called_once_with("owner")
         self.assertEqual(len(self._entries()), 1)
         self.assertEqual(self.bot._message_queues["owner"].qsize(), 1)
-        self.assertEqual(self._saved()["last_fired"], "2026-10-16T09:00:00")
+        occurrence = ScheduledOccurrence(self.ws, "owner", "calendar", "2026-10-16T09:00:00")
+        self.assertEqual(self.store.schedule_watermarks()[occurrence.key()], occurrence.slot)
         self.assertFalse(workspace.get_lock(self.ws).locked())
 
     async def test_cancellation_before_announcement_entry_still_wakes_durable_work(self) -> None:
@@ -282,7 +344,7 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self._tick(datetime(2029, 2, 28, 23, 59))
         await self._tick(datetime(2029, 3, 1, 9, 0))
         self.assertEqual(len(self._entries()), 1)
-        self.assertNotIn("last_fired", self._saved())
+        self.assertEqual(self._saved()["last_fired"], "2028-02-29T09:00:00")
         await self._tick(datetime(2029, 3, 29, 9, 0))
         self.assertEqual(len(self._entries()), 2)
         self.assertEqual(self._saved()["last_fired"], "2029-03-29T09:00:00")
@@ -353,7 +415,7 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                         self.assertNotIn("last_fired", self._saved())
                     else:
                         fire.assert_awaited_once()
-                        self.assertEqual(fire.await_args.args[1]["last_fired"], expected_slot)
+                        self.assertEqual(fire.await_args.kwargs["schedule_slot"], expected_slot)
                         self.assertEqual(fire.await_args.args[1]["command"], "edited work")
 
     async def test_concurrent_ticks_admit_overlapping_monthly_slot_only_once(self) -> None:
@@ -512,5 +574,5 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                         self.assertNotIn("last_fired", self._saved())
                     else:
                         fire.assert_awaited_once()
-                        self.assertEqual(fire.await_args.args[1]["last_fired"], expected_slot)
+                        self.assertEqual(fire.await_args.kwargs["schedule_slot"], expected_slot)
                         self.assertEqual(fire.await_args.args[1]["command"], "edited yearly work")

@@ -432,20 +432,24 @@ class TelegramBot(BotPlatform):
         logger.info("Telegram bot started polling.")
 
     async def stop(self) -> None:
-        await self._stop_daemon_services()
-        if self.app:
-            app = self.app
-            try:
-                if app.updater is not None and app.updater.running:
-                    await app.updater.stop()
-            finally:
+        try:
+            await self._stop_daemon_services()
+        finally:
+            if self.app:
+                app = self.app
                 try:
-                    if app.running:
-                        await app.stop()
+                    if app.updater is not None and app.updater.running:
+                        await app.updater.stop()
                 finally:
-                    await app.shutdown()
-                    self.app = None
-            logger.info("Telegram bot stopped.")
+                    try:
+                        if app.running:
+                            await app.stop()
+                    finally:
+                        try:
+                            await app.shutdown()
+                        finally:
+                            self.app = None
+                logger.info("Telegram bot stopped.")
 
     def _make_command_handler(self, name: str):
         async def handler(

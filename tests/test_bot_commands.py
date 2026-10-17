@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 from Cozter import schedules, session, workspace
-from Cozter.backends_bot.base import BotContext
+from Cozter.backends_bot.base import BotContext, QueueCapacityError
 from Cozter.tests.helpers import TestBot
 
 
@@ -65,9 +65,9 @@ class BotCommandTests(unittest.TestCase):
     def _run(self, coro) -> None:
         asyncio.run(coro)
 
-    def test_restored_queue_shrinks_without_losing_backlog_or_identity(self) -> None:
+    def test_restored_backlog_keeps_unbounded_cache_identity(self) -> None:
         self.bot.max_queue_size = 2
-        restored = self.bot._ensure_message_queue(self.uid, min_size=5)
+        restored = self.bot._ensure_message_queue(self.uid)
         entries = [(f"prompt {index}", "c1", str(index), False) for index in range(5)]
         for entry in entries:
             restored.put_nowait(entry)
@@ -75,29 +75,25 @@ class BotCommandTests(unittest.TestCase):
         current = self.bot._ensure_message_queue(self.uid)
 
         self.assertIs(current, restored)
-        self.assertEqual(current.maxsize, 2)
-        self.assertTrue(current.full())
+        self.assertEqual(current.maxsize, 0)
+        self.assertFalse(current.full())
         self.assertEqual([current.get_nowait() for _ in range(5)], entries)
 
-    def test_queue_growth_wakes_a_producer_waiting_on_existing_queue(self) -> None:
+    def test_changed_capacity_is_enforced_at_next_admission_without_resizing_cache(self) -> None:
         async def run() -> None:
             self.bot.max_queue_size = 1
             original = self.bot._ensure_message_queue(self.uid)
-            first = ("first", "c1", "1", False)
-            second = ("second", "c1", "2", False)
-            original.put_nowait(first)
-            producer = asyncio.create_task(original.put(second))
-            try:
-                await asyncio.sleep(0)
-                self.assertFalse(producer.done())
-                grown = self.bot._ensure_message_queue(self.uid, min_size=2)
-                self.assertIs(grown, original)
-                await asyncio.wait_for(producer, timeout=1)
-                self.assertEqual([grown.get_nowait(), grown.get_nowait()], [first, second])
-            finally:
-                if not producer.done():
-                    producer.cancel()
-                    await asyncio.gather(producer, return_exceptions=True)
+            await self.bot._admit_queue_entry(self.uid, "first", "c1", 0)
+            with self.assertRaises(QueueCapacityError):
+                await self.bot._admit_queue_entry(self.uid, "deferred", "c1", 0)
+            self.bot.max_queue_size = 2
+            await self.bot._admit_queue_entry(self.uid, "second", "c1", 0)
+            self.assertIs(self.bot._ensure_message_queue(self.uid), original)
+            self.assertEqual(original.maxsize, 0)
+            self.assertEqual([row[0] for row in (original.get_nowait(), original.get_nowait())],
+                             ["first", "second"])
+            self.assertEqual([row["text"] for row in self.bot._read_queue_file()[self.uid]],
+                             ["first", "second"])
 
         self._run(run())
 
@@ -400,14 +396,15 @@ class BotCommandTests(unittest.TestCase):
             await lock.acquire()
             with (
                 mock.patch.object(workspace, "get_lock", return_value=lock),
-                mock.patch.object(self.bot, "_admit_schedule", wraps=self.bot._admit_schedule) as fire,
                 mock.patch.object(self.bot, "_start_queue_drain"),
             ):
                 ticks = [asyncio.create_task(self.bot._scheduler_tick()) for _ in range(2)]
                 await asyncio.sleep(0)
                 lock.release()
                 await asyncio.gather(*ticks)
-                fire.assert_awaited_once()
+                self.assertEqual(len(self.bot._read_queue_file()[self.uid]), 1)
+                self.assertEqual(self.bot._message_queues[self.uid].qsize(), 1)
+                self.assertEqual(self.bot.replies.count("⏰ Queued scheduled task: run"), 1)
 
         self._run(run())
 
@@ -446,7 +443,7 @@ class BotCommandTests(unittest.TestCase):
                     self.assertNotIn("last_fired", schedules.list_schedules(self.ws, self.uid)[0])
                 else:
                     fire.assert_awaited_once()
-                    self.assertEqual(fire.await_args.args[1]["last_fired"], expected_slot)
+                    self.assertEqual(fire.await_args.kwargs["schedule_slot"], expected_slot)
 
         for updated_time, expected_slot in (
             ("10:00", None),

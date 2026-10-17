@@ -435,14 +435,18 @@ class SlackBot(BotPlatform):
         )
 
     async def stop(self) -> None:
-        await self._stop_daemon_services()
-        if self._handler is not None:
+        try:
+            await self._stop_daemon_services()
+        finally:
             try:
-                await self._handler.close_async()
-            except Exception:
-                logger.exception("Error during Slack socket close")
-        self._handler = None
-        self.app = None
+                if self._handler is not None:
+                    try:
+                        await self._handler.close_async()
+                    except Exception:
+                        logger.exception("Error during Slack socket close")
+            finally:
+                self._handler = None
+                self.app = None
         logger.info("Slack bot stopped.")
 
     # Plain messages + file uploads only.

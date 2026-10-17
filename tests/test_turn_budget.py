@@ -12,7 +12,7 @@ from unittest import mock
 from Cozter import agent, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent, append_text_result
 from Cozter.backends_bot.base import _InjectQueue
-from Cozter.tests.helpers import create_python_script_process
+from Cozter.tests.helpers import persist_queue_entry, create_python_script_process
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
 
 
@@ -543,7 +543,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             return AgentResult(text=answer, events=[ChatEvent(kind="text", content=answer)], session_id=self.data["id"])
 
         for text in ("slow task", "next task"):
-            entry = await bot._persist_enqueue("u1", text, "chat")
+            entry = await persist_queue_entry(bot, "u1", text, "chat")
             bot._ensure_message_queue("u1").put_nowait((text, "chat", entry, False))
         with (
             mock.patch.object(agent, "_run_turn_impl", implementation),

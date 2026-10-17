@@ -39,6 +39,7 @@ from .. import (
     agent, backends_agent, colony, config, schedules, session, updater,
     workspace,
 )
+from ..queue_store import AdmissionResult, QueueStore, ScheduledOccurrence
 from ..agent_tools.owned_worker import run_owned_worker
 from ..utils import await_cancelled
 from ..utils import create_background_task
@@ -56,6 +57,19 @@ logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
 
 _FileResult = TypeVar("_FileResult")
+
+
+class QueueCapacityError(RuntimeError):
+    """The configured waiting-work capacity has been reached."""
+
+
+class PlatformNotReadyError(RuntimeError):
+    """A platform dependency is temporarily unavailable during startup.
+
+    Raise this only after the failed attempt has successfully released its
+    resources. The daemon may then retry ``start`` on the same platform.
+    Configuration, durable-state, and cleanup failures are not retryable.
+    """
 
 
 async def _run_owned_poll_tasks(tasks: list[asyncio.Task[None]]) -> None:
@@ -732,6 +746,9 @@ class BotPlatform(ABC):
         )
 
         # Per-user runtime state.
+        self._stopping = False
+        self._queue_drain_tasks: dict[str, asyncio.Task[None]] = {}
+        self._queue_drain_requests: set[str] = set()
         self._running_tasks: dict[str, asyncio.Task] = {}
         self._task_locks: dict[str, asyncio.Lock] = {}
         self._message_queues: dict[str, asyncio.Queue] = {}
@@ -745,6 +762,7 @@ class BotPlatform(ABC):
         self._pending_input: dict[str, Handler] = {}
         # Scheduler state.
         self._scheduler_task: asyncio.Task | None = None
+        self._daemon_services_started = False
         # Update pulled; waiting for active replies before restart.
         self._update_restart_pending = False
         # Serializes persistent-queue read-modify-write.
@@ -779,6 +797,7 @@ class BotPlatform(ABC):
         self._cancel_generations: dict[str, int] = {}
         # Per-user admission lock.
         self._dispatch_admission_locks: dict[str, asyncio.Lock] = {}
+        self._active_queue_entries: dict[str, str] = {}
 
     def _check_upload_size(self, size: object) -> None:
         """Raise before accepting or sending a known-oversized file."""
@@ -881,9 +900,12 @@ class BotPlatform(ABC):
         prompts, and poll detached provider tasks. CLI mode deliberately
         skips the first two, so its lifecycle remains separate.
         """
+        self._stopping = False
         await self.restore_queues()
         self.start_detached_task_watcher()
-        await self.start_scheduler()
+        if not self._update_restart_pending:
+            await self.start_scheduler()
+        self._daemon_services_started = True
 
     async def _stop_daemon_services(self) -> None:
         """Stop the background services started by _start_daemon_services.
@@ -893,14 +915,29 @@ class BotPlatform(ABC):
         delivery resumes from the retained record via
         ``restore_reply_deliveries``.
         """
+        self._stopping = True
+        self._daemon_services_started = False
+        errors: list[BaseException] = []
+
+        async def cleanup(operation: Awaitable[object]) -> None:
+            try:
+                await operation
+            except BaseException as error:
+                errors.append(error)
+
         for owner in list(self._detached_launch_tasks):
-            await self._cancel_owned_deliveries(owner, self._detached_launch_tasks)
-        await self.stop_detached_task_watcher()
-        await self.stop_scheduler()
+            await cleanup(self._cancel_owned_deliveries(owner, self._detached_launch_tasks))
+        await cleanup(self.stop_detached_task_watcher())
+        await cleanup(self.stop_scheduler())
+        await cleanup(self._stop_queue_consumers())
         for owner in list(self._attachment_tasks):
-            await self._cancel_attachment_uploads(owner)
+            await cleanup(self._cancel_attachment_uploads(owner))
         for owner in list(self._reply_delivery_tasks):
-            await self._cancel_owned_deliveries(owner, self._reply_delivery_tasks)
+            await cleanup(self._cancel_owned_deliveries(owner, self._reply_delivery_tasks))
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("Daemon service cleanup failed", errors)
 
     async def _send_text_best_effort(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -938,14 +975,59 @@ class BotPlatform(ABC):
             logger.debug("Failed %s", action, exc_info=True)
         return None
 
-    def _start_queue_drain(self, uid: str) -> None:
-        if uid in self._paused_jobs:
-            return
-        create_background_task(
+    async def _stop_queue_consumers(self) -> None:
+        """Join every owned/active consumer before its platform is closed."""
+        current = asyncio.current_task()
+        tasks = set(self._queue_drain_tasks.values()) | set(self._running_tasks.values())
+        if current is not None:
+            tasks.discard(current)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        errors: list[BaseException] = []
+        pending = {task for task in tasks if not task.done()}
+        while pending:
+            try:
+                _, pending = await asyncio.wait(pending)
+            except asyncio.CancelledError as error:
+                # Retain consumer cleanup ownership during repeated shutdown.
+                errors.append(error)
+        for task in tasks:
+            if not task.cancelled() and (error := task.exception()) is not None:
+                errors.append(error)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("Queue consumer cleanup failed", errors)
+
+    def _start_queue_drain(self, uid: str) -> asyncio.Task[None] | None:
+        if self._stopping or uid in self._paused_jobs:
+            return None
+        current = self._queue_drain_tasks.get(uid)
+        if current is not None and not current.done():
+            # A wake can arrive while the current consumer is exiting or
+            # handling cancellation. Its completion callback owns that wake.
+            self._queue_drain_requests.add(uid)
+            return current
+        self._queue_drain_requests.discard(uid)
+        task = create_background_task(
             self._drain_message_queue(uid),
             name=f"{self.platform_id}:drain:{uid}",
             log=logger,
         )
+        self._queue_drain_tasks[uid] = task
+
+        def finished(done: asyncio.Task[None]) -> None:
+            if self._queue_drain_tasks.get(uid) is not done:
+                return
+            self._queue_drain_tasks.pop(uid, None)
+            requested = uid in self._queue_drain_requests
+            self._queue_drain_requests.discard(uid)
+            if requested:
+                self._start_queue_drain(uid)
+
+        task.add_done_callback(finished)
+        return task
 
     async def send_startup_messages(
         self, version: str, commit_date: str,
@@ -969,6 +1051,8 @@ class BotPlatform(ABC):
     async def cancel_update_restart(self) -> None:
         """Resume normal processing if an update restart is aborted."""
         self._update_restart_pending = False
+        if not self._daemon_services_started:
+            return
         await self.start_scheduler()
         for uid in list(self._message_queues):
             self._start_queue_drain(uid)
@@ -1276,23 +1360,16 @@ class BotPlatform(ABC):
         """Return the per-user barrier for durable inbound queue writes."""
         return ensure_lock(self._dispatch_admission_locks, uid)
 
-    def _ensure_message_queue(
-        self, uid: str, *, min_size: int = 0,
-    ) -> asyncio.Queue:
+    def _ensure_message_queue(self, uid: str) -> asyncio.Queue:
+        """Return the runnable cache; capacity is enforced at admission.
+
+        Restored, already accepted work must fit even when configuration has
+        lowered the admission limit. Publication never waits for a consumer.
+        """
         msg_queue = self._message_queues.get(uid)
-        maxsize = max(self.max_queue_size, min_size)
         if msg_queue is None:
-            msg_queue = asyncio.Queue(maxsize=maxsize)
+            msg_queue = asyncio.Queue()
             self._message_queues[uid] = msg_queue
-        elif msg_queue.maxsize != maxsize:
-            # Keep queue object and entries: asyncio.Queue has no public
-            # resize API; a restored backlog may exceed today's cap.
-            msg_queue._maxsize = maxsize
-            # A growth can make space without a get(), so wake blocked putters
-            # to recheck full(). Each still checks capacity before admission.
-            if not msg_queue.full():
-                while msg_queue._putters:
-                    msg_queue._wakeup_next(msg_queue._putters)
         return msg_queue
 
     @staticmethod
@@ -2596,26 +2673,28 @@ class BotPlatform(ABC):
             return
         generation = self._cancel_generations.get(uid, 0)
         msg_queue = self._ensure_message_queue(uid)
-        if msg_queue.full():
+        was_awaiting = uid in self._awaiting_answer
+        try:
+            result = await self._admit_queue_entry(uid, text, ctx.chat_id, generation)
+        except QueueCapacityError:
             await ctx.reply_text("Queue full. Wait or /stop first.")
             return
-        was_awaiting = uid in self._awaiting_answer
-        entry_id = await self._persist_and_queue_dispatch(
-            uid, text, ctx.chat_id, generation, msg_queue,
-        )
-        if entry_id is None:
+        if result is None or result.entry is None:
             return
-        if was_awaiting:
-            await self._resume_awaiting_answer(
-                uid, msg_queue, entry_id,
-                reason="inject arrived after turn finished",
+        entry_id = result.entry["id"]
+        try:
+            if was_awaiting:
+                await self._resume_awaiting_answer(
+                    uid, msg_queue, entry_id,
+                    reason="inject arrived after turn finished",
+                )
+            await ctx.reply_text(
+                f"Queued ({msg_queue.qsize()}/{self.max_queue_size})."
+                " Running next.",
             )
-        await ctx.reply_text(
-            f"Queued ({msg_queue.qsize()}/{self.max_queue_size})."
-            " Running next.",
-        )
-        # Race guard: kick a drain so the entry isn't orphaned.
-        self._start_queue_drain(uid)
+        finally:
+            if self._cancel_generations.get(uid, 0) == generation:
+                self._start_queue_drain(uid)
 
     # /reserve (recurring schedule wizard)
 
@@ -2809,12 +2888,13 @@ class BotPlatform(ABC):
         save_json_object(path, data)
 
     def _queue_file_path(self) -> str:
-        return self._platform_state_file_path("queue")
+        return os.path.splitext(self._platform_state_file_path("queue"))[0] + ".sqlite3"
+
+    def _queue_store(self) -> QueueStore:
+        return QueueStore(self._queue_file_path(), self._platform_state_file_path("queue"))
 
     def _read_queue_file(self) -> dict:
-        return self._read_platform_state_file(
-            self._queue_file_path(), "queue file",
-        )
+        return self._queue_store().read_entries()
 
     @staticmethod
     def _queue_entries(value: object) -> list[dict]:
@@ -2823,7 +2903,7 @@ class BotPlatform(ABC):
         return [entry for entry in value if isinstance(entry, dict)]
 
     def _write_queue_file(self, data: dict) -> None:
-        self._write_platform_state_file(self._queue_file_path(), data)
+        self._queue_store().write_entries(data)
 
     async def _load_job_checkpoint(self, uid: str, entry_id: str) -> dict:
         def read() -> dict:
@@ -2864,10 +2944,7 @@ class BotPlatform(ABC):
         entry = await _run_durable_file_operation(self._queue_file_lock, read)
         if entry is None:
             return  # /stop already removed it
-        existing = self._message_queues.get(uid)
-        queue = self._ensure_message_queue(
-            uid, min_size=(existing.qsize() if existing else 0) + 1,
-        )
+        queue = self._ensure_message_queue(uid)
         if not any(isinstance(item, tuple) and len(item) == 4
                    and item[2] == entry_id for item in queue._queue):
             queue.put_nowait((entry.get("text", ""), entry.get("chat_id", ""),
@@ -2926,98 +3003,68 @@ class BotPlatform(ABC):
             self._start_queue_drain(uid)
         return resumed
 
-    async def _persist_enqueue(
-        self, uid: str, text: str, chat_id: str,
-        *, ephemeral: bool = False,
-        workspace_path: str | None = None,
-        schedule_id: str | None = None,
-        schedule_slot: str | None = None,
-        on_persisted: Callable[[bool], None] | None = None,
-        on_committed: Callable[[str], None] | None = None,
-    ) -> str:
+    async def _admit_queue_entry(
+        self, uid: str, text: str, chat_id: str, generation: int, *,
+        ephemeral: bool = False, workspace_path: str | None = None,
+        occurrence: ScheduledOccurrence | None = None,
+    ) -> AdmissionResult | None:
+        """Commit durable ownership and publish once at a single boundary.
+
+        Every producer uses the same per-owner admission barrier. /stop bumps
+        its generation before acquiring that barrier, then clears the store.
+        Once I/O starts, cancellation waits for the transaction and publishes
+        accepted work before unwinding; no accepted job depends on its caller
+        surviving to a separate queue.put().
+        """
         if ephemeral and workspace_path is None:
             workspace_path = await self._current_workspace_for_turn(uid, chat_id)
         if ephemeral and (not isinstance(workspace_path, str) or not workspace_path.strip()):
             raise ValueError("Scheduled queue entries require an originating workspace")
-        if (schedule_id is None) != (schedule_slot is None):
-            raise ValueError("Scheduled admission requires both its schedule and slot")
-        if schedule_id is not None:
-            if not ephemeral or not schedule_id or schedules.parse_iso(schedule_slot) is None:
-                raise ValueError("Invalid scheduled admission identity")
-            assert isinstance(workspace_path, str)
-            identity = [self.platform_id, uid, workspace.canonicalize_workspace_path(workspace_path),
-                        schedule_id, schedule_slot]
-            entry_id = uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity)).hex[:12]
-        else:
-            entry_id = uuid.uuid4().hex[:12]
-        entry = {
-            "id": entry_id, "text": text, "chat_id": chat_id,
-        }
+        entry = {"id": occurrence.entry_id(self.platform_id) if occurrence else uuid.uuid4().hex,
+                 "text": text, "chat_id": chat_id}
         if ephemeral:
             entry["ephemeral"] = True
         if workspace_path is not None:
             entry["job"] = {"workspace_path": workspace_path}
-        if schedule_id is not None:
-            entry["job"].update(schedule_id=schedule_id, schedule_slot=schedule_slot)
-        def enqueue() -> None:
-            data = self._read_queue_file()
-            entries = self._queue_entries(data.get(uid))
-            existing = next((row for row in entries if row.get("id") == entry_id), None)
-            if existing is not None:
-                if schedule_id is None or any(existing.get(key) != entry.get(key) for key in ("text", "chat_id", "ephemeral")):
-                    raise ValueError("Scheduled queue identity collision")
-                if any(existing.get("job", {}).get(key) != entry["job"].get(key)
-                       for key in ("workspace_path", "schedule_id", "schedule_slot")):
-                    raise ValueError("Scheduled queue origin collision")
-                if on_persisted is not None:
-                    on_persisted(False)
+        if occurrence is not None:
+            if not ephemeral or occurrence.owner_id != uid:
+                raise ValueError("Scheduled admission requires its owning user")
+            entry["job"] = {"workspace_path": occurrence.workspace_path,
+                            "schedule_id": occurrence.schedule_id, "schedule_slot": occurrence.slot}
+        msg_queue = self._ensure_message_queue(uid)
+        published = False
+
+        def publish(result: AdmissionResult) -> None:
+            nonlocal published
+            if self._cancel_generations.get(uid, 0) != generation or result.entry is None:
                 return
-            entries.append(entry)
-            data[uid] = entries
-            self._write_queue_file(data)
-            if on_persisted is not None:
-                # This entry is the durable receipt if the second file write
-                # fails or power is lost. Retrying its slot reuses this ID.
-                on_persisted(True)
+            stored = result.entry
+            if self._active_queue_entries.get(uid) == stored["id"]:
+                return
+            if not any(isinstance(item, tuple) and len(item) == 4 and item[2] == stored["id"]
+                       for item in msg_queue._queue):
+                msg_queue.put_nowait((stored["text"], stored["chat_id"], stored["id"],
+                                      stored.get("ephemeral") is True))
+            published = True
 
-        await _run_durable_file_operation(
-            self._queue_file_lock, enqueue,
-            on_complete=(lambda _: on_committed(entry_id)) if on_committed is not None else None,
-        )
-        return entry_id
-
-    async def _persist_admitted_dispatch_entry(
-        self,
-        uid: str,
-        text: str,
-        chat_id: str,
-        generation: int,
-        *,
-        ephemeral: bool = False,
-        workspace_path: str | None = None,
-        schedule_id: str | None = None,
-        schedule_slot: str | None = None,
-        on_persisted: Callable[[bool], None] | None = None,
-        on_committed: Callable[[str], None] | None = None,
-    ) -> str | None:
-        """Persist a pre-cancellation dispatch, or reject it as stale.
-
-        ``/stop`` advances the generation before it waits for this admission
-        barrier and clears the durable queue while holding it. Consequently a
-        dispatch that captured an older generation either writes before that
-        clear or is rejected before it can write after it.
-        """
-        admission_lock = self._ensure_dispatch_admission_lock(uid)
-        async with admission_lock:
-            if self._cancel_generations.get(uid, 0) != generation:
-                return None
-            return await self._persist_enqueue(
-                uid, text, chat_id, ephemeral=ephemeral,
-                **({"workspace_path": workspace_path} if workspace_path is not None else {}),
-                **({"schedule_id": schedule_id, "schedule_slot": schedule_slot} if schedule_id is not None else {}),
-                **({"on_persisted": on_persisted} if on_persisted is not None else {}),
-                **({"on_committed": on_committed} if on_committed is not None else {}),
-            )
+        try:
+            async with self._ensure_dispatch_admission_lock(uid):
+                if self._cancel_generations.get(uid, 0) != generation:
+                    return None
+                if self.max_queue_size > 0 and msg_queue.qsize() >= self.max_queue_size:
+                    raise QueueCapacityError("Waiting-work queue is full")
+                result = await _run_durable_file_operation(
+                    self._queue_file_lock,
+                    lambda: self._queue_store().admit(uid, entry, occurrence),
+                    on_complete=publish,
+                )
+                if self._cancel_generations.get(uid, 0) != generation:
+                    return None
+                return result
+        except BaseException:
+            if published and self._cancel_generations.get(uid, 0) == generation:
+                self._start_queue_drain(uid)
+            raise
 
     async def _persist_complete(
         self, uid: str, entry_id: str,
@@ -3099,26 +3146,12 @@ class BotPlatform(ABC):
             if not entries:
                 continue
             self._ensure_task_lock(uid)
-            existing_q = self._message_queues.get(uid)
-            existing_size = existing_q.qsize() if existing_q else 0
-            msg_queue = self._ensure_message_queue(
-                uid, min_size=existing_size + len(entries),
-            )
+            msg_queue = self._ensure_message_queue(uid)
+            cached_ids = {item[2] for item in msg_queue._queue
+                          if isinstance(item, tuple) and len(item) == 4}
             for entry in entries:
-                job = entry.get("job", {})
-                if (entry.get("ephemeral") is True and isinstance(job, dict)
-                        and isinstance(job.get("workspace_path"), str)
-                        and isinstance(job.get("schedule_id"), str)
-                        and isinstance(job.get("schedule_slot"), str)):
-                    # Repair only explicit new admission receipts before work
-                    # can finish and remove the receipt from the queue.
-                    ws = job["workspace_path"]
-                    await _run_durable_file_operation(
-                        workspace.get_lock(ws),
-                        lambda uid=uid, job=job: self._claim_scheduled_slot(
-                            uid, job["workspace_path"], job["schedule_id"], job["schedule_slot"],
-                        ),
-                    )
+                if entry.get("id") in cached_ids or entry.get("id") == self._active_queue_entries.get(uid):
+                    continue
                 # Oldest-first preserves ordering.
                 msg_queue.put_nowait((
                     entry.get("text", ""),
@@ -4170,91 +4203,93 @@ class BotPlatform(ABC):
             await asyncio.sleep(30)
 
     async def _scheduler_tick(self) -> None:
-        """Fire every schedule whose most-recent matching slot hasn't run.
+        """Admit due occurrences using the transactional schedule watermark.
 
-        A schedule's "slot" is the most recent (day, time) match at or
-        before ``now``. If that slot is newer than the schedule's
-        persisted ``last_fired`` (or the schedule has never fired and
-        the slot is newer than ``created``), fire it.
-
-        Because ``last_fired`` lives in the session JSON on disk, this
-        correctly catches up after a bot restart: any slot that should
-        have run while the bot was down will fire once on the next tick.
+        schedules.json remains the editable definition and status projection.
+        Its last_fired write is retried independently and cannot block queued
+        work or make a consumed occurrence due again.
         """
         now = datetime.now()
-
-        # Same-slot fires in creation order.
+        watermarks = await _run_durable_file_operation(
+            self._queue_file_lock, lambda: self._queue_store().schedule_watermarks(),
+        )
         to_fire: list[tuple[str, str, dict, datetime]] = []
-
-        # Iterate workspace state.
         for uid, ws in workspace.iter_current_workspaces(self.platform_id):
             if not os.path.isdir(ws):
                 continue
-            for sched in self._platform_schedules(ws, uid):
-                schedule_id = sched.get("id")
-                if not isinstance(schedule_id, str) or not schedule_id:
-                    continue
-                slot = schedules.most_recent_slot(sched, now)
-                if slot is None:
-                    continue
-                last_fired = schedules.parse_iso(sched.get("last_fired"))
-                baseline = last_fired or schedules.parse_iso(
-                    sched.get("created"),
-                )
-                # Never fire at/before creation.
-                if baseline is not None and slot <= baseline:
-                    continue
-                to_fire.append((uid, ws, sched, slot))
-
+            try:
+                records = self._platform_schedules(ws, uid)
+                for sched in records:
+                    schedule_id = sched.get("id")
+                    if not isinstance(schedule_id, str) or not schedule_id:
+                        continue
+                    slot = schedules.most_recent_slot(sched, now)
+                    if slot is None:
+                        continue
+                    occurrence = ScheduledOccurrence(ws, uid, schedule_id, slot.isoformat())
+                    receipt = watermarks.get(occurrence.key())
+                    if receipt is not None:
+                        await self._project_schedule_receipt(uid, ws, schedule_id, receipt)
+                    baseline = max((value for value in (
+                        schedules.parse_iso(sched.get("last_fired")),
+                        schedules.parse_iso(receipt), schedules.parse_iso(sched.get("created")),
+                    ) if value is not None), default=None)
+                    if baseline is None or slot > baseline:
+                        to_fire.append((uid, ws, sched, slot))
+            except Exception:
+                logger.exception("Could not inspect schedules for user=%s workspace=%s", uid, ws)
         to_fire.sort(key=lambda item: str(item[2].get("created") or ""))
-
         for uid, ws, sched, slot in to_fire:
-            schedule_id = sched.get("id")
-            if not isinstance(schedule_id, str) or not schedule_id:
-                continue
             admission = None
             try:
                 async with workspace.get_lock(ws):
-                    current = next(
-                    (record for record in self._platform_schedules(ws, uid)
-                     if record.get("id") == schedule_id),
-                    None,
-                    )
+                    current = next((record for record in self._platform_schedules(ws, uid)
+                                    if record.get("id") == sched["id"]), None)
                     if current is None:
                         continue
-                    # Recheck edits and competing ticks after taking the lock.
                     slot = schedules.most_recent_slot(current, now)
                     if slot is None:
                         continue
-                    baseline = schedules.parse_iso(current.get("last_fired")) or schedules.parse_iso(
-                        current.get("created"),
-                    )
+                    baseline = max((value for value in (
+                        schedules.parse_iso(current.get("last_fired")),
+                        schedules.parse_iso(current.get("created")),
+                    ) if value is not None), default=None)
                     if baseline is not None and slot <= baseline:
                         continue
-                    # A full/rejected queue leaves this slot due. The durable
-                    # receipt and claim complete before any notice or drain.
                     admission = await self._admit_schedule(
-                        uid, {**current, "last_fired": slot.isoformat()},
-                        workspace_path=ws, schedule_slot=slot.isoformat(),
+                        uid, current, workspace_path=ws, schedule_slot=slot.isoformat(),
                     )
                 if admission is not None:
+                    await self._project_schedule_receipt(uid, ws, current["id"], slot.isoformat())
                     await self._announce_schedule(uid, current, admission)
+            except Exception:
+                logger.exception("Could not admit schedule user=%s schedule=%s", uid, sched["id"])
             finally:
                 if admission is not None:
                     self._wake_schedule(uid, admission)
 
     def _claim_scheduled_slot(self, uid: str, ws: str, schedule_id: str, slot: str) -> None:
-        """Finish an explicit durable admission before work can consume it."""
+        """Project a committed receipt into the editable schedule document."""
         current = next((record for record in self._platform_schedules(ws, uid)
                         if record.get("id") == schedule_id), None)
         if current is None:
-            return  # Removal does not cancel already admitted work.
+            return
         claimed_at = schedules.parse_iso(slot)
         if claimed_at is None:
             raise ValueError("Invalid scheduled admission slot")
         previous = schedules.parse_iso(current.get("last_fired"))
         if previous is None or previous < claimed_at:
             schedules.update_schedule_fired(ws, uid, schedule_id, slot)
+
+    async def _project_schedule_receipt(self, uid: str, ws: str, schedule_id: str, slot: str) -> None:
+        try:
+            await _run_durable_file_operation(
+                workspace.get_lock(ws),
+                lambda: self._claim_scheduled_slot(uid, ws, schedule_id, slot),
+            )
+        except Exception:
+            logger.exception("Could not project committed schedule receipt user=%s schedule=%s; will retry",
+                             uid, schedule_id)
 
     async def _fire_schedule(
         self, uid: str, sched: dict, *, workspace_path: str,
@@ -4272,84 +4307,32 @@ class BotPlatform(ABC):
         self, uid: str, sched: dict, *, workspace_path: str,
         schedule_slot: str | None = None,
     ) -> tuple[str, int, bool] | None:
-        """Push a scheduled command onto the user's message queue.
-
-        The queue entry is flagged ``ephemeral=True`` so the drain loop
-        runs it in a job-owned session kept until completion or cancellation,
-        rather than appending to whichever session was current at the
-        time the schedule fires.
-        """
         command = sched.get("command", "")
         chat_id = sched.get("chat_id", "")
         generation = self._cancel_generations.get(uid, 0)
-        if sched.get("platform_id") != self.platform_id:
-            return
-        if not command or not chat_id:
-            return
-
-        # Re-check auth: creators may be deauthorized.
+        if sched.get("platform_id") != self.platform_id or not command or not chat_id:
+            return None
         if not self.authorized(uid, chat_id):
-            logger.warning(
-                "Skipping schedule for unauthorized user=%s chat=%s",
-                uid, chat_id,
-            )
-            return
-
-        # The source schedule store owns the origin; a user's later /open
-        # cannot redirect scheduled work to a different workspace.
+            logger.warning("Skipping schedule for unauthorized user=%s chat=%s", uid, chat_id)
+            return None
         if not isinstance(workspace_path, str) or not workspace_path.strip():
             raise ValueError("Schedules require their source workspace")
-
-        # Scheduler can fire before first input.
-        self._ensure_task_lock(uid)
-        msg_queue = self._ensure_message_queue(uid)
-
-        # Check capacity first.
-        if msg_queue.full():
-            logger.info(
-                "Deferring scheduled task because its queue is full user=%s schedule=%s",
-                uid, sched.get("id"),
-            )
-            return
-
-        created = True
-
-        def persisted(is_new: bool) -> None:
-            nonlocal created
-            created = is_new
-            if schedule_slot is not None:
-                self._claim_scheduled_slot(uid, workspace_path, sched["id"], schedule_slot)
-
-        published = False
-
-        def committed(entry_id: str) -> None:
-            nonlocal published
-            if self._cancel_generations.get(uid, 0) != generation:
-                return
-            if not any(item[2] == entry_id for item in msg_queue._queue):
-                # Admission can yield while another producer fills the queue.
-                # Already durable work must never wait for a drain needing ws.
-                self._ensure_message_queue(uid, min_size=msg_queue.qsize() + 1)
-                msg_queue.put_nowait((command, chat_id, entry_id, True))
-            published = True
-
+        occurrence = (ScheduledOccurrence(workspace_path, uid, sched["id"], schedule_slot)
+                      if schedule_slot is not None else None)
         try:
-            entry_id = await self._persist_admitted_dispatch_entry(
+            result = await self._admit_queue_entry(
                 uid, command, chat_id, generation, ephemeral=True,
-                workspace_path=workspace_path, on_committed=committed,
-                **({"schedule_id": sched["id"], "schedule_slot": schedule_slot,
-                    "on_persisted": persisted} if schedule_slot is not None else {}),
+                workspace_path=workspace_path, occurrence=occurrence,
             )
-        except BaseException:
-            if published and self._cancel_generations.get(uid, 0) == generation:
-                self._start_queue_drain(uid)
-            raise
-        if entry_id is None:
-            return
-        if self._cancel_generations.get(uid, 0) != generation:
-            await self._discard_cancelled_dispatch_entry(uid, entry_id)
-            return
-        return entry_id, generation, created
+        except QueueCapacityError:
+            logger.info("Deferring scheduled task because its queue is full user=%s schedule=%s",
+                        uid, sched.get("id"))
+            return None
+        if result is None:
+            return None
+        if result.entry is None:
+            return None
+        return result.entry["id"], generation, result.created
 
     def _wake_schedule(self, uid: str, admission: tuple[str, int, bool]) -> None:
         if self._cancel_generations.get(uid, 0) == admission[1]:
@@ -4465,168 +4448,48 @@ class BotPlatform(ABC):
     # dispatch + AI turn
 
     def _cleanup_turn(self, uid: str, lock: asyncio.Lock) -> None:
+        self._active_queue_entries.pop(uid, None)
         self._running_tasks.pop(uid, None)
         self._inject_queues.pop(uid, None)
         self._cancel_acknowledged.discard(uid)
         self._clear_turn_progress(uid)
         lock.release()
 
-    async def _discard_cancelled_dispatch_entry(
-        self, uid: str, entry_id: str, msg_queue: asyncio.Queue | None = None,
-    ) -> None:
-        """Remove an entry whose dispatch began before /cancel or /stop.
-
-        The queue file may already have been cleared by the command.  Still
-        complete by id because a dispatch can persist after that clear while
-        it was suspended waiting on the queue-file lock.
-        """
-        if msg_queue is not None:
-            self._select_queue_entry(
-                msg_queue,
-                lambda entry: (
-                    isinstance(entry, tuple)
-                    and len(entry) == 4
-                    and entry[2] == entry_id
-                ),
-            )
-        try:
-            await self._persist_complete(uid, entry_id)
-        except Exception:
-            logger.warning(
-                "Failed to discard cancelled queue entry %s for user %s",
-                entry_id, uid, exc_info=True,
-            )
-
-    async def _persist_and_queue_dispatch(
-        self,
-        uid: str,
-        text: str,
-        chat_id: str,
-        generation: int,
-        msg_queue: asyncio.Queue,
-    ) -> str | None:
-        """Persist and enqueue a dispatch unless cancellation made it stale."""
-        entry_id = await self._persist_admitted_dispatch_entry(
-            uid, text, chat_id, generation,
-        )
-        if entry_id is None:
-            return None
-        if self._cancel_generations.get(uid, 0) != generation:
-            await self._discard_cancelled_dispatch_entry(uid, entry_id)
-            return None
-        await msg_queue.put((text, chat_id, entry_id, False))
-        if self._cancel_generations.get(uid, 0) != generation:
-            await self._discard_cancelled_dispatch_entry(uid, entry_id, msg_queue)
-            return None
-        return entry_id
-
     async def _dispatch_ai(self, ctx: BotContext, text: str) -> None:
-        uid = ctx.user_id
-        chat_id = ctx.chat_id
+        uid, chat_id = ctx.user_id, ctx.chat_id
         generation = self._cancel_generations.get(uid, 0)
         if await self._resume_paused_job(uid, chat_id, text, generation):
             await ctx.reply_text("Resuming the unfinished job with your guidance.")
             return
-        if self._update_restart_pending:
-            self._ensure_task_lock(uid)
-            msg_queue = self._ensure_message_queue(uid)
-            if msg_queue.full():
-                await ctx.reply_text("Queue full. Try again after restart.")
-            else:
-                entry_id = await self._persist_and_queue_dispatch(
-                    uid, text, chat_id, generation, msg_queue,
-                )
-                if entry_id is None:
-                    return
-                await self._resume_awaiting_answer(
-                    uid, msg_queue, entry_id, reason="update was pending",
-                )
-                await ctx.reply_text(
-                    f"Queued ({msg_queue.qsize()}/{self.max_queue_size})."
-                )
-            return
-
         lock = self._ensure_task_lock(uid)
-
-        if (lock.locked() or uid in self._pending_reply_delivery_users
-                or uid in self._paused_jobs):
-            msg_queue = self._ensure_message_queue(uid)
-            if msg_queue.full():
-                await ctx.reply_text("Queue full. Wait or /stop first.")
-            else:
-                was_awaiting = uid in self._awaiting_answer
-                entry_id = await self._persist_and_queue_dispatch(
-                    uid, text, chat_id, generation, msg_queue,
-                )
-                if entry_id is None:
-                    return
-                if was_awaiting:
-                    await self._resume_awaiting_answer(
-                        uid, msg_queue, entry_id, reason="turn was finishing",
-                    )
-                await ctx.reply_text(
-                    f"Queued ({msg_queue.qsize()}/{self.max_queue_size})."
-                )
-                # Race guard: kick a drain so the entry isn't orphaned.
-                self._start_queue_drain(uid)
-            return
-
-        # Persist before locking.
-        entry_id = await self._persist_admitted_dispatch_entry(
-            uid, text, chat_id, generation,
-        )
-        if entry_id is None:
-            return
-        await lock.acquire()
-        if self._cancel_generations.get(uid, 0) != generation:
-            try:
-                await self._discard_cancelled_dispatch_entry(uid, entry_id)
-            finally:
-                lock.release()
-            return
-        # Park in RAM too so an aborted update can resume it without restart.
-        if self._update_restart_pending:
-            lock.release()
-            queued = self._message_queues.get(uid)
-            msg_queue = self._ensure_message_queue(
-                uid,
-                min_size=(queued.qsize() if queued is not None else 0) + 1,
-            )
-            msg_queue.put_nowait((text, chat_id, entry_id, False))
-            await self._resume_awaiting_answer(
-                uid, msg_queue, entry_id, reason="update became pending",
-            )
-            await ctx.reply_text(
-                f"Queued ({msg_queue.qsize()}/{max(self.max_queue_size, msg_queue.qsize())})."
-            )
-            # Start anyway: covers the no-update/cancel race after placement.
-            self._start_queue_drain(uid)
-            return
-        # [[await]]: clear only after lock.
-        self._awaiting_answer.discard(uid)
-        # Register early so /stop finds the task.
-        self._running_tasks[uid] = asyncio.current_task()
+        queued = (lock.locked() or self._update_restart_pending
+                  or uid in self._pending_reply_delivery_users or uid in self._paused_jobs)
         try:
-            completed = await self._run_turn(
-                uid, chat_id, text, queue_entry_id=entry_id,
-            )
-        except asyncio.CancelledError:
-            # Shutdown keeps the entry for resume; don't mask the clean cancel.
-            if uid not in self._cancel_acknowledged:
-                await self._send_text_best_effort(chat_id, "Cancelled.")
+            result = await self._admit_queue_entry(uid, text, chat_id, generation)
+        except QueueCapacityError:
+            await ctx.reply_text("Queue full. Wait or /stop first.")
             return
-        except Exception as e:
-            logger.exception("AI turn failed")
-            await self._pause_job_after_failure(uid, entry_id, chat_id, e)
-        else:
-            if completed is False:
-                await self._retain_job_entry(uid, entry_id)
+        if result is None or result.entry is None:
+            return
+        draining = False
+        try:
+            msg_queue = self._ensure_message_queue(uid)
+            await self._resume_awaiting_answer(
+                uid, msg_queue, result.entry["id"], reason="a new message arrived",
+            )
+            if self._cancel_generations.get(uid, 0) != generation:
+                return
+            if queued or lock.locked() or self._update_restart_pending:
+                await ctx.reply_text(f"Queued ({msg_queue.qsize()}/{self.max_queue_size}).")
             else:
-                await self._persist_complete(uid, entry_id)
+                # All accepted work executes through the same FIFO consumer.
+                draining = True
+                consumer = self._start_queue_drain(uid)
+                if consumer is not None:
+                    await asyncio.shield(consumer)
         finally:
-            self._cleanup_turn(uid, lock)
-
-        await self._drain_message_queue(uid)
+            if not draining and self._cancel_generations.get(uid, 0) == generation:
+                self._start_queue_drain(uid)
 
     @staticmethod
     def _compose_thinking_display(
@@ -5486,6 +5349,8 @@ class BotPlatform(ABC):
         )
 
     async def _drain_message_queue(self, uid: str) -> None:
+        if self._stopping:
+            return
         msg_queue = self._message_queues.get(uid)
         if not msg_queue:
             return
@@ -5496,6 +5361,8 @@ class BotPlatform(ABC):
         lock = self._ensure_task_lock(uid)
 
         while not msg_queue.empty():
+            if self._stopping:
+                break
             if uid in self._pending_reply_delivery_users:
                 break
             if self._update_restart_pending:
@@ -5550,7 +5417,9 @@ class BotPlatform(ABC):
                     lock.release()
                 continue
 
-            # Register before first yield so /stop cancels early.
+            # Popping transfers cache ownership to this consumer before its
+            # first yield; an idempotent admission must not republish it.
+            self._active_queue_entries[uid] = entry_id
             self._running_tasks[uid] = asyncio.current_task()
             try:
                 if ephemeral:

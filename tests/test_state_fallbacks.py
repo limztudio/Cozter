@@ -15,7 +15,7 @@ from Cozter import titling
 from Cozter.agent_tools.builtin import web_search as web_search_mod
 from Cozter.backends_agent.base import ChatEvent
 from Cozter.backends_bot.base import BotContext, BotPlatform, ensure_upload_dir
-from Cozter.tests.helpers import TestBot, temporary_config
+from Cozter.tests.helpers import TestBot, persist_queue_entry, temporary_config
 
 
 class QueueRestoreBot(TestBot):
@@ -1131,7 +1131,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 bot = QueueRestoreBot(["u1"])
                 self.assertEqual(
                     os.path.basename(bot._queue_file_path()),
-                    "queue_test_queue.json",
+                    "queue_test_queue.sqlite3",
                 )
                 self.assertEqual(
                     os.path.basename(bot._detached_tasks_file_path()),
@@ -1158,9 +1158,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     existing_queue.put_nowait((
                         "already queued", "chat", "existing-id", False,
                     ))
-                    path = bot._queue_file_path()
-                    with open(path, "w", encoding="utf-8") as file_handle:
-                        json.dump({
+                    bot._write_queue_file({
                             "u1": [
                                 {
                                     "id": "first-id",
@@ -1174,7 +1172,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                                     "ephemeral": True,
                                 },
                             ],
-                        }, file_handle)
+                        })
 
                     await bot.restore_queues()
                     await asyncio.sleep(0)
@@ -1206,15 +1204,14 @@ class QueueStateFallbackTests(unittest.TestCase):
                 workspace.CONFIG_DIR = tmp
                 try:
                     bot = QueueRestoreBot(["u1"])
-                    with open(bot._queue_file_path(), "w", encoding="utf-8") as file_handle:
-                        json.dump({
+                    bot._write_queue_file({
                             "u1": [{
                                 "id": "entry-id",
                                 "text": "ordinary message",
                                 "chat_id": "chat",
                                 "ephemeral": "false",
                             }],
-                        }, file_handle)
+                        })
 
                     await bot.restore_queues()
                     await asyncio.sleep(0)
@@ -1276,7 +1273,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 try:
                     bot = QueueDrainBot()
                     msg_queue = bot._ensure_message_queue("u1")
-                    old_id = await bot._persist_enqueue(
+                    old_id = await persist_queue_entry(bot,
                         "u1", "old queued", "chat",
                     )
                     msg_queue.put_nowait(("old queued", "chat", old_id, False))
@@ -1328,7 +1325,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 try:
                     bot = QueueDrainBot()
                     msg_queue = bot._ensure_message_queue("u1")
-                    old_id = await bot._persist_enqueue(
+                    old_id = await persist_queue_entry(bot,
                         "u1", "old queued", "chat",
                     )
                     msg_queue.put_nowait(("old queued", "chat", old_id, False))
@@ -1386,7 +1383,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 try:
                     bot = QueueDrainBot()
                     entered_persist = asyncio.Event()
-                    original_persist = bot._persist_enqueue
+                    original_persist = bot._admit_queue_entry
 
                     async def persist_after_signal(*args, **kwargs):
                         entered_persist.set()
@@ -1396,7 +1393,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     queue_file_lock_held = True
                     with mock.patch.object(
                         bot,
-                        "_persist_enqueue",
+                        "_admit_queue_entry",
                         side_effect=persist_after_signal,
                     ):
                         dispatch_task = asyncio.create_task(
@@ -1442,7 +1439,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 queue_file_lock_held = False
                 try:
                     bot = _GatedDrainBot()
-                    original_persist = bot._persist_enqueue
+                    original_persist = bot._admit_queue_entry
                     first_entered_persist = asyncio.Event()
 
                     async def persist_after_signal(*args, **kwargs):
@@ -1454,7 +1451,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     queue_file_lock_held = True
                     with mock.patch.object(
                         bot,
-                        "_persist_enqueue",
+                        "_admit_queue_entry",
                         side_effect=persist_after_signal,
                     ):
                         first_task = asyncio.create_task(
@@ -1504,7 +1501,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     await asyncio.wait_for(bot.entered.wait(), timeout=2)
                     self.assertEqual(bot.ran, ["first"])
 
-                    original_persist = bot._persist_enqueue
+                    original_persist = bot._admit_queue_entry
                     second_entered_persist = asyncio.Event()
                     release_second_persist = asyncio.Event()
 
@@ -1516,7 +1513,7 @@ class QueueStateFallbackTests(unittest.TestCase):
 
                     with mock.patch.object(
                         bot,
-                        "_persist_enqueue",
+                        "_admit_queue_entry",
                         side_effect=pause_second_persist,
                     ):
                         second_task = asyncio.create_task(
@@ -1556,7 +1553,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 try:
                     bot = QueueDrainBot()
                     msg_queue = bot._ensure_message_queue("u1")
-                    entry_id = await bot._persist_enqueue(
+                    entry_id = await persist_queue_entry(bot,
                         "u1", "queued work", "chat",
                     )
                     msg_queue.put_nowait(("queued work", "chat", entry_id, False))
@@ -1713,26 +1710,6 @@ class RuntimeInputValidationTests(unittest.TestCase):
         )
         # Both junk-flag entries stay queued; nothing matched.
         self.assertEqual(msg_queue.qsize(), 2)
-
-    def test_discard_cancelled_entry_ignores_malformed_shapes(self) -> None:
-        async def run() -> None:
-            bot = QueueRestoreBot(["u1"])
-            msg_queue = asyncio.Queue()
-            msg_queue.put_nowait(("short",))
-            msg_queue.put_nowait(("t", "c", "keep-id", False))
-            with mock.patch.object(
-                BotPlatform, "_persist_complete", return_value=None,
-            ):
-                await bot._discard_cancelled_dispatch_entry(
-                    "u1", "keep-id", msg_queue,
-                )
-            # The malformed shape survives; only the matching id is gone.
-            rest = []
-            while not msg_queue.empty():
-                rest.append(msg_queue.get_nowait())
-            self.assertEqual(rest, [("short",)])
-
-        asyncio.run(run())
 
     def test_router_session_block_rejects_junk_id(self) -> None:
         self.assertEqual(router._build_session_block({"id": 123}), "")

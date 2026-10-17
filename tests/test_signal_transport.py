@@ -7,8 +7,9 @@ import unittest
 from unittest import mock
 
 from Cozter.backends_bot import signal as signal_module
+from Cozter.backends_bot.base import PlatformNotReadyError
 from Cozter.backends_bot.signal import (
-    SignalAccountError, SignalBot, SignalCliError, SignalNotReadyError,
+    SignalAccountError, SignalBot, SignalCliError,
 )
 
 
@@ -124,7 +125,7 @@ class WindowsSignalTransportTests(unittest.IsolatedAsyncioTestCase):
         sleep = mock.AsyncMock()
         bot = SignalBot([SIGNAL_GROUP_URL], jsonrpc_socket="tcp://127.0.0.1:7584")
         with _without_unix_api(connect=connect, sleep=sleep):
-            with self.assertRaisesRegex(SignalCliError, "not ready") as raised:
+            with self.assertRaisesRegex(PlatformNotReadyError, "not ready") as raised:
                 await bot._open_jsonrpc_socket(timeout=0)
         self.assertIs(raised.exception.__cause__, failure)
         connect.assert_awaited_once()
@@ -229,7 +230,7 @@ class SignalAccountStartupTests(unittest.IsolatedAsyncioTestCase):
                 bot = self._bot(account=account)
                 cause = SignalAccountError("Method requires valid account parameter")
                 bot._rpc_request = mock.AsyncMock(side_effect=[cause, []])
-                with self.assertRaisesRegex(SignalNotReadyError, "no loaded accounts") as raised:
+                with self.assertRaisesRegex(PlatformNotReadyError, "no loaded accounts") as raised:
                     await bot._resolve_group_ids()
                 self.assertIs(raised.exception.__cause__, cause)
                 self.assertEqual(bot._rpc_request.await_count, 2)
@@ -262,7 +263,7 @@ class SignalAccountStartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_account_and_transport_failures_are_not_skipped_as_bad_group_urls(self):
         for failure in (
             SignalAccountError("fixture account failure"),
-            SignalNotReadyError("fixture account not loaded"),
+            PlatformNotReadyError("fixture account not loaded"),
             ConnectionResetError("fixture transport closed"),
         ):
             with self.subTest(failure=failure):
@@ -284,7 +285,7 @@ class SignalAccountStartupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(raised.exception.__cause__, failure)
 
     async def test_subscription_readiness_precedes_queue_restore_and_failed_start_cleans_up(self):
-        for failure in (SignalNotReadyError("fixture transport"), asyncio.CancelledError()):
+        for failure in (PlatformNotReadyError("fixture transport"), asyncio.CancelledError()):
             with self.subTest(failure=failure):
                 bot = self._bot(account="+12025550123")
                 bot._outbound_journal.load = mock.AsyncMock()
@@ -306,7 +307,7 @@ class SignalAccountStartupTests(unittest.IsolatedAsyncioTestCase):
         bot._connect_jsonrpc = mock.AsyncMock(side_effect=ConnectionRefusedError("fixture boot"))
         bot._resolve_group_ids = mock.AsyncMock()
         bot.stop = mock.AsyncMock()
-        with self.assertRaises(SignalNotReadyError) as raised:
+        with self.assertRaises(PlatformNotReadyError) as raised:
             await bot.start()
         self.assertIsInstance(raised.exception.__cause__, ConnectionRefusedError)
         self.assertEqual(bot.account, "")
@@ -411,7 +412,7 @@ class SignalAccountStartupTests(unittest.IsolatedAsyncioTestCase):
         bot._handle_received_item.assert_not_awaited()
 
     async def test_failed_start_cancels_and_joins_notification_tasks_waiting_for_readiness(self):
-        for failure in (SignalNotReadyError("fixture unavailable"), asyncio.CancelledError()):
+        for failure in (PlatformNotReadyError("fixture unavailable"), asyncio.CancelledError()):
             with self.subTest(failure=failure):
                 bot = self._bot(account="+12025550123")
                 bot._outbound_journal.load = mock.AsyncMock()
@@ -441,11 +442,11 @@ class SignalAccountStartupTests(unittest.IsolatedAsyncioTestCase):
                 bot._stop_daemon_services.assert_awaited_once()
                 bot._stop_jsonrpc.assert_awaited_once()
 
-    async def test_startup_cleanup_closes_transport_even_if_daemon_or_journal_cleanup_fails(self):
+    async def test_startup_cleanup_failure_is_fatal_and_preserves_both_causes(self):
         for phase in ("daemon", "journal"):
             with self.subTest(phase=phase):
                 bot = self._bot()
-                original = SignalNotReadyError("fixture boot connection unavailable")
+                original = PlatformNotReadyError("fixture boot connection unavailable")
                 cleanup_failure = OSError("fixture cleanup state write failed")
                 bot._outbound_journal.load = mock.AsyncMock()
                 bot._connect_jsonrpc = mock.AsyncMock(side_effect=original)
@@ -456,10 +457,35 @@ class SignalAccountStartupTests(unittest.IsolatedAsyncioTestCase):
                     side_effect=cleanup_failure if phase == "journal" else None,
                 )
                 bot._stop_jsonrpc = mock.AsyncMock()
-                with self.assertRaises(SignalNotReadyError) as raised:
+                with self.assertRaises(ExceptionGroup) as raised:
                     await bot.start()
-                self.assertIs(raised.exception, original)
+                self.assertEqual(raised.exception.exceptions, (original, cleanup_failure))
+                bot._connect_jsonrpc.assert_awaited_once()
+                bot._stop_daemon_services.assert_awaited_once()
+                bot._flush_outbound_journal.assert_awaited_once()
                 bot._stop_jsonrpc.assert_awaited_once()
+
+    async def test_stop_attempts_every_cleanup_and_reports_all_failures(self):
+        bot = self._bot()
+        daemon_failure = RuntimeError("fixture watcher stop failed")
+        journal_failure = PermissionError("fixture journal write failed")
+        bot._receive_subscription = 7
+        bot._stop_daemon_services = mock.AsyncMock(side_effect=daemon_failure)
+        bot._rpc_request = mock.AsyncMock()
+        bot._flush_outbound_journal = mock.AsyncMock(side_effect=journal_failure)
+        bot._stop_jsonrpc = mock.AsyncMock()
+        notification = asyncio.create_task(asyncio.sleep(60))
+        bot._notification_tasks.add(notification)
+        notification.add_done_callback(bot._notification_tasks.discard)
+        with self.assertRaises(ExceptionGroup) as raised:
+            await bot.stop()
+        self.assertEqual(raised.exception.exceptions, (daemon_failure, journal_failure))
+        bot._rpc_request.assert_awaited_once_with(
+            "unsubscribeReceive", {"subscription": 7}, timeout=5,
+        )
+        self.assertTrue(notification.cancelled())
+        self.assertFalse(bot._notification_tasks)
+        bot._stop_jsonrpc.assert_awaited_once()
 
 
 if __name__ == "__main__":

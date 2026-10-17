@@ -39,6 +39,8 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(temporary_config({}))
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.path))
         self.bot = _PersistenceBot(self.path)
+        self.store = self.bot._queue_store()
+        self.enterContext(mock.patch.object(self.bot, "_queue_store", return_value=self.store))
         self.release = threading.Event()
         self.finished = threading.Event()
         self.tasks: list[asyncio.Task] = []
@@ -107,6 +109,15 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(task, timeout=2)
         # A returned cancellation cannot leave its executor mutation live.
         self.assertTrue(self.finished.is_set())
+
+    async def _admit(self, uid, text, chat_id, *, ephemeral=False):
+        result = await self.bot._admit_queue_entry(
+            uid, text, chat_id, self.bot._cancel_generations.get(uid, 0),
+            ephemeral=ephemeral, workspace_path=self.path if ephemeral else None,
+        )
+        self.assertIsNotNone(result)
+        self.assertIsNotNone(result.entry)
+        return result.entry["id"]
 
     async def _stage(self, uid: str = "u1", entry_id: str = "entry") -> dict:
         return await self.bot._stage_reply_delivery(
@@ -177,12 +188,12 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.bot._detached_task_file_lock.locked())
 
     async def test_queue_commits_keep_loop_responsive_and_preserve_fifo_context(self) -> None:
-        self._block(self.bot, "_write_queue_file")
+        self._block(self.store, "admit")
         self.context.set("request-context")
-        first = self._spawn(self.bot._persist_enqueue("u1", "first", "chat"))
+        first = self._spawn(self._admit("u1", "first", "chat"))
         await self._wait_blocked(self.bot._queue_file_lock)
-        second = self._spawn(self.bot._persist_enqueue("u1", "second", "chat"))
-        third = self._spawn(self.bot._persist_enqueue("u1", "third", "chat", ephemeral=True))
+        second = self._spawn(self._admit("u1", "second", "chat"))
+        third = self._spawn(self._admit("u1", "third", "chat", ephemeral=True))
         await asyncio.sleep(0)
         self.assertFalse(second.done())
         self.assertFalse(third.done())
@@ -196,8 +207,8 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.bot._queue_file_lock.locked())
 
     async def test_cancelled_admission_keeps_outer_lock_until_stop_can_clear(self) -> None:
-        self._block(os, "fsync")
-        admission = self._spawn(self.bot._persist_admitted_dispatch_entry(
+        self._block(self.store, "admit")
+        admission = self._spawn(self.bot._admit_queue_entry(
             "u1", "cancelled prompt", "chat", 0,
         ))
         await self._wait_blocked(self.bot._queue_file_lock)
@@ -213,6 +224,80 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(admission_lock.locked())
         self.assertFalse(self.bot._queue_file_lock.locked())
 
+    async def test_cancelled_ordinary_admission_publishes_and_wakes_committed_job(self) -> None:
+        self._block(self.store, "admit")
+        with mock.patch.object(self.bot, "_start_queue_drain") as wake:
+            admission = self._spawn(self.bot._admit_queue_entry(
+                "u1", "accepted ordinary prompt", "chat", 0,
+            ))
+            await self._wait_blocked(self.bot._queue_file_lock)
+            await self._cancel_twice(admission, self.bot._ensure_dispatch_admission_lock("u1"))
+            await self._finish_cancelled(admission)
+            wake.assert_called_once_with("u1")
+        rows = self.bot._read_queue_file()["u1"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(self.bot._message_queues["u1"].get_nowait(), (
+            "accepted ordinary prompt", "chat", rows[0]["id"], False,
+        ))
+        self.assertFalse(self.bot._queue_file_lock.locked())
+        self.assertFalse(self.bot._ensure_dispatch_admission_lock("u1").locked())
+
+    async def test_cancelled_answer_promotion_wakes_accepted_work_in_durable_order(self) -> None:
+        await self._admit("u1", "older queued work", "chat")
+        self.bot._awaiting_answer.add("u1")
+        self._block(self.store, "write_entries")
+        with mock.patch.object(self.bot, "_start_queue_drain") as wake:
+            dispatch = self._spawn(self.bot._dispatch_ai(
+                self.bot.make_context("u1", "chat"), "answer",
+            ))
+            await self._wait_blocked(self.bot._queue_file_lock)
+            self.assertEqual([row["text"] for row in self.bot._read_queue_file()["u1"]],
+                             ["older queued work", "answer"])
+            await self._cancel_twice(dispatch, self.bot._queue_file_lock)
+            await self._finish_cancelled(dispatch)
+            wake.assert_called_once_with("u1")
+        self.assertEqual([row["text"] for row in self.bot._read_queue_file()["u1"]],
+                         ["answer", "older queued work"])
+        self.assertNotIn("u1", self.bot._awaiting_answer)
+        await self.bot._drain_message_queue("u1")
+        self.assertEqual(self.bot.turns, ["answer", "older queued work"])
+        self.assertEqual(self.bot._read_queue_file(), {})
+
+    async def test_incoming_dispatch_cancellation_does_not_cancel_owned_consumer(self) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+
+        async def run(_uid, _chat, text, **_kwargs):
+            calls.append(text)
+            started.set()
+            await release.wait()
+
+        consumer = None
+        with mock.patch.object(self.bot, "_run_turn", side_effect=run):
+            dispatch = self._spawn(self.bot._dispatch_ai(
+                self.bot.make_context("u1", "chat"), "accepted request",
+            ))
+            try:
+                await asyncio.wait_for(started.wait(), timeout=1)
+                consumer = self.bot._running_tasks["u1"]
+                self.assertIsNot(consumer, dispatch)
+                dispatch.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await dispatch
+                self.assertFalse(consumer.done())
+                self.assertEqual(len(self.bot._read_queue_file()["u1"]), 1)
+                release.set()
+                await asyncio.wait_for(consumer, timeout=1)
+            finally:
+                release.set()
+                if consumer is not None and not consumer.done():
+                    consumer.cancel()
+                    await asyncio.gather(consumer, return_exceptions=True)
+        self.assertEqual(calls, ["accepted request"])
+        self.assertEqual(self.bot._read_queue_file(), {})
+        self.assertTrue(self.bot._message_queues["u1"].empty())
+
     async def _check_detached_poll_during_cancelled_queue_commit(self, state: str) -> None:
         await asyncio.to_thread(
             self.bot._write_detached_tasks_file,
@@ -220,7 +305,7 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
                         "workspace_path": self.path, "session_id": None,
                         "backend_name": "claude_code", "task_id": "provider-task"}]},
         )
-        await self.bot._persist_enqueue("u1", "queued prompt", "chat")
+        await self._admit("u1", "queued prompt", "chat")
         output_started = asyncio.Event()
         release_output = asyncio.Event()
 
@@ -241,7 +326,7 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
             polling = self._spawn(self.bot._check_detached_tasks())
             try:
                 await asyncio.wait_for(output_started.wait(), timeout=1)
-                self._block(os, "fsync")
+                self._block(self.store, "write_entries")
                 stopping = self._spawn(self.bot._cancel_user_work("u1"))
                 await self._wait_blocked(self.bot._queue_file_lock)
                 release_output.set()
@@ -327,17 +412,17 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         stopping = self._spawn(self.bot._cancel_user_work("u1"))
         admitting = None
         enqueue_started = asyncio.Event()
-        enqueue = self.bot._persist_enqueue
+        enqueue = self.store.admit
 
-        async def observe_enqueue(*args, **kwargs):
-            enqueue_started.set()
-            return await enqueue(*args, **kwargs)
+        def observe_enqueue(*args, **kwargs):
+            self.loop.call_soon_threadsafe(enqueue_started.set)
+            return enqueue(*args, **kwargs)
 
         try:
             await self._wait_blocked(self.bot._reply_delivery_file_lock)
             generation = self.bot._cancel_generations.get("u1", 0)
-            with mock.patch.object(self.bot, "_persist_enqueue", side_effect=observe_enqueue):
-                admitting = self._spawn(self.bot._persist_admitted_dispatch_entry(
+            with mock.patch.object(self.store, "admit", side_effect=observe_enqueue):
+                admitting = self._spawn(self.bot._admit_queue_entry(
                     "u1", "new prompt after stop", "chat", generation,
                 ))
                 with self.assertRaises(TimeoutError):
@@ -346,7 +431,8 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.bot._read_queue_file(), {})
                 self.release.set()
                 self.assertEqual(await asyncio.wait_for(stopping, timeout=2), (False, True))
-                entry_id = await asyncio.wait_for(admitting, timeout=2)
+                result = await asyncio.wait_for(admitting, timeout=2)
+                entry_id = result.entry["id"]
                 self.assertTrue(enqueue_started.is_set())
         finally:
             self.release.set()
@@ -357,8 +443,8 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("u1", self.bot._pending_reply_delivery_users)
 
     async def test_durable_cancellation_cleanup_counts_as_active_until_finished(self) -> None:
-        await self.bot._persist_enqueue("u1", "queued prompt", "chat")
-        self._block(os, "fsync")
+        await self._admit("u1", "queued prompt", "chat")
+        self._block(self.store, "write_entries")
         stopping = self._spawn(self.bot._cancel_user_work("u1"))
         try:
             await self._wait_blocked(self.bot._queue_file_lock)
@@ -390,16 +476,16 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(upload_started.wait(), timeout=1)
         stopping = self._spawn(self.bot._cancel_user_work("u1"))
         admitting = None
-        enqueue = self.bot._persist_enqueue
+        enqueue = self.store.admit
 
-        async def observe_enqueue(*args, **kwargs):
-            enqueue_started.set()
-            return await enqueue(*args, **kwargs)
+        def observe_enqueue(*args, **kwargs):
+            self.loop.call_soon_threadsafe(enqueue_started.set)
+            return enqueue(*args, **kwargs)
 
         try:
             await asyncio.wait_for(cleanup_started.wait(), timeout=1)
-            with mock.patch.object(self.bot, "_persist_enqueue", side_effect=observe_enqueue):
-                admitting = self._spawn(self.bot._persist_admitted_dispatch_entry(
+            with mock.patch.object(self.store, "admit", side_effect=observe_enqueue):
+                admitting = self._spawn(self.bot._admit_queue_entry(
                     "u1", "new prompt after stop", "chat",
                     self.bot._cancel_generations.get("u1", 0),
                 ))
@@ -408,7 +494,8 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(admitting.done())
                 release_cleanup.set()
                 self.assertEqual(await asyncio.wait_for(stopping, timeout=2), (False, True))
-                entry_id = await asyncio.wait_for(admitting, timeout=2)
+                result = await asyncio.wait_for(admitting, timeout=2)
+                entry_id = result.entry["id"]
         finally:
             release_cleanup.set()
             await asyncio.gather(*[task for task in (uploading, stopping, admitting) if task], return_exceptions=True)
@@ -416,13 +503,13 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.bot.has_active_turns())
 
     async def test_cancelled_completion_finishes_before_next_enqueue(self) -> None:
-        first_id = await self.bot._persist_enqueue("u1", "first", "chat")
-        second_id = await self.bot._persist_enqueue("u1", "second", "chat")
-        self._block(os, "fsync")
+        first_id = await self._admit("u1", "first", "chat")
+        second_id = await self._admit("u1", "second", "chat")
+        self._block(self.store, "write_entries")
         completing = self._spawn(self.bot._persist_complete("u1", first_id))
         await self._wait_blocked(self.bot._queue_file_lock)
         await self._cancel_twice(completing, self.bot._queue_file_lock)
-        third = self._spawn(self.bot._persist_enqueue("u1", "third", "chat"))
+        third = self._spawn(self._admit("u1", "third", "chat"))
         await asyncio.sleep(0)
         self.assertFalse(third.done())
         await self._finish_cancelled(completing)
@@ -526,8 +613,8 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_before_file_lock_does_not_start_a_write(self) -> None:
         await self.bot._queue_file_lock.acquire()
         try:
-            with mock.patch.object(self.bot, "_write_queue_file") as write:
-                waiting = self._spawn(self.bot._persist_enqueue("u1", "prompt", "chat"))
+            with mock.patch.object(self.store, "admit") as write:
+                waiting = self._spawn(self._admit("u1", "prompt", "chat"))
                 await asyncio.sleep(0)
                 waiting.cancel()
                 with self.assertRaises(asyncio.CancelledError):
@@ -537,17 +624,17 @@ class QueuePersistenceLatencyTests(unittest.IsolatedAsyncioTestCase):
             self.bot._queue_file_lock.release()
         self.assertEqual(self.bot._read_queue_file(), {})
 
-    async def test_fsync_failure_preserves_previous_rows_and_releases_lock(self) -> None:
-        entry_id = await self.bot._persist_enqueue("u1", "previous", "chat")
-        with mock.patch.object(os, "fsync", side_effect=OSError("fixture disk failure")):
+    async def test_transaction_failure_preserves_previous_rows_and_releases_lock(self) -> None:
+        entry_id = await self._admit("u1", "previous", "chat")
+        with mock.patch.object(self.store, "admit", side_effect=OSError("fixture disk failure")):
             with self.assertRaisesRegex(OSError, "fixture disk failure"):
-                await self.bot._persist_enqueue("u1", "uncommitted", "chat")
+                await self._admit("u1", "uncommitted", "chat")
         self.assertEqual([row["id"] for row in self.bot._read_queue_file()["u1"]], [entry_id])
         self.assertFalse(self.bot._queue_file_lock.locked())
 
     async def test_failed_commit_during_cancellation_logs_error_and_replays_cancel(self) -> None:
-        self._block(os, "fsync", error=OSError("fixture cancelled disk failure"))
-        writing = self._spawn(self.bot._persist_enqueue("u1", "uncommitted", "chat"))
+        self._block(self.store, "admit", error=OSError("fixture cancelled disk failure"))
+        writing = self._spawn(self._admit("u1", "uncommitted", "chat"))
         await self._wait_blocked(self.bot._queue_file_lock)
         await self._cancel_twice(writing, self.bot._queue_file_lock)
         with self.assertLogs("Cozter.backends_bot.base", level="ERROR") as captured:

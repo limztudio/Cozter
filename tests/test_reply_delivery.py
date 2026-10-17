@@ -10,6 +10,7 @@ from Cozter import agent, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import BotContext
 from Cozter.tests.helpers import (
+    persist_queue_entry,
     TestBot,
     create_python_script_process,
 )
@@ -75,13 +76,15 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             result = AgentResult(events=[
                 ChatEvent(kind="text", content="final response"),
             ])
-            queued_id = await bot._persist_enqueue("u1", "later prompt", "chat")
             queue = bot._ensure_message_queue("u1")
-            queue.put_nowait(("later prompt", "chat", queued_id, False))
+
+            async def run_with_later_inbound(*_args, **_kwargs):
+                await bot._admit_queue_entry("u1", "later prompt", "chat", 0)
+                return result
 
             with (
                 mock.patch.object(
-                    agent, "run", new=mock.AsyncMock(return_value=result),
+                    agent, "run", new=mock.AsyncMock(side_effect=run_with_later_inbound),
                 ) as run_agent,
                 mock.patch.object(
                     workspace,
@@ -124,7 +127,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             workspace.CONFIG_DIR = tmp
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
             before_crash = _ReplyDeliveryBot(tmp, fail_final=False)
-            entry_id = await before_crash._persist_enqueue(
+            entry_id = await persist_queue_entry(before_crash,
                 "u1", "prompt", "chat",
             )
             result = AgentResult(events=[
@@ -165,7 +168,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             workspace.CONFIG_DIR = tmp
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
             bot = _ReplyDeliveryBot(tmp, fail_final=False)
-            entry_id = await bot._persist_enqueue("u1", "prompt", "chat")
+            entry_id = await persist_queue_entry(bot, "u1", "prompt", "chat")
             record = await bot._stage_reply_delivery(
                 "u1", entry_id, "chat", tmp,
                 AgentResult(events=[
@@ -206,7 +209,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             result = AgentResult(events=[
                 ChatEvent(kind="text", content="final response"),
             ])
-            entry_id = await bot._persist_enqueue("u1", "prompt", "chat")
+            entry_id = await persist_queue_entry(bot, "u1", "prompt", "chat")
             queue = bot._ensure_message_queue("u1")
             queue.put_nowait(("short",))
             queue.put_nowait(("prompt", "chat", entry_id, False))
@@ -233,7 +236,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
                 with mock.patch.object(workspace, "CONFIG_DIR", tmp):
                     bot = _ReplyDeliveryBot(tmp, fail_final=False)
-                    entry_id = await bot._persist_enqueue("u1", "prompt", "chat")
+                    entry_id = await persist_queue_entry(bot, "u1", "prompt", "chat")
                     record = await bot._stage_reply_delivery(
                         "u1", entry_id, "chat", tmp,
                         AgentResult(events=[ChatEvent(kind="text", content="final response")]),
@@ -273,7 +276,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(workspace, "CONFIG_DIR", tmp):
                 bot = _ReplyDeliveryBot(tmp, fail_final=False)
-                entry_id = await bot._persist_enqueue("u1", "prompt", "chat")
+                entry_id = await persist_queue_entry(bot, "u1", "prompt", "chat")
                 await bot._stage_reply_delivery(
                     "u1", entry_id, "chat", tmp,
                     AgentResult(events=[
@@ -334,7 +337,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(workspace, "CONFIG_DIR", tmp):
                 bot = _ReplyDeliveryBot(tmp, fail_final=False)
-                entry_id = await bot._persist_enqueue("u1", "prompt", "chat")
+                entry_id = await persist_queue_entry(bot, "u1", "prompt", "chat")
                 record = await bot._stage_reply_delivery(
                     "u1", entry_id, "chat", tmp,
                     AgentResult(events=[

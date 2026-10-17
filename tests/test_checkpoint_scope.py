@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from Cozter.tests.helpers import persist_queue_entry
+
 from Cozter import agent, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
@@ -17,7 +19,7 @@ class CheckpointScopeTests(unittest.IsolatedAsyncioTestCase):
             sid = session.create_session(ws, name="Remaining duplicate cleanup")["id"]
             original = "Remove all duplication, preserve the documented behavior, verify and commit the result."
             addition = "Also retain the public command names."
-            entry = await bot._persist_enqueue("u1", original, "chat")
+            entry = await persist_queue_entry(bot, "u1", original, "chat")
             bot._ensure_message_queue("u1").put_nowait((original, "chat", entry, False))
             await bot._save_job_checkpoint("u1", entry, {
                 "state": "running", "request": original, "workspace_path": ws, "session_id": sid,

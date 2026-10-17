@@ -18,7 +18,7 @@ import os
 import re
 import time
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Awaitable, Iterable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -36,6 +36,7 @@ from .base import (
     BotPlatform,
     _run_durable_file_operation,
     MessageHandle,
+    PlatformNotReadyError,
     UploadTooLargeError,
     attachment_kind_from_mime,
     copy_file_with_limit_async,
@@ -117,10 +118,6 @@ _ACCOUNT_RPC_METHODS = frozenset({
 
 class SignalCliError(RuntimeError):
     """Raised when the signal-cli JSON-RPC socket is unavailable."""
-
-
-class SignalNotReadyError(SignalCliError):
-    """The daemon transport or its loaded account is temporarily unavailable."""
 
 
 class SignalAccountError(SignalCliError):
@@ -449,11 +446,16 @@ class SignalBot(BotPlatform):
                 self._receive_ready.set()
         except BaseException as exc:
             self._stop_requested.set()
-            with contextlib.suppress(Exception):
+            try:
                 await self.stop()
-            if (initializing_transport and not isinstance(exc, SignalNotReadyError)
+            except BaseException as cleanup_error:
+                raise BaseExceptionGroup(
+                    "Signal startup failed and its cleanup failed",
+                    [exc, cleanup_error],
+                ) from None
+            if (initializing_transport and not isinstance(exc, PlatformNotReadyError)
                     and _is_jsonrpc_transport_error(exc)):
-                raise SignalNotReadyError(
+                raise PlatformNotReadyError(
                     "signal-cli is not ready; waiting for its transport and account to load"
                 ) from exc
             raise
@@ -467,12 +469,21 @@ class SignalBot(BotPlatform):
         self._daemon_ready = False
         self._receive_ready.clear()
         self._stop_requested.set()
-        try:
-            await self._stop_daemon_services()
-            subscription = self._receive_subscription
-            self._receive_subscription = None
-            self._receive_started = False
-            self._receive_subscribed = False
+        errors: list[BaseException] = []
+
+        async def cleanup(operation: Awaitable[object]) -> None:
+            try:
+                await operation
+            except BaseException as error:
+                errors.append(error)
+
+        await cleanup(self._stop_daemon_services())
+        subscription = self._receive_subscription
+        self._receive_subscription = None
+        self._receive_started = False
+        self._receive_subscribed = False
+
+        async def unsubscribe() -> None:
             if subscription is not None:
                 with contextlib.suppress(Exception):
                     await self._rpc_request(
@@ -480,18 +491,19 @@ class SignalBot(BotPlatform):
                         {"subscription": subscription},
                         timeout=5,
                     )
-        finally:
-            for task in list(self._notification_tasks):
-                task.cancel()
-            try:
-                if self._notification_tasks:
-                    await asyncio.gather(
-                        *self._notification_tasks, return_exceptions=True,
-                    )
-                await self._flush_outbound_journal()
-            finally:
-                self._receive_started = False
-                await self._stop_jsonrpc()
+        await cleanup(unsubscribe())
+        for task in list(self._notification_tasks):
+            task.cancel()
+        if self._notification_tasks:
+            await cleanup(asyncio.gather(
+                *self._notification_tasks, return_exceptions=True,
+            ))
+        await cleanup(self._flush_outbound_journal())
+        await cleanup(self._stop_jsonrpc())
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("Signal cleanup failed", errors)
         logger.info("Signal bot stopped.")
 
     async def _open_jsonrpc_socket(
@@ -536,7 +548,7 @@ class SignalBot(BotPlatform):
             except (OSError, TimeoutError) as exc:
                 last_error = exc
                 if loop.time() >= deadline:
-                    raise SignalNotReadyError(
+                    raise PlatformNotReadyError(
                         "signal-cli JSON-RPC socket is not ready: "
                         f"{self.jsonrpc_socket}"
                     ) from last_error
@@ -1044,7 +1056,7 @@ class SignalBot(BotPlatform):
             try:
                 group_id = await self._resolve_group_id(group_url, groups=groups)
             except Exception as e:
-                if isinstance(e, (SignalAccountError, SignalNotReadyError)) or _is_jsonrpc_transport_error(e):
+                if isinstance(e, (SignalAccountError, PlatformNotReadyError)) or _is_jsonrpc_transport_error(e):
                     raise
                 last_error = e
                 logger.warning(
@@ -1126,7 +1138,7 @@ class SignalBot(BotPlatform):
                 if identifier not in candidates:
                     candidates.append(identifier)
             if not candidates:
-                raise SignalNotReadyError(
+                raise PlatformNotReadyError(
                     "signal-cli has no loaded accounts; waiting for the daemon to load its registered account"
                 ) from exc
             if self.account:

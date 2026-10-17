@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from Cozter.tests.helpers import persist_queue_entry
+
 from Cozter import agent, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
@@ -29,7 +31,7 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     async def enqueue(self, text, *, ephemeral=False, bot=None):
         bot = bot or self.bot
-        entry_id = await bot._persist_enqueue("u1", text, "chat", ephemeral=ephemeral)
+        entry_id = await persist_queue_entry(bot, "u1", text, "chat", ephemeral=ephemeral)
         bot._ensure_message_queue("u1").put_nowait((text, "chat", entry_id, ephemeral))
         return entry_id
 

@@ -12,7 +12,7 @@ from unittest import mock
 from Cozter import agent, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import BotPlatform, MessageHandle, _RecoverableTurnStatus
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import persist_queue_entry, TestBot
 from Cozter.tests.test_agent_post_turn import _ImmediateBackend
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
 
@@ -122,7 +122,7 @@ class ScheduleWorkspaceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_origin_pauses_without_creating_workspace(self):
         missing = os.path.join(self.origin, 'missing')
-        entry = await self.bot._persist_enqueue(
+        entry = await persist_queue_entry(self.bot,
             "u1", "scheduled work", "chat", ephemeral=True, workspace_path=missing,
         )
         with mock.patch.object(self.bot, "_current_workspace_for_turn", new=mock.AsyncMock()) as current:
@@ -134,7 +134,7 @@ class ScheduleWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.bot._load_job_checkpoint("u1", entry))['state'], 'paused')
 
     async def test_legacy_entry_without_origin_pauses_instead_of_using_current_workspace(self):
-        entry = await self.bot._persist_enqueue("u1", "scheduled work", "chat")
+        entry = await persist_queue_entry(self.bot, "u1", "scheduled work", "chat")
         with mock.patch.object(self.bot, "_current_workspace_for_turn", new=mock.AsyncMock()) as current:
             self.assertFalse(await self.bot._run_ephemeral_turn(
                 "u1", "chat", "scheduled work", queue_entry_id=entry,

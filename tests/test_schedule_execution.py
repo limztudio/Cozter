@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from Cozter import workspace
+from Cozter.queue_store import ScheduledOccurrence
 from Cozter.tests.helpers import TestBot
 
 
@@ -52,8 +53,10 @@ class _ScheduleBot(TestBot):
             self.foreground_started.set()
             await self.foreground_release.wait()
 
-    def _start_queue_drain(self, uid: str) -> None:
-        self.drains.append(asyncio.create_task(self._drain_message_queue(uid)))
+    def _start_queue_drain(self, uid: str) -> asyncio.Task[None]:
+        task = asyncio.create_task(self._drain_message_queue(uid))
+        self.drains.append(task)
+        return task
 
 
 class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -77,7 +80,7 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_direct_admission_requires_explicit_matching_platform(self) -> None:
         with (
-            mock.patch.object(self.bot, "_persist_admitted_dispatch_entry", new=mock.AsyncMock()) as persist,
+            mock.patch.object(self.bot, "_admit_queue_entry", new=mock.AsyncMock()) as persist,
             mock.patch.object(self.bot, "_current_workspace_for_turn", new=mock.AsyncMock()) as workspace_lookup,
             mock.patch.object(self.bot, "authorized") as authorized,
         ):
@@ -143,6 +146,42 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 active.cancel()
                 await asyncio.gather(active, return_exceptions=True)
 
+    async def test_simultaneous_idle_dispatches_follow_the_committed_fifo_order(self) -> None:
+        # Both observe an idle turn lock while the first durable admission is
+        # waiting; execution ownership must still follow admission order.
+        await self.bot._queue_file_lock.acquire()
+        first = asyncio.create_task(self.bot._dispatch_ai(
+            self.bot.make_context("u1", "chat"), "active",
+        ))
+        second = None
+        try:
+            await asyncio.sleep(0)
+            self.assertTrue(self.bot._ensure_dispatch_admission_lock("u1").locked())
+            second = asyncio.create_task(self.bot._dispatch_ai(
+                self.bot.make_context("u1", "chat"), "second",
+            ))
+            await asyncio.sleep(0)
+            self.assertFalse(self.bot._ensure_task_lock("u1").locked())
+            self.bot._queue_file_lock.release()
+            await asyncio.wait_for(self.bot.foreground_started.wait(), timeout=1)
+            await asyncio.wait_for(second, timeout=1)
+            self.assertEqual(self.bot.ran, [("normal", "active")])
+            self.assertEqual([row["text"] for row in self.bot._read_queue_file()["u1"]],
+                             ["active", "second"])
+            self.bot.foreground_release.set()
+            await asyncio.wait_for(first, timeout=1)
+            await self._finish_drains()
+            self.assertEqual(self.bot.ran, [("normal", "active"), ("normal", "second")])
+            self.assertEqual(self.bot._read_queue_file(), {})
+        finally:
+            if self.bot._queue_file_lock.locked():
+                self.bot._queue_file_lock.release()
+            self.bot.foreground_release.set()
+            for task in (first, second):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(*[task for task in (first, second) if task], return_exceptions=True)
+
     async def test_slow_queue_notice_does_not_prevent_job_start(self) -> None:
         self.bot.slow_notice = "⏰ Queued"
         with mock.patch("Cozter.backends_bot.base._STATUS_OPERATION_TIMEOUT_SEC", 0.01):
@@ -200,12 +239,61 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bot._read_queue_file(), {})
         self.assertEqual(msg_queue.qsize(), 1)
 
+    async def test_active_occurrence_is_not_republished_by_repeated_admission_or_restore(self) -> None:
+        occurrence = ScheduledOccurrence(self.tmp.name, "u1", "calendar", "2026-10-16T09:00:00")
+        started = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+
+        async def run(_uid, _chat, text, **_kwargs):
+            calls.append(text)
+            started.set()
+            await release.wait()
+
+        first = await self.bot._admit_queue_entry(
+            "u1", "scheduled work", "chat", 0, ephemeral=True,
+            workspace_path=self.tmp.name, occurrence=occurrence,
+        )
+        self.assertTrue(first.created)
+        with mock.patch.object(self.bot, "_run_turn", side_effect=run):
+            drain = asyncio.create_task(self.bot._drain_message_queue("u1"))
+            try:
+                await asyncio.wait_for(started.wait(), timeout=1)
+                repeated = await asyncio.gather(*[
+                    self.bot._admit_queue_entry(
+                        "u1", "scheduled work", "chat", 0, ephemeral=True,
+                        workspace_path=self.tmp.name, occurrence=occurrence,
+                    ) for _ in range(2)
+                ])
+                self.assertTrue(all(not result.created for result in repeated))
+                await self.bot.restore_queues()
+                self.assertTrue(self.bot._message_queues["u1"].empty())
+                release.set()
+                await asyncio.wait_for(drain, timeout=1)
+            finally:
+                release.set()
+                if not drain.done():
+                    drain.cancel()
+                    await asyncio.gather(drain, return_exceptions=True)
+        await self._finish_drains()
+        self.assertEqual(calls, ["scheduled work"])
+        self.assertEqual(self.bot._read_queue_file(), {})
+        self.assertTrue(self.bot._message_queues["u1"].empty())
+        self.assertNotIn("u1", self.bot._paused_jobs)
+        self.assertNotIn("u1", self.bot._active_queue_entries)
+        consumed = await self.bot._admit_queue_entry(
+            "u1", "scheduled work", "chat", 0, ephemeral=True,
+            workspace_path=self.tmp.name, occurrence=occurrence,
+        )
+        self.assertTrue(consumed.already_consumed)
+        self.assertIsNone(consumed.entry)
+
     async def test_ephemeral_write_rejects_unavailable_or_empty_origin(self) -> None:
         with mock.patch.object(self.bot, "_current_workspace_for_turn", new=mock.AsyncMock(return_value=None)):
             for origin in (None, "", "  ", False, 1):
                 with self.subTest(origin=origin), self.assertRaisesRegex(ValueError, "originating workspace"):
-                    await self.bot._persist_enqueue(
-                        "u1", "scheduled work", "chat", ephemeral=True, workspace_path=origin,
+                    await self.bot._admit_queue_entry(
+                        "u1", "scheduled work", "chat", 0, ephemeral=True, workspace_path=origin,
                     )
         self.assertEqual(self.bot._read_queue_file(), {})
 

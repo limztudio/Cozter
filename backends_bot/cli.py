@@ -98,6 +98,8 @@ class CliBot(BotPlatform):
             print(text)
 
     async def start(self) -> None:
+        self._stopping = False
+        self._stop_requested.clear()
         _prepare_console()
         _install_force_exit_on_sigint()
         print("=== Cozter CLI mode ===")
@@ -114,10 +116,12 @@ class CliBot(BotPlatform):
 
     async def stop(self) -> None:
         self._stop_requested.set()
-        await self.stop_detached_task_watcher()
-        if self._input_task and not self._input_task.done():
-            self._input_task.cancel()
-            await await_cancelled(self._input_task)
+        try:
+            await self._stop_daemon_services()
+        finally:
+            if self._input_task and not self._input_task.done():
+                self._input_task.cancel()
+                await await_cancelled(self._input_task)
 
     async def wait_until_exit(self) -> None:
         """Block the caller until the input loop terminates."""

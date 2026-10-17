@@ -9,6 +9,7 @@ import signal
 import sys
 import tempfile
 import time
+import uuid
 
 from Cozter import config
 from Cozter.agent_tools.base import _glob_segments, _match_glob_parts
@@ -61,6 +62,35 @@ class TestBot(BotPlatform):
 
     async def send_file(self, _chat_id: str, _path: str) -> None:
         return None
+
+
+async def persist_queue_entry(
+    bot: BotPlatform, uid: str, text: str, chat_id: str,
+    *, ephemeral: bool = False, workspace_path: str | None = None,
+) -> str:
+    """Stage an existing durable job without simulating a new inbound admission.
+
+    Checkpoint and restart tests need a persisted row independently of the
+    in-memory dispatch cache. Admission itself is tested through the platform's
+    canonical admission method instead of this fixture.
+    """
+    if ephemeral and workspace_path is None:
+        workspace_path = await bot._current_workspace_for_turn(uid, chat_id)
+    entry_id = uuid.uuid4().hex
+    entry: dict = {"id": entry_id, "text": text, "chat_id": chat_id}
+    if ephemeral:
+        entry["ephemeral"] = True
+    if workspace_path is not None:
+        entry["job"] = {"workspace_path": workspace_path}
+
+    def stage() -> None:
+        data = bot._read_queue_file()
+        data.setdefault(uid, []).append(entry)
+        bot._write_queue_file(data)
+
+    async with bot._queue_file_lock:
+        await asyncio.to_thread(stage)
+    return entry_id
 
 
 @contextmanager

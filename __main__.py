@@ -257,6 +257,7 @@ from logging.handlers import RotatingFileHandler  # noqa: E402
 from . import config as cfg  # noqa: E402
 from . import updater  # noqa: E402
 from .backends_bot import BotPlatform, create_platforms  # noqa: E402
+from .backends_bot.base import PlatformNotReadyError  # noqa: E402
 from .utils import await_cancelled  # noqa: E402
 
 MODULE_ROOT = os.path.dirname(__file__)
@@ -513,6 +514,7 @@ async def _wait_for_update_idle(
 
 async def _restart_after_update(
     bots: list[BotPlatform], restart_code: int,
+    *, startup_tasks: list[asyncio.Task[None]] | None = None,
 ) -> None:
     """Pause intake, safely pull, then restart for an update."""
     prepared: list[BotPlatform] = []
@@ -544,6 +546,8 @@ async def _restart_after_update(
         raise
 
     logger.info("Active turns finished; restarting for update...")
+    if startup_tasks is not None:
+        await _cancel_platform_starts(startup_tasks)
     for bot in bots:
         try:
             await bot.notify_users("Cozter is restarting for an update...")
@@ -559,6 +563,7 @@ async def _restart_after_update(
 
 async def update_loop(
     bots: list[BotPlatform], interval: int, restart_code: int = 0,
+    *, startup_tasks: list[asyncio.Task[None]] | None = None,
 ) -> None:
     """Periodically fetch and restart only when an update is available.
 
@@ -574,7 +579,9 @@ async def update_loop(
                 logger.info(
                     "New version detected; restart pending after active turns",
                 )
-                await _restart_after_update(bots, restart_code)
+                await _restart_after_update(
+                    bots, restart_code, startup_tasks=startup_tasks,
+                )
         except Exception:
             logger.exception("Update check failed")
 
@@ -645,15 +652,12 @@ async def main_cli() -> None:
 async def _start_platform(
     bot: BotPlatform, stop_event: asyncio.Event,
 ) -> bool:
-    """Wait for Signal readiness without losing shutdown or restarting Cozter.
+    """Retry a safely cleaned platform attempt while retaining task ownership.
 
-    Signal cleans up its failed attempt before raising its narrow readiness
-    error. Configuration errors and all other platform failures still escape
-    to the normal startup diagnostics. The owned tasks are always joined so
-    an interrupted connection cannot complete after platform shutdown.
+    Adapters raise PlatformNotReadyError only after successful cleanup.
+    Configuration, durable-state, and cleanup failures escape immediately.
+    Both the attempt and stop waiter are joined before this helper returns.
     """
-    from .backends_bot.signal import SignalNotReadyError
-
     delay = _PLATFORM_START_RETRY_BASE_SEC
     stop_task = asyncio.create_task(stop_event.wait())
     start_task: asyncio.Task[None] | None = None
@@ -667,7 +671,7 @@ async def _start_platform(
                 return False
             try:
                 await start_task
-            except SignalNotReadyError as exc:
+            except PlatformNotReadyError as exc:
                 logger.warning(
                     "%s is not ready: %s; retrying startup in %ds",
                     _bot_label(bot), exc, delay,
@@ -685,10 +689,53 @@ async def _start_platform(
         owned_tasks: list[asyncio.Task[Any]] = [stop_task]
         if start_task is not None:
             owned_tasks.append(start_task)
-        for task in owned_tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*owned_tasks, return_exceptions=True)
+        await _cancel_platform_starts(owned_tasks)
+
+
+async def _cancel_platform_starts(tasks: list[asyncio.Task[Any]]) -> None:
+    """Join startup attempts before a caller closes their platform resources."""
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    interrupted: asyncio.CancelledError | None = None
+    pending = {task for task in tasks if not task.done()}
+    while pending:
+        try:
+            # wait() retains child cleanup ownership if the caller receives
+            # another cancellation while an adapter is releasing resources.
+            _, pending = await asyncio.wait(pending)
+        except asyncio.CancelledError as error:
+            interrupted = error
+    for task in tasks:
+        if not task.cancelled():
+            task.exception()
+    if interrupted is not None:
+        raise interrupted
+
+
+async def _stop_platforms(bots: list[BotPlatform]) -> None:
+    """Finish every platform's shutdown before replaying cancellation."""
+    tasks = [asyncio.create_task(bot.stop()) for bot in reversed(bots)]
+    pending = set(tasks)
+    interruptions: list[BaseException] = []
+    while pending:
+        try:
+            # Parent cancellation must not cancel a platform which is already
+            # releasing its owned consumers, durable state, and transport.
+            _, pending = await asyncio.wait(pending)
+        except asyncio.CancelledError as error:
+            interruptions.append(error)
+    for task in tasks:
+        try:
+            task.result()
+        except Exception:
+            logger.exception("Failed to stop bot during shutdown")
+        except BaseException as error:
+            interruptions.append(error)
+    if len(interruptions) == 1:
+        raise interruptions[0]
+    if interruptions:
+        raise BaseExceptionGroup("Platform shutdown interrupted", interruptions)
 
 
 async def main() -> None:
@@ -729,42 +776,74 @@ async def main() -> None:
         except (NotImplementedError, ValueError):
             pass
 
-    started: list[BotPlatform] = []
+    ready: list[BotPlatform] = []
+    startup_tasks: list[asyncio.Task[None]] = []
+    stop_task: asyncio.Task[bool] | None = None
     update_task: asyncio.Task[None] | None = None
+
+    async def start_platform(bot: BotPlatform) -> None:
+        if not await _start_platform(bot, stop_event):
+            return
+        ready.append(bot)
+        try:
+            await bot.send_startup_messages(version, commit_date)
+        except Exception:
+            logger.exception("Failed to send startup message via bot")
+
     try:
         for bot in bots:
-            started.append(bot)
-            if not await _start_platform(bot, stop_event):
-                return
-
-        for bot in bots:
-            try:
-                await bot.send_startup_messages(version, commit_date)
-            except Exception:
-                logger.exception("Failed to send startup message via bot")
+            startup_tasks.append(asyncio.create_task(
+                start_platform(bot), name=f"{_bot_label(bot)}:startup",
+            ))
 
         logger.info(
             "Version: %s | Updated: %s | Bots: %d",
             version, commit_date, len(bots),
         )
-        update_task = asyncio.create_task(update_loop(bots, interval))
-        await stop_event.wait()
+        update_task = asyncio.create_task(update_loop(
+            bots, interval, startup_tasks=startup_tasks,
+        ))
+        stop_task = asyncio.create_task(stop_event.wait())
+        pending = set(startup_tasks)
+        while pending:
+            completed, _ = await asyncio.wait(
+                {*pending, stop_task}, return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in tuple(pending):
+                if task not in completed:
+                    continue
+                pending.remove(task)
+                # The updater joins in-flight starts before closing bots for
+                # a confirmed restart. Real startup failures still propagate.
+                if not task.cancelled():
+                    task.result()
+            if stop_event.is_set():
+                break
+        if not stop_event.is_set():
+            await stop_task
 
         logger.info("Shutting down...")
-        for bot in started:
+        await _cancel_platform_starts(startup_tasks)
+        for bot in ready:
             try:
                 await bot.notify_users("Cozter is shutting down.")
             except Exception:
                 logger.exception("Failed to send shutdown message via bot")
     finally:
-        if update_task is not None:
-            update_task.cancel()
-            await await_cancelled(update_task)
-        for bot in reversed(started):
+        try:
+            if update_task is not None:
+                update_task.cancel()
+                await await_cancelled(update_task)
+        finally:
             try:
-                await bot.stop()
-            except Exception:
-                logger.exception("Failed to stop bot during shutdown")
+                await _cancel_platform_starts(startup_tasks)
+            finally:
+                try:
+                    if stop_task is not None:
+                        stop_task.cancel()
+                        await _cancel_platform_starts([stop_task])
+                finally:
+                    await _stop_platforms(bots)
 
 
 def run() -> None:

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -491,8 +492,17 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def _run_daemon(self, main, bots, *, stop_event=None) -> None:
+        automatic_stop = stop_event is None
         if stop_event is None:
             stop_event = asyncio.Event()
+
+        async def updates(_bots, _interval, *, startup_tasks):
+            if automatic_stop:
+                await asyncio.wait(startup_tasks)
+                stop_event.set()
+            else:
+                await stop_event.wait()
+
         with (
             mock.patch.object(main, "_cli_mode_requested", return_value=False),
             mock.patch.object(main.cfg, "load_config", return_value={"update_check_interval": 300}),
@@ -502,9 +512,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(main.updater, "get_last_commit_date", return_value="test"),
             mock.patch.object(main.asyncio, "Event", return_value=stop_event),
             mock.patch.object(
-                main, "update_loop", new=mock.AsyncMock(
-                    side_effect=lambda *_args: stop_event.set(),
-                ),
+                main, "update_loop", new=mock.AsyncMock(side_effect=updates),
             ),
             mock.patch.object(asyncio.get_running_loop(), "add_signal_handler"),
         ):
@@ -512,13 +520,14 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_start_cleans_started_and_partially_started_platforms(self) -> None:
         main = _load_main_module()
-        first, failed, untouched = self._bot(), self._bot(), self._bot()
+        first, failed, concurrent = self._bot(), self._bot(), self._bot()
         failed.start.side_effect = RuntimeError("startup failed")
         with self.assertRaisesRegex(RuntimeError, "startup failed"):
-            await self._run_daemon(main, [first, failed, untouched])
+            await self._run_daemon(main, [first, failed, concurrent])
         first.stop.assert_awaited_once()
         failed.stop.assert_awaited_once()
-        untouched.start.assert_not_awaited()
+        concurrent.start.assert_awaited_once()
+        concurrent.stop.assert_awaited_once()
 
     async def test_shutdown_failures_do_not_skip_other_platform_cleanup(self) -> None:
         main = _load_main_module()
@@ -530,11 +539,74 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         first.stop.assert_awaited_once()
         second.stop.assert_awaited_once()
 
-    async def test_shutdown_during_start_cleans_up_and_does_not_start_next_platform(self):
+    async def test_cancel_replayed_after_stop_waiter_join_still_stops_platforms(self):
+        main = _load_main_module()
+        first, second = self._bot(), self._bot()
+        original = main._cancel_platform_starts
+
+        async def join(tasks):
+            await original(tasks)
+            if len(tasks) == 1 and tasks[0].get_coro().__qualname__ == "Event.wait":
+                raise asyncio.CancelledError("fixture repeated shutdown cancellation")
+
+        with (
+            mock.patch.object(main, "_cancel_platform_starts", side_effect=join),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await self._run_daemon(main, [first, second])
+        first.stop.assert_awaited_once()
+        second.stop.assert_awaited_once()
+
+    async def test_one_platform_replaying_cancel_does_not_skip_other_stops(self):
+        main = _load_main_module()
+        first, second = self._bot(), self._bot()
+        second.stop.side_effect = asyncio.CancelledError("fixture cleanup cancellation")
+        with self.assertRaises(asyncio.CancelledError):
+            await self._run_daemon(main, [first, second])
+        first.stop.assert_awaited_once()
+        second.stop.assert_awaited_once()
+
+    async def test_repeated_parent_cancel_keeps_all_platform_shutdowns_owned(self):
+        main = _load_main_module()
+        first, second = self._bot(), self._bot()
+        entered = [asyncio.Event(), asyncio.Event()]
+        release = asyncio.Event()
+        cleaned = []
+        previous_tasks = asyncio.all_tasks()
+
+        async def stop(index):
+            entered[index].set()
+            await release.wait()
+            cleaned.append(index)
+
+        async def stop_first():
+            await stop(0)
+
+        async def stop_second():
+            await stop(1)
+
+        first.stop.side_effect = stop_first
+        second.stop.side_effect = stop_second
+        run = asyncio.create_task(main._stop_platforms([first, second]))
+        await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered)), 1)
+        run.cancel()
+        await asyncio.sleep(0)
+        run.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(run.done())
+        release.set()
+        with self.assertRaises(BaseExceptionGroup) as raised:
+            await asyncio.wait_for(run, 1)
+        self.assertTrue(all(isinstance(error, asyncio.CancelledError)
+                            for error in raised.exception.exceptions))
+        self.assertEqual(set(cleaned), {0, 1})
+        self.assertEqual(asyncio.all_tasks() - previous_tasks, set())
+
+    async def test_shutdown_during_start_joins_attempts_and_cleans_every_platform(self):
         main = _load_main_module()
         stop_event = asyncio.Event()
         entered = asyncio.Event()
-        first, untouched = self._bot(), self._bot()
+        first, concurrent = self._bot(), self._bot()
 
         async def start():
             entered.set()
@@ -542,15 +614,117 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         first.start.side_effect = start
         run = asyncio.create_task(self._run_daemon(
-            main, [first, untouched], stop_event=stop_event,
+            main, [first, concurrent], stop_event=stop_event,
         ))
         await asyncio.wait_for(entered.wait(), 1)
         stop_event.set()
         await asyncio.wait_for(run, 1)
         first.stop.assert_awaited_once()
         first.send_startup_messages.assert_not_awaited()
-        untouched.start.assert_not_awaited()
-        untouched.stop.assert_not_awaited()
+        concurrent.start.assert_awaited_once()
+        concurrent.stop.assert_awaited_once()
+
+    async def test_offline_platform_does_not_block_healthy_startup_or_updates(self):
+        from Cozter.backends_bot.base import PlatformNotReadyError
+
+        main = _load_main_module()
+        stop_event = asyncio.Event()
+        healthy_announced = asyncio.Event()
+        offline, healthy = self._bot(), self._bot()
+        offline.start.side_effect = PlatformNotReadyError("dependency unavailable")
+        healthy.send_startup_messages.side_effect = lambda *_: healthy_announced.set()
+        with self.assertLogs(main.logger, level="WARNING"):
+            run = asyncio.create_task(self._run_daemon(
+                main, [offline, healthy], stop_event=stop_event,
+            ))
+            await asyncio.wait_for(healthy_announced.wait(), 1)
+            main.update_loop.assert_awaited_once()
+            self.assertFalse(run.done())
+            offline.send_startup_messages.assert_not_awaited()
+            stop_event.set()
+            await asyncio.wait_for(run, 1)
+        offline.stop.assert_awaited_once()
+        healthy.stop.assert_awaited_once()
+
+    async def test_shutdown_joins_simultaneous_start_and_backoff(self):
+        from Cozter.backends_bot.base import PlatformNotReadyError
+
+        main = _load_main_module()
+        stop_event = asyncio.Event()
+        starting, offline = self._bot(), self._bot()
+        entered, backoff, cleaned = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        previous_tasks = asyncio.all_tasks()
+
+        async def start():
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                await asyncio.sleep(0)
+                cleaned.set()
+
+        starting.start.side_effect = start
+        offline.start.side_effect = PlatformNotReadyError("dependency unavailable")
+        with mock.patch.object(main.logger, "warning", side_effect=lambda *_: backoff.set()):
+            run = asyncio.create_task(self._run_daemon(
+                main, [starting, offline], stop_event=stop_event,
+            ))
+            await asyncio.wait_for(asyncio.gather(entered.wait(), backoff.wait()), 1)
+            stop_event.set()
+            await asyncio.wait_for(run, 1)
+        self.assertTrue(cleaned.is_set())
+        self.assertEqual(asyncio.all_tasks() - previous_tasks, set())
+        starting.stop.assert_awaited_once()
+        offline.stop.assert_awaited_once()
+
+    async def test_confirmed_update_joins_startup_before_stopping_platform(self):
+        main = _load_main_module()
+        entered, cleaned = asyncio.Event(), asyncio.Event()
+
+        async def start():
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                await asyncio.sleep(0)
+                cleaned.set()
+
+        async def stop():
+            self.assertTrue(cleaned.is_set())
+
+        bot = self._bot()
+        bot.stop.side_effect = stop
+        bot.begin_update_restart = mock.AsyncMock()
+        bot.cancel_update_restart = mock.AsyncMock()
+        bot.has_active_turns = lambda: False
+        startup = asyncio.create_task(start())
+        await entered.wait()
+        with (
+            mock.patch.object(main.updater, "fetch_and_pull", return_value=True),
+            mock.patch.object(main.updater, "install_requirements"),
+            mock.patch.object(main.updater, "restart_script") as restart,
+        ):
+            await main._restart_after_update([bot], 0, startup_tasks=[startup])
+        self.assertTrue(startup.cancelled())
+        bot.stop.assert_awaited_once()
+        restart.assert_called_once_with(0)
+
+    async def test_aborted_update_keeps_dependency_startup_retry_owned(self):
+        main = _load_main_module()
+        bot = self._bot()
+        bot.begin_update_restart = mock.AsyncMock()
+        bot.cancel_update_restart = mock.AsyncMock()
+        bot.has_active_turns = lambda: False
+        startup = asyncio.create_task(asyncio.sleep(60))
+        try:
+            with mock.patch.object(main.updater, "fetch_and_pull", return_value=False):
+                await main._restart_after_update([bot], 0, startup_tasks=[startup])
+            self.assertFalse(startup.done())
+            bot.cancel_update_restart.assert_awaited_once()
+            bot.stop.assert_not_awaited()
+        finally:
+            startup.cancel()
+            await asyncio.gather(startup, return_exceptions=True)
 
     async def test_cli_failed_start_still_stops_partial_platform(self) -> None:
         from Cozter.backends_bot import cli
@@ -569,20 +743,242 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         bot.stop.assert_awaited_once()
 
 
+class SharedDaemonLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    def _bot(self):
+        from Cozter.tests.helpers import TestBot
+
+        return TestBot(["fixture"])
+
+    async def test_slack_closes_transport_after_shared_consumer_cleanup_fails(self):
+        from Cozter.backends_bot.slack import SlackBot
+
+        bot = SlackBot("fixture-bot", "fixture-app", ["fixture-channel"])
+        failure = RuntimeError("fixture consumer cleanup failed")
+        bot._stop_daemon_services = mock.AsyncMock(side_effect=failure)
+        handler = SimpleNamespace(close_async=mock.AsyncMock())
+        bot._handler = handler
+        bot.app = object()
+        with self.assertRaises(RuntimeError) as raised:
+            await bot.stop()
+        self.assertIs(raised.exception, failure)
+        handler.close_async.assert_awaited_once()
+        self.assertIsNone(bot._handler)
+        self.assertIsNone(bot.app)
+
+    async def test_telegram_closes_transport_after_shared_consumer_cleanup_fails(self):
+        from Cozter.backends_bot.telegram import TelegramBot
+
+        bot = TelegramBot("fixture-token", ["fixture"])
+        failure = RuntimeError("fixture consumer cleanup failed")
+        bot._stop_daemon_services = mock.AsyncMock(side_effect=failure)
+        app = SimpleNamespace(
+            updater=SimpleNamespace(running=True, stop=mock.AsyncMock()),
+            running=True, stop=mock.AsyncMock(), shutdown=mock.AsyncMock(),
+        )
+        bot.app = app
+        with self.assertRaises(RuntimeError) as raised:
+            await bot.stop()
+        self.assertIs(raised.exception, failure)
+        app.updater.stop.assert_awaited_once()
+        app.stop.assert_awaited_once()
+        app.shutdown.assert_awaited_once()
+        self.assertIsNone(bot.app)
+
+    async def test_service_cleanup_failure_does_not_skip_other_owned_services(self):
+        bot = self._bot()
+        failure = RuntimeError("fixture watcher stop failed")
+        bot._daemon_services_started = True
+        bot._detached_launch_tasks = {"launch": set()}
+        bot._attachment_tasks = {"attachment": set()}
+        bot._reply_delivery_tasks = {"reply": set()}
+        bot._cancel_owned_deliveries = mock.AsyncMock()
+        bot.stop_detached_task_watcher = mock.AsyncMock(side_effect=failure)
+        bot.stop_scheduler = mock.AsyncMock()
+        bot._cancel_attachment_uploads = mock.AsyncMock()
+        with self.assertRaises(RuntimeError) as raised:
+            await bot._stop_daemon_services()
+        self.assertIs(raised.exception, failure)
+        self.assertFalse(bot._daemon_services_started)
+        bot.stop_scheduler.assert_awaited_once()
+        bot._cancel_attachment_uploads.assert_awaited_once_with("attachment")
+        self.assertEqual(bot._cancel_owned_deliveries.await_args_list, [
+            mock.call("launch", bot._detached_launch_tasks),
+            mock.call("reply", bot._reply_delivery_tasks),
+        ])
+
+    async def test_aborted_update_does_not_start_services_on_offline_platform(self):
+        bot = self._bot()
+        bot.start_scheduler = mock.AsyncMock()
+        bot._start_queue_drain = mock.Mock()
+        await bot.begin_update_restart()
+        await bot.cancel_update_restart()
+        self.assertFalse(bot._update_restart_pending)
+        bot.start_scheduler.assert_not_awaited()
+        bot._start_queue_drain.assert_not_called()
+
+    async def test_start_during_update_restores_state_but_defers_scheduler_until_abort(self):
+        bot = self._bot()
+        bot._update_restart_pending = True
+        bot.restore_queues = mock.AsyncMock()
+        bot.start_detached_task_watcher = mock.Mock()
+        bot.start_scheduler = mock.AsyncMock()
+        await bot._start_daemon_services()
+        self.assertTrue(bot._daemon_services_started)
+        bot.restore_queues.assert_awaited_once()
+        bot.start_detached_task_watcher.assert_called_once()
+        bot.start_scheduler.assert_not_awaited()
+        await bot.cancel_update_restart()
+        bot.start_scheduler.assert_awaited_once()
+
+    async def test_cancelled_admission_settling_after_shutdown_cannot_start_consumer(self):
+        from Cozter.queue_store import AdmissionResult
+
+        bot = self._bot()
+        entered, release = asyncio.Event(), threading.Event()
+        accepted = []
+        loop = asyncio.get_running_loop()
+
+        def admit(uid, entry, occurrence):
+            loop.call_soon_threadsafe(entered.set)
+            self.assertTrue(release.wait(2))
+            accepted.append(entry)
+            return AdmissionResult(entry, True)
+
+        bot._queue_store = mock.Mock(return_value=SimpleNamespace(admit=admit))
+        bot._drain_message_queue = mock.AsyncMock()
+        admission = asyncio.create_task(bot._admit_queue_entry(
+            "fixture", "accepted work", "chat", 0,
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            admission.cancel()
+            await bot._stop_daemon_services()
+        finally:
+            release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await admission
+        await asyncio.sleep(0)
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(bot._message_queues["fixture"].qsize(), 1)
+        self.assertFalse(bot._queue_drain_tasks)
+        bot._drain_message_queue.assert_not_awaited()
+
+    async def test_shutdown_owns_deduplicated_drain_and_joins_its_cleanup(self):
+        bot = self._bot()
+        entered, cleaning, release, cleaned = (
+            asyncio.Event(), asyncio.Event(), asyncio.Event(), asyncio.Event()
+        )
+
+        async def drain(_uid):
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cleaning.set()
+                await release.wait()
+                cleaned.set()
+
+        bot._drain_message_queue = mock.AsyncMock(side_effect=drain)
+        first = bot._start_queue_drain("fixture")
+        await asyncio.wait_for(entered.wait(), 1)
+        self.assertIs(bot._start_queue_drain("fixture"), first)
+        shutdown = asyncio.create_task(bot._stop_daemon_services())
+        await asyncio.wait_for(cleaning.wait(), 1)
+        self.assertTrue(bot._stopping)
+        self.assertFalse(shutdown.done())
+        self.assertIsNone(bot._start_queue_drain("fixture"))
+        release.set()
+        await asyncio.wait_for(shutdown, 1)
+        self.assertTrue(cleaned.is_set())
+        self.assertFalse(bot._queue_drain_tasks)
+        self.assertFalse(bot._queue_drain_requests)
+        bot._drain_message_queue.assert_awaited_once_with("fixture")
+
+    async def test_wake_while_consumer_is_closing_starts_successor(self):
+        bot = self._bot()
+        entered, cleaning, release, continued = (
+            asyncio.Event(), asyncio.Event(), asyncio.Event(), asyncio.Event()
+        )
+        calls = 0
+
+        async def drain(_uid):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                try:
+                    await asyncio.Future()
+                finally:
+                    cleaning.set()
+                    await release.wait()
+            else:
+                continued.set()
+
+        bot._drain_message_queue = mock.AsyncMock(side_effect=drain)
+        first = bot._start_queue_drain("fixture")
+        await asyncio.wait_for(entered.wait(), 1)
+        first.cancel()
+        await asyncio.wait_for(cleaning.wait(), 1)
+        self.assertIs(bot._start_queue_drain("fixture"), first)
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+        await asyncio.wait_for(continued.wait(), 1)
+        await asyncio.sleep(0)
+        self.assertEqual(calls, 2)
+        self.assertFalse(bot._queue_drain_tasks)
+
+    async def test_shutdown_also_joins_active_inline_turn_without_cancelling_itself(self):
+        bot = self._bot()
+        entered, cleaned = asyncio.Event(), asyncio.Event()
+
+        async def inline():
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cleaned.set()
+
+        active = asyncio.create_task(inline())
+        await asyncio.wait_for(entered.wait(), 1)
+        bot._running_tasks["fixture"] = active
+        bot._running_tasks["caller"] = asyncio.current_task()
+        await bot._stop_daemon_services()
+        self.assertTrue(active.cancelled())
+        self.assertTrue(cleaned.is_set())
+
+    async def test_stopped_drain_does_not_pop_work_and_restart_opens_gate_before_restore(self):
+        bot = self._bot()
+        queue = bot._ensure_message_queue("fixture")
+        queue.put_nowait(("kept for restart", "chat", "entry", False))
+        bot._stopping = True
+        await bot._drain_message_queue("fixture")
+        self.assertEqual(queue.qsize(), 1)
+
+        async def restore():
+            self.assertFalse(bot._stopping)
+
+        bot.restore_queues = mock.AsyncMock(side_effect=restore)
+        bot.start_detached_task_watcher = mock.Mock()
+        bot.start_scheduler = mock.AsyncMock()
+        await bot._start_daemon_services()
+        self.assertFalse(bot._stopping)
+
+
 class PlatformStartupReadinessTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.main = _load_main_module()
 
     def _bot(self, start):
         return SimpleNamespace(
-            platform_id="signal:test", start=start, stop=mock.AsyncMock(),
+            platform_id="fixture:test", start=start, stop=mock.AsyncMock(),
         )
 
-    async def test_signal_readiness_retries_with_capped_backoff_until_ready(self):
-        from Cozter.backends_bot.signal import SignalNotReadyError
+    async def test_dependency_readiness_retries_with_capped_backoff_until_ready(self):
+        from Cozter.backends_bot.base import PlatformNotReadyError
 
         bot = self._bot(mock.AsyncMock(side_effect=[
-            *[SignalNotReadyError("account still loading") for _ in range(8)],
+            *[PlatformNotReadyError("account still loading") for _ in range(8)],
             None,
         ]))
         with (
@@ -599,9 +995,22 @@ class PlatformStartupReadinessTests(unittest.IsolatedAsyncioTestCase):
             [call.args[1] for call in backoff.call_args_list],
             [1, 2, 4, 8, 16, 30, 30, 30],
         )
-        # Each Signal attempt owns its cleanup; don't separately stop a bot
+        # Each platform attempt owns its cleanup; don't separately stop a bot
         # between attempts or tear down a successfully initialized retry.
         bot.stop.assert_not_awaited()
+
+    async def test_failed_cleanup_is_fatal_even_when_original_failure_is_retryable(self):
+        from Cozter.backends_bot.base import PlatformNotReadyError
+
+        failure = ExceptionGroup("startup and cleanup failed", [
+            PlatformNotReadyError("dependency unavailable"),
+            PermissionError("cleanup state write failed"),
+        ])
+        bot = self._bot(mock.AsyncMock(side_effect=failure))
+        with self.assertRaises(ExceptionGroup) as raised:
+            await self.main._start_platform(bot, asyncio.Event())
+        self.assertIs(raised.exception, failure)
+        bot.start.assert_awaited_once()
 
     async def test_configuration_failure_does_not_retry(self):
         bot = self._bot(mock.AsyncMock(side_effect=ValueError("bad account")))
@@ -674,12 +1083,43 @@ class PlatformStartupReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cleaned.is_set())
         self.assertEqual(asyncio.all_tasks() - previous_tasks, set())
 
+    async def test_repeated_cancellation_does_not_interrupt_adapter_cleanup(self):
+        entered, cleaning, release, cleaned = (
+            asyncio.Event(), asyncio.Event(), asyncio.Event(), asyncio.Event()
+        )
+        previous_tasks = asyncio.all_tasks()
+
+        async def start():
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cleaning.set()
+                await release.wait()
+                cleaned.set()
+
+        run = asyncio.create_task(
+            self.main._start_platform(self._bot(start), asyncio.Event()),
+        )
+        await asyncio.wait_for(entered.wait(), 1)
+        run.cancel()
+        await asyncio.wait_for(cleaning.wait(), 1)
+        run.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(run.done())
+        self.assertFalse(cleaned.is_set())
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(run, 1)
+        self.assertTrue(cleaned.is_set())
+        self.assertEqual(asyncio.all_tasks() - previous_tasks, set())
+
     async def test_stop_during_backoff_does_not_wait_or_retry(self):
-        from Cozter.backends_bot.signal import SignalNotReadyError
+        from Cozter.backends_bot.base import PlatformNotReadyError
 
         in_backoff = asyncio.Event()
         stop_event = asyncio.Event()
-        bot = self._bot(mock.AsyncMock(side_effect=SignalNotReadyError("loading")))
+        bot = self._bot(mock.AsyncMock(side_effect=PlatformNotReadyError("loading")))
         previous_tasks = asyncio.all_tasks()
         with mock.patch.object(
             self.main.logger, "warning", side_effect=lambda *_: in_backoff.set(),
@@ -692,10 +1132,10 @@ class PlatformStartupReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(asyncio.all_tasks() - previous_tasks, set())
 
     async def test_external_cancellation_during_backoff_leaves_no_waiter(self):
-        from Cozter.backends_bot.signal import SignalNotReadyError
+        from Cozter.backends_bot.base import PlatformNotReadyError
 
         in_backoff = asyncio.Event()
-        bot = self._bot(mock.AsyncMock(side_effect=SignalNotReadyError("loading")))
+        bot = self._bot(mock.AsyncMock(side_effect=PlatformNotReadyError("loading")))
         previous_tasks = asyncio.all_tasks()
         with mock.patch.object(
             self.main.logger, "warning", side_effect=lambda *_: in_backoff.set(),
