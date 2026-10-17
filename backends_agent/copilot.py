@@ -26,7 +26,6 @@ import codecs
 from collections.abc import Iterator
 import json
 import logging
-import re
 import os
 import queue
 import select
@@ -39,6 +38,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING
 
+from ..execution_state import native_session_id, record_missing_native_session
 from ..process_launch import create_prompt_subprocess
 from .base import (
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, NativeSessionUnavailable, ProcessResourceMap,
@@ -72,41 +72,6 @@ def _preserve_personal_skill_roots(env: dict[str, str]) -> None:
             return
         directories.append(personal_skills)
     env["COPILOT_SKILLS_DIRS"] = ",".join(directories)
-
-
-def _native_session_id(value: object) -> str | None:
-    """Require a complete UUID so resume cannot select a prefix/name/latest."""
-    if not isinstance(value, str) or len(value) != 36:
-        return None
-    try:
-        parsed = str(uuid.UUID(value))
-    except ValueError:
-        return None
-    return parsed if parsed == value.lower() else None
-
-
-def _record_missing_native_session(message: object) -> None:
-    """Permit portable recovery only for an exact missing ID before activity."""
-    from .. import execution_state
-
-    record = execution_state.current_run()
-    if (record is None or not record.get("native_resume_attempted")
-            or record.get("native_tools_started") or not isinstance(message, str)):
-        return
-    native_id = _native_session_id(record.get("native_session_id"))
-    if native_id is None:
-        return
-    escaped = re.escape(native_id)
-    missing = re.fullmatch(
-        rf"\s*(?:No (?:saved )?(?:session|conversation) found (?:with |for )?"
-        rf"(?:(?:session )?ID[: ]+)?['\"]?{escaped}['\"]?"
-        rf"|(?:Session|Conversation)(?: ID)?[: ]+['\"]?{escaped}['\"]? (?:was )?not found"
-        rf"|Session not found[: ]+['\"]?{escaped}['\"]?)\.?\s*",
-        message, re.IGNORECASE,
-    )
-    if missing:
-        record.set(native_session_id=None, native_resume_attempted=False,
-                   native_resume_unavailable=True, native_unavailable_session_id=native_id)
 
 
 def _native_copilot_home(record: "execution_state.ExecutionRecord") -> str:
@@ -472,7 +437,7 @@ class CopilotBackend(Backend):
         from .. import execution_state
 
         record = None if compaction else execution_state.current_run()
-        native_id = _native_session_id(record.get("native_session_id")) if record else None
+        native_id = native_session_id(record.get("native_session_id")) if record else None
         native_home = _native_copilot_home(record) if record is not None else None
         if (native_id is not None and native_home is not None
                 and not is_path_within(os.path.join(native_home, "session-state", native_id), native_home)):
@@ -576,11 +541,11 @@ class CopilotBackend(Backend):
             record.set(native_tools_started=True)
         if event_type in ("session.start", "session.resume"):
             data = event.get("data")
-            native_id = _native_session_id(data.get("sessionId")) if isinstance(data, dict) else None
+            native_id = native_session_id(data.get("sessionId")) if isinstance(data, dict) else None
             record = execution_state.current_run()
             if record is not None and native_id is not None:
-                expected = (_native_session_id(record.get("native_session_id"))
-                            or _native_session_id(record.get("native_candidate_session_id")))
+                expected = (native_session_id(record.get("native_session_id"))
+                            or native_session_id(record.get("native_candidate_session_id")))
                 if native_id == expected:
                     record.set(native_session_id=native_id, native_candidate_session_id=None)
             return
@@ -635,7 +600,7 @@ class CopilotBackend(Backend):
                     msg = err
             if not msg:
                 msg = "Unknown error"
-            _record_missing_native_session(msg)
+            record_missing_native_session(msg)
             record_backend_error(result, msg)
             return
 

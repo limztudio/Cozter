@@ -68,7 +68,7 @@ class MemoryDirectReadTests(unittest.IsolatedAsyncioTestCase):
                 self.write_session(directory, f"{index:012x}", content="x" * 128_000)
             target = "ffffffffffff"
             self.write_session(directory, target, content="the selected evidence")
-            with mock.patch.object(memory, "_load_sessions", side_effect=AssertionError("must not scan unrelated transcripts")), mock.patch.object(
+            with mock.patch.object(
                 memory, "_load_session_file", wraps=memory._load_session_file,
             ) as load:
                 result = await memory.MemoryTool().run(tmp, {"action": "read", "session": target})

@@ -432,23 +432,6 @@ def resolve_tool_path(
         return None, raw, f"Error: {exc}"
 
 
-def capped_list_tail(
-    limit: int, limit_name: str, narrow_hint: str,
-) -> str:
-    """Shared PARTIAL + remainder tail for capped listing tools.
-
-    Covers the near-identical truncation footers in glob/grep
-    so their paging advice and honesty marker stay in sync.
-    """
-    return (
-        f"\n(stopped at {limit} matches;"
-        f" remainder omitted — raise {limit_name} / {narrow_hint}"
-        " to fetch the rest; never treat this preview as full"
-        " coverage; say PARTIAL + remainder when coverage is"
-        " unclear)"
-    )
-
-
 def prepare_source_destination(
     workspace: str,
     args: dict,

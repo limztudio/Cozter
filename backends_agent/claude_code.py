@@ -23,10 +23,10 @@ import logging
 import os
 import re
 import sys
-import uuid
 from dataclasses import dataclass, field
 
 
+from ..execution_state import native_session_id, record_missing_native_session
 from ..process_launch import create_captured_subprocess, create_prompt_subprocess
 from .base import (
     AgentResult, Backend, ChatEvent, DetachedTaskStatus,
@@ -41,41 +41,6 @@ from ..utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _native_session_id(value: object) -> str | None:
-    """Allow only a complete UUID, never a provider picker/name/last selector."""
-    if not isinstance(value, str) or len(value) != 36:
-        return None
-    try:
-        parsed = str(uuid.UUID(value))
-    except ValueError:
-        return None
-    return parsed if parsed == value.lower() else None
-
-
-def _record_missing_native_session(message: object) -> None:
-    """Permit portable recovery only for an exact missing ID before activity."""
-    from .. import execution_state
-
-    record = execution_state.current_run()
-    if (record is None or not record.get("native_resume_attempted")
-            or record.get("native_tools_started") or not isinstance(message, str)):
-        return
-    native_id = _native_session_id(record.get("native_session_id"))
-    if native_id is None:
-        return
-    escaped = re.escape(native_id)
-    missing = re.fullmatch(
-        rf"\s*(?:No (?:saved )?(?:session|conversation) found (?:with |for )?"
-        rf"(?:(?:session )?ID[: ]+)?['\"]?{escaped}['\"]?"
-        rf"|(?:Session|Conversation)(?: ID)?[: ]+['\"]?{escaped}['\"]? (?:was )?not found"
-        rf"|Session not found[: ]+['\"]?{escaped}['\"]?)\.?\s*",
-        message, re.IGNORECASE,
-    )
-    if missing:
-        record.set(native_session_id=None, native_resume_attempted=False,
-                   native_resume_unavailable=True, native_unavailable_session_id=native_id)
 
 
 # Claude Code effort support differs from the API (notably Opus 4.5
@@ -682,7 +647,7 @@ class ClaudeCodeBackend(Backend):
         from .. import execution_state
 
         record = None if compaction else execution_state.current_run()
-        native_id = _native_session_id(record.get("native_session_id")) if record else None
+        native_id = native_session_id(record.get("native_session_id")) if record else None
         cmd: list[str] = [
             *prefix,
             "--print",
@@ -873,7 +838,7 @@ class ClaudeCodeBackend(Backend):
             record.set(native_tools_started=True)
         if (event_type == "system" and event.get("subtype") == "init"
                 and not event.get("parent_tool_use_id")):
-            native_id = _native_session_id(event.get("session_id"))
+            native_id = native_session_id(event.get("session_id"))
             record = execution_state.current_run()
             if (record is not None and native_id is not None
                     and record.get("native_session_id") in (None, native_id)):
@@ -892,11 +857,11 @@ class ClaudeCodeBackend(Backend):
 
         if event_type == "result":
             if event.get("is_error") or str(event.get("subtype", "")).startswith("error"):
-                _record_missing_native_session(event.get("result"))
+                record_missing_native_session(event.get("result"))
                 errors = event.get("errors")
                 if isinstance(errors, list):
                     for message in errors:
-                        _record_missing_native_session(message)
+                        record_missing_native_session(message)
             # Terminal event: streamed text else cumulative 'result'.
             apply_terminal_result_event(event, result)
             return
@@ -911,7 +876,7 @@ class ClaudeCodeBackend(Backend):
             return
 
         if event_type == "error":
-            _record_missing_native_session(event.get("message"))
+            record_missing_native_session(event.get("message"))
         if record_error_event(event, result):
             return
 

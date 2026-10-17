@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import re
 from pathlib import Path
 import shutil
 import tempfile
@@ -96,13 +97,15 @@ def _generation(value: object) -> str | None:
         return None
 
 
-def _confirmed_native_id(value: object) -> bool:
+def native_session_id(value: object) -> str | None:
+    """Only a full UUID can identify a saved native conversation."""
     if not isinstance(value, str) or len(value) != 36:
-        return False
+        return None
     try:
-        return str(uuid.UUID(value)) == value.lower()
+        canonical = str(uuid.UUID(value))
     except ValueError:
-        return False
+        return None
+    return canonical if canonical == value.lower() else None
 
 
 def _finite_json_float(value: str) -> float:
@@ -386,7 +389,7 @@ class Execution:
         if lifetime is not None and lifetime.discarded:
             return None
         native_id = record.get("native_session_id")
-        if not _confirmed_native_id(native_id):
+        if native_session_id(native_id) is None:
             return None
         assert isinstance(native_id, str)
         native_id = native_id.lower()
@@ -457,7 +460,7 @@ class Execution:
             pinned = job_record.get("native_record_id")
             # Preserve unfinished pre-conversation jobs in place, including
             # their owned Copilot home. Never copy unrelated job evidence.
-            if pinned is None and _confirmed_native_id(job_record.get("native_session_id")):
+            if pinned is None and native_session_id(job_record.get("native_session_id")) is not None:
                 return job_record, None, None
             if pinned is not None and _generation(pinned) is None:
                 raise RuntimeError("saved job has an invalid native generation pin")
@@ -472,7 +475,7 @@ class Execution:
                     "native_generation": head_generation, "backend": identity,
                 }, reload=True)
                 if (candidate.get("native_record_id") == head_generation
-                        and _confirmed_native_id(candidate.get("native_session_id"))):
+                        and native_session_id(candidate.get("native_session_id")) is not None):
                     selected = head_generation
                     state = candidate
             if selected is None:
@@ -500,7 +503,7 @@ class Execution:
         self, state: ExecutionRecord, head: ExecutionRecord | None,
         expected: str | None,
     ) -> None:
-        if head is None or not _confirmed_native_id(state.get("native_session_id")):
+        if head is None or native_session_id(state.get("native_session_id")) is None:
             return
         conversation = self.conversation
         assert conversation is not None and conversation._lifetime is not None
@@ -535,6 +538,28 @@ def current_execution() -> Execution | None:
 
 def current_run() -> ExecutionRecord | None:
     return _RUN.get()
+
+
+def record_missing_native_session(message: object) -> None:
+    """Allow recovery only for an exact missing ID before activity."""
+    record = current_run()
+    if (record is None or not record.get("native_resume_attempted")
+            or record.get("native_tools_started") or not isinstance(message, str)):
+        return
+    native_id = native_session_id(record.get("native_session_id"))
+    if native_id is None:
+        return
+    escaped = re.escape(native_id)
+    missing = re.fullmatch(
+        rf"\s*(?:No (?:saved )?(?:session|conversation) found (?:with |for )?"
+        rf"(?:(?:session )?ID[: ]+)?['\"]?{escaped}['\"]?"
+        rf"|(?:Session|Conversation)(?: ID)?[: ]+['\"]?{escaped}['\"]? (?:was )?not found"
+        rf"|Session not found[: ]+['\"]?{escaped}['\"]?)\.?\s*",
+        message, re.IGNORECASE,
+    )
+    if missing:
+        record.set(native_session_id=None, native_resume_attempted=False,
+                   native_resume_unavailable=True, native_unavailable_session_id=native_id)
 
 
 def bind_conversation(session_id: str) -> None:
@@ -665,7 +690,7 @@ async def backend_scope(
                         lane = _worker_lane(state.get("native_worker", _WORKER.get()))
                     except ValueError as exc:
                         raise RuntimeError("saved job has an invalid native worker lane") from exc
-                elif _confirmed_native_id(state.get("native_session_id")):
+                elif native_session_id(state.get("native_session_id")) is not None:
                     lane = _WORKER.get()
                 else:
                     lane = native_worker if native_worker is not None else _WORKER.get()

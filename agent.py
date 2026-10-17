@@ -1624,7 +1624,7 @@ async def _drive_backend(
                 nonlocal acknowledged
                 if (acknowledged or state is None or delivery is None
                         or not state.get("native_tools_started")
-                        or native_prompt._native_session_id(state.get("native_session_id")) is None):
+                        or execution_state.native_session_id(state.get("native_session_id")) is None):
                     return
                 await delivery.acknowledge(state, delivered_request=delivered_request)
                 acknowledged = True
@@ -3251,7 +3251,7 @@ async def _acknowledge_native_user_messages(
         # Conversation records have their own lifetime and reject late writes.
         if conversation_only and record.execution.namespace != "native_sessions":
             continue
-        if native_prompt._native_session_id(record.get("native_session_id")) != native_id:
+        if execution_state.native_session_id(record.get("native_session_id")) != native_id:
             continue
         await native_prompt.acknowledge_logged_turn(record, data, request_only=True)
 

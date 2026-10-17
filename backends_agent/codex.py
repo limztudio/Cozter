@@ -3,14 +3,13 @@
 import asyncio
 import json
 import logging
-import re
 import shutil
 import subprocess
 import threading
 import time
-import uuid
 
 
+from ..execution_state import native_session_id, record_missing_native_session
 from ..process_launch import create_prompt_subprocess
 from .base import (
     CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
@@ -22,41 +21,6 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _native_session_id(value: object) -> str | None:
-    """Accept exact UUIDs only; CLI names and most-recent selectors are unsafe."""
-    if not isinstance(value, str) or len(value) != 36:
-        return None
-    try:
-        parsed = str(uuid.UUID(value))
-    except ValueError:
-        return None
-    return parsed if parsed == value.lower() else None
-
-
-def _record_missing_native_session(message: object) -> None:
-    """Permit portable recovery only for an exact missing ID before activity."""
-    from .. import execution_state
-
-    record = execution_state.current_run()
-    if (record is None or not record.get("native_resume_attempted")
-            or record.get("native_tools_started") or not isinstance(message, str)):
-        return
-    native_id = _native_session_id(record.get("native_session_id"))
-    if native_id is None:
-        return
-    escaped = re.escape(native_id)
-    missing = re.fullmatch(
-        rf"\s*(?:No (?:saved )?(?:session|conversation) found (?:with |for )?"
-        rf"(?:(?:session )?ID[: ]+)?['\"]?{escaped}['\"]?"
-        rf"|(?:Session|Conversation)(?: ID)?[: ]+['\"]?{escaped}['\"]? (?:was )?not found"
-        rf"|Session not found[: ]+['\"]?{escaped}['\"]?)\.?\s*",
-        message, re.IGNORECASE,
-    )
-    if missing:
-        record.set(native_session_id=None, native_resume_attempted=False,
-                   native_resume_unavailable=True, native_unavailable_session_id=native_id)
 
 
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
@@ -367,7 +331,7 @@ class CodexBackend(Backend):
         from .. import execution_state
 
         record = None if compaction else execution_state.current_run()
-        native_id = _native_session_id(record.get("native_session_id")) if record else None
+        native_id = native_session_id(record.get("native_session_id")) if record else None
         cmd = [*prefix, "exec", "--json", "-C", workspace_path]
         if record is None:
             cmd.insert(len(prefix) + 1, "--ephemeral")
@@ -410,7 +374,7 @@ class CodexBackend(Backend):
                      and event["item"].get("type") not in ("reasoning", "plan"))):
             record.set(native_tools_started=True)
         if event_type == "thread.started":
-            native_id = _native_session_id(event.get("thread_id"))
+            native_id = native_session_id(event.get("thread_id"))
             record = execution_state.current_run()
             if (record is not None and native_id is not None
                     and record.get("native_session_id") in (None, native_id)):
@@ -463,14 +427,14 @@ class CodexBackend(Backend):
                 err = error_payload
             else:
                 err = "Unknown error"
-            _record_missing_native_session(err)
+            record_missing_native_session(err)
             # Record, but never replace a streamed reply.
             record_backend_error(result, err)
 
         elif event_type == "error":
             # Stream failure without turn.failed: record it.
             msg = event.get("message", "Unknown error")
-            _record_missing_native_session(msg)
+            record_missing_native_session(msg)
             logger.warning("Codex stream error: %s", msg)
             # Never let a late error overwrite the reply.
             record_backend_error(result, msg)

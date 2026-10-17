@@ -135,35 +135,6 @@ def _reload_session(sessions_dir: str, metadata: dict) -> dict:
     return data
 
 
-def _load_sessions(sessions_dir: str) -> list[dict]:
-    """Load every well-formed session file, newest first.
-
-    Mirrors the app-level session loader's crash-safety (skip corrupt
-    files, require ``id`` to match the file name) without importing it.
-    """
-    try:
-        names = os.listdir(sessions_dir)
-    except OSError:
-        return []
-    sessions: list[dict] = []
-    for fname in sorted(names):
-        if not fname.endswith(".json"):
-            continue
-        session_id = fname[: -len(".json")]
-        try:
-            path = resolve_inside_workspace(sessions_dir, fname)
-        except ValueError:
-            continue  # A child symlink must not expose files outside memory.
-        data = _load_session_file(path, session_id)
-        if data is not None:
-            sessions.append(data)
-    # Missing timestamps sort as oldest.
-    sessions.sort(
-        key=lambda session_data: session_data["created"] or "0000", reverse=True,
-    )
-    return sessions
-
-
 def _load_session_file(path: str, session_id: str, *, capture_signature: bool = False) -> dict | None:
     try:
         with open(path, encoding="utf-8") as file_handle:

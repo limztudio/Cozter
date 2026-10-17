@@ -4,20 +4,8 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 from typing import Callable
-import uuid
 
 from . import execution_state, session
-
-
-def _native_session_id(value: object) -> str | None:
-    """Only a full UUID can identify a resumable native conversation."""
-    if not isinstance(value, str) or len(value) != 36:
-        return None
-    try:
-        canonical = str(uuid.UUID(value))
-    except ValueError:
-        return None
-    return canonical if canonical == value.lower() else None
 
 
 def fingerprint(value: object) -> str:
@@ -34,7 +22,7 @@ def delivery_fingerprint(source_hash: str, rendered_text: str) -> str:
 def _matching_ledger(record: execution_state.ExecutionRecord | None) -> dict | None:
     if record is None:
         return None
-    native_id = _native_session_id(record.get("native_session_id"))
+    native_id = execution_state.native_session_id(record.get("native_session_id"))
     ledger = record.get("native_prompt_ledger", {})
     if native_id and isinstance(ledger, dict) and ledger.get("session_id") == native_id:
         return ledger
@@ -203,7 +191,7 @@ class NativePrompt:
     async def acknowledge(
         self, record: execution_state.ExecutionRecord, *, delivered_request: str | None = None,
     ) -> None:
-        native_id = _native_session_id(record.get("native_session_id"))
+        native_id = execution_state.native_session_id(record.get("native_session_id"))
         if native_id is None or record.get("native_tools_started") is not True:
             return
         previous = _matching_ledger(record) or {}
@@ -240,7 +228,7 @@ async def acknowledge_logged_turn(
 ) -> None:
     """The direct worker already knows its own request and final response."""
     ledger = record.get("native_prompt_ledger", {})
-    native_id = _native_session_id(record.get("native_session_id"))
+    native_id = execution_state.native_session_id(record.get("native_session_id"))
     if (native_id is None or (not request_only and record.get("native_tools_started") is not True)
             or not isinstance(ledger, dict) or ledger.get("session_id") != native_id):
         return
