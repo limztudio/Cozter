@@ -165,6 +165,37 @@ class FlexibleNativeHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(call["prompt"].endswith("New message:\nCURRENT-REQUEST-MARKER"))
         self.assertTrue({"colony", "memory", "summary"} <= context.partial_sections)
 
+    async def test_long_checkpoint_reserves_bounded_shared_history_and_resumes_with_only_new_messages(self) -> None:
+        request = "LONG-CHECKPOINT-MARKER " + "checkpoint obligation " * 3_000
+        self.data["messages"] = [
+            {"role": "user", "content": "OLDER-LARGE-HISTORY-MARKER " + "x" * 8_000},
+            {"role": "assistant", "content": "RECENT-SHARED-ANSWER-MARKER"},
+        ]
+        await self._invoke(self._native_drive, job="long-first", request=request, budget=2_000)
+        first = self.calls[-1]
+        context = first["context"]
+        shared_size = sum(len(context.sections.get(name, "")) for name in ("colony", "memory", "summary"))
+        shared_size += sum(len(text) + 1 for _, _, text in context.messages)
+        self.assertTrue(context.messages)
+        self.assertLessEqual(shared_size, 2_000)
+        self.assertIn("RECENT-SHARED-ANSWER-MARKER", first["prompt"])
+        self.assertTrue(first["prompt"].endswith("New message:\n" + request))
+
+        self._append_external_turn()
+        await self._invoke(self._native_drive, job="long-second", request=request, budget=2_000)
+        later = self.calls[-1]
+        self.assertEqual(later["record"].path, first["record"].path)
+        self.assertNotIn("RECENT-SHARED-ANSWER-MARKER", later["prompt"])
+        self.assertIn("INTERVENING-MERGED-ANSWER-MARKER", later["prompt"])
+        self.assertTrue(later["prompt"].endswith("New message:\n" + request))
+
+        direct = agent._native_turn_prompt(
+            self.native, request, self.data, self.colony, budget=2_000,
+            collaborative=False, is_scheduled=False,
+        )
+        self.assertEqual(direct.messages, [])
+        self.assertTrue(direct.render(None).endswith("New message:\n" + request))
+
     async def test_normalized_duplicate_inspectors_do_not_overlap_but_other_reads_still_parallelize(self) -> None:
         self.plan = ("[PLAN]\n1. [high] [parallel-read] Please inspect logs\n"
                      "2. [high] [parallel-read] inspect logs\n"

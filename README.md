@@ -409,7 +409,9 @@ than silently starting over.
 
 Flexible's native workers receive bounded shared Cozter context as well as
 their own plan, assigned instructions, earlier completed reports, and any
-retained draft. Each native lane tracks the shared messages it has received.
+retained draft. Their shared history allowance is separate from the full
+current request and checkpoint, so a long continuation still receives bounded
+history backfill. Each native lane tracks the shared messages it has received.
 Switching between direct and Flexible mode, or between backends, supplies
 intervening conversation messages to the returning lane without replaying
 unchanged context. A merged Flexible reply is supplied later to workers that

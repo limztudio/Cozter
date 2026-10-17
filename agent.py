@@ -1474,6 +1474,7 @@ def _native_turn_prompt(
     *, budget: int, collaborative: bool, is_scheduled: bool,
     bootstrap_request: str | None = None, previous_draft: str | None = None,
     skills_catalog: str = "",
+    budget_includes_request: bool = True,
 ) -> native_prompt.NativePrompt:
     """Budget named context before choosing bootstrap or exact-session delta."""
     memory = session_data.get("long_term", [])
@@ -1500,7 +1501,8 @@ def _native_turn_prompt(
     ]
     lengths = [len(render(None)) for _, render in descriptors]
     lengths.append(sum(len(text) + 1 for _, _, text in history))
-    quotas = _context_quotas(lengths, max(0, budget - len(bootstrap_request or request) - 32))
+    request_cost = len(bootstrap_request or request) + 32 if budget_includes_request else 0
+    quotas = _context_quotas(lengths, max(0, budget - request_cost))
     sections = {"policy and plugins": _build_backend_prompt(
         backend, "", collaborative=collaborative, allow_detached_requests=not is_scheduled,
     ).strip()}
@@ -2389,6 +2391,9 @@ async def _run_flexible(
                 backend, request, shared_session, shared_colony,
                 budget=shared_budget, collaborative=False, is_scheduled=True,
                 skills_catalog=native_skills_catalog,
+                # A long saved checkpoint must not consume the separately
+                # bounded context needed to join split worker conversations.
+                budget_includes_request=False,
             )
             worker_context.sections.update({
                 key: text for key, text in worker_sections.items() if key != "request"
