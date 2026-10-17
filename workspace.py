@@ -751,14 +751,16 @@ def set_interaction_style(workspace_path: str, style: str) -> None:
     )
 
 
-def get_reasoning_effort(workspace_path: str) -> int:
-    """Workspace reasoning effort as 0-100. Falls back to default on bad data."""
-    val = _load_settings(workspace_path).get(
-        "reasoning_effort", DEFAULT_REASONING_EFFORT,
-    )
+def _reasoning_effort(settings: dict) -> int:
+    val = settings.get("reasoning_effort", DEFAULT_REASONING_EFFORT)
     if not isinstance(val, int) or isinstance(val, bool):
         return DEFAULT_REASONING_EFFORT
     return max(0, min(val, 100))
+
+
+def get_reasoning_effort(workspace_path: str) -> int:
+    """Workspace reasoning effort as 0-100. Falls back to default on bad data."""
+    return _reasoning_effort(_load_settings(workspace_path))
 
 
 def set_reasoning_effort(workspace_path: str, effort: int) -> None:
@@ -768,6 +770,48 @@ def set_reasoning_effort(workspace_path: str, effort: int) -> None:
         raise ValueError("reasoning effort must be an integer 0-100")
     clamped = max(0, min(effort, 100))
     _set_setting(workspace_path, "reasoning_effort", clamped)
+
+
+def _flexible_effort_override(settings: dict, tier: str) -> int | None:
+    value = settings.get(f"flexible_{tier}_reasoning_effort")
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
+        return None
+    return value
+
+
+def get_flexible_reasoning_effort_override(workspace_path: str, tier: str) -> int | None:
+    """Return a tier's explicit override; None inherits the turn's effort."""
+    _validate_tier(tier)
+    return _flexible_effort_override(_load_settings(workspace_path), tier)
+
+
+def get_flexible_reasoning_efforts(workspace_path: str, *, default: int | None = None) -> dict[str, int]:
+    """Snapshot all tier efforts, inheriting the caller's captured turn value."""
+    settings = _load_settings(workspace_path)
+    inherited = _reasoning_effort(settings) if default is None else default
+    return {
+        tier: value if (value := _flexible_effort_override(settings, tier)) is not None else inherited
+        for tier in FLEXIBLE_TIERS
+    }
+
+
+def get_flexible_reasoning_effort(workspace_path: str, tier: str, *, default: int | None = None) -> int:
+    _validate_tier(tier)
+    return get_flexible_reasoning_efforts(workspace_path, default=default)[tier]
+
+
+def set_flexible_reasoning_effort(workspace_path: str, tier: str, effort: int | None) -> None:
+    """Set a tier percentage, or clear it to inherit the workspace setting."""
+    _validate_tier(tier)
+    key = f"flexible_{tier}_reasoning_effort"
+    if effort is None:
+        settings = _load_settings(workspace_path)
+        settings.pop(key, None)
+        _save_settings(workspace_path, settings)
+        return
+    if isinstance(effort, bool) or not isinstance(effort, int):
+        raise ValueError("reasoning effort must be an integer 0-100")
+    _set_setting(workspace_path, key, max(0, min(effort, 100)))
 
 
 def _positive_int_setting(

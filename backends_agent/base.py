@@ -151,10 +151,19 @@ def executable_command(name: str) -> list[str]:
 
 
 def effort_band(percent: int, levels: tuple[str, ...]) -> str | None:
-    """Map 1-100 onto evenly sized effort *levels*; 0 disables override."""
+    """Map effort to native levels, reserving the highest for 100.
+
+    Zero sends no override. Below 100, keep the existing lower cutoffs and
+    cap the result at the penultimate level. A single-level vocabulary has
+    no lower setting, so only 100 sends its sole explicit value.
+    """
     if percent <= 0 or not levels:
         return None
-    idx = min(percent * len(levels) // 100, len(levels) - 1)
+    if percent >= 100:
+        return levels[-1]
+    if len(levels) == 1:
+        return None
+    idx = min(percent * len(levels) // 100, len(levels) - 2)
     return levels[idx]
 
 
@@ -951,7 +960,7 @@ class Backend(ABC):
     def convert_effort(self, percent: int) -> str | None:
         """Translate a 0-100 percentage to the backend's native effort form.
 
-        None = send no signal (0 or no vocabulary).
+        None = send no signal (0, no vocabulary, or no lower choice).
         """
         return effort_band(percent, self.effort_levels)
 

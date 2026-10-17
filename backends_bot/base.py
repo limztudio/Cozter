@@ -1523,7 +1523,8 @@ class BotPlatform(ABC):
                 for tier, (name, model) in workspace.get_flexible_run_config(
                     ws,
                 ).items():
-                    lines.append(f"  flexible {tier:<4} = {name}/{model}")
+                    lines.append(f"  flexible {tier:<4} = {name}/{model}"
+                                 f" · effort {self._flexible_effort_text(ws, tier)}")
         await ctx.reply_text("\n".join(lines))
 
     async def cmd_cancel(self, ctx: BotContext) -> None:
@@ -1937,6 +1938,7 @@ class BotPlatform(ABC):
         ).items():
             lines.append(
                 f"  {tier:<4} {name}/{model}"
+                f" · effort {BotPlatform._flexible_effort_text(ws, tier)}"
                 f" — {workspace.FLEXIBLE_TIER_DESCRIPTIONS[tier]}"
             )
         lines.append(
@@ -1946,13 +1948,20 @@ class BotPlatform(ABC):
         )
         lines.append(
             "\nRebind a tier with /agent_flexible_<tier> or"
-            " /model_flexible_<tier>, where <tier> is "
+            " /model_flexible_<tier>, or set its effort with"
+            " /effort_flexible_<tier>, where <tier> is "
             + "|".join(workspace.FLEXIBLE_TIERS)
             + "."
         )
         return "\n".join(lines)
 
-    # /agent_flexible_<tier>, /model_flexible_<tier>
+    @staticmethod
+    def _flexible_effort_text(ws: str, tier: str) -> str:
+        value = workspace.get_flexible_reasoning_effort(ws, tier)
+        inherited = workspace.get_flexible_reasoning_effort_override(ws, tier) is None
+        return f"{value}%" + (" (inherited from workspace)" if inherited else " (tier override)")
+
+    # Flexible tier settings.
 
     async def _show_flexible_agent(self, ctx: BotContext, tier: str) -> None:
         ws = await self._require_ws(ctx)
@@ -1965,6 +1974,7 @@ class BotPlatform(ABC):
             f"Flexible {tier} tier —"
             f" {workspace.FLEXIBLE_TIER_DESCRIPTIONS[tier]}",
             f"Current agent: {current}\n",
+            f"Reasoning effort: {self._flexible_effort_text(ws, tier)}\n",
             *self._picker_list(options, current, noun="agent"),
         ]))
         self._expect_input(
@@ -2004,6 +2014,7 @@ class BotPlatform(ABC):
             f"Flexible {tier} tier —"
             f" {workspace.FLEXIBLE_TIER_DESCRIPTIONS[tier]}",
             f"Current model: {current} (agent: {backend_name})\n",
+            f"Reasoning effort: {self._flexible_effort_text(ws, tier)}\n",
             *self._picker_list(options, current, noun="model"),
         ]))
         self._expect_input(
@@ -2165,23 +2176,13 @@ class BotPlatform(ABC):
             f"Current reasoning effort: {current}%\n\n"
             "Pick a percentage 0-100. Higher = more reasoning,"
             " slower & costlier. 0 = no override (server picks).\n\n"
-            "Each agent maps to its native scale:\n"
-            "  codex:       model-aware; current models start at low and"
-            " range up to xhigh, max, or ultra\n"
-            "  llama:       1-24 minimal / 25-49 low / 50-74 medium"
-            " / 75-100 high\n"
-            "  claude_code: model-aware; current models range from low to"
-            " max, while Haiku and legacy pins use their default\n"
-            "  copilot:     1-16 minimal / 17-33 low / 34-49 medium"
-            " / 50-66 high / 67-83 xhigh / 84-100 max"
-            " for an explicit model; auto uses Copilot's default\n"
-            "  grok:        model-aware; 4.7/4.6 range from low to xhigh,"
-            " while 4.5 and unknown models range from low to high\n"
-            "  meta:        standard Muse Spark 1.3 ranges from minimal"
-            " to max; older and Contributor models stop at xhigh\n"
-            "  zai:         GLM-5.3/Flash/FlashX use low / high / max;"
-            " GLM-5.2 uses seven bands; compulsory-thinking models stay"
-            " enabled, and other GLMs toggle at 50%\n\n"
+            "100% selects the highest reasoning-effort level supported by"
+            " the selected model. 1-99% use its lower levels. Models without"
+            " adjustable effort keep their native behavior; Z.ai thinking"
+            " switches retain their enabled/disabled behavior.\n\n"
+            "Flexible tiers inherit this setting unless overridden with"
+            " /effort_flexible_low, /effort_flexible_mid, or"
+            " /effort_flexible_high.\n\n"
             "Applies to your chat turns (not compaction/routing)."
             "\nEnter a number 0-100 (or /cancel):"
         )
@@ -2211,6 +2212,39 @@ class BotPlatform(ABC):
             + ("\n(0 = no override - each backend uses its default)"
                if value == 0 else "")
         )
+
+    async def _show_flexible_effort(self, ctx: BotContext, tier: str) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        if ctx.args.strip():
+            ctx.text = ctx.args
+            await self._receive_flexible_effort(ctx, tier=tier)
+            return
+        await ctx.reply_text(
+            f"Flexible {tier} reasoning effort: {self._flexible_effort_text(ws, tier)}\n\n"
+            "Enter 0-100, or default to inherit the workspace effort."
+            " 0 explicitly uses the backend default; 100 selects the model's"
+            " highest supported effort.\nEnter a value (or /cancel):"
+        )
+        self._expect_input(ctx.user_id, functools.partial(self._receive_flexible_effort, tier=tier))
+
+    async def _receive_flexible_effort(self, ctx: BotContext, *, tier: str) -> None:
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        text = ctx.text.strip().rstrip("%").strip()
+        if text.casefold() == "default":
+            value = None
+        else:
+            value = try_parse_int(text)
+            if value is None or not 0 <= value <= 100:
+                await ctx.reply_text("Enter 0-100, or default to inherit (or /cancel):")
+                self._expect_input(ctx.user_id, functools.partial(self._receive_flexible_effort, tier=tier))
+                return
+        workspace.set_flexible_reasoning_effort(ws, tier, value)
+        await ctx.reply_text(f"Flexible {tier} reasoning effort set to: {self._flexible_effort_text(ws, tier)}"
+                             + ("\n0 = backend default." if value == 0 else ""))
 
     # /refresh
 
@@ -5479,10 +5513,9 @@ class BotPlatform(ABC):
 
 
 def _flexible_tier_commands() -> dict[str, Handler]:
-    """One /agent_flexible_<tier> and /model_flexible_<tier> per tier.
+    """Register each tier's agent, model, and effort settings.
 
-    Generated rather than written out so a new difficulty tier is a
-    one-line change in :mod:`Cozter.flexible` instead of six here.
+    Tier additions only change :mod:`Cozter.flexible`.
     """
     commands: dict[str, Handler] = {}
     for tier in workspace.FLEXIBLE_TIERS:
@@ -5491,6 +5524,9 @@ def _flexible_tier_commands() -> dict[str, Handler]:
         )
         commands[f"model_flexible_{tier}"] = _flexible_command(
             BotPlatform._show_flexible_model, tier,
+        )
+        commands[f"effort_flexible_{tier}"] = _flexible_command(
+            BotPlatform._show_flexible_effort, tier,
         )
     return commands
 

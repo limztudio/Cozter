@@ -980,6 +980,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/model` | Pick the chat model for the current backend |
 | `/agent_flexible_{low,mid,high}` | Pick the agent the flexible tier routes to |
 | `/model_flexible_{low,mid,high}` | Pick the model the flexible tier routes to |
+| `/effort_flexible_{low,mid,high} [0–100\|default]` | Set each Flexible tier's effort; `default` inherits `/effort` |
 | `/summaryagent` | Pick the backend used for compaction / titling / routing, and for flexible's plan + merge |
 | `/summarymodel` | Pick the model for the summary backend |
 | `/permission` | full / auto / confirm / deny — how the agent treats tool calls |
@@ -1501,7 +1502,7 @@ The grading rubric the planner is held to:
 | `mid` | Some reasoning required, but the problem stays bounded | Write unit tests for an existing method with known inputs and outputs |
 | `high` | Only when the task involves ambiguity, complex logic, or deeper system understanding | Refactor a system with unclear dependencies, or debug a non-obvious issue |
 
-Each tier carries its own agent and model, so tiers can straddle
+Each tier carries its own agent, model and reasoning effort, so tiers can straddle
 backends — a local `llama` for the easy parts, `claude_code` on `opus` for
 the hard ones:
 
@@ -1510,6 +1511,26 @@ the hard ones:
 /agent_flexible_mid     -> codex              /model_flexible_mid   -> gpt-6-sol
 /agent_flexible_high    -> claude_code        /model_flexible_high  -> opus
 ```
+
+Set each tier's effort independently:
+
+```text
+/effort_flexible_low 25
+/effort_flexible_mid 60
+/effort_flexible_high 100
+```
+
+Without an argument, each command opens a picker. A tier inherits the workspace
+`/effort` setting until you override it; `default` restores that inheritance.
+An explicit `0` asks that tier's backend to use its own default. Only `100`
+selects the chosen model's highest supported effort. Overrides are stored in
+`.cozter/settings.json` as `flexible_low_reasoning_effort`,
+`flexible_mid_reasoning_effort` and `flexible_high_reasoning_effort`.
+These settings apply to task workers; planner, merge and other internal calls
+retain their backend defaults. Each plan snapshots its tier efforts so parallel
+workers use one consistent policy. Effective effort changes invalidate worker
+checkpoints for that policy; adding the feature preserves checkpoints when all
+tiers still inherit their existing workspace effort.
 
 Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
 `gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
@@ -1848,10 +1869,20 @@ retained on the turn without replacing that reply.
 override — server defaults apply"; `1`–`100` are explicit. Each backend
 maps the percentage to its own vocabulary and request shape:
 
+Only `100` explicitly selects a model's highest supported effort level.
+Values `1`–`99` keep the existing lower-level cutoffs and stop at the next
+level down. This applies to CLI and HTTP backends, including Flexible task
+workers. For Opus 5.5, `60`–`99` selects `xhigh` and `100` selects `max`.
+The highest level may have another name: for example `ultra` on supported
+Codex models, or `high` on a four-level HTTP model. A model with only one
+explicit level receives it only at `100`; lower values leave its default.
+Models without effort controls and GLMs with only a thinking on/off switch
+retain their native behavior.
+
 | Backend | Bands | What gets sent at 100% |
 |---|---|---|
 | `codex` | Model-aware: 4–6 levels | `ultra` (Astra/Sol/Terra), `max` (Luna), or `xhigh` (others) |
-| `llama` | 4 levels @ 25% each | `payload["reasoning_effort"] = "high"` |
+| `llama` | 4 levels; highest reserved for `100` | `payload["reasoning_effort"] = "high"` |
 | `meta` | Standard Muse Spark 1.3: 6 levels (`minimal` through `max`); older and Contributor models: 5 levels (`minimal` through `xhigh`) | `payload["reasoning_effort"] = "max"` for standard 1.3; `xhigh` for older and Contributor models |
 | `zai` | GLM-5.3/Flash/FlashX: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
 | `claude_code` | Model-aware: current Fable / Haiku 5.5 / Sonnet 5.5 / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.6 and Sonnet 4.6 use 4; Opus 4.5, Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
@@ -1861,7 +1892,10 @@ maps the percentage to its own vocabulary and request shape:
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort
 parameter, so utility work stays cheap regardless of the workspace
-setting.
+setting. Flexible task workers use their tier's `/effort_flexible_low`,
+`/effort_flexible_mid` or `/effort_flexible_high` override when present,
+and inherit `/effort` otherwise. Flexible planner, merge and judge calls
+also keep their backend defaults.
 
 ## Interaction style
 

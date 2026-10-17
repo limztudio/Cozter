@@ -2165,6 +2165,9 @@ async def _run_flexible(
 
     summary_backend = backends_agent.get_backend(summary_backend_name)
     tiers = workspace_mod.get_flexible_run_config(workspace_path)
+    tier_efforts = workspace_mod.get_flexible_reasoning_efforts(workspace_path, default=effort)
+    effort_policy: int | dict[str, int] = (next(iter(tier_efforts.values()))
+                                         if len(set(tier_efforts.values())) == 1 else tier_efforts)
     native_skills_catalog = skills.catalog_prompt(
         skills.current_catalog(workspace_path), cli=True,
     )
@@ -2175,7 +2178,7 @@ async def _run_flexible(
     execution = execution_state.current_execution()
     original_request = execution.original_request if execution is not None else request
     signature_context = {
-        "tiers": tiers, "approval": approval, "effort": effort,
+        "tiers": tiers, "approval": approval, "effort": effort_policy,
         "summary_backend": summary_backend_name, "summary_model": summary_model,
         "collaborative": collaborative,
     }
@@ -2483,7 +2486,7 @@ async def _run_flexible(
                     collaborative=False, allow_detached_requests=False,
                     skills_catalog=native_skills_catalog,
                 ),
-                model, worker_approval, effort=effort, on_event=on_event,
+                model, worker_approval, effort=tier_efforts[task.tier], on_event=on_event,
                 # A parallel wave has ONE inject watcher; it stops every sibling.
                 inject_queue=None if parallel else inject_queue,
                 injected=None if parallel else injected, on_process=on_process,

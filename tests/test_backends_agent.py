@@ -510,7 +510,7 @@ class BackendPermissionCommandTests(unittest.TestCase):
             "auto", model="claude-opus-4-6[1m]", effort=75,
         )
         self.assertEqual(
-            limited_command[limited_command.index("--effort") + 1], "max",
+            limited_command[limited_command.index("--effort") + 1], "high",
         )
 
         haiku_command = self._claude_command(
