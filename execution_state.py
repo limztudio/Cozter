@@ -2,13 +2,13 @@
 
 Only actual execution workers bind a backend record. Internal routing, title,
 summary and planner calls must remain stateless. Native provider identifiers
-never cross a workspace, conversation, worker, model, permission or reasoning
+never cross a workspace, conversation, execution lane, model, permission or reasoning
 boundary. Jobs retain exact native-generation pins independently of the
 conversation's latest reusable generation.
 """
 
 import asyncio
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -37,6 +37,7 @@ _NAMESPACES = frozenset({"executions", "native_sessions"})
 class _ConversationLifetime:
     lock: Any = field(default_factory=threading.RLock)
     heads_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    lanes: dict[str, asyncio.Lock] = field(default_factory=dict)
     discarded: bool = False
 
 
@@ -44,6 +45,10 @@ _LIFETIMES: weakref.WeakValueDictionary[tuple[str, str], _ConversationLifetime] 
     weakref.WeakValueDictionary()
 )
 _LIFETIMES_LOCK = threading.RLock()
+_BACKEND_LOCKS: weakref.WeakValueDictionary[tuple[str, str, str, str], asyncio.Lock] = (
+    weakref.WeakValueDictionary()
+)
+_BACKEND_LOCKS_LOCK = threading.RLock()
 
 
 def _conversation_lifetime(workspace_path: str, session_id: str) -> _ConversationLifetime:
@@ -60,6 +65,26 @@ def _session_id(value: str) -> str:
     if not isinstance(value, str) or not value or value != value.strip():
         raise ValueError("native conversation requires a nonempty session id")
     return value
+
+
+def _worker_lane(value: object) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError("native worker lane requires a nonempty name")
+    return value
+
+
+def _backend_lock(execution: "Execution", identity: object) -> asyncio.Lock:
+    """Serialize one job record even across independent Execution objects."""
+    key = (
+        os.path.normcase(os.path.realpath(execution.workspace_path)),
+        execution.namespace, execution.directory_id, _digest(identity),
+    )
+    with _BACKEND_LOCKS_LOCK:
+        lock = _BACKEND_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _BACKEND_LOCKS[key] = lock
+        return lock
 
 
 def _generation(value: object) -> str | None:
@@ -253,6 +278,11 @@ class ExecutionRecord:
             await _settle(writer)
             raise
 
+    async def reload(self) -> None:
+        """Refresh a flushed record while its caller owns the record lease."""
+        await self.flush()
+        self._values = await asyncio.to_thread(self._read_values)
+
     async def _write_pending(self) -> None:
         async with self._lock:
             while self._written < self._revision:
@@ -327,7 +357,7 @@ class Execution:
     def directory_id(self) -> str:
         return _digest(self.execution_id)
 
-    async def record(self, identity: object) -> ExecutionRecord:
+    async def record(self, identity: object, *, reload: bool = False) -> ExecutionRecord:
         # The queue entry owns identity. Accepted guidance changes the request
         # while retaining the same native conversation and tool evidence.
         # Flexible plans separately fingerprint the latest full requirements.
@@ -335,6 +365,8 @@ class Execution:
         key = _digest(identity)
         cached = self.records.get(key)
         if cached is not None:
+            if reload:
+                await cached.reload()
             return cached
         result = ExecutionRecord(self, key)
 
@@ -362,7 +394,7 @@ class Execution:
             raise
 
     async def native_record(
-        self, identity: object, job_record: ExecutionRecord,
+        self, identity: dict[str, Any], job_record: ExecutionRecord,
     ) -> tuple[ExecutionRecord, ExecutionRecord | None, str | None]:
         """Select a conversation generation while pinning this job before work."""
         conversation = self.conversation
@@ -379,32 +411,37 @@ class Execution:
                 return job_record, None, None
             if pinned is not None and _generation(pinned) is None:
                 raise RuntimeError("saved job has an invalid native generation pin")
-            head = await conversation.record({"native_head": identity})
+            head = await conversation.record({"native_head": identity}, reload=True)
             head_generation = head.get("native_record_id")
             if head_generation is not None and _generation(head_generation) is None:
                 raise RuntimeError("saved conversation has an invalid native generation head")
             selected = pinned
+            state = None
             if selected is None and head_generation is not None:
                 candidate = await conversation.record({
                     "native_generation": head_generation, "backend": identity,
-                })
+                }, reload=True)
                 if (candidate.get("native_record_id") == head_generation
                         and _confirmed_native_id(candidate.get("native_session_id"))):
                     selected = head_generation
+                    state = candidate
             if selected is None:
                 selected = uuid.uuid4().hex
                 state = await conversation.record({
                     "native_generation": selected, "backend": identity,
                 })
                 await state.save(native_record_id=selected)
-            else:
+            elif state is None:
                 state = await conversation.record({
                     "native_generation": selected, "backend": identity,
-                })
+                }, reload=True)
                 if state.get("native_record_id") != selected:
                     raise RuntimeError("saved native generation is missing or has an invalid identity")
+            assert state is not None
             if pinned is None:
-                await job_record.save(native_record_id=selected)
+                await job_record.save(
+                    native_record_id=selected, native_worker=identity["worker"],
+                )
             # A resumed old job must not replace a newer conversation head.
             expected = head_generation if pinned is None else selected
             return state, head, expected
@@ -545,38 +582,69 @@ async def execution_scope(workspace_path: str, execution_id: str | None,
 @asynccontextmanager
 async def backend_scope(
     backend: str, model: str | None, approval: str, effort: int, *, native: bool = False,
+    native_worker: str | None = None,
 ):
+    """Bind a job record and optionally reuse a separately named native lane.
+
+    The detailed worker identity still owns job evidence and its exact pin.
+    Only a new native pin may choose the requested reusable conversation lane.
+    Leases cover selection, execution and durable publication so parallel
+    workers can never drive the same native session at the same time.
+    """
+    if native_worker is not None:
+        _worker_lane(native_worker)
     execution = current_execution()
     state = None
     head = None
     expected = None
-    if execution is not None:
-        identity = {
-            "backend": backend, "model": model, "approval": approval,
-            "effort": effort, "worker": _WORKER.get(),
-        }
-        state = await execution.record(identity)
-        if native and execution.conversation is not None:
-            state, head, expected = await execution.native_record(identity, state)
-            if _WORKER.get() == "main":
-                execution.native_main_record = state
-    token = _RUN.set(state)
-    try:
-        yield state
-    finally:
+    async with AsyncExitStack() as leases:
+        if execution is not None:
+            identity = {
+                "backend": backend, "model": model, "approval": approval,
+                "effort": effort, "worker": _WORKER.get(),
+            }
+            if native:
+                await leases.enter_async_context(_backend_lock(execution, identity))
+            state = await execution.record(identity, reload=native)
+            if native and execution.conversation is not None:
+                # Existing pins are immutable. Their generation's path was
+                # computed from the original worker unless a lane was saved.
+                # Preserve pre-conversation native jobs in their job home too.
+                if state.get("native_record_id") is not None:
+                    try:
+                        lane = _worker_lane(state.get("native_worker", _WORKER.get()))
+                    except ValueError as exc:
+                        raise RuntimeError("saved job has an invalid native worker lane") from exc
+                elif _confirmed_native_id(state.get("native_session_id")):
+                    lane = _WORKER.get()
+                else:
+                    lane = native_worker if native_worker is not None else _WORKER.get()
+                native_identity = {**identity, "worker": lane}
+                lifetime = execution.conversation._lifetime
+                assert lifetime is not None
+                lane_lease = lifetime.lanes.setdefault(_digest(native_identity), asyncio.Lock())
+                await leases.enter_async_context(lane_lease)
+                execution.conversation.ensure_live()
+                state, head, expected = await execution.native_record(native_identity, state)
+                if _WORKER.get() == "main":
+                    execution.native_main_record = state
+        token = _RUN.set(state)
         try:
-            if state is not None:
-                async def finish() -> None:
-                    assert state is not None
-                    await state.flush()
-                    if execution is not None:
-                        await execution.publish_native_head(state, head, expected)
-
-                task = asyncio.create_task(finish(), name="flush-backend-state")
-                try:
-                    await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    await _settle(task)
-                    raise
+            yield state
         finally:
-            _RUN.reset(token)
+            try:
+                if state is not None:
+                    async def finish() -> None:
+                        assert state is not None
+                        await state.flush()
+                        if execution is not None:
+                            await execution.publish_native_head(state, head, expected)
+
+                    task = asyncio.create_task(finish(), name="flush-backend-state")
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        await _settle(task)
+                        raise
+            finally:
+                _RUN.reset(token)

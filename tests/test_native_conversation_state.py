@@ -23,13 +23,215 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
 
     @asynccontextmanager
     async def scope(self, job="job", conversation="conversation", *, settings=_SETTINGS,
-                  worker="main", ws=None):
+                  worker="main", ws=None, native_worker=None):
         async with execution_state.execution_scope(ws or self.ws, job, "request") as execution:
             if conversation is not None:
                 execution_state.bind_conversation(conversation)
             with execution_state.worker_scope(worker):
-                async with execution_state.backend_scope(*settings, native=True) as state:
+                async with execution_state.backend_scope(
+                    *settings, native=True, native_worker=native_worker,
+                ) as state:
                     yield execution, state
+
+    async def test_changed_flexible_tasks_reuse_main_lane_without_changing_job_keys(self) -> None:
+        async with self.scope("direct") as (_, direct):
+            await direct.save(native_session_id=_SID, native_prompt_ledger={"direct": "seen"})
+            original = direct.path
+        for index, worker in enumerate(("flexible:build-one", "flexible:fix-two")):
+            async with self.scope(
+                f"worker-{index}", worker=worker, native_worker="main",
+            ) as (execution, state):
+                self.assertEqual(state.path, original)
+                self.assertEqual(state.get("native_session_id"), _SID)
+                self.assertEqual(state.get("native_prompt_ledger"), {"direct": "seen"})
+                self.assertIsNone(execution.native_main_record)
+                job = await execution.record({
+                    "backend": "codex", "model": "chosen", "approval": "full",
+                    "effort": 100, "worker": worker,
+                })
+                self.assertEqual(job.get("native_worker"), "main")
+                self.assertEqual(job.get("native_record_id"), state.get("native_record_id"))
+                self.assertIsNone(job.get("native_prompt_ledger"))
+        async with self.scope("direct-followup") as (_, state):
+            self.assertEqual(state.path, original)
+
+    async def test_existing_lane_pin_keeps_its_exact_path_and_home_after_requested_lane_changes(self) -> None:
+        async with self.scope("pinned", worker="flexible:task", native_worker="main") as (_, state):
+            await state.save(native_session_id=_SID)
+            original = state.path
+            home = state.directory / "copilot-home"
+            home.mkdir()
+            (home / "proof").write_text("session-owned", encoding="utf-8")
+        async with self.scope(
+            "pinned", worker="flexible:task", native_worker="flexible:reader:2",
+        ) as (_, state):
+            self.assertEqual(state.path, original)
+            self.assertEqual(state.get("native_session_id"), _SID)
+            self.assertEqual((state.directory / "copilot-home" / "proof").read_text(), "session-owned")
+        async with self.scope(
+            "new-reader", worker="flexible:different", native_worker="flexible:reader:2",
+        ) as (_, state):
+            self.assertIsNone(state.get("native_session_id"))
+
+    async def test_legacy_generation_pin_retains_detailed_worker_identity(self) -> None:
+        worker = "flexible:legacy-task"
+        async with self.scope("legacy", worker=worker) as (execution, state):
+            await state.save(native_session_id=_SID)
+            original = state.path
+            job = await execution.record({
+                "backend": "codex", "model": "chosen", "approval": "full",
+                "effort": 100, "worker": worker,
+            })
+            job_path = job.path
+        data = json.loads(job_path.read_text(encoding="utf-8"))
+        data["values"].pop("native_worker")
+        job_path.write_text(json.dumps(data), encoding="utf-8")
+        async with self.scope("direct") as (_, state):
+            await state.save(native_session_id=_OTHER_SID)
+            direct_path = state.path
+        async with self.scope("legacy", worker=worker, native_worker="main") as (_, state):
+            self.assertEqual(state.path, original)
+            self.assertEqual(state.get("native_session_id"), _SID)
+        async with self.scope("new", worker="flexible:new-task", native_worker="main") as (_, state):
+            self.assertEqual(state.path, direct_path)
+            self.assertEqual(state.get("native_session_id"), _OTHER_SID)
+
+    async def test_cached_generation_refreshes_after_another_execution_updates_the_lane(self) -> None:
+        async with execution_state.execution_scope(self.ws, "older", "request"):
+            execution_state.bind_conversation("conversation")
+            with execution_state.worker_scope("flexible:old"):
+                async with execution_state.backend_scope(
+                    *_SETTINGS, native=True, native_worker="main",
+                ) as old:
+                    await old.save(native_session_id=_SID, native_prompt_ledger={"first": "seen"})
+                async with self.scope("newer", native_worker="main") as (_, newer):
+                    self.assertEqual(newer.path, old.path)
+                    await newer.save(native_prompt_ledger={"first": "seen", "newer": "seen"})
+                async with execution_state.backend_scope(
+                    *_SETTINGS, native=True, native_worker="main",
+                ) as resumed:
+                    self.assertIs(resumed, old)
+                    self.assertEqual(resumed.get("native_prompt_ledger"), {"first": "seen", "newer": "seen"})
+
+    async def test_same_native_lane_serializes_selection_work_and_publication(self) -> None:
+        first_entered = asyncio.Event()
+        second_attempted = asyncio.Event()
+        second_entered = asyncio.Event()
+        release = asyncio.Event()
+        selected = []
+
+        async def first():
+            async with self.scope("one", worker="flexible:first", native_worker="main") as (_, state):
+                selected.append(state.path)
+                state.set(native_session_id=_SID, delivered="first")
+                first_entered.set()
+                await release.wait()
+
+        async def second():
+            second_attempted.set()
+            async with self.scope("two", worker="flexible:second", native_worker="main") as (_, state):
+                selected.append(state.path)
+                self.assertEqual(state.get("native_session_id"), _SID)
+                self.assertEqual(state.get("delivered"), "first")
+                second_entered.set()
+
+        first_task = asyncio.create_task(first())
+        await first_entered.wait()
+        second_task = asyncio.create_task(second())
+        try:
+            await second_attempted.wait()
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(second_entered.wait(), 0.05)
+        finally:
+            release.set()
+            await asyncio.gather(first_task, second_task)
+        self.assertEqual(selected[0], selected[1])
+
+    async def test_distinct_reader_lanes_can_execute_in_parallel(self) -> None:
+        entered = [asyncio.Event(), asyncio.Event()]
+        selected = []
+
+        async def reader(index):
+            async with self.scope(
+                f"job-{index}", worker=f"flexible:task-{index}",
+                native_worker=f"flexible:reader:{index}",
+            ) as (_, state):
+                selected.append(state.path)
+                await state.save(native_session_id=(_SID, _OTHER_SID)[index])
+                entered[index].set()
+                await asyncio.wait_for(entered[1 - index].wait(), 2)
+
+        await asyncio.gather(reader(0), reader(1))
+        self.assertNotEqual(selected[0], selected[1])
+
+    async def test_same_job_key_cannot_choose_conflicting_lanes_concurrently(self) -> None:
+        first_entered = asyncio.Event()
+        release = asyncio.Event()
+        selected = []
+
+        async def worker(lane, ready=None):
+            async with self.scope("same-job", worker="flexible:same", native_worker=lane) as (_, state):
+                selected.append(state.path)
+                if ready is not None:
+                    await state.save(native_session_id=_SID)
+                    ready.set()
+                    await release.wait()
+                else:
+                    self.assertEqual(state.get("native_session_id"), _SID)
+
+        first = asyncio.create_task(worker("main", first_entered))
+        await first_entered.wait()
+        second = asyncio.create_task(worker("flexible:reader:1"))
+        try:
+            await asyncio.sleep(0.05)
+            self.assertEqual(len(selected), 1)
+        finally:
+            release.set()
+            await asyncio.gather(first, second)
+        self.assertEqual(selected[0], selected[1])
+
+    async def test_cancelled_lane_waiter_does_not_block_later_workers(self) -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def holder():
+            async with self.scope("holder", native_worker="main") as (_, state):
+                await state.save(native_session_id=_SID)
+                entered.set()
+                await release.wait()
+
+        async def waiter():
+            async with self.scope("waiter", worker="flexible:waiting", native_worker="main"):
+                self.fail("cancelled waiter entered the leased native session")
+
+        owner = asyncio.create_task(holder())
+        await entered.wait()
+        waiting = asyncio.create_task(waiter())
+        await asyncio.sleep(0.05)
+        waiting.cancel()
+        try:
+            with self.assertRaises(asyncio.CancelledError):
+                await waiting
+        finally:
+            release.set()
+            await owner
+        async with self.scope("following", worker="flexible:later", native_worker="main") as (_, state):
+            self.assertEqual(state.get("native_session_id"), _SID)
+
+    async def test_native_lane_names_and_saved_lane_pins_are_validated(self) -> None:
+        for value in ("", " ", " main", True, 1):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "native worker lane"):
+                async with self.scope(native_worker=value):
+                    self.fail("invalid native lane was accepted")
+        async with self.scope("invalid-pin") as (execution, _):
+            job = await execution.record({
+                "backend": "codex", "model": "chosen", "approval": "full",
+                "effort": 100, "worker": "main",
+            })
+            await job.save(native_worker=False)
+        with self.assertRaisesRegex(RuntimeError, "invalid native worker lane"):
+            async with self.scope("invalid-pin", native_worker="main"):
+                self.fail("invalid saved lane was silently replaced")
 
     async def test_new_job_reuses_exact_confirmed_conversation_generation(self) -> None:
         async with self.scope("first") as (execution, state):

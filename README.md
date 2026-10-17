@@ -384,8 +384,13 @@ Codex (`codex`), Claude Code (`claude_code`), Copilot (`copilot`), and Grok
 (`grok`) reuse their confirmed native CLI conversation across turns in the
 same Cozter session, including after a queue job completes or Cozter restarts.
 Native state is isolated by canonical workspace, Cozter session, backend,
-resolved model, permission, reasoning effort, and stable worker role. A
-different worker role never borrows another worker's native conversation.
+resolved model, permission, reasoning effort, and execution lane. Direct turns
+and Flexible's serial editing workers share a compatible serial lane, so
+changing a subtask's wording or difficulty does not discard their native
+conversation. Concurrent inspection workers use separate reader lanes and
+native IDs; they do not attach to the editing worker's conversation or each
+other's active session. Job checkpoints still retain their exact subtask scope
+and native-generation pin, independently of these reusable lanes.
 `/newsession` starts a fresh conversation; `/sessions` returns to the selected
 conversation's own state. Changing the workspace, model, permission, or effort
 selects a separate native identity.
@@ -401,6 +406,17 @@ missing before any new work begins, Cozter can start a replacement with full
 saved context. Ambiguous failures or failures after work has begun do not
 trigger a fresh replay. Invalid saved state is preserved and reported rather
 than silently starting over.
+
+Flexible's native workers receive bounded shared Cozter context as well as
+their own plan, assigned instructions, earlier completed reports, and any
+retained draft. Each native lane tracks the shared messages it has received.
+Switching between direct and Flexible mode, or between backends, supplies
+intervening conversation messages to the returning lane without replaying
+unchanged context. A merged Flexible reply is supplied later to workers that
+have not seen it, including when a queue job has already completed. Parallel
+readers receive the same shared context independently; their current findings
+reach later workers through completed reports after the inspection wave ends.
+The planner uses bounded shared Cozter history and stays stateless.
 
 These are provider-managed sessions and can appear in the native CLI's normal
 local history where supported. Copilot keeps a persistent, conversation-owned
@@ -2090,7 +2106,7 @@ The runtime contains 76 Python source files, separate from the tests below.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (156 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 153 `test_*.py` modules:
+- Tests (158 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 155 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
@@ -2107,7 +2123,8 @@ The runtime contains 76 Python source files, separate from the tests below.
   `test_discovery_pruning.py`, `test_discovery_tools_async.py`, `test_durable_poll_parallelism.py`,
   `test_edit_file_read_limits.py`, `test_execution_state.py`, `test_flexible.py`,
   `test_flexible_continuation.py`, `test_flexible_injection_continuation.py`,
-  `test_flexible_instruction_identity.py`, `test_flexible_native_injection_continuation.py`,
+  `test_flexible_instruction_identity.py`, `test_flexible_native_history.py`,
+  `test_flexible_native_injection_continuation.py`, `test_flexible_native_sessions.py`,
   `test_flexible_parallel_plan.py`, `test_flexible_parallel_runtime.py`,
   `test_flexible_prompt_sections.py`,
   `test_format_marker_latency.py`, `test_git_checkout_integrity.py`, `test_git_cold_launch.py`,
@@ -2156,7 +2173,8 @@ The runtime contains 76 Python source files, separate from the tests below.
   CLI, and Slack commands, including canonical native APIs/protocols, strict
   unified-patch headers, exact platform ownership, explicit compaction snapshots,
   unbounded tool/provider execution with cancellation, native stdin ownership,
-  native conversations retained across completed jobs, exact worker and
+  native conversations retained across completed jobs, shared direct/Flexible
+  editing lanes, isolated parallel reader histories, exact job scope and
   model/policy isolation, changed-context delivery, and full bootstrap only on
   confirmed pre-work session loss; progressive workspace/native skill catalogs,
   bounded skill loading, native bridge ownership, planner-only skill tools, and skill-aware saved-plan

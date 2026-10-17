@@ -102,10 +102,16 @@ class NativePrompt:
         native_id = _native_session_id(record.get("native_session_id"))
         if native_id is None or record.get("native_tools_started") is not True:
             return
+        previous = record.get("native_prompt_ledger", {})
+        known = previous.get("messages", {}) if (
+            isinstance(previous, dict) and previous.get("session_id") == native_id
+        ) else {}
+        if not isinstance(known, dict):
+            known = {}
         await record.save(native_prompt_ledger={
             "session_id": native_id,
             "sections": {name: self.section_fingerprint(name, text) for name, text in self.sections.items()},
-            "messages": {coordinate: digest for coordinate, digest, _ in self.messages},
+            "messages": {**known, **{coordinate: digest for coordinate, digest, _ in self.messages}},
         })
 
 

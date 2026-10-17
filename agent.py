@@ -1551,10 +1551,11 @@ async def _drive_backend(
     close_inject_on_completion: bool = False,
     on_process: Callable[[Any], None] | None = None,
     native_context: native_prompt.NativePrompt | None = None,
+    native_worker: str | None = None,
 ) -> tuple[AgentResult, bool]:
     async with execution_state.backend_scope(
         backend.name, model or getattr(backend, "default_model", None), approval, effort,
-        native=backend.name in _NATIVE_BACKENDS,
+        native=backend.name in _NATIVE_BACKENDS, native_worker=native_worker,
     ) as state:
         prompt_context = native_context if backend.name in _NATIVE_BACKENDS else None
         bootstrap = prompt_context.render(None) if prompt_context is not None else full_prompt
@@ -2061,6 +2062,9 @@ async def _run_flexible(
     close_inject_on_completion: bool = True,
     previous_draft: str | None = None,
     on_process: Callable[[Any], None] | None = None,
+    session_data: dict | None = None,
+    colony_items: list[str] | None = None,
+    history_budget: int | None = None,
 ) -> tuple[AgentResult, bool]:
     """Run one turn of the ``flexible`` meta-agent.
 
@@ -2086,6 +2090,10 @@ async def _run_flexible(
     native_skills_catalog = skills.catalog_prompt(
         skills.current_catalog(workspace_path), cli=True,
     )
+    shared_session = session_data if session_data is not None else {}
+    shared_colony = colony_items if colony_items is not None else []
+    shared_budget = (history_budget if history_budget is not None
+                     else workspace_mod.get_history_budget(workspace_path))
     execution = execution_state.current_execution()
     original_request = execution.original_request if execution is not None else request
     signature_context = {
@@ -2331,6 +2339,13 @@ async def _run_flexible(
         return bool(task.read_only and task.independent
                     and getattr(backend, "supports_read_only_workers", False))
 
+    def worker_scope(index: int) -> str:
+        task = queue[index]
+        return "flexible:" + flexible.state_signature({
+            "tier": task.tier, "instruction": flexible.instruction_identity(task.instruction),
+            "read_only": task.read_only, "independent": task.independent,
+        })
+
     async def run_worker(
         index: int, earlier: list[str], *, parallel: bool,
     ) -> tuple[AgentResult, bool]:
@@ -2364,13 +2379,20 @@ async def _run_flexible(
         # The plan changes when guidance changes, but an identical remaining
         # role can keep its native conversation and receive that new guidance.
         # Backend records separately isolate provider/model/approval/effort.
-        scope = "flexible:" + flexible.state_signature({
-            "tier": task.tier, "instruction": flexible.instruction_identity(task.instruction),
-            "read_only": task.read_only, "independent": task.independent,
-        })
+        scope = worker_scope(index)
         worker_sections = flexible.build_subtask_sections(
             request, plan, index, earlier, previous_draft=previous_draft,
         )
+        worker_context = None
+        if backend.name in _NATIVE_BACKENDS:
+            worker_context = _native_turn_prompt(
+                backend, request, shared_session, shared_colony,
+                budget=shared_budget, collaborative=False, is_scheduled=True,
+                skills_catalog=native_skills_catalog,
+            )
+            worker_context.sections.update({
+                key: text for key, text in worker_sections.items() if key != "request"
+            })
         with execution_state.worker_scope(scope):
             sub_result, restarting = await _run_with_stage_timing(_drive_backend(
                 backend, workspace_path,
@@ -2384,13 +2406,12 @@ async def _run_flexible(
                 # A parallel wave has ONE inject watcher; it stops every sibling.
                 inject_queue=None if parallel else inject_queue,
                 injected=None if parallel else injected, on_process=on_process,
-                native_context=native_prompt.NativePrompt(request, {
-                    "policy and plugins": _build_backend_prompt(
-                        backend, "", collaborative=False, allow_detached_requests=False,
-                    ).strip(),
-                    **({"skills catalog": native_skills_catalog} if native_skills_catalog else {}),
-                    **{key: text for key, text in worker_sections.items() if key != "request"},
-                }) if backend.name in _NATIVE_BACKENDS else None,
+                native_context=worker_context,
+                # Job scope pins retain their detailed task identity. Native
+                # writers reuse the compatible conversation, while inspectors
+                # have distinct slots so independent work stays concurrent.
+                native_worker=((f"flexible:reader:{index}" if task.read_only else "main")
+                               if worker_context is not None else None),
             ), "flexible_worker", backend_name, model,
                 worker_index=index + 1, worker_count=total)
         if budget is not None:
@@ -2436,8 +2457,15 @@ async def _run_flexible(
             continue
         end = done + 1
         if can_inspect(done):
+            wave_scopes = {worker_scope(done)}
             while (end < len(queue) and end - done < max_parallel
                    and can_inspect(end) and tiers[queue[end].tier] not in unavailable_models):
+                scope = worker_scope(end)
+                if scope in wave_scopes:
+                    # Normalized duplicate wording can share an existing job
+                    # pin. Keep those occurrences sequential across old plans.
+                    break
+                wave_scopes.add(scope)
                 end += 1
         if budget is not None:
             remaining = budget.max_workers - budget.workers_started
@@ -3388,6 +3416,9 @@ async def _run_turn_impl(
                 close_inject_on_completion=False,
                 previous_draft=previous_draft,
                 on_process=on_process,
+                session_data=session_data,
+                colony_items=colony_items,
+                history_budget=history_budget,
             )
         return await _drive_backend(
             backend, workspace_path,

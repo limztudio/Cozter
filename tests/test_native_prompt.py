@@ -268,6 +268,56 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("remaining unseen suffix", rendered)
         self.assertNotIn("original oversized prefix", rendered)
 
+    async def test_budget_shrink_retains_omitted_known_messages_when_budget_expands(self) -> None:
+        backend = SimpleNamespace(
+            supports_detached_tasks=False, supports_typed_plugins=True, supports_plugin_prelude=False,
+        )
+        data = {"messages": [
+            _message("user", "older-known-marker " + "older content " * 35),
+            _message("assistant", "recent-known-marker"),
+        ]}
+
+        def build(budget: int) -> NativePrompt:
+            return agent._native_turn_prompt(
+                backend, "request", data, [], budget=budget, collaborative=False, is_scheduled=False,
+            )
+
+        full = build(2_000)
+        self.assertEqual([row[0] for row in full.messages], ["0", "1"])
+        await self._confirm()
+        await full.acknowledge(self.record)
+        smaller = build(200)
+        self.assertEqual([row[0] for row in smaller.messages], ["1"])
+        await smaller.acknowledge(self.record)
+
+        self.assertEqual(build(2_000).render(self.record), "New message:\nrequest")
+        self.assertEqual(set(self.record.get("native_prompt_ledger")["messages"]), {"0", "1"})
+        data["messages"][0] = _message("user", "rewritten-older-message-marker")
+        rewritten = build(2_000)
+        self.assertIn("rewritten-older-message-marker", rewritten.render(self.record))
+        self.assertNotIn("recent-known-marker", rewritten.render(self.record))
+        await rewritten.acknowledge(self.record)
+        self.assertEqual(rewritten.render(self.record), "New message:\nrequest")
+
+    async def test_budgeted_acknowledgment_does_not_carry_known_messages_to_changed_uuid(self) -> None:
+        messages = _history({"messages": [
+            _message("user", "old-session-only-marker"),
+            _message("assistant", "new-session-provided-marker"),
+        ]})
+        full = NativePrompt("request", {}, messages)
+        await self._confirm()
+        await full.acknowledge(self.record)
+        await self.record.save(native_session_id=_OTHER_SESSION_ID)
+        smaller = NativePrompt("request", {}, messages[1:])
+        await smaller.acknowledge(self.record)
+
+        ledger = self.record.get("native_prompt_ledger")
+        self.assertEqual(ledger["session_id"], _OTHER_SESSION_ID)
+        self.assertEqual(set(ledger["messages"]), {"1"})
+        rendered = full.render(self.record)
+        self.assertIn("old-session-only-marker", rendered)
+        self.assertNotIn("new-session-provided-marker", rendered)
+
     async def test_logged_turn_acknowledges_only_own_pair_leaving_other_backends_unseen(self) -> None:
         known = [_message("user", "known historical request"),
                  _message("assistant", "known historical answer")]
