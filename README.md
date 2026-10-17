@@ -295,6 +295,7 @@ example layout lives in `.config/config.example.json`):
 
   "signal_group_urls": [],
   "signal_jsonrpc_socket": "",
+  "signal_account": "",
   "signal_own_device_id": 0,
 
   "llama_server_url": "http://127.0.0.1:8080",
@@ -621,6 +622,23 @@ resolved from the daemon's known groups or joined at startup. Set
 example `/run/signal-cli/socket`. Cozter only connects to the socket; run
 and restart the `signal-cli daemon` from a service manager such as
 systemd.
+
+`signal_account` selects the daemon account by its phone number or ACI. Leave
+it empty when using a single-account daemon. With a multi-account daemon,
+Cozter can select the only loaded account automatically; if several accounts
+are loaded, configure the intended account explicitly. Account selection
+applies to group lookup, message delivery, deletion, and attachments. A daemon
+with no loaded accounts is unavailable even if its TCP port is listening.
+Startup waits for transient Signal readiness failures with a retry delay
+that grows from one second to at most thirty seconds; shutdown cancels that
+wait. Invalid configuration remains an explicit error. Queues and schedules
+start after the group lookup and receive subscription are ready.
+
+For a Windows daemon serving one account, start `signal-cli` with
+`--data-dir <directory> -a <account> daemon ...` and enable Windows service
+recovery. A failed account load then exits and can be retried by the service
+manager. Delayed automatic startup also gives networking time to initialize
+after a reboot.
 
 On Windows the `signal-cli` daemon usually runs as a restricted service
 account such as `NT AUTHORITY\LocalService`, so it can only attach files
@@ -1050,6 +1068,12 @@ Scheduled prompts run through the same persistent queue as user messages,
 but use a job-owned session that is deleted after full completion or explicit cancellation; they do
 not append to the user's current conversation. Each owner runs one turn at a
 time, so scheduled jobs wait behind active work and older queued messages.
+Admission requires the schedule's originating workspace; a missing or empty
+origin cannot create a durable scheduled job. `last_fired` advances after the
+queue accepts the job. A full queue or failed admission leaves the slot due
+for a later tick. The queued job records its schedule and slot identity so a
+restart between queue admission and the schedule stamp cannot enqueue the
+same occurrence twice.
 `Queued scheduled task` confirms the prompt has been saved in the queue;
 `Starting scheduled task` appears when that job is selected to run. These
 notices time out after four seconds so a slow chat connection cannot hold
@@ -2120,7 +2144,7 @@ The runtime contains 76 Python source files, separate from the tests below.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (159 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 156 `test_*.py` modules:
+- Tests (160 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 157 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
@@ -2166,7 +2190,8 @@ The runtime contains 76 Python source files, separate from the tests below.
   `test_public_http_pool.py`, `test_queue_persistence_latency.py`, `test_read_file_character_cursor.py`,
   `test_read_file_offset_chunks.py`, `test_read_files.py`, `test_reply_delivery.py`, `test_run_lock.py`,
   `test_runtime_diagnostics.py`, `test_schedule_execution.py`, `test_session_picker.py`,
-  `test_session_write_latency.py`, `test_signal_attachment_decoding.py`, `test_signal_feedback.py`,
+  `test_session_write_latency.py`, `test_signal_account_config.py`,
+  `test_signal_attachment_decoding.py`, `test_signal_feedback.py`,
   `test_signal_formatting.py`, `test_signal_inline_latency.py`, `test_signal_literal_runs.py`,
   `test_signal_send_observability.py`, `test_signal_span_projection.py`, `test_signal_status.py`,
   `test_signal_status_recovery.py`, `test_signal_transport.py`, `test_slack_commands.py`,

@@ -490,9 +490,9 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
             send_startup_messages=mock.AsyncMock(), notify_users=mock.AsyncMock(),
         )
 
-    async def _run_daemon(self, main, bots) -> None:
-        stop_event = asyncio.Event()
-        stop_event.set()
+    async def _run_daemon(self, main, bots, *, stop_event=None) -> None:
+        if stop_event is None:
+            stop_event = asyncio.Event()
         with (
             mock.patch.object(main, "_cli_mode_requested", return_value=False),
             mock.patch.object(main.cfg, "load_config", return_value={"update_check_interval": 300}),
@@ -501,6 +501,11 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(main.updater, "get_current_version", return_value="test"),
             mock.patch.object(main.updater, "get_last_commit_date", return_value="test"),
             mock.patch.object(main.asyncio, "Event", return_value=stop_event),
+            mock.patch.object(
+                main, "update_loop", new=mock.AsyncMock(
+                    side_effect=lambda *_args: stop_event.set(),
+                ),
+            ),
             mock.patch.object(asyncio.get_running_loop(), "add_signal_handler"),
         ):
             await main.main()
@@ -525,6 +530,28 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         first.stop.assert_awaited_once()
         second.stop.assert_awaited_once()
 
+    async def test_shutdown_during_start_cleans_up_and_does_not_start_next_platform(self):
+        main = _load_main_module()
+        stop_event = asyncio.Event()
+        entered = asyncio.Event()
+        first, untouched = self._bot(), self._bot()
+
+        async def start():
+            entered.set()
+            await asyncio.Future()
+
+        first.start.side_effect = start
+        run = asyncio.create_task(self._run_daemon(
+            main, [first, untouched], stop_event=stop_event,
+        ))
+        await asyncio.wait_for(entered.wait(), 1)
+        stop_event.set()
+        await asyncio.wait_for(run, 1)
+        first.stop.assert_awaited_once()
+        first.send_startup_messages.assert_not_awaited()
+        untouched.start.assert_not_awaited()
+        untouched.stop.assert_not_awaited()
+
     async def test_cli_failed_start_still_stops_partial_platform(self) -> None:
         from Cozter.backends_bot import cli
 
@@ -540,6 +567,148 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         ):
             await main.main_cli()
         bot.stop.assert_awaited_once()
+
+
+class PlatformStartupReadinessTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.main = _load_main_module()
+
+    def _bot(self, start):
+        return SimpleNamespace(
+            platform_id="signal:test", start=start, stop=mock.AsyncMock(),
+        )
+
+    async def test_signal_readiness_retries_with_capped_backoff_until_ready(self):
+        from Cozter.backends_bot.signal import SignalNotReadyError
+
+        bot = self._bot(mock.AsyncMock(side_effect=[
+            *[SignalNotReadyError("account still loading") for _ in range(8)],
+            None,
+        ]))
+        with (
+            mock.patch.object(
+                self.main.asyncio, "wait_for", side_effect=TimeoutError,
+            ) as backoff,
+            self.assertLogs(self.main.logger, level="WARNING"),
+        ):
+            ready = await self.main._start_platform(bot, asyncio.Event())
+
+        self.assertTrue(ready)
+        self.assertEqual(bot.start.await_count, 9)
+        self.assertEqual(
+            [call.args[1] for call in backoff.call_args_list],
+            [1, 2, 4, 8, 16, 30, 30, 30],
+        )
+        # Each Signal attempt owns its cleanup; don't separately stop a bot
+        # between attempts or tear down a successfully initialized retry.
+        bot.stop.assert_not_awaited()
+
+    async def test_configuration_failure_does_not_retry(self):
+        bot = self._bot(mock.AsyncMock(side_effect=ValueError("bad account")))
+        with (
+            mock.patch.object(self.main.asyncio, "wait_for") as backoff,
+            self.assertRaisesRegex(ValueError, "bad account"),
+        ):
+            await self.main._start_platform(bot, asyncio.Event())
+        bot.start.assert_awaited_once()
+        backoff.assert_not_called()
+
+    async def test_other_signal_errors_do_not_retry(self):
+        from Cozter.backends_bot.signal import SignalCliError
+
+        bot = self._bot(mock.AsyncMock(side_effect=SignalCliError("bad group")))
+        with self.assertRaisesRegex(SignalCliError, "bad group"):
+            await self.main._start_platform(bot, asyncio.Event())
+        bot.start.assert_awaited_once()
+
+    async def test_already_requested_stop_does_not_start_a_platform(self):
+        stop_event = asyncio.Event()
+        stop_event.set()
+        bot = self._bot(mock.AsyncMock())
+        self.assertFalse(await self.main._start_platform(bot, stop_event))
+        bot.start.assert_not_awaited()
+
+    async def test_stop_during_start_joins_attempt_cleanup(self):
+        entered = asyncio.Event()
+        cleaned = asyncio.Event()
+        stop_event = asyncio.Event()
+        owned_attempts = []
+
+        async def start():
+            owned_attempts.append(asyncio.current_task())
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                await asyncio.sleep(0)
+                cleaned.set()
+
+        bot = self._bot(start)
+        run = asyncio.create_task(self.main._start_platform(bot, stop_event))
+        await asyncio.wait_for(entered.wait(), 1)
+        stop_event.set()
+        self.assertFalse(await asyncio.wait_for(run, 1))
+        self.assertTrue(cleaned.is_set())
+        self.assertTrue(all(task.done() for task in owned_attempts))
+
+    async def test_external_cancellation_joins_start_and_stop_waiter(self):
+        entered = asyncio.Event()
+        cleaned = asyncio.Event()
+        previous_tasks = asyncio.all_tasks()
+
+        async def start():
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                await asyncio.sleep(0)
+                cleaned.set()
+
+        run = asyncio.create_task(
+            self.main._start_platform(self._bot(start), asyncio.Event()),
+        )
+        await asyncio.wait_for(entered.wait(), 1)
+        run.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await run
+        self.assertTrue(cleaned.is_set())
+        self.assertEqual(asyncio.all_tasks() - previous_tasks, set())
+
+    async def test_stop_during_backoff_does_not_wait_or_retry(self):
+        from Cozter.backends_bot.signal import SignalNotReadyError
+
+        in_backoff = asyncio.Event()
+        stop_event = asyncio.Event()
+        bot = self._bot(mock.AsyncMock(side_effect=SignalNotReadyError("loading")))
+        previous_tasks = asyncio.all_tasks()
+        with mock.patch.object(
+            self.main.logger, "warning", side_effect=lambda *_: in_backoff.set(),
+        ):
+            run = asyncio.create_task(self.main._start_platform(bot, stop_event))
+            await asyncio.wait_for(in_backoff.wait(), 1)
+            stop_event.set()
+            self.assertFalse(await asyncio.wait_for(run, 1))
+        bot.start.assert_awaited_once()
+        self.assertEqual(asyncio.all_tasks() - previous_tasks, set())
+
+    async def test_external_cancellation_during_backoff_leaves_no_waiter(self):
+        from Cozter.backends_bot.signal import SignalNotReadyError
+
+        in_backoff = asyncio.Event()
+        bot = self._bot(mock.AsyncMock(side_effect=SignalNotReadyError("loading")))
+        previous_tasks = asyncio.all_tasks()
+        with mock.patch.object(
+            self.main.logger, "warning", side_effect=lambda *_: in_backoff.set(),
+        ):
+            run = asyncio.create_task(
+                self.main._start_platform(bot, asyncio.Event()),
+            )
+            await asyncio.wait_for(in_backoff.wait(), 1)
+            run.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await run
+        bot.start.assert_awaited_once()
+        self.assertEqual(asyncio.all_tasks() - previous_tasks, set())
 
 
 if __name__ == "__main__":

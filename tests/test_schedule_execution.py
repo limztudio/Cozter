@@ -86,7 +86,7 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                     schedule = {key: value for key, value in self.schedule.items() if key != "platform_id"}
                     if platform is not None:
                         schedule["platform_id"] = platform
-                    await self.bot._fire_schedule("u1", schedule)
+                    await self.bot._fire_schedule("u1", schedule, workspace_path=self.tmp.name)
             persist.assert_not_awaited()
             workspace_lookup.assert_not_awaited()
             authorized.assert_not_called()
@@ -95,7 +95,7 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bot._read_queue_file(), {})
 
     async def test_queue_notice_follows_durable_and_in_memory_admission(self) -> None:
-        await self.bot._fire_schedule("u1", self.schedule)
+        await self.bot._fire_schedule("u1", self.schedule, workspace_path=self.tmp.name)
         queued = self.bot.notices[0]
         self.assertEqual(queued[0], "⏰ Queued scheduled task: scheduled work")
         self.assertEqual(len(queued[1]), 1)
@@ -121,7 +121,7 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             await self.bot._dispatch_ai(
                 self.bot.make_context("u1", "chat"), "older pending work",
             )
-            await self.bot._fire_schedule("u1", self.schedule)
+            await self.bot._fire_schedule("u1", self.schedule, workspace_path=self.tmp.name)
             await asyncio.sleep(0)
             self.assertEqual(self.bot.ran, [("normal", "active")])
             self.assertFalse(any(
@@ -146,7 +146,7 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_queue_notice_does_not_prevent_job_start(self) -> None:
         self.bot.slow_notice = "⏰ Queued"
         with mock.patch("Cozter.backends_bot.base._STATUS_OPERATION_TIMEOUT_SEC", 0.01):
-            await asyncio.wait_for(self.bot._fire_schedule("u1", self.schedule), timeout=1)
+            await asyncio.wait_for(self.bot._fire_schedule("u1", self.schedule, workspace_path=self.tmp.name), timeout=1)
             await self._finish_drains()
         self.assertTrue(self.bot.notice_cancelled)
         self.assertEqual(self.bot.ran, [("scheduled", "scheduled work")])
@@ -155,7 +155,7 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_start_notice_does_not_prevent_agent_execution(self) -> None:
         self.bot.slow_notice = "⏰ Starting"
         with mock.patch("Cozter.backends_bot.base._STATUS_OPERATION_TIMEOUT_SEC", 0.01):
-            await self.bot._fire_schedule("u1", self.schedule)
+            await self.bot._fire_schedule("u1", self.schedule, workspace_path=self.tmp.name)
             await self._finish_drains()
         self.assertTrue(self.bot.notice_cancelled)
         self.assertEqual(self.bot.ran, [("scheduled", "scheduled work")])
@@ -163,7 +163,7 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancelled_queue_notice_still_wakes_admitted_work(self) -> None:
         self.bot.slow_notice = "⏰ Queued"
-        firing = asyncio.create_task(self.bot._fire_schedule("u1", self.schedule))
+        firing = asyncio.create_task(self.bot._fire_schedule("u1", self.schedule, workspace_path=self.tmp.name))
         await asyncio.wait_for(self.bot.notice_started.wait(), timeout=1)
         firing.cancel()
         with self.assertRaises(asyncio.CancelledError):
@@ -175,7 +175,7 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stop_during_queue_notice_discards_work_without_starting(self) -> None:
         self.bot.slow_notice = "⏰ Queued"
-        firing = asyncio.create_task(self.bot._fire_schedule("u1", self.schedule))
+        firing = asyncio.create_task(self.bot._fire_schedule("u1", self.schedule, workspace_path=self.tmp.name))
         await asyncio.wait_for(self.bot.notice_started.wait(), timeout=1)
         task_running, cancelled_work = await self.bot._cancel_user_work("u1")
         firing.cancel()
@@ -188,18 +188,36 @@ class ScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bot._read_queue_file(), {})
         self.assertTrue(self.bot._message_queues["u1"].empty())
 
-    async def test_slow_full_queue_notice_does_not_hold_scheduler(self) -> None:
+    async def test_full_queue_defers_without_repeated_chat_notices(self) -> None:
         self.bot.max_queue_size = 1
         msg_queue = self.bot._ensure_message_queue("u1")
         msg_queue.put_nowait(("older work", "chat", "older-id", False))
-        self.bot.slow_notice = "Queue full"
-        with mock.patch("Cozter.backends_bot.base._STATUS_OPERATION_TIMEOUT_SEC", 0.01):
-            await asyncio.wait_for(self.bot._fire_schedule("u1", self.schedule), timeout=1)
-        self.assertTrue(self.bot.notice_cancelled)
+        for _ in range(2):
+            await asyncio.wait_for(self.bot._fire_schedule("u1", self.schedule, workspace_path=self.tmp.name), timeout=1)
+        self.assertEqual(self.bot.notices, [])
         self.assertEqual(self.bot.drains, [])
         self.assertEqual(self.bot.ran, [])
         self.assertEqual(self.bot._read_queue_file(), {})
         self.assertEqual(msg_queue.qsize(), 1)
+
+    async def test_ephemeral_write_rejects_unavailable_or_empty_origin(self) -> None:
+        with mock.patch.object(self.bot, "_current_workspace_for_turn", new=mock.AsyncMock(return_value=None)):
+            for origin in (None, "", "  ", False, 1):
+                with self.subTest(origin=origin), self.assertRaisesRegex(ValueError, "originating workspace"):
+                    await self.bot._persist_enqueue(
+                        "u1", "scheduled work", "chat", ephemeral=True, workspace_path=origin,
+                    )
+        self.assertEqual(self.bot._read_queue_file(), {})
+
+    async def test_direct_schedule_requires_source_without_current_workspace_fallback(self) -> None:
+        with mock.patch.object(self.bot, "_current_workspace_for_turn", new=mock.AsyncMock()) as current:
+            with self.assertRaises(TypeError):
+                await self.bot._fire_schedule("u1", self.schedule)
+            for origin in (None, "", "  "):
+                with self.subTest(origin=origin), self.assertRaisesRegex(ValueError, "source workspace"):
+                    await self.bot._fire_schedule("u1", self.schedule, workspace_path=origin)
+        current.assert_not_awaited()
+        self.assertEqual(self.bot._read_queue_file(), {})
 
 
 if __name__ == "__main__":

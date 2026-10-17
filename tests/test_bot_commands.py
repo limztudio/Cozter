@@ -43,6 +43,7 @@ class BotCommandTests(unittest.TestCase):
         self._orig_state = workspace.WORKSPACE_STATE_PATH
         workspace.WORKSPACE_STATE_PATH = os.path.join(self.ws, "state.json")
         self.bot = _CommandBot()
+        self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.ws))
         self.uid = "u1"
         workspace.select_workspace(self.uid, self.ws, self.bot.platform_id)
 
@@ -360,7 +361,7 @@ class BotCommandTests(unittest.TestCase):
                 schedule["platform_id"] = platform_id
             schedules.add_schedule(self.ws, self.uid, schedule)
 
-        with mock.patch.object(self.bot, "_fire_schedule", new=mock.AsyncMock()) as fire:
+        with mock.patch.object(self.bot, "_admit_schedule", new=mock.AsyncMock(return_value=None)) as fire:
             self._run(self.bot._scheduler_tick())
 
         self.assertEqual({call.args[1]["id"] for call in fire.await_args_list}, {"own"})
@@ -399,7 +400,8 @@ class BotCommandTests(unittest.TestCase):
             await lock.acquire()
             with (
                 mock.patch.object(workspace, "get_lock", return_value=lock),
-                mock.patch.object(self.bot, "_fire_schedule", new=mock.AsyncMock()) as fire,
+                mock.patch.object(self.bot, "_admit_schedule", wraps=self.bot._admit_schedule) as fire,
+                mock.patch.object(self.bot, "_start_queue_drain"),
             ):
                 ticks = [asyncio.create_task(self.bot._scheduler_tick()) for _ in range(2)]
                 await asyncio.sleep(0)
@@ -421,7 +423,7 @@ class BotCommandTests(unittest.TestCase):
             with (
                 mock.patch.object(workspace, "get_lock", return_value=lock),
                 mock.patch("Cozter.backends_bot.base.datetime") as clock,
-                mock.patch.object(self.bot, "_fire_schedule", new=mock.AsyncMock()) as fire,
+                mock.patch.object(self.bot, "_admit_schedule", new=mock.AsyncMock(return_value=None)) as fire,
             ):
                 clock.now.return_value = datetime(2026, 10, 12, 9, 0)
                 tick = asyncio.create_task(self.bot._scheduler_tick())

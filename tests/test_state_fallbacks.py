@@ -892,10 +892,14 @@ class ScheduleParserTests(unittest.TestCase):
                 workspace.select_workspace("u1", ws, "test:queue")
                 bot = QueueRestoreBot(["u1"])
                 with mock.patch.object(
-                    bot, "_fire_schedule", new=mock.AsyncMock(),
+                    bot, "_admit_schedule", new=mock.AsyncMock(return_value=None),
                 ) as fire:
                     asyncio.run(bot._scheduler_tick())
                 self.assertEqual(fire.await_count, 2)
+                self.assertEqual(
+                    [call.args[1]["id"] for call in fire.await_args_list],
+                    ["numeric-created", "string-created"],
+                )
             finally:
                 workspace.WORKSPACE_STATE_PATH = old_path
 

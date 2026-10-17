@@ -8,6 +8,7 @@
 
   "signal_group_urls": [],
   "signal_jsonrpc_socket": "",
+  "signal_account": "",
   "signal_own_device_id": 0,
 
   "llama_server_url": "http://127.0.0.1:8080",

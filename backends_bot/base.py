@@ -2930,10 +2930,26 @@ class BotPlatform(ABC):
         self, uid: str, text: str, chat_id: str,
         *, ephemeral: bool = False,
         workspace_path: str | None = None,
+        schedule_id: str | None = None,
+        schedule_slot: str | None = None,
+        on_persisted: Callable[[bool], None] | None = None,
+        on_committed: Callable[[str], None] | None = None,
     ) -> str:
         if ephemeral and workspace_path is None:
             workspace_path = await self._current_workspace_for_turn(uid, chat_id)
-        entry_id = uuid.uuid4().hex[:12]
+        if ephemeral and (not isinstance(workspace_path, str) or not workspace_path.strip()):
+            raise ValueError("Scheduled queue entries require an originating workspace")
+        if (schedule_id is None) != (schedule_slot is None):
+            raise ValueError("Scheduled admission requires both its schedule and slot")
+        if schedule_id is not None:
+            if not ephemeral or not schedule_id or schedules.parse_iso(schedule_slot) is None:
+                raise ValueError("Invalid scheduled admission identity")
+            assert isinstance(workspace_path, str)
+            identity = [self.platform_id, uid, workspace.canonicalize_workspace_path(workspace_path),
+                        schedule_id, schedule_slot]
+            entry_id = uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(identity)).hex[:12]
+        else:
+            entry_id = uuid.uuid4().hex[:12]
         entry = {
             "id": entry_id, "text": text, "chat_id": chat_id,
         }
@@ -2941,14 +2957,33 @@ class BotPlatform(ABC):
             entry["ephemeral"] = True
         if workspace_path is not None:
             entry["job"] = {"workspace_path": workspace_path}
+        if schedule_id is not None:
+            entry["job"].update(schedule_id=schedule_id, schedule_slot=schedule_slot)
         def enqueue() -> None:
             data = self._read_queue_file()
             entries = self._queue_entries(data.get(uid))
+            existing = next((row for row in entries if row.get("id") == entry_id), None)
+            if existing is not None:
+                if schedule_id is None or any(existing.get(key) != entry.get(key) for key in ("text", "chat_id", "ephemeral")):
+                    raise ValueError("Scheduled queue identity collision")
+                if any(existing.get("job", {}).get(key) != entry["job"].get(key)
+                       for key in ("workspace_path", "schedule_id", "schedule_slot")):
+                    raise ValueError("Scheduled queue origin collision")
+                if on_persisted is not None:
+                    on_persisted(False)
+                return
             entries.append(entry)
             data[uid] = entries
             self._write_queue_file(data)
+            if on_persisted is not None:
+                # This entry is the durable receipt if the second file write
+                # fails or power is lost. Retrying its slot reuses this ID.
+                on_persisted(True)
 
-        await _run_durable_file_operation(self._queue_file_lock, enqueue)
+        await _run_durable_file_operation(
+            self._queue_file_lock, enqueue,
+            on_complete=(lambda _: on_committed(entry_id)) if on_committed is not None else None,
+        )
         return entry_id
 
     async def _persist_admitted_dispatch_entry(
@@ -2960,6 +2995,10 @@ class BotPlatform(ABC):
         *,
         ephemeral: bool = False,
         workspace_path: str | None = None,
+        schedule_id: str | None = None,
+        schedule_slot: str | None = None,
+        on_persisted: Callable[[bool], None] | None = None,
+        on_committed: Callable[[str], None] | None = None,
     ) -> str | None:
         """Persist a pre-cancellation dispatch, or reject it as stale.
 
@@ -2975,6 +3014,9 @@ class BotPlatform(ABC):
             return await self._persist_enqueue(
                 uid, text, chat_id, ephemeral=ephemeral,
                 **({"workspace_path": workspace_path} if workspace_path is not None else {}),
+                **({"schedule_id": schedule_id, "schedule_slot": schedule_slot} if schedule_id is not None else {}),
+                **({"on_persisted": on_persisted} if on_persisted is not None else {}),
+                **({"on_committed": on_committed} if on_committed is not None else {}),
             )
 
     async def _persist_complete(
@@ -3063,6 +3105,20 @@ class BotPlatform(ABC):
                 uid, min_size=existing_size + len(entries),
             )
             for entry in entries:
+                job = entry.get("job", {})
+                if (entry.get("ephemeral") is True and isinstance(job, dict)
+                        and isinstance(job.get("workspace_path"), str)
+                        and isinstance(job.get("schedule_id"), str)
+                        and isinstance(job.get("schedule_slot"), str)):
+                    # Repair only explicit new admission receipts before work
+                    # can finish and remove the receipt from the queue.
+                    ws = job["workspace_path"]
+                    await _run_durable_file_operation(
+                        workspace.get_lock(ws),
+                        lambda uid=uid, job=job: self._claim_scheduled_slot(
+                            uid, job["workspace_path"], job["schedule_id"], job["schedule_slot"],
+                        ),
+                    )
                 # Oldest-first preserves ordering.
                 msg_queue.put_nowait((
                     entry.get("text", ""),
@@ -4156,36 +4212,66 @@ class BotPlatform(ABC):
             schedule_id = sched.get("id")
             if not isinstance(schedule_id, str) or not schedule_id:
                 continue
-            # Persist last_fired first.
-            async with workspace.get_lock(ws):
-                current = next(
+            admission = None
+            try:
+                async with workspace.get_lock(ws):
+                    current = next(
                     (record for record in self._platform_schedules(ws, uid)
                      if record.get("id") == schedule_id),
                     None,
-                )
-                if current is None:
-                    continue
-                # Days/time can change while this tick waits for the lock.
-                # Claim only the current schedule's slot, never its snapshot.
-                slot = schedules.most_recent_slot(current, now)
-                if slot is None:
-                    continue
-                baseline = schedules.parse_iso(current.get("last_fired")) or schedules.parse_iso(
-                    current.get("created"),
-                )
-                if baseline is not None and slot <= baseline:
-                    # Lost the lock race; another tick claimed it.
-                    continue
-                claimed_schedule = schedules.update_schedule_fired(
-                    ws, uid, schedule_id, slot.isoformat(),
-                )
-            # Re-check under the lock; snapshots can go stale.
-            if claimed_schedule is not None:
-                await self._fire_schedule(uid, claimed_schedule, workspace_path=ws)
+                    )
+                    if current is None:
+                        continue
+                    # Recheck edits and competing ticks after taking the lock.
+                    slot = schedules.most_recent_slot(current, now)
+                    if slot is None:
+                        continue
+                    baseline = schedules.parse_iso(current.get("last_fired")) or schedules.parse_iso(
+                        current.get("created"),
+                    )
+                    if baseline is not None and slot <= baseline:
+                        continue
+                    # A full/rejected queue leaves this slot due. The durable
+                    # receipt and claim complete before any notice or drain.
+                    admission = await self._admit_schedule(
+                        uid, {**current, "last_fired": slot.isoformat()},
+                        workspace_path=ws, schedule_slot=slot.isoformat(),
+                    )
+                if admission is not None:
+                    await self._announce_schedule(uid, current, admission)
+            finally:
+                if admission is not None:
+                    self._wake_schedule(uid, admission)
+
+    def _claim_scheduled_slot(self, uid: str, ws: str, schedule_id: str, slot: str) -> None:
+        """Finish an explicit durable admission before work can consume it."""
+        current = next((record for record in self._platform_schedules(ws, uid)
+                        if record.get("id") == schedule_id), None)
+        if current is None:
+            return  # Removal does not cancel already admitted work.
+        claimed_at = schedules.parse_iso(slot)
+        if claimed_at is None:
+            raise ValueError("Invalid scheduled admission slot")
+        previous = schedules.parse_iso(current.get("last_fired"))
+        if previous is None or previous < claimed_at:
+            schedules.update_schedule_fired(ws, uid, schedule_id, slot)
 
     async def _fire_schedule(
-        self, uid: str, sched: dict, *, workspace_path: str | None = None,
+        self, uid: str, sched: dict, *, workspace_path: str,
     ) -> None:
+        admission = None
+        try:
+            admission = await self._admit_schedule(uid, sched, workspace_path=workspace_path)
+            if admission is not None:
+                await self._announce_schedule(uid, sched, admission)
+        finally:
+            if admission is not None:
+                self._wake_schedule(uid, admission)
+
+    async def _admit_schedule(
+        self, uid: str, sched: dict, *, workspace_path: str,
+        schedule_slot: str | None = None,
+    ) -> tuple[str, int, bool] | None:
         """Push a scheduled command onto the user's message queue.
 
         The queue entry is flagged ``ephemeral=True`` so the drain loop
@@ -4209,12 +4295,10 @@ class BotPlatform(ABC):
             )
             return
 
-        # Capture the originating workspace before admission can yield. A
-        # later /open must not redirect an admitted schedule to another tree.
-        if workspace_path is None:
-            workspace_path = await self._current_workspace_for_turn(uid, chat_id)
-        if workspace_path is None:
-            return
+        # The source schedule store owns the origin; a user's later /open
+        # cannot redirect scheduled work to a different workspace.
+        if not isinstance(workspace_path, str) or not workspace_path.strip():
+            raise ValueError("Schedules require their source workspace")
 
         # Scheduler can fire before first input.
         self._ensure_task_lock(uid)
@@ -4222,37 +4306,67 @@ class BotPlatform(ABC):
 
         # Check capacity first.
         if msg_queue.full():
-            await self._run_status_operation(
-                self.send_text(
-                    chat_id, f"Queue full — dropped scheduled command: {command}",
-                ),
-                action="announcing a dropped scheduled task",
+            logger.info(
+                "Deferring scheduled task because its queue is full user=%s schedule=%s",
+                uid, sched.get("id"),
             )
             return
 
-        entry_id = await self._persist_admitted_dispatch_entry(
-            uid, command, chat_id, generation, ephemeral=True,
-            workspace_path=workspace_path,
-        )
+        created = True
+
+        def persisted(is_new: bool) -> None:
+            nonlocal created
+            created = is_new
+            if schedule_slot is not None:
+                self._claim_scheduled_slot(uid, workspace_path, sched["id"], schedule_slot)
+
+        published = False
+
+        def committed(entry_id: str) -> None:
+            nonlocal published
+            if self._cancel_generations.get(uid, 0) != generation:
+                return
+            if not any(item[2] == entry_id for item in msg_queue._queue):
+                # Admission can yield while another producer fills the queue.
+                # Already durable work must never wait for a drain needing ws.
+                self._ensure_message_queue(uid, min_size=msg_queue.qsize() + 1)
+                msg_queue.put_nowait((command, chat_id, entry_id, True))
+            published = True
+
+        try:
+            entry_id = await self._persist_admitted_dispatch_entry(
+                uid, command, chat_id, generation, ephemeral=True,
+                workspace_path=workspace_path, on_committed=committed,
+                **({"schedule_id": sched["id"], "schedule_slot": schedule_slot,
+                    "on_persisted": persisted} if schedule_slot is not None else {}),
+            )
+        except BaseException:
+            if published and self._cancel_generations.get(uid, 0) == generation:
+                self._start_queue_drain(uid)
+            raise
         if entry_id is None:
             return
         if self._cancel_generations.get(uid, 0) != generation:
             await self._discard_cancelled_dispatch_entry(uid, entry_id)
             return
-        await msg_queue.put((command, chat_id, entry_id, True))
+        return entry_id, generation, created
+
+    def _wake_schedule(self, uid: str, admission: tuple[str, int, bool]) -> None:
+        if self._cancel_generations.get(uid, 0) == admission[1]:
+            self._start_queue_drain(uid)
+
+    async def _announce_schedule(
+        self, uid: str, sched: dict, admission: tuple[str, int, bool],
+    ) -> None:
+        _entry_id, generation, created = admission
         if self._cancel_generations.get(uid, 0) != generation:
-            await self._discard_cancelled_dispatch_entry(uid, entry_id, msg_queue)
             return
 
-        try:
+        if created:
             await self._run_status_operation(
-                self.send_text(chat_id, f"⏰ Queued scheduled task: {command}"),
+                self.send_text(sched["chat_id"], f"⏰ Queued scheduled task: {sched['command']}"),
                 action="announcing a queued scheduled task",
             )
-        finally:
-            # Admitted work must wake even if its acknowledgement is cancelled.
-            if self._cancel_generations.get(uid, 0) == generation:
-                self._start_queue_drain(uid)
 
     # AI chat + file
 

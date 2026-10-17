@@ -15,6 +15,7 @@ import json
 import unittest
 from unittest import mock
 
+from Cozter import skills
 from Cozter.backends_agent._http_process import HttpAgentProcess, http_error_translator
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.backends_agent.base import AgentResult
@@ -999,7 +1000,10 @@ class OpenAIToolLimitTests(unittest.TestCase):
         oa.tools.execute_tool = execute_tool
 
         proc = _EventCaptureProcess()
-        with mock.patch.object(oa, "_MAX_AGENT_MESSAGE_BYTES", 9_000):
+        with (
+            mock.patch.object(oa, "_MAX_AGENT_MESSAGE_BYTES", 9_000),
+            mock.patch.object(skills, "current_catalog", return_value=skills.SkillCatalog("/tmp", (), ())),
+        ):
             asyncio.run(_ToolLimitBackend(auto_continue=False)._run_agent(
                 proc, "/tmp", "work", None, "auto", False, 0,
             ))

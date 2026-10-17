@@ -267,6 +267,8 @@ _CRASH_RESTART_DELAY_SEC = 5
 _MAX_CRASH_FILES = 50
 _UPDATE_IDLE_POLL_SEC = 1
 _UPDATE_IDLE_LOG_SEC = 30
+_PLATFORM_START_RETRY_BASE_SEC = 1
+_PLATFORM_START_RETRY_MAX_SEC = 30
 
 
 def setup_logging() -> None:
@@ -640,6 +642,55 @@ async def main_cli() -> None:
         await bot.stop()
 
 
+async def _start_platform(
+    bot: BotPlatform, stop_event: asyncio.Event,
+) -> bool:
+    """Wait for Signal readiness without losing shutdown or restarting Cozter.
+
+    Signal cleans up its failed attempt before raising its narrow readiness
+    error. Configuration errors and all other platform failures still escape
+    to the normal startup diagnostics. The owned tasks are always joined so
+    an interrupted connection cannot complete after platform shutdown.
+    """
+    from .backends_bot.signal import SignalNotReadyError
+
+    delay = _PLATFORM_START_RETRY_BASE_SEC
+    stop_task = asyncio.create_task(stop_event.wait())
+    start_task: asyncio.Task[None] | None = None
+    try:
+        while not stop_event.is_set():
+            start_task = asyncio.create_task(bot.start())
+            await asyncio.wait(
+                {start_task, stop_task}, return_when=asyncio.FIRST_COMPLETED,
+            )
+            if stop_event.is_set():
+                return False
+            try:
+                await start_task
+            except SignalNotReadyError as exc:
+                logger.warning(
+                    "%s is not ready: %s; retrying startup in %ds",
+                    _bot_label(bot), exc, delay,
+                )
+                try:
+                    await asyncio.wait_for(asyncio.shield(stop_task), delay)
+                except TimeoutError:
+                    delay = min(delay * 2, _PLATFORM_START_RETRY_MAX_SEC)
+                else:
+                    return False
+            else:
+                return True
+        return False
+    finally:
+        owned_tasks: list[asyncio.Task[Any]] = [stop_task]
+        if start_task is not None:
+            owned_tasks.append(start_task)
+        for task in owned_tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*owned_tasks, return_exceptions=True)
+
+
 async def main() -> None:
     if _cli_mode_requested():
         if _cli_child_mode():
@@ -683,7 +734,8 @@ async def main() -> None:
     try:
         for bot in bots:
             started.append(bot)
-            await bot.start()
+            if not await _start_platform(bot, stop_event):
+                return
 
         for bot in bots:
             try:

@@ -25,6 +25,7 @@ _DEFAULT_CONFIG = {
     "slack_channel_ids": [],
     "signal_group_urls": [],
     "signal_jsonrpc_socket": "",
+    "signal_account": "",
     "signal_own_device_id": 0,
     "llama_server_url": "http://127.0.0.1:8080",
     "llama_max_agent_turns": 60,
@@ -456,6 +457,11 @@ def load_config() -> dict:
         os.path.expandvars(os.path.expanduser(signal_socket_raw.strip()))
         if isinstance(signal_socket_raw, str) else ""
     )
+    signal_account = cfg.get("signal_account", "")
+    if not isinstance(signal_account, str):
+        print(f"ERROR: 'signal_account' in {CONFIG_PATH} must be a string.")
+        sys.exit(1)
+    cfg["signal_account"] = signal_account.strip()
     signal_device = cfg.get("signal_own_device_id")
     if signal_device is not None and (
         not isinstance(signal_device, int) or isinstance(signal_device, bool) or signal_device < 0
@@ -484,7 +490,7 @@ def load_config() -> dict:
 
     has_telegram = bool(cfg["telegram_bot_tokens"])
     has_slack = bool(cfg["slack_bot_token"])
-    has_signal = bool(cfg["signal_group_urls"] or cfg["signal_jsonrpc_socket"])
+    has_signal = bool(cfg["signal_group_urls"] or cfg["signal_jsonrpc_socket"] or cfg["signal_account"])
 
     configured = sum(bool(flag) for flag in (has_telegram, has_slack, has_signal))
     if configured == 0:

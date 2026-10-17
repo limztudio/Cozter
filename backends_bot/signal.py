@@ -109,10 +109,22 @@ def _signal_rate_limit_delay(exc: BaseException) -> float | None:
 
 # Send-methods aren't retried: a duplicate is worse than a lost reply.
 _NON_IDEMPOTENT_RPC_METHODS = frozenset({"send"})
+_ACCOUNT_RPC_METHODS = frozenset({
+    "listGroups", "joinGroup", "send", "sendReaction", "remoteDelete", "getAttachment",
+    "subscribeReceive",
+})
 
 
 class SignalCliError(RuntimeError):
     """Raised when the signal-cli JSON-RPC socket is unavailable."""
+
+
+class SignalNotReadyError(SignalCliError):
+    """The daemon transport or its loaded account is temporarily unavailable."""
+
+
+class SignalAccountError(SignalCliError):
+    """The daemon needs an unambiguous configured account before it can start."""
 
 
 def _echo_hash(value: str) -> str:
@@ -299,6 +311,7 @@ class SignalBot(BotPlatform):
         max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
         max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
         jsonrpc_socket: str = "",
+        account: str = "",
         own_device_id: int | None = None,
     ):
         super().__init__(
@@ -309,6 +322,10 @@ class SignalBot(BotPlatform):
         )
         self.group_urls = _dedupe_group_urls(group_urls)
         self.jsonrpc_socket = jsonrpc_socket.strip() if jsonrpc_socket else ""
+        if not isinstance(account, str):
+            raise ValueError("signal_account must be a string")
+        self._configured_account = account.strip()
+        self.account = self._configured_account
         if own_device_id is not None and (
             not isinstance(own_device_id, int) or isinstance(own_device_id, bool)
             or own_device_id < 0
@@ -331,6 +348,8 @@ class SignalBot(BotPlatform):
         self._receive_subscription: int | None = None
         self._receive_started = False
         self._receive_subscribed = False
+        self._daemon_ready = False
+        self._receive_ready = asyncio.Event()
         self._notification_tasks: set[asyncio.Task] = set()
         self._stop_requested = asyncio.Event()
         self._own_sent_timestamps: set[tuple[str, str]] = set()
@@ -409,18 +428,34 @@ class SignalBot(BotPlatform):
 
     async def start(self) -> None:
         self._stop_requested.clear()
-        await self._outbound_journal.load()
-        await self._connect_jsonrpc(resubscribe=False)
+        self._daemon_ready = False
+        self._receive_ready.clear()
+        self.account = self._configured_account
+        initializing_transport = False
         try:
+            await self._outbound_journal.load()
+            initializing_transport = True
+            await self._connect_jsonrpc(resubscribe=False)
             self._group_ids_by_url = await self._resolve_group_ids()
             self._group_ids = set(self._group_ids_by_url.values())
             self.notify_targets = list(
                 dict.fromkeys(self._group_ids_by_url.values())
             )
-            await self._start_daemon_services()
             await self._start_receive_subscription()
-        except Exception:
-            await self._stop_jsonrpc()
+            initializing_transport = False
+            await self._start_daemon_services()
+            self._daemon_ready = True
+            if self._jsonrpc_connected() and self._receive_subscribed:
+                self._receive_ready.set()
+        except BaseException as exc:
+            self._stop_requested.set()
+            with contextlib.suppress(Exception):
+                await self.stop()
+            if (initializing_transport and not isinstance(exc, SignalNotReadyError)
+                    and _is_jsonrpc_transport_error(exc)):
+                raise SignalNotReadyError(
+                    "signal-cli is not ready; waiting for its transport and account to load"
+                ) from exc
             raise
         logger.info(
             "Signal JSON-RPC bot started for %d group URL(s) via %s.",
@@ -429,27 +464,34 @@ class SignalBot(BotPlatform):
         )
 
     async def stop(self) -> None:
-        await self._stop_daemon_services()
+        self._daemon_ready = False
+        self._receive_ready.clear()
         self._stop_requested.set()
-        subscription = self._receive_subscription
-        self._receive_subscription = None
-        self._receive_started = False
-        self._receive_subscribed = False
-        if subscription is not None:
-            with contextlib.suppress(Exception):
-                await self._rpc_request(
-                    "unsubscribeReceive",
-                    {"subscription": subscription},
-                    timeout=5,
-                )
-        for task in list(self._notification_tasks):
-            task.cancel()
-        if self._notification_tasks:
-            await asyncio.gather(
-                *self._notification_tasks, return_exceptions=True,
-            )
-        await self._flush_outbound_journal()
-        await self._stop_jsonrpc()
+        try:
+            await self._stop_daemon_services()
+            subscription = self._receive_subscription
+            self._receive_subscription = None
+            self._receive_started = False
+            self._receive_subscribed = False
+            if subscription is not None:
+                with contextlib.suppress(Exception):
+                    await self._rpc_request(
+                        "unsubscribeReceive",
+                        {"subscription": subscription},
+                        timeout=5,
+                    )
+        finally:
+            for task in list(self._notification_tasks):
+                task.cancel()
+            try:
+                if self._notification_tasks:
+                    await asyncio.gather(
+                        *self._notification_tasks, return_exceptions=True,
+                    )
+                await self._flush_outbound_journal()
+            finally:
+                self._receive_started = False
+                await self._stop_jsonrpc()
         logger.info("Signal bot stopped.")
 
     async def _open_jsonrpc_socket(
@@ -494,7 +536,7 @@ class SignalBot(BotPlatform):
             except (OSError, TimeoutError) as exc:
                 last_error = exc
                 if loop.time() >= deadline:
-                    raise SignalCliError(
+                    raise SignalNotReadyError(
                         "signal-cli JSON-RPC socket is not ready: "
                         f"{self.jsonrpc_socket}"
                     ) from last_error
@@ -526,6 +568,8 @@ class SignalBot(BotPlatform):
                     await self._subscribe_receive_once()
                 )
                 self._receive_subscribed = True
+                if self._daemon_ready:
+                    self._receive_ready.set()
                 logger.info(
                     "Signal JSON-RPC receive subscription restored."
                 )
@@ -538,6 +582,7 @@ class SignalBot(BotPlatform):
         self._jsonrpc_reader_task = None
         self._receive_subscription = None
         self._receive_subscribed = False
+        self._receive_ready.clear()
         for request_id, fut in list(self._jsonrpc_pending.items()):
             self._jsonrpc_pending.pop(request_id, None)
             if not fut.done():
@@ -596,7 +641,7 @@ class SignalBot(BotPlatform):
                     continue
                 if payload.get("method") == "receive":
                     task = asyncio.create_task(
-                        self._handle_jsonrpc_receive(payload)
+                        self._handle_jsonrpc_receive(payload, transport=writer)
                     )
                     self._notification_tasks.add(task)
                     task.add_done_callback(self._notification_tasks.discard)
@@ -617,6 +662,7 @@ class SignalBot(BotPlatform):
                 self._jsonrpc_reader_task = None
             self._receive_subscription = None
             self._receive_subscribed = False
+            self._receive_ready.clear()
             if not self._stop_requested.is_set():
                 logger.warning(
                     "signal-cli JSON-RPC %s closed",
@@ -631,10 +677,25 @@ class SignalBot(BotPlatform):
             self._schedule_jsonrpc_reconnect()
             writer.close()
 
-    async def _handle_jsonrpc_receive(self, payload: dict[str, Any]) -> None:
+    async def _handle_jsonrpc_receive(
+        self, payload: dict[str, Any], *, transport: asyncio.StreamWriter | None = None,
+    ) -> None:
         try:
             params = payload.get("params")
             if not isinstance(params, dict):
+                return
+            if transport is not None and transport is not self._jsonrpc_writer:
+                return
+            if self.account:
+                subscription = params.get("subscription")
+                if isinstance(subscription, bool) or not isinstance(subscription, int):
+                    return
+            await self._receive_ready.wait()
+            if self._stop_requested.is_set():
+                return
+            if transport is not None and transport is not self._jsonrpc_writer:
+                return
+            if self.account and params.get("subscription") != self._receive_subscription:
                 return
             item = params.get("result") if "result" in params else params
             if isinstance(item, dict):
@@ -646,14 +707,14 @@ class SignalBot(BotPlatform):
 
     async def _subscribe_receive(self) -> int | None:
         result = await self._rpc_request("subscribeReceive", timeout=30)
-        if isinstance(result, bool) or not isinstance(result, int):
-            return None
+        if isinstance(result, bool) or not isinstance(result, int) or result < 0:
+            raise SignalCliError("signal-cli returned an invalid receive subscription ID")
         return result
 
     async def _subscribe_receive_once(self) -> int | None:
         result = await self._rpc_request_once("subscribeReceive", timeout=30)
-        if isinstance(result, bool) or not isinstance(result, int):
-            return None
+        if isinstance(result, bool) or not isinstance(result, int) or result < 0:
+            raise SignalCliError("signal-cli returned an invalid receive subscription ID")
         return result
 
     async def _start_receive_subscription(self) -> None:
@@ -674,6 +735,8 @@ class SignalBot(BotPlatform):
         self._receive_started = True
         self._receive_subscribed = True
         if self._jsonrpc_connected():
+            if self._daemon_ready:
+                self._receive_ready.set()
             return
 
         self._receive_subscription = None
@@ -763,7 +826,9 @@ class SignalBot(BotPlatform):
             "method": method,
             "id": request_id,
         }
-        if params:
+        if self.account and method in _ACCOUNT_RPC_METHODS:
+            request["params"] = {**(params or {}), "account": self.account}
+        elif params:
             request["params"] = params
         line = json.dumps(request, separators=(",", ":")) + "\n"
         try:
@@ -784,9 +849,11 @@ class SignalBot(BotPlatform):
         error = response.get("error")
         if error:
             if isinstance(error, dict):
-                message = error.get("message") or json.dumps(error)
+                message = str(error.get("message") or json.dumps(error))
             else:
                 message = str(error)
+            if "requires valid account parameter" in message.casefold():
+                raise SignalAccountError(message)
             raise SignalCliError(message)
         return response.get("result")
 
@@ -970,11 +1037,16 @@ class SignalBot(BotPlatform):
 
     async def _resolve_group_ids(self) -> dict[str, str]:
         resolved: dict[str, str] = {}
+        groups = await self._list_groups()
+        last_error: Exception | None = None
         total = len(self.group_urls)
         for index, group_url in enumerate(self.group_urls, 1):
             try:
-                group_id = await self._resolve_group_id(group_url)
+                group_id = await self._resolve_group_id(group_url, groups=groups)
             except Exception as e:
+                if isinstance(e, (SignalAccountError, SignalNotReadyError)) or _is_jsonrpc_transport_error(e):
+                    raise
+                last_error = e
                 logger.warning(
                     "Skipping Signal group URL %d/%d: %s",
                     index, total, _safe_error_message(e),
@@ -982,11 +1054,13 @@ class SignalBot(BotPlatform):
                 continue
             resolved[group_url] = group_id
         if not resolved:
-            raise RuntimeError("No configured Signal group URLs resolved")
+            raise RuntimeError("No configured Signal group URLs resolved") from last_error
         return resolved
 
-    async def _resolve_group_id(self, group_url: str) -> str:
-        group = await self._find_group_by_url(group_url)
+    async def _resolve_group_id(
+        self, group_url: str, *, groups: Any = None,
+    ) -> str:
+        group = await self._find_group_by_url(group_url, groups=groups)
         if group:
             group_id = _group_id(group)
             if _signal_group_is_member(group):
@@ -1018,9 +1092,10 @@ class SignalBot(BotPlatform):
         )
 
     async def _find_group_by_url(
-        self, group_url: str,
+        self, group_url: str, *, groups: Any = None,
     ) -> dict[str, Any] | None:
-        groups = await self._rpc_request("listGroups")
+        if groups is None:
+            groups = await self._list_groups()
         wanted = _normalize_group_url(group_url)
         for group in _coerce_json_items(groups):
             group_id = _group_id(group)
@@ -1030,6 +1105,41 @@ class SignalBot(BotPlatform):
                 if _normalize_group_url(url) == wanted:
                     return group
         return None
+
+    async def _list_groups(self) -> Any:
+        """Resolve account readiness before any per-group startup work."""
+        try:
+            return await self._rpc_request("listGroups")
+        except SignalAccountError as exc:
+            accounts = await self._rpc_request("listAccounts")
+            if not isinstance(accounts, list):
+                raise SignalAccountError("signal-cli returned an invalid account list") from exc
+            candidates: list[str] = []
+            for row in accounts:
+                if not isinstance(row, dict):
+                    raise SignalAccountError("signal-cli returned an invalid account list") from exc
+                number, aci = row.get("number"), row.get("aci")
+                identifier = next((value.strip() for value in (number, aci)
+                                   if isinstance(value, str) and value.strip()), "")
+                if not identifier:
+                    raise SignalAccountError("signal-cli returned an account without a number or ACI") from exc
+                if identifier not in candidates:
+                    candidates.append(identifier)
+            if not candidates:
+                raise SignalNotReadyError(
+                    "signal-cli has no loaded accounts; waiting for the daemon to load its registered account"
+                ) from exc
+            if self.account:
+                raise SignalAccountError(
+                    "The configured signal_account is unavailable in signal-cli; "
+                    "check that the daemon loaded the selected account"
+                ) from exc
+            if len(candidates) != 1:
+                raise SignalAccountError(
+                    "signal-cli has multiple loaded accounts; set signal_account to select one"
+                ) from exc
+            self.account = candidates[0]
+            return await self._rpc_request("listGroups")
 
     def _group_id_for_chat(self, chat_id: str) -> str:
         group_id = str(chat_id)
