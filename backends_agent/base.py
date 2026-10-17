@@ -490,7 +490,7 @@ class AgentResult:
     # Explicitly distinguish resumable allowance exhaustion from provider errors.
     continuation_reason: ContinuationReason | None = None
     continuation_checkpoint: ContinuationCheckpoint | None = None
-    # None for raw backend results; agent orchestration requires an explicit DONE verdict.
+    # None for raw backend results; orchestration needs an explicit DONE verdict.
     completion_verified: bool | None = None
     # A required prerequisite can be recovered/rechecked automatically without
     # turning an unfinished job into a completed response or an approval gate.

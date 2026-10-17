@@ -3477,7 +3477,7 @@ async def _run_turn_impl(
 
     # session_data reused across inject restarts.
     if explicit_session:
-        assert session_id is not None  # explicit_session == (session_id set)
+        assert session_id is not None  # set by both branches above
         session_data = session.load_session(workspace_path, session_id)
         if session_data is None:
             # Pinned session deleted; bail.

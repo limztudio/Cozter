@@ -172,7 +172,7 @@ _MERGE_BLOCKED_RULE = (
     " after finishing everything else possible; never use it for routine approval.\n"
 )
 
-# Continue-judge: finish, continue actionable work, or retain a recoverable prerequisite.
+# Continue-judge: finish, continue work, or keep a fixable prerequisite.
 _JUDGE_RULES = (
     "Continue-judge: decide whether the draft below fully answers the"
     " user's request.\n\n"

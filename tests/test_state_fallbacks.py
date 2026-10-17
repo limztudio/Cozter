@@ -1446,7 +1446,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                         first_entered_persist.set()
                         return await original_persist(*args, **kwargs)
 
-                    # Both pass the initial lock check; the first then holds the barrier in persistence.
+                    # Both pass the lock check; the first then holds the barrier.
                     await bot._queue_file_lock.acquire()
                     queue_file_lock_held = True
                     with mock.patch.object(
