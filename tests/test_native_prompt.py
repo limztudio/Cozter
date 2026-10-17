@@ -4,6 +4,7 @@ import copy
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 from Cozter import agent, execution_state, native_prompt, session
 from Cozter.native_prompt import NativePrompt
@@ -359,3 +360,294 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
                                        native_prompt_ledger=ledger)
                 await native_prompt.acknowledge_logged_turn(self.record, data)
                 self.assertEqual(self.record.get("native_prompt_ledger"), original)
+
+    async def test_full_source_receipt_suppresses_every_preview_without_coverage_downgrade(self) -> None:
+        message = _message("assistant", "full-known-head " + "evidence " * 200 + " full-known-tail")
+        source = native_prompt.fingerprint(message)
+        full_text = session.format_msg_line(message, cap=None)
+        full = NativePrompt(
+            "request", {}, [("7", native_prompt.delivery_fingerprint(source, full_text), full_text)],
+            message_sources={"7": (source, True)},
+        )
+        await self._confirm()
+        await full.acknowledge(self.record)
+
+        for text in (session.format_msg_line(message), full_text[:100], full_text[:2]):
+            with self.subTest(preview_length=len(text)):
+                self.assertTrue(native_prompt.message_is_known(self.record, "7", source, text))
+                smaller = NativePrompt(
+                    "request", {}, [("7", native_prompt.delivery_fingerprint(source, text), text)],
+                    message_sources={"7": (source, False)},
+                )
+                self.assertEqual(smaller.render(self.record), "New message:\nrequest")
+                await smaller.acknowledge(self.record)
+                self.assertTrue(self.record.get("native_prompt_ledger")["message_sources"]["7"]["complete"])
+        self.assertTrue(native_prompt.message_is_known(self.record, "7", source, full_text, complete=True))
+
+        # A rewrite can preserve its visible prefix while changing its source.
+        rewritten = dict(message, content=message["content"] + " changed-unseen-tail")
+        changed_source = native_prompt.fingerprint(rewritten)
+        same_preview = full_text[:100]
+        self.assertFalse(native_prompt.message_is_known(self.record, "7", changed_source, same_preview))
+        changed = NativePrompt(
+            "request", {}, [("7", native_prompt.delivery_fingerprint(changed_source, same_preview), same_preview)],
+            message_sources={"7": (changed_source, False)},
+        )
+        await changed.acknowledge(self.record)
+        receipt = self.record.get("native_prompt_ledger")["message_sources"]["7"]
+        self.assertEqual(receipt["source"], changed_source)
+        self.assertFalse(receipt["complete"])
+        self.assertFalse(native_prompt.message_is_known(self.record, "7", source, full_text, complete=True))
+
+    async def test_partial_receipts_remember_exact_views_without_claiming_full_source(self) -> None:
+        source = native_prompt.fingerprint(_message("user", "source with content beyond both previews"))
+
+        async def supply(text: str, *, complete: bool = False) -> NativePrompt:
+            prompt = NativePrompt(
+                "request", {}, [("12", native_prompt.delivery_fingerprint(source, text), text)],
+                message_sources={"12": (source, complete)},
+            )
+            await prompt.acknowledge(self.record)
+            return prompt
+
+        await self._confirm()
+        first = await supply("first partial preview")
+        await supply("different smaller preview")
+        self.assertEqual(first.render(self.record), "New message:\nrequest")
+        self.assertTrue(native_prompt.message_is_known(self.record, "12", source, "first partial preview"))
+        self.assertFalse(native_prompt.message_is_known(self.record, "12", source, "first partial"))
+        # Matching actual text needs no replay, even if the sender had marked
+        # its authority partial. The durable receipt still cannot suppress a
+        # different preview until full-source coverage is proven.
+        self.assertTrue(native_prompt.message_is_known(
+            self.record, "12", source, "first partial preview", complete=True,
+        ))
+        self.assertFalse(self.record.get("native_prompt_ledger")["message_sources"]["12"]["complete"])
+        await supply("full canonical message", complete=True)
+        self.assertTrue(native_prompt.message_is_known(self.record, "12", source, "any shorter preview"))
+
+    async def test_existing_exact_delivery_hash_proves_only_its_view_without_source_upgrade(self) -> None:
+        data = {"messages": [_message("assistant", "previously supplied full short message")]}
+        await self._confirm()
+        await NativePrompt("request", {}, _history(data)).acknowledge(self.record)
+        source = native_prompt.history_snapshot(data)["0"]
+        text = session.format_msg_line(data["messages"][0], cap=None)
+        self.assertTrue(native_prompt.message_is_known(self.record, "0", source, text, complete=True))
+        self.assertFalse(native_prompt.message_is_known(self.record, "0", source, text[:10]))
+        self.assertEqual(self.record.get("native_prompt_ledger")["message_sources"], {})
+
+    async def test_source_receipts_survive_reload_but_never_cross_native_uuid(self) -> None:
+        source = native_prompt.fingerprint(_message("assistant", "durable full evidence"))
+        prompt = NativePrompt(
+            "request", {}, [("3", native_prompt.delivery_fingerprint(source, "full evidence"), "full evidence")],
+            message_sources={"3": (source, True)},
+        )
+        await self._confirm()
+        await prompt.acknowledge(self.record)
+        await self.execution.flush()
+        await self.record.reload()
+        self.assertTrue(native_prompt.message_is_known(self.record, "3", source, "excerpt"))
+        for changed_id in (_OTHER_SESSION_ID, None, "--last"):
+            with self.subTest(changed_id=changed_id):
+                await self.record.save(native_session_id=changed_id)
+                self.assertFalse(native_prompt.message_is_known(self.record, "3", source, "excerpt"))
+
+    async def test_budget_omission_preserves_full_source_receipts_but_uuid_change_drops_them(self) -> None:
+        source = native_prompt.fingerprint(_message("assistant", "known full content"))
+        prompt = NativePrompt(
+            "request", {}, [("9", native_prompt.delivery_fingerprint(source, "known full content"),
+                              "known full content")],
+            message_sources={"9": (source, True)},
+        )
+        await self._confirm()
+        await prompt.acknowledge(self.record)
+        omitted = NativePrompt("request", {})
+        await omitted.acknowledge(self.record)
+        self.assertTrue(native_prompt.message_is_known(self.record, "9", source, "shorter preview"))
+
+        await self.record.save(native_session_id=_OTHER_SESSION_ID)
+        await omitted.acknowledge(self.record)
+        self.assertEqual(self.record.get("native_prompt_ledger")["message_sources"], {})
+        self.assertFalse(native_prompt.message_is_known(self.record, "9", source, "shorter preview"))
+
+    async def test_logged_own_long_messages_are_full_coverage_but_flexible_merge_is_unseen(self) -> None:
+        await self._confirm()
+        await NativePrompt("request", {}).acknowledge(self.record)
+        data = {"compacted_count": 40, "messages": [
+            _message("user", "own long request " + "requirements " * 200),
+            _message("assistant", "merged answer from other workers " + "evidence " * 200),
+        ]}
+        marks = native_prompt.history_snapshot(data)
+        await native_prompt.acknowledge_logged_turn(self.record, data, request_only=True)
+        self.assertTrue(native_prompt.message_is_known(
+            self.record, "40", marks["40"], "tiny request preview",
+        ))
+        self.assertFalse(native_prompt.message_is_known(
+            self.record, "41", marks["41"], session.format_msg_line(data["messages"][1]),
+        ))
+        self.assertEqual(set(self.record.get("native_prompt_ledger")["messages"]), {"40"})
+
+        await native_prompt.acknowledge_logged_turn(self.record, data)
+        self.assertTrue(native_prompt.message_is_known(
+            self.record, "41", marks["41"], session.format_msg_line(data["messages"][1], cap=None), complete=True,
+        ))
+
+    async def test_same_durable_request_uses_continuation_but_identical_new_job_remains_actionable(self) -> None:
+        request = "large-current-request-marker " + "exact requirements " * 2_000
+        prompt = NativePrompt(request, {}, request_identity="durable-job")
+        self.assertTrue(prompt.render(None).endswith(request))
+        await self._confirm()
+        delivered = prompt.request_for(self.record)
+        await prompt.acknowledge(self.record, delivered_request=delivered)
+
+        resumed = prompt.render(self.record)
+        self.assertLess(len(resumed), 250)
+        self.assertIn("Continue the current job", resumed)
+        self.assertNotIn("large-current-request-marker", resumed)
+        self.assertEqual(prompt.request_for(self.record), request)
+        self.assertEqual(
+            NativePrompt(request, {}, request_identity="different-job").render(self.record),
+            "New message:\n" + request,
+        )
+        self.assertEqual(
+            NativePrompt("updated scope", {}, request_identity="durable-job").render(self.record),
+            "New message:\nupdated scope",
+        )
+
+    async def test_bootstrap_request_receipt_tracks_body_delivered_before_native_initialization(self) -> None:
+        prompt = NativePrompt(
+            "short follow-up", {}, bootstrap_request="Original full task\nshort follow-up",
+            request_identity="same-durable-job",
+        )
+        bootstrap_body = prompt.request_for(None)
+        await self._confirm()
+        await prompt.acknowledge(self.record, delivered_request=bootstrap_body)
+        self.assertEqual(self.record.get("native_prompt_ledger")["request"]["body"],
+                         native_prompt.fingerprint(bootstrap_body))
+        self.assertEqual(prompt.request_for(self.record), "short follow-up")
+        self.assertEqual(prompt.render(self.record), "New message:\nshort follow-up")
+        await prompt.acknowledge(self.record, delivered_request="short follow-up")
+        self.assertIn("Continue the current job", prompt.render(self.record))
+
+        for missing_id in (None, _OTHER_SESSION_ID):
+            with self.subTest(missing_id=missing_id):
+                await self.record.save(native_session_id=missing_id)
+                self.assertEqual(prompt.request_for(self.record), bootstrap_body)
+                self.assertEqual(prompt.render(self.record), "New message:\n" + bootstrap_body)
+
+    async def test_preparation_spends_history_quota_on_unseen_older_message_before_known_recent(self) -> None:
+        backend = SimpleNamespace(
+            supports_detached_tasks=False, supports_typed_plugins=True, supports_plugin_prelude=False,
+        )
+        data = {"messages": [
+            _message("user", "older-unseen-marker " + "older evidence " * 35),
+            _message("assistant", "recent-already-known-marker " + "recent evidence " * 35),
+        ]}
+        recent = data["messages"][1]
+        source = native_prompt.history_snapshot(data)["1"]
+        recent_text = session.format_msg_line(recent, cap=None)
+        known = NativePrompt(
+            "previous request", {}, [("1", native_prompt.delivery_fingerprint(source, recent_text), recent_text)],
+            message_sources={"1": (source, True)},
+        )
+        await self._confirm()
+        await known.acknowledge(self.record)
+        template = agent._native_turn_prompt(
+            backend, "current request", data, [], budget=350,
+            collaborative=False, is_scheduled=False,
+        )
+        cold_coordinates = [coordinate for coordinate, _, _ in template.messages]
+        self.assertEqual(cold_coordinates, ["1"])
+
+        prepared = template.for_record(self.record)
+
+        self.assertEqual([coordinate for coordinate, _, _ in prepared.messages], ["0"])
+        self.assertIn("older-unseen-marker", prepared.render(self.record))
+        self.assertNotIn("recent-already-known-marker", prepared.render(self.record))
+        self.assertEqual([coordinate for coordinate, _, _ in template.messages], cold_coordinates)
+        self.assertEqual(template.for_record(None).render(None), template.render(None))
+
+    async def test_known_recent_partial_view_releases_its_quota_for_older_unseen_history(self) -> None:
+        backend = SimpleNamespace(
+            supports_detached_tasks=False, supports_typed_plugins=True, supports_plugin_prelude=False,
+        )
+        data = {"messages": [
+            _message("user", "older-partial-marker " + "older evidence " * 150),
+            _message("assistant", "recent-partial-marker " + "recent evidence " * 150),
+        ]}
+
+        def build(budget: int) -> NativePrompt:
+            return agent._native_turn_prompt(
+                backend, "current request", data, [], budget=budget,
+                collaborative=False, is_scheduled=False,
+            )
+
+        await self._confirm()
+        recent = build(350).for_record(self.record)
+        self.assertEqual([row[0] for row in recent.messages], ["1"])
+        self.assertFalse(recent.message_sources["1"][1])
+        await recent.acknowledge(self.record)
+
+        older = build(350).for_record(self.record)
+
+        self.assertEqual([row[0] for row in older.messages], ["0"])
+        self.assertIn("older-partial-marker", older.render(self.record))
+        self.assertNotIn("recent-partial-marker", older.render(self.record))
+        await older.acknowledge(self.record)
+        self.assertEqual(build(350).for_record(self.record).messages, [])
+
+        expanded = build(4_000).for_record(self.record)
+        self.assertEqual([row[0] for row in expanded.messages], ["0", "1"])
+        # The ordinary 800-character display cap is still partial, even when
+        # the surrounding turn budget can fit both entire displayed views.
+        self.assertTrue(all(not complete for _, complete in expanded.message_sources.values()))
+        await expanded.acknowledge(self.record)
+        self.assertEqual(build(350).for_record(self.record).messages, [])
+
+    async def test_known_large_current_request_leaves_quota_for_newly_missing_history(self) -> None:
+        backend = SimpleNamespace(
+            supports_detached_tasks=False, supports_typed_plugins=True, supports_plugin_prelude=False,
+        )
+        request = "huge-existing-current-request " + "requirements " * 3_000
+        data = {"messages": [_message("assistant", "newly-missing-history-marker")]}
+        with mock.patch.object(execution_state, "current_execution", return_value=self.execution):
+            template = agent._native_turn_prompt(
+                backend, request, data, [], budget=1_000,
+                collaborative=False, is_scheduled=False,
+            )
+            self.assertEqual(template.messages, [])
+            await self._confirm()
+            await template.acknowledge(self.record, delivered_request=request)
+
+            prepared = template.for_record(self.record)
+
+        self.assertEqual([row[0] for row in prepared.messages], ["0"])
+        self.assertIn("newly-missing-history-marker", prepared.render(self.record))
+        self.assertNotIn("huge-existing-current-request", prepared.render(self.record))
+        self.assertEqual(prepared.request_for(self.record), request)
+
+    async def test_render_and_preparation_copy_delivery_ledger_once_per_operation_not_per_message(self) -> None:
+        backend = SimpleNamespace(
+            supports_detached_tasks=False, supports_typed_plugins=True, supports_plugin_prelude=False,
+        )
+        data = {"messages": [_message("assistant", f"known history message {index}") for index in range(150)]}
+        marks = native_prompt.history_snapshot(data)
+        template = agent._native_turn_prompt(
+            backend, "current request", data, [], budget=30_000,
+            collaborative=False, is_scheduled=False,
+        )
+        await self._confirm()
+        await template.acknowledge(self.record)
+        self.assertEqual(set(self.record.get("native_prompt_ledger")["messages"]), set(marks))
+
+        with mock.patch.object(self.record, "get", wraps=self.record.get) as get:
+            self.assertEqual(template.render(self.record), "New message:\ncurrent request")
+        ledger_reads = sum(call.args[0] == "native_prompt_ledger" for call in get.call_args_list)
+        self.assertEqual(ledger_reads, 1)
+
+        with mock.patch.object(self.record, "get", wraps=self.record.get) as get:
+            prepared = template.for_record(self.record)
+        self.assertEqual(prepared.messages, [])
+        ledger_reads = sum(call.args[0] == "native_prompt_ledger" for call in get.call_args_list)
+        # History and request budgeting may each take one validated snapshot.
+        self.assertLessEqual(ledger_reads, 2)

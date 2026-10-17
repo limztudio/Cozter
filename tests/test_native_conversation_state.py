@@ -33,6 +33,106 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
                 ) as state:
                     yield execution, state
 
+    async def test_accepted_native_requests_require_activity_and_matching_confirmed_ledger(self) -> None:
+        async with self.scope() as (execution, state):
+            for values in (
+                {},
+                {"native_session_id": _SID},
+                {"native_session_id": "latest", "native_tools_started": True,
+                 "native_prompt_ledger": {"session_id": "latest"}},
+                {"native_session_id": _SID, "native_tools_started": True,
+                 "native_prompt_ledger": {"session_id": _OTHER_SID}},
+                {"native_session_id": _SID, "native_tools_started": False,
+                 "native_prompt_ledger": {"session_id": _SID}},
+            ):
+                await state.save(**values)
+                self.assertFalse(execution.remember_native_request(state, "not accepted"))
+                self.assertEqual(execution.native_request_deliveries(), [])
+            await state.save(native_session_id=_SID, native_tools_started=True,
+                             native_prompt_ledger={"session_id": _SID})
+            self.assertTrue(execution.remember_native_request(state, "accepted request"))
+            self.assertEqual(execution.native_request_deliveries(), [
+                (state, _SID, frozenset({"accepted request"})),
+            ])
+            with self.assertRaisesRegex(ValueError, "must be a string"):
+                execution.remember_native_request(state, False)
+
+    async def test_native_request_registry_keeps_exact_bodies_in_memory_only(self) -> None:
+        async with self.scope() as (execution, state):
+            await state.save(native_session_id=_SID, native_tools_started=True,
+                             native_prompt_ledger={"session_id": _SID})
+            bodies = {"unique request marker\n", "unique request marker", "  exact body  "}
+            for body in (*bodies, "unique request marker"):
+                self.assertTrue(execution.remember_native_request(state, body))
+            self.assertEqual(execution.native_request_deliveries(), [(state, _SID, frozenset(bodies))])
+            await execution.flush()
+            for path in Path(self.ws, ".cozter").rglob("state.json"):
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("unique request marker", text)
+                self.assertNotIn("exact body", text)
+            snapshot = execution.native_request_deliveries()[0][2]
+            execution.remember_native_request(state, "later body")
+            self.assertNotIn("later body", snapshot)
+
+    async def test_replacement_native_uuid_cannot_inherit_accepted_request_bodies(self) -> None:
+        async with self.scope() as (execution, state):
+            await state.save(native_session_id=_SID, native_tools_started=True,
+                             native_prompt_ledger={"session_id": _SID})
+            execution.remember_native_request(state, "old session request")
+            await state.save(native_session_id=_OTHER_SID)
+            self.assertEqual(execution.native_request_deliveries(), [])
+            self.assertFalse(execution.remember_native_request(state, "unacknowledged replacement"))
+            await state.save(native_prompt_ledger={"session_id": _OTHER_SID})
+            self.assertTrue(execution.remember_native_request(state, "replacement request"))
+            self.assertEqual(execution.native_request_deliveries(), [
+                (state, _OTHER_SID, frozenset({"replacement request"})),
+            ])
+            await state.save(native_session_id=_SID, native_prompt_ledger={"session_id": _SID})
+            self.assertEqual(execution.native_request_deliveries(), [])
+
+    async def test_native_request_registry_is_per_job_and_per_record_for_parallel_workers(self) -> None:
+        async with execution_state.execution_scope(self.ws, "one", "request") as execution:
+            execution_state.bind_conversation("conversation")
+
+            async def worker(index):
+                with execution_state.worker_scope(f"flexible:task-{index}"):
+                    async with execution_state.backend_scope(
+                        *_SETTINGS, native=True, native_worker=f"flexible:reader:{index}",
+                    ) as state:
+                        native_id = (_SID, _OTHER_SID)[index]
+                        await state.save(native_session_id=native_id, native_tools_started=True,
+                                         native_prompt_ledger={"session_id": native_id})
+                        execution.remember_native_request(state, f"reader-{index} exact request")
+                        return state
+
+            records = await asyncio.gather(worker(0), worker(1))
+            self.assertCountEqual(execution.native_request_deliveries(), [
+                (records[0], _SID, frozenset({"reader-0 exact request"})),
+                (records[1], _OTHER_SID, frozenset({"reader-1 exact request"})),
+            ])
+            async with self.scope("two", worker="flexible:other", native_worker="flexible:reader:0") as (
+                other_execution, other_state,
+            ):
+                self.assertEqual(other_state.get("native_session_id"), _SID)
+                self.assertEqual(other_execution.native_request_deliveries(), [])
+                with self.assertRaisesRegex(ValueError, "another execution"):
+                    other_execution.remember_native_request(records[0], "foreign request")
+            async with self.scope("three", conversation="other conversation") as (other_execution, _):
+                self.assertEqual(other_execution.native_request_deliveries(), [])
+        async with self.scope("one") as (reloaded, _):
+            self.assertEqual(reloaded.native_request_deliveries(), [])
+
+    async def test_deleted_native_session_is_excluded_from_request_receipts(self) -> None:
+        async with self.scope() as (execution, state):
+            await state.save(native_session_id=_SID, native_tools_started=True,
+                             native_prompt_ledger={"session_id": _SID})
+            self.assertTrue(execution.remember_native_request(state, "accepted before deletion"))
+            directory = state.path.parents[1]
+            execution_state.discard_native_conversation(self.ws, "conversation")
+            self.assertEqual(execution.native_request_deliveries(), [])
+            self.assertFalse(execution.remember_native_request(state, "late request"))
+            self.assertFalse(directory.exists())
+
     async def test_changed_flexible_tasks_reuse_main_lane_without_changing_job_keys(self) -> None:
         async with self.scope("direct") as (_, direct):
             await direct.save(native_session_id=_SID, native_prompt_ledger={"direct": "seen"})

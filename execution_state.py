@@ -323,6 +323,9 @@ class Execution:
     conversation: "Execution | None" = field(default=None, init=False)
     native_main_record: ExecutionRecord | None = field(default=None, init=False)
     _lifetime: _ConversationLifetime | None = field(default=None, init=False)
+    _native_requests: dict[tuple[str, str], tuple[ExecutionRecord, set[str]]] = field(
+        default_factory=dict, init=False, repr=False,
+    )
 
     def __post_init__(self) -> None:
         if self.namespace not in _NAMESPACES:
@@ -352,6 +355,53 @@ class Execution:
             self.workspace_path, session_id, "", namespace="native_sessions",
         )
         self.conversation.ensure_live()
+
+    def remember_native_request(self, record: ExecutionRecord, request: str) -> bool:
+        """Remember an already acknowledged request only for this job's UUID.
+
+        Callers invoke this after the native prompt's durable acknowledgment.
+        Request bodies stay in memory; they are never execution-state values.
+        """
+        if not isinstance(request, str):
+            raise ValueError("native request body must be a string")
+        if (not isinstance(record, ExecutionRecord)
+                or record.execution is not self and record.execution is not self.conversation):
+            raise ValueError("native request record belongs to another execution")
+        native_id = self._request_record_session(record)
+        if native_id is None or record.get("native_tools_started") is not True:
+            return False
+        directory = os.path.normcase(str(record.path.parent))
+        # A fallback can replace the provider session in the same generation.
+        # Discard the previous UUID's requests instead of relabeling them.
+        for key in list(self._native_requests):
+            if key[0] == directory and key[1] != native_id:
+                del self._native_requests[key]
+        _, requests = self._native_requests.setdefault((directory, native_id), (record, set()))
+        requests.add(request)
+        return True
+
+    @staticmethod
+    def _request_record_session(record: ExecutionRecord) -> str | None:
+        lifetime = record.execution._lifetime
+        if lifetime is not None and lifetime.discarded:
+            return None
+        native_id = record.get("native_session_id")
+        if not _confirmed_native_id(native_id):
+            return None
+        assert isinstance(native_id, str)
+        native_id = native_id.lower()
+        ledger = record.get("native_prompt_ledger")
+        if not isinstance(ledger, dict) or ledger.get("session_id") != native_id:
+            return None
+        return native_id
+
+    def native_request_deliveries(self) -> list[tuple[ExecutionRecord, str, frozenset[str]]]:
+        """Snapshot exact accepted bodies, excluding replaced or deleted UUIDs."""
+        return [
+            (record, native_id, frozenset(requests))
+            for (_, native_id), (record, requests) in self._native_requests.items()
+            if self._request_record_session(record) == native_id
+        ]
 
     @property
     def directory_id(self) -> str:

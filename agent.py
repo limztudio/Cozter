@@ -1475,6 +1475,8 @@ def _native_turn_prompt(
     bootstrap_request: str | None = None, previous_draft: str | None = None,
     skills_catalog: str = "",
     budget_includes_request: bool = True,
+    history_record: execution_state.ExecutionRecord | None = None,
+    _prepare: bool = True,
 ) -> native_prompt.NativePrompt:
     """Budget named context before choosing bootstrap or exact-session delta."""
     memory = session_data.get("long_term", [])
@@ -1490,8 +1492,19 @@ def _native_turn_prompt(
         messages = []
     marks = native_prompt.history_snapshot(session_data)
     start = session.total_message_count(session_data) - len(messages)
-    history = [(str(start + index), marks[str(start + index)], session.format_msg_line(message))
-               for index, message in enumerate(messages) if isinstance(message, dict)]
+    ledger = native_prompt._matching_ledger(history_record) or {}
+    history = []
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            continue
+        coordinate = str(start + index)
+        digest = marks[coordinate]
+        text = session.format_msg_line(message)
+        complete = text == session.format_msg_line(message, cap=None)
+        if not native_prompt.message_is_known_from_ledger(
+            ledger, coordinate, digest, text, complete=complete,
+        ):
+            history.append((coordinate, digest, text, complete))
     descriptors = [
         ("colony", lambda limit: _bounded_context_list_block(
             "Colony", colony_items, lambda item: f"- {item}", limit)),
@@ -1499,9 +1512,21 @@ def _native_turn_prompt(
             "Long-term Memory", memory, lambda item: f"- {item}", limit)),
         ("summary", lambda limit: _bounded_context_block("Session Summary", summary, limit)),
     ]
-    lengths = [len(render(None)) for _, render in descriptors]
-    lengths.append(sum(len(text) + 1 for _, _, text in history))
-    request_cost = len(bootstrap_request or request) + 32 if budget_includes_request else 0
+    known_sections = ledger.get("sections", {})
+    if not isinstance(known_sections, dict):
+        known_sections = {}
+    known_full_sections = {
+        name for name, render in descriptors
+        if known_sections.get(name) == native_prompt.fingerprint([render(None), False])
+    }
+    lengths = [0 if name in known_full_sections else len(render(None)) for name, render in descriptors]
+    lengths.append(sum(len(text) + 1 for _, _, text, _ in history))
+    execution = execution_state.current_execution()
+    request_identity = execution.execution_id if execution is not None else None
+    request_view = native_prompt.NativePrompt(
+        request, {}, bootstrap_request=bootstrap_request, request_identity=request_identity,
+    ).request_text_for(history_record)
+    request_cost = len(request_view) + 32 if budget_includes_request else 0
     quotas = _context_quotas(lengths, max(0, budget - request_cost))
     sections = {"policy and plugins": _build_backend_prompt(
         backend, "", collaborative=collaborative, allow_detached_requests=not is_scheduled,
@@ -1511,7 +1536,7 @@ def _native_turn_prompt(
     partial_sections: set[str] = set()
     for index, (name, render) in enumerate(descriptors):
         natural = render(None)
-        excerpt = render(quotas[index])
+        excerpt = natural if name in known_full_sections else render(quotas[index])
         if natural and excerpt != natural:
             partial_sections.add(name)
             if not excerpt:
@@ -1519,24 +1544,49 @@ def _native_turn_prompt(
                            "retain previously supplied context.]")
         sections[name] = excerpt
     selected: list[tuple[str, str, str]] = []
+    message_sources: dict[str, tuple[str, bool]] = {}
     remaining = quotas[-1]
-    for coordinate, digest, text in reversed(history):
+    for coordinate, digest, text, complete in reversed(history):
         if len(text) + 1 > remaining:
             if not selected and remaining:
                 excerpt = _truncate_context_text(text, remaining)
+                if native_prompt.message_is_known_from_ledger(
+                    ledger, coordinate, digest, excerpt, complete=False,
+                ):
+                    continue
                 selected.append((coordinate, native_prompt.delivery_fingerprint(digest, excerpt), excerpt))
+                message_sources[coordinate] = (digest, False)
             break
         selected.append((coordinate, native_prompt.delivery_fingerprint(digest, text), text))
+        message_sources[coordinate] = (digest, complete)
         remaining -= len(text) + 1
     selected.reverse()
-    return native_prompt.NativePrompt(
+    result = native_prompt.NativePrompt(
         request, sections, selected, bootstrap_request=bootstrap_request,
         bootstrap_sections={"previous draft": (
             "[Previous draft and evidence; retain completed work]\n"
             + flexible._bounded_draft_excerpt(previous_draft)
         )} if previous_draft else {},
         partial_sections=partial_sections,
+        message_sources=message_sources,
+        request_identity=request_identity,
     )
+    if _prepare:
+        def prepare(record: execution_state.ExecutionRecord | None) -> native_prompt.NativePrompt:
+            prepared = _native_turn_prompt(
+                backend, request, session_data, colony_items,
+                budget=budget, collaborative=collaborative, is_scheduled=is_scheduled,
+                bootstrap_request=bootstrap_request, previous_draft=previous_draft,
+                skills_catalog=skills_catalog, budget_includes_request=budget_includes_request,
+                history_record=record, _prepare=False,
+            )
+            # Flexible appends role-specific sections after building shared context.
+            prepared.sections.update({name: text for name, text in result.sections.items()
+                                      if name not in {"colony", "memory", "summary"}})
+            prepared.request_identity = result.request_identity
+            return prepared
+        result.prepare = prepare
+    return result
 
 
 async def _drive_backend(
@@ -1559,17 +1609,35 @@ async def _drive_backend(
         backend.name, model or getattr(backend, "default_model", None), approval, effort,
         native=backend.name in _NATIVE_BACKENDS, native_worker=native_worker,
     ) as state:
-        prompt_context = native_context if backend.name in _NATIVE_BACKENDS else None
-        bootstrap = prompt_context.render(None) if prompt_context is not None else full_prompt
+        context_template = native_context if backend.name in _NATIVE_BACKENDS else None
+        prompt_context = context_template.for_record(state) if context_template is not None else None
 
-        async def invoke(prompt_text: str) -> tuple[AgentResult, bool]:
+        async def invoke(
+            prompt_text: str, delivery: native_prompt.NativePrompt | None,
+            delivered_request: str | None,
+        ) -> tuple[AgentResult, bool]:
+            acknowledged = False
             if state is not None and prompt_context is not None:
                 await state.save(native_tools_started=False)
+
+            async def acknowledge_activity() -> None:
+                nonlocal acknowledged
+                if (acknowledged or state is None or delivery is None
+                        or not state.get("native_tools_started")
+                        or native_prompt._native_session_id(state.get("native_session_id")) is None):
+                    return
+                await delivery.acknowledge(state, delivered_request=delivered_request)
+                acknowledged = True
+                execution = execution_state.current_execution()
+                if execution is not None and delivered_request is not None:
+                    execution.remember_native_request(state, delivered_request)
+
             try:
                 return await _drive_backend_impl(
                     backend, workspace_path, prompt_text, model, approval, effort=effort,
                     on_event=on_event, inject_queue=inject_queue, injected=injected,
                     close_inject_on_completion=False, on_process=on_process,
+                    on_native_activity=acknowledge_activity if delivery is not None else None,
                 )
             except NativeSessionUnavailable as exc:
                 if (state is None or exc.backend_name != backend.name
@@ -1579,11 +1647,11 @@ async def _drive_backend(
                     raise
                 return AgentResult(error="The exact native session is unavailable."), False
             finally:
-                if state is not None and prompt_context is not None:
-                    await prompt_context.acknowledge(state)
+                await acknowledge_activity()
 
         result, restarting = await invoke(
             prompt_context.render(state) if prompt_context is not None else full_prompt,
+            prompt_context, prompt_context.request_for(state) if prompt_context is not None else None,
         )
         if (not restarting and state is not None and state.get("native_resume_unavailable")
                 and not state.get("native_tools_started")
@@ -1595,10 +1663,14 @@ async def _drive_backend(
             # activity, permits one fresh launch. Never retry ambiguous work.
             await state.save(native_resume_unavailable=False, native_session_id=None)
             logger.info("%s exact native session unavailable before work; recovering from saved evidence", backend.name)
+            bootstrap_context = context_template.for_record(None) if context_template is not None else None
+            bootstrap = bootstrap_context.render(None) if bootstrap_context is not None else full_prompt
             result, restarting = await invoke(
                 bootstrap + "\n\n[The exact provider session was unavailable before any new work began. "
                 "Inspect existing workspace changes and saved evidence; continue unfinished work "
                 "without repeating completed changes or commands with an unknown outcome.]",
+                bootstrap_context,
+                bootstrap_context.request_for(None) if bootstrap_context is not None else None,
             )
         if not restarting and _take_pending_injections(inject_queue, injected):
             restarting = True
@@ -1620,6 +1692,7 @@ async def _drive_backend_impl(
     injected: list[str] | None = None,
     close_inject_on_completion: bool = False,
     on_process: Callable[[Any], None] | None = None,
+    on_native_activity: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[AgentResult, bool]:
     """Launch *backend*, stream its events, and collect the result.
 
@@ -1695,6 +1768,9 @@ async def _drive_backend_impl(
         ):
             prev_count = len(result.events)
             backend.parse_event(event, result)
+
+            if on_native_activity is not None:
+                await on_native_activity()
 
             if on_event:
                 for ev in result.events[prev_count:]:
@@ -3151,6 +3227,35 @@ def _interrupted_turn_note(turn: _InterruptedTurn) -> str:
     return "\n\n".join(lines)
 
 
+async def _acknowledge_native_user_messages(
+    execution: execution_state.Execution | None, data: dict,
+    *, exclude: execution_state.ExecutionRecord | None = None,
+    conversation_only: bool = False,
+) -> None:
+    """Only workers that accepted this exact logged request know its user row."""
+    if execution is None:
+        return
+    messages = data.get("messages", [])
+    if not isinstance(messages, list) or len(messages) < 2:
+        return
+    message = messages[-2]
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return
+    content = message.get("content")
+    if not isinstance(content, str):
+        return
+    for record, native_id, requests in execution.native_request_deliveries():
+        if record is exclude or content not in requests:
+            continue
+        # A detached interruption write can outlive deletion of its queue job.
+        # Conversation records have their own lifetime and reject late writes.
+        if conversation_only and record.execution.namespace != "native_sessions":
+            continue
+        if native_prompt._native_session_id(record.get("native_session_id")) != native_id:
+            continue
+        await native_prompt.acknowledge_logged_turn(record, data, request_only=True)
+
+
 def _log_interrupted_turn(turn: _InterruptedTurn) -> None:
     """Persist a cancelled turn's prompt and partial output to its session.
 
@@ -3163,6 +3268,20 @@ def _log_interrupted_turn(turn: _InterruptedTurn) -> None:
         return
     note = _interrupted_turn_note(turn)
     session_id = turn.session_id
+    execution = execution_state.current_execution()
+    logged_native_data: dict | None = None
+
+    def append_and_snapshot() -> bool:
+        nonlocal logged_native_data
+        logged = _append_session_messages(
+            turn.workspace_path, session_id, [
+                {"role": "user", "content": turn.prompt},
+                {"role": "assistant", "content": note},
+            ], "Failed to log interrupted turn",
+        )
+        if logged and execution is not None and execution.native_request_deliveries():
+            logged_native_data = session.load_session(turn.workspace_path, session_id)
+        return logged
 
     async def _append() -> None:
         # Wait for an in-flight normal write so it never gains a duplicate.
@@ -3176,14 +3295,12 @@ def _log_interrupted_turn(turn: _InterruptedTurn) -> None:
                 return
         await _persist_session_write(
             turn.workspace_path,
-            lambda: _append_session_messages(
-                turn.workspace_path, session_id, [
-                    {"role": "user", "content": turn.prompt},
-                    {"role": "assistant", "content": note},
-                ],
-                "Failed to log interrupted turn",
-            ),
+            append_and_snapshot,
         )
+        if logged_native_data is not None:
+            await _acknowledge_native_user_messages(
+                execution, logged_native_data, conversation_only=True,
+            )
 
     try:
         task = create_background_task(
@@ -3284,10 +3401,21 @@ async def _run_turn(
             budget_session_id = turn.session_id
 
             async def log_budget_result() -> bool:
+                execution = execution_state.current_execution()
+                logged_native_data: dict | None = None
+
+                def log_and_snapshot() -> bool:
+                    nonlocal logged_native_data
+                    logged = _log_to_session(workspace_path, budget_session_id, turn.prompt, result)
+                    if logged and execution is not None and execution.native_request_deliveries():
+                        logged_native_data = session.load_session(workspace_path, budget_session_id)
+                    return logged
+
                 turn.logged_normally = await _persist_session_write(
-                    workspace_path,
-                    lambda: _log_to_session(workspace_path, budget_session_id, turn.prompt, result),
+                    workspace_path, log_and_snapshot,
                 )
+                if logged_native_data is not None:
+                    await _acknowledge_native_user_messages(execution, logged_native_data)
                 return turn.logged_normally
 
             turn.normal_log_task = create_background_task(
@@ -3639,7 +3767,10 @@ async def _run_turn_impl(
     def _log_and_snapshot() -> bool:
         nonlocal logged_native_data
         logged = _log_to_session(workspace_path, session_id, effective_prompt, result)
-        if logged and native_record is not None and not is_flexible and not result.error:
+        if logged and execution is not None and (
+            native_record is not None and not is_flexible and not result.error
+            or execution.native_request_deliveries()
+        ):
             # Capture our exact pair while holding the session write lock.
             # A detached completion can append as soon as that lock releases.
             logged_native_data = session.load_session(workspace_path, session_id)
@@ -3660,8 +3791,11 @@ async def _run_turn_impl(
     await asyncio.wait((turn.normal_log_task,))
     turn.normal_log_task.result()
 
-    if native_record is not None and logged_native_data is not None:
-        await native_prompt.acknowledge_logged_turn(native_record, logged_native_data)
+    if logged_native_data is not None:
+        own_pair = native_record if not is_flexible and not result.error else None
+        if own_pair is not None:
+            await native_prompt.acknowledge_logged_turn(own_pair, logged_native_data)
+        await _acknowledge_native_user_messages(execution, logged_native_data, exclude=own_pair)
 
     # Maintenance receives every input explicitly. Give its task a clean
     # context so a slow compactor/title or pipeline-lock wait cannot retain

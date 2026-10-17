@@ -407,6 +407,16 @@ saved context. Ambiguous failures or failures after work has begun do not
 trigger a fresh replay. Invalid saved state is preserved and reported rather
 than silently starting over.
 
+Cozter records context delivery as soon as the provider confirms that work has
+started, before a long-running turn finishes. That receipt is written to disk,
+so a recovered job can skip history and prompt sections already supplied to
+its exact native session. Session initialization alone or an error before work
+starts does not acknowledge the prompt. A full message receipt also covers
+shorter budget previews of that same message; changed source content remains
+eligible for synchronization. An unchanged request on the same recovered job
+uses a continuation cue. Sending identical wording as a new user request still
+asks the agent to perform it again.
+
 Flexible's native workers receive bounded shared Cozter context as well as
 their own plan, assigned instructions, earlier completed reports, and any
 retained draft. Their shared history allowance is separate from the full
@@ -415,8 +425,10 @@ history backfill. Each native lane tracks the shared messages it has received.
 Switching between direct and Flexible mode, or between backends, supplies
 intervening conversation messages to the returning lane without replaying
 unchanged context. A merged Flexible reply is supplied later to workers that
-have not seen it, including when a queue job has already completed. Parallel
-readers receive the same shared context independently; their current findings
+have not seen it, including when a queue job has already completed. A worker's
+receipt for the exact user request prevents that request from being repeated
+as historical context; it does not acknowledge the merger's unseen answer.
+Parallel readers receive the same shared context independently; their current findings
 reach later workers through completed reports after the inspection wave ends.
 The planner uses bounded shared Cozter history and stays stateless.
 
@@ -2108,7 +2120,7 @@ The runtime contains 76 Python source files, separate from the tests below.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (158 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 155 `test_*.py` modules:
+- Tests (159 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 156 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
@@ -2142,7 +2154,7 @@ The runtime contains 76 Python source files, separate from the tests below.
   `test_maintenance_context.py`, `test_memory_corrupt_state.py`, `test_memory_preservation.py`,
   `test_memory_repair_regressions.py`, `test_memory_streamed_search.py`,
   `test_monthly_schedule_execution.py`, `test_monthly_schedules.py`,
-  `test_native_conversation_state.py`, `test_native_current_protocol.py`,
+  `test_native_conversation_state.py`, `test_native_current_protocol.py`, `test_native_delta_sync.py`,
   `test_native_launch_contract.py`, `test_native_prompt.py`, `test_native_session_turns.py`,
   `test_native_skill_launch.py`,
   `test_notes_owned_worker.py`,
@@ -2177,7 +2189,9 @@ The runtime contains 76 Python source files, separate from the tests below.
   unbounded tool/provider execution with cancellation, native stdin ownership,
   native conversations retained across completed jobs, shared direct/Flexible
   editing lanes, isolated parallel reader histories, exact job scope and
-  model/policy isolation, changed-context delivery, and full bootstrap only on
+  model/policy isolation, missing-context selection before history budgeting,
+  durable first-activity receipts, exact user-only Flexible acknowledgments,
+  changed-context delivery, and full bootstrap only on
   confirmed pre-work session loss; progressive workspace/native skill catalogs,
   bounded skill loading, native bridge ownership, planner-only skill tools, and skill-aware saved-plan
   continuation without replaying completed workers; restored-queue
