@@ -28,7 +28,7 @@ from Cozter.backends_agent import claude_background_guard as guard
 
 BUILTIN_NAMES = frozenset({
     "apply_patch", "bash", "copy_file", "delete_file", "edit_file", "glob",
-    "grep", "list_dir", "make_dir", "move_file", "multi_edit", "read_file", "read_files",
+    "grep", "list_dir", "list_skills", "make_dir", "move_file", "multi_edit", "read_file", "read_files", "read_skill",
     "tree", "web_fetch", "web_search", "write_file",
 })
 PLUGIN_NAMES = frozenset({
@@ -216,6 +216,14 @@ class IsolatedToolsRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await invoke("notes", {"action": "append", "text": "isolated fixture note"}, "Noted")
                 await invoke("notes", {"action": "read"}, "isolated fixture note")
                 await invoke("notes", {"action": "clear"}, "Notes cleared")
+                skill_directory = Path(workspace, ".cozter", "skills")
+                skill_directory.mkdir(exist_ok=True)
+                (skill_directory / "runtime-audit.md").write_text(
+                    "---\nname: runtime-audit\ndescription: Isolated tools audit workflow.\n---\n"
+                    "Use the isolated-skill-instructions fixture.\n", encoding="utf-8",
+                )
+                await invoke("list_skills", {}, "runtime-audit")
+                await invoke("read_skill", {"name": "runtime-audit"}, "isolated-skill-instructions")
                 sessions = Path(workspace, ".cozter", "sessions")
                 sessions.mkdir(parents=True, exist_ok=True)
                 session = {"id": "audit-session", "name": "Fixture session", "created": "2026-10-13",

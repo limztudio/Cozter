@@ -54,6 +54,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _preserve_personal_skill_roots(env: dict[str, str]) -> None:
+    """Retain personal skills when session isolation replaces COPILOT_HOME."""
+    source_home = os.environ.get("COPILOT_HOME") or os.path.join(
+        os.path.expanduser("~"), ".copilot",
+    )
+    personal_skills = os.path.join(source_home, "skills")
+    if not os.path.isdir(personal_skills):
+        return
+    # This is Copilot's documented skills-only search path. It grants no
+    # additional shell/file permissions and does not share session history.
+    directories = [part.strip() for part in env.get("COPILOT_SKILLS_DIRS", "").split(",") if part.strip()]
+    normalized = {os.path.normcase(os.path.realpath(part)) for part in directories}
+    if os.path.normcase(os.path.realpath(personal_skills)) not in normalized:
+        if "," in personal_skills:
+            logger.warning("Personal Copilot skills path contains a comma; use the shared skill catalog to read it")
+            return
+        directories.append(personal_skills)
+    env["COPILOT_SKILLS_DIRS"] = ",".join(directories)
+
+
 def _native_session_id(value: object) -> str | None:
     """Require a complete UUID so resume cannot select a prefix/name/latest."""
     if not isinstance(value, str) or len(value) != 36:
@@ -509,6 +529,7 @@ class CopilotBackend(Backend):
                               native_tools_started=False, native_resume_unavailable=False)
         try:
             env = os.environ.copy()
+            _preserve_personal_skill_roots(env)
             env["COPILOT_HOME"] = isolated_home
             proc = await create_prompt_subprocess(
                 cmd, prompt,

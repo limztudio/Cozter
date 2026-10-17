@@ -22,7 +22,7 @@ from typing import Any, TypeVar
 
 from . import (
     agent_tools, backends_agent, colony, compaction, config, execution_state, flexible, router,
-    native_prompt, session, titling,
+    native_prompt, session, skills, titling,
 )
 from . import workspace as workspace_mod
 from .agent_tools.base import copy_file_atomically
@@ -1437,6 +1437,7 @@ def _build_backend_prompt(
     *,
     collaborative: bool,
     allow_detached_requests: bool = True,
+    skills_catalog: str = "",
 ) -> str:
     """Wrap a prompt in the preamble and plugin list *backend* needs.
 
@@ -1459,6 +1460,8 @@ def _build_backend_prompt(
         prelude = agent_tools.cli_plugin_prelude()
         if prelude:
             parts.append(prelude)
+    if skills_catalog and getattr(backend, "name", None) in _NATIVE_BACKENDS:
+        parts.append(skills_catalog)
     parts.append(contextual_prompt)
     return "\n\n".join(parts)
 
@@ -1470,6 +1473,7 @@ def _native_turn_prompt(
     backend, request: str, session_data: dict, colony_items: list[str],
     *, budget: int, collaborative: bool, is_scheduled: bool,
     bootstrap_request: str | None = None, previous_draft: str | None = None,
+    skills_catalog: str = "",
 ) -> native_prompt.NativePrompt:
     """Budget named context before choosing bootstrap or exact-session delta."""
     memory = session_data.get("long_term", [])
@@ -1500,6 +1504,8 @@ def _native_turn_prompt(
     sections = {"policy and plugins": _build_backend_prompt(
         backend, "", collaborative=collaborative, allow_detached_requests=not is_scheduled,
     ).strip()}
+    if skills_catalog:
+        sections["skills catalog"] = skills_catalog
     partial_sections: set[str] = set()
     for index, (name, render) in enumerate(descriptors):
         natural = render(None)
@@ -2077,6 +2083,9 @@ async def _run_flexible(
 
     summary_backend = backends_agent.get_backend(summary_backend_name)
     tiers = workspace_mod.get_flexible_run_config(workspace_path)
+    native_skills_catalog = skills.catalog_prompt(
+        skills.current_catalog(workspace_path), cli=True,
+    )
     execution = execution_state.current_execution()
     original_request = execution.original_request if execution is not None else request
     signature_context = {
@@ -2146,25 +2155,28 @@ async def _run_flexible(
     else:
         await invalidate()
         await status(f"flexible: planning with {summary_backend.name}/{summary_model}")
-        raw_plan, restarting = await _run_with_stage_timing(_run_with_inject_watch(
-            run_internal_backend(
-                summary_backend,
-                workspace_path,
-                flexible.build_plan_prompt(
-                    _planner_context(contextual_prompt, request),
-                    collaborative=collaborative,
+        with agent_tools.skill_planning_scope():
+            raw_plan, restarting = await _run_with_stage_timing(_run_with_inject_watch(
+                run_internal_backend(
+                    summary_backend,
+                    workspace_path,
+                    flexible.build_plan_prompt(
+                        _planner_context(contextual_prompt, request),
+                        collaborative=collaborative,
+                        skills_catalog=(native_skills_catalog
+                                        if summary_backend.name in _NATIVE_BACKENDS else ""),
+                    ),
+                    summary_model,
+                    label="Flexible planner",
+                    log=logger,
+                    missing_executable_message=(
+                        "%s CLI not found - flexible falling back to a single task"
+                    ),
+                    missing_level=logging.WARNING,
                 ),
-                summary_model,
-                label="Flexible planner",
-                log=logger,
-                missing_executable_message=(
-                    "%s CLI not found - flexible falling back to a single task"
-                ),
-                missing_level=logging.WARNING,
-            ),
-            inject_queue,
-            injected,
-        ), "flexible_planner", summary_backend.name, summary_model)
+                inject_queue,
+                injected,
+            ), "flexible_planner", summary_backend.name, summary_model)
         if restarting:
             return await restart(AgentResult())
         plan = flexible.parse_plan(raw_plan or "", request)
@@ -2366,6 +2378,7 @@ async def _run_flexible(
                     backend,
                     "\n".join(worker_sections.values()),
                     collaborative=False, allow_detached_requests=False,
+                    skills_catalog=native_skills_catalog,
                 ),
                 model, worker_approval, effort=effort, on_event=on_event,
                 # A parallel wave has ONE inject watcher; it stops every sibling.
@@ -2375,6 +2388,7 @@ async def _run_flexible(
                     "policy and plugins": _build_backend_prompt(
                         backend, "", collaborative=False, allow_detached_requests=False,
                     ).strip(),
+                    **({"skills catalog": native_skills_catalog} if native_skills_catalog else {}),
                     **{key: text for key, text in worker_sections.items() if key != "request"},
                 }) if backend.name in _NATIVE_BACKENDS else None,
             ), "flexible_worker", backend_name, model,
@@ -2663,6 +2677,7 @@ async def run(
     """
     async with (
         workspace_mod.get_run_lock(workspace_path),
+        skills.scope(workspace_path),
         execution_state.execution_scope(
             workspace_path, execution_id, original_request if original_request is not None else prompt,
         ),
@@ -2793,7 +2808,7 @@ async def launch_detached(
     The backend must expose a durable task id; the bot persists that id before
     acknowledging the launch and later polls it through the same adapter.
     """
-    async with workspace_mod.get_run_lock(workspace_path):
+    async with workspace_mod.get_run_lock(workspace_path), skills.scope(workspace_path):
         await _wait_for_pending_session_writes(workspace_path)
         backend = backends_agent.get_backend(backend_name)
         if not getattr(backend, "supports_detached_tasks", False):
@@ -2827,6 +2842,7 @@ async def launch_detached(
                 contextual_prompt,
                 collaborative=False,
                 allow_detached_requests=False,
+                skills_catalog=skills.catalog_prompt(skills.current_catalog(workspace_path), cli=True),
             ),
             model,
             approval,
@@ -3335,6 +3351,9 @@ async def _run_turn_impl(
 
     # Prepended context-block budget.
     history_budget = workspace_mod.get_history_budget(workspace_path)
+    native_skills_catalog = skills.catalog_prompt(
+        skills.current_catalog(workspace_path), cli=True,
+    )
 
     injected = turn.injected
     effort = workspace_mod.get_reasoning_effort(workspace_path)
@@ -3376,6 +3395,7 @@ async def _run_turn_impl(
                 backend, phase_prompt,
                 collaborative=collaborative,
                 allow_detached_requests=not is_scheduled,
+                skills_catalog=native_skills_catalog,
             ),
             model, approval,
             effort=effort,
@@ -3389,6 +3409,7 @@ async def _run_turn_impl(
                 session_data, colony_items, budget=history_budget,
                 collaborative=collaborative, is_scheduled=is_scheduled,
                 bootstrap_request=phase_request, previous_draft=previous_draft,
+                skills_catalog=native_skills_catalog,
             ) if backend.name in _NATIVE_BACKENDS else None,
         )
 

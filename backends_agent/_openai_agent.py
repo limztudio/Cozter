@@ -516,7 +516,7 @@ class OpenAIChatBackend(Backend):
         request_model = self._request_model(model)
 
         # Approval -> tools.
-        effective_approval = "deny" if compaction else approval
+        effective_approval = "confirm" if tools.skill_planning_active() else "deny" if compaction else approval
         tools_schema = _tools_for_approval(effective_approval, compaction)
         if tools_schema and not self._supports_tools_for_model(request_model):
             tools_schema = None
@@ -562,12 +562,28 @@ class OpenAIChatBackend(Backend):
                 execution.get("http_pending_results"),
             )
             previous_prompt_digest = execution.get("http_prompt_digest")
+        system_prompt = _system_prompt(workspace_path, enabled_tool_names, effective_approval)
+        has_skill_tools = any(name in tools.SKILL_TOOL_NAMES for name in enabled_tool_names)
+        if has_skill_tools or tools.skill_planning_active():
+            from .. import skills
+
+            catalog_text = await asyncio.to_thread(
+                lambda: skills.catalog_prompt(skills.current_catalog(workspace_path)),
+            )
+            if catalog_text:
+                system_prompt += "\n\n" + catalog_text
+                if tools.skill_planning_active() and not has_skill_tools:
+                    system_prompt += (
+                        "\n\nThis planner has no skill-reading interface. Select relevant skills"
+                        " from catalog metadata only; do not assume their hidden instructions"
+                        " or call unavailable tools. Name the selected skills in the responsible"
+                        " worker's instruction and assign that worker to load the full skill"
+                        " before choosing or executing its detailed workflow."
+                    )
         messages: list[dict] = [
             {
                 "role": "system",
-                "content": _system_prompt(
-                    workspace_path, enabled_tool_names, effective_approval,
-                ),
+                "content": system_prompt,
             },
             *restored,
         ]
@@ -1645,6 +1661,8 @@ def _tools_for_approval(
     - auto: workspace-bounded tools; direct host-access tools require full.
     - full: the full tool set.
     """
+    if tools.skill_planning_active():
+        return tools.SKILL_TOOL_SCHEMA or None
     # Malformed approval never widens tools.
     if compaction or approval not in {"auto", "full", "confirm"}:
         return None
@@ -1680,6 +1698,12 @@ def _system_prompt(
         PROGRESS_RULE,
         VISION_RULE,
     ]
+    if tools.skill_planning_active():
+        parts.append(
+            "This internal planning phase may only discover and read skills."
+            " Other filesystem, shell, network and mutation tools are unavailable."
+            " Skill names resolve only to the authorized discovered catalog."
+        )
     if effective_approval == "full":
         parts.append(
             "Built-in filesystem tools may access paths outside the workspace,"

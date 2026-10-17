@@ -40,7 +40,9 @@ import logging
 import pkgutil
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from .base import AgentTool
@@ -52,6 +54,23 @@ performance_logger = logging.getLogger("Cozter.performance")
 
 # Bound tool results.
 _TOOL_RESULT_MAX = 4_000
+SKILL_TOOL_NAMES: frozenset[str] = frozenset({"list_skills", "read_skill"})
+_SKILL_PLANNING: ContextVar[bool] = ContextVar("cozter_skill_planning", default=False)
+
+
+def skill_planning_active() -> bool:
+    """Whether this trusted internal phase may read only discovered skills."""
+    return _SKILL_PLANNING.get()
+
+
+@contextmanager
+def skill_planning_scope() -> Iterator[None]:
+    """Give the Flexible planner skill discovery without ordinary tool access."""
+    token = _SKILL_PLANNING.set(True)
+    try:
+        yield
+    finally:
+        _SKILL_PLANNING.reset(token)
 
 
 # Import siblings to trigger self-registration.
@@ -107,6 +126,8 @@ _BY_NAME: dict[str, AgentTool] = {tool.name: tool for tool in _TOOLS}
 READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
     "read_file",
     "read_files",
+    "list_skills",
+    "read_skill",
     "list_dir",
     "tree",
     "glob",
@@ -162,6 +183,10 @@ AUTO_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
 
 READ_ONLY_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
     _TOOLS, _is_confirm_read_only,
+)
+
+SKILL_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
+    _TOOLS, lambda tool: tool.name in SKILL_TOOL_NAMES and _is_confirm_read_only(tool),
 )
 
 
@@ -226,6 +251,15 @@ async def execute_tool(
         "input": args,
         "file_action": tool.file_action if tool else None,
     })
+
+    if skill_planning_active():
+        if name not in SKILL_TOOL_NAMES or not _is_confirm_read_only(tool):
+            return _emit_tool_result(
+                emit, name,
+                f"Blocked: '{name}' is unavailable in skill-only planning;"
+                " only list_skills and read_skill may run.",
+            )
+        approval = "confirm"
 
     if approval not in {"auto", "full", "confirm"}:
         # Schemas omit tools; fail closed.
@@ -418,11 +452,15 @@ __all__ = [
     "AUTO_TOOL_SCHEMA",
     "READ_ONLY_TOOL_NAMES",
     "READ_ONLY_TOOL_SCHEMA",
+    "SKILL_TOOL_NAMES",
+    "SKILL_TOOL_SCHEMA",
     "TOOL_SCHEMA",
     "AgentTool",
     "cli_plugin_prelude",
     "execute_tool",
     "parse_openai_call",
     "summarize_tool_use",
+    "skill_planning_active",
+    "skill_planning_scope",
     "tool_signature",
 ]

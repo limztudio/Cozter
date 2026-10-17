@@ -211,6 +211,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(oa, "_stream_completion", side_effect=first),
             mock.patch.object(oa.tools, "execute_tool", new_callable=mock.AsyncMock,
                               return_value="evidence"),
+            mock.patch("Cozter.skills.catalog_prompt", return_value=""),
         ):
             with self.assertRaises(asyncio.CancelledError):
                 await self._run(_ReasoningBackend())
@@ -224,6 +225,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(oa, "current_run", return_value=record),
             mock.patch.object(oa, "_system_prompt", return_value="fresh policy"),
             mock.patch.object(oa, "_stream_completion", side_effect=resumed),
+            mock.patch("Cozter.skills.catalog_prompt", return_value=""),
         ):
             proc = await self._run(_ReasoningBackend())
         self.assertEqual(captured[0], {"role": "system", "content": "fresh policy"})

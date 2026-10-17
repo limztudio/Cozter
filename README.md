@@ -550,7 +550,7 @@ behavior still differs by CLI.
 Trusted HTTP plugins are not sandboxed: an author must set
 `requires_full_permission = True` for a plugin that can escape Cozter's
 workspace-bounded tool model. See [Plugins](#plugins) for that contract.
-`deny` exposes no tools to the HTTP and Copilot
+For ordinary execution, `deny` exposes no tools to the HTTP and Copilot
 backends; Codex and Claude Code use their strongest non-interactive
 read-only/plan modes, which may still inspect the workspace. `/permission`
 rejects a higher mode, and an already-stored higher value is clamped down.
@@ -678,6 +678,7 @@ runs commands in it, and stores per-workspace state under
   sessions
 - `schedules.json` — recurring `/reserve` prompts and their last-fired
   timestamps
+- `skills/` — reusable workspace workflows, one Markdown file per skill
 - `uploads/` — files received from Telegram, Slack, or Signal
 - `generated_images/` — external generated images copied into the
   workspace before upload back to chat
@@ -808,6 +809,84 @@ manual name.
 The complete auto-title request is capped at 4,000 characters, with half of
 its remaining context budget reserved for recent messages. An oversized stored
 summary therefore cannot crowd the current exchange out of the title prompt.
+
+## Workspace skills
+
+Put reusable instructions in flat Markdown files under
+`<workspace>/.cozter/skills/`, for example `release-check.md` or
+`log-inspection.md`. Each file is one skill; no subdirectory or `SKILL.md`
+wrapper is required in this source folder. Cozter creates the folder when it
+prepares a workspace for execution. Every flat `.md` file, including a
+`README.md`, is treated as a skill; keep general usage notes and examples
+outside that folder. Skill files can be plain Markdown, or use
+optional frontmatter for a name and short description:
+
+```markdown
+---
+name: release-check
+description: Verify a release using the project's existing build and test workflow.
+---
+
+# Release check
+
+Read the project's release instructions and identify the affected targets.
+Reuse still-valid verification evidence. Run the remaining required checks,
+inspect their complete logs, and report commands, exit codes, and any limitations.
+```
+
+The example above is documentation; Cozter does not install it as an active
+skill. Add only workflows you want available in that workspace. Ask for a
+skill by name, or describe a task that matches its description. Skills supply
+workflow instructions; the current request, worker role, and selected tool
+permissions still govern execution. An inspection worker stays read-only even
+when a skill describes a later repair or build step.
+Without frontmatter, Cozter derives display metadata from the heading, first
+paragraph, and filename. Skill documents use UTF-8 and are limited to 256 KiB.
+
+Cozter initially supplies a lightweight catalog with each skill's identity,
+description, source path, and revision. Workers load the relevant full file
+when needed instead of adding every skill body to every prompt. Native CLI
+workers can use their file-reading tools and native skill interface; API
+workers use `list_skills` and `read_skill`, including the returned paging
+cursors when a catalog or document spans multiple pages. An unchanged native
+catalog is omitted on an exact session resume. Loaded instructions stay in
+the native conversation or the API job's saved tool transcript, so a
+continuation does not need to replay every skill body.
+`list_skills` returns stable IDs, revisions, and `next_offset`; pass a returned
+ID as the `name` to `read_skill`. Continue a long document using its
+`next_offset` and `revision`, so a file changed between pages is detected.
+The optional `resource` argument reads a supporting UTF-8 reference relative
+to that skill's source directory. Listing and reading skills do not execute
+scripts or grant additional shell or filesystem permissions.
+Native CLI workers can also page the catalog with
+`python -m Cozter.agent_tools.builtin.list_skills '<JSON arguments>'` and load
+instructions with `python -m Cozter.agent_tools.builtin.read_skill '<JSON arguments>'`
+from the workspace.
+
+The Flexible planner sees the same catalog and can read selected instructions
+before choosing a workflow when its backend provides a reading interface.
+A planner without read tools selects relevant skills from metadata, then
+explicitly assigns its worker to load the full skill before choosing or
+executing the detailed workflow. Its API planning tools are limited to skill
+listing and reading; implementation runs in the assigned worker. Selected
+skills are named in that worker's instructions. Skill updates refresh the
+catalog for remaining work while retaining the saved plan cursor and
+completed evidence. Routers, titles, judges, merges, summaries, compaction,
+and colony consolidation do not receive a Cozter-added skill catalog.
+
+Edit or remove a source file to update its instructions. Revisions identify
+changed skills, and a stale selection must be refreshed before using changed
+instructions. Cozter also prepares native skill wrappers for its supported
+CLI backends without replacing unrelated user-created native skills. The
+flat `.cozter/skills/*.md` files remain the source of truth for those wrappers.
+Generated `cozter-*` wrappers live under `.agents/skills/` and `.claude/skills/`;
+their ownership is tracked in `.cozter/skill_bridges.json`. Cozter updates or
+removes only its unchanged owned wrappers and preserves foreign or manually
+modified native skills. Existing supported project and personal native skill
+folders also appear in the shared catalog. Native skill names remain
+provider-specific; the catalog's stable ID identifies the exact source when
+display names overlap. Copilot keeps personal skill search paths available
+while its conversation history stays in the private native session home.
 
 ## Commands
 
@@ -1075,17 +1154,19 @@ shell/tool policy.
 
 - **HTTP backends** (`llama`, `meta`, `zai`, and any future API backend) see plugins
   as typed tools in the chat-completions `tools` schema, alongside
-  the 17 built-in tools under `agent_tools/builtin/` (`bash`, `read_file`, `read_files`,
+  the 19 built-in tools under `agent_tools/builtin/` (`bash`, `read_file`, `read_files`,
   `write_file`, `edit_file`, `multi_edit`, `apply_patch`, `delete_file`,
   `copy_file`, `move_file`, `make_dir`, `list_dir`, `tree`, `glob`, `grep`,
-  `web_search`, and `web_fetch`)
+  `web_search`, `web_fetch`, `list_skills`, and `read_skill`)
 - **CLI backends** (`codex`, `claude_code`, `copilot`, `grok`) can't have
   external tools injected into their fixed toolkit. The bot
   instead lists each plugin in their prompt and tells the model to
   invoke it through the backend's own `bash` / `shell` tool as
   `python -m Cozter.agent_tools.plugins.<filename> '<JSON args>'`.
 
-For HTTP backends, `deny` exposes no tools. Under `/permission confirm`,
+For ordinary HTTP execution, `deny` exposes no tools. The Flexible planner's
+separate planning scope permits only `list_skills` and `read_skill` while
+keeping all execution tools disabled. Under `/permission confirm`,
 plugins are never exposed or executed—even if a plugin reuses a built-in
 read-only tool's name. That mode uses only Cozter's fixed read-only built-ins;
 select `auto` or `full` when an HTTP plugin needs to run.
@@ -1546,7 +1627,7 @@ path. A cancelled owner retains the lock until its mutation finishes.
 Permission modes are backend-specific because a chat bot cannot answer a
 per-tool-call approval dialog. `codex` uses bypass only for `full`, its
 workspace-write sandbox for `auto`, and a read-only sandbox for `confirm`
-and `deny`. `llama`, `meta`, and `zai` run in-process: `deny` exposes no tools and
+and `deny`. `llama`, `meta`, and `zai` run in-process: ordinary `deny` execution exposes no tools and
 `confirm` exposes only read-only tools. `auto` permits Cozter's
 workspace-bounded built-ins plus plugins that do not declare themselves
 full-only with `requires_full_permission`; both it and `confirm` block the
@@ -1739,6 +1820,7 @@ Cozter/
 ├── session.py            per-workspace conversation persistence
 ├── execution_state.py    isolated job checkpoints and durable native conversation state
 ├── native_prompt.py      structured bootstrap and incremental native CLI context
+├── skills.py             flat workspace skills, shared native catalogs, and owned bridges
 ├── compaction.py         scratch-summary + long-term-memory rewriter
 ├── colony.py             cross-session long-term memory consolidation
 ├── router.py             session picker for first-turn-in-workspace (subsequent turns reuse last_session.json)
@@ -1780,7 +1862,7 @@ Cozter/
     ├── discovery.py        bounded whole-match pages with continuation offsets
     ├── html_scan.py        forward-only title and search-anchor extraction
     ├── owned_worker.py     blocking mutations with cancellation settlement
-    ├── builtin/            18 files: 17 built-in tools (bash, read_file, read_files, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch) plus __init__.py
+    ├── builtin/            20 files: 19 built-in tools (bash, read_file, read_files, write_file, edit_file, multi_edit, apply_patch, delete_file, copy_file, move_file, make_dir, list_dir, tree, glob, grep, web_search, web_fetch, list_skills, read_skill) plus __init__.py
     └── plugins/            user drop-in zone (current_time, calculator, notes, git_info, git_ops, git_sync, memory, http_request shipped live; _git_common.py holds the git tools' shared runner/validation/truncation and is skipped by the loader)
 ```
 
@@ -1978,13 +2060,13 @@ The tracked workspace is intentionally flat and small. A complete source
 audit should use `git ls-files` so hidden tracked files, especially
 `.config/config.example.json`, are included even though `.config/*` is
 ignored for local secrets and runtime queues.
-The runtime contains 73 Python source files, separate from the tests below.
+The runtime contains 76 Python source files, separate from the tests below.
 
 - Package entry and runtime setup: `__init__.py`, `__main__.py`,
   `launch_process.py`, `process_launch.py`, `config.py`, `updater.py`, and `utils.py`
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
-  `colony.py`, `flexible.py`, `execution_state.py`, `native_prompt.py`, and `schedules.py`
+  `colony.py`, `flexible.py`, `execution_state.py`, `native_prompt.py`, `skills.py`, and `schedules.py`
 - Chat-platform adapters: `backends_bot/__init__.py`, `base.py`, `formatting.py`,
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/__init__.py`, `base.py`, `_http_process.py`,
@@ -1995,10 +2077,10 @@ The runtime contains 73 Python source files, separate from the tests below.
   `agent_tools/owned_worker.py`, `agent_tools/_http_types.py`,
   `agent_tools/_public_resolver.py`,
   `agent_tools/discovery.py`, `agent_tools/html_scan.py`,
-  the 18 files under `agent_tools/builtin/` (`__init__.py`, `apply_patch.py`,
+  the 20 files under `agent_tools/builtin/` (`__init__.py`, `apply_patch.py`,
   `bash.py`, `copy_file.py`, `delete_file.py`, `edit_file.py`, `glob.py`,
-  `grep.py`, `list_dir.py`, `make_dir.py`, `move_file.py`, `multi_edit.py`,
-  `read_file.py`, `read_files.py`, `tree.py`, `web_fetch.py`, `web_search.py`, `write_file.py`),
+  `grep.py`, `list_dir.py`, `list_skills.py`, `make_dir.py`, `move_file.py`, `multi_edit.py`,
+  `read_file.py`, `read_files.py`, `read_skill.py`, `tree.py`, `web_fetch.py`, `web_search.py`, `write_file.py`),
   and the 11 files under `agent_tools/plugins/` (`__init__.py`,
   `_git_common.py`, `calculator.py`, `current_time.py`, `git_info.py`,
   `git_ops.py`, `git_sync.py`, `http_request.py`, `memory.py`, `notes.py`,
@@ -2008,7 +2090,7 @@ The runtime contains 73 Python source files, separate from the tests below.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (151 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 148 `test_*.py` modules:
+- Tests (156 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 153 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
@@ -2033,6 +2115,7 @@ The runtime contains 73 Python source files, separate from the tests below.
   `test_http_body_sniff.py`, `test_http_event_framing.py`, `test_http_execution_continuation.py`,
   `test_http_latency.py`, `test_http_owned_mutation_cancellation.py`,
   `test_http_pending_checkpoints.py`, `test_http_redirect_method.py`, `test_http_restore_accounting.py`,
+  `test_http_skill_workflow.py`,
   `test_image_snapshot_metadata.py`, `test_inject.py`, `test_interactive_schedule_refresh.py`,
   `test_internal_backend_deadline.py`, `test_interrupted_turns.py`, `test_job_continuation.py`,
   `test_job_prerequisite_retry.py`, `test_jpeg_dimensions.py`, `test_judge_blocked.py`,
@@ -2042,6 +2125,7 @@ The runtime contains 73 Python source files, separate from the tests below.
   `test_monthly_schedule_execution.py`, `test_monthly_schedules.py`,
   `test_native_conversation_state.py`, `test_native_current_protocol.py`,
   `test_native_launch_contract.py`, `test_native_prompt.py`, `test_native_session_turns.py`,
+  `test_native_skill_launch.py`,
   `test_notes_owned_worker.py`,
   `test_notes_transactions.py`, `test_openai_agent.py`, `test_owned_file_mutations.py`,
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`, `test_platform_formatting.py`,
@@ -2055,6 +2139,7 @@ The runtime contains 73 Python source files, separate from the tests below.
   `test_signal_formatting.py`, `test_signal_inline_latency.py`, `test_signal_literal_runs.py`,
   `test_signal_send_observability.py`, `test_signal_span_projection.py`, `test_signal_status.py`,
   `test_signal_status_recovery.py`, `test_signal_transport.py`, `test_slack_commands.py`,
+  `test_skill_prompt_integration.py`, `test_skill_tools.py`,
   `test_slack_formatting.py`, `test_state_fallbacks.py`, `test_state_integrity.py`,
   `test_status_and_shell_latency.py`, `test_status_latency.py`, `test_thinking_display.py`,
   `test_titling.py`, `test_tool_permissions.py`, `test_tool_runtime.py`,
@@ -2062,7 +2147,7 @@ The runtime contains 73 Python source files, separate from the tests below.
   `test_tools_audit_regressions.py`, `test_tree_junction_permissions.py`, `test_turn_budget.py`,
   `test_unbounded_tool_http_execution.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
   `test_vision_marker_scanning.py`, `test_web_fetch.py`, `test_web_html_latency.py`,
-  `test_web_search.py`, `test_yearly_schedules.py`)
+  `test_web_search.py`, `test_workspace_skills.py`, `test_yearly_schedules.py`)
   covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared
@@ -2073,7 +2158,9 @@ The runtime contains 73 Python source files, separate from the tests below.
   unbounded tool/provider execution with cancellation, native stdin ownership,
   native conversations retained across completed jobs, exact worker and
   model/policy isolation, changed-context delivery, and full bootstrap only on
-  confirmed pre-work session loss; restored-queue
+  confirmed pre-work session loss; progressive workspace/native skill catalogs,
+  bounded skill loading, native bridge ownership, planner-only skill tools, and skill-aware saved-plan
+  continuation without replaying completed workers; restored-queue
   FIFO/reference preservation, weekly/monthly/yearly/daily schedule parsing and presentation,
   short-month and leap-year dates, yearly catch-up, mixed-rule deduplication, and schedule edits
   while waiting for a lock;

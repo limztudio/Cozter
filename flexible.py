@@ -553,7 +553,9 @@ def parse_plan(raw: str, request: str) -> Plan:
     )
 
 
-def build_plan_prompt(context: str, *, collaborative: bool) -> str:
+def build_plan_prompt(
+    context: str, *, collaborative: bool, skills_catalog: str = "",
+) -> str:
     """Prompt the summary agent to understand and split the request."""
     parts = [_PLANNER_RULES]
     if collaborative:
@@ -561,6 +563,18 @@ def build_plan_prompt(context: str, *, collaborative: bool) -> str:
     parts.append(_PLANNER_FORMAT)
     parts.append("--- input ---")
     parts.append(context)
+    if skills_catalog:
+        parts.extend((
+            "--- available workspace skills ---",
+            skills_catalog,
+            "Select relevant skills by name. If a skill-reading interface is available,"
+            " read the selected instructions before choosing a detailed workflow."
+            " Without read tools, select skills from catalog metadata only; do not"
+            " assume hidden instructions. Name the selected skills in the responsible"
+            " worker's instruction and explicitly assign that worker to load the full"
+            " skill before choosing or executing its detailed workflow. The catalog"
+            " describes available skills; do not assume it contains their full instructions.",
+        ))
     return "\n".join(parts)
 
 

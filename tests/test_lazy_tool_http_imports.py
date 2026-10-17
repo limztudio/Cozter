@@ -20,7 +20,7 @@ class LazyToolHttpImportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run(
                 [sys.executable, "-B", "-c", textwrap.dedent(source)],
-                cwd=directory, env=env, capture_output=True, text=True,
+                cwd=directory, env=env, capture_output=True, text=True, encoding="utf-8",
                 timeout=10,
             )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -34,8 +34,8 @@ class LazyToolHttpImportTests(unittest.TestCase):
             sys.argv[0] = '-m'
             from Cozter import agent_tools as tools
             expected = ('apply_patch', 'tree', 'bash', 'copy_file', 'delete_file',
-                        'edit_file', 'glob', 'grep', 'list_dir', 'make_dir',
-                        'move_file', 'multi_edit', 'read_file', 'read_files',
+                        'edit_file', 'glob', 'grep', 'list_dir', 'list_skills', 'make_dir',
+                        'move_file', 'multi_edit', 'read_file', 'read_files', 'read_skill',
                         'web_fetch', 'web_search', 'write_file')
             assert tuple(tools._BY_NAME) == expected
             assert [row['function'] for row in tools.TOOL_SCHEMA] == [tool.schema for tool in tools._TOOLS]
@@ -51,6 +51,46 @@ class LazyToolHttpImportTests(unittest.TestCase):
             asyncio.run(run())
             assert 'aiohttp' not in sys.modules
         """)
+
+    def test_skill_command_help_stays_cold_and_does_not_create_workspace_state(self):
+        for name in ("list_skills", "read_skill"):
+            with self.subTest(tool=name):
+                output = self.run_fresh(f"""
+                    import pathlib
+                    import runpy
+                    import sys
+                    sys.argv[:] = ['-m', '--help']
+                    runpy.run_module('Cozter.agent_tools.builtin.{name}', run_name='__main__')
+                    assert not pathlib.Path('.cozter').exists()
+                    assert 'aiohttp' not in sys.modules
+                    assert 'Cozter.skills' not in sys.modules
+                """)
+                self.assertEqual(json.loads(output)["name"], name)
+
+    def test_skill_command_list_and_read_preserve_unicode(self):
+        for name in ("list_skills", "read_skill"):
+            with self.subTest(tool=name):
+                arguments = {} if name == "list_skills" else {"name": "unicode"}
+                output = self.run_fresh(f"""
+                    import json
+                    import pathlib
+                    import runpy
+                    import sys
+                    sys.argv[0] = '-m'
+                    from Cozter import skills
+                    skills._native_roots = lambda workspace: []
+                    root = pathlib.Path('.cozter', 'skills')
+                    root.mkdir(parents=True)
+                    (root / '지침.md').write_text(
+                        '---\\nname: unicode\\ndescription: 한글 안내\\n---\\n지침 본문', encoding='utf-8')
+                    sys.argv[:] = ['-m', json.dumps({arguments!r})]
+                    runpy.run_module('Cozter.agent_tools.builtin.{name}', run_name='__main__')
+                """)
+                decoded = json.loads(output)
+                if name == "read_skill":
+                    self.assertIn("지침 본문", decoded["content"])
+                else:
+                    self.assertEqual(decoded["skills"][0]["description"], "한글 안내")
 
     def test_plugin_help_keeps_required_imports_and_calculator_execution_stays_cold(self):
         for plugin in ('calculator', 'current_time', 'git_info', 'git_ops', 'git_sync', 'memory', 'notes'):
