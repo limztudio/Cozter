@@ -1942,6 +1942,7 @@ Cozter/
 ├── titling.py            auto-titles new sessions from their first turn
 ├── schedules.py          /reserve cron-style scheduled prompts
 ├── flexible.py           flexible meta-agent prompt construction + plan/merge parsing
+├── queue_store.py         transactional platform queue body plus schedule receipts (SQLite)
 ├── workspace.py          per-workspace settings; containment-checked nested .cozter dirs
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
@@ -2175,13 +2176,13 @@ The tracked workspace is intentionally flat and small. A complete source
 audit should use `git ls-files` so hidden tracked files, especially
 `.config/config.example.json`, are included even though `.config/*` is
 ignored for local secrets and runtime queues.
-The runtime contains 76 Python source files, separate from the tests below.
+The runtime contains 77 Python source files, separate from the tests below.
 
 - Package entry and runtime setup: `__init__.py`, `__main__.py`,
   `launch_process.py`, `process_launch.py`, `config.py`, `updater.py`, and `utils.py`
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
-  `colony.py`, `flexible.py`, `execution_state.py`, `native_prompt.py`, `skills.py`, and `schedules.py`
+  `colony.py`, `flexible.py`, `execution_state.py`, `native_prompt.py`, `skills.py`, `schedules.py`, and `queue_store.py`
 - Chat-platform adapters: `backends_bot/__init__.py`, `base.py`, `formatting.py`,
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/__init__.py`, `base.py`, `_http_process.py`,
@@ -2205,7 +2206,7 @@ The runtime contains 76 Python source files, separate from the tests below.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (160 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 157 `test_*.py` modules:
+- Tests (163 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 160 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
@@ -2220,8 +2221,8 @@ The runtime contains 76 Python source files, separate from the tests below.
   `test_config.py`, `test_copilot_catalog_cleanup.py`, `test_detached_tasks.py`,
   `test_discovery_canonical_root.py`, `test_discovery_optimization.py`, `test_discovery_paging.py`,
   `test_discovery_pruning.py`, `test_discovery_tools_async.py`, `test_durable_poll_parallelism.py`,
-  `test_edit_file_read_limits.py`, `test_execution_state.py`, `test_flexible.py`,
-  `test_flexible_continuation.py`, `test_flexible_injection_continuation.py`,
+  `test_edit_file_read_limits.py`, `test_effort_maximum.py`, `test_execution_state.py`, `test_flexible.py`,
+  `test_flexible_continuation.py`, `test_flexible_effort.py`, `test_flexible_injection_continuation.py`,
   `test_flexible_instruction_identity.py`, `test_flexible_native_history.py`,
   `test_flexible_native_injection_continuation.py`, `test_flexible_native_sessions.py`,
   `test_flexible_parallel_plan.py`, `test_flexible_parallel_runtime.py`,
@@ -2248,7 +2249,7 @@ The runtime contains 76 Python source files, separate from the tests below.
   `test_plugin_cli_unicode.py`, `test_plugin_memory_calculator_performance.py`,
   `test_plugin_parallelism.py`, `test_plugin_result_budgets.py`, `test_prerequisite_checkpoint.py`,
   `test_prompt_payload_dedup.py`, `test_prompt_subprocess.py`, `test_protocol_marker_latency.py`,
-  `test_public_http_pool.py`, `test_queue_persistence_latency.py`, `test_read_file_character_cursor.py`,
+  `test_public_http_pool.py`, `test_queue_persistence_latency.py`, `test_queue_store.py`, `test_read_file_character_cursor.py`,
   `test_read_file_offset_chunks.py`, `test_read_files.py`, `test_reply_delivery.py`, `test_run_lock.py`,
   `test_runtime_diagnostics.py`, `test_schedule_execution.py`, `test_session_picker.py`,
   `test_session_write_latency.py`, `test_signal_account_config.py`,
