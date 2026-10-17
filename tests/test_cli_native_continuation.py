@@ -12,7 +12,7 @@ from unittest import mock
 
 from Cozter import execution_state
 from Cozter.backends_agent import claude_code, codex, copilot, grok
-from Cozter.backends_agent.base import AgentResult
+from Cozter.backends_agent.base import AgentResult, NativeSessionUnavailable
 from Cozter.utils import kill_and_wait
 
 
@@ -216,13 +216,36 @@ class NativeCliContinuationTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(second[second.index("--session-id") + 1], candidate)
             await backend.cleanup_process(proc)
 
-    async def test_copilot_missing_owned_native_state_falls_back_before_process_launch(self):
+    async def test_copilot_missing_owned_native_state_requests_bootstrap_before_process_launch(self):
         backend = copilot.CopilotBackend()
         async with self.scope(backend, "fixture-model") as record:
             await record.save(native_session_id=_SID)
+            with (
+                mock.patch.object(copilot, "create_prompt_subprocess", new=mock.AsyncMock()) as create,
+                mock.patch.object(copilot, "executable_command") as executable,
+            ):
+                with self.assertRaises(NativeSessionUnavailable) as raised:
+                    await backend.launch(
+                        self.ws, "incremental guidance only", "fixture-model", "full", effort=100,
+                    )
+                create.assert_not_awaited()
+                executable.assert_not_called()
+            self.assertEqual(raised.exception.backend_name, backend.name)
+            self.assertEqual(raised.exception.native_session_id, _SID)
+            self.assertIsNone(record.get("native_session_id"))
+            self.assertEqual(record.get("native_unavailable_session_id"), _SID)
+            self.assertTrue(record.get("native_resume_unavailable"))
+            self.assertFalse(record.get("native_resume_attempted"))
+            self.assertFalse(record.get("native_tools_started"))
+
+            # Once the driver selects bootstrap input, a fresh launch remains
+            # possible with the same provider/model/permission/effort.
             cmd, _, proc = await self.launch(copilot, backend, "fixture-model")
             self.assertNotIn("--resume", cmd)
             self.assertIn("--session-id", cmd)
+            self.assertIn("fixture-model", cmd)
+            self.assertIn("--yolo", cmd)
+            self.assertIn("max", cmd)
             self.assertIsNone(record.get("native_session_id"))
             self.assertEqual(record.get("native_unavailable_session_id"), _SID)
             await backend.cleanup_process(proc)

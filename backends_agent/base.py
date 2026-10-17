@@ -25,6 +25,21 @@ _DETACHED_UNSUPPORTED_SUFFIX = "does not support detached tasks"
 # CLI probe timeouts (copilot/HTTP use their own).
 CLI_MODEL_DISCOVERY_TIMEOUT_SEC = 15
 
+
+class NativeSessionUnavailable(Exception):
+    """An exact native session was missing before any process or work began.
+
+    The shared driver may recover once using its complete bootstrap prompt.
+    Keeping this separate from ordinary launch errors prevents a backend from
+    silently starting a fresh conversation with an incremental resume prompt.
+    """
+
+    def __init__(self, backend_name: str, native_session_id: str) -> None:
+        self.backend_name = backend_name
+        self.native_session_id = native_session_id
+        super().__init__(f"{backend_name} exact native session {native_session_id} is unavailable")
+
+
 # Canonical turn-preamble wording (agent.py re-exports).
 WHOLE_SCOPE_RULE = (
     "Whole-scope: all/entire/every/whole = list every target first,"

@@ -1,8 +1,10 @@
-"""Durable, job-scoped backend continuation, independent of schedules.
+"""Durable job continuation and conversation-owned native CLI sessions.
 
 Only actual execution workers bind a backend record. Internal routing, title,
 summary and planner calls must remain stateless. Native provider identifiers
-never cross a workspace, job, worker, model, permission or reasoning boundary.
+never cross a workspace, conversation, worker, model, permission or reasoning
+boundary. Jobs retain exact native-generation pins independently of the
+conversation's latest reusable generation.
 """
 
 import asyncio
@@ -18,14 +20,64 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import threading
 from typing import Any
 import uuid
+import weakref
 
 from .utils import _fsync_directory, validate_json_nesting
 
 logger = logging.getLogger(__name__)
 _MAX_STATE_BYTES = 64 * 1024 * 1024
 _VERSION = 1
+_NAMESPACES = frozenset({"executions", "native_sessions"})
+
+
+@dataclass
+class _ConversationLifetime:
+    lock: Any = field(default_factory=threading.RLock)
+    heads_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    discarded: bool = False
+
+
+_LIFETIMES: weakref.WeakValueDictionary[tuple[str, str], _ConversationLifetime] = (
+    weakref.WeakValueDictionary()
+)
+_LIFETIMES_LOCK = threading.RLock()
+
+
+def _conversation_lifetime(workspace_path: str, session_id: str) -> _ConversationLifetime:
+    key = (os.path.normcase(os.path.realpath(workspace_path)), _digest(session_id))
+    with _LIFETIMES_LOCK:
+        lifetime = _LIFETIMES.get(key)
+        if lifetime is None:
+            lifetime = _ConversationLifetime()
+            _LIFETIMES[key] = lifetime
+        return lifetime
+
+
+def _session_id(value: str) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError("native conversation requires a nonempty session id")
+    return value
+
+
+def _generation(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) != 32:
+        return None
+    try:
+        return value if uuid.UUID(value).hex == value else None
+    except ValueError:
+        return None
+
+
+def _confirmed_native_id(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 36:
+        return False
+    try:
+        return str(uuid.UUID(value)) == value.lower()
+    except ValueError:
+        return False
 
 
 def _finite_json_float(value: str) -> float:
@@ -100,19 +152,41 @@ class ExecutionRecord:
     @property
     def directory(self) -> Path:
         from . import workspace
+        self.execution.ensure_live()
         return Path(workspace.ensure_workspace_state_dir(
-            self.execution.workspace_path, "executions", self.execution.directory_id,
+            self.execution.workspace_path, self.execution.namespace, self.execution.directory_id,
             self.key,
         ))
 
     @property
     def path(self) -> Path:
         from . import workspace
+        self.execution.ensure_live()
         # Revalidate containment on every read/write, including existing links.
         return Path(workspace.workspace_state_path(
-            self.execution.workspace_path, "executions", self.execution.directory_id,
+            self.execution.workspace_path, self.execution.namespace, self.execution.directory_id,
             self.key, "state.json",
         ))
+
+    def _read_values(self) -> dict:
+        path = self.path
+        if not path.exists():
+            return {}
+        if path.stat().st_size > _MAX_STATE_BYTES:
+            raise RuntimeError("Saved backend continuation is oversized; preserve and inspect it before resuming")
+        try:
+            data = json.loads(
+                path.read_bytes(), parse_constant=_finite_json_float,
+                parse_float=_finite_json_float,
+            )
+            validate_json_nesting(data)
+        except (OSError, ValueError, RecursionError) as exc:
+            raise RuntimeError("Saved backend continuation is unreadable; preserve and inspect it before resuming") from exc
+        if (not isinstance(data, dict) or data.get("version") != _VERSION
+                or data.get("identity") != self.key
+                or not isinstance(data.get("values"), dict)):
+            raise RuntimeError("Saved backend continuation has an invalid identity or format; inspect it before resuming")
+        return data["values"]
 
     def get(self, key: str, default: Any = None) -> Any:
         return deepcopy(self._values.get(key, default))
@@ -191,9 +265,21 @@ class ExecutionRecord:
                     # shallow snapshot remains immutable during thread I/O.
                     "values": dict(self._values),
                 }
-                self.directory
-                path = str(self.path)
-                await asyncio.to_thread(_write_snapshot, path, snapshot)
+                def write() -> None:
+                    lifetime = self.execution._lifetime
+                    if lifetime is None:
+                        self.directory
+                        _write_snapshot(str(self.path), snapshot)
+                    else:
+                        # Deletion and final replacement share a lock so a
+                        # queued writer cannot resurrect a deleted session.
+                        with lifetime.lock:
+                            if lifetime.discarded:
+                                return
+                            self.directory
+                            _write_snapshot(str(self.path), snapshot)
+
+                await asyncio.to_thread(write)
                 self._written = revision
 
 
@@ -203,6 +289,39 @@ class Execution:
     execution_id: str
     original_request: str
     records: dict[str, ExecutionRecord] = field(default_factory=dict)
+    namespace: str = "executions"
+    conversation: "Execution | None" = field(default=None, init=False)
+    native_main_record: ExecutionRecord | None = field(default=None, init=False)
+    _lifetime: _ConversationLifetime | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        if self.namespace not in _NAMESPACES:
+            raise ValueError("invalid backend continuation namespace")
+        if self.namespace == "native_sessions":
+            self._lifetime = _conversation_lifetime(
+                self.workspace_path, _session_id(self.execution_id),
+            )
+
+    def ensure_live(self) -> None:
+        if self.namespace not in _NAMESPACES:
+            raise ValueError("invalid backend continuation namespace")
+        if self._lifetime is not None and self._lifetime.discarded:
+            raise RuntimeError("native conversation was deleted")
+
+    def bind_conversation(self, session_id: str) -> None:
+        """Bind the resolved Cozter conversation without changing job evidence."""
+        _session_id(session_id)
+        if self.namespace != "executions":
+            raise ValueError("only a job execution can bind a native conversation")
+        if self.conversation is not None:
+            if self.conversation.execution_id != session_id:
+                raise ValueError("an execution cannot change its native conversation")
+            self.conversation.ensure_live()
+            return
+        self.conversation = Execution(
+            self.workspace_path, session_id, "", namespace="native_sessions",
+        )
+        self.conversation.ensure_live()
 
     @property
     def directory_id(self) -> str:
@@ -212,44 +331,110 @@ class Execution:
         # The queue entry owns identity. Accepted guidance changes the request
         # while retaining the same native conversation and tool evidence.
         # Flexible plans separately fingerprint the latest full requirements.
+        self.ensure_live()
         key = _digest(identity)
         cached = self.records.get(key)
         if cached is not None:
             return cached
         result = ExecutionRecord(self, key)
 
-        def load() -> dict:
-            path = result.path
-            if not path.exists():
-                return {}
-            if path.stat().st_size > _MAX_STATE_BYTES:
-                raise RuntimeError("Saved backend continuation is oversized; preserve and inspect it before resuming")
-            try:
-                data = json.loads(
-                    path.read_bytes(), parse_constant=_finite_json_float,
-                    parse_float=_finite_json_float,
-                )
-                validate_json_nesting(data)
-            except (OSError, ValueError, RecursionError) as exc:
-                raise RuntimeError("Saved backend continuation is unreadable; preserve and inspect it before resuming") from exc
-            if (not isinstance(data, dict) or data.get("version") != _VERSION
-                    or data.get("identity") != key
-                    or not isinstance(data.get("values"), dict)):
-                raise RuntimeError("Saved backend continuation has an invalid identity or format; inspect it before resuming")
-            return data["values"]
-
-        result._values = await asyncio.to_thread(load)
+        result._values = await asyncio.to_thread(result._read_values)
         # The workspace run lock normally serializes this, but independent
         # workers may request the same record concurrently.
         return self.records.setdefault(key, result)
 
     async def flush(self) -> None:
-        results = await asyncio.gather(
-            *(item.flush() for item in self.records.values()), return_exceptions=True,
-        )
-        for result in results:
-            if isinstance(result, BaseException):
-                raise result
+        async def finish() -> None:
+            results = await asyncio.gather(
+                *(item.flush() for item in self.records.values()),
+                *((self.conversation.flush(),) if self.conversation is not None else ()),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+
+        task = asyncio.create_task(finish(), name="flush-execution-state")
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await _settle(task)
+            raise
+
+    async def native_record(
+        self, identity: object, job_record: ExecutionRecord,
+    ) -> tuple[ExecutionRecord, ExecutionRecord | None, str | None]:
+        """Select a conversation generation while pinning this job before work."""
+        conversation = self.conversation
+        if conversation is None:
+            return job_record, None, None
+        lifetime = conversation._lifetime
+        assert lifetime is not None
+        async with lifetime.heads_lock:
+            conversation.ensure_live()
+            pinned = job_record.get("native_record_id")
+            # Preserve unfinished pre-conversation jobs in place, including
+            # their owned Copilot home. Never copy unrelated job evidence.
+            if pinned is None and _confirmed_native_id(job_record.get("native_session_id")):
+                return job_record, None, None
+            if pinned is not None and _generation(pinned) is None:
+                raise RuntimeError("saved job has an invalid native generation pin")
+            head = await conversation.record({"native_head": identity})
+            head_generation = head.get("native_record_id")
+            if head_generation is not None and _generation(head_generation) is None:
+                raise RuntimeError("saved conversation has an invalid native generation head")
+            selected = pinned
+            if selected is None and head_generation is not None:
+                candidate = await conversation.record({
+                    "native_generation": head_generation, "backend": identity,
+                })
+                if (candidate.get("native_record_id") == head_generation
+                        and _confirmed_native_id(candidate.get("native_session_id"))):
+                    selected = head_generation
+            if selected is None:
+                selected = uuid.uuid4().hex
+                state = await conversation.record({
+                    "native_generation": selected, "backend": identity,
+                })
+                await state.save(native_record_id=selected)
+            else:
+                state = await conversation.record({
+                    "native_generation": selected, "backend": identity,
+                })
+                if state.get("native_record_id") != selected:
+                    raise RuntimeError("saved native generation is missing or has an invalid identity")
+            if pinned is None:
+                await job_record.save(native_record_id=selected)
+            # A resumed old job must not replace a newer conversation head.
+            expected = head_generation if pinned is None else selected
+            return state, head, expected
+
+    async def publish_native_head(
+        self, state: ExecutionRecord, head: ExecutionRecord | None,
+        expected: str | None,
+    ) -> None:
+        if head is None or not _confirmed_native_id(state.get("native_session_id")):
+            return
+        conversation = self.conversation
+        assert conversation is not None and conversation._lifetime is not None
+        lifetime = conversation._lifetime
+        async with lifetime.heads_lock:
+            if lifetime.discarded:
+                return
+            # Different job Execution objects can have stale cached heads.
+            # Read the persisted head again before promoting this generation.
+            def current_generation() -> object:
+                with lifetime.lock:
+                    if lifetime.discarded:
+                        return object()
+                    return head._read_values().get("native_record_id")
+
+            current = await asyncio.to_thread(current_generation)
+            selected = state.get("native_record_id")
+            if _generation(selected) is None:
+                raise RuntimeError("saved native generation has an invalid identity")
+            if current == expected or current == selected or current is None and expected == selected:
+                await head.save(native_record_id=selected)
 
 
 _EXECUTION: ContextVar[Execution | None] = ContextVar("cozter_execution", default=None)
@@ -263,6 +448,13 @@ def current_execution() -> Execution | None:
 
 def current_run() -> ExecutionRecord | None:
     return _RUN.get()
+
+
+def bind_conversation(session_id: str) -> None:
+    """Bind routing's resolved conversation to the current job, when present."""
+    execution = current_execution()
+    if execution is not None:
+        execution.bind_conversation(session_id)
 
 
 @contextmanager
@@ -282,23 +474,37 @@ async def record(name: str) -> ExecutionRecord | None:
     return await execution.record({"record": name, "worker": _WORKER.get()})
 
 
-async def discard_execution(workspace_path: str, execution_id: str) -> None:
-    """Remove only a completed queue entry's owned continuation directory."""
+def _discard_owned_directory(workspace_path: str, namespace: str, identity: str) -> None:
     from . import workspace
 
-    def remove() -> None:
-        parent = workspace.workspace_state_path(workspace_path, "executions")
-        target = workspace.workspace_state_path(workspace_path, "executions", _digest(execution_id))
-        # Require the literal directory layout, not even an in-workspace link
-        # to another job. shutil.rmtree does not follow child symlink entries.
-        if (os.path.normcase(os.path.abspath(parent)) != os.path.normcase(os.path.realpath(parent))
-                or os.path.normcase(os.path.abspath(target)) != os.path.normcase(os.path.realpath(target))
-                or os.path.dirname(os.path.abspath(target)) != os.path.abspath(parent)):
-            raise ValueError("unsafe backend continuation cleanup path")
-        if os.path.isdir(target):
-            shutil.rmtree(target)
+    if namespace not in _NAMESPACES:
+        raise ValueError("invalid backend continuation namespace")
+    parent = workspace.workspace_state_path(workspace_path, namespace)
+    target = workspace.workspace_state_path(workspace_path, namespace, _digest(identity))
+    # Require the literal directory layout, not even an in-workspace link
+    # to another job. shutil.rmtree does not follow child symlink entries.
+    if (os.path.normcase(os.path.abspath(parent)) != os.path.normcase(os.path.realpath(parent))
+            or os.path.normcase(os.path.abspath(target)) != os.path.normcase(os.path.realpath(target))
+            or os.path.dirname(os.path.abspath(target)) != os.path.abspath(parent)):
+        raise ValueError("unsafe backend continuation cleanup path")
+    if os.path.isdir(target):
+        shutil.rmtree(target)
 
-    task = asyncio.create_task(asyncio.to_thread(remove), name="discard-execution-state")
+
+def discard_native_conversation(workspace_path: str, session_id: str) -> None:
+    """Delete only this conversation's native state and invalidate late writes."""
+    lifetime = _conversation_lifetime(workspace_path, _session_id(session_id))
+    with lifetime.lock:
+        lifetime.discarded = True
+        _discard_owned_directory(workspace_path, "native_sessions", session_id)
+
+
+async def discard_execution(workspace_path: str, execution_id: str) -> None:
+    """Remove only a completed queue entry's owned continuation directory."""
+
+    task = asyncio.create_task(asyncio.to_thread(
+        _discard_owned_directory, workspace_path, "executions", execution_id,
+    ), name="discard-execution-state")
     try:
         await asyncio.shield(task)
     except asyncio.CancelledError:
@@ -337,20 +543,40 @@ async def execution_scope(workspace_path: str, execution_id: str | None,
 
 
 @asynccontextmanager
-async def backend_scope(backend: str, model: str | None, approval: str, effort: int):
+async def backend_scope(
+    backend: str, model: str | None, approval: str, effort: int, *, native: bool = False,
+):
     execution = current_execution()
     state = None
+    head = None
+    expected = None
     if execution is not None:
-        state = await execution.record({
+        identity = {
             "backend": backend, "model": model, "approval": approval,
             "effort": effort, "worker": _WORKER.get(),
-        })
+        }
+        state = await execution.record(identity)
+        if native and execution.conversation is not None:
+            state, head, expected = await execution.native_record(identity, state)
+            if _WORKER.get() == "main":
+                execution.native_main_record = state
     token = _RUN.set(state)
     try:
         yield state
     finally:
         try:
             if state is not None:
-                await state.flush()
+                async def finish() -> None:
+                    assert state is not None
+                    await state.flush()
+                    if execution is not None:
+                        await execution.publish_native_head(state, head, expected)
+
+                task = asyncio.create_task(finish(), name="flush-backend-state")
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await _settle(task)
+                    raise
         finally:
             _RUN.reset(token)

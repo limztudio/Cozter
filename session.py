@@ -491,12 +491,18 @@ def delete_session(workspace: str, session_id: str) -> bool:
         return False
     try:
         os.remove(path)
-        return True
+        deleted = True
     except FileNotFoundError:
-        return False
+        deleted = False
     except OSError:
         logger.warning("Failed to delete session file: %s", path)
         return False
+    from .execution_state import discard_native_conversation
+    try:
+        discard_native_conversation(workspace, session_id)
+    except (OSError, ValueError):
+        logger.warning("Failed to clean native state for session %s", session_id, exc_info=True)
+    return deleted
 
 
 def is_default_name(name: str | None) -> bool:

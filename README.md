@@ -380,18 +380,49 @@ session, artifacts, and accounting, then resumes the same job with a fresh
 worker/tool allowance. Later queued jobs remain held until the whole request
 completes. A pending update may restart between those attempts; the durable
 checkpoint restores the same job first.
-Actual workers also retain execution state under `.cozter/executions/`,
-separate from schedules. Codex, Claude Code, Copilot and Grok resume an exact
-provider session; Copilot keeps its private session home with that job.
-Meta, Z.ai and llama restore their assistant/tool transcript and completed
-tool results. An interrupted command with no recorded result is reported to
-the resumed model as having an unknown outcome, requiring inspection before
-repeating it. No saved tool call is automatically replayed. State is isolated
-by workspace, queue entry, worker, backend, model, permission and effort;
-changed guidance joins the same conversation. Internal routing, summary and
-compaction calls stay stateless. Completed queue entries remove their owned
-execution state. Invalid saved state is preserved and reported rather than
-silently starting over.
+Codex (`codex`), Claude Code (`claude_code`), Copilot (`copilot`), and Grok
+(`grok`) reuse their confirmed native CLI conversation across turns in the
+same Cozter session, including after a queue job completes or Cozter restarts.
+Native state is isolated by canonical workspace, Cozter session, backend,
+resolved model, permission, reasoning effort, and stable worker role. A
+different worker role never borrows another worker's native conversation.
+`/newsession` starts a fresh conversation; `/sessions` returns to the selected
+conversation's own state. Changing the workspace, model, permission, or effort
+selects a separate native identity.
+An unfinished job that already owns a native checkpoint keeps that checkpoint
+through completion; conversation-owned reuse begins with a subsequent launch.
+
+On a confirmed resume, Cozter sends the current request and changed context
+instead of appending the complete Cozter transcript again. New conversations
+receive the full bootstrap context. Cozter resumes only an exact provider ID
+that it recorded from the CLI: it never adopts a CLI's latest session or an
+unrelated conversation. If the provider confirms that this exact session is
+missing before any new work begins, Cozter can start a replacement with full
+saved context. Ambiguous failures or failures after work has begun do not
+trigger a fresh replay. Invalid saved state is preserved and reported rather
+than silently starting over.
+
+These are provider-managed sessions and can appear in the native CLI's normal
+local history where supported. Copilot keeps a persistent, conversation-owned
+CLI home, including its local session history, until that Cozter conversation
+is deleted. Cozter still stores its own transcript for session selection,
+memory, and recovery. Native resumption avoids repeatedly sending the whole
+Cozter transcript; the provider can still process and bill retained history,
+so it does not make historical context token-free.
+
+Job checkpoints remain under `.cozter/executions/`, separate from schedules
+and the conversation-owned native state under
+`.cozter/native_sessions/<session-hash>/<generation-record-hash>/`.
+Meta, Z.ai, and llama restore their
+job's assistant/tool transcript and completed tool results. An interrupted
+command with no recorded result is reported to the resumed model as having an
+unknown outcome, requiring inspection before repeating it. No saved tool call
+is automatically replayed. These checkpoints remain isolated by workspace,
+queue entry, worker, backend, model, permission, and effort. Completed queue
+entries remove their job checkpoints while retaining native conversation
+state. Deleting a temporary scheduled session also deletes its native state.
+Internal routing, titling, planning, merging, judging, summary, compaction, and
+colony calls stay stateless and do not attach to a worker's native session.
 Large snapshots are privately copied and encoded on worker threads, with one
 serialization per atomic checkpoint write. Independent HTTP reads share a
 checkpoint per bounded wave, retaining completed results if that wave is
@@ -633,6 +664,10 @@ runs commands in it, and stores per-workspace state under
 `<workspace>/.cozter/`:
 
 - `sessions/` — conversation history files (one per session)
+- `native_sessions/` — confirmed native CLI conversations, context delivery
+  records, and persistent Copilot homes, isolated per Cozter session and worker
+- `executions/` — per-job checkpoints, HTTP tool transcripts, and flexible
+  planning/worker evidence; completed queue jobs remove their own checkpoints
 - `last_session.json` — per-user pointer to the session each user was
   last writing into; consulted on every turn (and across bot restarts)
   so conversations resume in place instead of being re-routed
@@ -801,7 +836,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
 | `/sessions [number\|name]` | List this workspace's sessions, or switch to one |
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
-| `/refresh` | Report disposable CLI-cache availability for the selected backend; preserve project configuration and job-owned sessions |
+| `/refresh` | Report disposable CLI-cache availability for the selected backend; preserve project configuration and saved native conversations |
 | `/stop` | Cancel the running agent turn and clear queued work |
 | `/bg <task>` or `/background <task>` | Start a restart-safe detached task with the selected compatible backend |
 | `/inject <text>` | Add context to the running turn; Cozter abandons its active phase and restarts with it |
@@ -1587,15 +1622,19 @@ omitting `-p`. File-backed stdin sends the exact UTF-8 bytes and EOF without
 trimming for platform argv limits or passing newlines, quotes, and shell
 metacharacters through Windows `.cmd` forwarding. The shared launcher returns
 before the child reads stdin, so captured startup output cannot deadlock
-prompt transfer. Each Copilot run also uses a short-lived private CLI home,
-so its planner, worker, and merge calls do not appear in Copilot's session
-history or get exported to GitHub web and mobile; Cozter's workspace session
-remains the durable conversation record. The private home copies `config.json`
-and `settings.json` from `$COPILOT_HOME` when it is set, otherwise from
-`~/.copilot`; set `COPILOT_HOME` before launch when the source profile lives
-elsewhere. That home is remembered by process-object identity
-(`ProcessResourceMap` in `backends_agent/base.py`), not PID, so concurrent
-Copilot turns cannot clobber each other after PID reuse.
+prompt transfer. Foreground Copilot workers use a persistent private CLI home
+owned by their Cozter conversation and isolated native identity. Its session
+history survives completed jobs and later turns, and can be inspected through
+Copilot with that home selected. Cozter passes `--no-remote-export`, so these
+local sessions are not exported to GitHub web and mobile. Internal planner,
+merge, and other maintenance calls still use short-lived homes and remain
+stateless. Each private home copies `config.json` and `settings.json` from
+`$COPILOT_HOME` when it is set, otherwise from `~/.copilot`; set `COPILOT_HOME`
+before launch when the source profile lives elsewhere. Short-lived homes are
+remembered by process-object identity (`ProcessResourceMap` in
+`backends_agent/base.py`), not PID, so concurrent processes cannot clobber
+each other's cleanup after PID reuse. A persistent home is removed when its
+Cozter conversation is deleted, rather than when one process exits.
 
 On Windows, recognized standard npm Node shims launch their bundled or
 PATH-resolved Node interpreter and existing `node_modules` script directly.
@@ -1698,6 +1737,8 @@ Cozter/
 ├── backends_bot/         chat surfaces and shared fenced-Markdown formatting
 ├── agent.py              orchestrator: builds prompt, runs backend, streams events and attachments
 ├── session.py            per-workspace conversation persistence
+├── execution_state.py    isolated job checkpoints and durable native conversation state
+├── native_prompt.py      structured bootstrap and incremental native CLI context
 ├── compaction.py         scratch-summary + long-term-memory rewriter
 ├── colony.py             cross-session long-term memory consolidation
 ├── router.py             session picker for first-turn-in-workspace (subsequent turns reuse last_session.json)
@@ -1721,7 +1762,7 @@ Cozter/
 │   ├── claude_background_guard.py
 │   │                       session-only Claude Bash hook that blocks
 │   │                       untracked background launches
-│   ├── copilot.py          wraps `copilot`; ProcessResourceMap for private CLI homes
+│   ├── copilot.py          wraps `copilot`; persistent native homes, ProcessResourceMap for stateless homes
 │   ├── grok.py             wraps `grok --prompt-file`; CachedModelCatalog and
 │   │                       ProcessResourceMap for prompt files
 │   ├── flexible.py         flexible meta-agent backend (no CLI of its own)
@@ -1774,9 +1815,11 @@ previews carry a `… [preview]` marker, and long tool-content lines and
 labels use the shared clipped marker rather than a bare cut.
 Tool status lines share `utils.clip_status_value()`, so compact
 summaries (paths, args, stderr previews, calculator/git/notes/http plugin
-statuses) clip with a visible marker instead of a silent cut. Backends that stage a per-launch file (Grok's
-prompt file, Copilot's private home) remember that path by process-object
-identity and delete it in `cleanup_process` after the child is reaped.
+statuses) clip with a visible marker instead of a silent cut. Backends that
+stage temporary launch resources (Grok's prompt file or a stateless Copilot
+home) remember that path by process-object identity and delete it in
+`cleanup_process` after the child is reaped. Conversation-owned Copilot homes
+survive process cleanup and are removed only with their Cozter conversation.
 
 Attachment, background-request, and saved-upload markers use forward scans
 that preserve their existing captures and whitespace rules. Unfinished markers
@@ -1935,12 +1978,13 @@ The tracked workspace is intentionally flat and small. A complete source
 audit should use `git ls-files` so hidden tracked files, especially
 `.config/config.example.json`, are included even though `.config/*` is
 ignored for local secrets and runtime queues.
+The runtime contains 73 Python source files, separate from the tests below.
 
 - Package entry and runtime setup: `__init__.py`, `__main__.py`,
   `launch_process.py`, `process_launch.py`, `config.py`, `updater.py`, and `utils.py`
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
-  `colony.py`, `flexible.py`, `execution_state.py`, and `schedules.py`
+  `colony.py`, `flexible.py`, `execution_state.py`, `native_prompt.py`, and `schedules.py`
 - Chat-platform adapters: `backends_bot/__init__.py`, `base.py`, `formatting.py`,
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
 - Agent adapters: `backends_agent/__init__.py`, `base.py`, `_http_process.py`,
@@ -1964,7 +2008,7 @@ ignored for local secrets and runtime queues.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (147 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 144 `test_*.py` modules:
+- Tests (151 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 148 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
@@ -1983,6 +2027,7 @@ ignored for local secrets and runtime queues.
   `test_flexible_continuation.py`, `test_flexible_injection_continuation.py`,
   `test_flexible_instruction_identity.py`, `test_flexible_native_injection_continuation.py`,
   `test_flexible_parallel_plan.py`, `test_flexible_parallel_runtime.py`,
+  `test_flexible_prompt_sections.py`,
   `test_format_marker_latency.py`, `test_git_checkout_integrity.py`, `test_git_cold_launch.py`,
   `test_git_plugin_paging.py`, `test_git_process_output.py`, `test_grok_model_line_latency.py`,
   `test_http_body_sniff.py`, `test_http_event_framing.py`, `test_http_execution_continuation.py`,
@@ -1995,7 +2040,9 @@ ignored for local secrets and runtime queues.
   `test_maintenance_context.py`, `test_memory_corrupt_state.py`, `test_memory_preservation.py`,
   `test_memory_repair_regressions.py`, `test_memory_streamed_search.py`,
   `test_monthly_schedule_execution.py`, `test_monthly_schedules.py`,
-  `test_native_current_protocol.py`, `test_native_launch_contract.py`, `test_notes_owned_worker.py`,
+  `test_native_conversation_state.py`, `test_native_current_protocol.py`,
+  `test_native_launch_contract.py`, `test_native_prompt.py`, `test_native_session_turns.py`,
+  `test_notes_owned_worker.py`,
   `test_notes_transactions.py`, `test_openai_agent.py`, `test_owned_file_mutations.py`,
   `test_patch_limit_optimization.py`, `test_planner_context_latency.py`, `test_platform_formatting.py`,
   `test_plugin_cli_unicode.py`, `test_plugin_memory_calculator_performance.py`,
@@ -2023,7 +2070,10 @@ ignored for local secrets and runtime queues.
   event parsing, and the shared OpenAI-compatible retry/backoff loop; bot,
   CLI, and Slack commands, including canonical native APIs/protocols, strict
   unified-patch headers, exact platform ownership, explicit compaction snapshots,
-  unbounded tool/provider execution with cancellation, native stdin ownership, restored-queue
+  unbounded tool/provider execution with cancellation, native stdin ownership,
+  native conversations retained across completed jobs, exact worker and
+  model/policy isolation, changed-context delivery, and full bootstrap only on
+  confirmed pre-work session loss; restored-queue
   FIFO/reference preservation, weekly/monthly/yearly/daily schedule parsing and presentation,
   short-month and leap-year dates, yearly catch-up, mixed-rule deduplication, and schedule edits
   while waiting for a lock;

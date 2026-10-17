@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 
 from ..process_launch import create_prompt_subprocess
 from .base import (
-    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, ProcessResourceMap,
+    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, NativeSessionUnavailable, ProcessResourceMap,
     append_text_result, attachment_image_paths,
     executable_command, fresh_model_catalog,
     record_backend_error, summarize_cli_tool, truncate_status_text,
@@ -462,8 +462,14 @@ class CopilotBackend(Backend):
             # This is our exact private home and documented native state path.
             # Missing local persistence is known before any provider/tool runs.
             assert record is not None
-            await record.save(native_session_id=None, native_unavailable_session_id=native_id)
-            native_id = None
+            await record.save(
+                native_session_id=None, native_resume_attempted=False,
+                native_resume_unavailable=True, native_unavailable_session_id=native_id,
+                native_tools_started=False,
+            )
+            # Only the shared driver has the complete bootstrap prompt. A
+            # fresh subprocess here could receive only incremental guidance.
+            raise NativeSessionUnavailable(self.name, native_id)
         # Resolve images before launch; prompt bytes stay intact on stdin.
         image_paths = (
             attachment_image_paths(prompt, workspace_path)

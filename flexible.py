@@ -586,6 +586,16 @@ def build_subtask_prompt(
     context: str, plan: Plan, index: int, results: list[str],
     *, previous_draft: str | None = None,
 ) -> str:
+    """Render the complete worker prompt, retaining its established format."""
+    return "\n".join(build_subtask_sections(
+        context, plan, index, results, previous_draft=previous_draft,
+    ).values())
+
+
+def build_subtask_sections(
+    context: str, plan: Plan, index: int, results: list[str],
+    *, previous_draft: str | None = None,
+) -> dict[str, str]:
     """Prompt for the worker running sub-task *index* of *plan*.
 
     *context* is the bare user request, not the full history — the
@@ -595,6 +605,11 @@ def build_subtask_prompt(
     resolves the image bytes natively. A continuation also carries a bounded
     *previous_draft* excerpt so workers retain already-completed work and its
     final evidence.
+
+    Sections retain their presentation separators and insertion order, so
+    joining their values with a newline produces the complete prompt. Native
+    callers may omit ``request`` and send the request separately, comparing
+    the other named sections without parsing human-readable prompt markers.
     """
     task = plan.subtasks[index]
     # A fallback task is the entire request, including any durable checkpoint.
@@ -604,7 +619,7 @@ def build_subtask_prompt(
     task_instruction = task.instruction
     if len(task_instruction) >= 128 and task_instruction == context.strip():
         task_instruction = "the complete user request above, including every saved obligation and constraint"
-    parts = [context, ""]
+    parts = [""]
     parts.append(
         f"[Sub-task {index + 1}/{len(plan.subtasks)}: {task.tier}]"
         " — do ONLY this one; others have their own workers."
@@ -613,10 +628,11 @@ def build_subtask_prompt(
         parts.append(f"Goal: {plan.understanding}")
     parts.append("\nPlan:")
     parts.append(_render_plan(plan, current=index))
+    sections = {"request": context, "plan": "\n".join(parts)}
 
     retained_reports: list[str] = []
     if results:
-        parts.append("\nEarlier reports:")
+        parts = ["\nEarlier reports:"]
         for result_index, text in enumerate(results):
             excerpt = _truncate_report(text)
             duplicate = next((earlier + 1 for earlier, retained in enumerate(results[:result_index])
@@ -627,6 +643,7 @@ def build_subtask_prompt(
                 + (f"Same evidence as report {duplicate} above (identical report)."
                    if duplicate is not None else excerpt)
             )
+        sections["earlier_reports"] = "\n".join(parts)
 
     if previous_draft:
         excerpt = _bounded_draft_excerpt(previous_draft)
@@ -634,7 +651,7 @@ def build_subtask_prompt(
             previous_draft in context or excerpt in context
             or any(previous_draft in report or excerpt in report for report in retained_reports)
         )
-        parts.append(
+        sections["previous_draft"] = (
             "\nPrevious draft and evidence from this turn:\n"
             + ("The same retained evidence already appears in the user request or earlier reports above."
                if already_retained else excerpt)
@@ -643,7 +660,7 @@ def build_subtask_prompt(
         )
 
     if task.read_only:
-        parts.append(
+        sections["worker_instructions"] = (
             f"\nYour task: {task_instruction}\n"
             "Inspection only: read existing files, logs, and metadata within this"
             " task's scope. Do not write, edit, delete, apply fixes, create files,"
@@ -664,9 +681,9 @@ def build_subtask_prompt(
             " failures, and unavailable services are not new defects. Progress is"
             " Thinking... status only."
         )
-        return "\n".join(parts)
+        return sections
 
-    parts.append(
+    sections["worker_instructions"] = (
         f"\nYour task: {task_instruction}\n"
         "Finish ALL of it - never a sample. If it says all/entire/every,"
         " find every item first (glob/grep/list), handle each one, then"
@@ -713,7 +730,7 @@ def build_subtask_prompt(
         " handoff/planning note; the followup lines above are the only"
         " carry-forward mechanism."
     )
-    return "\n".join(parts)
+    return sections
 
 
 def build_merge_prompt(
