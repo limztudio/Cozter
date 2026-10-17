@@ -2206,7 +2206,7 @@ The runtime contains 77 Python source files, separate from the tests below.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (163 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 160 `test_*.py` modules:
+- Tests (164 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 161 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
@@ -2263,7 +2263,8 @@ The runtime contains 77 Python source files, separate from the tests below.
   `test_titling.py`, `test_tool_permissions.py`, `test_tool_runtime.py`,
   `test_tool_safety_and_output_limits.py`, `test_tool_state_integrity.py`,
   `test_tools_audit_regressions.py`, `test_tree_junction_permissions.py`, `test_turn_budget.py`,
-  `test_unbounded_tool_http_execution.py`, `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
+  `test_unbounded_tool_http_execution.py`, `test_update_background_admission.py`,
+  `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
   `test_vision_marker_scanning.py`, `test_web_fetch.py`, `test_web_html_latency.py`,
   `test_web_search.py`, `test_workspace_skills.py`, `test_yearly_schedules.py`)
   covering config validation, agent attachments, prompts,
@@ -2427,10 +2428,21 @@ alone, so an auto-update pass does not fight an in-progress edit or an
 unpushed commit. It requires `git`, an `origin` remote, and a tracking
 upstream; if any of those are unavailable, it safely skips the auto-pull.
 
-Only when an update is available does Cozter pause new AI turns, wait for
-active turns to finish, fast-forward-pull, install any changed
-`requirements.txt`, and broadcast a "restarting" message. If a pull fails after
-already moving HEAD, Cozter still restarts for that new commit rather than keeping the running process on the old one. On POSIX, the
+When an update is available, Cozter waits for a natural idle point while
+schedulers, queued jobs, and incoming work continue normally. Busy work can
+defer an update; it does not freeze other queues or schedule admission.
+At the idle point, Cozter closes execution gates and checks activity again.
+If new work arrived during that handoff, it reopens the gates before waiting
+again. It fast-forward-pulls and installs changed `requirements.txt` only
+after confirming that no active turn won the race.
+
+The final handoff keeps newly accepted messages durable until the restart.
+Explicit `/bg` launches ask for a retry during that short handoff. An aborted
+handoff reopens every prepared platform, including one whose preparation was
+interrupted. Git and dependency operations finish before cancellation can
+release their gates. Once the checkout changes, installation failure still
+requires a restart so the startup dependency check can repair it; the old
+runtime must not resume against the changed source. On POSIX, the
 daemon then re-execs itself in place. On Windows, it exits for the bootstrap
 or `run_cozter.ps1` supervisor to relaunch it. Manual pulls and local commits
 while the bot is running also trigger this safe restart path. A service
@@ -2438,7 +2450,7 @@ manager such as `systemd` with `Restart=always` remains useful for boot-time
 startup and unexpected exits. CLI mode uses an outer respawner process and
 relaunches itself in the same terminal. Daemon platforms restore persisted
 queues after either path starts again; CLI mode currently does not.
-If a message is accepted just as an update becomes pending, Cozter keeps that
+If a message is accepted during the final update handoff, Cozter keeps that
 already-persisted message queued and does not start its agent turn against a
 checkout that is about to change.
 

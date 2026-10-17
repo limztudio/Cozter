@@ -258,6 +258,7 @@ from . import config as cfg  # noqa: E402
 from . import updater  # noqa: E402
 from .backends_bot import BotPlatform, create_platforms  # noqa: E402
 from .backends_bot.base import PlatformNotReadyError  # noqa: E402
+from .agent_tools.owned_worker import run_owned_worker  # noqa: E402
 from .utils import await_cancelled  # noqa: E402
 
 MODULE_ROOT = os.path.dirname(__file__)
@@ -481,7 +482,7 @@ async def _wait_for_update_idle(
 ) -> None:
     """Wait until no platform is actively producing an agent reply.
 
-    Long-running turns are allowed to finish. If the wait exceeds
+    Intake remains open while long-running turns finish. If the wait exceeds
     ``config.get_update_idle_timeout()``, emit diagnostics and continue
     waiting instead of restarting through active work.
     """
@@ -494,9 +495,9 @@ async def _wait_for_update_idle(
         now = asyncio.get_running_loop().time()
         if now - last_diag >= cfg.get_update_idle_timeout():
             waited = int(now - loop_start)
-            logger.critical(
-                "Update idle wait has waited at least %ds after ~%ds; "
-                "continuing to wait for active turn(s). Diagnostics: %s",
+            logger.warning(
+                "Update deferred for at least %ds after ~%ds; "
+                "queued work and schedules continue while active turn(s) finish. Diagnostics: %s",
                 cfg.get_update_idle_timeout(), waited,
                 {bot.platform_id: bot.stuck_turn_diagnostics() for bot in active},
             )
@@ -512,37 +513,89 @@ async def _wait_for_update_idle(
         await asyncio.sleep(_UPDATE_IDLE_POLL_SEC)
 
 
+async def _resume_update_intake(bots: list[BotPlatform]) -> None:
+    """Own every gate release, even during repeated update cancellation."""
+    tasks = [asyncio.create_task(bot.cancel_update_restart()) for bot in bots]
+    pending = set(tasks)
+    interrupted: asyncio.CancelledError | None = None
+    while pending:
+        try:
+            _, pending = await asyncio.wait(pending)
+        except asyncio.CancelledError as error:
+            interrupted = error
+    errors: list[BaseException] = []
+    for task in tasks:
+        try:
+            task.result()
+        except BaseException as error:
+            errors.append(error)
+    if interrupted is not None:
+        errors.append(interrupted)
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise BaseExceptionGroup("Failed to resume platforms after deferred update", errors)
+
+
 async def _restart_after_update(
     bots: list[BotPlatform], restart_code: int,
     *, startup_tasks: list[asyncio.Task[None]] | None = None,
 ) -> None:
-    """Pause intake, safely pull, then restart for an update."""
+    """Wait with intake open, then freeze only a confirmed idle handoff."""
     prepared: list[BotPlatform] = []
+    checkout_changed = False
+
+    def pull_update() -> bool:
+        nonlocal checkout_changed
+        # run_owned_worker settles this physical operation even when its
+        # awaiter is cancelled. Preserve the outcome for shutdown policy.
+        checkout_changed = updater.fetch_and_pull()
+        return checkout_changed
+
+    async def release_intake() -> None:
+        nonlocal prepared
+        releasing, prepared = prepared, []
+        await _resume_update_intake(releasing)
+
     try:
-        for bot in bots:
-            await bot.begin_update_restart()
-            prepared.append(bot)
-        await _wait_for_update_idle(
-            bots,
-            log_message=(
-                "Update ready; waiting for active turn(s) before restart"
-            ),
-        )
-        changed = await asyncio.to_thread(updater.fetch_and_pull)
+        while True:
+            await _wait_for_update_idle(
+                bots,
+                log_message="Update deferred; work continues until an idle restart handoff",
+            )
+            for bot in bots:
+                # begin may close its gate before an await fails/cancels.
+                prepared.append(bot)
+                await bot.begin_update_restart()
+            if not any(bot.has_active_turns() for bot in bots):
+                break
+            # A turn started between the idle observation and gate closure.
+            # Let it and every other room make progress before waiting again.
+            await release_intake()
+        changed = await run_owned_worker(pull_update)
         if not changed:
             logger.info("Update no longer requires a restart; resuming intake")
-            for bot in prepared:
-                await bot.cancel_update_restart()
+            await release_intake()
             return
-        await asyncio.to_thread(updater.install_requirements)
-    except Exception:
-        for bot in prepared:
-            try:
-                await bot.cancel_update_restart()
-            except Exception:
-                logger.exception(
-                    "Failed to resume bot after aborted update restart",
-                )
+        try:
+            await run_owned_worker(updater.install_requirements)
+        except Exception:
+            # HEAD already changed. Resume through startup's dependency repair
+            # rather than running old modules against a different checkout.
+            logger.exception("Updated requirements could not be installed; restarting for startup dependency repair")
+    except BaseException as error:
+        if checkout_changed:
+            # Cancellation now belongs to parent shutdown, which owns all
+            # platform stops. Never reopen old workers against changed source.
+            raise
+        try:
+            await release_intake()
+        except BaseException as cleanup_error:
+            if isinstance(error, asyncio.CancelledError) and isinstance(cleanup_error, asyncio.CancelledError):
+                raise error
+            raise BaseExceptionGroup(
+                "Update handoff failed and gate release failed", [error, cleanup_error],
+            ) from None
         raise
 
     logger.info("Active turns finished; restarting for update...")
@@ -553,11 +606,7 @@ async def _restart_after_update(
             await bot.notify_users("Cozter is restarting for an update...")
         except Exception:
             logger.exception("Failed to send update restart notification")
-    for bot in bots:
-        try:
-            await bot.stop()
-        except Exception:
-            logger.exception("Failed to stop bot before update restart")
+    await _stop_platforms(bots)
     updater.restart_script(restart_code)
 
 

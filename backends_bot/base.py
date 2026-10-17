@@ -1044,7 +1044,7 @@ class BotPlatform(ABC):
         await self.notify_users(msg)
 
     async def begin_update_restart(self) -> None:
-        """Pause new AI turns while an auto-update restart is pending."""
+        """Freeze new execution for the final update handoff."""
         self._update_restart_pending = True
         await self.stop_scheduler()
 
@@ -2543,6 +2543,12 @@ class BotPlatform(ABC):
         task_prompt = ctx.args.strip()
         if not task_prompt:
             await ctx.reply_text("Usage: /bg <task>")
+            return
+        if self._stopping:
+            await ctx.reply_text("Cozter is stopping. Retry /bg after startup.")
+            return
+        if self._update_restart_pending:
+            await ctx.reply_text("Update handoff in progress. Please retry /bg shortly.")
             return
         if self._cancel_work_depths.get(ctx.user_id, 0):
             await ctx.reply_text("Cancellation is still finishing. Please retry /bg afterward.")

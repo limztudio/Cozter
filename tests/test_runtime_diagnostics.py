@@ -349,13 +349,13 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         old_timeout = self._main.cfg.get_update_idle_timeout
         old_dump = self._main.dump_runtime_diagnostics
         old_sleep = self._main.asyncio.sleep
-        old_critical = self._main.logger.critical
+        old_warning = self._main.logger.warning
         self._main.cfg.get_update_idle_timeout = lambda: 0
         self._main.dump_runtime_diagnostics = (
             lambda _bots, *, reason: reasons.append(reason)
         )
         self._main.asyncio.sleep = fake_sleep
-        self._main.logger.critical = lambda *args, **kwargs: None
+        self._main.logger.warning = lambda *args, **kwargs: None
         try:
             asyncio.run(
                 self._main._wait_for_update_idle(
@@ -366,7 +366,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
             self._main.cfg.get_update_idle_timeout = old_timeout
             self._main.dump_runtime_diagnostics = old_dump
             self._main.asyncio.sleep = old_sleep
-            self._main.logger.critical = old_critical
+            self._main.logger.warning = old_warning
 
         self.assertEqual(reasons, ["update-idle-still-waiting"])
         self.assertGreaterEqual(sleeps, 1)
@@ -377,7 +377,7 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
         """An update may be detected mid-reply, but never cuts it short."""
         main = _load_main_module()
         reply_delivered = asyncio.Event()
-        restart_started = asyncio.Event()
+        wait_started = asyncio.Event()
         events: list[str] = []
 
         class _Bot:
@@ -385,10 +385,10 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
 
             async def begin_update_restart(self):
                 events.append("pause")
-                restart_started.set()
 
             def has_active_turns(self):
                 # True until final reply I/O and cleanup run.
+                wait_started.set()
                 return not reply_delivered.is_set()
 
             def stuck_turn_diagnostics(self):
@@ -432,10 +432,10 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
                 update = asyncio.create_task(
                     main._restart_after_update([bot], restart_code=0),
                 )
-                await asyncio.wait_for(restart_started.wait(), timeout=1)
+                await asyncio.wait_for(wait_started.wait(), timeout=1)
                 await asyncio.sleep(0)
 
-                self.assertEqual(events, ["pause"])
+                self.assertEqual(events, [])
                 pull.assert_not_called()
                 install.assert_not_called()
                 restart.assert_not_called()
@@ -482,6 +482,295 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
         check_mock.assert_called_once_with()
         # No update: intake must not pause.
         self.assertEqual(bot.restart_calls, 0)
+
+
+class UpdateHandoffTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.main = _load_main_module()
+        self.enterContext(mock.patch.object(self.main, "_UPDATE_IDLE_POLL_SEC", 0.001))
+        self.pull = self.enterContext(mock.patch.object(self.main.updater, "fetch_and_pull", return_value=False))
+        self.install = self.enterContext(mock.patch.object(self.main.updater, "install_requirements"))
+        self.restart = self.enterContext(mock.patch.object(self.main.updater, "restart_script"))
+
+    def bot(self, label):
+        bot = SimpleNamespace(platform_id=label, gated=False, active=False)
+
+        async def begin():
+            bot.gated = True
+
+        async def resume():
+            bot.gated = False
+
+        bot.begin_update_restart = mock.AsyncMock(side_effect=begin)
+        bot.cancel_update_restart = mock.AsyncMock(side_effect=resume)
+        bot.has_active_turns = lambda: bot.active
+        bot.stuck_turn_diagnostics = lambda: "active"
+        bot.notify_users = mock.AsyncMock()
+        bot.stop = mock.AsyncMock()
+        return bot
+
+    async def test_no_change_reopens_every_prepared_gate(self):
+        bots = [self.bot("first"), self.bot("second")]
+        await self.main._restart_after_update(bots, 0)
+        for bot in bots:
+            self.assertFalse(bot.gated)
+            bot.cancel_update_restart.assert_awaited_once()
+            bot.stop.assert_not_awaited()
+        self.install.assert_not_called()
+        self.restart.assert_not_called()
+
+    async def test_pull_failure_reopens_all_gates_and_preserves_failure(self):
+        bots = [self.bot("first"), self.bot("second")]
+        failure = RuntimeError("fixture pull failed before checkout change")
+        self.pull.side_effect = failure
+        with self.assertRaises(RuntimeError) as raised:
+            await self.main._restart_after_update(bots, 0)
+        self.assertIs(raised.exception, failure)
+        for bot in bots:
+            self.assertFalse(bot.gated)
+            bot.cancel_update_restart.assert_awaited_once()
+
+    async def test_partial_begin_failure_also_reopens_failing_platform(self):
+        first, partial, untouched = [self.bot(label) for label in ("first", "partial", "untouched")]
+
+        async def begin():
+            partial.gated = True
+            raise RuntimeError("fixture scheduler stop failed")
+
+        partial.begin_update_restart.side_effect = begin
+        with self.assertRaisesRegex(RuntimeError, "scheduler stop failed"):
+            await self.main._restart_after_update([first, partial, untouched], 0)
+        for bot in (first, partial):
+            self.assertFalse(bot.gated)
+            bot.cancel_update_restart.assert_awaited_once()
+        untouched.begin_update_restart.assert_not_awaited()
+        untouched.cancel_update_restart.assert_not_awaited()
+        self.pull.assert_not_called()
+
+    async def test_gate_release_failure_does_not_skip_other_platforms(self):
+        first, second = self.bot("first"), self.bot("second")
+
+        async def resume():
+            first.gated = False
+            raise RuntimeError("fixture scheduler restart failed")
+
+        first.cancel_update_restart.side_effect = resume
+        with self.assertRaisesRegex(RuntimeError, "scheduler restart failed"):
+            await self.main._restart_after_update([first, second], 0)
+        self.assertFalse(first.gated)
+        self.assertFalse(second.gated)
+        second.cancel_update_restart.assert_awaited_once()
+
+    async def test_idle_to_gate_race_reopens_every_gate_before_waiting_again(self):
+        first, second = self.bot("first"), self.bot("second")
+        bots = [first, second]
+        freezes = 0
+        waits = 0
+        original_wait = self.main._wait_for_update_idle
+
+        async def begin():
+            nonlocal freezes
+            freezes += 1
+            first.gated = True
+            first.active = freezes == 1
+
+        async def resume():
+            first.gated = False
+            first.active = False
+
+        async def wait(platforms, *, log_message):
+            nonlocal waits
+            waits += 1
+            self.assertTrue(all(not bot.gated for bot in platforms))
+            await original_wait(platforms, log_message=log_message)
+
+        first.begin_update_restart.side_effect = begin
+        first.cancel_update_restart.side_effect = resume
+        with mock.patch.object(self.main, "_wait_for_update_idle", side_effect=wait):
+            await self.main._restart_after_update(bots, 0)
+        self.assertEqual(waits, 2)
+        self.assertEqual(freezes, 2)
+        for bot in bots:
+            self.assertEqual(bot.cancel_update_restart.await_count, 2)
+            self.assertFalse(bot.gated)
+
+    async def test_partial_begin_cancellation_and_repeated_cancel_finish_every_gate_release(self):
+        first, partial = self.bot("first"), self.bot("partial")
+        entered = asyncio.Event()
+        resuming = [asyncio.Event(), asyncio.Event()]
+        release = asyncio.Event()
+
+        async def begin():
+            partial.gated = True
+            entered.set()
+            await asyncio.Future()
+
+        async def resume(bot, event):
+            event.set()
+            await release.wait()
+            bot.gated = False
+
+        async def resume_first():
+            await resume(first, resuming[0])
+
+        async def resume_partial():
+            await resume(partial, resuming[1])
+
+        partial.begin_update_restart.side_effect = begin
+        first.cancel_update_restart.side_effect = resume_first
+        partial.cancel_update_restart.side_effect = resume_partial
+        before = asyncio.all_tasks()
+        update = asyncio.create_task(self.main._restart_after_update([first, partial], 0))
+        await asyncio.wait_for(entered.wait(), 1)
+        update.cancel()
+        await asyncio.wait_for(asyncio.gather(*(event.wait() for event in resuming)), 1)
+        update.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(update.done())
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(update, 1)
+        self.assertFalse(first.gated)
+        self.assertFalse(partial.gated)
+        self.assertEqual(asyncio.all_tasks() - before, set())
+        self.pull.assert_not_called()
+
+    async def test_changed_checkout_install_failure_still_stops_and_restarts_without_reopening(self):
+        bots = [self.bot("first"), self.bot("second")]
+        self.pull.return_value = True
+        self.install.side_effect = RuntimeError("fixture pip failed")
+        with self.assertLogs(self.main.logger, level="ERROR"):
+            await self.main._restart_after_update(bots, 23)
+        for bot in bots:
+            self.assertTrue(bot.gated)
+            bot.cancel_update_restart.assert_not_awaited()
+            bot.stop.assert_awaited_once()
+        self.restart.assert_called_once_with(23)
+
+    async def test_cancelled_physical_pull_settles_before_unchanged_reopen_or_changed_shutdown(self):
+        loop = asyncio.get_running_loop()
+        for changed in (False, True):
+            with self.subTest(changed=changed):
+                bot = self.bot(f"pull-{changed}")
+                entered, release = asyncio.Event(), threading.Event()
+                settled = threading.Event()
+
+                def pull():
+                    loop.call_soon_threadsafe(entered.set)
+                    self.assertTrue(release.wait(2))
+                    settled.set()
+                    return changed
+
+                async def resume():
+                    self.assertTrue(settled.is_set())
+                    bot.gated = False
+
+                bot.cancel_update_restart.side_effect = resume
+                self.pull.side_effect = pull
+                update = asyncio.create_task(self.main._restart_after_update([bot], 0))
+                try:
+                    await asyncio.wait_for(entered.wait(), 1)
+                    update.cancel()
+                    await asyncio.sleep(0)
+                    update.cancel()
+                    await asyncio.sleep(0)
+                    self.assertFalse(update.done())
+                    self.assertTrue(bot.gated)
+                    bot.cancel_update_restart.assert_not_awaited()
+                finally:
+                    release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(update, 1)
+                self.assertEqual(bot.gated, changed)
+                self.assertEqual(bot.cancel_update_restart.await_count, 0 if changed else 1)
+                bot.stop.assert_not_awaited()  # Parent shutdown owns these stops.
+        self.install.assert_not_called()
+        self.restart.assert_not_called()
+
+    async def test_cancelled_physical_install_settles_without_reopening_changed_checkout(self):
+        bot = self.bot("install")
+        self.pull.return_value = True
+        entered, release, settled = asyncio.Event(), threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+
+        def install():
+            loop.call_soon_threadsafe(entered.set)
+            self.assertTrue(release.wait(2))
+            settled.set()
+
+        self.install.side_effect = install
+        update = asyncio.create_task(self.main._restart_after_update([bot], 0))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            update.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(update.done())
+            self.assertTrue(bot.gated)
+        finally:
+            release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(update, 1)
+        self.assertTrue(settled.is_set())
+        self.assertTrue(bot.gated)
+        bot.cancel_update_restart.assert_not_awaited()
+        self.restart.assert_not_called()
+
+    async def test_two_rooms_keep_queue_and_scheduler_running_while_update_waits(self):
+        from Cozter import workspace
+        from Cozter.tests.helpers import TestBot
+
+        temporary = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", temporary))
+        bot = TestBot(["active", "queued"])
+        bot._daemon_services_started = True
+        active_started, active_release, queued_ran = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        cancelled = []
+
+        async def turn(uid, _chat_id, _text, **_kwargs):
+            if uid == "active":
+                active_started.set()
+                try:
+                    await active_release.wait()
+                except asyncio.CancelledError:
+                    cancelled.append(uid)
+                    raise
+            else:
+                queued_ran.set()
+            return True
+
+        bot._run_turn = mock.AsyncMock(side_effect=turn)
+        await bot.start_scheduler()
+        scheduler = bot._scheduler_task
+        await bot._admit_queue_entry("active", "long job", "active", 0)
+        active = bot._start_queue_drain("active")
+        await asyncio.wait_for(active_started.wait(), 1)
+        update = asyncio.create_task(self.main._restart_after_update([bot], 0))
+        try:
+            await asyncio.sleep(0.01)
+            self.assertFalse(bot._update_restart_pending)
+            self.assertIs(bot._scheduler_task, scheduler)
+            self.assertFalse(scheduler.done())
+            self.pull.assert_not_called()
+            await bot._admit_queue_entry("queued", "next room job", "queued", 0)
+            queued = bot._start_queue_drain("queued")
+            await asyncio.wait_for(queued_ran.wait(), 1)
+            await asyncio.wait_for(queued, 1)
+            self.assertNotIn("queued", bot._read_queue_file())
+            self.assertFalse(active.done())
+            self.assertFalse(bot._update_restart_pending)
+            self.assertFalse(scheduler.done())
+            self.assertFalse(cancelled)
+            active_release.set()
+            await asyncio.wait_for(active, 1)
+            await asyncio.wait_for(update, 1)
+            self.assertFalse(bot._update_restart_pending)
+            self.assertFalse(cancelled)
+        finally:
+            active_release.set()
+            if not update.done():
+                update.cancel()
+            await asyncio.gather(update, return_exceptions=True)
+            await bot._stop_daemon_services()
 
 
 class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):

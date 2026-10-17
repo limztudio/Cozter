@@ -234,9 +234,85 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
                 updater, "_git",
                 side_effect=PermissionError("synthetic Git failure"),
             ),
-            mock.patch.object(updater, "_head_changed", side_effect=[False, True]),
+            mock.patch.object(updater, "_head_changed", return_value=False),
+            mock.patch.object(updater, "_get_head_commit", return_value="new456"),
         ):
             self.assertTrue(updater.fetch_and_pull())
+
+    def test_output_decode_error_after_pull_changed_head_requires_restart(self) -> None:
+        current = "abc123"
+
+        def pull(*args: str) -> subprocess.CompletedProcess:
+            nonlocal current
+            self.assertEqual(args, ("pull", "--ff-only"))
+            current = "new456"
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "synthetic output")
+
+        with (
+            mock.patch.object(updater, "_fetch_origin", return_value=True),
+            mock.patch.object(updater, "_skip_pull_reason", return_value=None),
+            mock.patch.object(updater, "_get_head_commit", side_effect=lambda: current),
+            mock.patch.object(updater, "_git", side_effect=pull),
+            self.assertLogs(updater.logger, level="ERROR") as logs,
+        ):
+            self.assertTrue(updater.fetch_and_pull())
+        self.assertIn("UnicodeDecodeError", "\n".join(logs.output))
+
+    def test_failed_pull_with_confirmed_unchanged_head_preserves_error(self) -> None:
+        failure = ValueError("synthetic pull failure")
+        with (
+            mock.patch.object(updater, "_fetch_origin", return_value=True),
+            mock.patch.object(updater, "_skip_pull_reason", return_value=None),
+            mock.patch.object(updater, "_get_head_commit", return_value="abc123"),
+            mock.patch.object(updater, "_git", side_effect=failure),
+            self.assertRaises(ValueError) as caught,
+        ):
+            updater.fetch_and_pull()
+        self.assertIs(caught.exception, failure)
+
+    def test_failed_pull_with_unreadable_head_requires_restart(self) -> None:
+        with (
+            mock.patch.object(updater, "_fetch_origin", return_value=True),
+            mock.patch.object(updater, "_skip_pull_reason", return_value=None),
+            mock.patch.object(updater, "_get_head_commit", side_effect=["abc123", ""]),
+            mock.patch.object(updater, "_git", side_effect=ValueError("pull failed")),
+            self.assertLogs(updater.logger, level="WARNING"),
+        ):
+            self.assertTrue(updater.fetch_and_pull())
+
+    def test_successful_pull_with_unreadable_head_requires_restart(self) -> None:
+        with (
+            mock.patch.object(updater, "_fetch_origin", return_value=True),
+            mock.patch.object(updater, "_skip_pull_reason", return_value=None),
+            mock.patch.object(updater, "_get_head_commit", side_effect=["abc123", ""]),
+            mock.patch.object(updater, "_git", return_value=subprocess.CompletedProcess([], 0)),
+            self.assertLogs(updater.logger, level="WARNING"),
+        ):
+            self.assertTrue(updater.fetch_and_pull())
+
+    def test_head_probe_failure_after_pull_requires_restart(self) -> None:
+        with (
+            mock.patch.object(updater, "_fetch_origin", return_value=True),
+            mock.patch.object(updater, "_skip_pull_reason", return_value=None),
+            mock.patch.object(
+                updater, "_get_head_commit",
+                side_effect=["abc123", ValueError("bad HEAD output"), ValueError("still unreadable")],
+            ),
+            mock.patch.object(updater, "_git", return_value=subprocess.CompletedProcess([], 0)),
+            self.assertLogs(updater.logger, level="ERROR"),
+        ):
+            self.assertTrue(updater.fetch_and_pull())
+
+    def test_error_before_pull_does_not_classify_checkout_as_mutated(self) -> None:
+        with (
+            mock.patch.object(updater, "_head_changed", return_value=False),
+            mock.patch.object(updater, "_fetch_origin", return_value=True),
+            mock.patch.object(updater, "_skip_pull_reason", side_effect=ValueError("bad status")),
+            mock.patch.object(updater, "_git") as git,
+            self.assertRaisesRegex(ValueError, "bad status"),
+        ):
+            updater.fetch_and_pull()
+        git.assert_not_called()
 
 
 class UpdaterRequirementsTests(unittest.TestCase):

@@ -218,8 +218,20 @@ def check_for_update() -> bool:
     return fetched and _remote_update_available()
 
 
+def _restart_required_after_pull() -> bool:
+    """Never resume old modules if the resulting checkout is indeterminate."""
+    current = _get_head_commit()
+    if not current or not _STARTUP_COMMIT:
+        logger.warning("Cannot confirm checkout after git pull; restart required")
+        return True
+    if current != _STARTUP_COMMIT:
+        logger.info("Code changed: %s -> %s", _STARTUP_COMMIT[:8], current[:8])
+        return True
+    return False
+
+
 def fetch_and_pull() -> bool:
-    """Fetch origin, pull if behind; return True if disk HEAD changed.
+    """Fetch origin, pull if behind; return whether a restart is required.
 
     This detects both remote updates and manual pulls that happened while
     the process was running.
@@ -238,15 +250,31 @@ def fetch_and_pull() -> bool:
         skip = _skip_pull_reason()
         if skip:
             logger.debug("Skipping auto-pull: %s", skip)
-        else:
-            pull = _git("pull", "--ff-only")
-            if pull.returncode != 0:
-                logger.warning("git pull failed: %s", pull.stderr.strip())
     except OSError:
         _log_git_unavailable()
         return _head_changed()
-
-    return _head_changed()
+    if skip:
+        return _head_changed()
+    try:
+        pull = _git("pull", "--ff-only")
+        if pull.returncode != 0:
+            logger.warning("git pull failed: %s", pull.stderr.strip())
+        return _restart_required_after_pull()
+    except Exception as error:
+        # A command can update HEAD and then fail while decoding its output.
+        # Resolve the physical outcome before the caller decides to reopen
+        # execution. An unreadable checkout also requires a fresh startup.
+        try:
+            restart_required = _restart_required_after_pull()
+        except Exception:
+            restart_required = True
+        if restart_required:
+            logger.exception("git pull did not finish cleanly; restarting to load the resulting checkout")
+            return True
+        if isinstance(error, OSError):
+            _log_git_unavailable()
+            return False
+        raise
 
 
 def requirements_changed_since_startup() -> bool:
