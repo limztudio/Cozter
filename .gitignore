@@ -60,6 +60,10 @@ pip-delete-this-directory.txt
 
 # Project-local: machine settings, real config, runtime state
 .claude/settings.local.json
+# Generated Cozter native skill bridges (machine-specific absolute paths,
+# regenerated at runtime from .cozter/skills/; see README "Skills" section)
+.agents/skills/cozter-*/
+.claude/skills/cozter-*/
 .config/*
 !.config/config.example.json
 .cozter/
