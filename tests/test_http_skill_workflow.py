@@ -10,7 +10,7 @@ from unittest import mock
 
 from Cozter import agent_tools, skills
 from Cozter.backends_agent import _openai_agent as oa
-from Cozter.tests.test_http_execution_continuation import _Record
+from Cozter.tests.helpers import OfflineRecord
 
 
 class _SkillBackend(oa.OpenAIChatBackend):
@@ -181,7 +181,7 @@ class HttpSkillWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(any(event.get("output", "").startswith("Blocked:") for event in events))
 
     async def test_next_scope_refreshes_edited_catalog_without_discarding_saved_tool_evidence(self) -> None:
-        record = _Record()
+        record = OfflineRecord()
         first_requests = []
 
         async def first_stream(*args, **_kwargs):
@@ -224,7 +224,7 @@ class HttpSkillWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(resumed_requests), 2)
 
     async def test_removed_last_skill_cannot_be_reused_from_restored_http_history(self) -> None:
-        record = _Record()
+        record = OfflineRecord()
         first_calls = 0
 
         async def first_stream(*_args, **_kwargs):

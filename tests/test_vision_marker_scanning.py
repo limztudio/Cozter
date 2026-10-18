@@ -2,14 +2,21 @@
 
 import os
 import random
+import re
 import tempfile
 import unittest
 
 from Cozter.backends_agent import base
 
 
+# The old regex, kept here as the expected answer.
+_LEGACY_ATTACHMENT_SAVED_RE = re.compile(
+    r"\[[^\]\n]*attachment saved to:\s*([^\]\n]+?)\s*\]", re.IGNORECASE,
+)
+
+
 def legacy_paths(prompt: str) -> list[str]:
-    return [path for match in base._ATTACHMENT_SAVED_RE.finditer(prompt)
+    return [path for match in _LEGACY_ATTACHMENT_SAVED_RE.finditer(prompt)
             if (path := match.group(1).strip())]
 
 

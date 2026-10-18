@@ -1949,13 +1949,12 @@ Cozter/
 ├── titling.py            auto-titles new sessions from their first turn
 ├── schedules.py          /reserve cron-style scheduled prompts
 ├── flexible.py           flexible meta-agent prompt construction + plan/merge parsing
-├── queue_store.py         transactional platform queue body plus schedule receipts (SQLite)
+├── queue_store.py        transactional platform queue body plus schedule receipts (SQLite)
 ├── workspace.py          per-workspace settings; containment-checked nested .cozter dirs
 ├── config.py             global .config/config.json reader
 ├── updater.py            git fetch + restart loop
 ├── utils.py              shared state, queue, lock, marker-block, and backend-process helpers
 ├── tests/                unittest coverage for commands, state, queues, schedules, compaction, backends, catalogs, flexible, prompts, tools, attachments, and updates
-├── .config/config.example.json
 │
 ├── backends_agent/       agent backends (one file per agent)
 │   ├── base.py             abstract Backend; convert_effort, supports_typed_plugins;

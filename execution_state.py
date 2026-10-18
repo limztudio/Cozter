@@ -12,7 +12,6 @@ from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
-import hashlib
 import json
 import logging
 import math
@@ -26,7 +25,7 @@ from typing import Any
 import uuid
 import weakref
 
-from .utils import _fsync_directory, validate_json_nesting
+from .utils import _fsync_directory, json_digest, validate_json_nesting
 
 logger = logging.getLogger(__name__)
 _MAX_STATE_BYTES = 64 * 1024 * 1024
@@ -53,7 +52,7 @@ _BACKEND_LOCKS_LOCK = threading.RLock()
 
 
 def _conversation_lifetime(workspace_path: str, session_id: str) -> _ConversationLifetime:
-    key = (os.path.normcase(os.path.realpath(workspace_path)), _digest(session_id))
+    key = (os.path.normcase(os.path.realpath(workspace_path)), json_digest(session_id))
     with _LIFETIMES_LOCK:
         lifetime = _LIFETIMES.get(key)
         if lifetime is None:
@@ -78,7 +77,7 @@ def _backend_lock(execution: "Execution", identity: object) -> asyncio.Lock:
     """Serialize one job record even across independent Execution objects."""
     key = (
         os.path.normcase(os.path.realpath(execution.workspace_path)),
-        execution.namespace, execution.directory_id, _digest(identity),
+        execution.namespace, execution.directory_id, json_digest(identity),
     )
     with _BACKEND_LOCKS_LOCK:
         lock = _BACKEND_LOCKS.get(key)
@@ -114,12 +113,6 @@ def _finite_json_float(value: str) -> float:
     if not math.isfinite(number):
         raise ValueError("backend continuation contains a nonfinite number")
     return number
-
-
-def _digest(value: object) -> str:
-    return hashlib.sha256(json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-    ).encode("utf-8")).hexdigest()
 
 
 async def _settle(task: asyncio.Task) -> Any:
@@ -408,14 +401,14 @@ class Execution:
 
     @property
     def directory_id(self) -> str:
-        return _digest(self.execution_id)
+        return json_digest(self.execution_id)
 
     async def record(self, identity: object, *, reload: bool = False) -> ExecutionRecord:
         # The queue entry owns identity. Accepted guidance changes the request
         # while retaining the same native conversation and tool evidence.
         # Flexible plans separately fingerprint the latest full requirements.
         self.ensure_live()
-        key = _digest(identity)
+        key = json_digest(identity)
         cached = self.records.get(key)
         if cached is not None:
             if reload:
@@ -540,6 +533,15 @@ def current_run() -> ExecutionRecord | None:
     return _RUN.get()
 
 
+def adopt_native_session_id(value: object) -> None:
+    """Save the CLI session id unless this run already owns another one."""
+    native_id = native_session_id(value)
+    record = current_run()
+    if (record is not None and native_id is not None
+            and record.get("native_session_id") in (None, native_id)):
+        record.set(native_session_id=native_id)
+
+
 def record_missing_native_session(message: object) -> None:
     """Allow recovery only for an exact missing ID before activity."""
     record = current_run()
@@ -592,7 +594,7 @@ def _discard_owned_directory(workspace_path: str, namespace: str, identity: str)
     if namespace not in _NAMESPACES:
         raise ValueError("invalid backend continuation namespace")
     parent = workspace.workspace_state_path(workspace_path, namespace)
-    target = workspace.workspace_state_path(workspace_path, namespace, _digest(identity))
+    target = workspace.workspace_state_path(workspace_path, namespace, json_digest(identity))
     # Require the literal directory layout, not even an in-workspace link
     # to another job. shutil.rmtree does not follow child symlink entries.
     if (os.path.normcase(os.path.abspath(parent)) != os.path.normcase(os.path.realpath(parent))
@@ -697,7 +699,7 @@ async def backend_scope(
                 native_identity = {**identity, "worker": lane}
                 lifetime = execution.conversation._lifetime
                 assert lifetime is not None
-                lane_lease = lifetime.lanes.setdefault(_digest(native_identity), asyncio.Lock())
+                lane_lease = lifetime.lanes.setdefault(json_digest(native_identity), asyncio.Lock())
                 await leases.enter_async_context(lane_lease)
                 execution.conversation.ensure_live()
                 state, head, expected = await execution.native_record(native_identity, state)

@@ -12,7 +12,8 @@ from unittest import mock
 
 from Cozter import execution_state
 from Cozter.backends_agent import _openai_agent as oa
-from Cozter.tests.test_http_execution_continuation import _Backend, _call
+from Cozter.tests.helpers import OfflineHttpBackend
+from Cozter.tests.test_http_execution_continuation import _call
 
 
 _TRANSCRIPT_FIELDS = {
@@ -42,7 +43,7 @@ class _ObservedRecord:
 
 class HttpPendingCheckpointTests(unittest.IsolatedAsyncioTestCase):
     async def run_backend(self, workspace, *, prompt="synthetic request"):
-        await _Backend()._run_agent(
+        await OfflineHttpBackend()._run_agent(
             SimpleNamespace(emit=lambda _event: None), workspace,
             prompt, "model-a", "full", False, 50,
         )

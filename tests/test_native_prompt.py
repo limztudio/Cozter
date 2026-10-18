@@ -8,6 +8,7 @@ from unittest import mock
 
 from Cozter import agent, execution_state, native_prompt, session
 from Cozter.native_prompt import NativePrompt
+from Cozter.utils import json_digest
 
 
 _SESSION_ID = "01a126fa-e54a-7753-8078-3e31ff8fc962"
@@ -275,7 +276,7 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         for invalid in (None, True, 1, "latest", "--last", _SESSION_ID[:8], _SESSION_ID + "\n"):
             with self.subTest(native_session_id=invalid):
                 ledger = {"session_id": invalid, "sections": {
-                    "memory": native_prompt.fingerprint("required bootstrap"),
+                    "memory": json_digest("required bootstrap"),
                 }, "messages": {}}
                 await self.record.save(native_session_id=invalid, native_tools_started=True,
                                        native_prompt_ledger=ledger)
@@ -431,7 +432,7 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_full_source_receipt_suppresses_every_preview_without_coverage_downgrade(self) -> None:
         message = _message("assistant", "full-known-head " + "evidence " * 200 + " full-known-tail")
-        source = native_prompt.fingerprint(message)
+        source = json_digest(message)
         full_text = session.format_msg_line(message, cap=None)
         full = NativePrompt(
             "request", {}, [("7", native_prompt.delivery_fingerprint(source, full_text), full_text)],
@@ -450,11 +451,11 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(smaller.render(self.record), "New message:\nrequest")
                 await smaller.acknowledge(self.record)
                 self.assertTrue(self.record.get("native_prompt_ledger")["message_sources"]["7"]["complete"])
-        self.assertTrue(native_prompt.message_is_known(self.record, "7", source, full_text, complete=True))
+        self.assertTrue(native_prompt.message_is_known(self.record, "7", source, full_text))
 
         # A rewrite can preserve its visible prefix while changing its source.
         rewritten = dict(message, content=message["content"] + " changed-unseen-tail")
-        changed_source = native_prompt.fingerprint(rewritten)
+        changed_source = json_digest(rewritten)
         same_preview = full_text[:100]
         self.assertFalse(native_prompt.message_is_known(self.record, "7", changed_source, same_preview))
         changed = NativePrompt(
@@ -465,10 +466,10 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         receipt = self.record.get("native_prompt_ledger")["message_sources"]["7"]
         self.assertEqual(receipt["source"], changed_source)
         self.assertFalse(receipt["complete"])
-        self.assertFalse(native_prompt.message_is_known(self.record, "7", source, full_text, complete=True))
+        self.assertFalse(native_prompt.message_is_known(self.record, "7", source, full_text))
 
     async def test_partial_receipts_remember_exact_views_without_claiming_full_source(self) -> None:
-        source = native_prompt.fingerprint(_message("user", "source with content beyond both previews"))
+        source = json_digest(_message("user", "source with content beyond both previews"))
 
         async def supply(text: str, *, complete: bool = False) -> NativePrompt:
             prompt = NativePrompt(
@@ -484,12 +485,8 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.render(self.record), "New message:\nrequest")
         self.assertTrue(native_prompt.message_is_known(self.record, "12", source, "first partial preview"))
         self.assertFalse(native_prompt.message_is_known(self.record, "12", source, "first partial"))
-        # Matching actual text needs no replay, even if the sender had marked
-        # its authority partial. The durable receipt still cannot suppress a
-        # different preview until full-source coverage is proven.
-        self.assertTrue(native_prompt.message_is_known(
-            self.record, "12", source, "first partial preview", complete=True,
-        ))
+        # A partial receipt cannot hide a different preview until the full
+        # source is proven.
         self.assertFalse(self.record.get("native_prompt_ledger")["message_sources"]["12"]["complete"])
         await supply("full canonical message", complete=True)
         self.assertTrue(native_prompt.message_is_known(self.record, "12", source, "any shorter preview"))
@@ -500,12 +497,12 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         await NativePrompt("request", {}, _history(data)).acknowledge(self.record)
         source = native_prompt.history_snapshot(data)["0"]
         text = session.format_msg_line(data["messages"][0], cap=None)
-        self.assertTrue(native_prompt.message_is_known(self.record, "0", source, text, complete=True))
+        self.assertTrue(native_prompt.message_is_known(self.record, "0", source, text))
         self.assertFalse(native_prompt.message_is_known(self.record, "0", source, text[:10]))
         self.assertEqual(self.record.get("native_prompt_ledger")["message_sources"], {})
 
     async def test_source_receipts_survive_reload_but_never_cross_native_uuid(self) -> None:
-        source = native_prompt.fingerprint(_message("assistant", "durable full evidence"))
+        source = json_digest(_message("assistant", "durable full evidence"))
         prompt = NativePrompt(
             "request", {}, [("3", native_prompt.delivery_fingerprint(source, "full evidence"), "full evidence")],
             message_sources={"3": (source, True)},
@@ -521,7 +518,7 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(native_prompt.message_is_known(self.record, "3", source, "excerpt"))
 
     async def test_budget_omission_preserves_full_source_receipts_but_uuid_change_drops_them(self) -> None:
-        source = native_prompt.fingerprint(_message("assistant", "known full content"))
+        source = json_digest(_message("assistant", "known full content"))
         prompt = NativePrompt(
             "request", {}, [("9", native_prompt.delivery_fingerprint(source, "known full content"),
                               "known full content")],
@@ -557,7 +554,7 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
 
         await native_prompt.acknowledge_logged_turn(self.record, data)
         self.assertTrue(native_prompt.message_is_known(
-            self.record, "41", marks["41"], session.format_msg_line(data["messages"][1], cap=None), complete=True,
+            self.record, "41", marks["41"], session.format_msg_line(data["messages"][1], cap=None),
         ))
 
     async def test_same_durable_request_uses_continuation_but_identical_new_job_remains_actionable(self) -> None:
@@ -591,7 +588,7 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         await self._confirm()
         await prompt.acknowledge(self.record, delivered_request=bootstrap_body)
         self.assertEqual(self.record.get("native_prompt_ledger")["request"]["body"],
-                         native_prompt.fingerprint(bootstrap_body))
+                         json_digest(bootstrap_body))
         self.assertEqual(prompt.request_for(self.record), "short follow-up")
         self.assertEqual(prompt.render(self.record), "New message:\nshort follow-up")
         await prompt.acknowledge(self.record, delivered_request="short follow-up")

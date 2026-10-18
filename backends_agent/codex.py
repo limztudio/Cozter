@@ -125,7 +125,6 @@ class CodexBackend(Backend):
     supports_read_only_workers = True
     executable = "codex"
     supports_vision = True
-    vision_mode = "cli_file_flag"
     # No no-tools mode: read-only sandbox is the confirm/deny fallback.
     permission_arg_sets = {
         "full": ("--dangerously-bypass-approvals-and-sandbox",),
@@ -374,11 +373,7 @@ class CodexBackend(Backend):
                      and event["item"].get("type") not in ("reasoning", "plan"))):
             record.set(native_tools_started=True)
         if event_type == "thread.started":
-            native_id = native_session_id(event.get("thread_id"))
-            record = execution_state.current_run()
-            if (record is not None and native_id is not None
-                    and record.get("native_session_id") in (None, native_id)):
-                record.set(native_session_id=native_id)
+            execution_state.adopt_native_session_id(event.get("thread_id"))
         # `or {}` guards present-but-null `"item"`.
         item = event.get("item") or {}
         if not isinstance(item, dict):

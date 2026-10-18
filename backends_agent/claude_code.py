@@ -34,7 +34,7 @@ from .base import (
     apply_terminal_result_event, attachment_image_paths,
     executable_command,
     extract_messages_style_agent_text,
-    record_error_event, truncate_status_text,
+    record_error_event, track_messages_stream_session, truncate_status_text,
 )
 from ..utils import (
     close_subprocess_pipe, is_path_within, wait_for_process_exit,
@@ -86,10 +86,6 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BACKGROUND_ID_RE = re.compile(
     r"(?im)^[ \t]*backgrounded[ \t]*(?:·|\*)[ \t]*"
     r"(?P<id>[A-Za-z0-9][A-Za-z0-9_-]{0,127})[ \t]*$",
-)
-_BACKGROUND_BASH_RE = re.compile(
-    r"(?:^|[\s;&|])claude\b[^\n]*--(?:bg|background)\b",
-    re.IGNORECASE,
 )
 _BACKGROUND_BASH_PREFIX_RE = re.compile(
     r"(?:^|[\s;&|])claude\b", re.IGNORECASE,
@@ -209,6 +205,7 @@ def _append_bounded_transcript_text(
     parts: list[str],
     used_bytes: int,
     text: str,
+    separator: str = "\n\n",
 ) -> tuple[int, bool]:
     """Append one visible transcript message within the aggregate cap.
 
@@ -216,7 +213,7 @@ def _append_bounded_transcript_text(
     the cap during the final ``join``.  Returning ``True`` means the retained
     output reached its limit and the caller can stop parsing the transcript.
     """
-    value = text if not parts else "\n\n" + text
+    value = text if not parts else separator + text
     retained, truncated, retained_bytes = _truncate_utf8_text(
         value,
         _MAX_DETACHED_OUTPUT_TEXT_BYTES - used_bytes,
@@ -308,17 +305,9 @@ def _transcript_text_from_content(content: object) -> str:
             continue
         text = block.get("text")
         if isinstance(text, str) and text.strip():
-            value = text.strip()
-            if parts:
-                value = "\n" + value
-            retained, truncated, retained_bytes = _truncate_utf8_text(
-                value,
-                _MAX_DETACHED_OUTPUT_TEXT_BYTES - used_bytes,
-                marker=_DETACHED_OUTPUT_TRUNCATION_MARKER,
+            used_bytes, truncated = _append_bounded_transcript_text(
+                parts, used_bytes, text.strip(), separator="\n",
             )
-            if retained:
-                parts.append(retained)
-                used_bytes += retained_bytes
             if truncated:
                 break
     return "".join(parts)
@@ -546,7 +535,6 @@ class ClaudeCodeBackend(Backend):
     name = "claude_code"
     executable = "claude"
     supports_vision = True
-    vision_mode = "stdin_text"
     # acceptEdits keeps outside checks; plan is the confirm/deny fallback.
     permission_arg_sets = {
         "full": ("--dangerously-skip-permissions",),
@@ -827,22 +815,10 @@ class ClaudeCodeBackend(Backend):
         return True
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
-        from .. import execution_state
-
         if not isinstance(event, dict):
             return
         event_type = event.get("type", "")
-        record = execution_state.current_run()
-        if (record is not None and event_type in ("assistant", "user")
-                and not record.get("native_tools_started")):
-            record.set(native_tools_started=True)
-        if (event_type == "system" and event.get("subtype") == "init"
-                and not event.get("parent_tool_use_id")):
-            native_id = native_session_id(event.get("session_id"))
-            record = execution_state.current_run()
-            if (record is not None and native_id is not None
-                    and record.get("native_session_id") in (None, native_id)):
-                record.set(native_session_id=native_id)
+        track_messages_stream_session(event, event_type)
 
         if event_type == "assistant":
             msg = event.get("message", {}) or {}

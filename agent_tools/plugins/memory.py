@@ -269,38 +269,6 @@ def _iter_search_texts(data: dict):
         yield f"{msg['role'].capitalize()}:", msg["content"]
 
 
-def _fit_output(
-    lines: list[str], header: str, *, keep_newest: bool = False,
-) -> str:
-    """Join *lines* under the budget, retaining the useful end of the list."""
-    lines = list(lines)
-    # Track joined size incrementally.
-    total = len(header) + sum(len(line) + 1 for line in lines)
-    dropped = 0
-
-    def omission_footer() -> str:
-        return (
-            f"(…{dropped} more result(s) omitted to fit the limit;"
-            " raise *limit* to see more; never treat this preview"
-            " as full coverage; say PARTIAL + remainder"
-            " when coverage is unclear)"
-        )
-
-    while lines and total + (len(omission_footer()) + 1 if dropped else 0) > _OUTPUT_BUDGET:
-        total -= len(lines.pop(0 if keep_newest else -1)) + 1
-        dropped += 1
-    if dropped:
-        lines.append(omission_footer())
-    result = "\n".join([header, *lines])
-    if len(result) > _OUTPUT_BUDGET:
-        # A model-supplied query/session name can exceed the whole budget.
-        return truncate_with_marker(
-            result, _OUTPUT_BUDGET,
-            "narrow the query or shorten the session name",
-        )
-    return result
-
-
 def _page_offset(args: dict) -> int | None:
     offset = args.get("offset", 0)
     return offset if isinstance(offset, int) and not isinstance(offset, bool) and offset >= 0 else None

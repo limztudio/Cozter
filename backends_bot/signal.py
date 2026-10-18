@@ -242,13 +242,6 @@ class _SignalOutboundJournal:
                    for created in (self._records.get((group, kind, value)),))
 
 
-async def seed_signal_outbound_echoes(messages: Iterable[tuple[str, str]]) -> None:
-    """Recover proven bot output from a quarantined queue without storing its text."""
-    journal = _SignalOutboundJournal()
-    await journal.remember((group, "text", _echo_hash(text.strip()))
-                           for group, text in messages if text.strip())
-
-
 def _signal_tcp_address(endpoint: str) -> tuple[str, int] | None:
     """Validate TCP URLs while leaving existing Unix socket paths intact."""
     if not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", endpoint):

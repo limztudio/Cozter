@@ -15,7 +15,7 @@ import unittest
 from Cozter.agent_tools import base as tool_base
 from Cozter.agent_tools.builtin.apply_patch import ApplyPatchTool
 from Cozter.agent_tools.plugins.git_info import GitInfoTool
-from Cozter.agent_tools.plugins.memory import MemoryTool, _OUTPUT_BUDGET, _fit_output
+from Cozter.agent_tools.plugins.memory import MemoryTool, _OUTPUT_BUDGET
 from Cozter.agent_tools.plugins.notes import NotesTool
 
 
@@ -58,17 +58,6 @@ class ToolSafetyAndOutputLimitTests(unittest.TestCase):
             self.assertEqual(result, "Notes cleared.")
             self.assertFalse(os.path.lexists(link))
             self.assertEqual(target.read_text(encoding="utf-8"), "keep this target\n")
-
-    def test_memory_output_reserves_the_complete_omission_footer(self) -> None:
-        lines = ["a" * 500 for _ in range(8)]
-        result = _fit_output(lines, "Found matching messages:")
-        self.assertLessEqual(len(result), _OUTPUT_BUDGET)
-        self.assertIn("PARTIAL + remainder", result)
-
-    def test_memory_oversized_header_still_respects_output_budget(self) -> None:
-        result = _fit_output(["matching message"], "query " + "x" * _OUTPUT_BUDGET)
-        self.assertLessEqual(len(result), _OUTPUT_BUDGET)
-        self.assertIn("PARTIAL + remainder", result)
 
     def test_memory_tail_read_keeps_newest_messages_when_result_budget_is_hit(self) -> None:
         with tempfile.TemporaryDirectory() as workspace:

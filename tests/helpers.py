@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 import asyncio
+import copy
 import json
 import os
 import signal
@@ -13,6 +14,7 @@ import uuid
 
 from Cozter import config
 from Cozter.agent_tools.base import _glob_segments, _match_glob_parts
+from Cozter.backends_agent import _openai_agent as oa
 from Cozter.backends_bot.base import BotPlatform, MessageHandle
 
 
@@ -25,6 +27,30 @@ class BytesContent:
     async def read(self, limit: int) -> bytes:
         chunk, self.body = self.body[:limit], self.body[limit:]
         return chunk
+
+
+class OfflineRecord:
+    """In-memory execution record that keeps a snapshot after each save."""
+
+    def __init__(self) -> None:
+        self.values: dict = {}
+        self.snapshots: list[dict] = []
+
+    def get(self, key, default=None):
+        return copy.deepcopy(self.values.get(key, default))
+
+    async def save(self, **values) -> None:
+        self.values.update(copy.deepcopy(values))
+        self.snapshots.append(copy.deepcopy(self.values))
+
+
+class OfflineHttpBackend(oa.OpenAIChatBackend):
+    """OpenAI-style backend whose endpoint is never reached."""
+
+    name = "offline-http"
+
+    def _chat_endpoint(self):
+        return "http://offline.invalid/chat/completions"
 
 
 class TestBot(BotPlatform):

@@ -9,7 +9,8 @@ import unittest
 from unittest import mock
 
 from Cozter.backends_agent import _openai_agent as oa
-from Cozter.tests.test_http_execution_continuation import _Backend, _Record, _call
+from Cozter.tests.helpers import OfflineHttpBackend, OfflineRecord
+from Cozter.tests.test_http_execution_continuation import _call
 
 
 def _legacy_restore(saved, pending):
@@ -76,20 +77,9 @@ class HttpRestoreAccountingTests(unittest.TestCase):
             owned = copy.deepcopy(saved)
             actual, byte_count = oa._restore_owned_http_messages(owned, pending)
             self.assertEqual(actual, expected)
-            self.assertEqual(oa._restore_http_messages(saved, pending), expected)
             self.assertEqual(byte_count, sum(oa._message_payload_bytes(message) for message in expected))
             if owned:
                 self.assertIs(actual[0], owned[0])
-
-    def test_compatibility_wrapper_owns_nested_values_and_originals_stay_unchanged(self):
-        saved = [{"role": "assistant", "content": None, "tool_calls": [_call("owned")],
-                  "provider_state": {"nested": [{"value": "keep"}]}}]
-        original = copy.deepcopy(saved)
-        restored = oa._restore_http_messages(saved, {"0": "known evidence"})
-        restored[0]["tool_calls"][0]["function"]["name"] = "changed"
-        restored[0]["provider_state"]["nested"][0]["value"] = "changed"
-        self.assertEqual(saved, original)
-        self.assertEqual(restored[1]["content"], "known evidence")
 
     def test_malformed_history_and_saved_history_cap_errors_match_legacy(self):
         cases = [4, {}, [None], [{"role": "system", "content": "old policy"}],
@@ -101,21 +91,20 @@ class HttpRestoreAccountingTests(unittest.TestCase):
                 with self.subTest(saved=saved):
                     with self.assertRaises(RuntimeError) as expected:
                         _legacy_restore(saved, {})
-                    for restore in (oa._restore_http_messages, oa._restore_owned_http_messages):
-                        with self.assertRaisesRegex(RuntimeError, "^" + str(expected.exception) + "$"):
-                            restore(saved, {})
+                    with self.assertRaisesRegex(RuntimeError, "^" + str(expected.exception) + "$"):
+                        oa._restore_owned_http_messages(saved, {})
 
 
 class HttpRestoreIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def run_backend(self, record, *, prompt="synthetic request"):
         events = []
         with mock.patch.object(oa, "current_run", return_value=record):
-            await _Backend()._run_agent(SimpleNamespace(emit=events.append), ".", prompt,
+            await OfflineHttpBackend()._run_agent(SimpleNamespace(emit=events.append), ".", prompt,
                                        "model-a", "full", False, 50)
         return events
 
     async def seed_record(self):
-        record = _Record()
+        record = OfflineRecord()
         with mock.patch.object(oa, "_stream_completion", new_callable=mock.AsyncMock,
                                return_value=("seeded", "", [])):
             await self.run_backend(record)
@@ -150,7 +139,6 @@ class HttpRestoreIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
                 with (
                     mock.patch.object(oa, "_message_payload_bytes", side_effect=measure),
-                    mock.patch.object(oa, "_restore_http_messages", side_effect=AssertionError("redundant copy path")),
                     mock.patch.object(oa, "_stream_completion", side_effect=stream),
                     mock.patch.object(oa.tools, "execute_tool", new_callable=mock.AsyncMock) as execute,
                 ):

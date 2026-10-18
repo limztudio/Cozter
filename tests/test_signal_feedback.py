@@ -1,7 +1,6 @@
 """Signal own-output replay protection without live RPCs or model calls."""
 
 import asyncio
-import json
 import os
 import tempfile
 import threading
@@ -14,7 +13,6 @@ from Cozter.backends_bot import create_platforms
 from Cozter.backends_bot import signal as signal_module
 from Cozter.backends_bot.signal import (
     SignalBot, SignalCliError, _SignalOutboundJournal, _echo_hash,
-    seed_signal_outbound_echoes,
 )
 from Cozter.tests.helpers import temporary_config
 
@@ -282,17 +280,6 @@ class SignalFeedbackTests(unittest.IsolatedAsyncioTestCase):
         restarted = self.bot()
         await restarted._handle_received_item(self.message("Cancelled send"))
         restarted.dispatch_text.assert_not_awaited()
-
-    async def test_recovery_seed_contains_hashes_only_and_suppresses_repeated_old_echoes(self) -> None:
-        await seed_signal_outbound_echoes([("group", "Proven quarantined report")])
-        with open(os.path.join(self.path, "signal_outbound.json"), encoding="utf-8") as source:
-            raw = source.read()
-        self.assertNotIn("Proven quarantined report", raw)
-        self.assertTrue(all(row["group"] != "group" for row in json.loads(raw)["records"]))
-        bot = self.bot()
-        for timestamp in (100, 101, 102):
-            await bot._handle_received_item(self.message("Proven quarantined report", timestamp=timestamp))
-        bot.dispatch_text.assert_not_awaited()
 
     async def test_journal_bounds_records_and_expires_old_provenance(self) -> None:
         now = time.time()

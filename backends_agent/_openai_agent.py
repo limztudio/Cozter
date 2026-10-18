@@ -17,7 +17,6 @@ name is resolved, and the per-loop safety limits.
 from __future__ import annotations
 
 import asyncio
-import copy
 import hashlib
 import json
 import logging
@@ -262,14 +261,6 @@ def _parallel_read_tool(name: str) -> bool:
     )
 
 
-def _restore_http_messages(
-    saved: object, pending: object,
-) -> list[dict[str, Any]]:
-    """Restore caller-owned history without retaining its mutable values."""
-    messages, _ = _restore_owned_http_messages(saved, pending)
-    return [copy.deepcopy(message) for message in messages]
-
-
 def _restore_owned_http_messages(
     saved: object, pending: object,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -345,7 +336,6 @@ class OpenAIChatBackend(Backend):
     # OpenAI-shape tools consumed directly.
     supports_typed_plugins = True
     supports_vision = True
-    vision_mode = "openai_parts"
     # Standard 4-level effort words.
     effort_levels: tuple[str, ...] = ("minimal", "low", "medium", "high")
 

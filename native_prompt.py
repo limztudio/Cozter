@@ -1,22 +1,15 @@
 """Structured, UUID-bound context delivery for native CLI conversations."""
 
 from dataclasses import dataclass, field
-import hashlib
-import json
 from typing import Callable
 
 from . import execution_state, session
-
-
-def fingerprint(value: object) -> str:
-    return hashlib.sha256(json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
-    ).encode("utf-8")).hexdigest()
+from .utils import json_digest
 
 
 def delivery_fingerprint(source_hash: str, rendered_text: str) -> str:
     """Bind known message content to the exact preview supplied to the CLI."""
-    return fingerprint([source_hash, rendered_text])
+    return json_digest([source_hash, rendered_text])
 
 
 def _matching_ledger(record: execution_state.ExecutionRecord | None) -> dict | None:
@@ -31,7 +24,7 @@ def _matching_ledger(record: execution_state.ExecutionRecord | None) -> dict | N
 
 def message_is_known(
     record: execution_state.ExecutionRecord | None, coordinate: str, source_hash: str,
-    rendered_text: str, *, complete: bool = False,
+    rendered_text: str,
 ) -> bool:
     """Only proven full coverage can suppress a different view of a message.
 
@@ -40,13 +33,12 @@ def message_is_known(
     older unseen messages from using the same space.
     """
     return message_is_known_from_ledger(
-        _matching_ledger(record), coordinate, source_hash, rendered_text, complete=complete,
+        _matching_ledger(record), coordinate, source_hash, rendered_text,
     )
 
 
 def message_is_known_from_ledger(
     ledger: dict | None, coordinate: str, source_hash: str, rendered_text: str,
-    *, complete: bool = False,
 ) -> bool:
     """Check one message against an already UUID-validated immutable snapshot."""
     if ledger is None:
@@ -89,7 +81,7 @@ def history_snapshot(data: dict) -> dict[str, str]:
     if not isinstance(messages, list):
         return {}
     start = session.total_message_count(data) - len(messages)
-    return {str(start + index): fingerprint(message)
+    return {str(start + index): json_digest(message)
             for index, message in enumerate(messages) if isinstance(message, dict)}
 
 
@@ -116,7 +108,7 @@ class NativePrompt:
 
     def section_fingerprint(self, name: str, content: str) -> str:
         """The same excerpt can be partial or an authoritative full section."""
-        return fingerprint([content, name in self.partial_sections])
+        return json_digest([content, name in self.partial_sections])
 
     def request_for(self, record: execution_state.ExecutionRecord | None) -> str:
         """Return the actual request body, even when rendering a continuation."""
@@ -136,7 +128,7 @@ class NativePrompt:
         receipt = (ledger or {}).get("request", {})
         if (self.request_identity is not None and isinstance(receipt, dict)
                 and receipt.get("identity") == self.request_identity
-                and receipt.get("body") == fingerprint(request)):
+                and receipt.get("body") == json_digest(request)):
             return ("Continue the current job from this native conversation. "
                     "Its request is already supplied; complete the remaining work.")
         return request
@@ -176,7 +168,7 @@ class NativePrompt:
         unseen = []
         for coordinate, digest, text in self.messages:
             source = self.message_sources.get(coordinate)
-            known = message_is_known_from_ledger(ledger, coordinate, source[0], text, complete=source[1]) if (
+            known = message_is_known_from_ledger(ledger, coordinate, source[0], text) if (
                 source is not None
             ) else resumed and previous_messages.get(coordinate) == digest
             if not known:
@@ -224,7 +216,7 @@ class NativePrompt:
         if self.request_identity is not None:
             ledger["request"] = {
                 "identity": self.request_identity,
-                "body": fingerprint(self.request_for(record) if delivered_request is None else delivered_request),
+                "body": json_digest(self.request_for(record) if delivered_request is None else delivered_request),
             }
         await record.save(native_prompt_ledger=ledger)
 

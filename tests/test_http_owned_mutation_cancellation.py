@@ -12,24 +12,7 @@ from unittest import mock
 
 from Cozter import agent_tools
 from Cozter.backends_agent import _openai_agent as oa
-
-
-class _Record:
-    def __init__(self):
-        self.values = {}
-
-    def get(self, key, default=None):
-        return copy.deepcopy(self.values.get(key, default))
-
-    async def save(self, **values):
-        self.values.update(copy.deepcopy(values))
-
-
-class _Backend(oa.OpenAIChatBackend):
-    name = "offline-owned-write-cancellation"
-
-    def _chat_endpoint(self):
-        return "http://offline.invalid/chat/completions"
+from Cozter.tests.helpers import OfflineHttpBackend, OfflineRecord
 
 
 def _call(path):
@@ -47,7 +30,7 @@ class HttpOwnedMutationCancellationTests(unittest.IsolatedAsyncioTestCase):
         release = threading.Event()
         settled = threading.Event()
         tool_tasks = []
-        record = _Record()
+        record = OfflineRecord()
         tool = agent_tools._BY_NAME["write_file"]
         original_run = tool.run
         events = []
@@ -69,7 +52,7 @@ class HttpOwnedMutationCancellationTests(unittest.IsolatedAsyncioTestCase):
                     settled.set()
 
             async def run():
-                await _Backend()._run_agent(
+                await OfflineHttpBackend()._run_agent(
                     SimpleNamespace(emit=events.append), workspace, "finish both files",
                     "offline-model", "full", False, 50,
                 )
@@ -112,7 +95,7 @@ class HttpOwnedMutationCancellationTests(unittest.IsolatedAsyncioTestCase):
             # result becomes durable. Resume must retain the saved intent as
             # unknown, inspect the workspace, and never automatically replay.
             self.assertEqual(record.values["http_pending_results"], {})
-            restored = oa._restore_http_messages(record.values["http_messages"], {})
+            restored, _ = oa._restore_owned_http_messages(record.values["http_messages"], {})
             tool_messages = [message for message in restored if message["role"] == "tool"]
             self.assertEqual([message["tool_call_id"] for message in tool_messages],
                              ["first.txt", "second.txt"])

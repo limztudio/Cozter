@@ -12,8 +12,6 @@ output parsing. The orchestration loop lives in :mod:`agent`, which owns
 the backend subprocess driver the workers run on.
 """
 
-import hashlib
-import json
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -415,11 +413,6 @@ def instruction_identity(instruction: str) -> str:
     # A polite request prefix does not create another obligation. Everything
     # identifying a target or action remains case-sensitive and unchanged.
     return re.sub(r"^Please\s+", "", normalized)
-
-
-def state_signature(value: object) -> str:
-    encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def task_identity(task: Subtask) -> str:

@@ -9,13 +9,7 @@ from unittest import mock
 from Cozter import agent, utils
 from Cozter.backends_agent import _http_process as hp
 from Cozter.backends_agent import _openai_agent as oa
-
-
-class _Backend(oa.OpenAIChatBackend):
-    name = "offline-http-event-framing"
-
-    def _chat_endpoint(self):
-        return "http://offline.invalid/chat/completions"
+from Cozter.tests.helpers import OfflineHttpBackend
 
 
 class HttpEventFramingTests(unittest.IsolatedAsyncioTestCase):
@@ -80,7 +74,7 @@ class HttpEventFramingTests(unittest.IsolatedAsyncioTestCase):
                               return_value=(text, "", [])),
         ):
             result, restarting = await agent._drive_backend(
-                _Backend(), "/workspace", "offline fixture", "offline-model", "full", effort=0,
+                OfflineHttpBackend(), "/workspace", "offline fixture", "offline-model", "full", effort=0,
             )
         self.assertFalse(restarting)
         self.assertIsNone(result.error)

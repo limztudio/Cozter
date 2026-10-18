@@ -48,6 +48,7 @@ from .base import (
     grok_prompt_json,
     record_backend_error,
     summarize_cli_tool,
+    track_messages_stream_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -164,7 +165,6 @@ class GrokBackend(CachedModelCatalog, Backend):
     name = "grok"
     executable = "grok"
     supports_vision = True
-    vision_mode = "prompt_file"
     default_model = "grok-4.7"
     default_summary_model = "grok-4.7"
     # Default-model vocabulary.
@@ -313,24 +313,12 @@ class GrokBackend(CachedModelCatalog, Backend):
     )
 
     def parse_event(self, event: dict, result: AgentResult) -> None:
-        from .. import execution_state
-
         if not isinstance(event, dict):
             return
         event_type = event.get("type", "")
         if not isinstance(event_type, str):
             return
-        record = execution_state.current_run()
-        if (record is not None and event_type in ("assistant", "user")
-                and not record.get("native_tools_started")):
-            record.set(native_tools_started=True)
-        if (event_type == "system" and event.get("subtype") == "init"
-                and not event.get("parent_tool_use_id")):
-            native_id = native_session_id(event.get("session_id"))
-            record = execution_state.current_run()
-            if (record is not None and native_id is not None
-                    and record.get("native_session_id") in (None, native_id)):
-                record.set(native_session_id=native_id)
+        track_messages_stream_session(event, event_type)
 
         if event_type == "assistant":
             message = event.get("message") or {}

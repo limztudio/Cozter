@@ -10,26 +10,7 @@ from unittest import mock
 from Cozter import agent_tools
 from Cozter.agent_tools.base import AgentTool
 from Cozter.backends_agent import _openai_agent as oa
-
-
-class _Record:
-    def __init__(self):
-        self.values = {}
-        self.snapshots = []
-
-    def get(self, key, default=None):
-        return copy.deepcopy(self.values.get(key, default))
-
-    async def save(self, **values):
-        self.values.update(copy.deepcopy(values))
-        self.snapshots.append(copy.deepcopy(self.values))
-
-
-class _Backend(oa.OpenAIChatBackend):
-    name = "offline-plugin-parallelism"
-
-    def _chat_endpoint(self):
-        return "http://offline.invalid/chat/completions"
+from Cozter.tests.helpers import OfflineHttpBackend, OfflineRecord
 
 
 def _plugin(name="read_plugin", *, parallel_safe=False):
@@ -56,7 +37,7 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self, *, approval="full"):
         events = []
         process = SimpleNamespace(emit=events.append)
-        await _Backend()._run_agent(
+        await OfflineHttpBackend()._run_agent(
             process, "/workspace", "inspect the requested scope", "offline-model",
             approval, False, 50,
         )
@@ -84,7 +65,7 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(oa._parallel_read_tool("unregistered_plugin"))
 
     async def test_plugin_waves_are_bounded_ordered_and_durable_before_barriers(self):
-        record = _Record()
+        record = OfflineRecord()
         plugin = _plugin(parallel_safe=True)
         barrier = _plugin("mixed_action_plugin")
         calls = [_call(f"before-{index}") for index in range(7)]
@@ -172,7 +153,7 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(peak, 1)
 
     async def test_cancelled_plugin_wave_settles_sibling_and_retains_finished_result(self):
-        record = _Record()
+        record = OfflineRecord()
         plugin = _plugin(parallel_safe=True)
         waiting = asyncio.Event()
         stopped = asyncio.Event()
@@ -200,8 +181,8 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
                 await task
         self.assertTrue(stopped.is_set())
         self.assertEqual(record.values["http_pending_results"], {"0": "completed plugin evidence"})
-        restored = oa._restore_http_messages(record.values["http_messages"],
-                                            record.values["http_pending_results"])
+        restored, _ = oa._restore_owned_http_messages(record.values["http_messages"],
+                                                      record.values["http_pending_results"])
         self.assertEqual(restored[-2]["content"], "completed plugin evidence")
         self.assertIn("outcome is unknown", restored[-1]["content"])
 

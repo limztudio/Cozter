@@ -145,7 +145,6 @@ class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
     supports_vision = True
-    vision_mode = "cli_file_flag"
     # Restricted modes expose no tools.
     permission_arg_sets = {
         "full": ("--yolo",),

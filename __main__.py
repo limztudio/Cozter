@@ -368,8 +368,8 @@ def _get_dump_file() -> TextIO:
     global _dump_file
     if _dump_file is None:
         os.makedirs(LOG_DIR, exist_ok=True)
-        # SIM115 does not apply: kept for the process lifetime.
-        _dump_file = open(  # noqa: SIM115
+        # Kept open for the process lifetime.
+        _dump_file = open(
             os.path.join(LOG_DIR, "diagnostics.log"), "a", encoding="utf-8",
         )
     return _dump_file

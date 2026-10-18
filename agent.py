@@ -46,6 +46,7 @@ from .utils import (
     image_header_extension,
     is_path_within,
     iter_process_json_events,
+    json_digest,
     kill_and_wait,
     run_internal_backend,
     take_recent_lines,
@@ -917,11 +918,6 @@ def _iter_image_file_metadata(
                        exc_info=True)
 
 
-def _iter_image_files(root: str) -> list[str]:
-    """Keep the existing path-list helper contract for discovery callers."""
-    return [path for path, _metadata in _iter_image_file_metadata(root)]
-
-
 def _snapshot_attachment_images(
     workspace_path: str,
 ) -> dict[str, tuple[int, int]]:
@@ -1497,7 +1493,7 @@ def _native_turn_prompt(
         text = session.format_msg_line(message)
         complete = text == session.format_msg_line(message, cap=None)
         if not native_prompt.message_is_known_from_ledger(
-            ledger, coordinate, digest, text, complete=complete,
+            ledger, coordinate, digest, text,
         ):
             history.append((coordinate, digest, text, complete))
     descriptors = [
@@ -1512,7 +1508,7 @@ def _native_turn_prompt(
         known_sections = {}
     known_full_sections = {
         name for name, render in descriptors
-        if known_sections.get(name) == native_prompt.fingerprint([render(None), False])
+        if known_sections.get(name) == json_digest([render(None), False])
     }
     lengths = [0 if name in known_full_sections else len(render(None)) for name, render in descriptors]
     lengths.append(sum(len(text) + 1 for _, _, text, _ in history))
@@ -1546,7 +1542,7 @@ def _native_turn_prompt(
             if not selected and remaining:
                 excerpt = _truncate_context_text(text, remaining)
                 if native_prompt.message_is_known_from_ledger(
-                    ledger, coordinate, digest, excerpt, complete=False,
+                    ledger, coordinate, digest, excerpt,
                 ):
                     continue
                 selected.append((coordinate, native_prompt.delivery_fingerprint(digest, excerpt), excerpt))
@@ -2181,7 +2177,7 @@ async def _run_flexible(
     }
 
     def request_signature(original: str, additions: list[str]) -> str:
-        return flexible.state_signature({
+        return json_digest({
             "request": original, "injected": additions, **signature_context,
         })
 
@@ -2419,7 +2415,7 @@ async def _run_flexible(
 
     def worker_scope(index: int) -> str:
         task = queue[index]
-        return "flexible:" + flexible.state_signature({
+        return "flexible:" + json_digest({
             "tier": task.tier, "instruction": flexible.instruction_identity(task.instruction),
             "read_only": task.read_only, "independent": task.independent,
         })

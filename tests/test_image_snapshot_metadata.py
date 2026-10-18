@@ -18,6 +18,10 @@ def _image(root: Path, relative: str, payload: bytes = b"fixture") -> str:
     return os.path.realpath(path)
 
 
+def _image_paths(root: str) -> list[str]:
+    return [path for path, _metadata in agent._iter_image_file_metadata(root)]
+
+
 def _legacy_paths(root: str) -> list[str]:
     paths = []
     root_real = os.path.realpath(root)
@@ -61,7 +65,7 @@ class ImageSnapshotMetadataTests(unittest.TestCase):
             for skipped in ("build", "Testing", "__cmake/build", "cmake-build-debug", "node_modules"):
                 _image(root, f"{skipped}/hidden.png")
             (root / "source.py").write_text("ordinary source", encoding="utf-8")
-            self.assertEqual(agent._iter_image_files(temporary), _legacy_paths(temporary))
+            self.assertEqual(_image_paths(temporary), _legacy_paths(temporary))
             before = agent._snapshot_attachment_images(temporary)
             self.assertEqual(before, _legacy_snapshot(temporary))
             modified = _image(root, "output/0/image-0.PNG", b"changed bytes")
@@ -110,7 +114,7 @@ class ImageSnapshotMetadataTests(unittest.TestCase):
 
             with mock.patch.object(agent.os, "stat", metadata):
                 self.assertEqual(set(agent._snapshot_attachment_images(temporary)), {valid})
-                self.assertEqual(agent._iter_image_files(temporary), [valid])
+                self.assertEqual(_image_paths(temporary), [valid])
 
     def test_file_aliases_keep_legacy_containment_skipped_target_and_duplicates(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -129,7 +133,7 @@ class ImageSnapshotMetadataTests(unittest.TestCase):
                 self.skipTest(f"file symlinks unavailable: {error}")
             expected_paths = _legacy_paths(str(workspace))
             self.assertEqual(expected_paths.count(target), 2)
-            self.assertEqual(agent._iter_image_files(str(workspace)), expected_paths)
+            self.assertEqual(_image_paths(str(workspace)), expected_paths)
             self.assertEqual(agent._snapshot_attachment_images(str(workspace)), _legacy_snapshot(str(workspace)))
             self.assertEqual(set(agent._snapshot_attachment_images(str(workspace))), {target})
 
@@ -157,7 +161,7 @@ class ImageSnapshotMetadataTests(unittest.TestCase):
                 return replacements.get(resolved, resolved)
 
             with mock.patch.object(agent.os.path, "realpath", resolve):
-                paths = agent._iter_image_files(str(workspace))
+                paths = _image_paths(str(workspace))
                 self.assertEqual(paths, _legacy_paths(str(workspace)))
                 self.assertEqual(paths.count(target), 2)
                 self.assertEqual(set(agent._snapshot_attachment_images(str(workspace))), {target})
@@ -189,7 +193,7 @@ class ImageSnapshotMetadataTests(unittest.TestCase):
                     expected = _legacy_snapshot(str(selected_root))
                     self.assertEqual(agent._snapshot_attachment_images(str(selected_root)), expected)
                     self.assertEqual(set(expected), {target})
-                    self.assertEqual(agent._iter_image_files(str(selected_root)), _legacy_paths(str(selected_root)))
+                    self.assertEqual(_image_paths(str(selected_root)), _legacy_paths(str(selected_root)))
 
     def test_path_resolution_error_keeps_prior_results_and_warns(self):
         with tempfile.TemporaryDirectory() as temporary:

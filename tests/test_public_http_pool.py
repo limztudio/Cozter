@@ -18,13 +18,7 @@ from aiohttp import web
 from Cozter.agent_tools import base, _http_types, _public_resolver
 from Cozter.agent_tools.plugins.http_request import HttpRequestTool
 from Cozter.backends_agent import _openai_agent as oa
-
-
-class _Backend(oa.OpenAIChatBackend):
-    name = "offline-public-http-pool"
-
-    def _chat_endpoint(self):
-        return "http://offline.invalid/chat/completions"
+from Cozter.tests.helpers import OfflineHttpBackend
 
 
 class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
@@ -313,7 +307,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
             return "offline evidence"
 
         async def worker(model):
-            await _Backend()._run_agent(
+            await OfflineHttpBackend()._run_agent(
                 SimpleNamespace(emit=lambda event: None), "/workspace", "request",
                 model, "full", False, 0,
             )
@@ -351,7 +345,7 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(oa, "current_run", return_value=None),
             mock.patch.object(oa, "_stream_completion", side_effect=stream),
         ):
-            await _Backend()._run_agent(
+            await OfflineHttpBackend()._run_agent(
                 SimpleNamespace(emit=lambda event: None), "/workspace", "request",
                 "worker-a", "full", False, 0,
             )

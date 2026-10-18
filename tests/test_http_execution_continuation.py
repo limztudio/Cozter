@@ -11,29 +11,10 @@ from unittest import mock
 
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter import execution_state, skills
+from Cozter.tests.helpers import OfflineHttpBackend, OfflineRecord
 
 
-class _Record:
-    def __init__(self):
-        self.values = {}
-        self.snapshots = []
-
-    def get(self, key, default=None):
-        return copy.deepcopy(self.values.get(key, default))
-
-    async def save(self, **values):
-        self.values.update(copy.deepcopy(values))
-        self.snapshots.append(copy.deepcopy(self.values))
-
-
-class _Backend(oa.OpenAIChatBackend):
-    name = "offline-continuation"
-
-    def _chat_endpoint(self):
-        return "http://offline.invalid/chat/completions"
-
-
-class _ReasoningBackend(_Backend):
+class _ReasoningBackend(OfflineHttpBackend):
     def _preserve_reasoning_content(self, _model):
         return True
 
@@ -53,7 +34,7 @@ def _process():
 class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self, backend=None, prompt="do the work", **kwargs):
         proc = _process()
-        await (backend or _Backend())._run_agent(
+        await (backend or OfflineHttpBackend())._run_agent(
             proc, kwargs.get("workspace", "/workspace"), prompt, kwargs.get("model", "model-a"),
             kwargs.get("approval", "full"), kwargs.get("compaction", False),
             kwargs.get("effort", 50),
@@ -61,7 +42,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         return proc
 
     async def test_completed_write_survives_cancel_without_reexecution(self):
-        record = _Record()
+        record = OfflineRecord()
         entered_second = asyncio.Event()
         writes = []
         requests = []
@@ -114,7 +95,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
                          "Continue; also inspect the new requirement.")
 
     async def test_completed_batch_transcript_survives_stream_interruption(self):
-        record = _Record()
+        record = OfflineRecord()
         count = 0
 
         async def stream(*args, **kwargs):
@@ -173,7 +154,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             ):
                 with self.assertRaises(asyncio.CancelledError):
                     async with execution_state.execution_scope(temp, "queued-job", "request"):
-                        async with execution_state.backend_scope(_Backend.name, "model-a", "full", 50):
+                        async with execution_state.backend_scope(OfflineHttpBackend.name, "model-a", "full", 50):
                             await self._run(workspace=temp)
 
             self.assertEqual(output.read_text(encoding="utf-8"), "saved once")
@@ -189,14 +170,14 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(oa.tools, "execute_tool", new_callable=mock.AsyncMock) as tool,
             ):
                 async with execution_state.execution_scope(temp, "queued-job", "request plus accepted guidance"):
-                    async with execution_state.backend_scope(_Backend.name, "model-a", "full", 50):
+                    async with execution_state.backend_scope(OfflineHttpBackend.name, "model-a", "full", 50):
                         await self._run(workspace=temp, prompt="Continue and verify the existing output.")
             tool.assert_not_awaited()
             self.assertTrue(any(m.get("content") == "wrote output.txt"
                                 for m in requests[0]["messages"]))
 
     async def test_reasoning_state_is_retained_but_current_system_is_rebuilt(self):
-        record = _Record()
+        record = OfflineRecord()
         calls = 0
 
         async def first(*args, **kwargs):
@@ -238,7 +219,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_or_permission_change_does_not_reuse_transcript(self):
         for changed in ({"model": "model-b"}, {"approval": "confirm"}):
             with self.subTest(changed=changed):
-                record = _Record()
+                record = OfflineRecord()
                 seen = []
 
                 async def stream(*args, **kwargs):
@@ -255,7 +236,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("completed private phase", str(seen[1]))
 
     async def test_compaction_never_reads_or_writes_execution_record(self):
-        record = _Record()
+        record = OfflineRecord()
         with (
             mock.patch.object(oa, "current_run", return_value=record) as current,
             mock.patch.object(oa, "_stream_completion", new_callable=mock.AsyncMock,
@@ -304,7 +285,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
                          [c["id"] for c in calls])
 
     async def test_read_wave_uses_one_complete_checkpoint_instead_of_one_per_read(self):
-        record = _Record()
+        record = OfflineRecord()
         calls = [_call(str(i), path=str(i)) for i in range(4)]
         requests = 0
 
@@ -330,7 +311,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(m["role"] == "tool" for m in record.values["http_messages"]), 4)
 
     async def test_interrupted_read_wave_preserves_finished_read_and_settles_sibling(self):
-        record = _Record()
+        record = OfflineRecord()
         waiting = asyncio.Event()
         stopped = asyncio.Event()
 
@@ -357,13 +338,13 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
                 await task
         self.assertTrue(stopped.is_set())
         self.assertEqual(record.values["http_pending_results"], {"0": "completed read evidence"})
-        restored = oa._restore_http_messages(record.values["http_messages"],
-                                            record.values["http_pending_results"])
+        restored, _ = oa._restore_owned_http_messages(record.values["http_messages"],
+                                                      record.values["http_pending_results"])
         self.assertEqual(restored[-2]["content"], "completed read evidence")
         self.assertIn("outcome is unknown", restored[-1]["content"])
 
     async def test_read_wave_and_each_mutation_are_durable_before_later_mutations(self):
-        record = _Record()
+        record = OfflineRecord()
         calls = [_call(str(i), path=str(i)) for i in range(4)]
         calls.extend([_call("write", "write_file"), _call("build", "bash")])
         requests = 0
@@ -423,7 +404,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     def test_invalid_saved_transcript_fails_closed(self):
         with self.assertRaisesRegex(RuntimeError, "invalid message"):
-            oa._restore_http_messages([{"role": "system", "content": "old policy"}], {})
+            oa._restore_owned_http_messages([{"role": "system", "content": "old policy"}], {})
         with mock.patch.object(oa, "_MAX_AGENT_MESSAGE_BYTES", 10):
             with self.assertRaisesRegex(RuntimeError, "safety limit"):
-                oa._restore_http_messages([{"role": "user", "content": "too long"}], {})
+                oa._restore_owned_http_messages([{"role": "user", "content": "too long"}], {})

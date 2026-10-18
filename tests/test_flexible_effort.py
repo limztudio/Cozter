@@ -12,6 +12,7 @@ from Cozter import agent, execution_state, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult
 from Cozter.backends_bot.base import BotPlatform, COMMAND_NAMES
 from Cozter.tests.helpers import TestBot
+from Cozter.utils import json_digest
 
 
 class FlexibleEffortSettingsTests(unittest.TestCase):
@@ -206,7 +207,7 @@ class FlexibleEffortRoutingTests(unittest.IsolatedAsyncioTestCase):
             state = execution_state.current_run()
             self.assertIsNotNone(state)
             identity = {"backend": "codex", "model": "gpt-6-sol", "approval": "full", "effort": effort, "worker": "main"}
-            self.assertEqual(state.key, execution_state._digest({
+            self.assertEqual(state.key, json_digest({
                 "native_generation": state.get("native_record_id"), "backend": identity,
             }))
             observed.append((effort, state.key))

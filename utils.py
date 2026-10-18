@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import hashlib
 import inspect
 import json
 import logging
@@ -653,6 +654,13 @@ def load_json_object(
         return data
     (log or logger).warning("Ignoring non-object %s (%s)", label, path)
     return {}
+
+
+def json_digest(value: object) -> str:
+    """SHA-256 of canonical JSON, so equal values get equal digests."""
+    return hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
 
 
 def validate_json_nesting(value: object) -> None:

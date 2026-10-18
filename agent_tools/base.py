@@ -801,7 +801,7 @@ def create_text_file_atomically(
     """
     text = _restore_text_newlines(text, uses_crlf=uses_crlf)
     parent = os.path.dirname(path) or "."
-    fd, tmp_path = _new_text_temp_file(parent, path)
+    fd, tmp_path = _new_text_temp_file(parent)
     try:
         _write_text_to_fd(fd, text)
         return _publish_new_file_no_clobber(tmp_path, path)
@@ -892,7 +892,7 @@ def _publish_new_file_no_clobber(
     return True
 
 
-def _new_text_temp_file(parent: str, target_path: str) -> tuple[int, str]:
+def _new_text_temp_file(parent: str) -> tuple[int, str]:
     """Open a same-directory temp file with normal file-creation mode.
 
     ``tempfile.mkstemp`` intentionally forces 0600. Source files created by

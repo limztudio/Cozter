@@ -277,11 +277,6 @@ VISION_MIME_BY_EXT = {
     ".bmp": "image/bmp",
 }
 VISION_MAX_IMAGES_PER_TURN = 4
-_ATTACHMENT_SAVED_PATTERN = (
-    r"\[[^\]\n]*attachment saved to:\s*([^\]\n]+?)\s*\]"
-)
-# Compiled once.
-_ATTACHMENT_SAVED_RE = re.compile(_ATTACHMENT_SAVED_PATTERN, re.IGNORECASE)
 _ATTACHMENT_SAVED_WORD_RE = re.compile("attachment saved to:", re.IGNORECASE)
 
 
@@ -642,6 +637,19 @@ def extract_messages_style_agent_text(event: dict) -> str | None:
     return "\n".join(texts)
 
 
+def track_messages_stream_session(event: dict, event_type: object) -> None:
+    """Save native activity and the session id from a Messages-style event."""
+    from .. import execution_state
+
+    record = execution_state.current_run()
+    if (record is not None and event_type in ("assistant", "user")
+            and not record.get("native_tools_started")):
+        record.set(native_tools_started=True)
+    if (event_type == "system" and event.get("subtype") == "init"
+            and not event.get("parent_tool_use_id")):
+        execution_state.adopt_native_session_id(event.get("session_id"))
+
+
 def apply_messages_assistant_content(
     content: object,
     result: AgentResult,
@@ -807,9 +815,6 @@ class Backend(ABC):
 
     # Native image pixels.
     supports_vision: bool = False
-
-    # Delivery form when supports_vision (text-only = none).
-    vision_mode: str = "none"
 
     # Provider-owned jobs queryable after our subprocess exits.
     supports_detached_tasks: bool = False

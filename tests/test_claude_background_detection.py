@@ -1,10 +1,16 @@
 """Claude Bash background bookkeeping must not rescan overlapping suffixes."""
 
 import random
+import re
 import unittest
 
 from Cozter.backends_agent import claude_code as cc
 from Cozter.backends_agent.base import AgentResult
+
+# The old regex, kept here as the expected answer.
+_LEGACY_BACKGROUND_BASH_RE = re.compile(
+    r"(?:^|[\s;&|])claude\b[^\n]*--(?:bg|background)\b", re.IGNORECASE,
+)
 
 
 class ClaudeBackgroundDetectionTests(unittest.TestCase):
@@ -24,7 +30,7 @@ class ClaudeBackgroundDetectionTests(unittest.TestCase):
         ]
         for command in cases:
             with self.subTest(command=command):
-                self.assertEqual(cc._is_background_bash(command), bool(cc._BACKGROUND_BASH_RE.search(command)))
+                self.assertEqual(cc._is_background_bash(command), bool(_LEGACY_BACKGROUND_BASH_RE.search(command)))
 
     def test_seeded_malformed_commands_match_legacy(self):
         randomizer = random.Random(217)
@@ -35,7 +41,7 @@ class ClaudeBackgroundDetectionTests(unittest.TestCase):
         ]
         for _ in range(15_000):
             command = "".join(randomizer.choices(pieces, k=randomizer.randrange(1, 35)))
-            self.assertEqual(cc._is_background_bash(command), bool(cc._BACKGROUND_BASH_RE.search(command)), command)
+            self.assertEqual(cc._is_background_bash(command), bool(_LEGACY_BACKGROUND_BASH_RE.search(command)), command)
 
     def test_large_repeated_launchers_preserve_flag_order(self):
         repeated = " claude" * 100_000
