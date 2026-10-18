@@ -15,10 +15,8 @@ from ..base import (
 )
 
 
-# Cap the read.
 _READ_FILE_MAX_CHARS = 128 * 1024
 _READ_FILE_SKIP_CHUNK_CHARS = 64 * 1024
-# Bound the skip.
 _READ_FILE_MAX_SKIP_CHARS = 16 * 1024 * 1024
 
 

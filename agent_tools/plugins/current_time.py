@@ -26,7 +26,6 @@ class CurrentTimeTool(AgentTool):
             if not isinstance(tz_name, str):
                 return f"Invalid timezone {tz_name!r}: must be a string"
             try:
-                # UTC needs no IANA tzdata.
                 if tz_name.strip().upper() == "UTC":
                     return datetime.now(UTC).isoformat()
                 from zoneinfo import ZoneInfo

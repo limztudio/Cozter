@@ -16,7 +16,7 @@ from .utils import stat_mtime_size
 logger = logging.getLogger(__name__)
 
 WORKSPACE_STATE_PATH = os.path.join(CONFIG_DIR, "workspaces.json")
-MAX_RECENT = 50  # cap on the recent-workspaces list
+MAX_RECENT = 50
 
 
 def canonicalize_workspace_path(path: str) -> str:
@@ -273,7 +273,6 @@ FLEXIBLE_BACKEND = backends_agent.FLEXIBLE_BACKEND
 # Compaction/titling default to codex.
 DEFAULT_SUMMARY_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
 
-# Difficulty tiers; all default.
 FLEXIBLE_TIERS = flexible.TIERS
 FLEXIBLE_TIER_DESCRIPTIONS = flexible.TIER_DESCRIPTIONS
 DEFAULT_FLEXIBLE_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
@@ -398,7 +397,6 @@ def _coerce_permission(permission: object) -> str:
     )
 
 
-# Privilege rank (low -> high).
 _PERMISSION_RANK = {"deny": 0, "confirm": 1, "auto": 2, "full": 3}
 
 
@@ -520,7 +518,6 @@ def get_available_summary_models(workspace_path: str) -> list[str]:
     )
 
 
-# Per-(backend, role) model memory.
 CHAT_SCOPE = ""
 SUMMARY_SCOPE = "summary"
 

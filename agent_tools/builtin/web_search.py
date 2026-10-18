@@ -29,7 +29,6 @@ _SEARCH_ENDPOINTS = (
 _ATTEMPTS_PER_ENDPOINT = 2
 _RETRY_DELAY_SECONDS = 0.5
 
-# Bound the anchor scan.
 _MAX_ANCHORS_SCANNED = 200
 # Sponsored markers live on /l/; results lack them.
 _AD_PARAMS = frozenset({"ad_provider", "ad_domain", "ad_tool"})

@@ -119,7 +119,6 @@ class GrepTool(AgentTool):
         ):
             try:
                 metadata = os.stat(fpath)
-                # Skip non-regular files.
                 if (
                     not stat.S_ISREG(metadata.st_mode)
                     or metadata.st_size > _GREP_MAX_FILE_BYTES
@@ -262,5 +261,5 @@ async def _scan_in_subprocess_async(
                 raise RuntimeError("grep worker exited without a result")
     finally:
         receive_conn.close()
-        # Reap on a thread so the worker never outlives a cancelled turn.
+        # Reap off-loop so no worker outlives a dead turn.
         await asyncio.to_thread(_stop_scan_worker, proc)

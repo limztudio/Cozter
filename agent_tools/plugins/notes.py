@@ -106,8 +106,7 @@ class NotesTool(AgentTool):
         try:
             existing = _read_notes_text(target)
         except OSError as exc:
-            # A failed read is not an empty file: replacing it would silently
-            # discard durable notes that this call never inspected.
+            # A bad read is not empty: never wipe unseen notes.
             return f"Error: could not read notes: {exc}"
         pre_fit = (existing + entry) if existing else entry
         combined = _fit_entries([existing, entry] if existing else [entry])
@@ -201,8 +200,7 @@ def _notes_transaction(target: str) -> Iterator[None]:
         if sys.platform == "win32":
             import msvcrt
 
-            # Windows byte locks need a real byte and remain owned by this
-            # descriptor. Nonblocking retries avoid LK_LOCK's ten-retry cap.
+            # Win locks need a real byte; retry without blocking.
             if os.fstat(descriptor).st_size == 0:
                 os.write(descriptor, b"0")
             os.lseek(descriptor, 0, os.SEEK_SET)

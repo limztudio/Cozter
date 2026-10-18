@@ -23,8 +23,7 @@ CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.
 _STDERR_CAPTURE_BYTES = 64 * 1024
 # Malformed CLIs can emit endless lines.
 _MAX_STREAM_LINE_BYTES = 4 * 1024 * 1024
-# HTTP workers already bound completion text/tool arguments before emitting
-# local JSON events. A 4 MiB string can need 24 MiB when JSON escapes controls.
+# Escaped JSON can bloat text; cap the line.
 HTTP_EVENT_LINE_MAX_BYTES = 32 * 1024 * 1024
 _HTTP_EVENT_STREAM_TOKEN = object()
 # Keep decoded state safe for deepcopy, normalization, and JSON serialization.
@@ -102,7 +101,7 @@ def clip_status_value(value: object, max_chars: int = 200) -> str:
     return text[:max_chars - len(_marker)] + _marker
 
 
-# BMP DIB header sizes; two "BM" bytes alone are too weak a signature.
+# BMP sizes; bare BM bytes prove nil.
 _BMP_HEADER_SIZES = frozenset({12, 40, 52, 56, 64, 108, 124})
 
 
@@ -182,8 +181,7 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
                     return None
                 marker = head[offset + 1]
                 if marker in (0xD9, 0xDA):
-                    # Dimensions precede the first scan; don't inspect entropy
-                    # data or bytes beyond the end of an image as header fields.
+                    # Size sits pre-scan; skip entropy bytes.
                     return None
                 if marker in (0xD8, 0x00, 0x01) or 0xD0 <= marker <= 0xD7:
                     offset += 2
@@ -410,7 +408,7 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
     """
     pid = getattr(proc, "pid", None)
     if os.name == "nt":
-        # ``taskkill /T`` walks the tree; keep the ~0.1s spawn off the loop.
+        # taskkill walks the tree; keep it off-loop.
         if terminate_windows_process_tree(pid):
             return
     elif has_managed_process_group(proc):
@@ -835,10 +833,7 @@ async def iter_process_json_events(
     stream = proc.stdout
     assert stream is not None
     if _is_http_event_stream(stream):
-        # These bytes come from our in-process adapter, whose owned driver
-        # always feeds EOF when it finishes or is cancelled. There can be no
-        # descendant inheriting this Python buffer, so native post-exit drain
-        # limits would only discard valid, already bounded HTTP events.
+        # In-house bytes always end with EOF; keep them whole.
         async for event in iter_json_events(stream, on_invalid=on_invalid):
             yield event
         return

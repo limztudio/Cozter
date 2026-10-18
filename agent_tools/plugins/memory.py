@@ -70,12 +70,7 @@ def _iter_session_files(sessions_dir: str):
 
 
 def _stat_signature(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
-    # Windows 3.12 can report creation time through stat().st_ctime_ns while
-    # fstat().st_ctime_ns reports change time. Use the explicitly named birth
-    # time when available so path and handle snapshots describe the same data.
-    # Older Windows versions expose birth time as ctime; POSIX keeps its real
-    # change time. File identity also detects equal-size atomic replacements
-    # whose modification timestamp was preserved.
+    # Pick birth time when present so both views match.
     change_time = (
         getattr(metadata, "st_birthtime_ns", metadata.st_ctime_ns)
         if os.name == "nt" else metadata.st_ctime_ns
@@ -577,8 +572,7 @@ class MemoryTool(AgentTool):
                     result, _OUTPUT_BUDGET,
                     "shorten the session name before retrying",
                 )
-            # Keep the newest complete rows in this page. Recompute both the
-            # visible count and cursor after each removal, so no row is skipped.
+            # Keep newest rows; recount after each drop.
             lines.pop(0)
 
 

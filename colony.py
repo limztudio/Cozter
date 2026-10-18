@@ -80,7 +80,6 @@ def _load(workspace: str) -> dict:
     cleaned = normalize_string_list(items)
     cleaned, dropped = _cap_to_newest(cleaned)
     if dropped:
-        # Match set_items: keep newest.
         logger.warning(
             "Colony exceeds cap (%d); dropping %d oldest item(s)",
             COLONY_CAP, dropped,
@@ -258,7 +257,6 @@ def _bounded_colony_lines(items: list[str], budget: int) -> tuple[list[str], boo
             if remaining == 1:
                 lines.append("…")
             elif remaining <= len(marker):
-                # Keep a visible cut indicator.
                 lines.append(
                     line[:remaining - 1] + "…"
                 )

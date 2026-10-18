@@ -117,15 +117,13 @@ def _is_background_bash(command: str) -> bool:
         end = command.find("\n", start)
         if end < 0:
             end = len(command)
-        # Include the preceding LF: it is a valid launcher separator in the
-        # original regex. Other Unicode whitespace remains inside this line.
+        # Count the past LF: it splits launchers here.
         launcher = _BACKGROUND_BASH_PREFIX_RE.search(command, max(0, start - 1), end)
         if launcher is not None and _BACKGROUND_BASH_FLAG_RE.search(command, launcher.end(), end):
             return True
         if end == len(command):
             return False
-        # If no flag follows the first launcher, none can follow a later
-        # launcher on this line. Never rescan that shared suffix.
+        # One miss on this line rules out later ones too.
         start = end + 1
 
 

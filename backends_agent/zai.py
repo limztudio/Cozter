@@ -139,7 +139,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
 
     default_model = "glm-5.3"
     default_summary_model = "glm-4.5-air"
-    # Cheap current general model; mid stays on 4.7 so tiers stay distinct.
+    # Cheap now; mid stays on 4.7 so tiers differ.
     tier_models = {
         "low": "glm-5.3-flash",
         "mid": "glm-4.7",
@@ -269,7 +269,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
         return {"tool_stream": True} if selected in _TOOL_STREAM_MODELS else {}
 
     def _auto_continue_after_tool_limit(self) -> bool:
-        # Long runs may need more tool turns: continue in a fresh segment.
+        # Long runs resume in a fresh slice.
         return True
 
     def _max_retries(self) -> int:

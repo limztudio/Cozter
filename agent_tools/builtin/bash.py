@@ -22,7 +22,7 @@ from ...utils import (
 # Commands run until completion or cancellation.
 
 _BASH_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
-# Only applies once the shell has exited, not to commands still doing work.
+# Only after shell exit, not for live work.
 _BASH_POST_EXIT_DRAIN_TIMEOUT = 1.0
 _BASH_PROGRESS_INTERVAL_SEC = 60.0
 performance_logger = logging.getLogger("Cozter.performance")
@@ -57,8 +57,6 @@ class BashTool(AgentTool):
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string"
-        # Extra args are ignored.
-
         # Pipes/redirection need a real shell.
         shell = _find_shell()
         if shell is None:

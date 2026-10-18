@@ -20,7 +20,7 @@ ROUTER_PROMPT = (
     "- One line: bare session id, or NEW.\n"
     "- No tools; decide from the input.\n"
 )
-ROUTER_MAX_SESSIONS = 12  # cap input size
+ROUTER_MAX_SESSIONS = 12
 ROUTER_PER_SESSION_CHARS = 400
 ROUTER_PROMPT_PREVIEW_CHARS = 600
 
@@ -155,7 +155,6 @@ async def select_or_create_session(
     """
     backend = backends_agent.get_backend(backend_name)
 
-    # Parse only the newest files.
     sessions_data, total_sessions = session.list_newest_sessions_with_data(
         workspace_path, ROUTER_MAX_SESSIONS,
     )

@@ -154,7 +154,6 @@ def update_schedule_fired(
         if not isinstance(schedule, dict):
             continue
         if schedule.get("id") == schedule_id:
-            # Stamp duplicate ids too.
             schedule["last_fired"] = fired_at
             if claimed is None:
                 claimed = dict(schedule)
@@ -299,7 +298,6 @@ def parse_iso(value: object) -> datetime | None:
         try:
             return parsed.astimezone().replace(tzinfo=None)
         except (OverflowError, OSError, ValueError):
-            # Clamp edge timestamps.
             return None
     return parsed
 

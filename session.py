@@ -626,7 +626,6 @@ def set_summary(
     basis = min(summarized_count, len(msgs))
     trimmed = max(0, basis - keep_recent)
     data["compacted_count"] = data.get("compacted_count", 0) + trimmed
-    # Keep the trim point onward.
     data["messages"] = msgs[trimmed:]
     if first_message_tail is not None and data["messages"]:
         first = data["messages"][0]

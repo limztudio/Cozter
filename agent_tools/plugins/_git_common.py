@@ -25,8 +25,7 @@ MAX_OUTPUT_CHARS = 12_000
 MAX_GIT_ERROR_CHARS = 500
 TRUNCATION_MARKER = "say PARTIAL + remainder when coverage is unclear"
 _GIT_POST_EXIT_DRAIN_SECONDS = 1.0
-# Retain enough UTF-8 bytes for the character-based display limits. Continue
-# draining excess output so a verbose commit hook or fetch can still finish.
+# Keep draining so long hooks still end.
 _GIT_STDOUT_BYTES = MAX_OUTPUT_CHARS * 4
 _GIT_STDERR_BYTES = MAX_GIT_ERROR_CHARS * 4
 

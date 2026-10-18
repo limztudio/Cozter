@@ -619,10 +619,7 @@ def build_subtask_sections(
     the other named sections without parsing human-readable prompt markers.
     """
     task = plan.subtasks[index]
-    # A fallback task is the entire request, including any durable checkpoint.
-    # Keep that payload once and point the actionable instruction back to it.
-    # Only exact equality is safe: a shorter or revised task still needs its
-    # full wording beside the execution rules below.
+    # Fallback holds the whole plea once; reuse needs exact text.
     task_instruction = task.instruction
     if len(task_instruction) >= 128 and task_instruction == context.strip():
         task_instruction = "the complete user request above, including every saved obligation and constraint"

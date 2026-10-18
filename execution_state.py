@@ -223,8 +223,7 @@ class ExecutionRecord:
     def _set_copied(self, copied: dict[str, Any], operation: int | None = None) -> None:
         if operation is None:
             operation = self._reserve_operation()
-        # Independent snapshot threads can finish out of order. A slow older
-        # save must not overwrite a newer save or a synchronous native event.
+        # Snaps race: an old save never beats a new one.
         # Failed validation never marks a key applied, retaining earlier valid
         # updates if a later invalid update is rejected.
         accepted = {

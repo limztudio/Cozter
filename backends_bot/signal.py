@@ -1404,10 +1404,7 @@ def _md_to_signal_body_and_spans(
 
     def parse_inline(inline_src: str) -> None:
         offset = 0
-        # Each parse scope advances monotonically. Retain the next valid
-        # single-character closer (or a known exhausted search) so unmatched
-        # identifiers cannot rescan every later underscore/star at each opener.
-        # Nested scopes have their own source string and their own tiny cache.
+        # Cache the next closer so strays scan once.
         single_closes: dict[str, int] = {}
         while offset < len(inline_src):
             marker = _signal_inline_marker_at(inline_src, offset)

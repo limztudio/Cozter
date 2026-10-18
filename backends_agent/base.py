@@ -264,9 +264,6 @@ class ProcessResourceMap:
             return self._items.pop(id(proc), None)
 
 
-# Native vision
-
-# Cap image bytes per vision turn.
 VISION_MAX_IMAGE_BYTES = 4 * 1024 * 1024
 VISION_MIME_BY_EXT = {
     ".jpg": "image/jpeg",
@@ -483,7 +480,6 @@ class AgentResult:
     detached_task_requests: list[DetachedTaskRequest] = field(
         default_factory=list,
     )
-    # Set by agent.run after routing.
     session_id: str | None = None
     # Per-run parser correlation ids.
     detached_task_tool_use_ids: set[str] = field(
@@ -496,8 +492,7 @@ class AgentResult:
     continuation_checkpoint: ContinuationCheckpoint | None = None
     # None for raw backend results; orchestration needs an explicit DONE verdict.
     completion_verified: bool | None = None
-    # A required prerequisite can be recovered/rechecked automatically without
-    # turning an unfinished job into a completed response or an approval gate.
+    # A missing fix stays open; never mark it done or gated.
     blocked_reason: str = ""
 
 
@@ -806,8 +801,7 @@ class Backend(ABC):
     # True = consumes TOOL_SCHEMA directly (OpenAI-shape HTTP).
     supports_typed_plugins: bool = False
 
-    # Explicit inspection workers may overlap only with an enforced read-only
-    # tool surface. Backends must opt in after their confirm mode provides it.
+    # Readers overlap only on a read-only surface.
     supports_read_only_workers: bool = False
 
     # Untyped bash/plugin prelude for CLIs.

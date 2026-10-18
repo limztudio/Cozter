@@ -32,7 +32,6 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-# Faux id: no collision with chat ids.
 _LOCAL_ID = "local"
 
 
@@ -55,11 +54,9 @@ class CliBot(BotPlatform):
 
     @property
     def platform_id(self) -> str:
-        # Stable, prefixed; disjoint from chat ids.
         return f"cli:{_LOCAL_ID}"
 
     def authorized(self, user_id: str, _chat_id: str) -> bool:
-        # Local binary implies shell access.
         return True
 
     async def send_text(
@@ -73,7 +70,6 @@ class CliBot(BotPlatform):
     async def edit_text(
         self, handle: MessageHandle, text: str, *, rich: bool = False,
     ) -> None:
-        # No-op: unreachable; kept for the contract.
         pass
 
     async def delete_message(self, handle: MessageHandle) -> None:
@@ -109,7 +105,6 @@ class CliBot(BotPlatform):
         )
         print("Plain text goes to the AI. Ctrl-D or Ctrl-C exits.")
         print()
-        # Load the staged reply first.
         await self.restore_reply_deliveries()
         self.start_detached_task_watcher()
         self._input_task = asyncio.create_task(self._input_loop())
@@ -145,11 +140,9 @@ class CliBot(BotPlatform):
                 loop.call_soon_threadsafe(line_queue.put_nowait, value)
                 return True
             except RuntimeError:
-                # Loop closed; nothing left to do.
                 return False
 
         def _reader() -> None:
-            # Prompt prints from the asyncio side.
             while True:
                 try:
                     line = input()
@@ -157,7 +150,6 @@ class CliBot(BotPlatform):
                     _safe_post(None)
                     return
                 except Exception:
-                    # Unexpected: treat as EOF.
                     _safe_post(None)
                     return
                 if not _safe_post(line):
@@ -167,7 +159,6 @@ class CliBot(BotPlatform):
 
         try:
             while not self._stop_requested.is_set():
-                # Reprint the prompt below the last output.
                 print("> ", end="", flush=True)
                 line = await line_queue.get()
                 if line is None:
@@ -230,7 +221,6 @@ def _prepare_console() -> None:
 
     _enable_ansi()
 
-    # Console: WARNING+ only.
     root = logging.getLogger()
     for handler in root.handlers:
         if isinstance(handler, logging.StreamHandler) and not isinstance(

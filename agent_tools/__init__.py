@@ -52,7 +52,6 @@ from .discovery import DISCOVERY_RESULT_MAX
 logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
 
-# Bound tool results.
 _TOOL_RESULT_MAX = 4_000
 SKILL_TOOL_NAMES: frozenset[str] = frozenset({"list_skills", "read_skill"})
 _SKILL_PLANNING: ContextVar[bool] = ContextVar("cozter_skill_planning", default=False)
@@ -116,13 +115,11 @@ _load_subpackage("builtin", mark_as_plugin=False)
 if not sys.argv or sys.argv[0] != "-m":
     _load_subpackage("plugins", mark_as_plugin=True)
 
-# Order: ``order`` then name.
 _TOOLS: tuple[AgentTool, ...] = tuple(
     sorted(AgentTool.registry, key=lambda tool: (tool.order, tool.name))
 )
 TOOLS_BY_NAME: dict[str, AgentTool] = {tool.name: tool for tool in _TOOLS}
 
-# Read-only surface for confirm mode.
 READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
     "read_file",
     "read_files",
@@ -190,7 +187,6 @@ SKILL_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
 )
 
 
-# Public API + internal emit-callback alias.
 _EmitFunc = Callable[[dict], None]
 
 
@@ -209,7 +205,6 @@ def parse_openai_call(call: dict) -> tuple[str, dict]:
     if not isinstance(name, str):
         name = ""
     raw = fn.get("arguments")
-    # Accept an already-parsed object too.
     if isinstance(raw, dict):
         args = raw
     elif isinstance(raw, str) and raw.strip():

@@ -60,8 +60,7 @@ class HttpAgentProcess:
             # their escaped spelling rather than replacing or losing text.
             line = (json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8")
         if len(line) > HTTP_EVENT_LINE_MAX_BYTES:
-            # Fail before adding any bytes. The driver emits a short error and
-            # a nonzero return code, instead of a reader silently dropping it.
+            # Fail fast so no reader drops bytes in silence.
             raise RuntimeError("HTTP agent event exceeded the 32 MiB transport limit")
         self.stdout.feed_data(line)
 

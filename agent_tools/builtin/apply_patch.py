@@ -26,7 +26,6 @@ from ..base import (
 )
 
 
-# Bound patch + target.
 _MAX_PATCH_BYTES = 1 * 1024 * 1024
 _MAX_PATCH_LINES = 20_000
 _MAX_FILE_BYTES = 1 * 1024 * 1024

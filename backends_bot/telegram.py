@@ -177,8 +177,6 @@ def _rich_telegram_chunks(text: str) -> list[str]:
     return chunks
 
 
-# Markdown -> HTML
-
 def _md_to_html(text: str) -> str:
     """Convert common Markdown to Telegram-compatible HTML."""
     return render_fenced_markdown(
@@ -399,7 +397,6 @@ class TelegramBot(BotPlatform):
             | filters.VOICE
             | filters.VIDEO_NOTE
         )
-        # New messages only.
         self.app.add_handler(
             MessageHandler(
                 attachment_filter & filters.UpdateType.MESSAGE,
@@ -426,7 +423,6 @@ class TelegramBot(BotPlatform):
                 )
                 await asyncio.sleep(5 * attempt)
         await self.app.start()
-        # Restore the backlog before polling.
         await self._start_daemon_services()
         await self.app.updater.start_polling(drop_pending_updates=True)
         logger.info("Telegram bot started polling.")

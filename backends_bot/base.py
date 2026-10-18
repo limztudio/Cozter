@@ -430,8 +430,6 @@ def write_bytes_atomically(local_path: str, data: bytes) -> None:
         output.write(data)
 
 
-# Message handle + attachments
-
 @dataclass
 class MessageHandle:
     """A reference to a sent message that can be edited or deleted later."""
@@ -605,8 +603,6 @@ class AttachmentInfo:
     caption: str = ""
 
 
-# Per-event facade for command handlers.
-
 @dataclass
 class BotContext:
     """Per-event context passed to command handlers.
@@ -632,7 +628,6 @@ class BotContext:
         )
 
 
-# Handler: callback taking a BotContext.
 Handler = Callable[[BotContext], Awaitable[None]]
 QueueEntry = tuple[str, str, str, bool]
 
@@ -711,8 +706,6 @@ class _InjectQueue(asyncio.Queue[str]):
         self._accepting = False
 
 
-# Shared state and command logic.
-
 class BotPlatform(ABC):
     """Base class: holds all command logic, leaves I/O to subclasses."""
 
@@ -745,7 +738,6 @@ class BotPlatform(ABC):
             else config.DEFAULT_MAX_UPLOAD_BYTES
         )
 
-        # Per-user runtime state.
         self._stopping = False
         self._queue_drain_tasks: dict[str, asyncio.Task[None]] = {}
         self._queue_drain_requests: set[str] = set()
@@ -758,9 +750,7 @@ class BotPlatform(ABC):
         # An unfinished job needing input blocks every later entry, including
         # scheduled work. Its checkpoint is also retained in the queue file.
         self._paused_jobs: set[str] = set()
-        # Multi-step flow state.
         self._pending_input: dict[str, Handler] = {}
-        # Scheduler state.
         self._scheduler_task: asyncio.Task | None = None
         self._daemon_services_started = False
         # Update pulled; waiting for active replies before restart.
@@ -793,9 +783,7 @@ class BotPlatform(ABC):
         self._turn_progress: dict[str, _TurnProgress] = {}
         # Users already acknowledged by /cancel or /stop.
         self._cancel_acknowledged: set[str] = set()
-        # Per-user epochs.
         self._cancel_generations: dict[str, int] = {}
-        # Per-user admission lock.
         self._dispatch_admission_locks: dict[str, asyncio.Lock] = {}
         self._active_queue_entries: dict[str, str] = {}
 
@@ -840,8 +828,6 @@ class BotPlatform(ABC):
             attachment=attachment,
             platform=self,
         )
-
-    # identity + I/O primitives
 
     @property
     @abstractmethod
@@ -1567,7 +1553,7 @@ class BotPlatform(ABC):
             for owned_tasks in (self._reply_delivery_tasks, self._detached_delivery_tasks):
                 for delivery in tuple(owned_tasks.get(uid, ())):
                     delivery.cancel()
-            # A queued upload must not begin while a file commit is settling.
+            # Hold uploads while a file write settles.
             uploads = tuple(
                 task for task in self._attachment_tasks.get(uid, ())
                 if not task.done()
@@ -2506,7 +2492,6 @@ class BotPlatform(ABC):
         items = colony.get_items(ws)
         count = colony.get_compact_count(ws)
         interval = workspace.get_colony_interval(ws)
-        # Countdown in [1, interval].
         until = interval - (count % interval) if interval > 0 else 0
         lines = [
             f"Colony items: {len(items)}",
@@ -3122,7 +3107,7 @@ class BotPlatform(ABC):
             workspace_path = job.get("workspace_path") if isinstance(job, dict) else None
             remaining = [entry for entry in entries if entry.get("id") != entry_id]
             if len(remaining) == len(entries):
-                return  # entry already gone
+                return
             if remaining:
                 data[uid] = remaining
             else:
@@ -3792,8 +3777,7 @@ class BotPlatform(ABC):
                     logger.exception("Durable %s poll failed", label)
                 await asyncio.sleep(_DETACHED_TASK_POLL_INTERVAL_SEC)
 
-        # A slow provider status or reply send must not postpone due job
-        # retries, nor stall another recovery class on every later cycle.
+        # Slow sends never block due jobs or peers.
         tasks = [asyncio.create_task(poll(check, label), name=f"{self.platform_id}:{label}")
                  for check, label in (
                      (self._check_job_retries, "job-retries"),
@@ -4056,7 +4040,6 @@ class BotPlatform(ABC):
                 record["user_id"],
             )
         except Exception:
-            # Keep the staged payload.
             logger.warning(
                 "Failed to deliver detached task %s",
                 record["task_id"], exc_info=True,
@@ -4391,8 +4374,6 @@ class BotPlatform(ABC):
                 action="announcing a queued scheduled task",
             )
 
-    # AI chat + file
-
     async def _require_ws(self, ctx: BotContext) -> str | None:
         ws = workspace.get_current(ctx.user_id, self.platform_id)
         if not ws or not os.path.isdir(ws):
@@ -4484,8 +4465,6 @@ class BotPlatform(ABC):
                 pass
 
         await self._dispatch_ai(ctx, "\n".join(parts))
-
-    # dispatch + AI turn
 
     def _cleanup_turn(self, uid: str, lock: asyncio.Lock) -> None:
         self._active_queue_entries.pop(uid, None)

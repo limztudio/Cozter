@@ -103,7 +103,6 @@ _MAX_ACP_MODEL_OPTIONS = 4_096
 # Also bound node count/depth.
 _MAX_ACP_OPTION_NODES = _MAX_ACP_MODEL_OPTIONS * 4
 _MAX_ACP_OPTION_GROUP_DEPTH = 16
-# Bound one JSON-RPC line.
 _MAX_ACP_LINE_CHARS = 1 * 1024 * 1024
 _COPILOT_HOME_FILES = ("config.json", "settings.json")
 # Short-lived discovery caches, bounded.
@@ -946,7 +945,7 @@ def _stop_acp_process(
     tree_stopped = False
     if kill_tree:
         if os.name == "nt":
-            # Windows cmd shims and Node loaders may own a native CLI child.
+            # Shims can own the real child.
             tree_stopped = terminate_windows_process_tree(proc.pid)
         else:
             try:
@@ -955,8 +954,7 @@ def _stop_acp_process(
             except (ProcessLookupError, PermissionError, OSError):
                 pass
     try:
-        # While taskkill is ending the process, Windows terminate() can save
-        # an exit code early and skip the wait. Wait on the real process.
+        # taskkill is async: still wait on the real proc.
         if proc.poll() is None and not tree_stopped:
             proc.terminate()
         proc.wait(timeout=2)

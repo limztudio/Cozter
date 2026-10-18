@@ -910,7 +910,7 @@ def _iter_image_file_metadata(
                 if not stat.S_ISREG(metadata.st_mode):
                     continue
                 relative_parts = os.path.relpath(path, root_real).split(os.sep)[:-1]
-                # A file link can point into a skipped tree inside the workspace.
+                # A link can point into a skipped tree.
                 if not any(_skip_automatic_image_directory(part) for part in relative_parts):
                     yield path, metadata
     except OSError:
@@ -1276,7 +1276,6 @@ def _build_contextual_prompt(
 
     full = "\n".join(parts)
 
-    # Bound durable blocks too.
     if len(full) > budget:
         keywords = _request_keywords(prompt)
         colony_list = _relevance_last(list(colony_list), keywords)
@@ -1320,11 +1319,10 @@ def _build_contextual_prompt(
         continuation = (
             "New message:"
         )
-        # Fit context: keep the request intact.
+        # Keep the request intact.
         fixed_length = len(continuation) + 1 + len(prompt)
         if fixed_length > budget:
             return prompt
-        # Count separators too.
         context_budget = max(
             0,
             budget - fixed_length - len(descriptors),
@@ -1835,7 +1833,7 @@ async def _drive_backend_impl(
     if has_managed_process_group(proc) and not result.detached_tasks:
         await terminate_process_group_async(proc)
 
-    # A partial reply does not make a failed process a successful turn.
+    # A partial reply never turns a failed run green.
     # Keep provider errors more specific than a generic exit status.
     if proc.returncode != 0 and not result.error:
         msg = f"{backend.name} exited with code {proc.returncode}"
@@ -2112,7 +2110,7 @@ async def _run_parallel_flexible_workers(
         for task in tasks:
             if not task.done():
                 task.cancel()
-        # gather itself must also be observed if it failed or was cancelled.
+        # Watch gather too when it fails or cancels.
         await asyncio.gather(group, *tasks, *([watcher] if watcher else []),
                              return_exceptions=True)
 
@@ -2444,7 +2442,7 @@ async def _run_flexible(
             f"flexible [{index + 1}/{total}] {task.tier} ·"
             f" {backend_name}/{model}: {task.instruction}"
         )
-        # This is a worker role, not a change to the workspace permission.
+        # Worker role only; workspace approval stays.
         # The coordinator and all editing workers retain the chosen approval.
         worker_approval = (
             "confirm" if can_inspect(index) and approval in {"auto", "full", "confirm"}
@@ -2685,7 +2683,7 @@ async def _run_flexible(
             final += "\n\n" + remainder
         append_text_result(result, final)
         result.usage = usage_totals or None
-        # A completed phase must never be returned again to a judge CONTINUE.
+        # A done phase never goes back to judge CONTINUE.
         await invalidate()
         return result, False
 
@@ -3287,7 +3285,7 @@ def _log_interrupted_turn(turn: _InterruptedTurn) -> None:
         return logged
 
     async def _append() -> None:
-        # Wait for an in-flight normal write so it never gains a duplicate.
+        # Wait for a live write so it stays single.
         if turn.normal_log_task is not None:
             while not turn.normal_log_task.done():
                 try:
@@ -3389,8 +3387,7 @@ async def _run_turn(
             "tool_budget" if limit_kind == "tools"
             else "worker_budget"
         )
-        # An accepted message is part of this request even if the allowance
-        # expires before its injected backend restart can run.
+        # An accepted message stays in this request.
         _close_inject_queue(inject_queue)
         _take_pending_injections(inject_queue, turn.injected)
         if turn.injected:
@@ -3762,7 +3759,6 @@ async def _run_turn_impl(
             continue
         break
 
-    # Close before session/reply yields.
     _close_inject_queue(inject_queue)
     # Discard Queue messages after the final answer.
     _drain_queue(inject_queue)
@@ -3770,7 +3766,7 @@ async def _run_turn_impl(
     # Consume the marker before session/chat delivery.
     _consume_detached_task_requests(result)
 
-    # The detached owner retains the file lock if /stop interrupts the caller.
+    # The detached owner keeps the lock on /stop.
     execution = execution_state.current_execution()
     native_record = execution.native_main_record if execution is not None else None
     logged_native_data: dict | None = None

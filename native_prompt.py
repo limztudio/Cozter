@@ -176,9 +176,7 @@ class NativePrompt:
         if unseen:
             parts.append("[Conversation messages not yet supplied to this native session]\n"
                          + "\n".join(unseen))
-        # Invocation requirements remain fresh even when the native session
-        # already knows every section, message, and durable request below.
-        # They are deliberately excluded from context delivery receipts.
+        # Rules stay fresh though known; skip in receipts.
         if self.turn_instructions:
             parts.append(self.turn_instructions)
         # Identical new jobs remain actionable; an interrupted durable job can

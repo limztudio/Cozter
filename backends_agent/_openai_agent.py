@@ -51,21 +51,16 @@ performance_logger = logging.getLogger("Cozter.performance")
 _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
 # SSE allows many data: lines; cap the aggregate.
 _MAX_SSE_EVENT_BYTES = 4 * 1024 * 1024
-# Bound retained completion state.
 _MAX_COMPLETION_TEXT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_REASONING_BYTES = 4 * 1024 * 1024
 _MAX_TOOL_ARGUMENT_BYTES = 4 * 1024 * 1024
 _MAX_COMPLETION_BUFFER_BYTES = 8 * 1024 * 1024
-# Cap call ids/names too.
 _MAX_TOOL_CALL_ID_CHARS = 512
 _MAX_TOOL_NAME_CHARS = 512
-# Cap the retained conversation.
 _MAX_AGENT_MESSAGE_BYTES = 32 * 1024 * 1024
 # Also bounds bookkeeping for malformed index-spam streams.
 _MAX_TOOL_CALLS_PER_COMPLETION = 128
-# Bound discovery responses.
 _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
-# Reject absurd ID lengths.
 _MAX_MODEL_ID_CHARS = 512
 _MAX_MODEL_IDS = 4_096
 _HTTP_CONNECT_TIMEOUT = 30.0
@@ -697,7 +692,6 @@ class OpenAIChatBackend(Backend):
                                 reasoning_content
                             )
                             has_preserved_reasoning = True
-                    # Emit per-turn commentary.
                     if assistant_text:
                         proc.emit({
                             "type": "assistant_text",
@@ -1103,7 +1097,6 @@ def _parse_retry_after(value: str | None) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError, OverflowError):
         return None
-    # Reject nan/-inf; callers cap +inf.
     if not math.isfinite(parsed) and parsed != float("inf"):
         return None
     return max(parsed, 0.0)
@@ -1539,7 +1532,6 @@ def _merge_tool_call(
         return 0
 
     idx = delta.get("index", 0)
-    # Reject non-int/negative indices.
     if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
         return 0
 

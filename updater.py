@@ -261,9 +261,7 @@ def fetch_and_pull() -> bool:
             logger.warning("git pull failed: %s", pull.stderr.strip())
         return _restart_required_after_pull()
     except Exception as error:
-        # A command can update HEAD and then fail while decoding its output.
-        # Resolve the physical outcome before the caller decides to reopen
-        # execution. An unreadable checkout also requires a fresh startup.
+        # HEAD may move before decode fails: check disk first.
         try:
             restart_required = _restart_required_after_pull()
         except Exception:

@@ -19,8 +19,7 @@ _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _ERROR_ALREADY_EXISTS = 183
 
-# This handle must stay open until Windows tears down the owner process.
-# Do not register an atexit close: that could terminate the live owner too.
+# Keep open till Windows ends the owner; no atexit close.
 _job_handle: int | None = None
 _protected = False
 _JOB_LOCK = threading.Lock()

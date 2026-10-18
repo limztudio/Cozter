@@ -238,8 +238,7 @@ def get_max_permission() -> str:
     """
     if not os.path.exists(CONFIG_PATH):
         return cast(str, _DEFAULT_CONFIG["max_permission"])
-    # A missing key retains the default; an explicit JSON null is malformed
-    # and must not widen a previously restrictive ceiling.
+    # Missing keeps default; null never widens.
     val = _load_config_object().get(
         "max_permission", _DEFAULT_CONFIG["max_permission"],
     )
@@ -437,7 +436,6 @@ def load_config() -> dict:
         ):
             cfg[key] = _DEFAULT_CONFIG[key]
 
-    # Filter blank tokens.
     cfg["telegram_bot_tokens"] = normalize_string_list(
         cfg.get("telegram_bot_tokens") or []
     )
@@ -470,7 +468,6 @@ def load_config() -> dict:
         sys.exit(1)
     cfg["signal_own_device_id"] = signal_device or 0
 
-    # Coerce IDs to strings.
     raw_user_ids = cfg.get("user_ids")
     if isinstance(raw_user_ids, (str, int)) and not isinstance(
         raw_user_ids, bool,
@@ -512,7 +509,6 @@ def load_config() -> dict:
                 f" Socket Mode in {CONFIG_PATH}."
             )
             sys.exit(1)
-        # Drop non-string/blank entries.
         slack_channels = normalize_string_list(
             cfg.get("slack_channel_ids") or []
         )

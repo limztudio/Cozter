@@ -438,7 +438,6 @@ async def _maybe_compact_under_maintenance_lock(
             )
             return
     elif covered_count <= KEEP_RECENT_AFTER_COMPACT:
-        # Keep one fewer than covered.
         if covered_count < 1:
             logger.error(
                 "Compaction did not cover enough messages for session %s "
@@ -505,8 +504,7 @@ def _apply_compaction(
     latest = session.load_session(workspace_path, session_id)
     if latest is None:
         return None
-    # Appended turns only trim the covered prefix; an edited prefix is a
-    # different snapshot the compactor never saw.
+    # Trim only the sent prefix; an edited one is new.
     if (
         latest["messages"][:covered_count] != data["messages"][:covered_count]
         or latest.get("summary") != data.get("summary")

@@ -50,8 +50,6 @@ from .formatting import (
 logger = logging.getLogger(__name__)
 
 
-# Markdown -> mrkdwn
-
 # Ordinary prose uses cheap PUA placeholders; collisions get private markers.
 _BOLD_OPEN = ""
 _BOLD_CLOSE = ""
@@ -112,7 +110,6 @@ def _mrkdwn_prose(line: str) -> str:
 
 
 def _mrkdwn_code_block(lines: list[str]) -> list[str]:
-    # Emit the accumulated block escaped.
     return ["```", *(escape_html_entities(line) for line in lines), "```"]
 
 
@@ -122,7 +119,6 @@ _SLACK_SEND_MAX_ATTEMPTS = 5
 _SLACK_SEND_MAX_DELAY_SEC = 60.0
 _FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,}).*$")
 
-# Precompiled mrkdwn patterns.
 _SLACK_ITALIC_STAR_RE = re.compile(r"(?<!\w)\*([^*]+?)\*(?!\w)")
 _SLACK_STRIKE_RE = re.compile(r"~~(.+?)~~")
 
@@ -235,7 +231,6 @@ def _split_slack_markdown(
     if len(text) <= limit:
         return [text]
 
-    # Split chunks reopen/close fences.
     max_opener = 0
     max_marker = 0
     # One pre-scan for reserves; the chunk loop replays fence state below.
@@ -388,7 +383,6 @@ class SlackBot(BotPlatform):
             await _update_rich_markdown(self.app.client, handle, chunks[0])
             return
 
-        # One handle per message.
         await self.app.client.chat_update(
             channel=handle.chat_id,
             ts=handle.message_id,
@@ -426,7 +420,6 @@ class SlackBot(BotPlatform):
         self.app.event("app_mention")(self._on_app_mention)
 
         self._handler = AsyncSocketModeHandler(self.app, self.app_token)
-        # Restore the backlog first.
         await self._start_daemon_services()
         await self._handler.connect_async()
         logger.info(
@@ -449,7 +442,6 @@ class SlackBot(BotPlatform):
                 self.app = None
         logger.info("Slack bot stopped.")
 
-    # Plain messages + file uploads only.
     _ALLOWED_SUBTYPES = frozenset({None, "file_share"})
 
     def _make_command_handler(self, name: str):
@@ -485,7 +477,6 @@ class SlackBot(BotPlatform):
             or not channel
         ):
             return
-        # Channel allowlist first.
         if not self.authorized(uid, channel):
             return
 

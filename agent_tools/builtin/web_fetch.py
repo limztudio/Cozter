@@ -157,9 +157,7 @@ class WebFetchTool(AgentTool):
         except Exception as exc:
             return f"Fetch failed: {exc}"
 
-        # Formatting is pure CPU work over the already bounded response body.
-        # A cancelled caller may leave this one bounded parse finishing on its
-        # thread; no network, file, or shared-state ownership moves with it.
+        # Format is pure CPU work on capped bytes.
         return await asyncio.to_thread(
             _format_fetch_result, final_url, content_type, body, fetch_capped, max_chars,
         )

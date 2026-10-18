@@ -179,10 +179,8 @@ def _ensure_venv_and_reexec() -> None:
         return
 
     python = _venv_python()
-    # Shell tools inherit the reexec marker: it must not bypass the venv
-    # for dependency repair. Only detect a broken interpreter and avoid an
-    # exec loop; compare launch paths, not realpaths (venv Python is often
-    # a symlink to the same binary as system Python).
+    # Shell tools keep the reexec marker: only spot a bad
+    # interpreter, never skip venv repair or loop on links.
     if (
         os.environ.get(_VENV_REEXEC_ENV) == "1"
         and os.path.normcase(os.path.abspath(sys.executable))
@@ -265,7 +263,7 @@ MODULE_ROOT = os.path.dirname(__file__)
 LOG_DIR = os.path.join(MODULE_ROOT, ".log")
 
 _CRASH_RESTART_DELAY_SEC = 5
-# Keep the newest N crash_*.log files so a crash loop cannot fill the disk.
+# Cap crash logs so a loop cannot fill the disk.
 _MAX_CRASH_FILES = 50
 _UPDATE_IDLE_POLL_SEC = 1
 _UPDATE_IDLE_LOG_SEC = 30

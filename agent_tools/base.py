@@ -107,7 +107,6 @@ class AgentTool(ABC):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        # Skip abstract intermediates.
         if getattr(cls.run, "__isabstractmethod__", False):
             return
         instance = cls()
@@ -854,7 +853,7 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
             tmp_path, target_path, preserve_metadata=True,
         )
     finally:
-        # Temp is ours in every case (link owns the inode; fallback copied).
+        # Temp stays ours either way.
         with suppress(OSError):
             os.unlink(tmp_path)
 
@@ -1563,7 +1562,6 @@ def html_to_text(value: str) -> str:
             index = next_markup
             continue
 
-        # Keep a bare '<' visible.
         if not _is_html_tag_start(value, index) and not (
             index + 1 < length and value[index + 1] in "!?"
         ):

@@ -72,7 +72,6 @@ async def maybe_auto_title(
             return
         if not session.is_default_name(data.get("name")):
             return
-        # Need at least one assistant reply.
         msgs = data.get("messages", [])
         if not isinstance(msgs, list):
             return
