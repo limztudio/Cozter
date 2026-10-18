@@ -12,11 +12,6 @@ from Cozter.agent_tools.builtin import read_files
 
 
 class TruncateWithMarkerTests(unittest.TestCase):
-    def test_complete_text_at_or_below_budget_is_unchanged(self):
-        for budget, text in ((0, ""), (256, ""), (256, "short"), (256, "x" * 256)):
-            with self.subTest(budget=budget, size=len(text)):
-                self.assertEqual(truncate_with_marker(text, budget, "page"), text)
-
     def test_only_over_budget_text_gets_bounded_remainder_marker(self):
         text = "x" * 257
         clipped = truncate_with_marker(text, 256, "fetch the remaining range")

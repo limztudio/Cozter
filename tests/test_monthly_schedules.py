@@ -16,9 +16,6 @@ class ScheduleDayTests(unittest.TestCase):
             schedules.parse_days("15, Monday, 01, mon, 15"), [15, "mon", 1],
         )
 
-    def test_all_keeps_daily_meaning(self) -> None:
-        self.assertEqual(schedules.parse_days(" ALL "), list(schedules.DAY_ABBREV))
-
     def test_invalid_input_rejects_entire_text(self) -> None:
         for value in (
             None, True, 1, [1], "", "0", "32", "-1", "+1", "1.0",

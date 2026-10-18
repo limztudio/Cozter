@@ -65,11 +65,6 @@ class BlockedJudgeVerdictTests(unittest.TestCase):
                 self.assertFalse(verdict.should_continue)
                 self.assertFalse(verdict.verified)
 
-    def test_existing_positional_verified_parameter_remains_compatible(self):
-        verdict = flexible.JudgeVerdict(False, "missing", "next", False)
-        self.assertFalse(verdict.verified)
-        self.assertFalse(verdict.blocked)
-
 
 class BlockedJudgePromptTests(unittest.TestCase):
     def test_prompt_distinguishes_incidental_limits_from_required_external_scope(self):

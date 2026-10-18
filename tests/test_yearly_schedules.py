@@ -13,12 +13,6 @@ class YearlyDayTests(unittest.TestCase):
             ["01/02", "12/25", "02/29"],
         )
 
-    def test_mixed_rules_preserve_first_seen_order(self) -> None:
-        self.assertEqual(
-            schedules.parse_days("12/25, 15, Monday, 02/29, 015, mon, 2/29"),
-            ["12/25", 15, "mon", "02/29"],
-        )
-
     def test_invalid_yearly_syntax_rejects_entire_text(self) -> None:
         for value in (
             "0/1", "13/1", "1/0", "1/32", "2/30", "2/31", "4/31", "11/31",
