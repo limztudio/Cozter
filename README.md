@@ -923,10 +923,15 @@ description, source path, and revision. Workers load the relevant full file
 when needed instead of adding every skill body to every prompt. Native CLI
 workers can use their file-reading tools and native skill interface; API
 workers use `list_skills` and `read_skill`, including the returned paging
-cursors when a catalog or document spans multiple pages. An unchanged native
-catalog is omitted on an exact session resume. Loaded instructions stay in
-the native conversation or the API job's saved tool transcript, so a
-continuation does not need to replay every skill body.
+cursors when a catalog or document spans multiple pages. Before each new user
+request and each worker starting or resuming work, the agent selects relevant
+skills again and re-reads their current files and the supporting references
+needed for the task. This includes native CLI skills, even when the CLI loaded
+them earlier or the shared catalog has not changed. Earlier skill reads remain
+historical evidence; they do not replace a fresh read for the current request.
+An unchanged native catalog and known conversation history are still omitted
+on an exact session resume, while a short skill-refresh instruction is always
+delivered. Native conversations and API tool transcripts remain intact.
 `list_skills` returns stable IDs, revisions, and `next_offset`; pass a returned
 ID as the `name` to `read_skill`. Continue a long document using its
 `next_offset` and `revision`, so a file changed between pages is detected.
@@ -944,8 +949,10 @@ A planner without read tools selects relevant skills from metadata, then
 explicitly assigns its worker to load the full skill before choosing or
 executing the detailed workflow. Its API planning tools are limited to skill
 listing and reading; implementation runs in the assigned worker. Selected
-skills are named in that worker's instructions. Skill updates refresh the
-catalog for remaining work while retaining the saved plan cursor and
+skills are named in that worker's instructions. Discovery and native bridges
+refresh when injected user guidance restarts a phase and before each actual
+Flexible worker wave; parallel readers share one fresh catalog snapshot.
+Skill updates refresh the catalog for remaining work while retaining the saved plan cursor and
 completed evidence. Routers, titles, judges, merges, summaries, compaction,
 and colony consolidation do not receive a Cozter-added skill catalog.
 

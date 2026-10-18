@@ -25,6 +25,10 @@ def _history(data: dict) -> list[tuple[str, str, str]]:
             for (coordinate, digest), message in zip(marks.items(), data["messages"], strict=True)]
 
 
+def _request_only(prompt: NativePrompt, request: str) -> str:
+    return "\n\n".join(part for part in (prompt.turn_instructions, "New message:\n" + request) if part)
+
+
 class NativePromptTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.ws = self.enterContext(tempfile.TemporaryDirectory())
@@ -83,6 +87,69 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         await prompt.acknowledge(self.record)
 
         self.assertEqual(prompt.render(self.record), "New message:\nRun the same verification again.")
+
+    async def test_turn_instructions_remain_on_new_request_without_replaying_known_catalog_or_history(self) -> None:
+        data = {"messages": [_message("user", "already-delivered-history")]}
+        sections = {"skills catalog": "unchanged-catalog", "policy": "unchanged-policy"}
+        reminder = "Re-read the relevant authoritative skill instructions for this request."
+        first = NativePrompt(
+            "first request", sections, _history(data), request_identity="first-job",
+            turn_instructions=reminder,
+        )
+        bootstrap = first.render(None)
+        self.assertIn("already-delivered-history", bootstrap)
+        self.assertIn("unchanged-catalog", bootstrap)
+        self.assertTrue(bootstrap.endswith(reminder + "\n\nNew message:\nfirst request"))
+        await self._confirm()
+        await first.acknowledge(self.record)
+
+        next_prompt = NativePrompt(
+            "next request", sections, _history(data), request_identity="next-job",
+            turn_instructions=reminder,
+        )
+        rendered = next_prompt.render(self.record)
+
+        self.assertEqual(rendered, reminder + "\n\nNew message:\nnext request")
+        self.assertNotIn("already-delivered-history", rendered)
+        self.assertNotIn("unchanged-catalog", rendered)
+        self.assertNotIn("unchanged-policy", rendered)
+        self.assertEqual(self.record.get("native_session_id"), _SESSION_ID)
+        ledger = self.record.get("native_prompt_ledger")
+        self.assertEqual(set(ledger["sections"]), set(sections))
+        self.assertNotIn("turn_instructions", ledger)
+        self.assertNotIn(reminder, str(ledger))
+
+    async def test_turn_instructions_remain_on_same_job_continuation_without_changing_receipts(self) -> None:
+        data = {"messages": [_message("assistant", "known native evidence")]}
+        request = "Complete the original durable request."
+        prompt = NativePrompt(
+            request, {"skills catalog": "known-catalog"}, _history(data),
+            request_identity="same-job", turn_instructions="Initial invocation reminder.",
+        )
+        await self._confirm()
+        await prompt.acknowledge(self.record)
+        before = copy.deepcopy(self.record.get("native_prompt_ledger"))
+        prompt.turn_instructions = "Read the relevant skill files again before this continuation."
+
+        rendered = prompt.render(self.record)
+
+        self.assertTrue(rendered.startswith(prompt.turn_instructions + "\n\nNew message:\n"))
+        self.assertIn("Continue the current job from this native conversation.", rendered)
+        self.assertNotIn(request, rendered)
+        self.assertNotIn("known native evidence", rendered)
+        self.assertNotIn("known-catalog", rendered)
+        await prompt.acknowledge(self.record)
+        self.assertEqual(self.record.get("native_prompt_ledger"), before)
+        self.assertEqual(self.record.get("native_session_id"), _SESSION_ID)
+
+    async def test_removing_turn_instructions_does_not_clear_any_native_context(self) -> None:
+        prompt = NativePrompt("request", {"skills catalog": "retained-catalog"},
+                              turn_instructions="Per-invocation reminder.")
+        await self._confirm()
+        await prompt.acknowledge(self.record)
+        prompt.turn_instructions = ""
+
+        self.assertEqual(prompt.render(self.record), "New message:\nrequest")
 
     async def test_removed_section_sends_an_explicit_clear_then_stops_repeating_it(self) -> None:
         await self._confirm()
@@ -153,7 +220,7 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(preview.messages[0][2], session.format_msg_line(data["messages"][0]))
         await self._confirm()
         await preview.acknowledge(self.record)
-        self.assertEqual(preview.render(self.record), "New message:\ncurrent request")
+        self.assertEqual(preview.render(self.record), _request_only(preview, "current request"))
         expanded = build(4_000)
         self.assertEqual(len(expanded.messages), 1)
         self.assertEqual(expanded.messages[0][0], "8")
@@ -164,7 +231,7 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn(content, rendered)
         await expanded.acknowledge(self.record)
-        self.assertEqual(expanded.render(self.record), "New message:\ncurrent request")
+        self.assertEqual(expanded.render(self.record), _request_only(expanded, "current request"))
 
     async def test_followup_resume_omits_own_draft_but_fresh_bootstrap_retains_original_and_draft(self) -> None:
         full_request = "Original full scope.\n\nJudge follow-up: verify the remaining target."
@@ -291,14 +358,15 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row[0] for row in smaller.messages], ["1"])
         await smaller.acknowledge(self.record)
 
-        self.assertEqual(build(2_000).render(self.record), "New message:\nrequest")
+        repeated = build(2_000)
+        self.assertEqual(repeated.render(self.record), _request_only(repeated, "request"))
         self.assertEqual(set(self.record.get("native_prompt_ledger")["messages"]), {"0", "1"})
         data["messages"][0] = _message("user", "rewritten-older-message-marker")
         rewritten = build(2_000)
         self.assertIn("rewritten-older-message-marker", rewritten.render(self.record))
         self.assertNotIn("recent-known-marker", rewritten.render(self.record))
         await rewritten.acknowledge(self.record)
-        self.assertEqual(rewritten.render(self.record), "New message:\nrequest")
+        self.assertEqual(rewritten.render(self.record), _request_only(rewritten, "request"))
 
     async def test_budgeted_acknowledgment_does_not_carry_known_messages_to_changed_uuid(self) -> None:
         messages = _history({"messages": [
@@ -641,7 +709,7 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(self.record.get("native_prompt_ledger")["messages"]), set(marks))
 
         with mock.patch.object(self.record, "get", wraps=self.record.get) as get:
-            self.assertEqual(template.render(self.record), "New message:\ncurrent request")
+            self.assertEqual(template.render(self.record), _request_only(template, "current request"))
         ledger_reads = sum(call.args[0] == "native_prompt_ledger" for call in get.call_args_list)
         self.assertEqual(ledger_reads, 1)
 

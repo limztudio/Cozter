@@ -580,6 +580,12 @@ class OpenAIChatBackend(Backend):
                         " worker's instruction and assign that worker to load the full skill"
                         " before choosing or executing its detailed workflow."
                     )
+            elif has_skill_tools:
+                system_prompt += (
+                    "\n\n" + skills.refresh_instructions()
+                    + "\nNo skills are currently discoverable. Previously loaded skill instructions"
+                    " are unavailable unless a fresh list_skills result discovers them again."
+                )
         messages: list[dict] = [
             {
                 "role": "system",

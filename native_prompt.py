@@ -108,6 +108,7 @@ class NativePrompt:
     prepare: Callable[[execution_state.ExecutionRecord | None], "NativePrompt"] | None = field(
         default=None, repr=False,
     )
+    turn_instructions: str = ""
 
     def for_record(self, record: execution_state.ExecutionRecord | None) -> "NativePrompt":
         """Choose missing context only after selecting this worker's native lane."""
@@ -183,6 +184,11 @@ class NativePrompt:
         if unseen:
             parts.append("[Conversation messages not yet supplied to this native session]\n"
                          + "\n".join(unseen))
+        # Invocation requirements remain fresh even when the native session
+        # already knows every section, message, and durable request below.
+        # They are deliberately excluded from context delivery receipts.
+        if self.turn_instructions:
+            parts.append(self.turn_instructions)
         # Identical new jobs remain actionable; an interrupted durable job can
         # continue from the full request already in this exact native session.
         parts.append("New message:\n" + self._request_text_for_ledger(ledger if resumed else None))

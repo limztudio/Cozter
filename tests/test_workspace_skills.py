@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -89,6 +91,152 @@ class WorkspaceSkillsTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Fresh body", json.loads(skills.read_skill(str(self.ws), previous.id))["content"])
             pinned = json.loads(skills.read_skill(str(self.ws), previous.id, revision=previous.revision))
             self.assertIn("revision changed", pinned["error"])
+
+    async def test_refresh_replaces_bound_body_only_revision_and_owned_bridges(self) -> None:
+        header = "---\nname: Stable\ndescription: Stable metadata\n---\n"
+        path = self.write("stable.md", header + "Old body")
+        async with skills.scope(str(self.ws)) as original:
+            before = original.entries[0]
+            stamp = path.stat()
+            path.write_text(header + "New body", encoding="utf-8")
+            os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            refreshed = await skills.refresh(str(self.ws))
+            self.assertIs(skills.current_catalog(str(self.ws)), refreshed)
+            self.assertEqual(refreshed.entries[0].id, before.id)
+            self.assertEqual(refreshed.entries[0].description, before.description)
+            self.assertNotEqual(refreshed.entries[0].revision, before.revision)
+            self.assertIn("New body", json.loads(skills.read_skill(str(self.ws), before.id))["content"])
+            manifest = json.loads((self.ws / ".cozter" / "skill_bridges.json").read_text())
+            for relative in manifest["files"]:
+                self.assertIn(refreshed.entries[0].revision, (self.ws / relative).read_text())
+        self.assertIsNone(skills._CURRENT.get())
+
+    async def test_refresh_adds_and_removes_sources_without_touching_foreign_bridges(self) -> None:
+        path = self.write("old.md", "# Old\n\nOld body")
+        async with skills.scope(str(self.ws)):
+            manifest = json.loads((self.ws / ".cozter" / "skill_bridges.json").read_text())
+            owned = [self.ws / relative for relative in manifest["files"]]
+            foreign = self.ws / ".agents" / "skills" / "foreign" / "SKILL.md"
+            foreign.parent.mkdir(parents=True)
+            foreign.write_text("foreign instructions", encoding="utf-8")
+            path.unlink()
+            self.write("new.md", "# New\n\nNew body")
+            refreshed = await skills.refresh(str(self.ws))
+            self.assertEqual([entry.name for entry in refreshed.entries], ["New"])
+            self.assertTrue(all(not old.exists() for old in owned))
+            self.assertEqual(foreign.read_text(), "foreign instructions")
+            self.assertIn("New", skills.catalog_prompt(skills.current_catalog(str(self.ws))))
+            (self.source / "new.md").unlink()
+            empty = await skills.refresh(str(self.ws))
+            self.assertEqual(empty.entries, ())
+            self.assertEqual(skills.catalog_prompt(empty), "")
+
+    async def test_refresh_reloads_native_sources_and_needed_resources(self) -> None:
+        native_root = self.ws / "personal-native"
+        native_folder = native_root / "review"
+        native_folder.mkdir(parents=True)
+        source = native_folder / "SKILL.md"
+        source.write_text("---\nname: Review\ndescription: Stable\n---\nOld workflow", encoding="utf-8")
+        resource = native_folder / "checks.md"
+        resource.write_text("Old checks", encoding="utf-8")
+        with mock.patch.object(skills, "_native_roots", return_value=[(native_root, "native-user:fixture")]):
+            async with skills.scope(str(self.ws)) as original:
+                first = original.entries[0]
+                source.write_text("---\nname: Review\ndescription: Stable\n---\nNew workflow", encoding="utf-8")
+                refreshed = await skills.refresh(str(self.ws))
+                self.assertEqual(refreshed.entries[0].id, first.id)
+                self.assertNotEqual(refreshed.entries[0].revision, first.revision)
+                self.assertIn("New workflow", json.loads(skills.read_skill(str(self.ws), first.id))["content"])
+                unchanged_catalog = skills._catalog_revision(refreshed)
+                resource.write_text("New checks", encoding="utf-8")
+                references_refreshed = await skills.refresh(str(self.ws))
+                self.assertEqual(skills._catalog_revision(references_refreshed), unchanged_catalog)
+                self.assertEqual(json.loads(skills.read_skill(str(self.ws), first.id, resource="checks.md"))["content"], "New checks")
+                self.assertIn("supporting references", skills.refresh_instructions(cli=True))
+
+    async def test_refresh_outside_scope_or_for_another_workspace_does_not_leak(self) -> None:
+        self.write("first.md", "First instructions")
+        outside = await skills.refresh(str(self.ws))
+        self.assertTrue(outside.entries)
+        self.assertIsNone(skills._CURRENT.get())
+        other = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        async with skills.scope(str(self.ws)) as bound:
+            refreshed_other = await skills.refresh(str(other))
+            self.assertEqual(refreshed_other.workspace_path, str(skills._canonical(other)))
+            self.assertIs(skills.current_catalog(str(self.ws)), bound)
+        self.assertIsNone(skills._CURRENT.get())
+
+    async def test_concurrent_refresh_updates_each_callers_scope_only(self) -> None:
+        self.write("first.md", "# First\n\nOriginal")
+        other = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        directory = other / ".cozter" / "skills"
+        directory.mkdir(parents=True)
+        second = directory / "second.md"
+        second.write_text("# Second\n\nOriginal", encoding="utf-8")
+        ready = [asyncio.Event(), asyncio.Event()]
+
+        async def use(path, source, index):
+            async with skills.scope(str(path)) as original:
+                source.write_text(source.read_text() + f"\nchanged-{index}", encoding="utf-8")
+                ready[index].set()
+                await ready[1 - index].wait()
+                refreshed = await skills.refresh(str(path))
+                await asyncio.sleep(0)
+                self.assertIs(skills.current_catalog(str(path)), refreshed)
+                self.assertNotEqual(original.entries[0].revision, refreshed.entries[0].revision)
+                return refreshed.workspace_path
+
+        first_path, second_path = await asyncio.gather(use(self.ws, self.source / "first.md", 0), use(other, second, 1))
+        self.assertNotEqual(first_path, second_path)
+        self.assertIsNone(skills._CURRENT.get())
+
+    async def test_cancelled_refresh_settles_owned_bridge_work_without_rebinding(self) -> None:
+        self.write("first.md", "Original body")
+        async with skills.scope(str(self.ws)) as original:
+            started = asyncio.Event()
+            release = threading.Event()
+            finished = threading.Event()
+            loop = asyncio.get_running_loop()
+            sync = skills._sync_bridges
+
+            def blocked(catalog):
+                loop.call_soon_threadsafe(started.set)
+                try:
+                    if not release.wait(2):
+                        raise RuntimeError("Test did not release bridge preparation")
+                    return sync(catalog)
+                finally:
+                    finished.set()
+
+            with mock.patch.object(skills, "_sync_bridges", side_effect=blocked):
+                refreshing = asyncio.create_task(skills.refresh(str(self.ws)))
+                try:
+                    await asyncio.wait_for(started.wait(), 1)
+                    refreshing.cancel()
+                    await asyncio.sleep(0)
+                    refreshing.cancel()
+                    await asyncio.sleep(0)
+                    self.assertFalse(refreshing.done())
+                    self.assertIs(skills.current_catalog(str(self.ws)), original)
+                finally:
+                    release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(refreshing, 1)
+                self.assertTrue(finished.is_set())
+                self.assertIs(skills.current_catalog(str(self.ws)), original)
+
+    def test_refresh_rule_is_explicit_for_current_request_api_and_native_cli(self) -> None:
+        catalog = skills.SkillCatalog(str(self.ws), (), ("Discovery warning",))
+        for cli in (False, True):
+            with self.subTest(cli=cli):
+                rule = skills.refresh_instructions(cli=cli)
+                self.assertIn("each new user request", rule)
+                self.assertIn("worker starting or resuming", rule)
+                self.assertIn("unchanged", rule)
+                self.assertIn("historical context", rule)
+                self.assertIn("permissions", rule)
+                self.assertIn(rule, skills.catalog_prompt(catalog, cli=cli))
+                self.assertIn("native CLI SKILL.md" if cli else "read_skill", rule)
 
     async def test_native_roots_deduplicate_paths_and_share_relative_resource_pages(self) -> None:
         root = self.ws / "native"

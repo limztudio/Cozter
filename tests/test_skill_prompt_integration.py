@@ -1,6 +1,7 @@
 """Workspace skill metadata follows execution roles without replaying bodies."""
 
 import asyncio
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from unittest import mock
 
 from Cozter import agent, agent_tools, execution_state, skills, utils, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
+from Cozter.tests import test_native_session_turns as native_turns
 
 
 _NATIVE_ID = "01a126fa-e54a-7753-8078-3e31ff8fc962"
@@ -75,7 +77,10 @@ class SkillPromptIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await record.save(native_session_id=_NATIVE_ID, native_tools_started=True)
             await first.acknowledge(record)
 
-            self.assertEqual(self._native_prompt(index, "next request").render(record), "New message:\nnext request")
+            self.assertEqual(
+                self._native_prompt(index, "next request").render(record),
+                skills.refresh_instructions(cli=True) + "\n\nNew message:\nnext request",
+            )
             self._write_skill("UPDATED-SKILL-CATALOG-DESCRIPTION")
             async with skills.scope(self.ws) as updated_catalog:
                 updated = self._native_prompt(skills.catalog_prompt(updated_catalog, cli=True), "new request")
@@ -195,6 +200,31 @@ class SkillPromptIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Your task: finish remaining scope", worker_calls[2][0])
         self.assertIn("UPDATED-PENDING-WORKER-SKILL-DESCRIPTION", worker_calls[2][1])
 
+    async def test_later_flexible_worker_refreshes_skills_changed_by_earlier_worker(self) -> None:
+        worker_catalogs = []
+
+        async def internal(_backend, _ws, _prompt, _model, *, label, **_kwargs):
+            if label == "Flexible planner":
+                return "1. [low] inspect first scope\n2. [high] finish remaining scope"
+            return "verified result"
+
+        async def drive(_backend, _ws, _prompt, _model, _approval, **kwargs):
+            context = kwargs["native_context"]
+            worker_catalogs.append(context.sections["skills catalog"])
+            self.assertIn(skills.refresh_instructions(cli=True), context.render(None))
+            if len(worker_catalogs) == 1:
+                self._write_skill("CHANGED-DURING-EARLIER-WORKER")
+            return AgentResult(text="completed proof", events=[ChatEvent("text", "completed proof")]), False
+
+        with (mock.patch.object(agent, "run_internal_backend", side_effect=internal),
+              mock.patch.object(agent, "_drive_backend", side_effect=drive)):
+            async with skills.scope(self.ws), execution_state.execution_scope(self.ws, "live-skills", "current request"):
+                _, restarting = await self._flexible()
+        self.assertFalse(restarting)
+        self.assertEqual(len(worker_catalogs), 2)
+        self.assertNotIn("CHANGED-DURING-EARLIER-WORKER", worker_catalogs[0])
+        self.assertIn("CHANGED-DURING-EARLIER-WORKER", worker_catalogs[1])
+
     async def test_unrelated_internal_roles_remain_stateless_without_skill_prompt_injection(self) -> None:
         launches = []
 
@@ -218,6 +248,67 @@ class SkillPromptIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kwargs, {"approval": "deny", "compaction": True})
             self.assertFalse(planning)
             self.assertIsNone(native_record)
+
+
+class NativeSkillRefreshTests(unittest.IsolatedAsyncioTestCase):
+    _started = staticmethod(native_turns.NativeSessionTurnsTests._started)
+    _answer = staticmethod(native_turns.NativeSessionTurnsTests._answer)
+    _missing = staticmethod(native_turns.NativeSessionTurnsTests._missing)
+    _conversation = native_turns.NativeSessionTurnsTests._conversation
+    _turn = native_turns.NativeSessionTurnsTests._turn
+    _drive = native_turns.NativeSessionTurnsTests._drive
+    _create_process = native_turns.NativeSessionTurnsTests._create_process
+
+    async def asyncSetUp(self):
+        await native_turns.NativeSessionTurnsTests.asyncSetUp(self)
+        self.enterContext(mock.patch.object(skills, "_native_roots", return_value=[]))
+        self.skill_path = Path(self.ws, ".cozter", "skills", "checks.md")
+        self.skill_path.parent.mkdir(parents=True)
+        self.skill_path.write_text("# Checks\nCurrent check workflow.", encoding="utf-8")
+
+    async def test_all_native_backends_reread_instruction_survives_exact_session_resume(self):
+        for _module, backend, _model in native_turns._CASES:
+            with self.subTest(backend=backend.name):
+                sid = self._conversation()
+                await self._turn(backend.name, "FIRST-SKILL-REQUEST", sid=sid)
+                first = self.attempts[-1]
+                await self._turn(backend.name, "NEXT-SKILL-REQUEST", sid=sid)
+                second = self.attempts[-1]
+                self.assertEqual(second["previous_id"], first["native_id"])
+                self.assertIn(skills.refresh_instructions(cli=True), first["prompt"])
+                self.assertIn(skills.refresh_instructions(cli=True), second["prompt"])
+                self.assertNotIn("[Available workspace and shared native skills]", second["prompt"])
+                self.assertNotIn("FIRST-SKILL-REQUEST", second["prompt"])
+                self.assertNotIn("HISTORICAL-REQUEST-MARKER", second["prompt"])
+
+    async def test_injected_user_request_refreshes_skills_without_replacing_native_session(self):
+        sid = self._conversation()
+
+        async def drive(*args, **kwargs):
+            result, restarting = await self._drive(*args, **kwargs)
+            if len(self.attempts) == 1:
+                self.skill_path.write_text("# Checks\nUPDATED-WORKFLOW-BODY", encoding="utf-8")
+                Path(self.skill_path.parent, "new.md").write_text("# NEW-INJECTED-SKILL", encoding="utf-8")
+                kwargs["injected"].append("Continue with the updated skills.")
+                return result, True
+            return result, restarting
+
+        with mock.patch.object(agent, "_drive_backend_impl", side_effect=drive):
+            await self._turn("codex", "INJECT-SKILL-REQUEST", sid=sid)
+        self.assertEqual(len(self.attempts), 2)
+        self.assertEqual(self.attempts[1]["previous_id"], self.attempts[0]["native_id"])
+        self.assertIn("NEW-INJECTED-SKILL", self.attempts[1]["prompt"])
+        self.assertIn("[Updated skills catalog; replaces the previous version]", self.attempts[1]["prompt"])
+        self.assertIn(skills.refresh_instructions(cli=True), self.attempts[1]["prompt"])
+        self.assertIn("UPDATED-WORKFLOW-BODY", json.loads(skills.read_skill(self.ws, "Checks"))["content"])
+
+    async def test_native_only_skill_refresh_instruction_is_present_with_empty_shared_catalog(self):
+        self.skill_path.unlink()
+        sid = self._conversation()
+        await self._turn("claude_code", "NATIVE-ONLY-SKILL-REQUEST", sid=sid)
+        self.assertNotIn("[Available workspace and shared native skills]", self.attempts[-1]["prompt"])
+        self.assertIn("native CLI SKILL.md", self.attempts[-1]["prompt"])
+        self.assertIn(skills.refresh_instructions(cli=True), self.attempts[-1]["prompt"])
 
 
 if __name__ == "__main__":

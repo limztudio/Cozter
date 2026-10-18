@@ -203,6 +203,10 @@ class HttpSkillWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
         async def resumed_stream(*args, **_kwargs):
             resumed_requests.append(copy.deepcopy(args[1]))
+            self.assertIn(skills.refresh_instructions(), args[1]["messages"][0]["content"])
+            if len(resumed_requests) == 1:
+                return "", "", [_call("skill-fresh", "read_skill", name="build")]
+            self.assertIn("new revision marker", json.loads(args[1]["messages"][-1]["content"])["content"])
             return "Retained evidence and refreshed catalog.", "", []
 
         async with skills.scope(self.ws):
@@ -210,10 +214,49 @@ class HttpSkillWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(oa, "current_run", return_value=record),
                 mock.patch.object(oa, "_stream_completion", side_effect=resumed_stream),
             ):
-                await self._run()
+                await self._run(prompt="Follow the current build skill for this next request")
         self.assertEqual(record.get("http_identity"), previous_identity)
         self.assertNotEqual(resumed_requests[0]["messages"][0]["content"], previous_system)
         self.assertTrue(any(
             message.get("role") == "tool" and "body-instructions-marker" in message.get("content", "")
             for message in resumed_requests[0]["messages"]
         ))
+        self.assertEqual(len(resumed_requests), 2)
+
+    async def test_removed_last_skill_cannot_be_reused_from_restored_http_history(self) -> None:
+        record = _Record()
+        first_calls = 0
+
+        async def first_stream(*_args, **_kwargs):
+            nonlocal first_calls
+            first_calls += 1
+            if first_calls == 1:
+                return "", "", [_call("old-skill", "read_skill", name="build")]
+            return "Earlier workflow used.", "", []
+
+        async with skills.scope(self.ws):
+            with (mock.patch.object(oa, "current_run", return_value=record),
+                  mock.patch.object(oa, "_stream_completion", side_effect=first_stream)):
+                await self._run()
+        self.skill_file.unlink()
+        resumed_requests = []
+
+        async def next_stream(*args, **_kwargs):
+            payload = copy.deepcopy(args[1])
+            resumed_requests.append(payload)
+            system = payload["messages"][0]["content"]
+            self.assertIn(skills.refresh_instructions(), system)
+            self.assertIn("No skills are currently discoverable", system)
+            self.assertIn("Previously loaded skill instructions are unavailable", system)
+            if len(resumed_requests) == 1:
+                self.assertTrue(any(message.get("role") == "tool" and "body-instructions-marker" in message.get("content", "")
+                                    for message in payload["messages"]))
+                return "", "", [_call("current-skill", "read_skill", name="build")]
+            self.assertEqual(json.loads(payload["messages"][-1]["content"])["error"], "Skill not found")
+            return "The removed workflow is unavailable.", "", []
+
+        async with skills.scope(self.ws):
+            with (mock.patch.object(oa, "current_run", return_value=record),
+                  mock.patch.object(oa, "_stream_completion", side_effect=next_stream)):
+                await self._run(prompt="Use current instructions for the next request")
+        self.assertEqual(len(resumed_requests), 2)

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from Cozter.backends_agent import _openai_agent as oa
-from Cozter import execution_state
+from Cozter import execution_state, skills
 
 
 class _Record:
@@ -228,7 +228,10 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             mock.patch("Cozter.skills.catalog_prompt", return_value=""),
         ):
             proc = await self._run(_ReasoningBackend())
-        self.assertEqual(captured[0], {"role": "system", "content": "fresh policy"})
+        self.assertEqual(captured[0]["role"], "system")
+        self.assertTrue(captured[0]["content"].startswith("fresh policy\n\n"))
+        self.assertIn(skills.refresh_instructions(), captured[0]["content"])
+        self.assertIn("No skills are currently discoverable", captured[0]["content"])
         self.assertTrue(any(m.get("reasoning_content") == "opaque provider state" for m in captured))
         self.assertNotIn("opaque provider state", str(proc.events))
 

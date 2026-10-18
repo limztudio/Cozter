@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 import uuid
 
-from Cozter import agent, execution_state, flexible, session
+from Cozter import agent, execution_state, flexible, session, skills
 from Cozter.backends_agent import claude_code, codex, copilot, grok
 from Cozter.backends_agent.base import AgentResult
 
@@ -170,7 +170,8 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
                 flag = "resume" if module is codex else "--resume"
                 self.assertEqual(later_launch["command"][later_launch["command"].index(flag) + 1],
                                  initial_attempt["native_id"])
-                self.assertEqual(later_launch["prompt"], "New message:\nSECOND-REQUEST-MARKER")
+                self.assertEqual(later_launch["prompt"], skills.refresh_instructions(cli=True)
+                                 + "\n\nNew message:\nSECOND-REQUEST-MARKER")
                 if module is copilot:
                     self.assertEqual(initial_launch["home"], later_launch["home"])
                     self.assertTrue(Path(later_launch["home"]).is_dir())
@@ -266,7 +267,8 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
                 attempts = self.attempts[start:]
                 self.assertEqual(len(attempts), 2)
                 self.assertEqual(attempts[0]["previous_id"], original_id)
-                self.assertEqual(attempts[0]["prompt"], "New message:\nRECOVERED-REQUEST")
+                self.assertEqual(attempts[0]["prompt"], skills.refresh_instructions(cli=True)
+                                 + "\n\nNew message:\nRECOVERED-REQUEST")
                 self.assertIsNone(attempts[1]["previous_id"])
                 for marker in ("HISTORICAL-REQUEST-MARKER", "HISTORICAL-ANSWER-MARKER",
                                "BEFORE-MISSING-REQUEST", "RECOVERED-REQUEST", "POLICY-PRELUDE-MARKER"):
@@ -289,7 +291,8 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(attempts), 2)
         self.assertEqual(len(launches), 1)
         self.assertEqual(attempts[0]["previous_id"], original_id)
-        self.assertEqual(attempts[0]["prompt"], "New message:\nCOPILOT-RECOVERY-REQUEST")
+        self.assertEqual(attempts[0]["prompt"], skills.refresh_instructions(cli=True)
+                         + "\n\nNew message:\nCOPILOT-RECOVERY-REQUEST")
         self.assertIsNone(attempts[1]["previous_id"])
         self.assertNotIn("--resume", launches[0]["command"])
         self.assertIn("HISTORICAL-REQUEST-MARKER", launches[0]["prompt"])
@@ -311,7 +314,8 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(self.attempts) - attempts_before, 1)
                 self.assertEqual(len(self.launches) - launches_before, 1)
                 self.assertEqual(self.attempts[-1]["previous_id"], native_id)
-                self.assertEqual(self.attempts[-1]["prompt"], "New message:\nREQUEST-WITH-AMBIGUOUS-OUTCOME")
+                self.assertEqual(self.attempts[-1]["prompt"], skills.refresh_instructions(cli=True)
+                                 + "\n\nNew message:\nREQUEST-WITH-AMBIGUOUS-OUTCOME")
 
     async def test_judge_followup_sends_only_new_instruction_but_missing_session_restores_draft(self):
         for missing in (False, True):

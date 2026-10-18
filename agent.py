@@ -1462,6 +1462,8 @@ def _build_backend_prompt(
             parts.append(prelude)
     if skills_catalog and getattr(backend, "name", None) in _NATIVE_BACKENDS:
         parts.append(skills_catalog)
+    if contextual_prompt and getattr(backend, "name", None) in _NATIVE_BACKENDS:
+        parts.append(skills.refresh_instructions(cli=True))
     parts.append(contextual_prompt)
     return "\n\n".join(parts)
 
@@ -1570,6 +1572,7 @@ def _native_turn_prompt(
         partial_sections=partial_sections,
         message_sources=message_sources,
         request_identity=request_identity,
+        turn_instructions=skills.refresh_instructions(cli=True),
     )
     if _prepare:
         def prepare(record: execution_state.ExecutionRecord | None) -> native_prompt.NativePrompt:
@@ -1584,6 +1587,7 @@ def _native_turn_prompt(
             prepared.sections.update({name: text for name, text in result.sections.items()
                                       if name not in {"colony", "memory", "summary"}})
             prepared.request_identity = result.request_identity
+            prepared.turn_instructions = result.turn_instructions
             return prepared
         result.prepare = prepare
     return result
@@ -2557,6 +2561,13 @@ async def _run_flexible(
                 budget.claim_worker()  # raises with the established checkpoint protocol
             end = min(end, done + remaining)
         earlier = list(reports)
+        if any(not worker_outputs.get(str(index), {}).get("complete") for index in range(done, end)):
+            # Each actual worker wave selects skills from disk again. A long
+            # preceding worker may have outlived edits to native/shared skills.
+            # Parallel readers share one fresh snapshot, rather than scanning
+            # and synchronizing the same roots once per sibling.
+            worker_catalog = await skills.refresh(workspace_path)
+            native_skills_catalog = skills.catalog_prompt(worker_catalog, cli=True)
         if end - done > 1:
             await status(f"flexible: inspecting {end - done} independent tasks in parallel")
             values, restarting = await _run_parallel_flexible_workers(
@@ -3518,6 +3529,7 @@ async def _run_turn_impl(
     native_skills_catalog = skills.catalog_prompt(
         skills.current_catalog(workspace_path), cli=True,
     )
+    phase_started = False
 
     injected = turn.injected
     effort = workspace_mod.get_reasoning_effort(workspace_path)
@@ -3538,6 +3550,13 @@ async def _run_turn_impl(
         native_request: str | None = None,
     ) -> tuple[AgentResult, bool]:
         """Drive initial and continuation phases with the same turn policy."""
+        nonlocal native_skills_catalog, phase_started
+        if phase_started:
+            # An accepted injection is a new user request inside the existing
+            # run scope. Continuations also need current skill sources.
+            catalog = await skills.refresh(workspace_path)
+            native_skills_catalog = skills.catalog_prompt(catalog, cli=True)
+        phase_started = True
         if is_flexible:
             return await _run_flexible(
                 phase_prompt, phase_request, workspace_path,

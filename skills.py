@@ -290,6 +290,22 @@ def _row(skill: Skill, *, path: bool = False) -> dict:
     return result
 
 
+def refresh_instructions(*, cli: bool = False) -> str:
+    """Require current sources independently of prior conversation contents."""
+    reader = (
+        "Open authoritative skill files with your file-reading tool, including selected native CLI SKILL.md files absent from this catalog."
+        if cli else
+        "Use read_skill with a current skill id, starting at offset 0; pin the returned revision when paging."
+    )
+    return (
+        "[Refresh selected skills for the current request]\n"
+        "For each new user request and each worker starting or resuming work, re-evaluate which skills are relevant and re-read every selected skill's"
+        " current instructions and the supporting references needed for that work, even when its name or"
+        " catalog revision is unchanged. Earlier skill reads are historical context, not a current read. "
+        + reader + " Follow the current user's task and permissions."
+    )
+
+
 def catalog_prompt(catalog: SkillCatalog, *, cli: bool = False) -> str:
     if not catalog.entries and not catalog.warnings:
         return ""
@@ -297,7 +313,8 @@ def catalog_prompt(catalog: SkillCatalog, *, cli: bool = False) -> str:
              f"Catalog revision: {_catalog_revision(catalog)}",
              "Use relevant skills as workflow instructions within the current task and permissions.",
              "When planning work, name selected skills in the responsible worker's instructions.",
-             "Read a skill before following it; resolve supporting relative paths from its source root."]
+             "Read a skill before following it; resolve supporting relative paths from its source root.",
+             refresh_instructions(cli=cli)]
     lines.append("Read the exact source path below with your file-reading tool. "
                  "For catalog paging use python -m Cozter.agent_tools.builtin.list_skills with JSON arguments; "
                  "read_skill is also available as python -m Cozter.agent_tools.builtin.read_skill." if cli else
@@ -496,15 +513,15 @@ def _sync_bridges(catalog: SkillCatalog) -> SkillCatalog:
     return SkillCatalog(catalog.workspace_path, catalog.entries, tuple(bounded))
 
 
-@asynccontextmanager
-async def scope(workspace_path: str):
+async def _prepare_catalog(workspace_path: str) -> SkillCatalog:
+    """Finish catalog/bridge preparation before releasing its caller's scope."""
     def prepare() -> SkillCatalog:
         workspace.ensure_workspace_state_dir(workspace_path, "skills")
         return _sync_bridges(discover(workspace_path))
 
     task = asyncio.create_task(asyncio.to_thread(prepare), name="prepare-workspace-skills")
     try:
-        catalog = await asyncio.shield(task)
+        return await asyncio.shield(task)
     except asyncio.CancelledError:
         while not task.done():
             try:
@@ -513,6 +530,20 @@ async def scope(workspace_path: str):
                 continue
         task.result()
         raise
+
+
+async def refresh(workspace_path: str) -> SkillCatalog:
+    """Refresh live sources, replacing only the caller's matching bound catalog."""
+    catalog = await _prepare_catalog(workspace_path)
+    bound = _CURRENT.get()
+    if bound is not None and bound.workspace_path == catalog.workspace_path:
+        _CURRENT.set(catalog)
+    return catalog
+
+
+@asynccontextmanager
+async def scope(workspace_path: str):
+    catalog = await _prepare_catalog(workspace_path)
     token = _CURRENT.set(catalog)
     try:
         yield catalog
