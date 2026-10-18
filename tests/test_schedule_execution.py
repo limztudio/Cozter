@@ -8,10 +8,10 @@ from unittest import mock
 
 from Cozter import workspace
 from Cozter.queue_store import ScheduledOccurrence
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
-class _ScheduleBot(TestBot):
+class _ScheduleBot(OfflineBot):
     def __init__(self, workspace_path: str) -> None:
         super().__init__(["u1"])
         self.workspace_path = workspace_path

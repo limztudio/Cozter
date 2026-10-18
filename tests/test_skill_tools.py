@@ -42,7 +42,7 @@ class SkillToolTests(unittest.IsolatedAsyncioTestCase):
                 result = json.loads(await self._execute("read_skill", {"name": "build"}, mode))
                 self.assertIn("fixture-check-marker", result["content"])
         for name in agent_tools.SKILL_TOOL_NAMES:
-            tool = agent_tools._BY_NAME[name]
+            tool = agent_tools.TOOLS_BY_NAME[name]
             self.assertFalse(tool.is_plugin)
             self.assertTrue(tool.parallel_safe)
             self.assertFalse(tool.requires_full_permission)
@@ -147,7 +147,7 @@ class SkillToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("skill-only planning", planned)
         self.assertIn("fixture-check-marker", normal)
         fake = SimpleNamespace(name="read_skill", is_plugin=True, file_action=None, run=mock.AsyncMock())
-        with mock.patch.dict(agent_tools._BY_NAME, {"read_skill": fake}):
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {"read_skill": fake}):
             with agent_tools.skill_planning_scope():
                 self.assertTrue((await self._execute("read_skill", {"name": "build"}, "full")).startswith("Blocked:"))
             self.assertTrue((await self._execute("read_skill", {"name": "build"}, "confirm")).startswith("Blocked:"))

@@ -9,7 +9,7 @@ from unittest import mock
 from Cozter import agent, flexible, session
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import _InjectQueue
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
 class _ImmediateBackend:
@@ -330,7 +330,7 @@ class AgentContinuationTests(unittest.IsolatedAsyncioTestCase):
                     with mock.patch.object(agent.workspace_mod, "get_history_budget", return_value=500):
                         await self.run_turn(ws, drive, judge)
                 self.assertEqual(len(prompts), 2)
-                excerpt = flexible._bounded_draft_excerpt(draft, limit=500)
+                excerpt = flexible.bounded_draft_excerpt(draft, limit=500)
                 self.assertEqual(len(excerpt), 500)
                 self.assertIn(excerpt, prompts[1])
                 self.assertIn("OPENING: retry.py fixed.", prompts[1])
@@ -427,7 +427,7 @@ class BotContinuationTests(unittest.IsolatedAsyncioTestCase):
                 usage={"input_tokens": 10},
             )
             second = AgentResult(text="Finished", events=[ChatEvent(kind="text", content="Finished")], usage={"input_tokens": 20})
-            bot = TestBot(["u1"])
+            bot = OfflineBot(["u1"])
             calls = 0
 
             async def run(*_args, **kwargs):
@@ -451,7 +451,7 @@ class BotContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_repeated_continuations_finish_original_job(self):
         with tempfile.TemporaryDirectory() as ws:
-            bot = TestBot(["u1"])
+            bot = OfflineBot(["u1"])
 
             calls = []
 

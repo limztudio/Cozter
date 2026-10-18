@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 
-from .base import _scan_html_tag_end
+from .base import scan_html_tag_end
 
 
 _TITLE_START = re.compile(r"<title(?=[\s/>])", re.IGNORECASE)
@@ -25,7 +25,7 @@ def first_title_contents(value: str) -> str:
     opening = _TITLE_START.search(value)
     if opening is None:
         return ""
-    start = _scan_html_tag_end(value, opening.end())
+    start = scan_html_tag_end(value, opening.end())
     if start is None:
         return ""
     closing = _TITLE_END.search(value, start)
@@ -81,7 +81,7 @@ def iter_anchor_contents(value: str) -> Iterator[tuple[str, str]]:
     """
     index = 0
     while opening := _ANCHOR_START.search(value, index):
-        start = _scan_html_tag_end(value, opening.end())
+        start = scan_html_tag_end(value, opening.end())
         if start is None:
             return
         href = _href_attribute(value, opening.end(), start - 1)

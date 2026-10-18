@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from Cozter import schedules, workspace
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 from Cozter.backends_bot.base import QueueCapacityError
 from Cozter.queue_store import ScheduledOccurrence
 
@@ -22,7 +22,7 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             workspace, "WORKSPACE_STATE_PATH", os.path.join(self.ws, "workspaces.json"),
         ))
         self.enterContext(mock.patch.dict(schedules._SCHEDULES_CACHE, clear=True))
-        self.bot = TestBot(["owner"])
+        self.bot = OfflineBot(["owner"])
         self.store = self.bot._queue_store()
         self.enterContext(mock.patch.object(self.bot, "_queue_store", return_value=self.store))
         self.enterContext(mock.patch.object(self.bot, "_start_queue_drain"))
@@ -38,7 +38,7 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         schedules.add_schedule(self.ws, "owner", record)
         return record
 
-    async def _tick(self, now: datetime, bot: TestBot | None = None) -> None:
+    async def _tick(self, now: datetime, bot: OfflineBot | None = None) -> None:
         with mock.patch("Cozter.backends_bot.base.datetime") as clock:
             clock.now.return_value = now
             await (bot or self.bot)._scheduler_tick()
@@ -115,7 +115,7 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(schedules, "update_schedule_fired", side_effect=OSError("read-only definitions")):
             await self._tick(datetime(2026, 10, 16, 9, 0))
             entry_id = self._entries()[0]["id"]
-            restarted = TestBot(["owner"])
+            restarted = OfflineBot(["owner"])
             starts = []
 
             def start(uid):
@@ -138,7 +138,7 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             entry_id = self._entries()[0]["id"]
             self.bot._message_queues["owner"].get_nowait()
             await self.bot._persist_complete("owner", entry_id)
-            restarted = TestBot(["owner"])
+            restarted = OfflineBot(["owner"])
             with mock.patch.object(restarted, "_start_queue_drain") as wake:
                 await restarted.restore_queues()
                 await self._tick(datetime(2026, 10, 16, 9, 1), restarted)
@@ -373,7 +373,7 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_persisted_monthly_claim_survives_bot_restart(self) -> None:
         self._add([16])
         await self._tick(datetime(2026, 10, 16, 9, 0))
-        restarted = TestBot(["owner"])
+        restarted = OfflineBot(["owner"])
         with mock.patch.object(restarted, "_start_queue_drain"):
             await self._tick(datetime(2026, 10, 16, 23, 59), restarted)
             await self._tick(datetime(2026, 10, 17, 9, 0), restarted)
@@ -493,7 +493,7 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         await self._tick(datetime(2026, 12, 1, 9, 0))
         self.assertEqual(len(self._entries()), 1)
         self.assertEqual(self._saved()["last_fired"], "2026-10-16T09:00:00")
-        restarted = TestBot(["owner"])
+        restarted = OfflineBot(["owner"])
         with mock.patch.object(restarted, "_start_queue_drain"):
             await self._tick(datetime(2026, 12, 2, 9, 0), restarted)
             await self._tick(datetime(2027, 10, 16, 8, 59), restarted)
@@ -518,7 +518,7 @@ class MonthlyScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._saved()["last_fired"], "2096-02-29T09:00:00")
 
         # A restart after the next leap day catches up that one valid slot.
-        restarted = TestBot(["owner"])
+        restarted = OfflineBot(["owner"])
         with mock.patch.object(restarted, "_start_queue_drain"):
             await self._tick(datetime(2104, 3, 1, 9, 0), restarted)
             await self._tick(datetime(2104, 3, 2, 9, 0), restarted)

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from Cozter import launch_process
+from Cozter import launch_job
 
 
 class LaunchJobUnitTests(unittest.TestCase):
@@ -26,55 +26,55 @@ class LaunchJobUnitTests(unittest.TestCase):
             CloseHandle=mock.Mock(return_value=1),
         )
         patches = (
-            mock.patch.object(launch_process, "os", SimpleNamespace(
+            mock.patch.object(launch_job, "os", SimpleNamespace(
                 name="nt", environ=self.environment, getpid=lambda: 4321,
             )),
-            mock.patch.object(launch_process, "_kernel32", return_value=self.api),
-            mock.patch.object(launch_process, "_job_handle", None),
-            mock.patch.object(launch_process, "_protected", False),
-            mock.patch.object(launch_process, "_last_error", return_value=0),
-            mock.patch.object(launch_process.ctypes, "set_last_error", create=True),
-            mock.patch.object(launch_process.ctypes, "FormatError", return_value="test failure", create=True),
+            mock.patch.object(launch_job, "_kernel32", return_value=self.api),
+            mock.patch.object(launch_job, "_job_handle", None),
+            mock.patch.object(launch_job, "_protected", False),
+            mock.patch.object(launch_job, "_last_error", return_value=0),
+            mock.patch.object(launch_job.ctypes, "set_last_error", create=True),
+            mock.patch.object(launch_job.ctypes, "FormatError", return_value="test failure", create=True),
         )
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
 
     def test_non_windows_does_not_load_native_api(self) -> None:
-        with mock.patch.object(launch_process.os, "name", "posix"):
-            self.assertFalse(launch_process.ensure_launch_job())
-        launch_process._kernel32.assert_not_called()
+        with mock.patch.object(launch_job.os, "name", "posix"):
+            self.assertFalse(launch_job.ensure_launch_job())
+        launch_job._kernel32.assert_not_called()
         self.assertEqual(self.environment, {})
 
     def test_current_process_is_assigned_before_marker_and_owner_keeps_handle(self) -> None:
         def assign(handle, process):
-            self.assertNotIn(launch_process._LAUNCH_JOB_ENV, self.environment)
+            self.assertNotIn(launch_job._LAUNCH_JOB_ENV, self.environment)
             self.assertEqual((handle, process), (11, -1))
             return 1
 
         self.api.AssignProcessToJobObject.side_effect = assign
-        self.assertTrue(launch_process.ensure_launch_job())
-        self.assertEqual(launch_process._job_handle, 11)
+        self.assertTrue(launch_job.ensure_launch_job())
+        self.assertEqual(launch_job._job_handle, 11)
         self.api.CloseHandle.assert_not_called()
         security, name = self.api.CreateJobObjectW.call_args.args
         self.assertIsNone(security)  # NULL attributes produce a noninherited handle.
         self.assertTrue(name.startswith("Local\\CozterLaunch-4321-"))
-        self.assertEqual(self.environment[launch_process._LAUNCH_JOB_ENV], name)
+        self.assertEqual(self.environment[launch_job._LAUNCH_JOB_ENV], name)
         handle, info_class, info, size = self.api.SetInformationJobObject.call_args.args
         self.assertEqual(handle, 11)
         self.assertEqual(info_class, 9)
         self.assertEqual(info._obj.BasicLimitInformation.LimitFlags, 0x2000)
-        self.assertEqual(size, ctypes.sizeof(launch_process._ExtendedLimitInformation))
+        self.assertEqual(size, ctypes.sizeof(launch_job._ExtendedLimitInformation))
 
     def test_repeated_calls_create_and_assign_only_once(self) -> None:
-        self.assertTrue(launch_process.ensure_launch_job())
-        self.assertTrue(launch_process.ensure_launch_job())
+        self.assertTrue(launch_job.ensure_launch_job())
+        self.assertTrue(launch_job.ensure_launch_job())
         self.api.CreateJobObjectW.assert_called_once()
         self.api.AssignProcessToJobObject.assert_called_once()
 
     def test_descendant_verifies_membership_and_closes_query_handle(self) -> None:
         marker = "Local\\parent-launch-job"
-        self.environment[launch_process._LAUNCH_JOB_ENV] = marker
+        self.environment[launch_job._LAUNCH_JOB_ENV] = marker
 
         def belongs(process, handle, result):
             self.assertEqual((process, handle), (-1, 22))
@@ -82,64 +82,64 @@ class LaunchJobUnitTests(unittest.TestCase):
             return 1
 
         self.api.IsProcessInJob.side_effect = belongs
-        self.assertTrue(launch_process.ensure_launch_job())
+        self.assertTrue(launch_job.ensure_launch_job())
         self.api.OpenJobObjectW.assert_called_once_with(0x0004, False, marker)
         self.api.CloseHandle.assert_called_once_with(22)
         self.api.CreateJobObjectW.assert_not_called()
         self.api.AssignProcessToJobObject.assert_not_called()
-        self.assertIsNone(launch_process._job_handle)
-        self.assertEqual(self.environment[launch_process._LAUNCH_JOB_ENV], marker)
+        self.assertIsNone(launch_job._job_handle)
+        self.assertEqual(self.environment[launch_job._LAUNCH_JOB_ENV], marker)
 
     def test_unverified_marker_does_not_skip_new_protection(self) -> None:
-        self.environment[launch_process._LAUNCH_JOB_ENV] = "Local\\unrelated-job"
+        self.environment[launch_job._LAUNCH_JOB_ENV] = "Local\\unrelated-job"
         # A FALSE query output alone is not proof of protection.
-        self.assertTrue(launch_process.ensure_launch_job())
+        self.assertTrue(launch_job.ensure_launch_job())
         self.api.CloseHandle.assert_called_once_with(22)
         self.api.CreateJobObjectW.assert_called_once()
         self.api.AssignProcessToJobObject.assert_called_once()
-        self.assertNotEqual(self.environment[launch_process._LAUNCH_JOB_ENV], "Local\\unrelated-job")
+        self.assertNotEqual(self.environment[launch_job._LAUNCH_JOB_ENV], "Local\\unrelated-job")
 
     def test_stale_marker_creates_new_protection(self) -> None:
-        self.environment[launch_process._LAUNCH_JOB_ENV] = "Local\\expired-job"
+        self.environment[launch_job._LAUNCH_JOB_ENV] = "Local\\expired-job"
         self.api.OpenJobObjectW.return_value = None
-        self.assertTrue(launch_process.ensure_launch_job())
+        self.assertTrue(launch_job.ensure_launch_job())
         self.api.CreateJobObjectW.assert_called_once()
         self.api.CloseHandle.assert_not_called()
 
     def test_failed_membership_query_closes_handle_and_fails_clearly(self) -> None:
-        self.environment[launch_process._LAUNCH_JOB_ENV] = "Local\\parent-job"
+        self.environment[launch_job._LAUNCH_JOB_ENV] = "Local\\parent-job"
         self.api.IsProcessInJob.return_value = 0
         with self.assertRaisesRegex(RuntimeError, "IsProcessInJob"):
-            launch_process.ensure_launch_job()
+            launch_job.ensure_launch_job()
         self.api.CloseHandle.assert_called_once_with(22)
         self.api.CreateJobObjectW.assert_not_called()
-        self.assertFalse(launch_process._protected)
+        self.assertFalse(launch_job._protected)
 
     def test_failed_creation_never_assigns_or_marks_protected(self) -> None:
         self.api.CreateJobObjectW.return_value = None
         with self.assertRaisesRegex(RuntimeError, "CreateJobObjectW"):
-            launch_process.ensure_launch_job()
+            launch_job.ensure_launch_job()
         self.api.AssignProcessToJobObject.assert_not_called()
         self.api.CloseHandle.assert_not_called()
         self.assertEqual(self.environment, {})
-        self.assertFalse(launch_process._protected)
+        self.assertFalse(launch_job._protected)
 
     def test_failed_limit_setup_closes_only_unassigned_handle(self) -> None:
         self.api.SetInformationJobObject.return_value = 0
         with self.assertRaisesRegex(RuntimeError, "SetInformationJobObject"):
-            launch_process.ensure_launch_job()
+            launch_job.ensure_launch_job()
         self.api.CloseHandle.assert_called_once_with(11)
         self.api.AssignProcessToJobObject.assert_not_called()
         self.assertEqual(self.environment, {})
 
     def test_incompatible_parent_job_fails_before_children_can_spawn(self) -> None:
         self.api.AssignProcessToJobObject.return_value = 0
-        with mock.patch.object(launch_process, "_last_error", return_value=5):
+        with mock.patch.object(launch_job, "_last_error", return_value=5):
             with self.assertRaisesRegex(RuntimeError, "parent job may prohibit nested jobs"):
-                launch_process.ensure_launch_job()
+                launch_job.ensure_launch_job()
         self.api.CloseHandle.assert_called_once_with(11)
-        self.assertIsNone(launch_process._job_handle)
-        self.assertFalse(launch_process._protected)
+        self.assertIsNone(launch_job._job_handle)
+        self.assertFalse(launch_job._protected)
         self.assertEqual(self.environment, {})
 
 
@@ -150,25 +150,25 @@ class WindowsLaunchJobLifetimeTests(unittest.IsolatedAsyncioTestCase):
         # termination targets that fixture, never the unittest runner itself.
         child_script = (
             "import json, os, subprocess, sys, time\n"
-            "from Cozter import launch_process\n"
-            "launch_process.ensure_launch_job()\n"
+            "from Cozter import launch_job\n"
+            "launch_job.ensure_launch_job()\n"
             "grandchild = subprocess.Popen([sys.executable, '-B', '-c', "
             "'import time; time.sleep(120)'], stdin=subprocess.DEVNULL, "
             "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=False)\n"
             "print(json.dumps({'child': os.getpid(), 'grandchild': grandchild.pid, "
-            "'child_kept_job_handle': launch_process._job_handle is not None}), flush=True)\n"
+            "'child_kept_job_handle': launch_job._job_handle is not None}), flush=True)\n"
             "time.sleep(120)\n"
         )
         outer_setup = (
-            "api = launch_process._kernel32()\n"
+            "api = launch_job._kernel32()\n"
             "outer_job = api.CreateJobObjectW(None, None)\n"
             "assert outer_job and api.AssignProcessToJobObject(outer_job, api.GetCurrentProcess())\n"
         ) if existing_parent_job else ""
         parent_script = (
             "import json, subprocess, sys, time\n"
-            "from Cozter import launch_process\n"
+            "from Cozter import launch_job\n"
             + outer_setup
-            + "launch_process.ensure_launch_job()\n"
+            + "launch_job.ensure_launch_job()\n"
             + f"child = subprocess.Popen([sys.executable, '-B', '-c', {child_script!r}], "
             "stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, "
             "close_fds=False)\n"
@@ -176,12 +176,12 @@ class WindowsLaunchJobLifetimeTests(unittest.IsolatedAsyncioTestCase):
             "if not line:\n"
             "    raise RuntimeError(child.stderr.read().decode())\n"
             "data = json.loads(line)\n"
-            "data['owner_kept_job_handle'] = launch_process._job_handle is not None\n"
+            "data['owner_kept_job_handle'] = launch_job._job_handle is not None\n"
             "print(json.dumps(data), flush=True)\n"
             "time.sleep(120)\n"
         )
         environment = dict(os.environ)
-        environment.pop(launch_process._LAUNCH_JOB_ENV, None)
+        environment.pop(launch_job._LAUNCH_JOB_ENV, None)
         package_parent = str(Path(__file__).resolve().parents[2])
         proc = await asyncio.create_subprocess_exec(
             sys.executable, "-B", "-c", parent_script,

@@ -192,7 +192,7 @@ _CONSOLIDATE_TRUNCATION_NOTE = (
 )
 
 # Per-workspace guard: one pass at a time.
-_consolidate_in_flight: set[str] = set()
+_CONSOLIDATE_IN_FLIGHT: set[str] = set()
 
 
 def _parse_consolidate_output(
@@ -375,20 +375,20 @@ async def consolidate(
     items removed. Returns True on a successful apply.
     """
     workspace_key = workspace_mod.canonicalize_workspace_path(workspace_path)
-    if workspace_key in _consolidate_in_flight:
+    if workspace_key in _CONSOLIDATE_IN_FLIGHT:
         logger.info(
             "Colony pass already in flight for %s, skipping",
             workspace_path,
         )
         return False
-    _consolidate_in_flight.add(workspace_key)
+    _CONSOLIDATE_IN_FLIGHT.add(workspace_key)
     try:
         async with workspace_mod.get_memory_maintenance_lock(workspace_path):
             return await _consolidate_inner(
                 workspace_path, summary_model, backend_name=backend_name,
             )
     finally:
-        _consolidate_in_flight.discard(workspace_key)
+        _CONSOLIDATE_IN_FLIGHT.discard(workspace_key)
 
 
 async def _consolidate_inner(

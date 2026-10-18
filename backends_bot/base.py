@@ -101,7 +101,7 @@ async def _run_owned_poll_tasks(tasks: list[asyncio.Task[None]]) -> None:
             raise interrupted
 
 
-async def _run_durable_file_operation(
+async def run_durable_file_operation(
     lock: asyncio.Lock, operation: Callable[[], _FileResult], *,
     on_complete: Callable[[_FileResult], None] | None = None,
     required_cleanup: bool = False,
@@ -416,7 +416,7 @@ async def copy_file_with_limit_async(
     the cancelled file. Delay cancellation until the copy physically finishes
     so the reservation also removes any completed output.
     """
-    await _run_durable_file_operation(
+    await run_durable_file_operation(
         asyncio.Lock(),
         functools.partial(
             copy_file_with_limit, source_path, local_path, max_upload_bytes,
@@ -1476,7 +1476,7 @@ class BotPlatform(ABC):
             data[uid] = [selected, *remaining]
             self._write_queue_file(data)
 
-        await _run_durable_file_operation(self._queue_file_lock, promote)
+        await run_durable_file_operation(self._queue_file_lock, promote)
 
     async def _resume_awaiting_answer(
         self, uid: str, msg_queue: asyncio.Queue, entry_id: str, *,
@@ -2953,7 +2953,7 @@ class BotPlatform(ABC):
                     return job if isinstance(job, dict) else {}
             return {}
 
-        return await _run_durable_file_operation(self._queue_file_lock, read)
+        return await run_durable_file_operation(self._queue_file_lock, read)
 
     async def _save_job_checkpoint(
         self, uid: str, entry_id: str, job: dict,
@@ -2972,7 +2972,7 @@ class BotPlatform(ABC):
                     return True
             return False
 
-        return await _run_durable_file_operation(self._queue_file_lock, save)
+        return await run_durable_file_operation(self._queue_file_lock, save)
 
     async def _retain_job_entry(self, uid: str, entry_id: str) -> None:
         """Put unfinished work first in memory, retaining durable FIFO order."""
@@ -2981,7 +2981,7 @@ class BotPlatform(ABC):
                 self._read_queue_file().get(uid),
             ) if entry.get("id") == entry_id), None)
 
-        entry = await _run_durable_file_operation(self._queue_file_lock, read)
+        entry = await run_durable_file_operation(self._queue_file_lock, read)
         if entry is None:
             return  # /stop already removed it
         queue = self._ensure_message_queue(uid)
@@ -3034,7 +3034,7 @@ class BotPlatform(ABC):
             return True
 
         async with self._ensure_dispatch_admission_lock(uid):
-            resumed = await _run_durable_file_operation(self._queue_file_lock, resume)
+            resumed = await run_durable_file_operation(self._queue_file_lock, resume)
         if self._cancel_generations.get(uid, 0) != generation:
             return False
         if resumed:
@@ -3093,7 +3093,7 @@ class BotPlatform(ABC):
                     return None
                 if self.max_queue_size > 0 and msg_queue.qsize() >= self.max_queue_size:
                     raise QueueCapacityError("Waiting-work queue is full")
-                result = await _run_durable_file_operation(
+                result = await run_durable_file_operation(
                     self._queue_file_lock,
                     lambda: self._queue_store().admit(uid, entry, occurrence),
                     on_complete=publish,
@@ -3130,7 +3130,7 @@ class BotPlatform(ABC):
             self._write_queue_file(data)
             return workspace_path if isinstance(workspace_path, str) else None
 
-        completed_workspace = await _run_durable_file_operation(self._queue_file_lock, complete)
+        completed_workspace = await run_durable_file_operation(self._queue_file_lock, complete)
         if completed_workspace:
             from .. import execution_state
             try:
@@ -3160,7 +3160,7 @@ class BotPlatform(ABC):
                 return len(self._queue_entries(entries)) or 1
             return 0
 
-        return await _run_durable_file_operation(
+        return await run_durable_file_operation(
             self._queue_file_lock, clear,
             on_complete=lambda _: self._paused_jobs.discard(uid),
         )
@@ -3174,7 +3174,7 @@ class BotPlatform(ABC):
         """
         # Park prompts with staged replies.
         await self.restore_reply_deliveries()
-        data = await _run_durable_file_operation(
+        data = await run_durable_file_operation(
             self._queue_file_lock, self._read_queue_file,
         )
         if not data:
@@ -3252,7 +3252,7 @@ class BotPlatform(ABC):
             data = self._read_reply_deliveries_file()
             return self._reply_delivery_records(data.get("deliveries"))
 
-        return await _run_durable_file_operation(
+        return await run_durable_file_operation(
             self._reply_delivery_file_lock, read,
         )
 
@@ -3280,7 +3280,7 @@ class BotPlatform(ABC):
                 None,
             )
 
-        return await _run_durable_file_operation(
+        return await run_durable_file_operation(
             self._reply_delivery_file_lock, read,
         )
 
@@ -3355,7 +3355,7 @@ class BotPlatform(ABC):
                 # Starting is idempotent.
                 self.start_detached_task_watcher()
 
-        record, _ = await _run_durable_file_operation(
+        record, _ = await run_durable_file_operation(
             self._reply_delivery_file_lock, stage, on_complete=staged,
         )
         return record
@@ -3413,7 +3413,7 @@ class BotPlatform(ABC):
             if cleared_user is not None:
                 self._pending_reply_delivery_users.discard(cleared_user)
 
-        await _run_durable_file_operation(
+        await run_durable_file_operation(
             self._reply_delivery_file_lock, remove, on_complete=removed,
         )
 
@@ -3441,7 +3441,7 @@ class BotPlatform(ABC):
             return removed
 
         async with self._reply_delivery_lock(uid):
-            return await _run_durable_file_operation(
+            return await run_durable_file_operation(
                 self._reply_delivery_file_lock, clear,
                 on_complete=lambda _: self._pending_reply_delivery_users.discard(uid),
             )
@@ -3624,7 +3624,7 @@ class BotPlatform(ABC):
             data = self._read_detached_tasks_file()
             return self._detached_task_records(data.get("tasks"))
 
-        return await _run_durable_file_operation(
+        return await run_durable_file_operation(
             self._detached_task_file_lock, read,
         )
 
@@ -3638,7 +3638,7 @@ class BotPlatform(ABC):
                 None,
             )
 
-        return await _run_durable_file_operation(
+        return await run_durable_file_operation(
             self._detached_task_file_lock, read,
         )
 
@@ -3722,7 +3722,7 @@ class BotPlatform(ABC):
         async with self._ensure_dispatch_admission_lock(uid):
             if self._cancel_generations.get(uid, 0) != generation:
                 return False
-            await _run_durable_file_operation(
+            await run_durable_file_operation(
                 self._detached_task_file_lock, register, on_complete=registered,
             )
         return self._cancel_generations.get(uid, 0) == generation
@@ -3744,7 +3744,7 @@ class BotPlatform(ABC):
                 data["tasks"] = records
                 self._write_detached_tasks_file(data)
 
-        await _run_durable_file_operation(self._detached_task_file_lock, update)
+        await run_durable_file_operation(self._detached_task_file_lock, update)
 
     async def _remove_detached_task_record(self, record_id: str) -> None:
         def remove() -> None:
@@ -3759,7 +3759,7 @@ class BotPlatform(ABC):
                 data.pop("tasks", None)
             self._write_detached_tasks_file(data)
 
-        await _run_durable_file_operation(self._detached_task_file_lock, remove)
+        await run_durable_file_operation(self._detached_task_file_lock, remove)
 
     def start_detached_task_watcher(self) -> None:
         """Start the durable completion watcher once per platform."""
@@ -3811,7 +3811,7 @@ class BotPlatform(ABC):
         """
         if self._update_restart_pending:
             return
-        data = await _run_durable_file_operation(
+        data = await run_durable_file_operation(
             self._queue_file_lock, self._read_queue_file,
         )
         now = time.time()
@@ -3849,7 +3849,7 @@ class BotPlatform(ABC):
                     if ready and self._cancel_generations.get(uid, 0) == generation:
                         self._paused_jobs.discard(uid)
 
-                ready = await _run_durable_file_operation(
+                ready = await run_durable_file_operation(
                     self._queue_file_lock, claim, on_complete=claimed,
                 )
                 if (ready and self._cancel_generations.get(uid, 0) == generation
@@ -4250,7 +4250,7 @@ class BotPlatform(ABC):
         work or make a consumed occurrence due again.
         """
         now = datetime.now()
-        watermarks = await _run_durable_file_operation(
+        watermarks = await run_durable_file_operation(
             self._queue_file_lock, lambda: self._queue_store().schedule_watermarks(),
         )
         to_fire: list[tuple[str, str, dict, datetime]] = []
@@ -4323,7 +4323,7 @@ class BotPlatform(ABC):
 
     async def _project_schedule_receipt(self, uid: str, ws: str, schedule_id: str, slot: str) -> None:
         try:
-            await _run_durable_file_operation(
+            await run_durable_file_operation(
                 workspace.get_lock(ws),
                 lambda: self._claim_scheduled_slot(uid, ws, schedule_id, slot),
             )
@@ -5123,7 +5123,7 @@ class BotPlatform(ABC):
 
         try:
             if sid is None:
-                await _run_durable_file_operation(
+                await run_durable_file_operation(
                     workspace.get_lock(ws),
                     lambda: session.create_session(ws, name=f"⏰ {label}"),
                     on_complete=created,
@@ -5152,7 +5152,7 @@ class BotPlatform(ABC):
                                   and uid not in self._cancel_acknowledged
                                   and not self._cancel_work_depths.get(uid, 0))
                 if sid is not None and not retain_session:
-                    await _run_durable_file_operation(
+                    await run_durable_file_operation(
                         workspace.get_lock(ws), lambda: session.delete_session(ws, sid),
                         required_cleanup=True,
                     )

@@ -717,11 +717,11 @@ class UpdateHandoffTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_two_rooms_keep_queue_and_scheduler_running_while_update_waits(self):
         from Cozter import workspace
-        from Cozter.tests.helpers import TestBot
+        from Cozter.tests.helpers import OfflineBot
 
         temporary = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", temporary))
-        bot = TestBot(["active", "queued"])
+        bot = OfflineBot(["active", "queued"])
         bot._daemon_services_started = True
         active_started, active_release, queued_ran = asyncio.Event(), asyncio.Event(), asyncio.Event()
         cancelled = []
@@ -1034,9 +1034,9 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 class SharedDaemonLifecycleTests(unittest.IsolatedAsyncioTestCase):
     def _bot(self):
-        from Cozter.tests.helpers import TestBot
+        from Cozter.tests.helpers import OfflineBot
 
-        return TestBot(["fixture"])
+        return OfflineBot(["fixture"])
 
     async def test_slack_closes_transport_after_shared_consumer_cleanup_fails(self):
         from Cozter.backends_bot.slack import SlackBot

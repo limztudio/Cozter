@@ -19,7 +19,7 @@ from Cozter.backends_agent.base import (
 from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 from Cozter.backends_agent import claude_code as claude_code_mod
 from Cozter.backends_bot.base import BotContext
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
 class _DetachedBackend:
@@ -42,7 +42,7 @@ class _DetachedBackend:
         return True
 
 
-class _DetachedBot(TestBot):
+class _DetachedBot(OfflineBot):
     def __init__(self) -> None:
         super().__init__(["u1"])
         self.sent: list[str] = []

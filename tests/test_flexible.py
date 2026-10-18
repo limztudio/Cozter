@@ -551,18 +551,18 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         ):
             report = "OPENING: changed retry.py.\n" + "detail\n" * 2_000 + final_evidence
             with self.subTest(final_evidence=final_evidence):
-                excerpt = flexible._truncate_report(report)
+                excerpt = flexible.truncate_report(report)
                 self.assertEqual(len(excerpt), flexible._REPORT_MAX_CHARS)
                 self.assertTrue(excerpt.startswith("OPENING: changed retry.py."))
                 self.assertTrue(excerpt.endswith(final_evidence))
-                self.assertIn(flexible._REPORT_TRUNCATION_MARKER, excerpt)
+                self.assertIn(flexible.REPORT_TRUNCATION_MARKER, excerpt)
                 for downstream in (
                     flexible.build_subtask_prompt("request", plan, 0, [report]),
                     flexible.build_merge_prompt("request", plan, [report], collaborative=False),
                 ):
                     self.assertIn(final_evidence, downstream)
                     self.assertNotIn(report, downstream)
-        completed = flexible._truncate_report(
+        completed = flexible.truncate_report(
             "OPENING\n" + "detail\n" * 2_000 + "FINAL: complete; exit code 0."
         )
         self.assertNotIn("PARTIAL", completed)
@@ -678,7 +678,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Fixed retry.py; exit code 0.", prompt)
             self.assertIn("FINAL EVIDENCE: integration test passed.", prompt)
             self.assertIn("without repeating completed actions", prompt)
-            self.assertIn(flexible._DRAFT_OMISSION_MARKER, prompt)
+            self.assertIn(flexible.DRAFT_OMISSION_MARKER, prompt)
 
     async def test_textless_workers_never_reply_with_a_placeholder(
         self,
@@ -1187,13 +1187,13 @@ class JudgeVerdictTests(unittest.TestCase):
     def test_long_judge_excerpt_retains_opening_and_final_evidence(self) -> None:
         draft = "REQUEST COVERAGE: all targets checked.\n" + "detail\n" * 3_000
         draft += "FINAL: every target passed; no remaining work."
-        excerpt = flexible._bounded_draft_excerpt(draft)
+        excerpt = flexible.bounded_draft_excerpt(draft)
         self.assertLessEqual(len(excerpt), flexible._DRAFT_MAX_CHARS)
         self.assertTrue(excerpt.startswith("REQUEST COVERAGE: all targets checked."))
         self.assertTrue(excerpt.endswith("FINAL: every target passed; no remaining work."))
         prompt = flexible.build_judge_prompt("check all targets", draft)
         self.assertIn(excerpt, prompt)
-        self.assertNotIn(flexible._REPORT_TRUNCATION_MARKER, prompt)
+        self.assertNotIn(flexible.REPORT_TRUNCATION_MARKER, prompt)
         self.assertNotIn("say PARTIAL + remainder", excerpt)
         self.assertIn("Omission alone is not evidence of unfinished work", prompt)
 
@@ -1205,16 +1205,16 @@ class JudgeVerdictTests(unittest.TestCase):
 
     def test_draft_excerpt_obeys_explicit_and_tight_budgets(self) -> None:
         draft = "OPENING: completed work.\n" + "detail\n" * 1_000 + "FINAL: verified."
-        for limit in (-1, 0, 1, 2, len(flexible._DRAFT_OMISSION_MARKER), 300):
+        for limit in (-1, 0, 1, 2, len(flexible.DRAFT_OMISSION_MARKER), 300):
             with self.subTest(limit=limit):
-                excerpt = flexible._bounded_draft_excerpt(draft, limit=limit)
+                excerpt = flexible.bounded_draft_excerpt(draft, limit=limit)
                 self.assertEqual(len(excerpt), max(0, limit))
                 self.assertNotIn("PARTIAL", excerpt)
-        excerpt = flexible._bounded_draft_excerpt(draft, limit=300)
+        excerpt = flexible.bounded_draft_excerpt(draft, limit=300)
         self.assertTrue(excerpt.startswith("OPENING: completed work."))
         self.assertTrue(excerpt.endswith("FINAL: verified."))
-        self.assertIn(flexible._DRAFT_OMISSION_MARKER, excerpt)
-        self.assertEqual(flexible._bounded_draft_excerpt("short", limit=10), "short")
+        self.assertIn(flexible.DRAFT_OMISSION_MARKER, excerpt)
+        self.assertEqual(flexible.bounded_draft_excerpt("short", limit=10), "short")
 
 
 class FlexibleTurnCompletionTests(unittest.IsolatedAsyncioTestCase):

@@ -50,7 +50,7 @@ class PromptPayloadDedupTests(unittest.TestCase):
         opening = "OPENING:" + "head " * 800
         ending = "tail " * 800 + "FINAL evidence: all requested checks passed."
         first, second = opening + "UNIQUE FAILURE A" + ending, opening + "UNIQUE FAILURE B" + ending
-        self.assertEqual(flexible._truncate_report(first), flexible._truncate_report(second))
+        self.assertEqual(flexible.truncate_report(first), flexible.truncate_report(second))
         plan = flexible.Plan("", (flexible.Subtask("mid", "one"), flexible.Subtask("high", "two")))
         for prompt in (
             flexible.build_subtask_prompt("request", plan, 1, [first, second]),

@@ -1229,7 +1229,7 @@ class NonPublicAddressError(OSError):
     """Raised when a request hostname resolves outside the public internet."""
 
 
-def _is_public_ip(value: str) -> bool:
+def is_public_ip(value: str) -> bool:
     """Return whether *value* is a globally routable, public IP address."""
     try:
         address = ipaddress.ip_address(value)
@@ -1319,7 +1319,7 @@ def validate_public_url(url: str) -> str | None:
 
     for answer in numeric_answers:
         address = answer[4][0]
-        if not isinstance(address, str) or not _is_public_ip(address):
+        if not isinstance(address, str) or not is_public_ip(address):
             return "Error: URL host must be a publicly routable address"
     return None
 
@@ -1445,7 +1445,7 @@ def _is_html_tag_start(value: str, index: int) -> bool:
     return "A" <= character <= "Z" or "a" <= character <= "z"
 
 
-def _scan_html_tag_end(value: str, index: int) -> int | None:
+def scan_html_tag_end(value: str, index: int) -> int | None:
     """Return the index after an unquoted '>', or ``None`` if absent."""
     quote = ""
     while index < len(value):
@@ -1483,7 +1483,7 @@ def _scan_html_markup(
 
     marker = index + 1
     if marker < length and value[marker] in "!?":
-        markup_end = _scan_html_tag_end(value, marker + 1)
+        markup_end = scan_html_tag_end(value, marker + 1)
         if markup_end is None:
             return None
         return "", False, False, markup_end
@@ -1507,7 +1507,7 @@ def _scan_html_markup(
         marker += 1
     tag = value[name_start:marker].lower()
 
-    markup_end = _scan_html_tag_end(value, marker)
+    markup_end = scan_html_tag_end(value, marker)
     if markup_end is None:
         return None
 
@@ -1540,7 +1540,7 @@ def _skip_html_raw_text(value: str, index: int, tag: str) -> int:
                 or value[name_end] in _HTML_TAG_WHITESPACE
                 or value[name_end] in "/>"
             ):
-                end = _scan_html_tag_end(value, name_end)
+                end = scan_html_tag_end(value, name_end)
                 return end if end is not None else length
         index += 1
     return length

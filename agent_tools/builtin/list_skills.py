@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 from ..base import AgentTool, object_parameters
 
 
-def _page_integer(args: dict, name: str, default: int, minimum: int, maximum: int | None = None) -> int:
+def page_integer(args: dict, name: str, default: int, minimum: int, maximum: int | None = None) -> int:
     value = args.get(name, default)
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"'{name}' must be an integer")
@@ -34,8 +34,8 @@ class ListSkillsTool(AgentTool):
         from ... import skills
 
         try:
-            offset = _page_integer(args, "offset", 0, 0)
-            count = _page_integer(args, "max_results", 50, 1, 200)
+            offset = page_integer(args, "offset", 0, 0)
+            count = page_integer(args, "max_results", 50, 1, 200)
         except ValueError as exc:
             return f"Error: {exc}"
         return await asyncio.to_thread(skills.list_skills, workspace_path, offset=offset, max_results=count)

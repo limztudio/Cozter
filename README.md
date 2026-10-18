@@ -1931,7 +1931,7 @@ or ordinary chat work.
 Cozter/
 ├── __init__.py           package marker
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
-├── launch_process.py     Windows launcher job owns descendant lifetimes
+├── launch_job.py         Windows launcher job owns descendant lifetimes
 ├── process_launch.py     shared subprocess launch and cancellation ownership
 ├── requirements.txt      Python runtime dependencies installed into .venv
 ├── py.typed              marks the package as typed for downstream checkers
@@ -2140,7 +2140,7 @@ duplicate carriage returns. Non-UTF-8 files are refused rather than rewritten
 with replacement characters.
 Regression coverage for these paths lives in
 `tests/test_agent_process_cleanup.py`, `tests/test_prompt_subprocess.py`,
-`tests/test_cli_commands.py`, `tests/test_launch_process.py`, `tests/test_utils.py`,
+`tests/test_cli_commands.py`, `tests/test_launch_job.py`, `tests/test_utils.py`,
 `tests/test_agent_tools.py`, and `tests/test_discovery_tools_async.py`.
 
 CLI JSONL and OpenAI-compatible HTTP SSE use the same bounded line reader in
@@ -2185,7 +2185,7 @@ ignored for local secrets and runtime queues.
 The runtime contains 77 Python source files, separate from the tests below.
 
 - Package entry and runtime setup: `__init__.py`, `__main__.py`,
-  `launch_process.py`, `process_launch.py`, `config.py`, `updater.py`, and `utils.py`
+  `launch_job.py`, `process_launch.py`, `config.py`, `updater.py`, and `utils.py`
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
   `colony.py`, `flexible.py`, `execution_state.py`, `native_prompt.py`, `skills.py`, `schedules.py`, and `queue_store.py`
@@ -2238,11 +2238,11 @@ The runtime contains 77 Python source files, separate from the tests below.
   `test_http_body_sniff.py`, `test_http_event_framing.py`, `test_http_execution_continuation.py`,
   `test_http_latency.py`, `test_http_owned_mutation_cancellation.py`,
   `test_http_pending_checkpoints.py`, `test_http_redirect_method.py`, `test_http_restore_accounting.py`,
-  `test_http_skill_workflow.py`,
+  `test_http_skill_workflow.py`, `test_image_dimensions.py`,
   `test_image_snapshot_metadata.py`, `test_inject.py`, `test_interactive_schedule_refresh.py`,
   `test_internal_backend_deadline.py`, `test_interrupted_turns.py`, `test_job_continuation.py`,
-  `test_job_prerequisite_retry.py`, `test_jpeg_dimensions.py`, `test_judge_blocked.py`,
-  `test_launch_process.py`, `test_launcher_and_followups.py`, `test_lazy_tool_http_imports.py`,
+  `test_job_prerequisite_retry.py`, `test_judge_blocked.py`,
+  `test_launch_job.py`, `test_launcher_and_followups.py`, `test_lazy_tool_http_imports.py`,
   `test_maintenance_context.py`, `test_memory_corrupt_state.py`, `test_memory_preservation.py`,
   `test_memory_repair_regressions.py`, `test_memory_streamed_search.py`,
   `test_monthly_schedule_execution.py`, `test_monthly_schedules.py`,

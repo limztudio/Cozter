@@ -15,10 +15,10 @@ from unittest import mock
 
 from Cozter import schedules, session, workspace
 from Cozter.backends_bot.base import BotContext, QueueCapacityError
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
-class _CommandBot(TestBot):
+class _CommandBot(OfflineBot):
     def __init__(self) -> None:
         super().__init__(["u1"])
         self.replies: list[str] = []

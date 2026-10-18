@@ -23,7 +23,7 @@ _ERROR_ALREADY_EXISTS = 183
 # Do not register an atexit close: that could terminate the live owner too.
 _job_handle: int | None = None
 _protected = False
-_job_lock = threading.Lock()
+_JOB_LOCK = threading.Lock()
 
 
 class _BasicLimitInformation(ctypes.Structure):
@@ -133,7 +133,7 @@ def ensure_launch_job() -> bool:
     global _job_handle, _protected
     if os.name != "nt":
         return False
-    with _job_lock:
+    with _JOB_LOCK:
         if _protected:
             return True
         api = _kernel32()

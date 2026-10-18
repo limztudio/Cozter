@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 from ..execution_state import native_session_id, record_missing_native_session
 from ..process_launch import create_prompt_subprocess
 from .base import (
-    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, NativeSessionUnavailable, ProcessResourceMap,
+    MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, NativeSessionUnavailableError, ProcessResourceMap,
     append_text_result, attachment_image_paths,
     executable_command, fresh_model_catalog,
     record_backend_error, summarize_cli_tool, truncate_status_text,
@@ -453,7 +453,7 @@ class CopilotBackend(Backend):
             )
             # Only the shared driver has the complete bootstrap prompt. A
             # fresh subprocess here could receive only incremental guidance.
-            raise NativeSessionUnavailable(self.name, native_id)
+            raise NativeSessionUnavailableError(self.name, native_id)
         # Resolve images before launch; prompt bytes stay intact on stdin.
         image_paths = (
             attachment_image_paths(prompt, workspace_path)

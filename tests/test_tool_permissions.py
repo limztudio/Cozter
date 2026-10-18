@@ -463,7 +463,7 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
         tool = SimpleNamespace(
             name="delayed_read", file_action=None, is_plugin=False, run=delayed_read,
         )
-        with mock.patch.dict(agent_tools._BY_NAME, {"delayed_read": tool}):
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {"delayed_read": tool}):
             full, auto = await asyncio.gather(
                 self._execute("delayed_read", {"path": str(self.outside_file)}, "full"),
                 self._execute("delayed_read", {"path": str(self.outside_file)}, "auto"),
@@ -480,7 +480,7 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("intentional test failure")
 
         tool = SimpleNamespace(name="failing_read", file_action=None, run=failing_read)
-        with mock.patch.dict(agent_tools._BY_NAME, {"failing_read": tool}):
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {"failing_read": tool}):
             result = await self._execute("failing_read", {"path": str(self.outside_file)})
         self.assertIn("intentional test failure", result)
         self.assertIn("escapes workspace", await ReadFileTool().run(
@@ -496,7 +496,7 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
             raise TimeoutError("requested operation deadline")
 
         tool = SimpleNamespace(name="waiting_read", file_action=None, run=waiting_read)
-        with mock.patch.dict(agent_tools._BY_NAME, {"waiting_read": tool}), self.assertLogs(
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {"waiting_read": tool}), self.assertLogs(
             "Cozter.performance", level="INFO",
         ) as timings:
             result = await self._execute("waiting_read", {"path": str(self.outside_file)})
@@ -532,7 +532,7 @@ class FileToolPermissionTests(unittest.IsolatedAsyncioTestCase):
                 )
             raise AssertionError("cancellation was swallowed")
 
-        with mock.patch.dict(agent_tools._BY_NAME, {"waiting_read": tool}):
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {"waiting_read": tool}):
             task = asyncio.create_task(cancelled_caller())
             try:
                 await asyncio.wait_for(started.wait(), timeout=2)

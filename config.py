@@ -51,10 +51,10 @@ _DEFAULT_CONFIG = {
 }
 
 
-_CONFIG_CACHE_PATH: str | None = None
-_CONFIG_CACHE_MTIME_NS: int | None = None
-_CONFIG_CACHE_SIZE: int | None = None
-_CONFIG_CACHE_DATA: dict | None = None
+_config_cache_path: str | None = None
+_config_cache_mtime_ns: int | None = None
+_config_cache_size: int | None = None
+_config_cache_data: dict | None = None
 
 
 def _load_config_object() -> dict:
@@ -64,17 +64,17 @@ def _load_config_object() -> dict:
     re-parsing the file on every call. A config edit changes mtime/size
     and takes effect on the next getter without a restart.
     """
-    global _CONFIG_CACHE_PATH, _CONFIG_CACHE_MTIME_NS
-    global _CONFIG_CACHE_SIZE, _CONFIG_CACHE_DATA
+    global _config_cache_path, _config_cache_mtime_ns
+    global _config_cache_size, _config_cache_data
     mtime_ns, size = stat_mtime_size(CONFIG_PATH)
     if (
         mtime_ns is not None
-        and _CONFIG_CACHE_DATA is not None
-        and _CONFIG_CACHE_PATH == CONFIG_PATH
-        and mtime_ns == _CONFIG_CACHE_MTIME_NS
-        and size == _CONFIG_CACHE_SIZE
+        and _config_cache_data is not None
+        and _config_cache_path == CONFIG_PATH
+        and mtime_ns == _config_cache_mtime_ns
+        and size == _config_cache_size
     ):
-        return _CONFIG_CACHE_DATA
+        return _config_cache_data
     with open(CONFIG_PATH, encoding="utf-8") as file_handle:
         cfg = json.load(file_handle)
     validate_json_nesting(cfg)
@@ -83,10 +83,10 @@ def _load_config_object() -> dict:
     # An unstatable file must still be read and validated, without trusting
     # or replacing the last successfully stamped cache entry.
     if mtime_ns is not None:
-        _CONFIG_CACHE_PATH = CONFIG_PATH
-        _CONFIG_CACHE_MTIME_NS = mtime_ns
-        _CONFIG_CACHE_SIZE = size
-        _CONFIG_CACHE_DATA = cfg
+        _config_cache_path = CONFIG_PATH
+        _config_cache_mtime_ns = mtime_ns
+        _config_cache_size = size
+        _config_cache_data = cfg
     return cfg
 
 

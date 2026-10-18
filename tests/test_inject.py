@@ -8,10 +8,10 @@ from unittest import mock
 from Cozter import agent, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import BotContext
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
-class _InjectRaceBot(TestBot):
+class _InjectRaceBot(OfflineBot):
     """A bot whose final reply remains in flight for the race window."""
 
     def __init__(self, workspace_path: str) -> None:

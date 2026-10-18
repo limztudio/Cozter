@@ -10,7 +10,7 @@ from unittest import mock
 from Cozter import agent
 from Cozter.agent_tools.base import get_tool_permission, tool_permission_scope
 from Cozter.backends_agent.base import AgentResult, ChatEvent
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
 class AttachmentPreparationOwnershipTests(unittest.IsolatedAsyncioTestCase):
@@ -23,7 +23,7 @@ class AttachmentPreparationOwnershipTests(unittest.IsolatedAsyncioTestCase):
             workspace.mkdir()
             source = external / "fixture.png"
             source.write_bytes(b"synthetic image fixture")
-            bot = TestBot(["u1"])
+            bot = OfflineBot(["u1"])
             bot.send_text = mock.AsyncMock()
             started = asyncio.Event()
             release = threading.Event()
@@ -86,7 +86,7 @@ class AttachmentPreparationOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 settled = threading.Event()
                 published = Path(temporary) / "copied.png"
                 attempts = []
-                bot = TestBot(["u1"])
+                bot = OfflineBot(["u1"])
                 bot.send_text = mock.AsyncMock()
 
                 def blocked_prepare(path, _workspace):

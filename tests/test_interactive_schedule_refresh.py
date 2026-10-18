@@ -12,7 +12,7 @@ from unittest import mock
 from Cozter import agent, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import BotPlatform, MessageHandle, _RecoverableTurnStatus
-from Cozter.tests.helpers import persist_queue_entry, TestBot
+from Cozter.tests.helpers import persist_queue_entry, OfflineBot
 from Cozter.tests.test_agent_post_turn import _ImmediateBackend
 from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
 
@@ -155,7 +155,7 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
             state = Path(ws, '.cozter', 'executions', 'job', 'state.json')
             state.parent.mkdir(parents=True)
             state.write_text('job-owned continuation', encoding='utf-8')
-            bot = TestBot([])
+            bot = OfflineBot([])
             ctx = bot.make_context("u1", "chat")
             for backend in workspace.AVAILABLE_BACKENDS:
                 with (
@@ -175,7 +175,7 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
 
 class DetachedLoggingAndStatusTests(unittest.IsolatedAsyncioTestCase):
     async def test_recoverable_status_retains_five_lines_and_full_omitted_count(self):
-        status = _RecoverableTurnStatus(TestBot([]), 'u1', 'chat')
+        status = _RecoverableTurnStatus(OfflineBot([]), 'u1', 'chat')
         for index in range(30):
             status.on_event(ChatEvent(kind='tool', content=f'step {index}'))
         self.assertEqual(len(status.lines), 5)

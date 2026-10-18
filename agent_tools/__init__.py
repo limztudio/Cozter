@@ -120,7 +120,7 @@ if not sys.argv or sys.argv[0] != "-m":
 _TOOLS: tuple[AgentTool, ...] = tuple(
     sorted(AgentTool.registry, key=lambda tool: (tool.order, tool.name))
 )
-_BY_NAME: dict[str, AgentTool] = {tool.name: tool for tool in _TOOLS}
+TOOLS_BY_NAME: dict[str, AgentTool] = {tool.name: tool for tool in _TOOLS}
 
 # Read-only surface for confirm mode.
 READ_ONLY_TOOL_NAMES: frozenset[str] = frozenset({
@@ -243,7 +243,7 @@ async def execute_tool(
         name = ""
     if not isinstance(args, dict):
         args = {}
-    tool = _BY_NAME.get(name)
+    tool = TOOLS_BY_NAME.get(name)
 
     emit({
         "type": "tool_use",
@@ -403,7 +403,7 @@ def summarize_tool_use(name: str, args: dict) -> str:
         return ""
     if not isinstance(args, dict):
         args = {}
-    tool = _BY_NAME.get(name)
+    tool = TOOLS_BY_NAME.get(name)
     return tool.summarize(args) if tool else name
 
 
@@ -454,6 +454,7 @@ __all__ = [
     "READ_ONLY_TOOL_SCHEMA",
     "SKILL_TOOL_NAMES",
     "SKILL_TOOL_SCHEMA",
+    "TOOLS_BY_NAME",
     "TOOL_SCHEMA",
     "AgentTool",
     "cli_plugin_prelude",

@@ -34,7 +34,7 @@ from .base import (
     AttachmentInfo,
     BotContext,
     BotPlatform,
-    _run_durable_file_operation,
+    run_durable_file_operation,
     MessageHandle,
     PlatformNotReadyError,
     UploadTooLargeError,
@@ -206,7 +206,7 @@ class _SignalOutboundJournal:
     async def load(self) -> None:
         if self._loaded:
             return
-        await _run_durable_file_operation(
+        await run_durable_file_operation(
             self._lock,
             lambda: self._records if self._loaded else self._read(),
             on_complete=self._adopt,
@@ -230,7 +230,7 @@ class _SignalOutboundJournal:
             })
             return records
 
-        await _run_durable_file_operation(self._lock, write, on_complete=self._adopt)
+        await run_durable_file_operation(self._lock, write, on_complete=self._adopt)
 
     def contains(self, group_id: str, *, text: str, timestamp: str | None) -> bool:
         group = _echo_hash(group_id)

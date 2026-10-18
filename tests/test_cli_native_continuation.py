@@ -12,7 +12,7 @@ from unittest import mock
 
 from Cozter import execution_state
 from Cozter.backends_agent import claude_code, codex, copilot, grok
-from Cozter.backends_agent.base import AgentResult, NativeSessionUnavailable
+from Cozter.backends_agent.base import AgentResult, NativeSessionUnavailableError
 from Cozter.utils import kill_and_wait
 
 
@@ -224,7 +224,7 @@ class NativeCliContinuationTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(copilot, "create_prompt_subprocess", new=mock.AsyncMock()) as create,
                 mock.patch.object(copilot, "executable_command") as executable,
             ):
-                with self.assertRaises(NativeSessionUnavailable) as raised:
+                with self.assertRaises(NativeSessionUnavailableError) as raised:
                     await backend.launch(
                         self.ws, "incremental guidance only", "fixture-model", "full", effort=100,
                     )

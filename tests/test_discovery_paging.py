@@ -148,7 +148,7 @@ class DiscoveryDispatchLimitTests(unittest.IsolatedAsyncioTestCase):
         page = "entry.txt\n" * 600
         for tool in (GlobTool(), GrepTool()):
             with self.subTest(tool=tool.name):
-                with mock.patch.dict(agent_tools._BY_NAME, {tool.name: tool}), mock.patch.object(
+                with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {tool.name: tool}), mock.patch.object(
                     tool, "run", new=mock.AsyncMock(return_value=page),
                 ):
                     result = await agent_tools.execute_tool(tool.name, {}, ".", "full", lambda _event: None)
@@ -160,7 +160,7 @@ class DiscoveryDispatchLimitTests(unittest.IsolatedAsyncioTestCase):
         for tool in (GlobTool(), GrepTool()):
             tool.is_plugin = True
             with self.subTest(tool=tool.name):
-                with mock.patch.dict(agent_tools._BY_NAME, {tool.name: tool}), mock.patch.object(
+                with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {tool.name: tool}), mock.patch.object(
                     tool, "run", new=mock.AsyncMock(return_value=page),
                 ):
                     result = await agent_tools.execute_tool(tool.name, {}, ".", "full", lambda _event: None)

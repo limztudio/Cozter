@@ -11,12 +11,12 @@ from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import BotContext
 from Cozter.tests.helpers import (
     persist_queue_entry,
-    TestBot,
+    OfflineBot,
     create_python_script_process,
 )
 
 
-class _ReplyDeliveryBot(TestBot):
+class _ReplyDeliveryBot(OfflineBot):
     def __init__(self, workspace_path: str, *, fail_final: bool) -> None:
         super().__init__(["u1"])
         self.workspace_path = workspace_path

@@ -32,7 +32,7 @@ class ConfigCacheTests(unittest.TestCase):
             )
             with patch.object(config.os, "stat", side_effect=PermissionError("stat denied")):
                 self.assertEqual(config._load_config_object(), {"value": "updated"})
-                self.assertIs(config._CONFIG_CACHE_DATA, stamped)
+                self.assertIs(config._config_cache_data, stamped)
 
     def test_stat_failure_still_rejects_invalid_file_content(self) -> None:
         for content, message in (
@@ -46,7 +46,7 @@ class ConfigCacheTests(unittest.TestCase):
                 with patch.object(config.os, "stat", side_effect=PermissionError("stat denied")):
                     with self.assertRaisesRegex(ValueError, message):
                         config._load_config_object()
-                    self.assertIs(config._CONFIG_CACHE_DATA, stamped)
+                    self.assertIs(config._config_cache_data, stamped)
 
     def test_stat_failure_does_not_hide_unreadable_file(self) -> None:
         with temporary_config({"value": "initial"}):

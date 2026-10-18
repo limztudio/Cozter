@@ -1161,15 +1161,15 @@ class ConfirmPermissionGateTests(unittest.TestCase):
                 },
             )
 
-            original_tools = agent_tools._BY_NAME
-            agent_tools._BY_NAME = {
+            original_tools = agent_tools.TOOLS_BY_NAME
+            agent_tools.TOOLS_BY_NAME = {
                 **original_tools,
                 "read_file": plugin,
             }
             try:
                 result = self._execute("read_file", {}, "confirm", tmp)
             finally:
-                agent_tools._BY_NAME = original_tools
+                agent_tools.TOOLS_BY_NAME = original_tools
 
             self.assertTrue(result.startswith("Blocked"), result)
             self.assertFalse(plugin.was_run)
@@ -1273,15 +1273,15 @@ class ExecuteToolResultTests(unittest.TestCase):
                 events,
             )
 
-        original_tools = agent_tools._BY_NAME
-        agent_tools._BY_NAME = {
+        original_tools = agent_tools.TOOLS_BY_NAME
+        agent_tools.TOOLS_BY_NAME = {
             **original_tools,
             "non_text_test": NonTextTool(),
         }
         try:
             result, events = asyncio.run(run())
         finally:
-            agent_tools._BY_NAME = original_tools
+            agent_tools.TOOLS_BY_NAME = original_tools
 
         self.assertEqual(
             result,

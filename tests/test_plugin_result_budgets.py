@@ -98,7 +98,7 @@ class PluginResultBudgetTests(unittest.IsolatedAsyncioTestCase):
         for tool in (GitInfoTool(), GitOpsTool(), GitSyncTool()):
             with (
                 self.subTest(tool=tool.name),
-                mock.patch.dict(agent_tools._BY_NAME, {tool.name: tool}),
+                mock.patch.dict(agent_tools.TOOLS_BY_NAME, {tool.name: tool}),
                 mock.patch.object(tool, "run", new_callable=mock.AsyncMock, return_value=evidence),
             ):
                 self.assertEqual(await self.dispatch(tool.name), evidence)
@@ -108,7 +108,7 @@ class PluginResultBudgetTests(unittest.IsolatedAsyncioTestCase):
             name="web_fetch", is_plugin=True, file_action=None,
             run=mock.AsyncMock(return_value="x" * 10_000),
         )
-        with mock.patch.dict(agent_tools._BY_NAME, {replacement.name: replacement}):
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {replacement.name: replacement}):
             result = await self.dispatch(replacement.name, {"max_result_chars": 60_000})
         self.assertEqual(len(result), 4_000)
         self.assertIn("truncated", result)
@@ -120,7 +120,7 @@ class PluginResultBudgetTests(unittest.IsolatedAsyncioTestCase):
         )
         for invalid in (None, True, False, 0, -1, "12000", 12_000.0):
             tool.max_result_chars = invalid
-            with self.subTest(metadata=invalid), mock.patch.dict(agent_tools._BY_NAME, {tool.name: tool}):
+            with self.subTest(metadata=invalid), mock.patch.dict(agent_tools.TOOLS_BY_NAME, {tool.name: tool}):
                 self.assertEqual(len(await self.dispatch(tool.name)), 4_000)
 
     async def test_declared_budget_cannot_exceed_the_global_bound(self):
@@ -128,7 +128,7 @@ class PluginResultBudgetTests(unittest.IsolatedAsyncioTestCase):
             name="budget_test", is_plugin=True, file_action=None, max_result_chars=10**12,
             run=mock.AsyncMock(return_value="x" * 100_000),
         )
-        with mock.patch.dict(agent_tools._BY_NAME, {tool.name: tool}):
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {tool.name: tool}):
             result = await self.dispatch(tool.name)
         self.assertEqual(len(result), 64 * 1024)
         self.assertIn("truncated", result)

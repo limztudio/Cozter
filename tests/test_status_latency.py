@@ -12,10 +12,10 @@ from unittest import mock
 from Cozter import agent, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import MessageHandle
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
-class _StatusBot(TestBot):
+class _StatusBot(OfflineBot):
     def __init__(self, workspace_path: str) -> None:
         super().__init__([])
         self.workspace_path = workspace_path

@@ -11,10 +11,10 @@ from unittest import mock
 from Cozter import session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent, DetachedTaskStatus
 from Cozter.backends_bot import base as bot_base
-from Cozter.tests.helpers import TestBot, temporary_config
+from Cozter.tests.helpers import OfflineBot, temporary_config
 
 
-class _PersistenceBot(TestBot):
+class _PersistenceBot(OfflineBot):
     def __init__(self, path: str) -> None:
         super().__init__(["u1", "u2"])
         self.path = path

@@ -70,7 +70,7 @@ if __name__ == "__main__":
     if os.name == "nt":
         # Task Scheduler terminates the entry process, not subprocess.call's
         # module/venv descendants. Tie that entire chain to this first owner.
-        import_module(f"{__package__}.launch_process").ensure_launch_job()
+        import_module(f"{__package__}.launch_job").ensure_launch_job()
 
 
 # Expose Cozter to spawned CLIs/bash.

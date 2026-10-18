@@ -51,16 +51,16 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
         for declaration in (False, None, 0, 1, "true", [], {}):
             with self.subTest(declaration=declaration):
                 plugin = _plugin(parallel_safe=declaration)
-                with mock.patch.dict(agent_tools._BY_NAME, {plugin.name: plugin}):
+                with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {plugin.name: plugin}):
                     self.assertFalse(oa._parallel_read_tool(plugin.name))
         plugin = _plugin(parallel_safe=True)
-        with mock.patch.dict(agent_tools._BY_NAME, {plugin.name: plugin}):
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {plugin.name: plugin}):
             self.assertTrue(oa._parallel_read_tool(plugin.name))
 
     def test_shadowing_a_read_builtin_requires_its_own_contract(self):
         self.assertTrue(oa._parallel_read_tool("read_file"))
         replacement = _plugin("read_file")
-        with mock.patch.dict(agent_tools._BY_NAME, {"read_file": replacement}):
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {"read_file": replacement}):
             self.assertFalse(oa._parallel_read_tool("read_file"))
         self.assertFalse(oa._parallel_read_tool("unregistered_plugin"))
 
@@ -108,7 +108,7 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
                 active -= 1
 
         with (
-            mock.patch.dict(agent_tools._BY_NAME, {plugin.name: plugin, barrier.name: barrier}),
+            mock.patch.dict(agent_tools.TOOLS_BY_NAME, {plugin.name: plugin, barrier.name: barrier}),
             mock.patch.object(oa, "current_run", return_value=record),
             mock.patch.object(oa, "_stream_completion", side_effect=stream),
             mock.patch.object(agent_tools, "execute_tool", side_effect=execute),
@@ -144,7 +144,7 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
                 active -= 1
 
         with (
-            mock.patch.dict(agent_tools._BY_NAME, {plugin.name: plugin}),
+            mock.patch.dict(agent_tools.TOOLS_BY_NAME, {plugin.name: plugin}),
             mock.patch.object(oa, "current_run", return_value=None),
             mock.patch.object(oa, "_stream_completion", side_effect=stream),
             mock.patch.object(agent_tools, "execute_tool", side_effect=execute),
@@ -168,7 +168,7 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
                 stopped.set()
 
         with (
-            mock.patch.dict(agent_tools._BY_NAME, {plugin.name: plugin}),
+            mock.patch.dict(agent_tools.TOOLS_BY_NAME, {plugin.name: plugin}),
             mock.patch.object(oa, "current_run", return_value=record),
             mock.patch.object(oa, "_stream_completion", new_callable=mock.AsyncMock,
                               return_value=("", "", [_call("finished"), _call("waiting")])),
@@ -195,7 +195,7 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
             return ("", "", [_call("blocked")]) if len(requests) == 1 else ("done", "", [])
 
         with (
-            mock.patch.dict(agent_tools._BY_NAME, {plugin.name: plugin}),
+            mock.patch.dict(agent_tools.TOOLS_BY_NAME, {plugin.name: plugin}),
             mock.patch.object(oa, "current_run", return_value=None),
             mock.patch.object(oa, "_stream_completion", side_effect=stream),
         ):

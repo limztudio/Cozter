@@ -24,7 +24,7 @@ from ...utils import clip_status_value
 from ._git_common import (
     GitFailedError as _GitFailedError,
     MAX_OUTPUT_CHARS,
-    _GitTextWindow,
+    GitTextWindow,
     add_common_git_flags,
     append_stderr_note as _append_stderr_note,
     bounded as _bounded,
@@ -55,7 +55,7 @@ def _output_offset(args: dict) -> int:
     return offset
 
 
-def _page_output(window: _GitTextWindow, stderr: str) -> str:
+def _page_output(window: GitTextWindow, stderr: str) -> str:
     text = window.text()
     end = window.offset + len(text)
     more = end < window.total_chars
@@ -145,7 +145,7 @@ class GitInfoTool(AgentTool):
             return f"Error: {exc}"
 
         try:
-            window = _GitTextWindow(offset, _PAGE_CONTENT_CHARS)
+            window = GitTextWindow(offset, _PAGE_CONTENT_CHARS)
             stdout, stderr = await self._run_git(
                 argv, workspace_path, stdout_window=window,
             )
@@ -256,7 +256,7 @@ class GitInfoTool(AgentTool):
     @staticmethod
     async def _run_git(
         argv: list[str], workspace: str,
-        *, stdout_window: _GitTextWindow | None = None,
+        *, stdout_window: GitTextWindow | None = None,
     ) -> tuple[str, str]:
         """Run a fixed read-only git argv and return decoded output.
 

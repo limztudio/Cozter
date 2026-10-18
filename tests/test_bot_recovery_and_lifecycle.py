@@ -8,12 +8,12 @@ from telegram.error import BadRequest, NetworkError
 
 from Cozter.backends_bot.base import MessageHandle
 from Cozter.backends_bot.telegram import TelegramBot
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
 class ReplyRecoveryQueueTests(unittest.IsolatedAsyncioTestCase):
     async def test_completed_input_preserves_backlog_with_malformed_entries(self):
-        bot = TestBot(["user"])
+        bot = OfflineBot(["user"])
         queue = bot._ensure_message_queue("user")
         malformed = [("short",), None, {"id": "completed"}]
         completed = ("already answered", "chat", "completed", False)

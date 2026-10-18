@@ -14,10 +14,10 @@ from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot import base as bot_base
 from Cozter.backends_bot.base import MessageHandle
 from Cozter.backends_bot.signal import SignalBot
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
-class _StatusProbe(TestBot):
+class _StatusProbe(OfflineBot):
     def __init__(self, path: str, *, editable: bool = True) -> None:
         super().__init__([])
         self.path = path

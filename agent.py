@@ -30,7 +30,7 @@ from .agent_tools.owned_worker import run_owned_worker
 from .backends_agent.base import (
     DOC_FOLLOWING_RULE, NO_RESPONSE_TEXT, WHOLE_SCOPE_RULE, AgentResult,
     ChatEvent, ContinuationCheckpoint, ContinuationReason, ContinuationReport,
-    NativeSessionUnavailable,
+    NativeSessionUnavailableError,
     append_detached_task_request,
     append_text_result, record_backend_error, set_error_result,
 )
@@ -169,11 +169,11 @@ class TurnBudget:
             turn.prompt,
             self.latest_draft,
             _truncate_context_text(activity, INTERRUPTED_TURN_ACTIVITY_CHARS),
-            flexible._bounded_draft_excerpt(streamed, limit=1200),
+            flexible.bounded_draft_excerpt(streamed, limit=1200),
         ]
         quotas = _context_quotas([len(value) for value in values], CONTINUATION_CHECKPOINT_CHARS)
         bounded = [
-            flexible._bounded_draft_excerpt(value, limit=quota)
+            flexible.bounded_draft_excerpt(value, limit=quota)
             for value, quota in zip(values, quotas, strict=True)
         ]
         report_values: list[ContinuationReport] = [
@@ -201,8 +201,8 @@ class TurnBudget:
                 or values != bounded
                 or len(activity) > INTERRUPTED_TURN_ACTIVITY_CHARS
                 or len(streamed) > 1200
-                or flexible._DRAFT_OMISSION_MARKER in self.latest_draft
-                or any(flexible._REPORT_TRUNCATION_MARKER in report for _, report in reports)
+                or flexible.DRAFT_OMISSION_MARKER in self.latest_draft
+                or any(flexible.REPORT_TRUNCATION_MARKER in report for _, report in reports)
             ),
         }
 
@@ -231,21 +231,21 @@ class TurnBudget:
         ]
         if self.reports:
             reports = "\n\n".join(
-                f"Task: {instruction}\n{flexible._truncate_report(report)}"
+                f"Task: {instruction}\n{flexible.truncate_report(report)}"
                 for instruction, report in self.reports
             )
             sections.append("Completed worker reports:\n" +
-                            flexible._bounded_draft_excerpt(reports))
+                            flexible.bounded_draft_excerpt(reports))
         elif self.latest_draft:
             sections.append("Latest completed draft:\n" +
-                            flexible._bounded_draft_excerpt(self.latest_draft))
+                            flexible.bounded_draft_excerpt(self.latest_draft))
         streamed = next((
             event.content for event in reversed(turn.events)
             if event.kind == "text" and event.content.strip()
         ), "")
         if streamed and streamed != self.latest_draft:
             sections.append("Latest streamed output (unverified):\n" +
-                            flexible._bounded_draft_excerpt(streamed, limit=1200))
+                            flexible.bounded_draft_excerpt(streamed, limit=1200))
         activity = next((
             event.content for event in reversed(turn.events)
             if event.kind in ("tool", "file") and event.content.strip()
@@ -259,7 +259,7 @@ class TurnBudget:
                 for instruction in dict.fromkeys(self.pending)
             )
             sections.append("Unfinished or unverified scope:\n" +
-                            flexible._bounded_draft_excerpt(pending, limit=6000))
+                            flexible.bounded_draft_excerpt(pending, limit=6000))
         else:
             sections.append("Final completion verification remains unfinished.")
         append_text_result(result, "\n\n".join(sections))
@@ -1225,7 +1225,7 @@ def _build_continuation_prompt(
     return (
         history
         + "[Previous draft — continue its work and return the completed answer]:\n"
-        + flexible._bounded_draft_excerpt(draft, limit=draft_limit)
+        + flexible.bounded_draft_excerpt(draft, limit=draft_limit)
         + "\n\nNew message:\n"
         + request + followup
     )
@@ -1483,7 +1483,7 @@ def _native_turn_prompt(
         messages = []
     marks = native_prompt.history_snapshot(session_data)
     start = session.total_message_count(session_data) - len(messages)
-    ledger = native_prompt._matching_ledger(history_record) or {}
+    ledger = native_prompt.matching_ledger(history_record) or {}
     history = []
     for index, message in enumerate(messages):
         if not isinstance(message, dict):
@@ -1556,7 +1556,7 @@ def _native_turn_prompt(
         request, sections, selected, bootstrap_request=bootstrap_request,
         bootstrap_sections={"previous draft": (
             "[Previous draft and evidence; retain completed work]\n"
-            + flexible._bounded_draft_excerpt(previous_draft)
+            + flexible.bounded_draft_excerpt(previous_draft)
         )} if previous_draft else {},
         partial_sections=partial_sections,
         message_sources=message_sources,
@@ -1632,7 +1632,7 @@ async def _drive_backend(
                     close_inject_on_completion=False, on_process=on_process,
                     on_native_activity=acknowledge_activity if delivery is not None else None,
                 )
-            except NativeSessionUnavailable as exc:
+            except NativeSessionUnavailableError as exc:
                 if (state is None or exc.backend_name != backend.name
                         or state.get("native_unavailable_session_id") != exc.native_session_id
                         or not state.get("native_resume_unavailable")
@@ -2313,7 +2313,7 @@ async def _run_flexible(
         }
         if text:
             encoded.update({
-                "text": flexible._truncate_report(value.text),
+                "text": flexible.truncate_report(value.text),
                 "followups": "\n".join(f"[followup:{task.tier}] {task.instruction}"
                                        for task in flexible.parse_followups(value.text)),
                 "awaiting": extract_await(value.text)[1],
@@ -2376,14 +2376,14 @@ async def _run_flexible(
             active=True, signature=signature, understanding=plan.understanding,
             folded_signatures=folded_signatures,
             queue=[flexible.task_record(task) for task in queue], cursor=done,
-            reports=[flexible._truncate_report(report) for report in reports],
+            reports=[flexible.truncate_report(report) for report in reports],
             output=encode_output(result), usage_processed_audit=usage_audit,
             attach_markers=attach_markers, blocked=blocked, worker_errors=worker_errors,
             unavailable_models=[{"backend": target[0], "model": target[1], "cause": cause}
                                 for target, cause in unavailable_models.items()],
             unrun_followups=[flexible.task_record(task) for task in unrun_followups],
             worker_outputs=dict(worker_outputs),
-            phase_previous_draft=(flexible._bounded_draft_excerpt(previous_draft)
+            phase_previous_draft=(flexible.bounded_draft_excerpt(previous_draft)
                                   if previous_draft is not None else None),
             scope_members=scope_members,
             completed_read_scopes=sorted(completed_read_scopes),
@@ -2399,7 +2399,7 @@ async def _run_flexible(
         if sub_result.error:
             report += f"\n\n(the agent then failed: {sub_result.error})"
         scope = _checkpoint_scope(queue[index].instruction, request)
-        budget.reports.append((scope, flexible._truncate_report(report)))
+        budget.reports.append((scope, flexible.truncate_report(report)))
         if scope in budget.pending:
             budget.pending.remove(scope)
         if sub_result.error and "tool budget exhausted" in sub_result.error.casefold():
@@ -3630,7 +3630,7 @@ async def _run_turn_impl(
         # CONTINUE re-drives the backend (capped).
         budget = _TURN_BUDGET.get()
         if budget is not None:
-            budget.latest_draft = flexible._bounded_draft_excerpt(result.text)
+            budget.latest_draft = flexible.bounded_draft_excerpt(result.text)
             budget.capture(result, workspace_path, account_usage=not is_flexible)
             if result.error and "tool budget exhausted" in result.error.casefold():
                 raise _TurnBudgetExhaustedError(result.error)
@@ -3701,7 +3701,7 @@ async def _run_turn_impl(
             # The new draft replaces prior text, but artifacts and accounting
             # still belong to the same user turn.
             if budget is not None:
-                budget.latest_draft = flexible._bounded_draft_excerpt(result.text)
+                budget.latest_draft = flexible.bounded_draft_excerpt(result.text)
                 if not is_flexible:
                     budget.capture(result, workspace_path)
             carry_forward_turn_output(previous_result, result, workspace_path)

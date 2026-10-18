@@ -27,7 +27,7 @@ def _fake_git(outputs: dict[str, str], calls: list[tuple[str, ...]]):
 
 class UpdaterAutoPullGuardTests(unittest.TestCase):
     def setUp(self):
-        startup = mock.patch.object(updater, "_STARTUP_COMMIT", "abc123")
+        startup = mock.patch.object(updater, "_startup_commit", "abc123")
         startup.start()
         self.addCleanup(startup.stop)
 
@@ -182,7 +182,7 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
                 "origin/main..HEAD": "0",
                 "HEAD..origin/main": "1",
             }, calls)),
-            mock.patch.object(updater, "_STARTUP_COMMIT", "abc123"),
+            mock.patch.object(updater, "_startup_commit", "abc123"),
         ):
             available = updater.check_for_update()
 
@@ -203,7 +203,7 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
                 "origin/main..HEAD": "0",
                 "HEAD..origin/main": "0",
             }, calls)),
-            mock.patch.object(updater, "_STARTUP_COMMIT", "abc123"),
+            mock.patch.object(updater, "_startup_commit", "abc123"),
         ):
             available = updater.check_for_update()
 
@@ -320,7 +320,7 @@ class UpdaterRequirementsTests(unittest.TestCase):
         unchanged = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         with (
             mock.patch.object(updater.os.path, "exists", return_value=True),
-            mock.patch.object(updater, "_STARTUP_COMMIT", "old"),
+            mock.patch.object(updater, "_startup_commit", "old"),
             mock.patch.object(updater, "_git", return_value=unchanged),
             mock.patch.object(updater.subprocess, "run") as run,
         ):
@@ -333,7 +333,7 @@ class UpdaterRequirementsTests(unittest.TestCase):
         installed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         with (
             mock.patch.object(updater.os.path, "exists", return_value=True),
-            mock.patch.object(updater, "_STARTUP_COMMIT", "old"),
+            mock.patch.object(updater, "_startup_commit", "old"),
             mock.patch.object(updater, "_git", return_value=changed),
             mock.patch.object(
                 updater.subprocess, "run", return_value=installed,

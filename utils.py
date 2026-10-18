@@ -253,14 +253,14 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
             file_handle.flush()
             os.fsync(file_handle.fileno())
         os.replace(tmp_path, target)  # atomic on same filesystem
-        _fsync_directory(os.path.dirname(os.path.abspath(target)) or ".")
+        fsync_directory(os.path.dirname(os.path.abspath(target)) or ".")
     except Exception:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
         raise
 
 
-def _fsync_directory(path: str) -> None:
+def fsync_directory(path: str) -> None:
     """Sync a POSIX directory so a preceding rename survives a crash.
 
     ``os.replace`` makes a new file visible atomically, but its directory

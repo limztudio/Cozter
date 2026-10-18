@@ -31,7 +31,7 @@ def _process():
     return SimpleNamespace(emit=events.append, events=events)
 
 
-class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
+class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self, backend=None, prompt="do the work", **kwargs):
         proc = _process()
         await (backend or OfflineHttpBackend())._run_agent(
@@ -373,7 +373,7 @@ class HTTPExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             await self._run()
 
     def test_plugin_shadowing_read_name_never_enables_parallel_execution(self):
-        with mock.patch.dict(oa.tools._BY_NAME, {"read_file": SimpleNamespace(is_plugin=True)}):
+        with mock.patch.dict(oa.tools.TOOLS_BY_NAME, {"read_file": SimpleNamespace(is_plugin=True)}):
             self.assertFalse(oa._parallel_read_tool("read_file"))
         self.assertFalse(oa._parallel_read_tool("unknown_plugin"))
 

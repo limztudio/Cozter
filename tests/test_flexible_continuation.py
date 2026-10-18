@@ -150,7 +150,7 @@ class FlexibleContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.planner_calls, 1)
         self.assertEqual(calls, {1: 1, 2: 2, 3: 1})
         self.assertIn(marker, result.text)
-        self.assertIn(flexible._REPORT_TRUNCATION_MARKER, self.merge_prompts[-1])
+        self.assertIn(flexible.REPORT_TRUNCATION_MARKER, self.merge_prompts[-1])
 
     async def test_interrupted_judge_followup_phase_restores_its_draft_on_normal_resume(self):
         self.plan = "[PLAN]\n1. [low] first\n2. [high] second\n[/PLAN]"

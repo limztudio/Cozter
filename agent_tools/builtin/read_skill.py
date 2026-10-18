@@ -4,7 +4,7 @@ import asyncio
 from typing import Any, ClassVar
 
 from ..base import AgentTool, object_parameters
-from .list_skills import _page_integer
+from .list_skills import page_integer
 
 
 class ReadSkillTool(AgentTool):
@@ -39,8 +39,8 @@ class ReadSkillTool(AgentTool):
         if resource is not None and (not isinstance(resource, str) or not resource.strip()):
             return "Error: 'resource' must be a non-empty relative reference path"
         try:
-            offset = _page_integer(args, "offset", 0, 0)
-            count = _page_integer(args, "max_chars", 12_000, 1, 48_000)
+            offset = page_integer(args, "offset", 0, 0)
+            count = page_integer(args, "max_chars", 12_000, 1, 48_000)
         except ValueError as exc:
             return f"Error: {exc}"
         return await asyncio.to_thread(

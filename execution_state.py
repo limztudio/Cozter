@@ -25,7 +25,7 @@ from typing import Any
 import uuid
 import weakref
 
-from .utils import _fsync_directory, json_digest, validate_json_nesting
+from .utils import fsync_directory, json_digest, validate_json_nesting
 
 logger = logging.getLogger(__name__)
 _MAX_STATE_BYTES = 64 * 1024 * 1024
@@ -147,7 +147,7 @@ def _write_snapshot(path: str, snapshot: dict[str, Any]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_path, path)
-        _fsync_directory(directory)
+        fsync_directory(directory)
     except BaseException:
         try:
             os.unlink(temporary_path)

@@ -239,14 +239,14 @@ _JUDGE_RULES = (
 
 # Reports are re-sent downstream; cap each.
 _REPORT_MAX_CHARS = 6_000
-_REPORT_TRUNCATION_MARKER = (
+REPORT_TRUNCATION_MARKER = (
     "\n… [middle omitted from bounded report excerpt — never treat this preview"
     " as full content; omission alone does not imply unfinished work]\n"
 )
 
 # Judge and continuation excerpts preserve final evidence as well as context.
 _DRAFT_MAX_CHARS = 12_000
-_DRAFT_OMISSION_MARKER = (
+DRAFT_OMISSION_MARKER = (
     "\n… [middle omitted from bounded draft excerpt; omission alone does not"
     " imply unfinished work]\n"
 )
@@ -260,22 +260,22 @@ def _clip_excerpt_middle(text: str, limit: int, marker: str) -> str:
     return text[:head] + marker + text[-tail:]
 
 
-def _bounded_draft_excerpt(text: str, *, limit: int = _DRAFT_MAX_CHARS) -> str:
+def bounded_draft_excerpt(text: str, *, limit: int = _DRAFT_MAX_CHARS) -> str:
     """Keep a draft's opening and final evidence without adding new work."""
     if limit <= 0:
         return ""
     if len(text) <= limit:
         return text
-    if limit <= len(_DRAFT_OMISSION_MARKER):
+    if limit <= len(DRAFT_OMISSION_MARKER):
         return "…" + text[-(limit - 1):] if limit > 1 else "…"
-    return _clip_excerpt_middle(text, limit, _DRAFT_OMISSION_MARKER)
+    return _clip_excerpt_middle(text, limit, DRAFT_OMISSION_MARKER)
 
 
-def _truncate_report(text: str) -> str:
+def truncate_report(text: str) -> str:
     """Bound a report while retaining its opening and final evidence."""
     if len(text) <= _REPORT_MAX_CHARS:
         return text
-    return _clip_excerpt_middle(text, _REPORT_MAX_CHARS, _REPORT_TRUNCATION_MARKER)
+    return _clip_excerpt_middle(text, _REPORT_MAX_CHARS, REPORT_TRUNCATION_MARKER)
 
 
 @dataclass(frozen=True)
@@ -641,7 +641,7 @@ def build_subtask_sections(
     if results:
         parts = ["\nEarlier reports:"]
         for result_index, text in enumerate(results):
-            excerpt = _truncate_report(text)
+            excerpt = truncate_report(text)
             duplicate = next((earlier + 1 for earlier, retained in enumerate(results[:result_index])
                               if len(excerpt) >= 128 and text == retained), None)
             retained_reports.append(excerpt)
@@ -653,7 +653,7 @@ def build_subtask_sections(
         sections["earlier_reports"] = "\n".join(parts)
 
     if previous_draft:
-        excerpt = _bounded_draft_excerpt(previous_draft)
+        excerpt = bounded_draft_excerpt(previous_draft)
         already_retained = len(previous_draft) >= 128 and (
             previous_draft in context or excerpt in context
             or any(previous_draft in report or excerpt in report for report in retained_reports)
@@ -773,7 +773,7 @@ def build_merge_prompt(
             if task is not None
             else f"\n--- {report_index + 1} [unknown]: (no sub-task){tag} ---\n"
         )
-        excerpt = _truncate_report(text) if text else "(no report)"
+        excerpt = truncate_report(text) if text else "(no report)"
         duplicate = next((earlier + 1 for earlier, retained in enumerate(retained_reports)
                           if len(excerpt) >= 128 and text and text == retained), None)
         retained_reports.append(text)
@@ -842,7 +842,7 @@ def build_judge_prompt(request: str, draft: str) -> str:
         request if isinstance(request, str) and request else "(empty)",
         "",
         "--- draft ---",
-        _bounded_draft_excerpt(draft) if draft else "(no draft)",
+        bounded_draft_excerpt(draft) if draft else "(no draft)",
         "",
         "--- end ---",
     ]

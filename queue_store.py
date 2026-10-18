@@ -18,7 +18,7 @@ from typing import Iterator
 import uuid
 
 from . import schedules, workspace
-from .utils import _fsync_directory
+from .utils import fsync_directory
 
 logger = logging.getLogger(__name__)
 _VERSION = 1
@@ -171,7 +171,7 @@ class QueueStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
-            _fsync_directory(str(Path(path).parent))
+            fsync_directory(str(Path(path).parent))
         except BaseException:
             Path(temporary).unlink(missing_ok=True)
             raise
@@ -191,7 +191,7 @@ class QueueStore:
                 # ours to delete. Never parse a legacy file after version 1.
                 if self._fingerprint(stat) == fingerprint:
                     os.unlink(source)
-                    _fsync_directory(str(Path(source).parent))
+                    fsync_directory(str(Path(source).parent))
             connection.execute("UPDATE queue_migration SET archived = 1 WHERE source = ?", (source,))
         except (OSError, sqlite3.Error):
             logger.warning("Could not archive migrated queue source; will retry", exc_info=True)

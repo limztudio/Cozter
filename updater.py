@@ -10,7 +10,7 @@ MODULE_ROOT = os.path.dirname(__file__)
 REQUIREMENTS_PATH = os.path.join(MODULE_ROOT, "requirements.txt")
 
 # Commit snapshot captured by init_startup_commit at runtime startup.
-_STARTUP_COMMIT: str | None = None
+_startup_commit: str | None = None
 
 
 # Non-zero so supervisors restart on it.
@@ -106,9 +106,9 @@ def _local_ahead_of_upstream() -> bool:
 
 def init_startup_commit() -> None:
     """Snapshot the commit hash this process started with."""
-    global _STARTUP_COMMIT
-    _STARTUP_COMMIT = _get_head_commit()
-    logger.info("Startup commit: %s", _STARTUP_COMMIT)
+    global _startup_commit
+    _startup_commit = _get_head_commit()
+    logger.info("Startup commit: %s", _startup_commit)
 
 
 def get_current_version() -> str:
@@ -124,8 +124,8 @@ def get_last_commit_date() -> str:
 def _head_changed() -> bool:
     """Return whether the checkout no longer matches the running process."""
     current = _get_head_commit()
-    if current and _STARTUP_COMMIT and current != _STARTUP_COMMIT:
-        logger.info("Code changed: %s -> %s", _STARTUP_COMMIT[:8], current[:8])
+    if current and _startup_commit and current != _startup_commit:
+        logger.info("Code changed: %s -> %s", _startup_commit[:8], current[:8])
         return True
     return False
 
@@ -221,11 +221,11 @@ def check_for_update() -> bool:
 def _restart_required_after_pull() -> bool:
     """Never resume old modules if the resulting checkout is indeterminate."""
     current = _get_head_commit()
-    if not current or not _STARTUP_COMMIT:
+    if not current or not _startup_commit:
         logger.warning("Cannot confirm checkout after git pull; restart required")
         return True
-    if current != _STARTUP_COMMIT:
-        logger.info("Code changed: %s -> %s", _STARTUP_COMMIT[:8], current[:8])
+    if current != _startup_commit:
+        logger.info("Code changed: %s -> %s", _startup_commit[:8], current[:8])
         return True
     return False
 
@@ -285,11 +285,11 @@ def requirements_changed_since_startup() -> bool:
     packages. If Git cannot establish the comparison, return True so the
     updater remains conservative and repairs dependencies before restart.
     """
-    if not _STARTUP_COMMIT:
+    if not _startup_commit:
         return True
     try:
         result = _git(
-            "diff", "--quiet", _STARTUP_COMMIT, "HEAD", "--", "requirements.txt",
+            "diff", "--quiet", _startup_commit, "HEAD", "--", "requirements.txt",
         )
     except OSError:
         return True

@@ -25,7 +25,7 @@ class GitTextWindowTests(unittest.IsolatedAsyncioTestCase):
         for offset in (0, 6, len(decoded), len(decoded) + 2):
             with self.subTest(offset=offset):
                 stream = asyncio.StreamReader()
-                window = git._GitTextWindow(offset, 7)
+                window = git.GitTextWindow(offset, 7)
                 task = asyncio.create_task(window.drain(stream))
                 for byte in raw:
                     stream.feed_data(bytes((byte,)))
@@ -44,7 +44,7 @@ class GitTextWindowTests(unittest.IsolatedAsyncioTestCase):
                 return b"x" * size if self.calls <= 256 else b""
 
         stream = RepeatingStream()
-        window = git._GitTextWindow(12 * 1024 * 1024, 11_000)
+        window = git.GitTextWindow(12 * 1024 * 1024, 11_000)
         await window.drain(stream)
         self.assertEqual(window.total_chars, 16 * 1024 * 1024)
         self.assertEqual(window.retained_chars, 11_000)
@@ -54,14 +54,14 @@ class GitTextWindowTests(unittest.IsolatedAsyncioTestCase):
     async def test_short_and_exactly_full_output_have_no_remainder_marker(self):
         for length in (0, 12, _PAGE_CONTENT_CHARS):
             with self.subTest(length=length):
-                window = git._GitTextWindow(0, _PAGE_CONTENT_CHARS)
+                window = git.GitTextWindow(0, _PAGE_CONTENT_CHARS)
                 window._accept_text("x" * length)
                 self.assertEqual(_page_output(window, ""), "x" * length)
 
     async def test_eof_and_beyond_eof_do_not_offer_another_page(self):
         for offset in (12, 20):
             with self.subTest(offset=offset):
-                window = git._GitTextWindow(offset, _PAGE_CONTENT_CHARS)
+                window = git.GitTextWindow(offset, _PAGE_CONTENT_CHARS)
                 window._accept_text("x" * 12)
                 text = _page_output(window, "")
                 self.assertIn("end of output", text)
@@ -69,7 +69,7 @@ class GitTextWindowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("truncated", text)
 
     async def test_incomplete_pipe_drain_never_claims_end_of_output(self):
-        window = git._GitTextWindow(0, _PAGE_CONTENT_CHARS)
+        window = git.GitTextWindow(0, _PAGE_CONTENT_CHARS)
         window._accept_text("known prefix")
         window.incomplete = True
         text = _page_output(window, "")
@@ -117,7 +117,7 @@ class GitTextWindowTests(unittest.IsolatedAsyncioTestCase):
             started.set()
             return proc
 
-        window = git._GitTextWindow(0, 20)
+        window = git.GitTextWindow(0, 20)
         executable = getattr(sys, "_base_executable", sys.executable)
         with tempfile.TemporaryDirectory() as path, mock.patch.object(
             git, "create_captured_subprocess", observed_launch,

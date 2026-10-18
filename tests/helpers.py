@@ -53,15 +53,12 @@ class OfflineHttpBackend(oa.OpenAIChatBackend):
         return "http://offline.invalid/chat/completions"
 
 
-class TestBot(BotPlatform):
+class OfflineBot(BotPlatform):
     """Concrete no-op platform base for focused bot-logic tests.
 
     Individual tests override only the I/O behavior relevant to the scenario,
     keeping the abstract-platform plumbing in one place.
     """
-
-    # Reusable fake: mark to silence collection warnings.
-    __test__ = False
 
     @property
     def platform_id(self) -> str:

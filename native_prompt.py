@@ -12,7 +12,7 @@ def delivery_fingerprint(source_hash: str, rendered_text: str) -> str:
     return json_digest([source_hash, rendered_text])
 
 
-def _matching_ledger(record: execution_state.ExecutionRecord | None) -> dict | None:
+def matching_ledger(record: execution_state.ExecutionRecord | None) -> dict | None:
     if record is None:
         return None
     native_id = execution_state.native_session_id(record.get("native_session_id"))
@@ -33,7 +33,7 @@ def message_is_known(
     older unseen messages from using the same space.
     """
     return message_is_known_from_ledger(
-        _matching_ledger(record), coordinate, source_hash, rendered_text,
+        matching_ledger(record), coordinate, source_hash, rendered_text,
     )
 
 
@@ -112,7 +112,7 @@ class NativePrompt:
 
     def request_for(self, record: execution_state.ExecutionRecord | None) -> str:
         """Return the actual request body, even when rendering a continuation."""
-        return self._request_for_ledger(_matching_ledger(record))
+        return self._request_for_ledger(matching_ledger(record))
 
     def _request_for_ledger(self, ledger: dict | None) -> str:
         if ledger is None and self.bootstrap_request is not None:
@@ -121,7 +121,7 @@ class NativePrompt:
 
     def request_text_for(self, record: execution_state.ExecutionRecord | None) -> str:
         """Use exactly the same full request or continuation for quota and output."""
-        return self._request_text_for_ledger(_matching_ledger(record))
+        return self._request_text_for_ledger(matching_ledger(record))
 
     def _request_text_for_ledger(self, ledger: dict | None) -> str:
         request = self._request_for_ledger(ledger)
@@ -134,7 +134,7 @@ class NativePrompt:
         return request
 
     def render(self, record: execution_state.ExecutionRecord | None) -> str:
-        ledger = _matching_ledger(record)
+        ledger = matching_ledger(record)
         resumed = ledger is not None
         ledger = ledger or {}
         previous_sections = ledger.get("sections", {}) if resumed else {}
@@ -192,7 +192,7 @@ class NativePrompt:
         native_id = execution_state.native_session_id(record.get("native_session_id"))
         if native_id is None or record.get("native_tools_started") is not True:
             return
-        previous = _matching_ledger(record) or {}
+        previous = matching_ledger(record) or {}
         known = previous.get("messages", {})
         if not isinstance(known, dict):
             known = {}

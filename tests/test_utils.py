@@ -513,7 +513,7 @@ class JsonHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "state.json")
 
-            with mock.patch.object(utils, "_fsync_directory") as sync_dir:
+            with mock.patch.object(utils, "fsync_directory") as sync_dir:
                 utils.atomic_write(path, {"ok": True}, tmp)
 
             sync_dir.assert_called_once_with(os.path.abspath(tmp))
@@ -528,7 +528,7 @@ class JsonHelperTests(unittest.TestCase):
             mock.patch.object(utils.os, "fsync") as fsync,
             mock.patch.object(utils.os, "close") as close,
         ):
-            utils._fsync_directory("/state")
+            utils.fsync_directory("/state")
 
         open_dir.assert_called_once_with(
             "/state", utils.os.O_RDONLY | getattr(utils.os, "O_DIRECTORY", 0),
@@ -541,7 +541,7 @@ class JsonHelperTests(unittest.TestCase):
             mock.patch.object(utils.os, "name", "nt"),
             mock.patch.object(utils.os, "open") as open_dir,
         ):
-            utils._fsync_directory("C:/state")
+            utils.fsync_directory("C:/state")
 
         open_dir.assert_not_called()
 

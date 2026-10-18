@@ -252,7 +252,7 @@ def _parallel_read_tool(name: str) -> bool:
     must declare its own contract, and mixed-action tools remain barriers.
     Permission checks still run independently inside execute_tool.
     """
-    tool = tools._BY_NAME.get(name)
+    tool = tools.TOOLS_BY_NAME.get(name)
     return (
         tool is not None and (
             getattr(tool, "parallel_safe", False) is True

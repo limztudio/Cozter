@@ -4,12 +4,12 @@ import asyncio
 import unittest
 from unittest import mock
 
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
 class UpdateBackgroundAdmissionTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_handoff_rejects_new_detached_launch(self):
-        bot = TestBot(["user"])
+        bot = OfflineBot(["user"])
         bot._update_restart_pending = True
         ctx = bot.make_context("user", "chat", command="bg", args="run checks")
         with (
@@ -22,7 +22,7 @@ class UpdateBackgroundAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Update handoff", reply.await_args.args[1])
 
     async def test_shutdown_rejects_new_detached_launch(self):
-        bot = TestBot(["user"])
+        bot = OfflineBot(["user"])
         bot._stopping = True
         ctx = bot.make_context("user", "chat", command="bg", args="run checks")
         with (
@@ -35,7 +35,7 @@ class UpdateBackgroundAdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("stopping", reply.await_args.args[1])
 
     async def test_registered_detached_launch_is_visible_to_idle_recheck(self):
-        bot = TestBot(["user"])
+        bot = OfflineBot(["user"])
         ctx = bot.make_context("user", "chat", command="bg", args="run checks")
         entered, release = asyncio.Event(), asyncio.Event()
 

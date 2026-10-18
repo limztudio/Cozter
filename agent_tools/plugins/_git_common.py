@@ -51,7 +51,7 @@ class _GitCapture:
 
 
 @dataclass
-class _GitTextWindow:
+class GitTextWindow:
     """Retain a character window while draining and counting all UTF-8 output.
 
     Incremental decoding keeps offsets stable when a multibyte character spans
@@ -164,12 +164,12 @@ async def git_once(
     workspace: str,
     env: dict[str, str],
     *,
-    stdout_window: _GitTextWindow | None = None,
+    stdout_window: GitTextWindow | None = None,
 ) -> tuple[str, str, int]:
     """Run Git with bounded capture and an exited parent's drain grace."""
     proc = await _spawn_git(argv, workspace, env)
     assert proc.stdout is not None and proc.stderr is not None
-    stdout: _GitCapture | _GitTextWindow
+    stdout: _GitCapture | GitTextWindow
     if stdout_window is None:
         stdout = _GitCapture(_GIT_STDOUT_BYTES)
     else:

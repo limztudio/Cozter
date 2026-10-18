@@ -118,7 +118,7 @@ class FileMutationDispatchTests(unittest.IsolatedAsyncioTestCase):
         previous_handler = loop.get_exception_handler()
         loop.set_exception_handler(lambda _loop, context: diagnostics.append(context))
         self.addCleanup(loop.set_exception_handler, previous_handler)
-        tool = agent_tools._BY_NAME["write_file"]
+        tool = agent_tools.TOOLS_BY_NAME["write_file"]
         original_run = tool.run
 
         for late_failure in (False, True):
@@ -191,7 +191,7 @@ class FileMutationDispatchTests(unittest.IsolatedAsyncioTestCase):
             "move_file", "delete_file", "make_dir",
         ):
             with self.subTest(tool=name):
-                tool = agent_tools._BY_NAME[name]
+                tool = agent_tools.TOOLS_BY_NAME[name]
                 observed = []
 
                 def body(_workspace, _args):
@@ -209,7 +209,7 @@ class FileMutationDispatchTests(unittest.IsolatedAsyncioTestCase):
         inner_tasks = []
         order = []
         results = []
-        tool = agent_tools._BY_NAME["write_file"]
+        tool = agent_tools.TOOLS_BY_NAME["write_file"]
         original_run = tool.run
 
         async def observe_run(workspace, args):

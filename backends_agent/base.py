@@ -26,7 +26,7 @@ _DETACHED_UNSUPPORTED_SUFFIX = "does not support detached tasks"
 CLI_MODEL_DISCOVERY_TIMEOUT_SEC = 15
 
 
-class NativeSessionUnavailable(Exception):
+class NativeSessionUnavailableError(Exception):
     """An exact native session was missing before any process or work began.
 
     The shared driver may recover once using its complete bootstrap prompt.

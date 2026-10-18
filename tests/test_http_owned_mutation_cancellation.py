@@ -31,7 +31,7 @@ class HttpOwnedMutationCancellationTests(unittest.IsolatedAsyncioTestCase):
         settled = threading.Event()
         tool_tasks = []
         record = OfflineRecord()
-        tool = agent_tools._BY_NAME["write_file"]
+        tool = agent_tools.TOOLS_BY_NAME["write_file"]
         original_run = tool.run
         events = []
 
@@ -139,7 +139,7 @@ class ToolDispatchCancellationTests(unittest.IsolatedAsyncioTestCase):
                 return "late success after swallowing cancellation"
 
         plugin = SimpleNamespace(run=run, file_action=None, is_plugin=True)
-        with mock.patch.dict(agent_tools._BY_NAME, {"late_plugin": plugin}):
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {"late_plugin": plugin}):
             owner = asyncio.create_task(agent_tools.execute_tool(
                 "late_plugin", {}, "/unused", "full", events.append,
             ))

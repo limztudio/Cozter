@@ -25,7 +25,7 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 # One compaction per session.
-_in_flight: set[tuple[str, str]] = set()
+_IN_FLIGHT: set[tuple[str, str]] = set()
 
 
 KEEP_RECENT_AFTER_COMPACT = 5
@@ -345,11 +345,11 @@ async def maybe_compact(
     key = (
         workspace_mod.canonicalize_workspace_path(workspace_path), session_id,
     )
-    if key in _in_flight:
+    if key in _IN_FLIGHT:
         logger.debug("Compaction already in progress for session %s", session_id)
         return
 
-    _in_flight.add(key)
+    _IN_FLIGHT.add(key)
     try:
         async with workspace_mod.get_memory_maintenance_lock(workspace_path):
             await _maybe_compact_under_maintenance_lock(
@@ -360,7 +360,7 @@ async def maybe_compact(
     except Exception:
         logger.error("Compaction check failed", exc_info=True)
     finally:
-        _in_flight.discard(key)
+        _IN_FLIGHT.discard(key)
 
 
 async def _maybe_compact_under_maintenance_lock(

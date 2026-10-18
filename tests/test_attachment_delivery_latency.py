@@ -8,10 +8,10 @@ from unittest import mock
 from Cozter import workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot import base
-from Cozter.tests.helpers import persist_queue_entry, TestBot
+from Cozter.tests.helpers import persist_queue_entry, OfflineBot
 
 
-class _UploadProbe(TestBot):
+class _UploadProbe(OfflineBot):
     def __init__(self):
         super().__init__(["u1"])
         self.sent = []

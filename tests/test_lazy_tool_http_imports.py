@@ -37,7 +37,7 @@ class LazyToolHttpImportTests(unittest.TestCase):
                         'edit_file', 'glob', 'grep', 'list_dir', 'list_skills', 'make_dir',
                         'move_file', 'multi_edit', 'read_file', 'read_files', 'read_skill',
                         'web_fetch', 'web_search', 'write_file')
-            assert tuple(tools._BY_NAME) == expected
+            assert tuple(tools.TOOLS_BY_NAME) == expected
             assert [row['function'] for row in tools.TOOL_SCHEMA] == [tool.schema for tool in tools._TOOLS]
             assert not any(tool.is_plugin for tool in tools._TOOLS)
             assert 'aiohttp' not in sys.modules

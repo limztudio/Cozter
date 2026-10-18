@@ -389,7 +389,7 @@ class GitInfoToolTests(unittest.TestCase):
                 )
 
 
-class _GitRepoMixin(unittest.TestCase):
+class _GitRepoTestCase(unittest.TestCase):
     tool_class = None  # type: ignore[assignment]
 
     def setUp(self) -> None:
@@ -427,7 +427,7 @@ class _GitRepoMixin(unittest.TestCase):
             file_handle.write(content)
 
 
-class GitOpsToolTests(_GitRepoMixin):
+class GitOpsToolTests(_GitRepoTestCase):
     tool_class = GitOpsTool
 
     def test_add_and_commit_round_trip(self) -> None:
@@ -566,7 +566,7 @@ class GitOpsToolTests(_GitRepoMixin):
         )
 
 
-class GitSyncToolTests(_GitRepoMixin):
+class GitSyncToolTests(_GitRepoTestCase):
     tool_class = GitSyncTool
 
     def setUp(self) -> None:

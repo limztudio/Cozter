@@ -11,7 +11,7 @@ from unittest import mock
 from Cozter import agent, execution_state, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult
 from Cozter.backends_bot.base import BotPlatform, COMMAND_NAMES
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 from Cozter.utils import json_digest
 
 
@@ -72,7 +72,7 @@ class FlexibleEffortCommandTests(unittest.IsolatedAsyncioTestCase):
         self.ws = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.ws))
         self.enterContext(mock.patch.object(workspace, "WORKSPACE_STATE_PATH", str(Path(self.ws, "workspaces.json"))))
-        self.bot = TestBot(["owner"])
+        self.bot = OfflineBot(["owner"])
         self.bot.send_text = mock.AsyncMock()
         workspace.select_workspace("owner", self.ws, self.bot.platform_id)
 

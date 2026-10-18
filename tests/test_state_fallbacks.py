@@ -15,10 +15,10 @@ from Cozter import titling
 from Cozter.agent_tools.builtin import web_search as web_search_mod
 from Cozter.backends_agent.base import ChatEvent
 from Cozter.backends_bot.base import BotContext, BotPlatform, ensure_upload_dir
-from Cozter.tests.helpers import TestBot, persist_queue_entry, temporary_config
+from Cozter.tests.helpers import OfflineBot, persist_queue_entry, temporary_config
 
 
-class QueueRestoreBot(TestBot):
+class QueueRestoreBot(OfflineBot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.drained_users: list[str] = []
@@ -31,7 +31,7 @@ class QueueRestoreBot(TestBot):
         self.drained_users.append(uid)
 
 
-class QueueDrainBot(TestBot):
+class QueueDrainBot(OfflineBot):
     def __init__(self) -> None:
         super().__init__(["u1"], max_queue_size=5)
         self.ran: list[tuple[str, str]] = []
@@ -1582,7 +1582,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 asyncio.run(run(pause))
 
 
-class _GatedDrainBot(TestBot):
+class _GatedDrainBot(OfflineBot):
     """Bot whose _run_turn blocks on a gate, simulating a mid-reply turn.
 
     When ``await_on_finish`` is set, a finished turn arms the ``[[await]]``

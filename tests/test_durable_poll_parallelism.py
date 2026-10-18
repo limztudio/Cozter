@@ -5,12 +5,12 @@ import unittest
 from unittest import mock
 
 from Cozter.backends_bot import base as bot_base
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
 class DurablePollParallelismTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.bot = TestBot([])
+        self.bot = OfflineBot([])
 
     async def test_stalled_reply_does_not_postpone_retry_or_provider_poll_cycles(self):
         reply_started = asyncio.Event()

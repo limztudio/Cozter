@@ -28,7 +28,7 @@ class PublicResolver(AbstractResolver):
             )
         for answer in answers:
             address = answer.get("host") if isinstance(answer, dict) else None
-            if not isinstance(address, str) or not base._is_public_ip(address):
+            if not isinstance(address, str) or not base.is_public_ip(address):
                 raise base.NonPublicAddressError(
                     "URL host resolves to a non-public address",
                 )

@@ -26,7 +26,7 @@ TITLE_MAX_CHARS = 60
 TITLE_CONTEXT_CHARS = 4_000
 
 # Per-session guard against concurrent title passes.
-_in_flight: set[tuple[str, str]] = set()
+_IN_FLIGHT: set[tuple[str, str]] = set()
 
 
 def clean_title(raw: str) -> str | None:
@@ -63,9 +63,9 @@ async def maybe_auto_title(
     key = (
         workspace_mod.canonicalize_workspace_path(workspace_path), session_id,
     )
-    if key in _in_flight:
+    if key in _IN_FLIGHT:
         return
-    _in_flight.add(key)
+    _IN_FLIGHT.add(key)
     try:
         data = await run_owned_worker(session.load_session, workspace_path, session_id)
         if data is None:
@@ -95,7 +95,7 @@ async def maybe_auto_title(
     except Exception:
         logger.warning("Auto-title failed", exc_info=True)
     finally:
-        _in_flight.discard(key)
+        _IN_FLIGHT.discard(key)
 
 
 def _apply_auto_title(workspace_path: str, session_id: str, title: str) -> bool:

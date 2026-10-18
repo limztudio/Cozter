@@ -100,7 +100,7 @@ def ensure_workspace_state_dir(workspace_path: str, *parts: str) -> str:
     return workspace_state_path(workspace_path, *parts)
 
 
-_STATE_CACHE: tuple[str, int | None, int | None, dict] | None = None
+_state_cache: tuple[str, int | None, int | None, dict] | None = None
 
 
 def _load_all() -> dict:
@@ -110,28 +110,28 @@ def _load_all() -> dict:
     Scheduler enumeration and per-turn routing read this repeatedly;
     edits change mtime/size so the next read sees them.
     """
-    global _STATE_CACHE
+    global _state_cache
     mtime_ns, size = stat_mtime_size(WORKSPACE_STATE_PATH)
     if (
-        _STATE_CACHE is not None
-        and _STATE_CACHE[:3] == (WORKSPACE_STATE_PATH, mtime_ns, size)
+        _state_cache is not None
+        and _state_cache[:3] == (WORKSPACE_STATE_PATH, mtime_ns, size)
     ):
-        return copy.deepcopy(_STATE_CACHE[3])
+        return copy.deepcopy(_state_cache[3])
     data = load_json_object(
         WORKSPACE_STATE_PATH, "workspace state file", logger,
     )
-    _STATE_CACHE = (WORKSPACE_STATE_PATH, mtime_ns, size, copy.deepcopy(data))
+    _state_cache = (WORKSPACE_STATE_PATH, mtime_ns, size, copy.deepcopy(data))
     return data
 
 
 def _save_all(data: dict) -> None:
     save_json_object(WORKSPACE_STATE_PATH, data)
-    global _STATE_CACHE
+    global _state_cache
     mtime_ns, size = stat_mtime_size(WORKSPACE_STATE_PATH)
     if mtime_ns is None:
-        _STATE_CACHE = None
+        _state_cache = None
         return
-    _STATE_CACHE = (WORKSPACE_STATE_PATH, mtime_ns, size, copy.deepcopy(data))
+    _state_cache = (WORKSPACE_STATE_PATH, mtime_ns, size, copy.deepcopy(data))
 
 
 def _get_user(user_id: int | str) -> dict:
@@ -879,7 +879,7 @@ def set_history_budget(workspace_path: str, budget: int) -> None:
     )
 
 
-_locks: dict[str, asyncio.Lock] = {}
+_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _lock_for(
@@ -890,10 +890,10 @@ def _lock_for(
 
 def get_lock(workspace_path: str) -> asyncio.Lock:
     """Return the per-workspace asyncio lock; creates it on first use."""
-    return _lock_for(_locks, workspace_path)
+    return _lock_for(_LOCKS, workspace_path)
 
 
-_run_locks: dict[str, asyncio.Lock] = {}
+_RUN_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def get_run_lock(workspace_path: str) -> asyncio.Lock:
@@ -906,10 +906,10 @@ def get_run_lock(workspace_path: str) -> asyncio.Lock:
     message racing a scheduled ``/reserve`` run) from interleaving file
     edits - without deadlocking on the non-reentrant file lock.
     """
-    return _lock_for(_run_locks, workspace_path)
+    return _lock_for(_RUN_LOCKS, workspace_path)
 
 
-_memory_maintenance_locks: dict[str, asyncio.Lock] = {}
+_MEMORY_MAINTENANCE_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def get_memory_maintenance_lock(workspace_path: str) -> asyncio.Lock:
@@ -921,4 +921,4 @@ def get_memory_maintenance_lock(workspace_path: str) -> asyncio.Lock:
     so this separate lock spans the full maintenance transaction without
     blocking foreground turns from appending ordinary session messages.
     """
-    return _lock_for(_memory_maintenance_locks, workspace_path)
+    return _lock_for(_MEMORY_MAINTENANCE_LOCKS, workspace_path)

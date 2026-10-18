@@ -13,7 +13,7 @@ from Cozter import agent, workspace
 from Cozter.backends_agent.base import DetachedTaskStatus
 from Cozter.backends_bot import base as bot_base
 from Cozter.backends_bot import signal
-from Cozter.tests.helpers import TestBot
+from Cozter.tests.helpers import OfflineBot
 
 
 class CopilotHomeSetupTests(unittest.TestCase):
@@ -137,7 +137,7 @@ class BackgroundLaunchCancellationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.directory = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.directory))
-        self.bot = TestBot(["user"])
+        self.bot = OfflineBot(["user"])
         self.bot._require_ws = mock.AsyncMock(return_value=self.directory)
         self.bot.send_text = mock.AsyncMock()
         self.bot.start_detached_task_watcher = mock.Mock()

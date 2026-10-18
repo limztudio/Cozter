@@ -39,7 +39,7 @@ class UnboundedToolHttpExecutionTests(unittest.IsolatedAsyncioTestCase):
             path.write_text(json.dumps({"tool_timeout": 0.001}), encoding="utf-8")
             with (
                 mock.patch.object(config, "CONFIG_PATH", str(path)),
-                mock.patch.dict(agent_tools._BY_NAME, {"waiting_plugin": tool}),
+                mock.patch.dict(agent_tools.TOOLS_BY_NAME, {"waiting_plugin": tool}),
                 mock.patch.object(asyncio, "wait", side_effect=observe_wait),
             ):
                 owner = asyncio.create_task(agent_tools.execute_tool(
