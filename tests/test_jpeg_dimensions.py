@@ -60,3 +60,31 @@ class JpegDimensionParsingTests(unittest.TestCase):
         for header in (self._jpeg_header()[:11], b"\xff\xd8" + b"\xff" * 20):
             with self.subTest(header=header):
                 self.assertIsNone(self._probe(header))
+
+
+class WebpBmpDimensionParsingTests(unittest.TestCase):
+    _probe = JpegDimensionParsingTests._probe
+
+    @staticmethod
+    def _webp(chunk: bytes, payload: bytes) -> bytes:
+        body = b"WEBP" + chunk + struct.pack("<I", len(payload)) + payload
+        return b"RIFF" + struct.pack("<I", len(body)) + body
+
+    def test_webp_size_fields_ignore_flag_bits_and_cross_byte_edges(self) -> None:
+        # VP8 keeps scale bits on top; VP8L packs 14-bit sizes with flag bits.
+        lossy = b"\x00\x00\x00\x9d\x01\x2a" + struct.pack("<HH", 0xC000 | 640, 0x4000 | 480)
+        lossless = b"\x2f" + struct.pack("<I", 999 | (16383 << 14) | (1 << 28))
+        extended = b"\x10\x00\x00\x00" + (69999).to_bytes(3, "little") + (2).to_bytes(3, "little")
+        cases = (
+            (b"VP8 ", lossy, (640, 480, "WEBP")),
+            (b"VP8L", lossless, (1000, 16384, "WEBP")),
+            (b"VP8X", extended, (70000, 3, "WEBP")),
+        )
+        for chunk, payload, expected in cases:
+            with self.subTest(chunk=chunk):
+                self.assertEqual(self._probe(self._webp(chunk, payload)), expected)
+
+    def test_bmp_needs_a_real_dib_header_and_reads_old_core_sizes(self) -> None:
+        core = b"BM" + bytes(12) + struct.pack("<IHH", 12, 300, 200) + bytes(8)
+        self.assertEqual(self._probe(core), (300, 200, "BMP"))
+        self.assertIsNone(self._probe(b"BMW owners manual, chapter one: getting started."))

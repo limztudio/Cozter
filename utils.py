@@ -101,11 +101,45 @@ def clip_status_value(value: object, max_chars: int = 200) -> str:
     return text[:max_chars - len(_marker)] + _marker
 
 
+# BMP DIB header sizes; two "BM" bytes alone are too weak a signature.
+_BMP_HEADER_SIZES = frozenset({12, 40, 52, 56, 64, 108, 124})
+
+
+def image_header_extension(head: bytes) -> str | None:
+    """Return the image extension proved by a file header, else None."""
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    if head[:2] == b"BM" and int.from_bytes(head[14:18], "little") in _BMP_HEADER_SIZES:
+        return ".bmp"
+    return None
+
+
+def _webp_dimensions(head: bytes) -> tuple[int, int] | None:
+    chunk = head[12:16]
+    if chunk == b"VP8 " and len(head) >= 30 and head[23:26] == b"\x9d\x01\x2a":
+        width, height = struct.unpack("<HH", head[26:30])
+        return width & 0x3FFF, height & 0x3FFF
+    if chunk == b"VP8L" and len(head) >= 25 and head[20] == 0x2F:
+        bits = int.from_bytes(head[21:25], "little")
+        return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+    if chunk == b"VP8X" and len(head) >= 30:
+        width = int.from_bytes(head[24:27], "little") + 1
+        height = int.from_bytes(head[27:30], "little") + 1
+        return width, height
+    return None
+
+
 def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
     """Return (width, height, format) for common image files, else None.
 
-    Pure-stdlib header probe (PNG/JPEG/GIF/BMP) so photo uploads can be
-    described without adding a Pillow dependency. Reads only the first
+    Pure-stdlib header probe (PNG/JPEG/GIF/WebP/BMP) so photo uploads can
+    be described without adding a Pillow dependency. Reads only the first
     64 KiB of headers; never raises. One shared implementation replaces
     the copies that used to live in the bot platform, the read_file
     tool, and the signal adapter.
@@ -117,19 +151,24 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
         return None
     if len(head) < 16:
         return None
+    kind = image_header_extension(head)
     try:
         # PNG: signature + IHDR width/height.
-        if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+        if kind == ".png" and len(head) >= 24:
             width, height = struct.unpack(">II", head[16:24])
             if 0 < width <= 100000 and 0 < height <= 100000:
                 return (width, height, "PNG")
         # GIF: header + width/height.
-        elif head[:6] in (b"GIF87a", b"GIF89a"):
+        elif kind == ".gif":
             width, height = struct.unpack("<HH", head[6:10])
             if width and height:
                 return (width, height, "GIF")
+        elif kind == ".webp":
+            size = _webp_dimensions(head)
+            if size is not None and all(size):
+                return (*size, "WEBP")
         # JPEG: scan SOF markers for height/width.
-        elif head[:2] == b"\xff\xd8":
+        elif kind == ".jpg":
             offset = 2
             while offset + 1 < len(head):
                 if head[offset] != 0xFF:
@@ -163,9 +202,12 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
                         return (width, height, "JPEG")
                     return None
                 offset += 2 + seg_len
-        # BMP: width/height at offset 18.
-        elif head[:2] == b"BM" and len(head) >= 26:
-            width, height = struct.unpack("<ii", head[18:26])
+        # BMP: width/height at offset 18; old core headers use 16-bit sizes.
+        elif kind == ".bmp" and len(head) >= 26:
+            if int.from_bytes(head[14:18], "little") == 12:
+                width, height = struct.unpack("<HH", head[18:22])
+            else:
+                width, height = struct.unpack("<ii", head[18:26])
             if width and height:
                 return (abs(width), abs(height), "BMP")
     except (OSError, struct.error):

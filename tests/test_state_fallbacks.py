@@ -728,6 +728,11 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
 
 
 class ScheduleParserTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Scheduler ticks save the bot queue; keep it out of the real config.
+        config_dir = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", config_dir))
+
     def test_parse_days_handles_case_and_spaces(self) -> None:
         self.assertEqual(
             schedules.parse_days(" Mon, WED, 5 "),

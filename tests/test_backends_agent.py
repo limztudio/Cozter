@@ -1622,30 +1622,28 @@ warning: ignored after the catalog
         api.CloseHandle.argtypes = [ctypes.c_void_p]
         api.CloseHandle.restype = ctypes.c_int32
 
-        def running(pid):
-            handle = api.OpenProcess(0x100000, False, pid)
-            if not handle:
-                return False
-            try:
-                return api.WaitForSingleObject(handle, 0) == 258
-            finally:
-                api.CloseHandle(handle)
+        def running(handle):
+            return api.WaitForSingleObject(handle, 0) == 258
 
         with tempfile.TemporaryDirectory(prefix="catalog npm ") as root:
             launcher = os.path.join(root, "launcher.js")
             identities = os.path.join(root, "identities.json")
             with open(launcher, "w", encoding="utf-8") as handle:
+                # Detached leaves Node's kill-on-close job, so only the tree
+                # kill can end the child.
                 handle.write(
                     "const {spawn}=require('node:child_process');"
                     "const fs=require('node:fs');"
                     "const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],"
-                    "{stdio:['ignore','inherit','inherit']});"
+                    "{stdio:['ignore','inherit','inherit'],detached:true});"
                     f"fs.writeFileSync({json.dumps(identities)},JSON.stringify({{parent:process.pid,child:child.pid}}));"
                     "setInterval(()=>{},1000);"
                 )
             home = os.path.join(root, "private-home")
             os.mkdir(home)
             pids = {}
+            # Hold live handles: a busy host can reuse a dead PID at once.
+            handles = {}
             real_popen = subprocess.Popen
 
             def launch_ready_fixture(*args, **kwargs):
@@ -1655,12 +1653,17 @@ warning: ignored after the catalog
                     # native child. Node cold startup on a busy Windows host
                     # must not consume this separate 0.5-second ACP deadline.
                     ready_deadline = time.monotonic() + 5
-                    while (not os.path.isfile(identities) and proc.poll() is None
-                           and time.monotonic() < ready_deadline):
-                        time.sleep(0.01)
-                    if not os.path.isfile(identities):
+                    while not pids and proc.poll() is None and time.monotonic() < ready_deadline:
+                        try:
+                            with open(identities, encoding="utf-8") as handle:
+                                pids.update(json.load(handle))
+                        except (OSError, ValueError):
+                            time.sleep(0.01)
+                    if not pids:
                         copilot_mod._stop_acp_process(proc, kill_tree=True)
                         self.fail("Node catalog fixture did not create its native child")
+                    for name, pid in pids.items():
+                        handles[name] = api.OpenProcess(0x100000, False, pid)
                 return proc
 
             try:
@@ -1672,18 +1675,17 @@ warning: ignored after the catalog
                     mock.patch.object(copilot_mod, "_MODEL_DISCOVERY_TIMEOUT_SEC", 0.5),
                 ):
                     self.assertIsNone(CopilotBackend()._discover_models(root))
-                with open(identities, encoding="utf-8") as handle:
-                    pids = json.load(handle)
-                self.assertFalse(running(pids["parent"]))
-                self.assertFalse(running(pids["child"]))
+                self.assertTrue(handles["parent"] and handles["child"])
+                self.assertFalse(running(handles["parent"]))
+                # taskkill does not wait for a child to finish ending.
+                self.assertEqual(api.WaitForSingleObject(handles["child"], 5000), 0)
                 self.assertFalse(os.path.exists(home))
             finally:
-                if not pids and os.path.isfile(identities):
-                    with open(identities, encoding="utf-8") as handle:
-                        pids = json.load(handle)
-                for pid in pids.values():
-                    if running(pid):
-                        terminate_windows_process_tree(pid)
+                for name, handle in handles.items():
+                    if handle:
+                        if running(handle):
+                            terminate_windows_process_tree(pids[name])
+                        api.CloseHandle(handle)
 
     def test_copilot_effort_matches_current_cli_choices(self) -> None:
         backend = CopilotBackend()

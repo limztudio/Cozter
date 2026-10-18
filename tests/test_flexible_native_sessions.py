@@ -190,8 +190,14 @@ class FlexibleNativeSessionsTests(unittest.IsolatedAsyncioTestCase):
         self.parallel_started = 0
         self.parallel_barrier = asyncio.Event()
         await self._turn("flexible", "NEXT-PARALLEL-REQUEST", sid=sid)
-        for earlier, later in zip((first, second, writer), self.attempts[3:]):
-            self.assertEqual(later["previous_id"], earlier["native_id"])
+        # Readers may start in either order, so match each one by its lane.
+        lanes = {attempt["directory"]: attempt for attempt in (first, second, writer)}
+        later_attempts = self.attempts[3:]
+        self.assertEqual(len(later_attempts), 3)
+        self.assertEqual(later_attempts[-1]["directory"], writer["directory"])
+        self.assertEqual({attempt["directory"] for attempt in later_attempts}, set(lanes))
+        for later in later_attempts:
+            self.assertEqual(later["previous_id"], lanes[later["directory"]]["native_id"])
             self.assertNotIn("HISTORICAL-REQUEST-MARKER", later["prompt"])
             self.assertEqual(later["prompt"].count("MERGED-ANSWER-MARKER-1"), 1)
 

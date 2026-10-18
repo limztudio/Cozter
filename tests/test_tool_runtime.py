@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -143,11 +143,13 @@ class _FixtureHandler(BaseHTTPRequestHandler):
         self._respond(body, content_type)
 
     def _respond(self, body: bytes, content_type: str) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        # Bounded tools may hang up early; that is not a fixture error.
+        with suppress(ConnectionError):
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
     def _write_request(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))

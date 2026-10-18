@@ -43,6 +43,7 @@ from .utils import (
     drain_text_stream,
     finish_process_stderr,
     has_managed_process_group,
+    image_header_extension,
     is_path_within,
     iter_process_json_events,
     kill_and_wait,
@@ -528,12 +529,6 @@ def _remove_protocol_markers(
     parts.append(text[cursor:])
     return "".join(parts)
 
-_IMAGE_MAGIC = (
-    (b"\x89PNG\r\n\x1a\n", ".png"),
-    (b"\xff\xd8\xff", ".jpg"),
-    (b"GIF87a", ".gif"),
-    (b"GIF89a", ".gif"),
-)
 _ATTACHMENT_SCAN_SKIP_DIRS = {
     ".git", ".hg", ".svn", ".venv", "venv", "node_modules",
     "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
@@ -737,14 +732,12 @@ def _external_attachment_roots() -> list[str]:
 def _image_extension(path: str) -> str | None:
     try:
         with open(path, "rb") as file_handle:
-            head = file_handle.read(16)
+            head = file_handle.read(32)
     except OSError:
         return None
-    for magic, ext in _IMAGE_MAGIC:
-        if head.startswith(magic):
-            return ext
-    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
-        return ".webp"
+    sniffed = image_header_extension(head)
+    if sniffed is not None:
+        return sniffed
     ext = os.path.splitext(path)[1].lower()
     return ext if ext in IMAGE_EXTENSIONS else None
 

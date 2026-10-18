@@ -944,10 +944,11 @@ def _stop_acp_process(
             proc.stdin.close()
         except OSError:
             pass
+    tree_stopped = False
     if kill_tree:
         if os.name == "nt":
             # Windows cmd shims and Node loaders may own a native CLI child.
-            terminate_windows_process_tree(proc.pid)
+            tree_stopped = terminate_windows_process_tree(proc.pid)
         else:
             try:
                 if proc.pid != getattr(os, "getpgid")(0):
@@ -955,7 +956,9 @@ def _stop_acp_process(
             except (ProcessLookupError, PermissionError, OSError):
                 pass
     try:
-        if proc.poll() is None:
+        # While taskkill is ending the process, Windows terminate() can save
+        # an exit code early and skip the wait. Wait on the real process.
+        if proc.poll() is None and not tree_stopped:
             proc.terminate()
         proc.wait(timeout=2)
     except (OSError, subprocess.TimeoutExpired):

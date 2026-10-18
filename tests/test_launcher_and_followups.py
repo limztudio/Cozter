@@ -1,6 +1,7 @@
 """Regression coverage for audit findings in launcher and orchestration."""
 
 import re
+import tempfile
 import unittest
 from unittest import mock
 
@@ -68,7 +69,9 @@ class FollowupCoverageTests(unittest.IsolatedAsyncioTestCase):
             append_text_result(result, text)
             return result, False
 
+        # Skill prep writes .cozter/ into the workspace, so keep it out of cwd.
         with (
+            tempfile.TemporaryDirectory() as ws,
             mock.patch.object(agent, "run_internal_backend", side_effect=internal),
             mock.patch.object(agent, "_drive_backend", side_effect=drive),
             mock.patch.object(workspace, "get_flexible_run_config", return_value={
@@ -76,7 +79,7 @@ class FollowupCoverageTests(unittest.IsolatedAsyncioTestCase):
             }),
         ):
             result, restarting = await agent._run_flexible(
-                "context", "request", ".", approval="auto", effort=0,
+                "context", "request", ws, approval="auto", effort=0,
                 collaborative=False, summary_backend_name="codex",
                 summary_model="fixture-model", on_event=None,
                 inject_queue=None, injected=[],
