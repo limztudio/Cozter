@@ -1542,7 +1542,7 @@ tiers still inherit their existing workspace effort.
 Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
 `gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
 These defaults follow the [current Codex model guidance](https://developers.openai.com/codex/models)
-and the installed CLI catalog (verified 2026-10-15 against codex-cli 0.162.1
+and the installed CLI catalog (verified 2026-10-18 against codex-cli 0.163.0
 and grok 1.0.52; codex's `gpt-5.5` retired from the live catalog on 2026-10-14 and is no longer in the fallback; Claude picker adds Haiku 5.5,
 released 2026-10-07).
 Model access depends on the account and client; select an available model on
@@ -1838,8 +1838,8 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. That built-in Codex fallback (verified 2026-10-15 against
-codex-cli 0.162.1, matching the live `codex debug models` catalog) lists the `gpt-6.1-sol` / `gpt-6-astra` / `gpt-6-sol` / `gpt-6-luna` quartet first in live-listed order — Astra shipped
+authoritative. That built-in Codex fallback (verified 2026-10-18 against
+codex-cli 0.163.0, matching the live `codex debug models` catalog) lists the `gpt-6.1-sol` / `gpt-6-astra` / `gpt-6-sol` / `gpt-6-luna` quartet first in live-listed order — Astra shipped
 on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
 the GPT-5.6 family (`gpt-6.1-sol` runs a 500K active window; Luna the fast
 affordable tier, also 272K active) — followed by
