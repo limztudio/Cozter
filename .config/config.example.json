@@ -25,6 +25,11 @@
   "meta_max_retries": 2,
 
   "flexible_max_parallel_workers": 3,
+  "hang_check_interval_seconds": 30,
+  "hang_diagnose_after_seconds": 300,
+  "hang_review_interval_seconds": 300,
+  "hang_review_timeout_seconds": 120,
+  "hang_long_running_review_seconds": 1800,
   "update_idle_timeout": 1200,
   "dump_traceback_interval": 0,
   "update_check_interval": 300,

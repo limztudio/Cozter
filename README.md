@@ -13,6 +13,23 @@ works across every backend.
 
 ## What it gives you
 
+- **Automatic hang diagnosis and recovery** for tools, native CLI workers and
+  internal model calls, including Flexible workers. Cozter samples owned process
+  identities, descendants, I/O and real output every 30 seconds. After five minutes
+  without useful progress it asks the configured summary model to inspect local
+  source and logs with read-only tools. A confirmed hang stops and reaps that owned
+  invocation, returns its evidence to the original worker and continues the same
+  job so the worker can repair the cause. Native workers resume their existing
+  session. CPU usage alone does not establish progress or a hang. Work that is
+  progressing has no runtime deadline; inconclusive or unavailable diagnosis is
+  retried after a cooldown. Reports are saved under `.cozter/hang_reports/`.
+  Global `config.json` settings `hang_check_interval_seconds` (30),
+  `hang_diagnose_after_seconds` (300), `hang_review_interval_seconds` (300) and
+  `hang_review_timeout_seconds` (120) tune observation, suspicion, review cooldown
+  and the diagnostic call budget. `hang_long_running_review_seconds` (1800)
+  also reviews long operations periodically even when they still emit output.
+  These reviews and diagnostic budgets do not limit task runtime.
+
 - **A default meta-agent plus seven direct agent backends**, picked per
   workspace:
   - `flexible` (default) — a meta-agent that sizes the work with a cheap

@@ -38,6 +38,7 @@ from .utils import (
     IMAGE_EXTENSIONS,
     abandon_subprocess_stream_task,
     await_cancelled,
+    cancel_and_settle,
     cleanup_backend_process,
     create_background_task,
     drain_text_stream,
@@ -1458,6 +1459,106 @@ def _build_backend_prompt(
 _NATIVE_BACKENDS = frozenset({"codex", "claude_code", "copilot", "grok"})
 
 
+class _NativeHangRecovered(Exception):
+    """The owned CLI stopped after a confirmed hang; its native state survives."""
+
+    def __init__(self, diagnosis: str, partial: AgentResult):
+        super().__init__(diagnosis)
+        self.diagnosis = diagnosis
+        self.partial = partial
+
+
+class _NativeRecoveryDeferred(Exception):
+    """A worker keeps its plan position while repeated recovery backs off."""
+
+    def __init__(self, result: AgentResult):
+        super().__init__(result.error)
+        self.result = result
+
+
+def _note_native_progress(proc: Any, event: dict) -> None:
+    """Observe actual native work independently of the status presentation."""
+    from . import supervision
+
+    cursors = getattr(proc, "_cozter_progress_cursors", None)
+    if not isinstance(cursors, dict):
+        cursors = {}
+        setattr(proc, "_cozter_progress_cursors", cursors)
+
+    def note(key: str, value: object) -> None:
+        if value is None:
+            return
+        text = value if isinstance(value, str) else str(value)
+        if not text.strip():
+            return
+        digest = json_digest(text)
+        if cursors.get(key) == digest:
+            return
+        if len(cursors) >= 128:
+            cursors.pop(next(iter(cursors)))
+        cursors[key] = digest
+        supervision.note_output(text[-12000:])
+
+    event_type = event.get("type")
+    item = event.get("item")
+    if isinstance(item, dict) and event_type in {"item.started", "item.updated", "item.completed"}:
+        item_type = item.get("type")
+        if item_type == "command_execution":
+            command = item.get("command")
+            if isinstance(command, str):
+                supervision.attach_process(proc, command=command[:4000])
+            output = item.get("aggregated_output")
+            if isinstance(output, str) and output.strip():
+                note(f"command-output:{item.get('id', '')}", output)
+            if event_type == "item.completed":
+                note(f"command-complete:{item.get('id', '')}", "command completed")
+        elif event_type == "item.completed" and item_type in {"agent_message", "file_change"}:
+            note(f"item:{item.get('id', '')}", item.get("text") or item.get("changes"))
+        return
+    if event_type in {"assistant", "user"}:
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str) and content.strip():
+            note("message-text", content)
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "tool_use":
+                    tool_input = block.get("input")
+                    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+                    tool = block.get("name", "tool")
+                    supervision.attach_process(proc, command=str(command or tool)[:4000])
+                elif block_type in {"text", "tool_result"}:
+                    value = block.get("text") if block_type == "text" else block.get("content")
+                    if value:
+                        note(f"message:{block_type}:{block.get('tool_use_id', '')}", value)
+        return
+    if isinstance(event_type, str) and (event_type.startswith("tool.") or event_type in {
+        "tool_use", "tool_call", "tool_start", "tool", "tool_result", "tool_output", "tool_end",
+    }):
+        payload = event.get("data")
+        payload = payload if isinstance(payload, dict) else event
+        command = payload.get("command") or payload.get("toolName") or payload.get("name")
+        arguments = payload.get("arguments") or payload.get("input")
+        if isinstance(arguments, dict):
+            command = arguments.get("command") or command
+        if command:
+            supervision.attach_process(proc, command=str(command)[:4000])
+        output = payload.get("output") or payload.get("result")
+        if output:
+            note(f"tool-output:{payload.get('toolCallId', '')}", output)
+        if event_type in {"tool_result", "tool_end", "tool.execution_complete"}:
+            note(f"tool-complete:{payload.get('toolCallId', '')}", "tool completed")
+    elif event_type in {"assistant.message", "result"}:
+        payload = event.get("data")
+        payload = payload if isinstance(payload, dict) else event
+        text = payload.get("content") or payload.get("text") or payload.get("result")
+        if isinstance(text, str) and text.strip():
+            note("final-text", text)
+
+
 def _native_turn_prompt(
     backend, request: str, session_data: dict, colony_items: list[str],
     *, budget: int, collaborative: bool, is_scheduled: bool,
@@ -1607,6 +1708,49 @@ async def _drive_backend(
             prompt_text: str, delivery: native_prompt.NativePrompt | None,
             delivered_request: str | None,
         ) -> tuple[AgentResult, bool]:
+            recoveries = 0
+            retained = AgentResult()
+            turn_instructions = delivery.turn_instructions if delivery is not None else ""
+            while True:
+                try:
+                    result, restarting = await attempt(prompt_text, delivery, delivered_request)
+                    carry_forward_turn_output(retained, result, workspace_path)
+                    return result, restarting
+                except _NativeHangRecovered as exc:
+                    carry_forward_turn_output(exc.partial, retained, workspace_path)
+                    recoveries += 1
+                    if _take_pending_injections(inject_queue, injected):
+                        return retained, True
+                    diagnosis = exc.diagnosis[:8000]
+                    guidance = (
+                        "[Automatic hang recovery: the previous owned CLI and its child processes "
+                        "were stopped after a confirmed lack of useful progress. Inspect the current "
+                        "workspace and preserved native conversation, diagnose and repair the cause, "
+                        "then finish the SAME job. Preserve completed work and valid evidence; "
+                        "check commands with unknown outcomes before repeating them.]\n" + diagnosis
+                    )
+                    if recoveries >= 3:
+                        retained.error = "Repeated native hangs require another recovery attempt: " + diagnosis
+                        retained.continuation_reason = "prerequisite"
+                        retained.continue_instruction = guidance
+                        retained.blocked_reason = retained.error
+                        return retained, False
+                    if delivery is not None:
+                        delivery = dataclasses.replace(
+                            delivery, turn_instructions="\n\n".join(filter(None, (
+                                turn_instructions, guidance,
+                            ))),
+                        )
+                        prompt_text = delivery.render(state)
+                        delivered_request = delivery.request_for(state)
+                    else:
+                        prompt_text = full_prompt + "\n\n" + guidance
+                    logger.warning("%s continuing its saved native session after confirmed hang", backend.name)
+
+        async def attempt(
+            prompt_text: str, delivery: native_prompt.NativePrompt | None,
+            delivered_request: str | None,
+        ) -> tuple[AgentResult, bool]:
             acknowledged = False
             if state is not None and prompt_context is not None:
                 await state.save(native_tools_started=False)
@@ -1685,6 +1829,47 @@ async def _drive_backend_impl(
     on_process: Callable[[Any], None] | None = None,
     on_native_activity: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[AgentResult, bool]:
+    from . import supervision
+
+    ticket = (supervision.new_operation(
+        workspace_path, "native", details=f"backend={backend.name} model={model or 'default'}",
+    ) if backend.name in _NATIVE_BACKENDS else None)
+    partial = AgentResult()
+    with supervision.operation_scope(ticket):
+        call = _drive_backend_process(
+            backend, workspace_path, full_prompt, model, approval, effort=effort,
+            on_event=on_event, inject_queue=inject_queue, injected=injected,
+            close_inject_on_completion=close_inject_on_completion, on_process=on_process,
+            on_native_activity=on_native_activity, partial=partial,
+        )
+        if ticket is None:
+            return await call
+        task = asyncio.create_task(call, name=f"native-worker:{backend.name}")
+        try:
+            diagnosis = await supervision.wait_owned(task, ticket)
+        finally:
+            await cancel_and_settle(task)
+        if diagnosis is not None:
+            raise _NativeHangRecovered(diagnosis, partial)
+        return task.result()
+
+
+async def _drive_backend_process(
+    backend,
+    workspace_path: str,
+    full_prompt: str,
+    model: str | None,
+    approval: str,
+    *,
+    effort: int,
+    on_event: Callable[[ChatEvent], Awaitable[None]] | None,
+    inject_queue: asyncio.Queue[str] | None,
+    injected: list[str] | None,
+    close_inject_on_completion: bool,
+    on_process: Callable[[Any], None] | None,
+    on_native_activity: Callable[[], Awaitable[None]] | None,
+    partial: AgentResult,
+) -> tuple[AgentResult, bool]:
     """Launch *backend*, stream its events, and collect the result.
 
     Returns ``(result, restarting)``. *restarting* is True when a message
@@ -1700,6 +1885,8 @@ async def _drive_backend_impl(
 
     Raises :exc:`BackendUnavailableError` when the CLI isn't installed.
     """
+    from . import supervision
+
     try:
         proc = await backend.launch(
             workspace_path, full_prompt, model, approval, effort=effort,
@@ -1723,7 +1910,9 @@ async def _drive_backend_impl(
         except Exception:
             logger.debug("on_process hook failed", exc_info=True)
 
-    result = AgentResult()
+    if backend.name in _NATIVE_BACKENDS:
+        supervision.attach_process(proc)
+    result = partial
     restarting = False
     completed_stream = False
     cancelled = False
@@ -1759,6 +1948,8 @@ async def _drive_backend_impl(
         ):
             prev_count = len(result.events)
             backend.parse_event(event, result)
+            if backend.name in _NATIVE_BACKENDS:
+                _note_native_progress(proc, event)
 
             if on_native_activity is not None:
                 await on_native_activity()
@@ -2047,23 +2238,28 @@ async def _judge_draft(
             content=f"judge: round {round_no} with"
             f" {summary_backend.name}/{summary_model}",
         ))
+    from . import supervision
+
     try:
-        raw, restarting = await _run_with_stage_timing(_run_with_inject_watch(
-            run_internal_backend(
-                summary_backend,
-                workspace_path,
-                flexible.build_judge_prompt(request, cleaned),
-                summary_model,
-                label="Continue judge",
-                log=logger,
-                missing_executable_message=(
-                    "%s CLI not found - retaining the draft without verifying completion"
+        with supervision.worker_scope(
+            workspace_path, summary_backend_name=summary_backend_name, summary_model=summary_model,
+        ):
+            raw, restarting = await _run_with_stage_timing(_run_with_inject_watch(
+                run_internal_backend(
+                    summary_backend,
+                    workspace_path,
+                    flexible.build_judge_prompt(request, cleaned),
+                    summary_model,
+                    label="Continue judge",
+                    log=logger,
+                    missing_executable_message=(
+                        "%s CLI not found - retaining the draft without verifying completion"
+                    ),
+                    missing_level=logging.WARNING,
                 ),
-                missing_level=logging.WARNING,
-            ),
-            inject_queue,
-            injected,
-        ), "judge", summary_backend.name, summary_model)
+                inject_queue,
+                injected,
+            ), "judge", summary_backend.name, summary_model)
     except (AttributeError, TypeError, OSError, RuntimeError) as exc:
         logger.warning("Continue judge unavailable (%s) - retaining unverified draft", exc)
         return flexible.JudgeVerdict(should_continue=False, verified=False), False
@@ -2316,7 +2512,8 @@ async def _run_flexible(
                                        for task in flexible.parse_followups(value.text)),
                 "awaiting": extract_await(value.text)[1],
                 "attach_markers": _split_attach_markers(value.text)[1],
-                "complete": not (value.error and "tool budget exhausted" in value.error.casefold()),
+                "complete": not (value.continuation_reason
+                                 or value.error and "tool budget exhausted" in value.error.casefold()),
             })
         return encoded
 
@@ -2489,6 +2686,10 @@ async def _run_flexible(
                                if worker_context is not None else None),
             ), "flexible_worker", backend_name, model,
                 worker_index=index + 1, worker_count=total)
+        if sub_result.continuation_reason == "prerequisite":
+            worker_outputs[str(index)] = encode_output(sub_result, text=True)
+            await save_progress()
+            raise _NativeRecoveryDeferred(sub_result)
         if budget is not None:
             budget.capture(sub_result, workspace_path)
         if not restarting:
@@ -2555,16 +2756,20 @@ async def _run_flexible(
             # and synchronizing the same roots once per sibling.
             worker_catalog = await skills.refresh(workspace_path)
             native_skills_catalog = skills.catalog_prompt(worker_catalog, cli=True)
-        if end - done > 1:
-            await status(f"flexible: inspecting {end - done} independent tasks in parallel")
-            values, restarting = await _run_parallel_flexible_workers(
-                [run_worker(index, earlier, parallel=True) for index in range(done, end)],
-                inject_queue, injected,
-            )
-            if restarting:
-                return await restart(result)
-        else:
-            values = [await run_worker(done, earlier, parallel=False)]
+        try:
+            if end - done > 1:
+                await status(f"flexible: inspecting {end - done} independent tasks in parallel")
+                values, restarting = await _run_parallel_flexible_workers(
+                    [run_worker(index, earlier, parallel=True) for index in range(done, end)],
+                    inject_queue, injected,
+                )
+                if restarting:
+                    return await restart(result)
+            else:
+                values = [await run_worker(done, earlier, parallel=False)]
+        except _NativeRecoveryDeferred as exc:
+            carry_forward_turn_output(result, exc.result, workspace_path)
+            return exc.result, False
         # Always merge in plan order, regardless of completion order.
         for sub_result, restarting in values:
             task = queue[done]
@@ -3529,6 +3734,22 @@ async def _run_turn_impl(
             await on_event(event)
 
     async def _run_phase(
+        phase_prompt: str,
+        phase_request: str,
+        *,
+        previous_draft: str | None = None,
+        native_request: str | None = None,
+    ) -> tuple[AgentResult, bool]:
+        from . import supervision
+
+        with supervision.worker_scope(
+            workspace_path, summary_backend_name=summary_backend, summary_model=summary_model,
+        ):
+            return await _run_phase_impl(
+                phase_prompt, phase_request, previous_draft=previous_draft, native_request=native_request,
+            )
+
+    async def _run_phase_impl(
         phase_prompt: str,
         phase_request: str,
         *,

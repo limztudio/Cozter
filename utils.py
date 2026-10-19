@@ -283,6 +283,22 @@ async def await_cancelled(task: Awaitable[object]) -> None:
         await task
 
 
+async def cancel_and_settle(task: asyncio.Task) -> None:
+    """Cancel once and retain ownership through repeated caller cancellation."""
+    if not task.done():
+        task.cancel()
+    interrupted: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.wait((task,))
+        except asyncio.CancelledError as exc:
+            interrupted = exc
+    with contextlib.suppress(asyncio.CancelledError):
+        task.exception()
+    if interrupted is not None:
+        raise interrupted
+
+
 def ensure_lock(
     registry: dict[str, asyncio.Lock], key: str,
 ) -> asyncio.Lock:
@@ -1165,14 +1181,17 @@ async def drain_llm_subprocess(
     running subprocess past the cancelled task.
     """
     active_log = log or logger
+    from . import supervision
+
     raw = ""
     finished = False
     stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
 
     def _capture_bare_text(line: str) -> None:
         nonlocal raw
-        if not raw:
+        if not raw and line.strip():
             raw = line
+            supervision.note_output(line)
 
     assert proc.stdout is not None  # spawned with stdout=PIPE
     try:
@@ -1183,6 +1202,8 @@ async def drain_llm_subprocess(
             ):
                 text = backend.extract_agent_text(event)
                 if text:
+                    if text != raw:
+                        supervision.note_output(text)
                     raw = text
             await wait_for_process_exit(proc)
             finished = True
@@ -1247,6 +1268,8 @@ async def run_internal_backend(
     Return ``None`` when the backend executable is missing and an empty
     string when it runs without producing an agent response.
     """
+    from . import supervision
+
     async def launch_and_drain() -> str | None:
         from . import execution_state
         with execution_state.suspended_run():
@@ -1260,13 +1283,35 @@ async def run_internal_backend(
             except (OSError, RuntimeError) as exc:
                 log.error("%s could not start: %s", label, exc)
                 return ""
+            supervision.attach_process(proc)
             return await drain_llm_subprocess(proc, backend, label, log=log)
 
+    async def supervised_call() -> str | None:
+        for attempt in range(2):
+            ticket = supervision.new_operation(
+                workspace_path, "internal", details=(
+                    f"role={label} backend={getattr(backend, 'name', type(backend).__name__)} "
+                    f"model={model or 'default'}"
+                ),
+            )
+            with supervision.operation_scope(ticket):
+                if ticket is None:
+                    return await launch_and_drain()
+                task = asyncio.create_task(launch_and_drain(), name=f"internal-worker:{label}")
+                try:
+                    diagnosis = await supervision.wait_owned(task, ticket)
+                finally:
+                    await cancel_and_settle(task)
+                if diagnosis is None:
+                    return task.result()
+                log.warning("%s confirmed stalled; owned worker stopped (attempt %d)", label, attempt + 1)
+        return ""
+
     if timeout is None or timeout <= 0:
-        return await launch_and_drain()
+        return await supervised_call()
     try:
         async with asyncio.timeout(timeout):
-            return await launch_and_drain()
+            return await supervised_call()
     except TimeoutError:
         # The drain's finally reaps a launched child before this returns.
         # Discard any partial response, as memory jobs may replace durable data.

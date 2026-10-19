@@ -37,24 +37,47 @@ import asyncio
 import importlib
 import json
 import logging
+import os
 import pkgutil
 import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from glob import has_magic
 from typing import Any
 
+from .. import supervision
 from .base import AgentTool
-from .base import tool_permission_scope, truncate_with_marker
+from .base import resolve_inside_workspace, tool_permission_scope, truncate_with_marker
 from .discovery import DISCOVERY_RESULT_MAX
 
 logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
 
 _TOOL_RESULT_MAX = 4_000
+_DIAGNOSTIC_GREP_BUDGET_SECONDS = 15.0
 SKILL_TOOL_NAMES: frozenset[str] = frozenset({"list_skills", "read_skill"})
 _SKILL_PLANNING: ContextVar[bool] = ContextVar("cozter_skill_planning", default=False)
+DIAGNOSTIC_READ_TOOL_NAMES: frozenset[str] = frozenset({
+    "read_file", "read_files", "list_dir", "glob", "grep",
+})
+_DIAGNOSTIC_READING: ContextVar[bool] = ContextVar("cozter_diagnostic_reading", default=False)
+
+
+def diagnostic_reading_active() -> bool:
+    """Whether this internal diagnostic phase can inspect only local files."""
+    return _DIAGNOSTIC_READING.get()
+
+
+@contextmanager
+def diagnostic_reading_scope() -> Iterator[None]:
+    """Restrict a diagnostic and its child tasks to local builtin reads."""
+    token = _DIAGNOSTIC_READING.set(True)
+    try:
+        yield
+    finally:
+        _DIAGNOSTIC_READING.reset(token)
 
 
 def skill_planning_active() -> bool:
@@ -186,6 +209,10 @@ SKILL_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
     _TOOLS, lambda tool: tool.name in SKILL_TOOL_NAMES and _is_confirm_read_only(tool),
 )
 
+DIAGNOSTIC_READ_TOOL_SCHEMA: list[dict[str, Any]] = _filtered_tool_schema(
+    _TOOLS, lambda tool: tool.name in DIAGNOSTIC_READ_TOOL_NAMES and _is_confirm_read_only(tool),
+)
+
 
 _EmitFunc = Callable[[dict], None]
 
@@ -225,6 +252,62 @@ def _emit_tool_result(emit: _EmitFunc, name: str, result: str) -> str:
     return result
 
 
+def _diagnostic_search_refusal(name: str, args: dict, workspace_path: str) -> str | None:
+    """Avoid recursive root scans without abandoning a threaded glob owner."""
+    if name not in {"glob", "grep"}:
+        return None
+    pattern = args.get("glob") or "**/*" if name == "grep" else args.get("pattern")
+    if not isinstance(pattern, str):
+        return None  # The normal tool validates malformed arguments.
+    drive, tail = os.path.splitdrive(pattern.replace("\\", "/"))
+    parts = [part for part in tail.split("/") if part and part != "."]
+    if "**" not in parts:
+        return None
+    prefix = []
+    for part in parts:
+        if has_magic(part):
+            break
+        prefix.append(part)
+    try:
+        with tool_permission_scope("confirm"):
+            root = resolve_inside_workspace(workspace_path, args.get("path") or ".")
+            literal_prefix = os.path.join(*prefix) if prefix else "."
+            if tail.startswith("/"):
+                literal_prefix = "/" + literal_prefix
+            search_root = resolve_inside_workspace(
+                workspace_path, os.path.join(root, drive + literal_prefix),
+            )
+    except (OSError, TypeError, ValueError):
+        return None  # Preserve the tool's ordinary path validation feedback.
+    if os.path.normcase(search_root) != os.path.normcase(os.path.realpath(workspace_path)):
+        return None
+    return (
+        "Diagnostic search is too broad: recursive workspace-root searches are unavailable"
+        " during hang diagnosis. Use list_dir at the root, then choose a narrow source/test"
+        " subtree with path, or a glob with a literal directory prefix such as tests/**/*.cpp."
+        " Nonrecursive root globs remain available."
+    )
+
+
+async def _settle_diagnostic_read(task: asyncio.Task[Any]) -> None:
+    """Cancel a killable read once; preserve operator stops during cleanup."""
+    if not task.done() and not task.cancelling():
+        task.cancel("diagnostic search budget exceeded")
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.wait((task,))
+        except asyncio.CancelledError as exc:
+            if cancelled is None:
+                cancelled = exc
+    try:
+        task.result()
+    except BaseException:
+        pass
+    if cancelled is not None:
+        raise cancelled
+
+
 async def execute_tool(
     name: str,
     args: dict,
@@ -247,7 +330,25 @@ async def execute_tool(
         "file_action": tool.file_action if tool else None,
     })
 
-    if skill_planning_active():
+    if diagnostic_reading_active():
+        if approval not in {"auto", "full", "confirm"}:
+            return _emit_tool_result(
+                emit, name,
+                f"Blocked: '{name}' cannot run during hang diagnosis because"
+                f" permission mode '{approval}' permits no tools.",
+            )
+        if name not in DIAGNOSTIC_READ_TOOL_NAMES or not _is_confirm_read_only(tool):
+            return _emit_tool_result(
+                emit, name,
+                f"Blocked: '{name}' is unavailable during hang diagnosis;"
+                " only local builtin file-reading tools may run.",
+            )
+        approval = "confirm"
+        refusal = _diagnostic_search_refusal(name, args, workspace_path)
+        if refusal is not None:
+            return _emit_tool_result(emit, name, refusal)
+
+    if skill_planning_active() and not diagnostic_reading_active():
         if name not in SKILL_TOOL_NAMES or not _is_confirm_read_only(tool):
             return _emit_tool_result(
                 emit, name,
@@ -294,8 +395,8 @@ async def execute_tool(
     if tool is None:
         result = f"Unknown tool: {name}"
     else:
-        # Tools run until completion or cancellation. Mutation tools settle
-        # owned disk work before acknowledging cancellation.
+        # Supervision can return a diagnosed hang to the model after the
+        # owned operation has settled. Elapsed time alone is not a deadline.
         started = time.monotonic()
         outcome = "ok"
         tool_task: asyncio.Task[Any] | None = None
@@ -303,13 +404,46 @@ async def execute_tool(
             "stage=tool_start tool=%s", name,
         )
         try:
-            with tool_permission_scope(approval):
+            details = ""
+            summarizer = getattr(tool, "summarize", None)
+            if callable(summarizer):
+                try:
+                    summary = summarizer(args)
+                    if isinstance(summary, str):
+                        details = summary[:4_000]
+                except Exception:
+                    pass  # A status formatter must not prevent tool execution.
+            ticket = supervision.new_operation(
+                workspace_path, kind=f"tool:{name}", **({"details": details} if details else {}),
+            )
+            with tool_permission_scope(approval), supervision.operation_scope(ticket):
                 # Keep the real tool owner reachable throughout cancellation.
                 # wait() never forwards caller cancellation to that owner, so
                 # this layer can cancel it once and settle it explicitly.
                 tool_task = asyncio.create_task(tool.run(workspace_path, args))
-                await asyncio.wait((tool_task,))
-                raw_result: object = tool_task.result()
+                try:
+                    # Grep owns a killable subprocess. Other readers use threads,
+                    # so do not pretend their cancellation settles the real read.
+                    budget = _DIAGNOSTIC_GREP_BUDGET_SECONDS if diagnostic_reading_active() and name == "grep" else None
+                    async with asyncio.timeout(budget):
+                        diagnosis = await supervision.wait_owned(tool_task, ticket)
+                except TimeoutError:
+                    if budget is None:
+                        raise
+                    await _settle_diagnostic_read(tool_task)
+                    outcome = "diagnostic_budget"
+                    diagnosis = (
+                        "Search exceeded the diagnostic budget; its owned scan has stopped."
+                        " Use a narrower source/test path and glob to inspect the suspected cause"
+                        " within the remaining diagnosis time. The original task is still running."
+                    )
+                raw_result: object
+                if diagnosis is not None:
+                    if outcome != "diagnostic_budget":
+                        outcome = "recovered_hang"
+                    raw_result = diagnosis
+                else:
+                    raw_result = tool_task.result()
             if isinstance(raw_result, str):
                 result = raw_result
             else:
@@ -340,7 +474,7 @@ async def execute_tool(
                     # A late failure must be observed without replacing the
                     # caller's original cancellation or reporting success.
                     pass
-            raise  # cancel is the only stop.
+            raise
         except TimeoutError:
             outcome = "timeout"
             result = (
@@ -445,6 +579,8 @@ def cli_plugin_prelude() -> str:
 
 __all__ = [
     "AUTO_TOOL_SCHEMA",
+    "DIAGNOSTIC_READ_TOOL_NAMES",
+    "DIAGNOSTIC_READ_TOOL_SCHEMA",
     "READ_ONLY_TOOL_NAMES",
     "READ_ONLY_TOOL_SCHEMA",
     "SKILL_TOOL_NAMES",
@@ -454,6 +590,8 @@ __all__ = [
     "AgentTool",
     "cli_plugin_prelude",
     "execute_tool",
+    "diagnostic_reading_active",
+    "diagnostic_reading_scope",
     "parse_openai_call",
     "summarize_tool_use",
     "skill_planning_active",

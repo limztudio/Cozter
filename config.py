@@ -38,6 +38,11 @@ _DEFAULT_CONFIG = {
     "meta_base_url": "https://api.meta.ai/v1",
     "meta_max_retries": 2,
     "flexible_max_parallel_workers": 3,
+    "hang_check_interval_seconds": 30,
+    "hang_diagnose_after_seconds": 300,
+    "hang_review_interval_seconds": 300,
+    "hang_review_timeout_seconds": 120,
+    "hang_long_running_review_seconds": 1800,
     "update_idle_timeout": 1200,
     "dump_traceback_interval": 0,
     "update_check_interval": DEFAULT_UPDATE_CHECK_INTERVAL,
@@ -277,6 +282,26 @@ def get_meta_base_url() -> str:
 def get_meta_max_retries() -> int:
     """Retry attempts for transient Meta Model API failures (>= 0)."""
     return _get_int_at_least("meta_max_retries", 0)
+
+
+def get_hang_check_interval_seconds() -> int:
+    return _get_int_at_least("hang_check_interval_seconds", 1)
+
+
+def get_hang_diagnose_after_seconds() -> int:
+    return _get_int_at_least("hang_diagnose_after_seconds", 1)
+
+
+def get_hang_review_interval_seconds() -> int:
+    return _get_int_at_least("hang_review_interval_seconds", 1)
+
+
+def get_hang_review_timeout_seconds() -> int:
+    return _get_int_at_least("hang_review_timeout_seconds", 1)
+
+
+def get_hang_long_running_review_seconds() -> int:
+    return _get_int_at_least("hang_long_running_review_seconds", 1)
 
 
 def get_update_idle_timeout() -> int:

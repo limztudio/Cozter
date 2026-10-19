@@ -10,6 +10,7 @@ import shutil
 from typing import Any, ClassVar
 
 from ..base import AgentTool
+from ... import supervision
 from ...utils import (
     clip_status_value,
     close_subprocess_pipe,
@@ -72,6 +73,7 @@ class BashTool(AgentTool):
             return "Error: could not capture command output"
 
         try:
+            supervision.attach_process(proc, command=command)
             stdout, truncated, incomplete = await _read_command_output(
                 proc, _BASH_MAX_OUTPUT_BYTES,
             )
@@ -253,6 +255,7 @@ async def _read_command_output(
             chunk = await read_task
             if not chunk:
                 break
+            supervision.note_output(chunk)
             chunks.append(chunk)
             total += len(chunk)
             if total > limit:
