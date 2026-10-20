@@ -14,15 +14,15 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
             flexible.Subtask("high", "repair every confirmed finding"),
         ))
 
-    def test_sections_join_to_the_unchanged_complete_prompt(self) -> None:
-        # These hashes were captured before extracting the named sections.
-        # Cover both roles and duplicate report/draft evidence suppression.
+    def test_sections_join_to_the_canonical_complete_prompt(self) -> None:
+        # Snapshots include the tier policy and terminal control messages.
+        # Both roles still join exactly, including repeated evidence.
         cases = (
-            (0, [], None, "db1cf8508de0b25f9475d3c7a19522ef246e3578dfd50252a9422730969509f4"),
+            (0, [], None, "44c74fd10a207326ea53783a6e26e0205acb54a297af42314f1af49fb6c50ed8"),
             (1, ["report A", "report B"], "Previous verified result",
-             "d7760740d7692be90fce490c08b6d9f6e5d5537e7b47f22aa07b8176aa1863c2"),
+             "7a332872c0a880d51d590bebf4d92a09c51d695b9849c7b6bd5bc3dae12ad918"),
             (0, ["a" * 180, "a" * 180], "a" * 180,
-             "0a50cb41bb6b712326a6167eea929836bca163bee4c145243f94403a1925c2b9"),
+             "a0672a0d04d310cf8c21a8386f929d797a3a75e1955f7fe69823e66361f29e28"),
         )
         for index, reports, draft, expected_hash in cases:
             with self.subTest(index=index, reports=len(reports), draft=draft is not None):
@@ -33,6 +33,9 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
                 self.assertEqual(rendered, flexible.build_subtask_prompt(
                     self.request, self.plan, index, reports, previous_draft=draft,
                 ))
+                self.assertEqual(sections["request"], self.request)
+                self.assertIn("\n[LEASE]\ntier:", sections["worker_instructions"])
+                self.assertIn("\n[ESCALATE]\nreason:", sections["worker_instructions"])
                 self.assertEqual(hashlib.sha256(rendered.encode()).hexdigest(), expected_hash)
 
     def test_section_identity_is_derived_while_building_not_from_human_markers(self) -> None:

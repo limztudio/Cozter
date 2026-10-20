@@ -34,6 +34,7 @@ from .backends_agent.base import (
     append_detached_task_request,
     append_text_result, record_backend_error, set_error_result,
 )
+from .backends_agent._openai_agent import http_continuation_scope
 from .utils import (
     IMAGE_EXTENSIONS,
     abandon_subprocess_stream_task,
@@ -291,6 +292,7 @@ async def _run_with_stage_timing(
     call: Awaitable[_StageResult], stage: str, backend_name: str,
     model: str | None,
     *, worker_index: int | None = None, worker_count: int | None = None,
+    worker_tier: str | None = None,
 ) -> _StageResult:
     """Record stage starts and durations without private call content."""
     loop = asyncio.get_running_loop()
@@ -300,6 +302,8 @@ async def _run_with_stage_timing(
         worker_metadata += f" worker_index={worker_index}"
     if worker_count is not None:
         worker_metadata += f" worker_count={worker_count}"
+    if worker_tier in flexible.TIERS:
+        worker_metadata += f" tier={worker_tier}"
     performance_logger.info(
         "stage=%s backend=%s model=%s event=start%s",
         stage, backend_name, model, worker_metadata,
@@ -2485,6 +2489,11 @@ async def _run_flexible(
             for subtask in plan.subtasks
         ),
     )
+    performance_logger.info(
+        "stage=flexible_routing event=%s low=%d mid=%d high=%d",
+        "resume" if restored else "plan",
+        *(sum(task.tier == tier for task in plan.subtasks) for tier in flexible.TIERS),
+    )
 
     # 2. Route sub-tasks to tiers.
     result = AgentResult()
@@ -2503,6 +2512,12 @@ async def _run_flexible(
     restored_outputs: set[str] = set()
     scope_members: dict[str, list[str]] = {}
     completed_read_scopes: set[str] = set()
+    routing_evidence: dict[str, list[dict[str, str]]] = {}
+    retained_worker_reports: set[str] = set()
+    tier_leases: dict[str, list[dict[str, Any]]] = {}
+    lease_rounds: dict[str, int] = {}
+    lease_delivery: dict[str, int] = {}
+    interim_followups: dict[str, list[dict[str, Any]]] = {}
 
     def encode_output(value: AgentResult, *, text: bool = False) -> dict:
         encoded: dict[str, Any] = {
@@ -2512,6 +2527,8 @@ async def _run_flexible(
             "error": value.error, "usage": value.usage,
         }
         if text:
+            escalation = flexible.parse_escalation(value.text)
+            lease = flexible.parse_lease(value.text)
             encoded.update({
                 "text": flexible.truncate_report(value.text),
                 "followups": "\n".join(f"[followup:{task.tier}] {task.instruction}"
@@ -2520,6 +2537,8 @@ async def _run_flexible(
                 "attach_markers": _split_attach_markers(value.text)[1],
                 "complete": not (value.continuation_reason
                                  or value.error and "tool budget exhausted" in value.error.casefold()),
+                "escalation": dataclasses.asdict(escalation) if escalation is not None else None,
+                "lease": dataclasses.asdict(lease) if lease is not None else None,
             })
         return encoded
 
@@ -2551,6 +2570,49 @@ async def _run_flexible(
         restored_outputs = set(worker_outputs)
         scope_members = saved_plan.get("scope_members", {})
         completed_read_scopes = set(saved_plan.get("completed_read_scopes", []))
+        retained_routing = saved_plan.get("routing_evidence", {})
+        if not isinstance(retained_routing, dict):
+            raise ValueError("Saved Flexible routing evidence is invalid")
+        for key, rows in retained_routing.items():
+            if (not isinstance(key, str) or key not in {str(index) for index in range(len(queue))}
+                    or not isinstance(rows, list) or len(rows) > len(flexible.TIERS) - 1):
+                raise ValueError("Saved Flexible routing evidence is invalid")
+            for row in rows:
+                if (not isinstance(row, dict) or row.get("tier") not in flexible.TIERS
+                        or not isinstance(row.get("report"), str)
+                        or flexible.restore_escalation({
+                            field: row.get(field) for field in ("reason", "evidence", "remaining")
+                        }) is None):
+                    raise ValueError("Saved Flexible routing evidence is invalid")
+            routing_evidence[key] = rows
+        tier_leases = saved_plan.get("tier_leases", {})
+        lease_rounds = saved_plan.get("lease_rounds", {})
+        lease_delivery = saved_plan.get("lease_delivery", {})
+        interim_followups = saved_plan.get("interim_followups", {})
+        if (not isinstance(interim_followups, dict) or any(
+            not isinstance(key, str) or flexible.restore_tasks(rows, limit=None) is None
+            for key, rows in interim_followups.items()
+        )):
+            raise ValueError("Saved Flexible followups are invalid")
+        if not all(isinstance(value, dict) for value in (tier_leases, lease_rounds, lease_delivery)):
+            raise ValueError("Saved Flexible leases are invalid")
+        for key, rows in tier_leases.items():
+            if (key not in {str(index) for index in range(len(queue))}
+                    or not isinstance(rows, list) or len(rows) > flexible.MAX_TIER_LEASES):
+                raise ValueError("Saved Flexible leases are invalid")
+            for row in rows:
+                if (not isinstance(row, dict)
+                        or flexible.restore_lease({field: row.get(field) for field in ("tier", "reason", "task")}) is None
+                        or row.get("state") not in {"pending", "complete"}
+                        or not isinstance(row.get("id"), str)
+                        or row.get("parent_tier") not in flexible.TIERS
+                        or not isinstance(row.get("round"), int)
+                        or not isinstance(row.get("output", {}), dict)):
+                    raise ValueError("Saved Flexible leases are invalid")
+        for counters in (lease_rounds, lease_delivery):
+            if any(not isinstance(key, str) or not isinstance(value, int) or isinstance(value, bool)
+                   or not 0 <= value <= flexible.MAX_TIER_LEASES for key, value in counters.items()):
+                raise ValueError("Saved Flexible lease counters are invalid")
         for value in worker_outputs.values():
             retained = decode_output(value)
             result.events.extend(event for event in retained.events if event not in result.events)
@@ -2588,6 +2650,9 @@ async def _run_flexible(
                                   if previous_draft is not None else None),
             scope_members=scope_members,
             completed_read_scopes=sorted(completed_read_scopes),
+            routing_evidence=routing_evidence,
+            tier_leases=tier_leases, lease_rounds=lease_rounds, lease_delivery=lease_delivery,
+            interim_followups=interim_followups,
         )
 
     await save_progress()
@@ -2601,7 +2666,8 @@ async def _run_flexible(
             report += f"\n\n(the agent then failed: {sub_result.error})"
         scope = _checkpoint_scope(queue[index].instruction, request)
         budget.reports.append((scope, flexible.truncate_report(report)))
-        if scope in budget.pending:
+        if (scope in budget.pending and flexible.parse_lease(sub_result.text) is None
+                and flexible.parse_escalation(sub_result.text) is None):
             budget.pending.remove(scope)
         if sub_result.error and "tool budget exhausted" in sub_result.error.casefold():
             budget.pending.insert(0, scope)
@@ -2627,7 +2693,7 @@ async def _run_flexible(
         task = queue[index]
         backend_name, model = tiers[task.tier]
         backend = backends_agent.get_backend(backend_name)
-        if not can_inspect(index):
+        if not task.read_only:
             # A writer can invalidate previously inspected inputs even if it
             # is interrupted before producing a completed report.
             completed_read_scopes.clear()
@@ -2636,7 +2702,9 @@ async def _run_flexible(
             sub_result = decode_output(cached)
             if budget is not None:
                 budget.capture(sub_result, workspace_path, account_usage=False)
-            retain_report(index, sub_result)
+            if str(index) not in retained_worker_reports:
+                retain_report(index, sub_result)
+                retained_worker_reports.add(str(index))
             return sub_result, False
         restored_outputs.discard(str(index))
         if budget is not None:
@@ -2648,7 +2716,7 @@ async def _run_flexible(
         # Worker role only; workspace approval stays.
         # The coordinator and all editing workers retain the chosen approval.
         worker_approval = (
-            "confirm" if can_inspect(index) and approval in {"auto", "full", "confirm"}
+            "confirm" if task.read_only and approval in {"auto", "full", "confirm"}
             else approval
         )
         # The plan changes when guidance changes, but an identical remaining
@@ -2658,6 +2726,35 @@ async def _run_flexible(
         worker_sections = flexible.build_subtask_sections(
             request, plan, index, earlier, previous_draft=previous_draft,
         )
+        attempts = routing_evidence.get(str(index), [])
+        if attempts:
+            worker_sections["routing_evidence"] = (
+                "\nEarlier attempts on this same unfinished task:\n"
+                + "\n\n".join(
+                    f"[{attempt['tier']}] {flexible.truncate_report(attempt['report'])}\n"
+                    f"Reason: {attempt['reason']}\nEvidence: {attempt['evidence']}"
+                    for attempt in attempts
+                )
+                + f"\nRemaining work: {attempts[-1]['remaining']}\n"
+                "Complete only that remaining work within the original task's scope and constraints."
+                " Reuse completed work and valid evidence; do not restart the whole audit or rebuild."
+            )
+        completed_leases = [item for item in tier_leases.get(str(index), []) if item["state"] == "complete"]
+        lease_sections = {
+            "lease_result:" + item["id"]: (
+                f"\nHelper question: {item['task']}\n"
+                f"Helper findings: {item['output'].get('text', '')}\n"
+                + (f"Helper limitation: {item['output']['error']}\n" if item["output"].get("error") else "")
+                + "These are advisory findings. You retain responsibility for the original task and its verification."
+            ) for item in completed_leases
+        }
+        if completed_leases:
+            lease_sections["lease_continuation"] = (
+                f"\nHelper request {lease_rounds.get(str(index), 0)} has been handled."
+                " Continue your original task using the supplied findings. Reuse completed evidence."
+                " Do not repeat a helper question already answered."
+            )
+        worker_sections.update(lease_sections)
         worker_context = None
         if backend.name in _NATIVE_BACKENDS:
             worker_context = _native_turn_prompt(
@@ -2671,12 +2768,30 @@ async def _run_flexible(
             worker_context.sections.update({
                 key: text for key, text in worker_sections.items() if key != "request"
             })
-        with execution_state.worker_scope(scope):
+        delivery_key = f"{index}:{task.tier}"
+        http_resume = backend.name not in _NATIVE_BACKENDS and delivery_key in lease_delivery and bool(completed_leases)
+        prompt_sections = worker_sections
+        if http_resume:
+            delivered = lease_delivery[delivery_key]
+            prompt_sections = {
+                key: value for key, value in lease_sections.items()
+                if key == "lease_continuation" or any(
+                    key == "lease_result:" + item["id"] and item["round"] > delivered
+                    for item in completed_leases
+                )
+            }
+            prompt_sections["parent_scope"] = f"\nContinue parent task: {task.instruction}"
+        bootstrap_prompt = _build_backend_prompt(
+            backend, "\n".join(worker_sections.values()), collaborative=False,
+            allow_detached_requests=False, skills_catalog=native_skills_catalog,
+        )
+        with (execution_state.worker_scope(scope),
+              http_continuation_scope(bootstrap_prompt if http_resume else None)):
             sub_result, restarting = await _run_with_stage_timing(_drive_backend(
                 backend, workspace_path,
                 _build_backend_prompt(
                     backend,
-                    "\n".join(worker_sections.values()),
+                    "\n".join(prompt_sections.values()),
                     collaborative=False, allow_detached_requests=False,
                     skills_catalog=native_skills_catalog,
                 ),
@@ -2691,7 +2806,7 @@ async def _run_flexible(
                 native_worker=((f"flexible:reader:{index}" if task.read_only else "main")
                                if worker_context is not None else None),
             ), "flexible_worker", backend_name, model,
-                worker_index=index + 1, worker_count=total)
+                worker_index=index + 1, worker_count=total, worker_tier=task.tier)
         if sub_result.continuation_reason == "prerequisite":
             worker_outputs[str(index)] = encode_output(sub_result, text=True)
             await save_progress()
@@ -2699,9 +2814,11 @@ async def _run_flexible(
         if budget is not None:
             budget.capture(sub_result, workspace_path)
         if not restarting:
+            lease_delivery[delivery_key] = lease_rounds.get(str(index), 0)
             worker_outputs[str(index)] = encode_output(sub_result, text=True)
             try:
                 retain_report(index, sub_result)
+                retained_worker_reports.add(str(index))
             except _TurnBudgetExhaustedError:
                 await save_progress()
                 raise
@@ -2711,6 +2828,87 @@ async def _run_flexible(
                 # save once below, after advancing the durable cursor.
                 await save_progress()
         return sub_result, restarting
+
+    async def hold_current(message: str, details: str) -> tuple[AgentResult, bool]:
+        result.error = message
+        result.completion_verified = False
+        result.usage = usage_totals or None
+        append_text_result(result, "PARTIAL: " + details + "\nThe current task and its dependent work remain unfinished.")
+        worker_outputs.setdefault(str(done), {})["terminal_error"] = message
+        worker_outputs[str(done)]["terminal_text"] = flexible.truncate_report(result.text)
+        if budget is not None:
+            scope = _checkpoint_scope(queue[done].instruction, request)
+            if scope not in budget.pending:
+                budget.pending.append(scope)
+        await save_progress()
+        return result, False
+
+    async def run_lease(index: int, item: dict[str, Any]) -> tuple[AgentResult, bool]:
+        if item["state"] == "complete":
+            return decode_output(item["output"]), False
+        helper_name, helper_model = tiers[item["tier"]]
+        helper = backends_agent.get_backend(helper_name)
+        restricted_cli = isinstance(helper.permission_arg_sets, dict) and "restricted" in helper.permission_arg_sets
+        if not (getattr(helper, "supports_read_only_workers", False) or restricted_cli):
+            value = AgentResult(error="The configured helper backend cannot enforce read-only work.")
+            item.update(state="complete", output=encode_output(value, text=True))
+            await save_progress()
+            return value, False
+        if budget is not None:
+            budget.claim_worker()
+        helper_catalog = skills.catalog_prompt(await skills.refresh(workspace_path), cli=True)
+        helper_sections = {
+            "parent_scope": f"\nParent task: {queue[index].instruction}",
+            "helper_question": f"\nHelper question: {item['task']}\nReason: {item['reason']}",
+            "lease_request": (
+                f"\nHelper request {item['round']}: inspect current inputs for this request."
+                " Recheck findings whose inputs changed since an earlier answer."
+            ),
+            "helper_role": (
+                "\nYou are a read-only helper. Answer ONLY the helper question using analysis and existing files or logs."
+                " Do not edit files, run builds/tests/processes, change state, or publish anything."
+                " The parent owns implementation and final verification. Give concrete findings and limitations."
+                " Do not request another helper or emit LEASE, ESCALATE, or followup control blocks."
+            ),
+        }
+        helper_context = None
+        if helper.name in _NATIVE_BACKENDS:
+            helper_context = _native_turn_prompt(
+                helper, item["task"], shared_session, shared_colony,
+                budget=shared_budget, collaborative=False, is_scheduled=True,
+                skills_catalog=helper_catalog, budget_includes_request=False,
+            )
+            helper_context.sections.update(helper_sections)
+        helper_approval = "confirm" if approval in {"auto", "full", "confirm"} else approval
+        scope = "flexible:lease:" + json_digest({"parent": index, "lease": item["id"]})
+        await status(f"flexible: task {index + 1}/{total} borrowing {item['tier']} for read-only help")
+        with execution_state.worker_scope(scope):
+            value, restarting = await _run_with_stage_timing(_drive_backend(
+                helper, workspace_path,
+                _build_backend_prompt(helper, "\n".join(helper_sections.values()),
+                                      collaborative=False, allow_detached_requests=False,
+                                      skills_catalog=helper_catalog),
+                helper_model, helper_approval, effort=tier_efforts[item["tier"]],
+                on_event=on_event, inject_queue=inject_queue, injected=injected,
+                on_process=on_process, native_context=helper_context,
+                native_worker=f"flexible:lease:{item['tier']}" if helper_context is not None else None,
+            ), "flexible_lease", helper_name, helper_model,
+                worker_index=index + 1, worker_count=total, worker_tier=item["tier"])
+        if budget is not None:
+            budget.capture(value, workspace_path)
+        _accumulate_usage(usage_totals, value.usage)
+        _accumulate_usage(usage_audit, value.usage)
+        result.events.extend(event for event in value.events if event.kind != "text")
+        for marker in _split_attach_markers(value.text)[1]:
+            if marker not in attach_markers:
+                attach_markers.append(marker)
+        if (flexible.parse_lease(value.text) is not None
+                or flexible.parse_escalation(value.text) is not None):
+            value.error = "Nested helper requests are disabled; the helper did not resolve its question."
+        item["output"] = encode_output(value, text=True)
+        item["state"] = "pending" if restarting or value.continuation_reason else "complete"
+        await save_progress()
+        return value, restarting
 
     max_parallel = config.get_flexible_max_parallel_workers()
     while done < len(queue):
@@ -2783,6 +2981,13 @@ async def _run_flexible(
             target = (tier_backend_name, tier_model)
             if restarting:
                 return await restart(result)
+            cached_output = worker_outputs.get(str(done), {})
+            if cached_output.get("terminal_error"):
+                result.error = cached_output["terminal_error"]
+                result.completion_verified = False
+                if not result.text:
+                    append_text_result(result, cached_output.get("terminal_text", "PARTIAL: the current task remains unfinished."))
+                return result, False
             # Worker text is internal (feeds the merge).
             result.events.extend(
                 ev for ev in sub_result.events if ev.kind != "text"
@@ -2790,9 +2995,11 @@ async def _run_flexible(
             for task_ref in sub_result.detached_tasks:
                 if task_ref not in result.detached_tasks:
                     result.detached_tasks.append(task_ref)
-            if str(done) not in restored_outputs:
-                _accumulate_usage(usage_totals, sub_result.usage)
-            _accumulate_usage(usage_audit, sub_result.usage)
+            if not cached_output.get("usage_processed"):
+                if str(done) not in restored_outputs:
+                    _accumulate_usage(usage_totals, sub_result.usage)
+                _accumulate_usage(usage_audit, sub_result.usage)
+                cached_output["usage_processed"] = True
 
             if sub_result.error:
                 worker_errors.append(sub_result.error)
@@ -2809,6 +3016,102 @@ async def _run_flexible(
             markers.extend(worker_outputs.get(str(done), {}).get("attach_markers", []))
             attach_markers.extend(markers)
             report = report.strip()
+            pending_followups = interim_followups.setdefault(str(done), [])
+            for extra in flexible.parse_followups(cached_output.get("followups", "")):
+                row = flexible.task_record(extra)
+                if row not in pending_followups:
+                    pending_followups.append(row)
+
+            lease = flexible.restore_lease(cached_output.get("lease"))
+            if sub_result.detached_tasks and (lease is not None or cached_output.get("escalation")):
+                return await hold_current(
+                    "Flexible helper handoff has unsettled background work.",
+                    "The worker requested another tier while background work was still active. "
+                    "Its task and background references are saved before any dependent work runs.",
+                )
+            if (lease is not None and not sub_result.error and not sub_result.continuation_reason
+                    and not worker_awaiting and not sub_result.detached_tasks):
+                key = str(done)
+                if budget is not None:
+                    scope = _checkpoint_scope(task.instruction, request)
+                    if scope not in budget.pending:
+                        budget.pending.append(scope)
+                if "lease_round" not in cached_output:
+                    rounds = lease_rounds.get(key, 0)
+                    if rounds >= flexible.MAX_TIER_LEASES:
+                        return await hold_current(
+                            "Flexible helper lease limit reached; the current task remains unfinished.",
+                            "The task requested more helper work after its bounded helper attempts. "
+                            "Completed helper findings and parent work are saved.",
+                        )
+                    lease_rounds[key] = rounds + 1
+                    cached_output["lease_round"] = rounds + 1
+                lease_id = json_digest({"tier": lease.tier, "task": lease.task,
+                                        "round": cached_output["lease_round"]})
+                items = tier_leases.setdefault(key, [])
+                item = next((entry for entry in items if entry["id"] == lease_id), None)
+                if item is None:
+                    item = {**dataclasses.asdict(lease), "id": lease_id, "state": "pending",
+                            "parent_tier": task.tier, "round": cached_output["lease_round"]}
+                    items.append(item)
+                await save_progress()
+                if lease.tier == task.tier:
+                    helper_result = AgentResult(error="Use your own tier directly; helpers must use another tier.")
+                    helper_restarting = False
+                    item["output"] = encode_output(helper_result, text=True)
+                    item["state"] = "complete"
+                else:
+                    helper_result, helper_restarting = await run_lease(done, item)
+                if helper_restarting:
+                    return await restart(result)
+                if helper_result.continuation_reason:
+                    carry_forward_turn_output(result, helper_result, workspace_path)
+                    helper_result.usage = usage_totals or None
+                    return helper_result, False
+                await save_progress()
+                worker_outputs.pop(key, None)
+                restored_outputs.discard(key)
+                retained_worker_reports.discard(key)
+                if budget is not None:
+                    scope = _checkpoint_scope(task.instruction, request)
+                    if scope not in budget.pending:
+                        budget.pending.append(scope)
+                await save_progress()
+                break
+
+            escalation = flexible.restore_escalation(worker_outputs.get(str(done), {}).get("escalation"))
+            if (escalation is not None and not sub_result.error
+                    and not sub_result.continuation_reason and not worker_awaiting
+                    and not sub_result.detached_tasks):
+                tier_index = flexible.TIERS.index(task.tier)
+                if budget is not None:
+                    scope = _checkpoint_scope(task.instruction, request)
+                    if scope not in budget.pending:
+                        budget.pending.append(scope)
+                if tier_index == len(flexible.TIERS) - 1:
+                    return await hold_current(
+                        "Flexible reasoning escalation exhausted at high; the current task remains unfinished.",
+                        "The remaining work could not be resolved after the available reasoning tiers.\n"
+                        f"Remaining work: {escalation.remaining}\n"
+                        f"Evidence: {escalation.evidence}\n",
+                    )
+                next_tier = flexible.TIERS[tier_index + 1]
+                routing_evidence.setdefault(str(done), []).append({
+                    "tier": task.tier, "report": flexible.truncate_report(report),
+                    **dataclasses.asdict(escalation),
+                })
+                queue[done] = dataclasses.replace(task, tier=next_tier)
+                plan = dataclasses.replace(plan, subtasks=tuple(queue))
+                worker_outputs.pop(str(done), None)
+                restored_outputs.discard(str(done))
+                retained_worker_reports.discard(str(done))
+                performance_logger.info(
+                    "stage=flexible_routing event=escalate tier=%s next_tier=%s worker_index=%d",
+                    task.tier, next_tier, done + 1,
+                )
+                await save_progress()
+                await status(f"flexible: continuing task {done + 1}/{total} on {next_tier} with saved evidence")
+                break
 
             # Empty worker report: name the tier.
             if not report:
@@ -2829,7 +3132,10 @@ async def _run_flexible(
 
             # Keep every distinct leftover, but consolidate compatible adjacent
             # scopes instead of multiplying a report into dozens of workers.
-            followup_report = worker_outputs.get(str(done), {}).get("followups", report)
+            followup_report = "\n".join(
+                f"[followup:{extra['tier']}] {extra['instruction']}"
+                for extra in interim_followups.get(str(done), [])
+            )
             # Completed checks may need a legitimate rerun after a repair.
             # Only still-queued scope and duplicates inside this report can
             # be elided without assuming unchanged inputs.
@@ -2864,6 +3170,7 @@ async def _run_flexible(
                 await status(f"flexible: plan grew to {total} sub-tasks")
 
             done += 1
+            interim_followups.pop(str(done - 1), None)
             worker_outputs.pop(str(done - 1), None)
             await save_progress()
 

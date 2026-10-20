@@ -23,29 +23,92 @@ BACKEND_NAME = "flexible"
 # Difficulty tiers, cheapest first.
 TIERS: tuple[str, ...] = ("low", "mid", "high")
 
-# Plan-failure tier: strongest.
-FALLBACK_TIER = "high"
+# Unknown work starts on the general coding tier.
+FALLBACK_TIER = "mid"
 
 TIER_DESCRIPTIONS = {
-    "low": "Straightforward, well-scoped work with clear intent",
-    "mid": "Some reasoning needed, but the problem stays bounded",
+    "low": "Routine inspection, known commands, and mechanical changes",
+    "mid": "Normal bounded coding and diagnosis; default for unknown work",
     "high": (
-        "Only for ambiguity, complex logic, or deeper system understanding"
+        "Concrete hard reasoning, subtle concurrency, design, or algorithms"
     ),
 }
 
 # Cap fan-out: each sub-task is a turn.
 MAX_SUBTASKS = 12
 MAX_FOLLOWUP_TASKS_PER_REPORT = len(TIERS)
+MAX_TIER_LEASES = 3
 
 # Continue-judge bounds per backend per turn.
 JUDGE_MAX_CONTINUES = 3
 
 # The rubric the planner grades each sub-task against.
 _RUBRIC = (
-    "low  - straightforward, well-scoped work.\n"
-    "mid  - some reasoning, but bounded.\n"
-    "high - ONLY ambiguity, complex logic, or deep system needs."
+    "Choose the cheapest capable tier for each remaining obligation:\n"
+    "low  - routine lookup, inventory, existing-log inspection, known build/test"
+    " commands, or mechanical edits with a clear rule.\n"
+    "mid  - normal bounded diagnosis, coding, refactoring, and verification."
+    " Use mid when the difficulty is unknown; inspect the scoped evidence first.\n"
+    "high - concrete hard reasoning: subtle concurrency/correctness, difficult"
+    " algorithms, or architectural decisions across components. Name the actual"
+    " reasoning difficulty in the instruction.\n"
+    "File count, duration, broad wording, or the words all/fix/audit/optimise"
+    " alone do not justify high. Missing initial information is usually a reason"
+    " for scoped low/mid inspection. Do not force a mix of tiers."
+)
+
+_ESCALATION_RULES = (
+    "Try the appropriate same-tier diagnosis, repair, and verification first."
+    " If a reasoning limit prevents finishing this SAME obligation after inspecting"
+    " evidence and attempting the relevant verification, request the next tier"
+    " by ending your report with exactly one block, using one nonempty line per field:\n"
+    "[ESCALATE]\n"
+    "reason: the concrete reasoning difficulty this attempt could not resolve\n"
+    "evidence: work attempted, checks performed, and the unresolved result\n"
+    "remaining: the self-contained unfinished scope, retaining original constraints\n"
+    "[/ESCALATE]\n"
+    "Do not wrap the block in a Markdown code fence. Do not mark that obligation"
+    " complete or duplicate it as a followup. The"
+    " coordinator preserves completed evidence and advances only one tier at a"
+    " time. At high, the block records unfinished reasoning; no higher tier exists."
+    " Do not escalate for quota/auth/network errors,"
+    " missing prerequisites, unavailable tools, permissions, or slow commands."
+    " Report those conditions and their recovery evidence normally. Use existing"
+    " authorization; do not ask permission merely to retry authorized work.\n"
+)
+
+_LEASE_RULES = (
+    "For a focused analysis or read-only inspection question, you may borrow a"
+    " helper from any OTHER tier without handing over your whole obligation."
+    " For example, high can use low for routine inventory, and mid can use high"
+    " for a difficult reasoning question. Choose the cheapest capable helper"
+    " when the saved work warrants the handoff; finish trivial queries directly."
+    " Retain ownership of edits, verification, and completion. To yield, end your"
+    " report with exactly this block, using one nonempty line per field:\n"
+    "[LEASE]\n"
+    "tier: low|mid|high\n"
+    "reason: why this focused question benefits from the chosen helper\n"
+    "task: a self-contained read-only question with exact scope and needed evidence\n"
+    "[/LEASE]\n"
+    "Do not wrap the block in a Markdown code fence. Stop issuing tools after"
+    " the block. The coordinator runs the helper, then"
+    " resumes you automatically with its result; no permission question is needed."
+    " The helper never writes, edits, builds, runs tests, launches/stops processes,"
+    " commits, or pushes. It reports evidence for you to assess and apply."
+    f" At most {MAX_TIER_LEASES} lease requests are allowed per logical task; helpers cannot"
+    " request their own leases or escalations. Use LEASE for a question while"
+    " retaining the parent task, and ESCALATE only when the remaining whole"
+    " obligation needs a stronger worker. Never emit both blocks in one report.\n"
+)
+
+_WORKER_ROUTING_RULES = (
+    "Use the same tier policy for newly discovered work:\n"
+    f"{_RUBRIC}\n"
+    "An ordinary [followup:<low|mid|high>] is NEW scope discovered inside this task,"
+    " not a stronger retry of unfinished work. Prefer finishing related work here;"
+    " a previous high-tier worker does not make routine leftovers high.\n"
+    f"{_ESCALATION_RULES}"
+    f"{_LEASE_RULES}"
 )
 
 _PLANNER_RULES = (
@@ -78,6 +141,10 @@ _PLANNER_RULES = (
     " follow-ups join); never a chat reply; DONE ping only at the end.\n"
     "- Grade honestly: over-grading wastes the strong model, under-grading"
     " strands hard work on a weak one.\n"
+    "- On a continuation, grade only the unfinished obligation. Reuse earlier"
+    " findings and verified work; a difficult original request does not make a"
+    " remaining known test command or commit/push high. A worker can request"
+    " a bounded next-tier escalation if actual evidence reveals harder reasoning.\n"
     "- Self-contained: the worker sees only the user message, the plan,"
     " and earlier reports.\n"
     "- Cover everything: when the request says all/entire/every/whole, the"
@@ -288,6 +355,24 @@ class Subtask:
 
 
 @dataclass(frozen=True)
+class Escalation:
+    """Evidence and remaining scope for one capability escalation."""
+
+    reason: str
+    evidence: str
+    remaining: str
+
+
+@dataclass(frozen=True)
+class Lease:
+    """A focused question for a helper while the parent retains its task."""
+
+    tier: str
+    reason: str
+    task: str
+
+
+@dataclass(frozen=True)
 class Plan:
     """A parsed planner reply.
 
@@ -316,6 +401,108 @@ _PLAN_LINE_RE = re.compile(
 _PARALLEL_READ_RE = re.compile(r"^\[\s*parallel-read\s*\]\s*", re.IGNORECASE)
 
 _REMAINDER_LINE_RE = re.compile(r"^\s*(?:[-*]\s*)?(?:PARTIAL\b|remainder\b)", re.IGNORECASE)
+
+_ESCALATION_MARKER_RE = re.compile(
+    r"^ {0,3}\[(?P<close>/)?ESCALATE\][ \t]*\r?$", re.IGNORECASE | re.MULTILINE,
+)
+_LEASE_MARKER_RE = re.compile(
+    r"^ {0,3}\[(?P<close>/)?LEASE\][ \t]*\r?$", re.IGNORECASE | re.MULTILINE,
+)
+_CODE_FENCE_RE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<info>[^\r\n]*)\r?$", re.MULTILINE)
+_CONTROL_NONSPACE_RE = re.compile(r"\S")
+_CONTROL_MAX_CHARS = 6_000
+
+
+def _restore_control_fields(value: object, names: tuple[str, ...]) -> dict[str, str] | None:
+    """Validate a bounded, unambiguous retained control message."""
+    if not isinstance(value, dict) or set(value) != set(names):
+        return None
+    fields = {}
+    size = 0
+    for key, text in value.items():
+        if not isinstance(text, str):
+            return None
+        size += len(text)
+        if size > _CONTROL_MAX_CHARS or not text.strip() or text.splitlines() != [text]:
+            return None
+        fields[key] = text.strip()
+    return fields
+
+
+def _parse_control_fields(
+    report: str, marker: re.Pattern[str], names: tuple[str, ...],
+) -> dict[str, str] | None:
+    """Accept one terminal control block outside quoted code."""
+    if not isinstance(report, str):
+        return None
+    markers: list[re.Match[str]] = []
+    fences = iter(_CODE_FENCE_RE.finditer(report))
+    fence_match = next(fences, None)
+    fence_char, fence_size = "", 0
+    for match in marker.finditer(report):
+        while fence_match is not None and fence_match.start() < match.start():
+            fence = fence_match.group("fence")
+            info = fence_match.group("info")
+            if not fence_char:
+                if fence[0] != "`" or "`" not in info:
+                    fence_char, fence_size = fence[0], len(fence)
+            elif fence[0] == fence_char and len(fence) >= fence_size and not info.strip():
+                fence_char, fence_size = "", 0
+            fence_match = next(fences, None)
+        if fence_char:
+            continue
+        if len(markers) == 2:
+            return None
+        markers.append(match)
+    if len(markers) != 2:
+        return None
+    opening, closing = markers
+    if opening.group("close") or not closing.group("close"):
+        return None
+    if _CONTROL_NONSPACE_RE.search(report, closing.end()):
+        return None
+    if closing.start() - opening.end() > _CONTROL_MAX_CHARS:
+        return None
+    fields: dict[str, str] = {}
+    for line in report[opening.end():closing.start()].splitlines():
+        if not line.strip():
+            continue
+        label, separator, value = line.partition(":")
+        key = label.strip().casefold()
+        if not separator or key not in names or key in fields:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        fields[key] = value
+    return _restore_control_fields(fields, names)
+
+
+def restore_escalation(value: object) -> Escalation | None:
+    """Validate retained escalation fields before resuming the same task."""
+    fields = _restore_control_fields(value, ("reason", "evidence", "remaining"))
+    return Escalation(**fields) if fields is not None else None
+
+
+def parse_escalation(report: str) -> Escalation | None:
+    """Accept one bounded escalation block; the coordinator chooses transitions."""
+    fields = _parse_control_fields(report, _ESCALATION_MARKER_RE, ("reason", "evidence", "remaining"))
+    return restore_escalation(fields)
+
+
+def restore_lease(value: object) -> Lease | None:
+    """Validate one retained helper request without changing parent ownership."""
+    fields = _restore_control_fields(value, ("tier", "reason", "task"))
+    if fields is None:
+        return None
+    tier = normalize_tier(fields["tier"])
+    return Lease(tier, fields["reason"], fields["task"]) if tier is not None else None
+
+
+def parse_lease(report: str) -> Lease | None:
+    """Accept one bounded lease block; the coordinator chooses transitions."""
+    fields = _parse_control_fields(report, _LEASE_MARKER_RE, ("tier", "reason", "task"))
+    return restore_lease(fields)
 
 
 def normalize_tier(value: str) -> str | None:
@@ -477,7 +664,7 @@ def coalesce_followups(report: str, known: set[str]) -> tuple[list[Subtask], lis
 
 
 def fallback_plan(request: str) -> Plan:
-    """The whole request as one sub-task on the strongest tier."""
+    """Keep the whole request on the general coding tier when planning fails."""
     if isinstance(request, str):
         instruction = request.strip() or "(empty request)"
     else:
@@ -489,11 +676,10 @@ def fallback_plan(request: str) -> Plan:
 
 
 def parse_plan(raw: str, request: str) -> Plan:
-    """Parse a planner reply, falling back to a single high-tier task.
+    """Parse a planner reply, falling back to a single mid-tier task.
 
-    Tolerant by design: the planner is a cheap model, so a missing
-    ``[PLAN]`` wrapper, stray prose, or a ``[medium]`` tier should not
-    cost the user their turn.
+    A missing ``[PLAN]`` wrapper or stray prose can still yield tasks.
+    Unrecognized tiers do not make malformed plans more expensive.
     """
     if not isinstance(raw, str):
         return fallback_plan(request)
@@ -683,7 +869,11 @@ def build_subtask_sections(
             "If requested inspection is unfinished, say PARTIAL and identify the"
             " exact remainder. Expected test diagnostics, platform skips, historical"
             " failures, and unavailable services are not new defects. Progress is"
-            " Thinking... status only."
+            " Thinking... status only.\n"
+            f"{_WORKER_ROUTING_RULES}"
+            "A reasoning escalation preserves this inspection-only role. Its"
+            " remaining field must request analysis only; never edits, commands,"
+            " builds, tests, process operations, or other writes."
         )
         return sections
 
@@ -732,7 +922,8 @@ def build_subtask_sections(
         " of one consecutive tier group will run in one cohesive worker, preserving every item."
         " Never write 'Next turn should:' or any other"
         " handoff/planning note; the followup lines above are the only"
-        " carry-forward mechanism."
+        " carry-forward mechanism for new scope.\n"
+        f"{_WORKER_ROUTING_RULES}"
     )
     return sections
 

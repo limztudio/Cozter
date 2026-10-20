@@ -110,11 +110,11 @@ class PlanParsingTests(unittest.TestCase):
             [(subtask.tier, subtask.instruction) for subtask in plan.subtasks], [("low", "yep")],
         )
 
-    def test_unparseable_output_falls_back_to_one_strong_task(self) -> None:
-        for raw in ("", "   ", "no idea, sorry", "[PLAN]\n[/PLAN]"):
+    def test_unparseable_output_keeps_scope_without_buying_the_high_tier(self) -> None:
+        for raw in ("", "   ", "no idea, sorry", "[PLAN]\n[/PLAN]", "[medium] inspect it"):
             plan = flexible.parse_plan(raw, "the original request")
             self.assertEqual(len(plan.subtasks), 1)
-            self.assertEqual(plan.subtasks[0].tier, flexible.FALLBACK_TIER)
+            self.assertEqual(plan.subtasks[0].tier, "mid")
             self.assertEqual(
                 plan.subtasks[0].instruction, "the original request",
             )
@@ -133,6 +133,158 @@ class PlanParsingTests(unittest.TestCase):
         autonomous = flexible.build_plan_prompt("ctx", collaborative=False)
         self.assertIn("[QUESTION]", collaborative)
         self.assertNotIn("[QUESTION]", autonomous)
+
+
+class EscalationParsingTests(unittest.TestCase):
+    _FIELDS = {
+        "reason": "The lock ordering remains unresolved.",
+        "evidence": "Inspected both locks; the targeted race check still fails.",
+        "remaining": "Resolve the conflicting lock order and verify the existing regression.",
+    }
+
+    @classmethod
+    def _block(cls, fields: dict[str, str] | None = None) -> str:
+        return "[ESCALATE]\n" + "\n".join(
+            f"{key}: {value}" for key, value in (fields if fields is not None else cls._FIELDS).items()
+        ) + "\n[/ESCALATE]"
+
+    def test_embedded_block_retains_evidence_and_round_trips_the_checkpoint(self) -> None:
+        expected = flexible.Escalation(**self._FIELDS)
+        report = "Completed independent checks.\r\n"
+        report += "[followup:low] inspect a newly found documentation link\r\n"
+        report += self._block().replace("\n", "\r\n") + "\r\n  \t"
+        self.assertEqual(flexible.parse_escalation(report), expected)
+        self.assertEqual(flexible.restore_escalation(self._FIELDS), expected)
+        self.assertEqual(
+            flexible.parse_followups(report),
+            [flexible.Subtask("low", "inspect a newly found documentation link")],
+        )
+
+    def test_partial_duplicate_and_non_field_payloads_never_trigger_escalation(self) -> None:
+        block = self._block()
+        invalid = (
+            "", "[ESCALATE]", "[/ESCALATE]", block.replace("[/ESCALATE]", ""),
+            block.replace("evidence:", "unknown:"), block.replace("evidence:", "reason:"),
+            block.replace("evidence: " + self._FIELDS["evidence"] + "\n", ""),
+            block.replace("evidence: " + self._FIELDS["evidence"], "evidence:   "),
+            block.replace("[/ESCALATE]", "an unlabeled line\n[/ESCALATE]"),
+            block + "\n" + block,
+            "[ESCALATE]\n" + block,
+            block + "\n[/ESCALATE]",
+            "[/ESCALATE]\n" + block,
+            "prefix " + block + " suffix",
+        )
+        for report in invalid:
+            with self.subTest(report=report):
+                self.assertIsNone(flexible.parse_escalation(report))
+
+    def test_oversized_block_is_rejected_without_discarding_normal_reports(self) -> None:
+        oversized = {**self._FIELDS, "evidence": "x" * flexible._CONTROL_MAX_CHARS}
+        self.assertIsNone(flexible.parse_escalation(self._block(oversized)))
+        self.assertIsNone(flexible.restore_escalation(oversized))
+        self.assertIsNone(flexible.restore_escalation({
+            **self._FIELDS, "evidence": " " * flexible._CONTROL_MAX_CHARS + "x",
+        }))
+        surrounding = "ordinary evidence\n" * flexible._CONTROL_MAX_CHARS
+        self.assertEqual(
+            flexible.parse_escalation(surrounding + self._block()),
+            flexible.Escalation(**self._FIELDS),
+        )
+
+    def test_retained_fields_reject_ambiguous_or_corrupt_values(self) -> None:
+        for value in (
+            None, [], {}, {**self._FIELDS, "tier": "high"},
+            {**self._FIELDS, "remaining": None}, {**self._FIELDS, "remaining": "   "},
+            {**self._FIELDS, "remaining": "one\ntwo"},
+            {**self._FIELDS, "remaining": "one\r"},
+            {**self._FIELDS, "remaining": "one\u2028two"},
+        ):
+            with self.subTest(value=value):
+                self.assertIsNone(flexible.restore_escalation(value))
+
+
+class LeaseParsingTests(unittest.TestCase):
+    _FIELDS = {
+        "tier": "low",
+        "reason": "A bounded inventory leaves the design work with the parent.",
+        "task": "Read the existing retry tests and report their documented lock order; do not edit.",
+    }
+
+    @classmethod
+    def _block(cls, fields: dict[str, str] | None = None) -> str:
+        return "[LEASE]\n" + "\n".join(
+            f"{key}: {value}" for key, value in (fields if fields is not None else cls._FIELDS).items()
+        ) + "\n[/LEASE]"
+
+    def test_any_tier_can_be_retained_without_converting_the_parent_obligation(self) -> None:
+        for tier in flexible.TIERS:
+            fields = {**self._FIELDS, "tier": f" {tier.upper()} "}
+            expected = flexible.Lease(tier, fields["reason"], fields["task"])
+            report = "Parent edits are retained.\r\n" + self._block(fields).replace("\n", "\r\n")
+            with self.subTest(tier=tier):
+                self.assertEqual(flexible.parse_lease(report), expected)
+                self.assertEqual(flexible.restore_lease(fields), expected)
+                self.assertIsNone(flexible.parse_escalation(report))
+
+    def test_incomplete_duplicate_and_unknown_fields_do_not_start_a_helper(self) -> None:
+        block = self._block()
+        for report in (
+            "", "[LEASE]", "[/LEASE]", block.replace("[/LEASE]", ""),
+            block.replace("tier: low", "tier: medium"),
+            block.replace("tier: low", "tier: "),
+            block.replace("task:", "reason:"), block.replace("reason:", "unknown:"),
+            block.replace("task: " + self._FIELDS["task"] + "\n", ""),
+            block.replace("[/LEASE]", "unlabeled question\n[/LEASE]"),
+            block + "\n" + block, "[LEASE]\n" + block,
+            block + "\n[/LEASE]", "[/LEASE]\n" + block,
+            "prefix " + block + " suffix",
+        ):
+            with self.subTest(report=report):
+                self.assertIsNone(flexible.parse_lease(report))
+
+    def test_control_parsers_do_not_choose_between_lease_and_escalation(self) -> None:
+        escalation = EscalationParsingTests._block()
+        report = escalation + "\n" + self._block()
+        self.assertEqual(flexible.parse_lease(report), flexible.Lease(**self._FIELDS))
+        self.assertIsNone(flexible.parse_escalation(report))
+
+    def test_research_examples_and_nonterminal_blocks_do_not_trigger_control(self) -> None:
+        for parser, block, expected in (
+            (flexible.parse_lease, self._block(), flexible.Lease(**self._FIELDS)),
+            (flexible.parse_escalation, EscalationParsingTests._block(),
+             flexible.Escalation(**EscalationParsingTests._FIELDS)),
+        ):
+            for report in (
+                block + "\nThis is just an example.",
+                block + "\n[followup:low] unrelated scope",
+                "```text\n" + block,
+                "   ```json\r\n" + block,
+                "~~~~text\n" + block,
+                "````text\nexample\n```\n" + block,
+                "~~~\nexample\n```\n" + block,
+                "\n".join("    " + line for line in block.splitlines()),
+            ):
+                with self.subTest(parser=parser.__name__, report=report):
+                    self.assertIsNone(parser(report))
+            for fence in ("```", "````", "~~~"):
+                report = f"Example:\n{fence}text\n{block}\n{fence}\nActual request:\n{block}\n"
+                with self.subTest(parser=parser.__name__, fence=fence):
+                    self.assertEqual(parser(report), expected)
+
+    def test_oversized_or_corrupt_retained_lease_is_not_resumed(self) -> None:
+        for fields in (
+            None, {}, {**self._FIELDS, "parent": "high"},
+            {**self._FIELDS, "tier": "urgent"}, {**self._FIELDS, "tier": 1},
+            {**self._FIELDS, "reason": " "}, {**self._FIELDS, "task": "one\ntwo"},
+            {**self._FIELDS, "task": "one\r"}, {**self._FIELDS, "task": "one\u2028two"},
+            {**self._FIELDS, "task": "x" * flexible._CONTROL_MAX_CHARS},
+            {**self._FIELDS, "task": " " * flexible._CONTROL_MAX_CHARS + "x"},
+        ):
+            with self.subTest(fields=fields):
+                self.assertIsNone(flexible.restore_lease(fields))
+        self.assertIsNone(flexible.parse_lease(self._block({
+            **self._FIELDS, "task": "x" * flexible._CONTROL_MAX_CHARS,
+        })))
 
 
 class MergeFallbackTests(unittest.TestCase):
@@ -419,7 +571,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
         # A scheduled turn degrades into the fallback plan.
         self.assertNotIn("[[await]]", result.text)
-        self.assertEqual(self.driven, [("codex", "gpt-6.1-sol")])
+        self.assertEqual(self.driven, [("codex", "gpt-6-sol")])
 
     async def test_a_merged_answer_may_end_on_a_blocking_question(
         self,

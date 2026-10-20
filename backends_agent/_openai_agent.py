@@ -27,7 +27,9 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 import aiohttp
@@ -46,6 +48,9 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 performance_logger = logging.getLogger("Cozter.performance")
+_HTTP_CONTINUATION_BOOTSTRAP: ContextVar[str | None] = ContextVar(
+    "http_continuation_bootstrap", default=None,
+)
 
 # One SSE event can exceed the readline limit.
 _MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
@@ -74,6 +79,16 @@ _MAX_HTTP_ERROR_BODY_BYTES = 8 * 1024
 _EOF_SUCCESS_FINISH_REASONS = frozenset({
     "stop", "length", "tool_calls", "function_call", "content_filter",
 })
+
+
+@contextmanager
+def http_continuation_scope(bootstrap_prompt: str | None) -> Iterator[None]:
+    """Keep full parent scope available if an HTTP delta cannot restore history."""
+    token = _HTTP_CONTINUATION_BOOTSTRAP.set(bootstrap_prompt)
+    try:
+        yield
+    finally:
+        _HTTP_CONTINUATION_BOOTSTRAP.reset(token)
 
 
 def extract_model_ids(payload: object) -> tuple[str, ...]:
@@ -488,10 +503,13 @@ class OpenAIChatBackend(Backend):
     ) -> None:
         # Pool tool connections only inside this worker. Every borrow still
         # creates a new session, keeping per-call cookies and auth isolated.
-        async with public_http_pool_scope():
-            await self._run_agent_impl(
-                proc, workspace_path, prompt, model, approval, compaction, effort,
-            )
+        bootstrap_prompt = _HTTP_CONTINUATION_BOOTSTRAP.get()
+        with http_continuation_scope(None):
+            async with public_http_pool_scope():
+                await self._run_agent_impl(
+                    proc, workspace_path, prompt, model, approval, compaction, effort,
+                    bootstrap_prompt=bootstrap_prompt,
+                )
 
     async def _run_agent_impl(
         self,
@@ -502,6 +520,8 @@ class OpenAIChatBackend(Backend):
         approval: str,
         compaction: bool,
         effort: int,
+        *,
+        bootstrap_prompt: str | None = None,
     ) -> None:
         endpoint = self._chat_endpoint()
         headers = self._auth_headers()
@@ -530,7 +550,30 @@ class OpenAIChatBackend(Backend):
         effort_fields = self._effort_fields(effort, request_model)
         preserve_reasoning = self._preserve_reasoning_content(request_model)
 
-        # Vision backends attach image bytes too.
+        # The execution record is scoped to this queued job/worker/provider.
+        # Compaction calls remain stateless and never acquire tool history.
+        execution = None if compaction else current_run()
+        identity = hashlib.sha256(_compact_json({
+            "backend": self.name,
+            "workspace": os.path.normcase(os.path.realpath(workspace_path)),
+            "model": request_model,
+            "approval": effective_approval,
+            "effort": effort_fields,
+            "endpoint": endpoint,
+        }).encode("utf-8")).hexdigest()
+        restored: list[dict[str, Any]] = []
+        restored_bytes = 0
+        previous_prompt_digest: object = None
+        if execution is not None and execution.get("http_identity") == identity:
+            restored, restored_bytes = _restore_owned_http_messages(
+                execution.get("http_messages"),
+                execution.get("http_pending_results"),
+            )
+            previous_prompt_digest = execution.get("http_prompt_digest")
+        if not restored and bootstrap_prompt is not None and not compaction:
+            prompt = bootstrap_prompt
+        prompt_digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        # Vision backends attach image bytes from the selected delta or bootstrap.
         user_content: str | list[dict[str, Any]] = prompt
         if (
             getattr(self, "supports_vision", False)
@@ -543,28 +586,6 @@ class OpenAIChatBackend(Backend):
             )
             if vision_parts is not None:
                 user_content = vision_parts
-
-        # The execution record is scoped to this queued job/worker/provider.
-        # Compaction calls remain stateless and never acquire tool history.
-        execution = None if compaction else current_run()
-        identity = hashlib.sha256(_compact_json({
-            "backend": self.name,
-            "workspace": os.path.normcase(os.path.realpath(workspace_path)),
-            "model": request_model,
-            "approval": effective_approval,
-            "effort": effort_fields,
-            "endpoint": endpoint,
-        }).encode("utf-8")).hexdigest()
-        prompt_digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-        restored: list[dict[str, Any]] = []
-        restored_bytes = 0
-        previous_prompt_digest: object = None
-        if execution is not None and execution.get("http_identity") == identity:
-            restored, restored_bytes = _restore_owned_http_messages(
-                execution.get("http_messages"),
-                execution.get("http_pending_results"),
-            )
-            previous_prompt_digest = execution.get("http_prompt_digest")
         system_prompt = _system_prompt(workspace_path, enabled_tool_names, effective_approval)
         has_skill_tools = any(name in tools.SKILL_TOOL_NAMES for name in enabled_tool_names)
         if has_skill_tools or skill_planning:

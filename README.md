@@ -1504,6 +1504,42 @@ hard. One turn is three phases:
    reply you see. The workers' own text never reaches the chat; their tool
    and file events still stream into the live status display.
 
+A single task returns its final parent report directly, without another merge
+call. Routing uses the least demanding suitable tier: routine work starts low,
+normal bounded coding and diagnosis starts mid, and concrete architectural,
+concurrency, or difficult reasoning needs justify high. Large file counts,
+long-running commands, and words such as "all" or "fix" do not alone require
+high. An empty or malformed plan keeps the full request on mid. Continuations
+grade the remaining work using saved evidence.
+
+While working, a parent can borrow another tier for a focused read-only question.
+High can ask low to inspect existing logs or metadata; mid or low can ask high
+to analyze a difficult invariant. The parent pauses, receives the findings, and
+continues the original task with its own model, effort, permissions, and ownership
+of edits and verification. Helpers use the requested tier's configured model and
+effort with restricted permissions. They cannot write, launch builds, publish,
+or recursively request helpers. Each logical task has at most three helper
+requests; interruptions reuse completed helper results, while a new request can
+recheck inputs changed by the parent. No extra planner or router
+call is needed for a lease.
+
+CLI parents resume their existing native conversation. Helpers have separate,
+stable native lanes that can be reused for later questions at that tier. History
+already synchronized into a native CLI is not resent. Each helper result has its
+own context section, so a later answer does not resend earlier answers. HTTP
+parents continue their saved transcript with only new helper findings and a small
+task reminder; if that transcript or provider identity changed, they bootstrap
+with the full worker context.
+
+When the whole remaining obligation exceeds a tier's reasoning ability, the worker
+can request escalation with concrete attempted-work evidence. The same logical
+task advances low → mid → high before any dependent task starts, retaining earlier
+findings and completed work. The cursor, helper results, escalation evidence, and
+interim follow-ups survive interruptions. Quota, authentication, unavailable
+prerequisites, and permission problems keep their existing recovery behavior.
+If high still cannot resolve the work, its pending state is retained without
+an automatic high-to-high loop. Existing saved plans resume their chosen tiers.
+
 `[parallel-read]` means both read-only and independent of the other consecutive
 marked tasks. For example, inspecting existing transport logs and reviewing an
 unrelated parser can run together before one repair worker consumes both reports.
@@ -1537,9 +1573,9 @@ The grading rubric the planner is held to:
 
 | Tier | When | Example |
 |---|---|---|
-| `low` | Straightforward, well-scoped work with clear intent | Add a small validation check, or extend an existing function with clearly defined behavior |
-| `mid` | Some reasoning required, but the problem stays bounded | Write unit tests for an existing method with known inputs and outputs |
-| `high` | Only when the task involves ambiguity, complex logic, or deeper system understanding | Refactor a system with unclear dependencies, or debug a non-obvious issue |
+| `low` | Routine lookup, inventory, known commands, and exact mechanical changes | Inspect existing logs or apply a specified rename |
+| `mid` | Normal bounded implementation, debugging, refactoring, and verification | Diagnose a module bug and implement and verify its repair |
+| `high` | Concrete difficult reasoning or architecture; unresolved lower-tier attempts | Resolve a subtle concurrency invariant or difficult algorithm |
 
 Each tier carries its own agent, model and reasoning effort, so tiers can straddle
 backends — a local `llama` for the easy parts, `claude_code` on `opus` for

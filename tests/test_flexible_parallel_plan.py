@@ -69,7 +69,7 @@ class ParallelReadPlanTests(unittest.TestCase):
         )
         self.assertEqual(plan.subtasks, (flexible.Subtask("mid", "complete the request"),))
         fallback = flexible.parse_plan("1. [low] [parallel-read]", "original request")
-        self.assertEqual(fallback.subtasks, (flexible.Subtask("high", "original request"),))
+        self.assertEqual(fallback.subtasks, (flexible.Subtask("mid", "original request"),))
 
     def test_followups_cannot_opt_themselves_into_concurrent_inspection(self) -> None:
         followups = flexible.parse_followups(

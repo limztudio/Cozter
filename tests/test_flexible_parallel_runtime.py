@@ -86,7 +86,7 @@ class FlexibleParallelRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await check(self.plan, 1)
         await check("[PLAN]\n1. [low] edit A\n2. [high] edit B\n[/PLAN]", 3)
 
-    async def test_unknown_backend_capability_falls_back_to_serial_original_approval(self):
+    async def test_unknown_parallel_capability_keeps_serial_readers_restricted(self):
         backend = agent.backends_agent.get_backend("meta")
         seen = []
 
@@ -97,7 +97,7 @@ class FlexibleParallelRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(backend, "supports_read_only_workers", False):
             await self.run_flexible(drive)
-        self.assertEqual(seen, ["full", "full", "full"])
+        self.assertEqual(seen, ["confirm", "confirm", "full"])
 
     async def test_injection_cancels_all_readers_and_does_not_run_writer(self):
         queue = asyncio.Queue()
