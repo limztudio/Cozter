@@ -44,6 +44,11 @@ class Operation:
     last_review: float = 0
     progress_paths: tuple[str, ...] = ()
     file_stamps: dict[str, tuple[int, int] | None] = field(default_factory=dict)
+    can_replan: bool = False
+    review_count: int = 0
+    review_history: list[dict[str, str]] = field(default_factory=list)
+    uncertain_version: int = -1
+    uncertain_reviews: int = 0
 
 
 @contextmanager
@@ -79,6 +84,13 @@ def new_operation(workspace_path: str, kind: str, details: str = "") -> Operatio
     if worker is None or _disabled.get():
         return None
     return Operation(Worker(workspace_path, worker.backend, worker.model), kind, details[:4000])
+
+
+def mark_replannable_read() -> None:
+    """Let the owned, killable builtin search yield to a narrower query."""
+    ticket = _operation.get()
+    if ticket is not None and ticket.kind == "tool:grep":
+        ticket.can_replan = True
 
 
 def attach_process(proc: Any, command: str = "") -> None:
@@ -172,6 +184,9 @@ def _evidence(ticket: Operation) -> dict[str, Any]:
         "recent_output": ticket.output,
         "processes": asdict(ticket.snapshot) if ticket.snapshot is not None else None,
         "progress_files": ticket.file_stamps,
+        "can_replan_read": ticket.can_replan,
+        "review_count": ticket.review_count,
+        "previous_reviews": ticket.review_history[-3:],
     }
 
 
@@ -180,13 +195,13 @@ def _parse_diagnosis(raw: str) -> dict[str, Any]:
     if text.startswith("```"):
         text = text.partition("\n")[2].rsplit("```", 1)[0].strip()
     result = json.loads(text)
-    if not isinstance(result, dict) or result.get("verdict") not in {"progressing", "uncertain", "confirmed_hang"}:
+    if not isinstance(result, dict) or result.get("verdict") not in {"progressing", "uncertain", "confirmed_hang", "replan_read"}:
         raise ValueError("Invalid hang diagnosis")
     for key in ("evidence", "diagnosis", "repair"):
         if not isinstance(result.get(key), str):
             raise ValueError("Missing diagnostic evidence")
         result[key] = result[key][:12000]
-    if result["verdict"] == "confirmed_hang" and any(not result[key].strip() for key in ("evidence", "diagnosis", "repair")):
+    if result["verdict"] in {"confirmed_hang", "replan_read"} and any(not result[key].strip() for key in ("evidence", "diagnosis", "repair")):
         raise ValueError("Hang verdict requires evidence, diagnosis and repair instructions")
     paths = result.get("progress_paths", [])
     result["progress_paths"] = [path[:1000] for path in paths[:16] if isinstance(path, str)] if isinstance(paths, list) else []
@@ -211,13 +226,25 @@ async def _diagnose(ticket: Operation, evidence: dict[str, Any], timeout: float)
         "A confirmed_hang requires specific causal evidence such as a cyclic wait, impossible prerequisite or "
         "repeated failed work with no possible progress. If the work is making useful progress return progressing. "
         "If you cannot establish a cause return uncertain. Return ONLY JSON with keys verdict "
-        "(progressing|uncertain|confirmed_hang), evidence, diagnosis, repair (strings), progress_paths "
+        "(progressing|uncertain|confirmed_hang|replan_read), evidence, diagnosis, repair (strings), progress_paths "
         "(up to 16 workspace-relative files whose change would demonstrate useful progress). "
         "Enumerate every proven blocking dependency and explain how the proposed repair breaks every cycle "
         "or impossible prerequisite; one necessary change must not be presented as sufficient if another wait remains. "
         "Repair must tell the original worker how to inspect and fix all proven causes, preserve partial work, "
         "validate with a targeted rerun and continue the original task autonomously. "
         "Never claim the user's task completed.\n"
+        + (
+            "This operation is a trusted, owned, cancellable read-only search. It may be stopped safely to let "
+            "the original worker choose a better query. Return replan_read when a broad or costly scan is "
+            "preventing a useful answer and a narrower search can answer the worker's question. This does not "
+            "require proving a deadlock. First perform the narrower search and include its path, pattern, "
+            "actual matches (or explicit absence), and coverage limits in evidence/repair. Never call a "
+            "partial search exhaustive. Review the previous decisions; do not repeat an uncertain inspection "
+            "without using what it already established. If still uncertain, give a concrete narrower next "
+            "query so the worker can proceed when this expensive read is yielded.\n"
+            if ticket.can_replan else
+            "This operation cannot use replan_read; only a confirmed hang permits stopping it.\n"
+        )
         + json.dumps(evidence, ensure_ascii=False)
     )
     backend = backends_agent.get_backend(ticket.worker.backend)
@@ -288,6 +315,7 @@ async def wait_owned(task: asyncio.Task, ticket: Operation | None) -> str | None
                 continue
             ticket.last_review = now
             version = ticket.version
+            ticket.review_count += 1
             evidence = _evidence(ticket)
             logger.warning("hang_review operation=%s kind=%s elapsed=%.0f quiet=%.0f", ticket.token, ticket.kind, now-ticket.started, now-ticket.progress_at)
             doctor = asyncio.create_task(_diagnose(ticket, evidence, timeout), name=f"hang-diagnosis:{ticket.token}")
@@ -316,17 +344,43 @@ async def wait_owned(task: asyncio.Task, ticket: Operation | None) -> str | None
             if task.done() or ticket.version != version or ownership_unknown:
                 logger.info("hang_review stale operation=%s; progress resumed", ticket.token)
                 continue
+            ticket.review_history.append({
+                "verdict": str(decision.get("verdict", "")),
+                "evidence": str(decision.get("evidence", ""))[:2000],
+                "diagnosis": str(decision.get("diagnosis", ""))[:2000],
+                "repair": str(decision.get("repair", ""))[:2000],
+            })
+            ticket.review_history = ticket.review_history[-3:]
+            if decision.get("verdict") == "uncertain":
+                ticket.uncertain_reviews = ticket.uncertain_reviews + 1 if ticket.uncertain_version == version else 1
+                ticket.uncertain_version = version
+            else:
+                ticket.uncertain_reviews = 0
+                ticket.uncertain_version = -1
+            owned_read = (
+                ticket.can_replan and ticket.kind == "tool:grep"
+                and isinstance(attached_pid, int) and attached_pid > 0
+                and ticket.identity is not None and ticket.snapshot is not None
+                and ticket.snapshot.root == ticket.identity
+            )
+            if (owned_read and ticket.uncertain_reviews >= 2
+                    and all(str(decision.get(key, "")).strip() for key in ("evidence", "diagnosis", "repair"))):
+                decision = {
+                    **decision, "verdict": "replan_read", "review_verdict": "uncertain",
+                    "replan_reason": "Repeated inconclusive reviews of an owned read without useful progress; return advice to its worker.",
+                }
             ticket.progress_paths = tuple(decision.get("progress_paths", ()))
             ticket.file_stamps = await asyncio.to_thread(_file_stamps, ticket)
             try:
                 report = await asyncio.to_thread(_write_report, ticket, evidence, decision)
             except (OSError, ValueError):
                 report = "(report unavailable; evidence retained below)"
-            if decision.get("verdict") != "confirmed_hang":
+            replanning = decision.get("verdict") == "replan_read" and owned_read
+            if decision.get("verdict") != "confirmed_hang" and not replanning:
                 continue
             if task.done() or ticket.version != version:
                 continue
-            task.cancel("confirmed hang; returning diagnostics to worker")
+            task.cancel("expensive read; returning query advice to worker" if replanning else "confirmed hang; returning diagnostics to worker")
             await _settle(task)
             # An operator stop must never become a successful recovery result.
             owner = asyncio.current_task()
@@ -336,6 +390,18 @@ async def wait_owned(task: asyncio.Task, ticket: Operation | None) -> str | None
                 # A cooperative owner may finish normally while cancellation is settling.
                 # Let its original result (or error) take precedence over recovery.
                 return None
+            if replanning:
+                logger.warning("read_replanned operation=%s kind=%s reviews=%d", ticket.token, ticket.kind, ticket.review_count)
+                return (
+                    "The expensive read-only search was stopped and its owned process cleanup has finished. "
+                    "This is a request to choose a narrower query, not a confirmed deadlock or a complete search. "
+                    "The original task remains unfinished. Preserve partial matches and completed work, use the "
+                    "inspection evidence below to narrow the next search, and continue automatically. "
+                    "Do not repeat the same broad query or ask permission to continue.\n"
+                    f"Evidence and coverage limits: {decision['evidence']}\n"
+                    f"Inspection: {decision['diagnosis']}\nNext query/repair: {decision['repair']}\n"
+                    f"Report: {report}\nRetained partial output:\n{ticket.output[-6000:]}"
+                )
             logger.warning("hang_recovered operation=%s kind=%s", ticket.token, ticket.kind)
             return (
                 "The owned operation was stopped after a confirmed hang; cleanup has finished. "

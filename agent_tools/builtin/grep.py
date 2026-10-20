@@ -9,10 +9,12 @@ import re
 import stat
 from typing import Any
 
+from ... import supervision
 from ..base import (
     AgentTool,
     coerce_int_arg,
     get_tool_permission,
+    git_discovery_files,
     iter_workspace_files,
     object_parameters,
     require_nonempty_string_arg,
@@ -32,7 +34,9 @@ class GrepTool(AgentTool):
     name = "grep"
     description = (
         "Regex-search files (`path:lineno: line`). Use the returned offset to"
-        " page remaining matches; restart at offset=0 if files change."
+        " page remaining matches; restart at offset=0 if files change. Broad"
+        " workspace searches use the root repository's Git files; set a"
+        " specific path or directory glob for ignored files or nested repositories."
     )
     parameters = object_parameters(
         {
@@ -84,12 +88,21 @@ class GrepTool(AgentTool):
             maximum=200,
         )
         offset = coerce_int_arg(args.get("offset", 0), default=0, minimum=0)
+        supervision.mark_replannable_read()
+        details = (
+            f"grep pattern={pattern_str!r} root={search_root!r}"
+            f" glob={file_glob!r} max_results={max_results} offset={offset}"
+        )
+        supervision.note_command(details)
 
         # CPU-bound regex: killable process, 0.1s polls.
         try:
+            source_files = await git_discovery_files(
+                workspace_path, search_root, file_glob,
+            )
             results = await _scan_in_subprocess_async(
                 workspace_path, search_root, file_glob, regex, max_results,
-                offset,
+                offset, source_files, details,
             )
         except Exception as exc:
             return f"Grep failed: {exc}"
@@ -110,12 +123,14 @@ class GrepTool(AgentTool):
         max_results: int,
         offset: int = 0,
         *, sort_entries: bool = False,
+        source_files: list[str] | None = None,
     ) -> list[str]:
         results: list[str] = []
         skipped = 0
         for fpath, rel, _root_rel in iter_workspace_files(
             workspace_path, search_root, file_glob,
             sort_entries=sort_entries,
+            source_files=source_files,
         ):
             try:
                 metadata = os.stat(fpath)
@@ -163,6 +178,7 @@ def _scan_worker(
     max_results: int,
     approval: str = "auto",
     offset: int = 0,
+    source_files: list[str] | None = None,
 ) -> None:
     """Run one scan in a child process and return its result."""
     try:
@@ -170,6 +186,7 @@ def _scan_worker(
             result_conn.send((True, GrepTool._scan(
                 workspace_path, search_root, file_glob, regex, max_results,
                 offset, sort_entries=True,
+                source_files=source_files,
             )))
     except BaseException as exc:
         # Report scan failures, not false empties.
@@ -200,6 +217,7 @@ def _start_scan_worker(
     regex: re.Pattern[str],
     max_results: int,
     offset: int = 0,
+    source_files: list[str] | None = None,
 ) -> tuple[Any, Any]:
     """Spawn the grep worker; return ``(proc, receive_conn)``."""
     context = multiprocessing.get_context("spawn")
@@ -210,6 +228,7 @@ def _start_scan_worker(
             send_conn, workspace_path, search_root, file_glob, regex,
             max_results, get_tool_permission(),
             offset,
+            source_files,
         ),
         daemon=True,
     )
@@ -243,6 +262,8 @@ async def _scan_in_subprocess_async(
     regex: re.Pattern[str],
     max_results: int,
     offset: int = 0,
+    source_files: list[str] | None = None,
+    details: str = "",
 ) -> list[str]:
     """Return up to ``max_results + 1`` matches, including page lookahead.
 
@@ -251,8 +272,10 @@ async def _scan_in_subprocess_async(
     """
     proc, receive_conn = _start_scan_worker(
         workspace_path, search_root, file_glob, regex, max_results + 1, offset,
+        source_files,
     )
     try:
+        supervision.attach_process(proc, details)
         while True:
             if await asyncio.to_thread(receive_conn.poll, 0.1):
                 return _read_scan_payload(receive_conn)

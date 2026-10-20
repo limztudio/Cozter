@@ -329,13 +329,13 @@ async def _run_with_stage_timing(
 
 def _terminal_provider_error(error: str) -> bool:
     """Recognize explicit account/auth failures and Cozter's refusal stop."""
+    if _account_provider_unavailable(error):
+        return True
     if re.search(r"\bHTTP\s*(?:status\s*)?(?:401|403|429)\b", error, re.IGNORECASE):
         return True
     normalized = error.casefold().replace("_", " ").replace("-", " ")
     return any(marker in normalized for marker in (
-        "usage limit", "quota exceeded", "quota exhausted", "quota limit",
-        "insufficient quota", "insufficient credits", "out of credits",
-        "credit balance exhausted", "invalid api key", "authentication failed",
+        "usage limit", "quota limit",
         "consecutive rounds where every tool call was refused",
         "tool budget exhausted",
     ))
@@ -351,6 +351,12 @@ def _account_provider_unavailable(error: str) -> bool:
     if re.search(r"\bHTTP\s*(?:status\s*)?401\b", error, re.IGNORECASE):
         return True
     normalized = error.casefold().replace("_", " ").replace("-", " ")
+    if re.search(
+        r"\b(?:hit|reached|exceeded)\s+(?:(?:your|the|a)\s+)?monthly\s+spend(?:ing)?\s+limit\b"
+        r"|\bmonthly\s+spend(?:ing)?\s+limit\s+(?:(?:has\s+been|was|is)\s+)?(?:hit|reached|exceeded)\b",
+        normalized,
+    ):
+        return True
     return any(marker in normalized for marker in (
         "usage limit reached", "usage limit exceeded", "reached your usage limit",
         "quota exceeded", "quota exhausted", "quota limit reached", "quota limit exceeded",

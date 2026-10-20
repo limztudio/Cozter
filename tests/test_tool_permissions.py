@@ -620,7 +620,7 @@ class WindowsDiscoveryPathTests(unittest.TestCase):
                 scan.assert_called_once_with(
                     workspace, ntpath.normpath(anchor + "\\"), r"**\*.txt",
                     discovery_pattern=anchor + r"\**\*.txt",
-                    sort_entries=False,
+                    sort_entries=False, source_files=None,
                 )
 
     def test_full_iterator_labels_external_link_to_another_drive_as_absolute(self) -> None:

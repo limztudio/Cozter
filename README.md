@@ -22,7 +22,12 @@ works across every backend.
   job so the worker can repair the cause. Native workers resume their existing
   session. CPU usage alone does not establish progress or a hang. Work that is
   progressing has no runtime deadline; inconclusive or unavailable diagnosis is
-  retried after a cooldown. Reports are saved under `.cozter/hang_reports/`.
+  retried after a cooldown. A costly, cancellable builtin grep can instead return
+  inspection evidence and narrower-query advice to its worker. This read-only
+  recovery requires a verified owned process; it preserves unfinished coverage
+  without requiring a deadlock claim. Repeated inconclusive reviews of the same
+  unchanged search also return control to the worker, using the previous findings.
+  Reports are saved under `.cozter/hang_reports/`.
   Global `config.json` settings `hang_check_interval_seconds` (30),
   `hang_diagnose_after_seconds` (300), `hang_review_interval_seconds` (300) and
   `hang_review_timeout_seconds` (120) tune observation, suspicion, review cooldown
@@ -1420,10 +1425,17 @@ contract: capped content keeps a `… [truncated N chars total … PARTIAL +
 remainder]` marker with the suffix reserved inside the cap, and tight caps
 keep a visible ellipsis. `list_dir` and `tree` skip an entry whose `is_dir()` raises (a dangling
 symlink, ELOOP, or vanished file) instead of aborting the rest of the listing.
-`grep` only opens regular files up to 1 MB and runs its regex scan in a
-killable worker process that cancel always reaps; a slow scan simply keeps
-running until it finishes or the turn is cancelled, so narrow the pattern
-or search path if a query is too broad.
+Broad workspace-root `grep` and `glob` searches in a Git checkout use tracked
+files and untracked files permitted by Git's ignore rules. This avoids scanning
+ignored build trees and archived source copies. A specific search path or directory
+pattern still reaches ignored files or nested repositories when explicitly requested;
+the root inventory covers the parent repository's files. Other workspaces
+retain ordinary filesystem discovery. `grep` only opens regular files up to 1 MB
+and runs its regex scan in a killable worker process. Supervision records the
+actual query and process identity, and can stop an excessively costly read before
+returning its evidence and narrower-query advice to the worker. Cancellation
+always reaps the owned scan before another query starts; partial coverage remains
+explicit and the original task continues.
 The `web_search` and `web_fetch` tools also cap downloaded response bodies
 at 5 MiB and share the bounded `read_bounded_text()` reader in
 `agent_tools/base.py`, which reports whether the cap was hit so the model

@@ -31,7 +31,7 @@ class HangSupervisionPolicyTests(unittest.TestCase):
                     json.dumps({**decision(), "evidence": " "}), json.dumps({**decision(), "repair": False})):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 supervision._parse_diagnosis(raw)
-        for verdict in ("progressing", "uncertain", "confirmed_hang"):
+        for verdict in ("progressing", "uncertain", "confirmed_hang", "replan_read"):
             expected = decision(verdict)
             self.assertEqual(supervision._parse_diagnosis("```json\n" + json.dumps(expected) + "\n```"), expected)
 
@@ -74,6 +74,13 @@ class HangSupervisionPolicyTests(unittest.TestCase):
             self.assertIsNone(stamps["missing.log"])
             self.assertNotIn("../outside.txt", stamps)
 
+    def test_only_owned_builtin_grep_can_opt_in_to_read_replanning(self):
+        for kind in ("native", "tool:bash", "tool:write_file", "tool:grep"):
+            ticket = supervision.Operation(supervision.Worker("workspace", "meta", "model"), kind)
+            with supervision.operation_scope(ticket):
+                supervision.mark_replannable_read()
+            self.assertEqual(ticket.can_replan, kind == "tool:grep")
+
 
 class HangSupervisionAsyncTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -114,6 +121,179 @@ class HangSupervisionAsyncTests(unittest.IsolatedAsyncioTestCase):
         value.progress_at -= 60
         value.last_review -= 60
         return value
+
+    def read_ticket(self):
+        ticket = self.ticket("tool:grep")
+        ticket.can_replan = True
+        ticket.process = SimpleNamespace(pid=10)
+        ticket.identity = snapshot().root
+        ticket.snapshot = snapshot()
+        return ticket
+
+    async def test_replan_verdict_cannot_stop_native_mutable_or_unmarked_reads(self):
+        for kind, marked in (("native", True), ("tool:bash", True), ("tool:write_file", True), ("tool:grep", False)):
+            with self.subTest(kind=kind, marked=marked):
+                finish, reviewed, applied = self.event(), self.event(), self.event()
+                ticket = self.read_ticket()
+                ticket.kind, ticket.can_replan = kind, marked
+
+                async def diagnose(*_args):
+                    reviewed.set()
+                    return decision("replan_read")
+
+                async def observe(_ticket):
+                    if reviewed.is_set():
+                        applied.set()
+
+                self.doctor.side_effect, self.observe.side_effect = diagnose, observe
+                owned = self.spawn(finish.wait())
+                monitor = self.spawn(supervision.wait_owned(owned, ticket))
+                await asyncio.wait_for(applied.wait(), 2)
+                self.assertFalse(owned.done())
+                finish.set()
+                self.assertIsNone(await asyncio.wait_for(monitor, 2))
+                self.assertFalse(owned.cancelled())
+
+    async def test_expensive_read_replanning_settles_owner_and_retains_partial_coverage(self):
+        cleanup, release_cleanup = self.event(), self.event()
+        ticket = self.read_ticket()
+        ticket.command = 'grep path="." pattern="rare_symbol" glob="**/*"'
+        ticket.output = "core/module.cpp:7: rare_symbol"
+        self.doctor.return_value = decision("replan_read")
+
+        async def work():
+            try:
+                await asyncio.Future()
+            finally:
+                cleanup.set()
+                await release_cleanup.wait()
+
+        owned = self.spawn(work())
+        monitor = self.spawn(supervision.wait_owned(owned, ticket))
+        await asyncio.wait_for(cleanup.wait(), 2)
+        self.assertFalse(monitor.done())
+        release_cleanup.set()
+        result = await asyncio.wait_for(monitor, 2)
+        self.assertTrue(owned.cancelled())
+        self.assertIn("not a confirmed deadlock or a complete search", result)
+        self.assertIn(ticket.output, result)
+        self.assertIn(decision()["repair"], result)
+        self.doctor.assert_awaited_once()
+
+    async def test_repeated_uncertain_read_reviews_yield_advice_and_include_prior_findings(self):
+        ticket = self.read_ticket()
+        evidence_seen = []
+
+        async def diagnose(_ticket, evidence, _timeout):
+            evidence_seen.append(evidence)
+            return decision("uncertain")
+
+        self.doctor.side_effect = diagnose
+        with mock.patch.object(config, "get_hang_review_interval_seconds", return_value=0):
+            owned = self.spawn(asyncio.Event().wait())
+            result = await asyncio.wait_for(supervision.wait_owned(owned, ticket), 2)
+        self.assertTrue(owned.cancelled())
+        self.assertEqual(len(evidence_seen), 2)
+        self.assertEqual(evidence_seen[1]["review_count"], 2)
+        self.assertEqual(evidence_seen[1]["previous_reviews"][0]["verdict"], "uncertain")
+        self.assertIn("expensive read-only search was stopped", result)
+        self.assertEqual(self.report.call_args.args[2]["review_verdict"], "uncertain")
+
+    async def test_uncertain_write_reviews_and_unavailable_read_diagnoses_cannot_trigger_replanning(self):
+        for kind, error in (("tool:write_file", None), ("tool:grep", ValueError("malformed")),
+                            ("tool:grep", RuntimeError("provider unavailable"))):
+            with self.subTest(kind=kind, error=error):
+                finish, twice = self.event(), self.event()
+                ticket = self.read_ticket()
+                ticket.kind = kind
+                reviews = 0
+
+                async def diagnose(*_args):
+                    nonlocal reviews
+                    reviews += 1
+                    if reviews == 2:
+                        twice.set()
+                    if error:
+                        raise error
+                    return decision("uncertain")
+
+                self.doctor.side_effect = diagnose
+                with mock.patch.object(config, "get_hang_review_interval_seconds", return_value=0):
+                    owned = self.spawn(finish.wait())
+                    monitor = self.spawn(supervision.wait_owned(owned, ticket))
+                    await asyncio.wait_for(twice.wait(), 2)
+                    self.assertFalse(owned.done())
+                    finish.set()
+                    self.assertIsNone(await asyncio.wait_for(monitor, 2))
+                self.assertFalse(owned.cancelled())
+
+    async def test_replanning_requires_a_verified_owned_process(self):
+        for identity, observed in ((None, snapshot()), (snapshot().root, None)):
+            with self.subTest(identity=identity, observed=observed):
+                finish, applied = self.event(), self.event()
+                ticket = self.read_ticket()
+                ticket.identity, ticket.snapshot = identity, observed
+                self.doctor.return_value = decision("replan_read")
+
+                async def observe(_ticket):
+                    if self.doctor.await_count:
+                        applied.set()
+
+                self.observe.side_effect = observe
+                self.doctor.reset_mock()
+                owned = self.spawn(finish.wait())
+                monitor = self.spawn(supervision.wait_owned(owned, ticket))
+                await asyncio.wait_for(applied.wait(), 2)
+                self.assertFalse(owned.done())
+                finish.set()
+                self.assertIsNone(await asyncio.wait_for(monitor, 2))
+                self.assertFalse(owned.cancelled())
+
+    async def test_new_matches_during_read_diagnosis_make_replan_stale(self):
+        finish, entered, release, applied = (self.event() for _ in range(4))
+        ticket = self.read_ticket()
+
+        async def diagnose(*_args):
+            entered.set()
+            await release.wait()
+            return decision("replan_read")
+
+        async def observe(_ticket):
+            if release.is_set():
+                applied.set()
+
+        self.doctor.side_effect, self.observe.side_effect = diagnose, observe
+        owned = self.spawn(finish.wait())
+        monitor = self.spawn(supervision.wait_owned(owned, ticket))
+        await asyncio.wait_for(entered.wait(), 2)
+        with supervision.operation_scope(ticket):
+            supervision.note_output("core/next.cpp:10: rare_symbol")
+        release.set()
+        await asyncio.wait_for(applied.wait(), 2)
+        self.assertFalse(owned.done())
+        finish.set()
+        self.assertIsNone(await asyncio.wait_for(monitor, 2))
+        self.report.assert_not_called()
+
+    async def test_operator_cancel_during_read_cleanup_never_returns_replan_success(self):
+        cleanup, release_cleanup = self.event(), self.event()
+        self.doctor.return_value = decision("replan_read")
+
+        async def work():
+            try:
+                await asyncio.Future()
+            finally:
+                cleanup.set()
+                await release_cleanup.wait()
+
+        owned = self.spawn(work())
+        monitor = self.spawn(supervision.wait_owned(owned, self.read_ticket()))
+        await asyncio.wait_for(cleanup.wait(), 2)
+        monitor.cancel()
+        release_cleanup.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(monitor, 2)
+        self.assertTrue(owned.cancelled())
 
     async def test_process_io_and_child_churn_are_observed_without_resetting_quiet_clock(self):
         for kind in ("native", "tool:bash"):

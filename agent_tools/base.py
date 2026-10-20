@@ -9,6 +9,7 @@ import fnmatch
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -23,10 +24,12 @@ import re
 import socket
 import urllib.parse
 
-from ..utils import clip_status_value, is_path_within
+from ..utils import clip_status_value, close_subprocess_pipe, is_path_within
 from . import _http_types
 
 _MAX_FETCH_BYTES = 5 * 1024 * 1024
+_GIT_DISCOVERY_MAX_BYTES = 32 * 1024 * 1024
+_GIT_DISCOVERY_TIMEOUT_SECONDS = 10
 HTTP_USER_AGENT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 compatible; CozterAgent/1.0; +https://local"
@@ -522,6 +525,7 @@ def iter_workspace_files(
     *,
     discovery_pattern: str | None = None,
     sort_entries: bool = False,
+    source_files: list[str] | None = None,
 ) -> Iterator[tuple[str, str, str]]:
     """Yield files under *root* that match *pattern*.
 
@@ -540,6 +544,32 @@ def iter_workspace_files(
     )
     full_access = get_tool_permission() == "full"
     pattern_parts = _glob_segments(pattern or "**/*")
+    if source_files is not None:
+        entries = sorted(source_files, key=_discovery_order) if sort_entries else source_files
+        for relative in entries:
+            parts = _glob_segments(relative)
+            if (
+                any(part in skip_dirs for part in parts[:-1])
+                or not _match_glob_parts(pattern_parts, parts)
+            ):
+                continue
+            fpath = os.path.join(abs_root, relative)
+            try:
+                if (
+                    os.path.commonpath((os.path.abspath(fpath), abs_root)) != abs_root
+                    or not os.path.lexists(fpath)
+                    or os.path.isdir(fpath)
+                    or (
+                        not full_access
+                        and os.path.commonpath((os.path.realpath(fpath), abs_ws)) != abs_ws
+                    )
+                ):
+                    continue
+            except (OSError, ValueError):
+                continue
+            display = os.path.relpath(fpath, abs_ws).replace(os.sep, "/")
+            yield fpath, display, relative.replace(os.sep, "/")
+        return
     if "**" in pattern_parts:
         directory_prefix = pattern_parts[:pattern_parts.index("**")]
         max_directory_depth = None
@@ -604,6 +634,88 @@ def iter_workspace_files(
                 if lexical_inside else fpath
             ).replace(os.sep, "/")
             yield fpath, ws_rel, root_rel
+
+
+def _discovery_order(relative: str) -> tuple[tuple[int, str], ...]:
+    parts = relative.replace("\\", "/").split("/")
+    return tuple((1, part) for part in parts[:-1]) + ((0, parts[-1]),)
+
+
+async def git_discovery_files(
+    workspace: str, root: str, pattern: str,
+) -> list[str] | None:
+    """Use Git's current files for broad root searches; keep explicit paths open."""
+    abs_ws = os.path.realpath(workspace)
+    if (
+        os.path.normcase(os.path.realpath(root)) != os.path.normcase(abs_ws)
+        or not os.path.exists(os.path.join(abs_ws, ".git"))
+    ):
+        return None
+    parts = _glob_segments(pattern)
+    if (
+        not parts
+        or any(part not in ("*", "**") for part in parts[:-1])
+        or not any(character in parts[-1] for character in "*?[")
+    ):
+        return None
+    git = shutil.which("git")
+    if git is None:
+        return None
+
+    async def create() -> asyncio.subprocess.Process:
+        return await asyncio.create_subprocess_exec(
+            git, "-c", "core.fsmonitor=false", "-C", abs_ws,
+            "ls-files", "--cached", "--others",
+            "--exclude-standard", "-z",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    async def cleanup() -> None:
+        while not launch.done():
+            await asyncio.wait((launch,))
+        if launch.cancelled() or launch.exception() is not None:
+            return
+        proc = launch.result()
+        if proc.returncode is None:
+            with suppress(ProcessLookupError):
+                proc.kill()
+        close_subprocess_pipe(proc, 1)
+        await proc.wait()
+
+    launch = asyncio.create_task(create())
+    cancelled: asyncio.CancelledError | None = None
+    try:
+        async with asyncio.timeout(_GIT_DISCOVERY_TIMEOUT_SECONDS):
+            await asyncio.wait((launch,))
+            proc = launch.result()
+            assert proc.stdout is not None
+            output = bytearray()
+            while chunk := await proc.stdout.read(65536):
+                output.extend(chunk)
+                if len(output) > _GIT_DISCOVERY_MAX_BYTES:
+                    raise ValueError("Git inventory exceeds the discovery budget")
+            if await proc.wait():
+                raise OSError("Git inventory failed")
+        return list(dict.fromkeys(os.fsdecode(path) for path in bytes(output).split(b"\0") if path))
+    except (OSError, ValueError, TimeoutError):
+        return None
+    except asyncio.CancelledError as exc:
+        cancelled = exc
+        raise
+    finally:
+        settlement = asyncio.create_task(cleanup())
+        interrupted: asyncio.CancelledError | None = None
+        while not settlement.done():
+            try:
+                await asyncio.wait((settlement,))
+            except asyncio.CancelledError as exc:
+                interrupted = exc
+        settlement.result()
+        if interrupted is not None and cancelled is None:
+            raise interrupted
 
 
 def _discovery_directory_matches(

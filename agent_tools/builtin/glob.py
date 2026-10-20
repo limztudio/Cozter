@@ -9,6 +9,7 @@ from glob import has_magic
 from ..base import (
     AgentTool,
     coerce_int_arg,
+    git_discovery_files,
     iter_workspace_files,
     object_parameters,
     require_nonempty_string_arg,
@@ -22,7 +23,9 @@ class GlobTool(AgentTool):
     name = "glob"
     description = (
         "Find files by glob (`**` recurses). Use the returned offset to page"
-        " remaining matches; restart at offset=0 if files change."
+        " remaining matches; restart at offset=0 if files change. Broad"
+        " workspace searches use the root repository's Git files; use a"
+        " specific path or directory pattern for ignored files or nested repositories."
     )
     parameters = object_parameters(
         {
@@ -62,9 +65,10 @@ class GlobTool(AgentTool):
             root = resolve_inside_workspace(
                 abs_ws, args.get("path") or ".",
             )
+            source_files = await git_discovery_files(abs_ws, root, pattern)
             matches = await asyncio.to_thread(
                 self._find_matches, abs_ws, pattern, max_results + 1, root,
-                offset, sort_entries=True,
+                offset, sort_entries=True, source_files=source_files,
             )
         except Exception as exc:
             return f"Glob failed: {exc}"
@@ -82,6 +86,7 @@ class GlobTool(AgentTool):
         search_root: str | None = None,
         offset: int = 0,
         *, sort_entries: bool = False,
+        source_files: list[str] | None = None,
     ) -> list[str]:
         """Synchronously scan for matches; called in a worker thread."""
         # Split off a literal prefix (anchors literal; never split magical ones).
@@ -98,6 +103,7 @@ class GlobTool(AgentTool):
         for index, (_path, rel, _root_rel) in enumerate(iter_workspace_files(
             workspace_path, root, search_pattern, discovery_pattern=pattern,
             sort_entries=sort_entries,
+            source_files=source_files,
         )):
             if index < offset:
                 continue
