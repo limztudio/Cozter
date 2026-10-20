@@ -2785,16 +2785,16 @@ async def _run_flexible(
             backend, "\n".join(worker_sections.values()), collaborative=False,
             allow_detached_requests=False, skills_catalog=native_skills_catalog,
         )
+        worker_prompt = bootstrap_prompt
+        if http_resume:
+            worker_prompt = _build_backend_prompt(
+                backend, "\n".join(prompt_sections.values()), collaborative=False,
+                allow_detached_requests=False, skills_catalog=native_skills_catalog,
+            )
         with (execution_state.worker_scope(scope),
               http_continuation_scope(bootstrap_prompt if http_resume else None)):
             sub_result, restarting = await _run_with_stage_timing(_drive_backend(
-                backend, workspace_path,
-                _build_backend_prompt(
-                    backend,
-                    "\n".join(prompt_sections.values()),
-                    collaborative=False, allow_detached_requests=False,
-                    skills_catalog=native_skills_catalog,
-                ),
+                backend, workspace_path, worker_prompt,
                 model, worker_approval, effort=tier_efforts[task.tier], on_event=on_event,
                 # A parallel wave has ONE inject watcher; it stops every sibling.
                 inject_queue=None if parallel else inject_queue,
@@ -2847,6 +2847,16 @@ async def _run_flexible(
         if item["state"] == "complete":
             return decode_output(item["output"]), False
         helper_name, helper_model = tiers[item["tier"]]
+        helper_target = (helper_name, helper_model)
+        unavailable_cause = unavailable_models.get(helper_target)
+        if unavailable_cause is not None:
+            value = AgentResult(
+                text="Helper was not run because this account/model is already unavailable.",
+                error=unavailable_cause,
+            )
+            item.update(state="complete", output=encode_output(value, text=True))
+            await save_progress()
+            return value, False
         helper = backends_agent.get_backend(helper_name)
         restricted_cli = isinstance(helper.permission_arg_sets, dict) and "restricted" in helper.permission_arg_sets
         if not (getattr(helper, "supports_read_only_workers", False) or restricted_cli):
@@ -2898,6 +2908,8 @@ async def _run_flexible(
             budget.capture(value, workspace_path)
         _accumulate_usage(usage_totals, value.usage)
         _accumulate_usage(usage_audit, value.usage)
+        if value.error and _account_provider_unavailable(value.error):
+            unavailable_models[helper_target] = value.error
         result.events.extend(event for event in value.events if event.kind != "text")
         for marker in _split_attach_markers(value.text)[1]:
             if marker not in attach_markers:
@@ -2918,7 +2930,7 @@ async def _run_flexible(
         tier_backend_name, tier_model = tiers[task.tier]
         target = (tier_backend_name, tier_model)
         unavailable_cause = unavailable_models.get(target)
-        if unavailable_cause is not None:
+        if unavailable_cause is not None and not worker_outputs.get(str(done), {}).get("complete"):
             await status(
                 f"flexible [{done + 1}/{total}] {task.tier} ·"
                 f" {tier_backend_name}/{tier_model}: skipping unavailable account/model"
@@ -2932,6 +2944,7 @@ async def _run_flexible(
                 f" an account/auth limit: {unavailable_cause}\n"
                 "This plan item remains unfinished."
             )
+            worker_errors.append(unavailable_cause)
             done += 1
             await save_progress()
             continue
@@ -2949,9 +2962,17 @@ async def _run_flexible(
                 end += 1
         if budget is not None:
             remaining = budget.max_workers - budget.workers_started
-            if remaining <= 0:
+            fresh = 0
+            admitted = done
+            for index in range(done, end):
+                if not worker_outputs.get(str(index), {}).get("complete"):
+                    if fresh >= remaining:
+                        break
+                    fresh += 1
+                admitted = index + 1
+            if admitted == done:
                 budget.claim_worker()  # raises with the established checkpoint protocol
-            end = min(end, done + remaining)
+            end = admitted
         earlier = list(reports)
         if any(not worker_outputs.get(str(index), {}).get("complete") for index in range(done, end)):
             # Each actual worker wave selects skills from disk again. A long

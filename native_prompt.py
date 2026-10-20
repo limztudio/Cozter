@@ -45,11 +45,12 @@ def message_is_known_from_ledger(
         return False
     sources = ledger.get("message_sources", {})
     receipt = sources.get(coordinate) if isinstance(sources, dict) else None
+    source_receipt = receipt if isinstance(receipt, dict) and receipt.get("source") == source_hash else None
+    if source_receipt is not None and source_receipt.get("complete") is True:
+        return True
     digest = delivery_fingerprint(source_hash, rendered_text)
-    if isinstance(receipt, dict) and receipt.get("source") == source_hash:
-        if receipt.get("complete") is True:
-            return True
-        deliveries = receipt.get("deliveries", [])
+    if source_receipt is not None:
+        deliveries = source_receipt.get("deliveries", [])
         if isinstance(deliveries, list) and digest in deliveries:
             return True
     # An exact projected hash proves that view only, never full coverage.
