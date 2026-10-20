@@ -2286,7 +2286,7 @@ class ZaiBackendTests(unittest.TestCase):
             backend._effort_fields(50, "glm-5.2"),
             {
                 "thinking": {"type": "enabled"},
-                "reasoning_effort": "medium",
+                "reasoning_effort": "high",
             },
         )
         self.assertEqual(
@@ -2300,7 +2300,7 @@ class ZaiBackendTests(unittest.TestCase):
             backend._effort_fields(50, "GLM-5.2[1M]"),
             {
                 "thinking": {"type": "enabled"},
-                "reasoning_effort": "medium",
+                "reasoning_effort": "high",
             },
         )
 

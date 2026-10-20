@@ -363,6 +363,17 @@ class OpenAIChatBackend(Backend):
         native_effort = self.convert_effort(percent)
         return {"reasoning_effort": native_effort} if native_effort else {}
 
+    def describe_effort(self, percent: int, model: str | None = None) -> str:
+        """Describe the effort fields this provider will actually receive."""
+        fields = self._effort_fields(percent, self._request_model(model))
+        native = fields.get("reasoning_effort")
+        if isinstance(native, str) and native:
+            return native
+        thinking = fields.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") in {"enabled", "disabled"}:
+            return f"thinking {thinking['type']}"
+        return "backend default (no override)"
+
     def _tool_request_fields(self, _model: str | None) -> dict[str, Any]:
         """Return provider fields for a streaming completion with tools.
 

@@ -148,19 +148,18 @@ class ZaiBackend(CachedOpenAIChatBackend):
         "mid": "glm-4.7",
         "high": "glm-5.3",
     }
-    # GLM-5.2: seven levels; 5.3 family: three; others: switch only.
-    effort_levels = (
-        "none", "minimal", "low", "medium", "high", "xhigh", "max",
-    )
+    # GLM-5.2 aliases xhigh to max; keep only its distinct levels.
+    # https://docs.z.ai/guides/capabilities/thinking
+    effort_levels = ("none", "high", "max")
 
     def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
         """Return the documented reasoning vocabulary for one GLM model."""
-        if (
-            _capability_model_id(model or self.default_model)
-            in _GLM_5_3_REASONING_MODELS
-        ):
+        selected = _capability_model_id(model or self.default_model)
+        if selected in _GLM_5_3_REASONING_MODELS:
             return _GLM_5_3_EFFORT_LEVELS
-        return self.effort_levels
+        if selected == "glm-5.2":
+            return self.effort_levels
+        return ()
 
     def context_window_tokens(self, model: str | None) -> int | None:
         """Return a published capacity for a curated Z.ai model ID."""
@@ -210,18 +209,12 @@ class ZaiBackend(CachedOpenAIChatBackend):
         if percent <= 0:
             return {}
         selected = _capability_model_id(model or self.default_model)
-        if selected in _GLM_5_3_REASONING_MODELS:
-            # Reasoning-only family: map percentage onto three levels.
+        if selected in _GLM_5_3_REASONING_MODELS or selected == "glm-5.2":
             return {
                 "thinking": {"type": "enabled"},
                 "reasoning_effort": effort_band(
                     percent, self.effort_levels_for_model(model),
                 ),
-            }
-        if selected == "glm-5.2":
-            return {
-                "thinking": {"type": "enabled"},
-                "reasoning_effort": self.convert_effort(percent),
             }
         if selected in _COMPULSORY_THINKING_MODELS:
             return {"thinking": {"type": "enabled"}}

@@ -1947,6 +1947,28 @@ class BotPlatform(ABC):
         inherited = workspace.get_flexible_reasoning_effort_override(ws, tier) is None
         return f"{value}%" + (" (inherited from workspace)" if inherited else " (tier override)")
 
+    @staticmethod
+    def _effort_resolution_text(ws: str, tier: str | None = None) -> str:
+        """Show the native request level for the current backend or tiers."""
+        name = workspace.get_backend_name(ws)
+        if tier is not None or name == workspace.FLEXIBLE_BACKEND:
+            tiers = workspace.get_flexible_run_config(ws)
+            efforts = workspace.get_flexible_reasoning_efforts(ws)
+            lines = []
+            for selected in ([tier] if tier is not None else workspace.FLEXIBLE_TIERS):
+                backend_name, model = tiers[selected]
+                native = backends_agent.get_backend(backend_name).describe_effort(efforts[selected], model)
+                inherited = workspace.get_flexible_reasoning_effort_override(ws, selected) is None
+                source = "inherited from workspace" if inherited else "tier override"
+                label = f"{backend_name}/{model} — {efforts[selected]}% ({source}) → {native}"
+                if tier is None:
+                    label = f"{selected}: {label}"
+                lines.append(label)
+            return "\n".join(lines)
+        model = workspace.get_model(ws)
+        native = backends_agent.get_backend(name).describe_effort(workspace.get_reasoning_effort(ws), model)
+        return f"{name}/{model} → {native}"
+
     # Flexible tier settings.
 
     async def _show_flexible_agent(self, ctx: BotContext, tier: str) -> None:
@@ -2157,9 +2179,14 @@ class BotPlatform(ABC):
         ws = await self._require_ws(ctx)
         if ws is None:
             return
+        if ctx.args.strip():
+            ctx.text = ctx.args
+            await self._receive_effort(ctx)
+            return
         current = workspace.get_reasoning_effort(ws)
         await ctx.reply_text(
-            f"Current reasoning effort: {current}%\n\n"
+            f"Current reasoning effort: {current}%\n"
+            f"{self._effort_resolution_text(ws)}\n\n"
             "Pick a percentage 0-100. Higher = more reasoning,"
             " slower & costlier. 0 = no override (server picks).\n\n"
             "100% selects the highest reasoning-effort level supported by"
@@ -2194,9 +2221,8 @@ class BotPlatform(ABC):
             return
         workspace.set_reasoning_effort(ws, value)
         await ctx.reply_text(
-            f"Reasoning effort set to: {value}%"
-            + ("\n(0 = no override - each backend uses its default)"
-               if value == 0 else "")
+            f"Reasoning effort set to: {value}%\n"
+            + self._effort_resolution_text(ws)
         )
 
     async def _show_flexible_effort(self, ctx: BotContext, tier: str) -> None:
@@ -2208,7 +2234,8 @@ class BotPlatform(ABC):
             await self._receive_flexible_effort(ctx, tier=tier)
             return
         await ctx.reply_text(
-            f"Flexible {tier} reasoning effort: {self._flexible_effort_text(ws, tier)}\n\n"
+            f"Flexible {tier} reasoning effort: {self._flexible_effort_text(ws, tier)}\n"
+            f"{self._effort_resolution_text(ws, tier)}\n\n"
             "Enter 0-100, or default to inherit the workspace effort."
             " 0 explicitly uses the backend default; 100 selects the model's"
             " highest supported effort.\nEnter a value (or /cancel):"
@@ -2230,7 +2257,7 @@ class BotPlatform(ABC):
                 return
         workspace.set_flexible_reasoning_effort(ws, tier, value)
         await ctx.reply_text(f"Flexible {tier} reasoning effort set to: {self._flexible_effort_text(ws, tier)}"
-                             + ("\n0 = backend default." if value == 0 else ""))
+                             + f"\n{self._effort_resolution_text(ws, tier)}")
 
     # /refresh
 

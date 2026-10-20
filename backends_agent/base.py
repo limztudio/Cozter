@@ -985,6 +985,18 @@ class Backend(ABC):
         """Return the reasoning-effort vocabulary for a selected model."""
         return self.effort_levels
 
+    def describe_effort(self, percent: int, model: str | None = None) -> str:
+        """Describe the native effort request without probing the provider."""
+        if percent <= 0:
+            return "backend default (no override)"
+        levels = self.effort_levels_for_model(model)
+        native = effort_band(percent, levels)
+        if native is not None:
+            return native
+        if not levels:
+            return "backend default (no adjustable effort for this model)"
+        return "backend default (no lower effort level for this model)"
+
     @classmethod
     def permission_args(cls, approval: str) -> list[str]:
         """Return backend-specific CLI flags for a permission mode."""

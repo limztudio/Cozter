@@ -1910,6 +1910,13 @@ retained on the turn without replacing that reply.
 override — server defaults apply"; `1`–`100` are explicit. Each backend
 maps the percentage to its own vocabulary and request shape:
 
+Use `/effort 99` directly or enter a value in the `/effort` prompt. Confirmation
+shows the resolved backend/model and native request level, such as `xhigh`,
+`max`, or `ultra`. Flexible shows each tier's effective percentage, inherited
+or overridden source, and native level. `/effort_flexible_<tier>` confirms the
+same mapping for that tier. Models without adjustable effort report their
+native default; Z.ai models with a thinking switch report enabled/disabled.
+
 Only `100` explicitly selects a model's highest supported effort level.
 Values `1`–`99` keep the existing lower-level cutoffs and stop at the next
 level down. This applies to CLI and HTTP backends, including Flexible task
@@ -1924,11 +1931,16 @@ retain their native behavior.
 |---|---|---|
 | `codex` | Model-aware: 4–6 levels | `ultra` (Astra/Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels; highest reserved for `100` | `payload["reasoning_effort"] = "high"` |
-| `meta` | Standard Muse Spark 1.3: 6 levels (`minimal` through `max`); older and Contributor models: 5 levels (`minimal` through `xhigh`) | `payload["reasoning_effort"] = "max"` for standard 1.3; `xhigh` for older and Contributor models |
-| `zai` | GLM-5.3/Flash/FlashX: 3 levels; GLM-5.2: 7 levels; other GLMs use documented thinking behavior | `payload["reasoning_effort"] = "max"` |
+| `meta` | Muse Wonder 1.0 and Standard Spark 1.3: 6 levels (`minimal` through `max`); older and Contributor models: 5 levels (`minimal` through `xhigh`) | `payload["reasoning_effort"] = "max"` for Wonder/standard 1.3; `xhigh` for older and Contributor models |
+| `zai` | GLM-5.3/Flash/FlashX: `low` / `high` / `max`; GLM-5.2: `none` / `high` / `max`; other GLMs use documented thinking switches | `payload["reasoning_effort"] = "max"` for graded models |
 | `claude_code` | Model-aware: current Fable / Haiku 5.5 / Sonnet 5.5 / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.6 and Sonnet 4.6 use 4; Opus 4.5, Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
 | `grok` | Model-aware: grok-4.7 / grok-4.7-build-fast / grok-4.6 use 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on 4.7/4.6; `--effort high` otherwise |
+
+GLM-5.2 uses its three effective levels, as documented in [Z.ai's thinking guide](https://docs.z.ai/guides/capabilities/thinking).
+The provider treats `xhigh` as `max`, so Cozter maps 1–99 to `none` or `high`
+and reserves `max` for 100. Its explicit `none` level disables thinking;
+zero still omits the override and keeps the provider default.
 
 The setting applies only to user-facing chat turns. Internal calls
 (compaction, routing, titling, colony consolidation) skip the effort

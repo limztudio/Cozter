@@ -127,6 +127,23 @@ class MetaReasoningCapabilityTests(unittest.TestCase):
 
 
 class ZaiModelDiscoveryCapabilityTests(unittest.TestCase):
+    def test_glm_5_2_never_selects_a_maximum_alias_below_100(self) -> None:
+        backend = ZaiBackend()
+        aliases = {"minimal", "low", "medium", "xhigh"}
+        for model in ("glm-5.2", " GLM-5.2[1M] "):
+            with self.subTest(model=model):
+                self.assertEqual(backend.effort_levels_for_model(model), ("none", "high", "max"))
+                self.assertEqual(backend._effort_fields(0, model), {})
+                for percent in range(1, 100):
+                    level = backend._effort_fields(percent, model)["reasoning_effort"]
+                    self.assertIn(level, {"none", "high"})
+                    self.assertNotIn(level, aliases)
+                self.assertEqual(backend._effort_fields(100, model)["reasoning_effort"], "max")
+        for model in ("glm-5.1", "glm-4.7", "glm-4.5v", "private-glm"):
+            with self.subTest(switch_model=model):
+                self.assertEqual(backend.effort_levels_for_model(model), ())
+                self.assertNotIn("reasoning_effort", backend._effort_fields(99, model))
+
     def test_coding_plan_fallback_omits_standard_only_flashx(self) -> None:
         standard = zai_mod._coding_plan_fallback_models(
             "https://api.z.ai/api/paas/v4/",
