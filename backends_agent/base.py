@@ -215,8 +215,19 @@ class CachedModelCatalog:
 
     def __init__(self) -> None:
         self._cached_models: tuple[str, ...] | None = None
+        self._cached_models_key: object = None
         self._catalog_expires_at = 0.0
         self._models_lock = threading.Lock()
+
+    def _model_catalog_key(self) -> object:
+        """Return the endpoint identity used by this catalog."""
+        return None
+
+    def invalidate_model_catalog(self, workspace_path: str | None = None) -> None:
+        """Discard catalog metadata without touching native conversations."""
+        with self._models_lock:
+            self._cached_models = None
+            self._catalog_expires_at = 0.0
 
     def _fetch_models(self) -> tuple[str, ...]:
         """Return this provider's current model catalog."""
@@ -224,24 +235,26 @@ class CachedModelCatalog:
 
     def _live_model_catalog(self) -> tuple[str, ...]:
         """Return the cached catalog, refreshing it after the shared TTL."""
-        cached = fresh_model_catalog(
-            self._cached_models, self._catalog_expires_at,
-        )
-        if cached is not None:
-            return cached
-
         with self._models_lock:
-            cached = fresh_model_catalog(
-                self._cached_models, self._catalog_expires_at,
-            )
-            if cached is not None:
-                return cached
-            models = self._fetch_models()
-            self._cached_models = models
-            self._catalog_expires_at = (
-                time.monotonic() + self._model_catalog_ttl_sec
-            )
-            return models
+            for _attempt in range(2):
+                key = self._model_catalog_key()
+                cached = fresh_model_catalog(
+                    self._cached_models, self._catalog_expires_at,
+                )
+                if cached is not None and self._cached_models_key == key:
+                    return cached
+                models = self._fetch_models()
+                if self._model_catalog_key() != key:
+                    self._cached_models = None
+                    self._catalog_expires_at = 0.0
+                    continue
+                self._cached_models = models
+                self._cached_models_key = key
+                self._catalog_expires_at = (
+                    time.monotonic() + self._model_catalog_ttl_sec
+                )
+                return models
+            return ()
 
 
 class ProcessResourceMap:
@@ -918,6 +931,9 @@ class Backend(ABC):
         project-policy backends override.
         """
         return self.available_models
+
+    def invalidate_model_catalog(self, workspace_path: str | None = None) -> None:
+        """Discard cached model metadata; static catalogs need no cleanup."""
 
     def resolve_configured_model(self, model: str) -> str:
         """Return a stored model ID that is safe to launch.

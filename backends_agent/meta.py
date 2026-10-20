@@ -1,6 +1,6 @@
 """Meta Model API backend: OpenAI-compatible cloud API for the Muse models.
 
-Meta's Model API serves the Muse families (Muse Spark text/reasoning chat
+Meta's Model API serves the Muse families (Muse Wonder and Muse Spark chat
 models) through an OpenAI-compatible endpoint with Bearer auth. It reuses
 the shared :class:`OpenAIChatBackend` loop; this module supplies only Meta's
 specifics - the Model API endpoint, the Authorization header built from
@@ -16,6 +16,7 @@ via ``extra_models`` in config without editing source.
 
 from __future__ import annotations
 
+import hashlib
 from typing import NamedTuple
 
 from .. import config as cfg
@@ -32,19 +33,25 @@ class _FallbackModelSpec(NamedTuple):
 
     name: str
     context_window: int
+    supports_max: bool
 
 
-# Offline discovery fallback: curated chat IDs + capabilities.
+# https://dev.meta.ai/docs/models and /docs/reasoning (2026-10-21).
 _FALLBACK_MODEL_SPECS = (
-    # Current flagship.
-    _FallbackModelSpec("muse-spark-1.3", 1_048_576),
-    _FallbackModelSpec("muse-spark-1.2", 1_048_576),
-    _FallbackModelSpec("muse-spark-1.1", 1_048_576),
+    _FallbackModelSpec("muse-wonder-1.0", 1_048_576, True),
+    _FallbackModelSpec("muse-spark-1.3", 1_048_576, True),
+    _FallbackModelSpec("muse-spark-1.3-contributor", 1_048_576, False),
+    _FallbackModelSpec("muse-spark-1.2", 1_048_576, False),
+    _FallbackModelSpec("muse-spark-1.2-contributor", 1_048_576, False),
+    _FallbackModelSpec("muse-spark-1.1", 1_048_576, False),
 )
 _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _MODEL_CONTEXT_WINDOWS = {
     spec.name: spec.context_window for spec in _FALLBACK_MODEL_SPECS
 }
+_MAX_REASONING_MODELS = frozenset(
+    spec.name for spec in _FALLBACK_MODEL_SPECS if spec.supports_max
+)
 # Non-chat endpoints (image/voice/SAM): unknown IDs stay selectable.
 _NON_CHAT_COMPLETION_MODEL_PREFIXES = (
     "muse-image",
@@ -65,14 +72,10 @@ def _is_non_chat_completion_model_id(model_id: str) -> bool:
 
 
 def _capability_model_id(model: str | None) -> str:
-    """Normalize pricing-tier suffixes for capability lookups.
-
-    Requests keep the exact ID; e.g. ``-contributor`` shares the base
-    model's window and streaming behavior.
-    """
+    """Normalize known model IDs without inventing pricing variants."""
     if not isinstance(model, str):
         return ""
-    return model.strip().casefold().removesuffix("-contributor")
+    return model.strip().casefold()
 
 
 class MetaModelApiBackend(CachedOpenAIChatBackend):
@@ -87,16 +90,16 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         "mid": "muse-spark-1.3",
         "high": "muse-spark-1.3",
     }
-    # https://dev.meta.ai/docs/reasoning: max is Standard-tier 1.3 only.
+    # Max is supported by Wonder and Standard-tier Spark 1.3.
     # Muse Spark always reasons, so its vocabulary never includes "none".
     effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
 
     def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
         """Expose only reasoning levels supported by the selected tier."""
-        selected = (model or self.default_model).strip().casefold()
-        if selected == "muse-spark-1.3":
+        selected = _capability_model_id(model or self.default_model)
+        if selected in _MAX_REASONING_MODELS:
             return self.effort_levels
-        if _capability_model_id(selected) in _MODEL_CONTEXT_WINDOWS:
+        if selected in _MODEL_CONTEXT_WINDOWS:
             return self.effort_levels[:-1]
         return CachedOpenAIChatBackend.effort_levels
 
@@ -113,6 +116,12 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         selected = _capability_model_id(model or self.default_model)
         return _MODEL_CONTEXT_WINDOWS.get(selected)
 
+    def _model_catalog_key(self) -> object:
+        return (
+            hashlib.sha256(cfg.get_meta_base_url().rstrip("/").encode()).digest(),
+            hashlib.sha256(cfg.get_meta_api_key().encode()).digest(),
+        )
+
     def _fetch_models(self) -> tuple[str, ...]:
         return discover_bearer_models(
             label="Meta Model API",
@@ -128,7 +137,7 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         )
 
     def _chat_endpoint(self) -> str:
-# base_url carries /v1: append /chat/completions.
+        # base_url carries /v1: append /chat/completions.
         return cfg.get_meta_base_url().rstrip("/") + "/chat/completions"
 
     def _auth_headers(self) -> dict[str, str]:

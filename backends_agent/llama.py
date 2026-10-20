@@ -31,6 +31,9 @@ class LlamaBackend(CachedOpenAIChatBackend):
     def _models_url(self) -> str:
         return cfg.get_llama_server_url().rstrip("/") + "/v1/models"
 
+    def _model_catalog_key(self) -> object:
+        return self._models_url()
+
     def _fetch_models(self) -> tuple[str, ...]:
         url = self._models_url()
         try:

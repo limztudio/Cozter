@@ -11,7 +11,68 @@ from Cozter.backends_agent.meta import MetaModelApiBackend
 from Cozter.backends_agent.zai import ZaiBackend
 
 
+class AccountCatalogIdentityTests(unittest.TestCase):
+    def test_warm_catalog_cannot_cross_endpoint_or_account_changes(self) -> None:
+        for module, backend_type, name in (
+            (meta_mod, MetaModelApiBackend, "meta"),
+            (zai_mod, ZaiBackend, "zai"),
+        ):
+            with (
+                self.subTest(backend=name),
+                mock.patch.object(
+                    module.cfg, f"get_{name}_base_url",
+                    return_value="https://first.invalid/v1",
+                ) as base_url,
+                mock.patch.object(
+                    module.cfg, f"get_{name}_api_key", return_value="secret-account-a",
+                ) as api_key,
+                mock.patch.object(
+                    module, "fetch_model_ids",
+                    side_effect=[("private-a",), ("private-b",), ("private-c",)],
+                ) as fetch,
+            ):
+                backend = backend_type()
+                self.assertEqual(backend.available_models, ("private-a",))
+                self.assertEqual(backend.available_models, ("private-a",))
+                self.assertEqual(fetch.call_count, 1)
+                first_identity = backend._model_catalog_key()
+                self.assertNotIn("secret-account-a", repr(first_identity))
+                base_url.return_value = "https://second.invalid/v1"
+                self.assertEqual(backend.available_models, ("private-b",))
+                self.assertNotEqual(backend._model_catalog_key(), first_identity)
+                second_identity = backend._model_catalog_key()
+                api_key.return_value = "secret-account-b"
+                self.assertEqual(backend.available_models, ("private-c",))
+                self.assertNotEqual(backend._model_catalog_key(), second_identity)
+                self.assertNotIn("secret-account-b", repr(backend._model_catalog_key()))
+                self.assertEqual(fetch.call_count, 3)
+                api_key.return_value = ""
+                self.assertEqual(backend.available_models, module._FALLBACK_MODELS)
+                self.assertEqual(fetch.call_count, 3)
+
+
 class MetaReasoningCapabilityTests(unittest.TestCase):
+    def test_wonder_max_effort_keeps_only_100_as_maximum(self) -> None:
+        backend = MetaModelApiBackend()
+        for model in ("muse-wonder-1.0", " MUSE-WONDER-1.0 "):
+            with self.subTest(model=model):
+                self.assertIn("muse-wonder-1.0", meta_mod._FALLBACK_MODELS)
+                self.assertEqual(backend.context_window_tokens(model), 1_048_576)
+                self.assertEqual(
+                    backend._effort_fields(99, model), {"reasoning_effort": "xhigh"},
+                )
+                self.assertEqual(
+                    backend._effort_fields(100, model), {"reasoning_effort": "max"},
+                )
+                self.assertEqual(backend._request_model(model), model)
+        for unsupported in (
+            "muse-wonder-1.0-contributor", "muse-spark-1.1-contributor",
+        ):
+            with self.subTest(model=unsupported):
+                self.assertNotIn(unsupported, meta_mod._FALLBACK_MODELS)
+                self.assertIsNone(backend.context_window_tokens(unsupported))
+                self.assertNotIn("max", backend.effort_levels_for_model(unsupported))
+
     def test_standard_spark_1_3_exposes_extended_reasoning(self) -> None:
         backend = MetaModelApiBackend()
         expected = ("minimal", "low", "medium", "high", "xhigh", "max")
@@ -66,6 +127,18 @@ class MetaReasoningCapabilityTests(unittest.TestCase):
 
 
 class ZaiModelDiscoveryCapabilityTests(unittest.TestCase):
+    def test_coding_plan_fallback_omits_standard_only_flashx(self) -> None:
+        standard = zai_mod._coding_plan_fallback_models(
+            "https://api.z.ai/api/paas/v4/",
+        )
+        coding = zai_mod._coding_plan_fallback_models(
+            "https://api.z.ai/api/coding/paas/v4/",
+        )
+        self.assertIn("glm-5.3-flashx", standard)
+        self.assertNotIn("glm-5.3-flashx", coding)
+        self.assertIn("glm-5.3-flash[1m]", coding)
+        self.assertIn("glm-5.3[1m]", coding)
+
     def test_video_generation_model_is_not_selectable_for_chat(self) -> None:
         with (
             mock.patch.object(zai_mod.cfg, "get_zai_api_key", return_value="key"),

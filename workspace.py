@@ -504,6 +504,14 @@ def _available_models_for_selected_backend(
     )
 
 
+def refresh_available_models_for_backend(
+    backend_name: str, workspace_path: str,
+) -> list[str]:
+    """Refresh one catalog without changing selected models or sessions."""
+    backends_agent.get_backend(backend_name).invalidate_model_catalog(workspace_path)
+    return _available_models_for_backend(backend_name, workspace_path)
+
+
 def get_available_models(workspace_path: str) -> list[str]:
     """List models for the workspace's currently selected backend."""
     return _available_models_for_selected_backend(

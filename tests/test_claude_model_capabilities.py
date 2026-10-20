@@ -9,6 +9,28 @@ from Cozter.backends_agent.claude_code import ClaudeCodeBackend
 
 
 class ClaudeModelCapabilityTests(unittest.TestCase):
+    def test_native_1m_pins_do_not_offer_redundant_context_variants(self) -> None:
+        backend = ClaudeCodeBackend()
+        with mock.patch.dict("os.environ", {}, clear=True):
+            for model in (
+                "claude-fable-5-1", "claude-fable-5", "claude-opus-5-5",
+                "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7",
+                "claude-sonnet-5-5", "claude-sonnet-5", "claude-haiku-5-5",
+            ):
+                with self.subTest(model=model):
+                    self.assertEqual(backend.context_window_tokens(model), 1_000_000)
+                    self.assertNotIn(f"{model}[1m]", backend.available_models)
+
+    def test_native_context_respects_cli_disable_flag_without_resolving_aliases(self) -> None:
+        backend = ClaudeCodeBackend()
+        with mock.patch.dict("os.environ", {"CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"}):
+            for model in ("claude-fable-5-1", "claude-opus-5-5", "claude-opus-4-6[1m]"):
+                with self.subTest(model=model):
+                    self.assertEqual(backend.context_window_tokens(model), 200_000)
+            for model in ("default", "fable", "best", "opus", "sonnet", "haiku", "private"):
+                with self.subTest(model=model):
+                    self.assertIsNone(backend.context_window_tokens(model))
+
     def test_opus_45_api_effort_is_not_a_claude_code_capability(self) -> None:
         backend = ClaudeCodeBackend()
         for model in (

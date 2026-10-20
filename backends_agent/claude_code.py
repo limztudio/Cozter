@@ -62,23 +62,22 @@ _NO_EFFORT_MODELS = frozenset({
 })
 _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 
-# No safe catalog: keep explicit ``[1m]`` only.
+# https://code.claude.com/docs/en/model-config#extended-context
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
+_STANDARD_CONTEXT_WINDOW_TOKENS = 200_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
-    # Capacity attaches to ``[1m]`` selections only. Haiku 5.5 is
-    # 1M-native (no ``[1m]`` suffix), so its bare pin carries the window.
     "sonnet[1m]",
     "opus[1m]",
-    "fable[1m]",
-    "opusplan[1m]",
-    "claude-opus-4-7[1m]",
-    "claude-opus-5[1m]",
-    "claude-opus-5-5[1m]",
-    "claude-opus-4-8[1m]",
     "claude-opus-4-6[1m]",
-    "claude-sonnet-5-5[1m]",
-    "claude-sonnet-5[1m]",
     "claude-sonnet-4-6[1m]",
+    "claude-fable-5-1",
+    "claude-fable-5",
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-5-5",
+    "claude-sonnet-5",
     "claude-haiku-5-5",
 })
 
@@ -551,8 +550,6 @@ class ClaudeCodeBackend(Backend):
         "opusplan",
         "sonnet[1m]",
         "opus[1m]",
-        "fable[1m]",
-        "opusplan[1m]",
         "claude-fable-5-1",
         "claude-fable-5",
         "claude-haiku-5-5",
@@ -570,13 +567,7 @@ class ClaudeCodeBackend(Backend):
         "claude-sonnet-4-5-20250929",
         "claude-haiku-4-5",
         "claude-haiku-4-5-20251001",
-        "claude-opus-4-7[1m]",
-        "claude-opus-5[1m]",
-        "claude-opus-5-5[1m]",
-        "claude-opus-4-8[1m]",
         "claude-opus-4-6[1m]",
-        "claude-sonnet-5-5[1m]",
-        "claude-sonnet-5[1m]",
         "claude-sonnet-4-6[1m]",
     )
     default_model = "default"
@@ -602,15 +593,15 @@ class ClaudeCodeBackend(Backend):
         return self.effort_levels
 
     def context_window_tokens(self, model: str | None) -> int | None:
-        """Return a verified capacity for one explicit Claude variant.
+        """Return the native or explicitly selected long-context capacity.
 
-        Only the explicit ``[1m]`` selections carry Cozter's 1M-token
-        metadata — plus the 1M-native ``claude-haiku-5-5`` bare pin, which
-        has no ``[1m]`` suffix. Aliases and other bare pins stay unknown
-        because their active window varies by account and provider.
+        Bare aliases stay unknown because provider pins can change them.
+        Claude Code's context-disable flag also caps native 1M models.
         """
         selected = (model or self.default_model).strip().casefold()
         if selected in _ONE_MILLION_CONTEXT_MODELS:
+            if os.environ.get("CLAUDE_CODE_DISABLE_1M_CONTEXT") == "1":
+                return _STANDARD_CONTEXT_WINDOW_TOKENS
             return _LONG_CONTEXT_WINDOW_TOKENS
         return None
 

@@ -237,6 +237,17 @@ class CopilotBackend(Backend):
             return _FALLBACK_MODELS
         return None
 
+    def invalidate_model_catalog(self, workspace_path: str | None = None) -> None:
+        """Forget account policy metadata before an explicit refresh."""
+        with self._models_lock:
+            if workspace_path is None:
+                self._workspace_model_catalogs.clear()
+                self._workspace_fallback_expires_at.clear()
+            else:
+                key = self._workspace_catalog_key(workspace_path)
+                self._workspace_model_catalogs.pop(key, None)
+                self._workspace_fallback_expires_at.pop(key, None)
+
     def available_models_for_workspace(
         self, workspace_path: str,
     ) -> tuple[str, ...]:

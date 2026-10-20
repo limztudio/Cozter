@@ -16,6 +16,7 @@ and ``zai_max_retries``. Pick the model with
 
 from __future__ import annotations
 
+import hashlib
 from typing import NamedTuple
 
 from .. import config as cfg
@@ -76,6 +77,8 @@ _CODING_PLAN_FALLBACK_MODELS = tuple(
         *_CODING_PLAN_FALLBACK_MODEL_SPECS,
         *_FALLBACK_MODEL_SPECS,
     )
+    # https://docs.z.ai/guides/vlm/glm-5.3-flash (2026-10-21).
+    if spec.name != "glm-5.3-flashx"
 )
 _ALL_FALLBACK_MODEL_SPECS = (
     *_CODING_PLAN_FALLBACK_MODEL_SPECS,
@@ -163,6 +166,12 @@ class ZaiBackend(CachedOpenAIChatBackend):
         """Return a published capacity for a curated Z.ai model ID."""
         selected = _capability_model_id(model or self.default_model)
         return _MODEL_CONTEXT_WINDOWS.get(selected)
+
+    def _model_catalog_key(self) -> object:
+        return (
+            hashlib.sha256(cfg.get_zai_base_url().rstrip("/").encode()).digest(),
+            hashlib.sha256(cfg.get_zai_api_key().encode()).digest(),
+        )
 
     def _fetch_models(self) -> tuple[str, ...]:
         return discover_bearer_models(

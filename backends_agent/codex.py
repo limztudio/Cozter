@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 _COMMON_EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
 # Discovery fallback: curated IDs + capabilities (0.163.0).
 _FALLBACK_MODEL_SPECS = (
-    ("gpt-6.1-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 500_000),
+    ("gpt-6.1-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-astra", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-sol", (*_COMMON_EFFORT_LEVELS, "max", "ultra"), 272_000),
     ("gpt-6-luna", (*_COMMON_EFFORT_LEVELS, "max"), 272_000),
@@ -172,12 +172,15 @@ class CodexBackend(Backend):
         expired catalog is likewise not safe to use: the next picker refresh
         may reflect a changed account policy or CLI model set.
         """
-        if (
-            self._cached_model_catalog is None
-            or time.monotonic() >= self._catalog_expires_at
-        ):
+        if not self._model_catalog_lock.acquire(blocking=False):
             return _FALLBACK_MODEL_EFFORT_LEVELS
-        return self._cached_model_catalog[1]
+        try:
+            catalog = self._cached_model_catalog
+            if catalog is None or time.monotonic() >= self._catalog_expires_at:
+                return _FALLBACK_MODEL_EFFORT_LEVELS
+            return catalog[1]
+        finally:
+            self._model_catalog_lock.release()
 
     def context_window_tokens(self, model: str | None) -> int | None:
         """Return fresh cached capacity without probing the CLI.
@@ -187,23 +190,28 @@ class CodexBackend(Backend):
         next model picker has had a chance to refresh the catalog.
         """
         selected_model = model or self.default_model
-        if (
-            self._cached_model_catalog is None
-            or time.monotonic() >= self._catalog_expires_at
-        ):
+        if not self._model_catalog_lock.acquire(blocking=False):
             return _FALLBACK_MODEL_CONTEXT_WINDOWS.get(selected_model)
-        return self._model_context_windows.get(selected_model)
+        try:
+            if (
+                self._cached_model_catalog is None
+                or time.monotonic() >= self._catalog_expires_at
+            ):
+                return _FALLBACK_MODEL_CONTEXT_WINDOWS.get(selected_model)
+            return self._model_context_windows.get(selected_model)
+        finally:
+            self._model_catalog_lock.release()
+
+    def invalidate_model_catalog(self, workspace_path: str | None = None) -> None:
+        """Discard the CLI catalog, including account-specific capabilities."""
+        with self._model_catalog_lock:
+            self._cached_model_catalog = None
+            self._model_context_windows = dict(_FALLBACK_MODEL_CONTEXT_WINDOWS)
+            self._catalog_expires_at = 0.0
 
     def _model_catalog(self) -> tuple[
         tuple[str, ...], dict[str, tuple[str, ...]],
     ]:
-        now = time.monotonic()
-        if (
-            self._cached_model_catalog is not None
-            and now < self._catalog_expires_at
-        ):
-            return self._cached_model_catalog
-
         with self._model_catalog_lock:
             now = time.monotonic()
             if (
@@ -219,7 +227,7 @@ class CodexBackend(Backend):
                 self._catalog_expires_at = (
                     time.monotonic() + MODEL_CATALOG_TTL_SEC
                 )
-        return self._cached_model_catalog
+            return self._cached_model_catalog
 
     def _discover_models(self) -> tuple[
         tuple[str, ...], dict[str, tuple[str, ...]], dict[str, int],

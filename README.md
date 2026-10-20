@@ -63,7 +63,7 @@ works across every backend.
     (the default summary model), plus documented Coding Plan `[1m]` pins);
     OpenAI-compatible,
     so it shares the in-process loop — set `zai_api_key` in config
-  - `meta` — Meta's Model API (Muse Spark models: `muse-spark-1.3`,
+  - `meta` — Meta's Model API (Muse Wonder and Spark models: `muse-wonder-1.0`, `muse-spark-1.3`,
     `muse-spark-1.2`, `muse-spark-1.1`, …); OpenAI-compatible, so it shares
     the in-process loop — set `meta_api_key` in config
 - **Four chat surfaces**, with Telegram, Slack, and Signal runnable together:
@@ -558,8 +558,8 @@ default so the API key is never sent over cleartext HTTP.
 GLM Coding Plan users can instead set it to
 `https://api.z.ai/api/coding/paas/v4`. The normal endpoint's fallback already
 includes `glm-5.3` and multimodal `glm-5.3-flash`/`glm-5.3-flashx`; the Coding Plan fallback
-also offers the documented `glm-5.3[1m]` and `glm-5.3-flash[1m]` pins.
-`meta_api_key` enables the `meta` backend (Meta Model API — Muse Spark).
+omits standard-only FlashX and offers the documented `glm-5.3[1m]` and `glm-5.3-flash[1m]` pins.
+`meta_api_key` enables the `meta` backend (Meta Model API — Muse Wonder and Spark).
 Get one from the Meta Model API developer console and paste it here (the
 docs also expose it as a `MODEL_API_KEY` environment variable). The backend
 talks to Meta's OpenAI-compatible endpoint at `https://api.meta.ai/v1`;
@@ -570,9 +570,12 @@ Muse Image, Muse Voice Transcribe, and SAM vision segmentation need other endpoi
 and are never
 offered as agent models. Model discovery queries the account's `/models`
 catalog live; the offline fallback lists the published chat models
-(`muse-spark-1.3`, default, with `muse-spark-1.2` anchoring the cheap
-summary/low tier). Private or preview IDs can be added via `extra_models`
-(`{"meta": ["muse-spark-…"]}`); published Muse Spark context is 1M tokens,
+(`muse-wonder-1.0`, Spark 1.3/1.2 Standard and Contributor variants, and Spark 1.1).
+The default remains `muse-spark-1.3`, with `muse-spark-1.2` for summary/low tier.
+[Meta's model guide](https://dev.meta.ai/docs/models) lists regional availability;
+catalog visibility alone does not guarantee generation access.
+Private or preview IDs can be added via `extra_models`
+(`{"meta": ["muse-spark-…"]}`); published Muse chat context is 1,048,576 tokens,
 overridable per model via `model_context_windows`.
 `meta_max_retries` (default 2) mirrors the other cloud retry knob.
 
@@ -1020,7 +1023,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/newsession` | Start a fresh session (next message will go into a new conversation) |
 | `/sessions [number\|name]` | List this workspace's sessions, or switch to one |
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
-| `/refresh` | Report disposable CLI-cache availability for the selected backend; preserve project configuration and saved native conversations |
+| `/refresh` | Refresh every backend's model catalog in parallel for chat, summaries, and Flexible; preserve selected models, configuration, and native conversations |
 | `/stop` | Cancel the running agent turn and clear queued work |
 | `/bg <task>` or `/background <task>` | Start a restart-safe detached task with the selected compatible backend |
 | `/inject <text>` | Add context to the running turn; Cozter abandons its active phase and restarts with it |
@@ -1571,7 +1574,7 @@ tiers still inherit their existing workspace effort.
 Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
 `gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
 These defaults follow the [current Codex model guidance](https://developers.openai.com/codex/models)
-and the installed CLI catalog (verified 2026-10-18 against codex-cli 0.163.0
+and the installed CLI catalog (verified 2026-10-21 against codex-cli 0.163.0
 and grok 1.0.52; codex's `gpt-5.5` retired from the live catalog on 2026-10-14 and is no longer in the fallback; Claude picker adds Haiku 5.5,
 released 2026-10-07).
 Model access depends on the account and client; select an available model on
@@ -1702,14 +1705,13 @@ workspace-policy-disabled Copilot models out of the picker; a stored Copilot
 choice also uses `auto` until it appears in that workspace's fresh catalog.
 Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
-aliases, the supported `sonnet[1m]`, `opus[1m]`, `fable[1m]`, and
-`opusplan[1m]` long-context aliases, and verified version pins (including
-Fable 5.1, Fable 5, Haiku 5.5, Sonnet 5.5, Sonnet 5, Opus 5.5, Opus 5, `claude-sonnet-5-5[1m]`, `claude-sonnet-5[1m]`, and explicit
-`[1m]` variants of other documented long-context models).
-Only the explicit `[1m]` selections receive Cozter's 1M-token context metadata —
-plus the 1M-native `claude-haiku-5-5` bare pin, which has no `[1m]` suffix;
-aliases and bare version pins remain capacity-unknown because their active
-window can vary by account and provider. Claude Code's own `/fast` is a
+aliases, `sonnet[1m]`/`opus[1m]`, and version pins. The [Claude model guide](https://code.claude.com/docs/en/model-config)
+documents native 1M context for Fable 5/5.1, Opus 4.7+, Sonnet 5+, and
+Haiku 5.5. Those pins use native capacity without redundant `[1m]` choices;
+Opus/Sonnet 4.6 retain explicit long-context choices. `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`
+caps recognized long-context models at 200K. Bare aliases remain capacity-unknown;
+gateway or settings-specific limits can use `model_context_windows`.
+Haiku 5.5 requires Claude Code 2.1.293 or newer. Claude Code's own `/fast` is a
 session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama,
 Z.ai, and Meta Model API discover models live from their configured HTTP
 endpoints.
@@ -1799,20 +1801,25 @@ picker queries the configured Z.ai `/models` endpoint and retains its curated
 agent-capable fallback, including text-compatible multimodal models such as
 `glm-5v-turbo`, `glm-4.6v`, and `glm-4.5v`, if the account cannot be queried.
 The normal Z.ai fallback includes the general endpoint's default
-`glm-5.3` model and multimodal `glm-5.3-flash`/`glm-5.3-flashx`. A Coding Plan base URL also
-surfaces `glm-5.3[1m]` and `glm-5.3-flash[1m]`. Cozter maps `/effort` for
+`glm-5.3` model and multimodal `glm-5.3-flash`/`glm-5.3-flashx`. A Coding Plan base URL
+omits FlashX from its fallback and surfaces `glm-5.3[1m]` and `glm-5.3-flash[1m]`, following
+the [Flash/FlashX availability guide](https://docs.z.ai/guides/vlm/glm-5.3-flash). Cozter maps `/effort` for
 both families to Z.ai's supported `low` / `high` / `max` reasoning levels, preserves
 their opaque reasoning state between tool calls, and enables their documented
 tool-call streaming.
 It filters Z.ai's known image, OCR, and audio-only IDs because those require
 different endpoints, while preserving unknown/private chat-model IDs. Codex,
-llama, Z.ai, and Grok refresh their live catalogs lazily when a model picker is
+llama, Meta, Z.ai, and Grok refresh their live catalogs lazily when a model picker is
 opened after its 60-second cache expires, so long-running services see CLI,
 server, and account model changes without a restart. Grok and the
 OpenAI-compatible HTTP backends share that fail-closed TTL cache
 (`CachedModelCatalog` in `backends_agent/base.py`). Codex and Copilot keep
 their own caches because they store extra per-model metadata or
-workspace-scoped policy catalogs. HTTP catalog responses
+workspace-scoped policy catalogs. HTTP catalogs
+also refresh immediately after an endpoint or account change. `/refresh` discards
+catalog caches and probes all seven direct backends concurrently, without changing
+selected models, schedules, saved sessions, or Flexible tier assignments. A provider
+failure does not prevent the other catalogs from refreshing. HTTP catalog responses
 over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates
 the IDs, keeps at most 4,096, and ignores IDs longer than 512 characters.
 Copilot applies the same 512-character-ID and 4,096-model bounds to its
@@ -1867,15 +1874,13 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. That built-in Codex fallback (verified 2026-10-18 against
-codex-cli 0.163.0, matching the live `codex debug models` catalog) lists the `gpt-6.1-sol` / `gpt-6-astra` / `gpt-6-sol` / `gpt-6-luna` quartet first in live-listed order — Astra shipped
-on the OpenAI API on 2026-09-04 with the same 272K active Codex window as
-the GPT-5.6 family (`gpt-6.1-sol` runs a 500K active window; Luna the fast
-affordable tier, also 272K active) — followed by
-the GPT-5.6 Sol/Terra/Luna family (`gpt-5.5` retired from
-Codex with ChatGPT sign-in on October 14, 2026 and is `hide` in the live catalog); `gpt-5.3-codex-spark` is
-gone from the live catalog, and `gpt-5.4` and `gpt-5.4-mini` were retired
-from Codex ChatGPT sign-in. Grok's published `grok-4.7`, `grok-4.7-build-fast`,
+authoritative. The Codex fallback was verified on 2026-10-21 against
+codex-cli 0.163.0 and the [official model guide](https://learn.chatgpt.com/docs/models).
+It includes `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, and
+the GPT-5.6 Sol/Terra/Luna family. The installed CLI advertises a 272K
+active window for all seven; its larger optional maximum does not determine
+Cozter's compaction threshold. Hidden and retired entries are excluded.
+Grok's published `grok-4.7`, `grok-4.7-build-fast`,
 `grok-4.6`, and `grok-4.5` IDs use a 500K-token
 window for that same trigger; custom or private Grok models stay unknown
 until an operator sets `model_context_windows`. Grok delivers its prompt

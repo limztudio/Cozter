@@ -157,20 +157,57 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
             state.write_text('job-owned continuation', encoding='utf-8')
             bot = OfflineBot([])
             ctx = bot.make_context("u1", "chat")
-            for backend in workspace.AVAILABLE_BACKENDS:
-                with (
-                    self.subTest(backend=backend),
-                    mock.patch.object(bot, "_require_ws", new=mock.AsyncMock(return_value=ws)),
-                    mock.patch.object(workspace, "get_backend_name", return_value=backend),
-                    mock.patch.object(bot, "send_text", new=mock.AsyncMock()) as send,
-                ):
-                    await bot.cmd_refresh(ctx)
-                    response = send.call_args.args[1]
-                    self.assertIn(backend, response)
-                    self.assertIn('no disposable workspace CLI cache', response)
-                    self.assertNotIn('refreshed', response)
-                    self.assertEqual(config.read_text(encoding='utf-8'), 'project-specific configuration')
-                    self.assertEqual(state.read_text(encoding='utf-8'), 'job-owned continuation')
+            with (
+                mock.patch.object(bot, "_require_ws", new=mock.AsyncMock(return_value=ws)),
+                mock.patch.object(workspace, "refresh_available_models_for_backend", return_value=["model"]) as refresh,
+                mock.patch.object(bot, "send_text", new=mock.AsyncMock()) as send,
+            ):
+                await bot.cmd_refresh(ctx)
+                response = send.call_args.args[1]
+                self.assertCountEqual(
+                    refresh.call_args_list,
+                    [mock.call(name, ws) for name in workspace.DIRECT_BACKENDS],
+                )
+                for name in workspace.DIRECT_BACKENDS:
+                    self.assertIn(f"{name}: 1 model(s)", response)
+                self.assertIn("Flexible", response)
+                self.assertEqual(config.read_text(encoding='utf-8'), 'project-specific configuration')
+                self.assertEqual(state.read_text(encoding='utf-8'), 'job-owned continuation')
+
+    async def test_slow_or_failed_provider_does_not_block_other_catalogs_or_loop(self):
+        started = threading.Event()
+        release = threading.Event()
+        sibling_done = threading.Event()
+
+        def refresh(name, _ws):
+            if name == "codex":
+                started.set()
+                if not release.wait(5):
+                    raise TimeoutError("test release timed out")
+            elif name == "meta":
+                sibling_done.set()
+                raise RuntimeError("private provider error")
+            return ["model"]
+
+        bot = OfflineBot([])
+        ctx = bot.make_context("u1", "chat")
+        with (
+            mock.patch.object(bot, "_require_ws", new=mock.AsyncMock(return_value="/workspace")),
+            mock.patch.object(workspace, "refresh_available_models_for_backend", side_effect=refresh),
+            mock.patch.object(bot, "send_text", new=mock.AsyncMock()) as send,
+        ):
+            task = asyncio.create_task(bot.cmd_refresh(ctx))
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                self.assertTrue(await asyncio.to_thread(sibling_done.wait, 2))
+                self.assertFalse(task.done())
+            finally:
+                release.set()
+                await task
+            response = send.call_args.args[1]
+            self.assertIn("meta: refresh failed", response)
+            self.assertIn("codex: 1 model(s)", response)
+            self.assertNotIn("private provider error", response)
 
 
 class DetachedLoggingAndStatusTests(unittest.IsolatedAsyncioTestCase):

@@ -1759,7 +1759,7 @@ warning: ignored after the catalog
         self.assertIn("--effort", named_command)
         self.assertIn("max", named_command)
 
-    def test_claude_context_windows_cover_only_explicit_1m_models(
+    def test_claude_context_windows_cover_native_and_explicit_1m_models(
         self,
     ) -> None:
         backend = ClaudeCodeBackend()
@@ -1769,12 +1769,7 @@ warning: ignored after the catalog
                     backend.context_window_tokens(model), 1_000_000,
                 )
         for model in (
-            "default", "sonnet", "opusplan", "claude-fable-5-1",
-            "claude-fable-5",
-            "claude-opus-5-5",
-            "claude-opus-5",
-            "claude-sonnet-5-5",
-            "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7",
+            "default", "sonnet", "opusplan",
             "claude-opus-4-6", "claude-sonnet-4-6",
             "claude-sonnet-4-5-20250929", "private",
             # Haiku 5.5 is 1M-native: no [1m] suffix exists for it.
@@ -2017,7 +2012,7 @@ class ZaiBackendTests(unittest.TestCase):
             (
                 "glm-5.3[1m]",
                 "glm-5.3-flash[1m]",
-                *zai_mod._FALLBACK_MODELS,
+                *(model for model in zai_mod._FALLBACK_MODELS if model != "glm-5.3-flashx"),
             ),
         )
         self.assertIn("glm-5.3-flash", zai_mod._FALLBACK_MODELS)
@@ -2349,7 +2344,7 @@ class ZaiBackendTests(unittest.TestCase):
         backend = ZaiBackend()
         self.assertEqual(
             zai_mod._PRESERVED_THINKING_MODELS,
-            set(zai_mod._CODING_PLAN_FALLBACK_MODELS)
+            (set(zai_mod._CODING_PLAN_FALLBACK_MODELS) | {"glm-5.3-flashx"})
             - {"glm-4-32b-0414-128k"},
         )
         for model in (

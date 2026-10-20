@@ -2238,13 +2238,20 @@ class BotPlatform(ABC):
         ws = await self._require_ws(ctx)
         if ws is None:
             return
-        backend_name = workspace.get_backend_name(ws)
-        # CLI continuation is owned by durable jobs under .cozter/executions;
-        # removing it would lose their saved evidence. Project .codex settings
-        # are user configuration, not a disposable cache owned by this command.
+        names = workspace.DIRECT_BACKENDS
+        catalogs = await asyncio.gather(*(
+            asyncio.to_thread(workspace.refresh_available_models_for_backend, name, ws)
+            for name in names
+        ), return_exceptions=True)
+        lines = [
+            f"{name}: refresh failed" if isinstance(models, BaseException)
+            else f"{name}: {len(models)} model(s)"
+            for name, models in zip(names, catalogs)
+        ]
         await ctx.reply_text(
-            f"{backend_name} has no disposable workspace CLI cache to clear."
-            " Job-owned CLI sessions and your conversation history are preserved."
+            "Model catalogs refreshed for chat, summaries, and Flexible.\n"
+            + "\n".join(lines)
+            + "\nSelected models, configuration, and native conversations are preserved."
         )
 
     # /compact
