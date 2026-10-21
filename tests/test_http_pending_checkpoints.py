@@ -18,6 +18,7 @@ from Cozter.tests.test_http_execution_continuation import _call
 
 _TRANSCRIPT_FIELDS = {
     "http_identity", "http_messages", "http_prompt_digest", "http_pending_results",
+    "http_argument_repairs",
 }
 
 

@@ -2329,7 +2329,7 @@ def _new_owner_obligation(instruction: str, rows: list[dict[str, Any]]) -> dict[
 
 
 async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
-    """Return a judge's missing work to the same durable execution owner."""
+    """Reopen the same owner with remaining work and a fresh phase outcome."""
     saved = await execution_state.record("flexible_plan")
     if saved is None or saved.get("owner_mode") is not True:
         return False
@@ -2350,9 +2350,21 @@ async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
         if len(rows) >= flexible.MAX_SUBTASKS * 4:
             raise _TurnBudgetExhaustedError("the owner obligation context is full; remaining scope is checkpointed")
         rows.append(_new_owner_obligation(instruction, rows))
+    output = saved.get("output", {})
+    errors = saved.get("worker_errors", [])
+    audit = saved.get("owner_error_audit", [])
+    if (not isinstance(output, dict) or not isinstance(errors, list)
+            or not all(isinstance(error, str) for error in errors)
+            or not isinstance(audit, list) or not all(isinstance(error, str) for error in audit)):
+        raise ValueError("Saved Flexible owner outcome is invalid")
+    if isinstance(output.get("error"), str) and output["error"] and output["error"] not in errors:
+        errors.append(output["error"])
+    audit = [flexible.truncate_report(error) for error in (audit + errors)[-8:]]
+    output["error"] = None
     await saved.save(
         active=True, cursor=0, reports=[], worker_outputs={}, owner_obligations=obligations,
         phase_previous_draft=flexible.bounded_draft_excerpt(draft),
+        worker_errors=[], blocked=[], output=output, owner_error_audit=audit,
     )
     return True
 

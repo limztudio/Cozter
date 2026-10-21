@@ -38,7 +38,7 @@ from .. import agent_tools as tools, supervision
 from ..agent_tools.base import public_http_pool_scope
 from ..agent_tools.builtin.bash import shell_context
 from ..execution_state import current_run
-from ..utils import clip_status_value, iter_bounded_lines
+from ..utils import clip_status_value, iter_bounded_lines, validate_json_nesting
 from ._http_process import HttpAgentProcess, http_error_translator
 from .base import (
     DOC_FOLLOWING_RULE, PROGRESS_RULE, VISION_RULE, WHOLE_SCOPE_RULE,
@@ -270,6 +270,126 @@ def _parallel_read_tool(name: str) -> bool:
             or not tool.is_plugin and name in tools.READ_ONLY_TOOL_NAMES
         )
     )
+
+
+def _reject_tool_json_constant(_value: str) -> None:
+    raise ValueError("nonfinite JSON value")
+
+
+def _finite_tool_json_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("nonfinite JSON number")
+    return number
+
+
+def _tool_arguments_object(raw: object) -> dict[str, Any]:
+    """Require the finite JSON object expected by the tool schema."""
+    if isinstance(raw, dict):
+        raw = json.dumps(raw, allow_nan=False, separators=(",", ":"))
+    if not isinstance(raw, str):
+        raise ValueError("arguments must be a JSON object")
+    arguments = json.loads(
+        raw, parse_constant=_reject_tool_json_constant,
+        parse_float=_finite_tool_json_float,
+    )
+    if not isinstance(arguments, dict):
+        raise ValueError("arguments must be a JSON object")
+    validate_json_nesting(arguments)
+    return arguments
+
+
+def _validate_tool_call_batch(calls: object) -> list[tuple[str, dict[str, Any]]]:
+    """Reject the whole new batch before any intent or side effect is saved."""
+    if not isinstance(calls, list) or len(calls) > _MAX_TOOL_CALLS_PER_COMPLETION:
+        raise _RetryableError("Malformed generated tool-call batch")
+    parsed = []
+    for position, call in enumerate(calls):
+        function = call.get("function") if isinstance(call, dict) else None
+        if (not isinstance(function, dict) or not isinstance(function.get("name"), str)
+                or not function["name"].strip()):
+            raise _RetryableError(
+                f"Malformed generated tool call at position {position}: missing function name",
+            )
+        try:
+            arguments = _tool_arguments_object(function.get("arguments"))
+        except (ValueError, TypeError, RecursionError):
+            raise _RetryableError(
+                f"Malformed generated tool call at position {position}: arguments must be a finite JSON object",
+            ) from None
+        if isinstance(function.get("arguments"), dict):
+            function["arguments"] = _compact_json(arguments)
+        parsed.append((function["name"], arguments))
+    return parsed
+
+
+def _repair_http_tool_arguments(
+    messages: list[dict[str, Any]], audit: object, identity: str,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Make old wire calls valid without replaying their recorded execution."""
+    if not isinstance(audit, list) or any(not isinstance(row, dict) for row in audit):
+        raise RuntimeError("Saved HTTP argument repair audit is invalid; preserve it for recovery.")
+    repairs = list(audit)
+    changed = False
+    invalid_count = 0
+    for message_index, message in enumerate(messages):
+        if message.get("role") != "assistant" or "tool_calls" not in message:
+            continue
+        calls = message["tool_calls"]
+        if not isinstance(calls, list):
+            raise RuntimeError("Saved HTTP transcript contains an invalid tool-call batch.")
+        for call_index, call in enumerate(calls):
+            function = call.get("function") if isinstance(call, dict) else None
+            if (not isinstance(function, dict) or not isinstance(function.get("name"), str)
+                    or not function["name"].strip()):
+                raise RuntimeError("Saved HTTP transcript contains an invalid tool function.")
+            raw = function.get("arguments")
+            try:
+                arguments = _tool_arguments_object(raw)
+            except (ValueError, TypeError, RecursionError):
+                name, dispatcher_arguments = tools.parse_openai_call(call)
+                original = raw if isinstance(raw, str) else _compact_json(raw)
+                row = {
+                    "http_identity": identity,
+                    "message_index": message_index, "call_index": call_index,
+                    "tool_call_id": call.get("id", ""), "tool_name": name,
+                    "arguments_present": "arguments" in function,
+                    "arguments_were_string": isinstance(raw, str),
+                    "original_arguments": original,
+                    "dispatcher_arguments": _compact_json(dispatcher_arguments),
+                    "wire_arguments": "{}",
+                }
+                row["id"] = hashlib.sha256(_compact_json(row).encode("utf-8")).hexdigest()
+                repairs.append(row)
+                function["arguments"] = "{}"
+                changed = True
+                invalid_count += 1
+            else:
+                if isinstance(raw, dict):
+                    function["arguments"] = _compact_json(arguments)
+                    changed = True
+    try:
+        validate_json_nesting(repairs)
+        encoded_audit = json.dumps(repairs, allow_nan=False, separators=(",", ":"))
+    except (ValueError, TypeError, RecursionError):
+        raise RuntimeError("Saved HTTP argument repair audit is invalid; preserve it for recovery.") from None
+    if len(encoded_audit.encode("utf-8")) > _MAX_AGENT_MESSAGE_BYTES:
+        raise RuntimeError("Saved HTTP argument repair audit exceeds its safety limit.")
+    if invalid_count:
+        messages.append({
+            "role": "user",
+            "content": (
+                "[HTTP tool history recovery]\n"
+                "Earlier tool calls contained arguments that were not finite JSON objects. "
+                "Their original arguments and the old dispatcher's interpretation are retained "
+                "in the private execution repair audit. Their wire arguments are now {} only "
+                "to make the provider transcript valid; this is not a new execution or a guess "
+                "at the intended inputs. All recorded tool outcomes are preserved, and unknown "
+                "outcomes remain unknown. No historical call was rerun. Inspect actual files, "
+                "processes, and logs when verification is needed; do not replay completed side effects."
+            ),
+        })
+    return repairs, changed
 
 
 def _restore_owned_http_messages(
@@ -564,12 +684,19 @@ class OpenAIChatBackend(Backend):
         restored: list[dict[str, Any]] = []
         restored_bytes = 0
         previous_prompt_digest: object = None
+        argument_repairs: list[dict[str, Any]] = []
         if execution is not None and execution.get("http_identity") == identity:
             restored, restored_bytes = _restore_owned_http_messages(
                 execution.get("http_messages"),
                 execution.get("http_pending_results"),
             )
             previous_prompt_digest = execution.get("http_prompt_digest")
+        if execution is not None:
+            argument_repairs, repaired = _repair_http_tool_arguments(
+                restored, execution.get("http_argument_repairs", []), identity,
+            )
+            if repaired:
+                restored_bytes = sum(_message_payload_bytes(message) for message in restored)
         if not restored and bootstrap_prompt is not None and not compaction:
             prompt = bootstrap_prompt
         prompt_digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -634,6 +761,7 @@ class OpenAIChatBackend(Backend):
                     http_messages=messages[1:],
                     http_prompt_digest=prompt_digest,
                     http_pending_results=dict(pending_results),
+                    http_argument_repairs=argument_repairs,
                 )
 
         async def save_pending_results() -> None:
@@ -751,6 +879,7 @@ class OpenAIChatBackend(Backend):
                     assistant_text, reasoning_content, tool_calls = (
                         await stream_completion(payload)
                     )
+                    validated_calls = _validate_tool_call_batch(tool_calls)
 
                     # OpenAI wants content null with tool_calls.
                     assistant_msg: dict[str, Any] = {
@@ -791,8 +920,7 @@ class OpenAIChatBackend(Backend):
                     _batch_names: list[str] = []
                     _batch_args: list[dict] = []
                     _batch_skipped: list[bool] = []
-                    for call in tool_calls:
-                        call_name, call_args = tools.parse_openai_call(call)
+                    for call_name, call_args in validated_calls:
                         call_signature = tools.tool_signature(call_name, call_args)
                         tool_repeat_counts[call_signature] = (
                             tool_repeat_counts.get(call_signature, 0) + 1
@@ -1213,9 +1341,9 @@ async def _stream_completion(
 
     Returns ``(text, reasoning_content, tool_calls)``. Connection drops
     and HTTP 429/5xx are retried with exponential backoff up to
-    *max_retries* times - retrying a completion is safe because tool side
-    effects only run *after* this returns. A bad status or malformed
-    response is not retried. Worker generation has no imposed deadline.
+    *max_retries* times. Malformed tool-call batches use the same bounded
+    retry before any call is persisted or executed. Other bad statuses and
+    malformed responses are not retried. Worker generation has no imposed deadline.
     A positive explicit ``timeout_seconds`` bounds this operation across
     retries and backoff; cancellation always stops it.
     """
@@ -1228,10 +1356,12 @@ async def _stream_completion(
         nonlocal retries
         while True:
             try:
-                return await _stream_once(
+                result = await _stream_once(
                     endpoint, payload, headers, timeout_seconds, label,
                     session=session, deadline=deadline,
                 )
+                _validate_tool_call_batch(result[2])
+                return result
             except _RetryableError as exc:
                 if retries >= max_retries:
                     raise
@@ -1508,7 +1638,7 @@ async def _post_completion_stream(
         buf = tool_buffers[idx]
         function = buf.get("function")
         if not isinstance(function, dict) or not function.get("name"):
-            continue
+            raise _RetryableError("Malformed generated tool call: missing function name")
         argument_parts = buf.pop("_argument_parts", [])
         buf.pop("_argument_bytes", None)
         if isinstance(argument_parts, list):
