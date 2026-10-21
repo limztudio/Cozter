@@ -1,17 +1,17 @@
-"""Flexible agent — understand, split by difficulty, route, merge.
+"""Flexible agent — choose an owner, consult, complete.
 
 The ``flexible`` agent is not a CLI of its own: it is a meta-agent that
-spends a cheap summary-model call to understand the user's request and
-split it into sub-tasks, routes each sub-task to the agent+model
-configured for its difficulty tier (low/mid/high), then spends a second
-summary-model call to merge the workers' reports into the single reply
-the user sees.
+spends a cheap summary-model call to choose one whole-job owner and any
+useful initial read-only specialists. The owner uses the configured
+low/mid/high backend and retains implementation, verification, and completion.
+Older saved multi-worker plans retain their ordered execution and merge.
 
 This module holds the side-effect-free half — prompt construction and
 output parsing. The orchestration loop lives in :mod:`agent`, which owns
 the backend subprocess driver the workers run on.
 """
 
+import json
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -28,39 +28,42 @@ FALLBACK_TIER = "low"
 
 TIER_DESCRIPTIONS = {
     "low": "Default for bounded coding, debugging, refactoring, and verification",
-    "mid": "Non-routine diagnosis or implementation with interacting causes or competing invariants",
-    "high": (
-        "Concrete hard reasoning, subtle concurrency, design, or algorithms"
-    ),
+    "mid": "Involved implementation with an understood approach and several constraints",
+    "high": "New design, ambiguous causes, coupled invariants, or performance/correctness tradeoffs",
 }
 
 # Cap fan-out: each sub-task is a turn.
 MAX_SUBTASKS = 12
 MAX_FOLLOWUP_TASKS_PER_REPORT = len(TIERS)
 MAX_TIER_LEASES = 3
+MAX_INITIAL_SPECIALISTS = 2
 
 # Continue-judge bounds per backend per turn.
 JUDGE_MAX_CONTINUES = 3
 
-# The rubric the planner grades each sub-task against.
+# Shared by the planner and workers choosing focused help.
 _RUBRIC = (
-    "Choose the cheapest capable tier for each remaining obligation. Start low"
-    " unless the request or retained evidence gives a concrete reason for a higher tier:\n"
+    "Choose the cheapest capable owner or specialist for the reasoning required."
+    " Low is the broad default; the request itself can justify mid/high upfront:\n"
     "low  - default for bounded implementation, debugging, refactoring, test repairs,"
     " configuration, documentation, inspection, and build/runtime verification."
     " A capable low worker can inspect, implement, and verify a complete change"
     " across several files using existing patterns; low is not limited to mechanical edits.\n"
-    "mid  - demonstrated non-routine diagnosis or implementation: several interacting"
-    " causes, unclear cross-component behavior, or competing invariants in a refactor."
-    " Name that difficulty. Ordinary design choices following existing patterns stay low.\n"
-    "high - concrete hard reasoning: subtle concurrency/correctness, difficult"
-    " algorithms, or architectural decisions across components. Name the actual"
-    " reasoning difficulty in the instruction.\n"
+    "mid  - involved non-routine implementation or diagnosis with an understood"
+    " approach: carry several clear constraints through the change and its checks."
+    " Ordinary choices following existing patterns stay low.\n"
+    "high - substantive new design or approach selection, ambiguous multi-cause"
+    " diagnosis, refactors with coupled invariants, difficult algorithms, subtle"
+    " concurrency, or performance/correctness tradeoffs. Choose high directly when"
+    " this reasoning is central and tightly coupled to implementation and verification."
+    " A failed lower-tier attempt or a known root cause is not required.\n"
     "File count, duration, broad wording, or the words all/fix/audit/optimise"
-    " alone do not justify mid/high. Unknown difficulty or unfamiliar files start"
-    " with scoped low inspection, followed by implementation and verification in"
-    " that same worker when a clear path emerges. Escalate or borrow a focused helper"
-    " only when concrete evidence requires it. Do not force a mix of tiers."
+    " alone do not justify mid/high. Unfamiliar files alone can start with low"
+    " inspection and continue in that owner when the path is clear. When the request"
+    " already presents design uncertainty, multiple plausible interacting causes,"
+    " or competing invariants, use high reasoning upfront rather than requiring"
+    " lower-tier failures. A low/mid owner can consult high early for a focused"
+    " decision, then retain the straightforward implementation. Do not force a mix of tiers."
 )
 
 _ESCALATION_RULES = (
@@ -87,8 +90,10 @@ _ESCALATION_RULES = (
 _LEASE_RULES = (
     "For a focused analysis or read-only inspection question, you may borrow a"
     " helper from any OTHER tier without handing over your whole obligation."
-    " For example, high can use low for routine inventory, and mid can use high"
-    " for a difficult reasoning question. Choose the cheapest capable helper"
+    " For example, high can use low for routine inventory, and low/mid can consult"
+    " high early for approach selection, competing causes, or an invariant before"
+    " making speculative changes. No failed attempt is required for consultation."
+    " Choose the cheapest capable helper"
     " when the saved work warrants the handoff; finish trivial queries directly."
     " Retain ownership of edits, verification, and completion. To yield, end your"
     " report with exactly this block, using one nonempty line per field:\n"
@@ -118,21 +123,40 @@ _WORKER_ROUTING_RULES = (
     f"{_LEASE_RULES}"
 )
 
+_OWNER_ROUTING_RULES = (
+    "You remain the completion owner of the whole user request, including related"
+    " obligations discovered during inspection, implementation, and verification."
+    " Your brief and advisory reports never narrow the user's original scope."
+    " Keep design, edits, tests, documentation, and authorized publication in this"
+    " owner conversation; do not assign workflow stages to new writers. Finish"
+    " discovered work here. If it must carry forward, list exact remaining items"
+    " as [followup:<low|mid|high>] lines; they remain with this owner, and the tier"
+    " label does not create a replacement writer. Use LEASE for focused advice or"
+    " ESCALATE for a demonstrated whole-obligation reasoning limit.\n"
+    f"{_RUBRIC}\n"
+    f"{_ESCALATION_RULES}"
+    f"{_LEASE_RULES}"
+)
+
 _PLANNER_RULES = (
-    "Planner for a multi-agent assistant. Split the request below into"
-    " the fewest sub-tasks covering it; grade each low/mid/high:\n\n"
+    "Planner for a multi-agent assistant. Choose ONE persistent owner for the"
+    " entire unfinished job, plus optional focused read-only specialists:\n\n"
     f"{_RUBRIC}\n\n"
     "Rules:\n"
-    "- Simple request = ONE sub-task.\n"
-    "- For an audit followed by repairs, group independent inspection scopes first,"
-    " then use one cohesive repair-and-verification task for the related findings."
-    " Do not split enumeration, implementation, tests, and documentation into"
-    " separate workers when one worker can complete the related change.\n"
-    "- Mark a task [parallel-read] ONLY when it is read-only inspection AND"
-    " independent of every other consecutive task with that marker. Marked tasks"
-    " may use completed earlier reports, but cannot depend on another marked"
-    " task in the same consecutive group. Unmarked tasks run in order. Never"
-    " mark edits, builds, tests, process launches, repairs, commits, or pushes.\n"
+    "- The owner retains the whole job through inspection, design, implementation,"
+    " tests, documentation, publication when authorized, and newly discovered"
+    " obligations. Never split workflow stages into different writers.\n"
+    "- Add no specialist for routine work. When focused advice would materially"
+    " improve an approach, ask high early about design, ambiguous causes, coupled"
+    " invariants, or performance/correctness tradeoffs; do not wait for failed"
+    " edits. A high owner can ask low for a useful routine inventory instead."
+    " This is optional advice, not a mandatory high-to-low pipeline.\n"
+    f"- At most {MAX_INITIAL_SPECIALISTS} initial specialists, each at a distinct"
+    " tier different from the owner's. Their questions must be self-contained,"
+    " read-only, and independent of each other. They run before the owner's first"
+    " turn and count toward its bounded helper allowance. They cannot edit, build,"
+    " test, launch/stop processes, commit, push, or request other helpers. The"
+    " owner assesses their evidence and performs all changes and verification.\n"
     "- Saved checkpoints and earlier reports identify completed work. Exclude"
     " completed actions from the new plan; revalidate only concrete evidence"
     " needed for the remaining requested scope, without repeating whole audits.\n"
@@ -141,30 +165,31 @@ _PLANNER_RULES = (
     " remaining commit/push and necessary targeted checks, not another audit"
     " or rebuild. Reuse verified evidence when relevant inputs and environment"
     " are unchanged; final verification still covers the full original scope.\n"
-    f"- At most {MAX_SUBTASKS} sub-tasks, ordered (each needs only earlier"
-    " results). If more scope remains, the plan still lists it as an"
-    " explicit PARTIAL + remainder note after the numbered tasks.\n"
+    "- The OWNER task is a self-contained whole-job brief, with every unfinished"
+    " obligation and constraint. Advice questions never replace requested scope."
+    " Do not drop difficult work merely because a specialist is unavailable.\n"
     "- Progress is Thinking... status only (done/total may grow as"
     " follow-ups join); never a chat reply; DONE ping only at the end.\n"
-    "- Grade the actual reasoning needed. Low workers own complete coding and"
-    " verification tasks; select mid/high only for a named difficulty beyond routine work.\n"
+    "- Grade the actual reasoning needed. Low owners can complete coding and"
+    " verification; mid handles involved work with a known approach; high can"
+    " own design or ambiguous diagnosis directly, without prior lower-tier attempts.\n"
     "- On a continuation, grade only the unfinished obligation. Reuse earlier"
     " findings and verified work; a remaining known test command or commit/push"
-    " normally stays low, even after a difficult original request. A worker can request"
+    " normally stays low, even after a difficult original request. An owner can request"
     " a bounded next-tier escalation if actual evidence reveals harder reasoning.\n"
-    "- Self-contained: the worker sees only the user message, the plan,"
-    " and earlier reports.\n"
+    "- Self-contained: the owner sees the user message, its whole-job brief,"
+    " retained evidence, and specialist findings. It keeps ownership of follow-ups.\n"
     "- Cover everything: when the request says all/entire/every/whole, the"
     " plan must cover every item with no gaps; prefer concrete enumerated"
     " targets over one vague 'handle all' task.\n"
-    "- Doc-following: request pointing at a file/doc/standard = split so"
-    " every rule/section is covered; never one vague 'follow the doc' task"
+    "- Doc-following: request pointing at a file/doc/standard = explicitly retain"
+    " every rule/section; never one vague 'follow the doc' brief"
     " hiding dozens of rules.\n"
     "- Build/verify requests (buildable, no error/warning, no runtime"
     " warning): keep enumeration, canonical build/test, log inspection,"
-    " repair, re-run, and runtime verification in one cohesive task for"
-    " each target or related target group. Split only when distinct scope"
-    " or difficulty requires another worker, not merely for workflow stages."
+    " repair, re-run, and runtime verification as one cohesive task with the same"
+    " owner for every target or related target group. Use focused advice when useful without"
+    " handing implementation stages to new writers."
     " Run commands to completion (cancel still stops them; capture to file),"
     " inspect full logs, classify actual unexpected failures, fix and verify them,"
     " then runtime launch/exercise/log-check. Each task states evidence"
@@ -179,17 +204,24 @@ _PLANNER_RULES = (
 )
 
 _PLANNER_FORMAT = (
-    "Reply in exactly this format, nothing else:\n\n"
+    "Reply using these blocks, nothing else. UNDERSTANDING and SPECIALISTS are"
+    " optional; OWNER is required, last, and outside Markdown code fences. Use"
+    " one nonempty line per OWNER field:\n\n"
     "[UNDERSTANDING]\n"
     "1-2 sentences: what the user wants.\n"
     "[/UNDERSTANDING]\n"
-    "[PLAN]\n"
-    "1. [low|mid|high] first sub-task instruction\n"
-    "2. [low|mid|high] second sub-task instruction\n"
-    "[/PLAN]\n"
-    "For independent read-only inspection only, put [parallel-read] immediately"
-    " after the tier, for example: 1. [low] [parallel-read] inspect existing logs."
-    " Omit that marker for every task that changes or executes anything.\n"
+    "[SPECIALISTS]\n"
+    '[{"tier":"high","reason":"why focused advice helps",'
+    '"task":"self-contained read-only question and required evidence"}]\n'
+    "[/SPECIALISTS]\n"
+    "[OWNER]\n"
+    "tier: low|mid|high\n"
+    "reason: why this tier can own the whole remaining job\n"
+    "task: complete whole-job brief, retaining all requested scope and constraints\n"
+    "[/OWNER]\n"
+    "SPECIALISTS must be a JSON array with exact tier/reason/task string fields;"
+    " use [] or omit the block when no advice is needed. Do not copy the example"
+    " high specialist automatically. Its tier must differ from the owner's.\n"
 )
 
 _PLANNER_QUESTION_RULE = (
@@ -389,6 +421,9 @@ class Plan:
     understanding: str
     subtasks: tuple[Subtask, ...]
     question: str | None = None
+    owner_mode: bool = False
+    specialists: tuple[Lease, ...] = ()
+    owner_reason: str = ""
 
 
 _FOLLOWUP_LINE_RE = re.compile(
@@ -415,6 +450,12 @@ _ESCALATION_MARKER_RE = re.compile(
 _LEASE_MARKER_RE = re.compile(
     r"^ {0,3}\[(?P<close>/)?LEASE\][ \t]*\r?$", re.IGNORECASE | re.MULTILINE,
 )
+_OWNER_MARKER_RE = re.compile(
+    r"^ {0,3}\[(?P<close>/)?OWNER\][ \t]*\r?$", re.IGNORECASE | re.MULTILINE,
+)
+_SPECIALISTS_MARKER_RE = re.compile(
+    r"^ {0,3}\[(?P<close>/)?SPECIALISTS\][ \t]*\r?$", re.IGNORECASE | re.MULTILINE,
+)
 _CODE_FENCE_RE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<info>[^\r\n]*)\r?$", re.MULTILINE)
 _CONTROL_NONSPACE_RE = re.compile(r"\S")
 _CONTROL_MAX_CHARS = 6_000
@@ -436,10 +477,11 @@ def _restore_control_fields(value: object, names: tuple[str, ...]) -> dict[str, 
     return fields
 
 
-def _parse_control_fields(
-    report: str, marker: re.Pattern[str], names: tuple[str, ...],
-) -> dict[str, str] | None:
-    """Accept one terminal control block outside quoted code."""
+def _control_block(
+    report: str, marker: re.Pattern[str], *, terminal: bool = True,
+    max_chars: int = _CONTROL_MAX_CHARS,
+) -> str | None:
+    """Accept one bounded control block outside quoted code."""
     if not isinstance(report, str):
         return None
     markers: list[re.Match[str]] = []
@@ -466,12 +508,22 @@ def _parse_control_fields(
     opening, closing = markers
     if opening.group("close") or not closing.group("close"):
         return None
-    if _CONTROL_NONSPACE_RE.search(report, closing.end()):
+    if terminal and _CONTROL_NONSPACE_RE.search(report, closing.end()):
         return None
-    if closing.start() - opening.end() > _CONTROL_MAX_CHARS:
+    if closing.start() - opening.end() > max_chars:
+        return None
+    return report[opening.end():closing.start()]
+
+
+def _parse_control_fields(
+    report: str, marker: re.Pattern[str], names: tuple[str, ...],
+) -> dict[str, str] | None:
+    """Accept one terminal control block outside quoted code."""
+    block = _control_block(report, marker)
+    if block is None:
         return None
     fields: dict[str, str] = {}
-    for line in report[opening.end():closing.start()].splitlines():
+    for line in block.splitlines():
         if not line.strip():
             continue
         label, separator, value = line.partition(":")
@@ -510,6 +562,42 @@ def parse_lease(report: str) -> Lease | None:
     """Accept one bounded lease block; the coordinator chooses transitions."""
     fields = _parse_control_fields(report, _LEASE_MARKER_RE, ("tier", "reason", "task"))
     return restore_lease(fields)
+
+
+def _unique_json_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    for key, value in pairs:
+        if key in fields:
+            raise ValueError("duplicate specialist field")
+        fields[key] = value
+    return fields
+
+
+def _initial_specialists(raw: str, owner_tier: str) -> tuple[tuple[Lease, ...], bool]:
+    """Keep optional advice only when its whole bounded list is valid."""
+    if _SPECIALISTS_MARKER_RE.search(raw) is None:
+        return (), True
+    block = _control_block(
+        raw, _SPECIALISTS_MARKER_RE, terminal=False,
+        max_chars=MAX_INITIAL_SPECIALISTS * _CONTROL_MAX_CHARS + 256,
+    )
+    if block is None:
+        return (), False
+    try:
+        rows = json.loads(block, object_pairs_hook=_unique_json_fields)
+    except (ValueError, RecursionError):
+        return (), False
+    if not isinstance(rows, list) or len(rows) > MAX_INITIAL_SPECIALISTS:
+        return (), False
+    specialists = []
+    tiers = {owner_tier}
+    for row in rows:
+        lease = restore_lease(row)
+        if lease is None or lease.tier in tiers:
+            return (), False
+        specialists.append(lease)
+        tiers.add(lease.tier)
+    return tuple(specialists), True
 
 
 def normalize_tier(value: str) -> str | None:
@@ -679,11 +767,13 @@ def fallback_plan(request: str) -> Plan:
     return Plan(
         understanding="",
         subtasks=(Subtask(tier=FALLBACK_TIER, instruction=instruction),),
+        owner_mode=True,
+        owner_reason="No valid owner choice was supplied; inspect the full request and retain every obligation.",
     )
 
 
 def parse_plan(raw: str, request: str) -> Plan:
-    """Parse a planner reply, falling back to a single low-tier task.
+    """Parse a whole-job owner or a legacy plan, falling back to a low owner.
 
     A missing ``[PLAN]`` wrapper or stray prose can still yield tasks.
     Unrecognized tiers do not make malformed plans more expensive.
@@ -691,6 +781,28 @@ def parse_plan(raw: str, request: str) -> Plan:
     if not isinstance(raw, str):
         return fallback_plan(request)
     if not raw or not raw.strip():
+        return fallback_plan(request)
+
+    if _OWNER_MARKER_RE.search(raw) is not None:
+        owner = restore_lease(_parse_control_fields(raw, _OWNER_MARKER_RE, ("tier", "reason", "task")))
+        if owner is None:
+            return fallback_plan(request)
+        specialists, valid = _initial_specialists(raw, owner.tier)
+        understanding = extract_marker_block(raw, "UNDERSTANDING") or ""
+        if not valid:
+            note = (
+                "Optional initial advice was omitted because its specification was invalid;"
+                " the owner retains every requested obligation and constraint."
+            )
+            understanding = "\n".join(filter(None, (understanding, note)))
+        return Plan(
+            understanding=understanding,
+            subtasks=(Subtask(owner.tier, owner.task),),
+            owner_mode=True,
+            specialists=specialists,
+            owner_reason=owner.reason,
+        )
+    if _SPECIALISTS_MARKER_RE.search(raw) is not None:
         return fallback_plan(request)
 
     question = extract_marker_block(raw, "QUESTION")
@@ -742,7 +854,7 @@ def parse_plan(raw: str, request: str) -> Plan:
 def build_plan_prompt(
     context: str, *, collaborative: bool, skills_catalog: str = "",
 ) -> str:
-    """Prompt the summary agent to understand and split the request."""
+    """Prompt the summary agent to choose a whole-job owner and focused advice."""
     parts = [_PLANNER_RULES]
     if collaborative:
         parts.append(_PLANNER_QUESTION_RULE)
@@ -819,8 +931,11 @@ def build_subtask_sections(
     parts = [""]
     parts.append(
         f"[Sub-task {index + 1}/{len(plan.subtasks)}: {task.tier}]"
-        " — do ONLY this one; others have their own workers."
+        + (" — you own the whole unfinished job through completion."
+           if plan.owner_mode else " — do ONLY this one; others have their own workers.")
     )
+    if plan.owner_mode and plan.owner_reason:
+        parts.append(f"Owner choice: {plan.owner_reason}")
     if plan.understanding:
         parts.append(f"Goal: {plan.understanding}")
     parts.append("\nPlan:")
@@ -914,13 +1029,13 @@ def build_subtask_sections(
         " unconfigured-provider verification as limitations; do not provision services"
         " or create cross-platform follow-ups unless explicitly requested.\n"
         "Use tools, not description. Report per-item: what you did/found,"
-        " what you skipped or could not do, what the next worker needs"
+        " what you skipped or could not do, and retained evidence"
         " (paths, commands, exit codes, error/warning counts).\n"
         "Be honest: say PARTIAL and list what remains if anything is"
         " unfinished or unverified; never report done when work remains"
         " or evidence is missing. Progress is Thinking... status only; notify"
         " DONE only at the very end.\n"
-        "New work discovered while doing this task: list each item on its own"
+        + ("New work discovered while doing this task: list each item on its own"
         " line as [followup:<low|mid|high>] <instruction> (self-contained, one"
         " line each). Only genuine leftovers found inside this task - never"
         " restate the plan or completed/queued scope. Prefer finishing related"
@@ -930,7 +1045,8 @@ def build_subtask_sections(
         " Never write 'Next turn should:' or any other"
         " handoff/planning note; the followup lines above are the only"
         " carry-forward mechanism for new scope.\n"
-        f"{_WORKER_ROUTING_RULES}"
+           if not plan.owner_mode else "")
+        + (_OWNER_ROUTING_RULES if plan.owner_mode else _WORKER_ROUTING_RULES)
     )
     return sections
 

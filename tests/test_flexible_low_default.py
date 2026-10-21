@@ -84,12 +84,11 @@ class FlexibleLowDefaultTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(self.request, prompt)
                     self.assertIn("low-attempt-proof", prompt)
                     self.assertIn("remaining invariant", prompt)
+                    self.assertIn("Verify dependent cache export", prompt)
                     raise asyncio.CancelledError
                 self.assertIn("Continue the current job from this native conversation", prompt)
-                return AgentResult(text="Repair and verification complete; dependent export may now be checked."), False
-            self.assertIn("Verify dependent cache export", prompt)
-            self.assertIn("Repair and verification complete", prompt)
-            return AgentResult(text="Dependent cache export verified."), False
+                return AgentResult(text="Repair, regression, and retained dependent cache export verified."), False
+            self.fail(f"Unexpected replacement owner: {model}")
 
         with self.assertRaises(asyncio.CancelledError):
             await self.invoke(drive)
@@ -98,6 +97,7 @@ class FlexibleLowDefaultTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.record.get("reports"), [])
         self.assertIn("low-attempt-proof", str(self.record.get("routing_evidence")))
         self.assertIn("Verify dependent cache export", str(self.record.get("interim_followups")))
+        self.assertIn("Verify dependent cache export", str(self.record.get("owner_obligations")))
         self.plan_output = "[PLAN]\n1. [high] Repeat the entire audit\n[/PLAN]"
 
         result, restarting = await self.invoke(drive)
@@ -105,15 +105,14 @@ class FlexibleLowDefaultTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(restarting)
         self.assertFalse(result.error)
         self.assertEqual([row["model"] for row in self.calls],
-                         ["gpt-6-luna", "gpt-6-sol", "gpt-6-sol", "gpt-6-luna"])
-        self.assertEqual([row["effort"] for row in self.calls], [10, 60, 60, 10])
+                         ["gpt-6-luna", "gpt-6-sol", "gpt-6-sol"])
+        self.assertEqual([row["effort"] for row in self.calls], [10, 60, 60])
         self.assertEqual({row["approval"] for row in self.calls}, {"full"})
         self.assertNotEqual(self.calls[0]["native_id"], self.calls[1]["native_id"])
         self.assertEqual(self.calls[1]["native_id"], self.calls[2]["native_id"])
         self.assertEqual(self.calls[1]["key"], self.calls[2]["key"])
-        self.assertEqual(self.calls[0]["native_id"], self.calls[3]["native_id"])
-        self.assertEqual(self.record.get("cursor"), 2)
-        self.assertEqual(self.internal_labels, ["Flexible planner", "Flexible merge"])
+        self.assertEqual(self.record.get("cursor"), 1)
+        self.assertEqual(self.internal_labels, ["Flexible planner"])
 
     async def test_previously_graded_mid_checkpoint_stays_mid_after_default_changes(self):
         async def drive(_backend, _ws, prompt, model, approval, *, effort, on_native_activity=None, **_kwargs):

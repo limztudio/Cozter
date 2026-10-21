@@ -38,18 +38,18 @@ works across every backend.
 - **A default meta-agent plus seven direct agent backends**, picked per
   workspace:
   - `flexible` (default) — a meta-agent that sizes the work with a cheap
-    summary-model call, splits it into up to 12 sub-tasks, routes each to
-    the agent+model bound to its difficulty tier (`low` / `mid` / `high`),
-    then merges the reports into one reply. Tiers can straddle backends.
+    summary-model call, chooses one persistent completion owner at
+    `low` / `mid` / `high`, and can request focused read-only advice from
+    other tiers. Tiers can straddle backends. The owner retains the whole job
+    and its native conversation through edits, verification, and follow-ups.
     Whole-scope (`all`/`entire`/`every`/`whole`) and doc-following requests
-    are split so every item/rule is covered with verifiable done-criteria;
+    retain every item/rule with verifiable done-criteria;
     build/verify requests keep target enumeration, canonical build/test,
     full-log inspection, repairs, rechecks, and runtime verification together
-    in one cohesive task per target or related target group, with full-log
-    evidence (commands + exit codes + error/warning counts);
-    a plan that hits the 12-task cap carries an explicit PARTIAL + remainder
-    note, and truncated worker reports are marked as previews so the merge
-    requires retained scope and verification evidence before claiming done
+    with that owner for every target or related target group, with full-log
+    evidence (commands + exit codes + error/warning counts). Existing saved
+    multi-worker plans keep their original queue. Bounded reports retain an
+    explicit preview marker and require verification evidence before claiming done
   - `codex` — OpenAI's CLI (`codex exec`)
   - `claude_code` — Anthropic's CLI (`claude --print`)
   - `copilot` — GitHub's CLI
@@ -396,7 +396,9 @@ pipe drains, and retry counts retain their separate transport safeguards.
 Low-level callers may explicitly request an operation timeout; normal agent
 execution supplies no such deadline.
 
-Flexible attempts retain their maximum of 24 workers. Worker-count and backend
+Flexible attempts retain their bounded allowance of 24 worker segments. The
+persistent owner resumes instead of creating a new writer when work remains.
+Worker-count and backend
 tool-round limits checkpoint the current job instead of completing it: Cozter
 saves the original request, prior worker evidence, remaining scope, workspace,
 session, artifacts, and accounting, then resumes the same job with a fresh
@@ -1487,44 +1489,47 @@ change the CLI's native tool sandbox.
 ## The flexible agent
 
 `flexible` is the default agent. It is not a CLI of its own — it is a
-meta-agent that spends a cheap summary-model call to size the work up
-front, then pays for the expensive model only where the work is actually
-hard. One turn is three phases:
+meta-agent that uses one cheap summary-model call to choose a persistent
+completion owner and any useful focused advice. The owner keeps the whole job
+through inspection, design, implementation, verification, and related follow-ups.
+Its tool and file events stream into the live status display; its final report
+returns directly without a separate merge call.
 
-1. **Understand and split.** The summary agent (`/summaryagent`,
-   `/summarymodel`) restates what you asked for and splits it into
-   up to 12 sub-tasks, grading each one `low`, `mid`, or `high`.
-2. **Route.** Each sub-task runs as a full agent turn — real tools, real
-   file edits — on the agent and model bound to its difficulty tier.
-   Tasks run in order unless the planner explicitly marks consecutive tasks
-   `[parallel-read]`: these inspect independent scopes together, with the
-   reports from completed earlier tasks. Changes and follow-up tasks run
-   serially; one later writer can repair and verify related findings together.
-3. **Merge.** The summary agent folds the workers' reports into the single
-   reply you see. The workers' own text never reaches the chat; their tool
-   and file events still stream into the live status display.
+The planner (`/summaryagent`, `/summarymodel`) chooses the owner's `low`, `mid`,
+or `high` tier and can request up to two initial read-only specialists at distinct
+other tiers. Initial specialists answer focused independent questions before
+the owner's first turn, so useful advice does not require a throwaway owner
+turn or another router call. They cannot change files or run builds and tests.
+The owner assesses their findings, makes the changes, and verifies completion.
+Independent consultations run in parallel when their backends enforce read-only
+access, within `flexible_max_parallel_workers`; other consultations run serially.
+Advice is optional: routine work starts directly with its owner, and design work
+can go straight to a high owner when reasoning and implementation belong together.
+There is no fixed high-to-low pipeline or required tier mix.
 
-A single task returns its final parent report directly, without another merge
-call. Low is the default for bounded coding, debugging, refactoring, test repairs,
-configuration, documentation, and verification. A low worker can inspect,
+Low is the default for bounded coding, debugging, refactoring, test repairs,
+configuration, documentation, and verification. A low owner can inspect,
 implement, and verify a cohesive change across several files using existing
-patterns. Unknown difficulty starts with scoped low inspection and continues in
-that same worker when the path becomes clear. Mid requires concrete non-routine
-difficulty, such as interacting causes, unclear cross-component behavior, or
-competing invariants. Concrete hard architecture, concurrency, or algorithmic
-reasoning justifies high. File counts, long commands, and words such as "all" or
+patterns. Unfamiliar files alone can start with scoped low inspection and continue
+in that owner when the path becomes clear. Mid handles involved non-routine work
+with an understood approach and several clear constraints. High can own new
+design, ambiguous multi-cause diagnosis, refactors with coupled invariants,
+difficult algorithms, or performance/correctness tradeoffs from the start.
+Neither a failed lower-tier attempt nor an already-known root cause is required.
+File counts, long commands, and words such as "all" or
 "fix" do not alone require mid/high. An empty or malformed plan keeps the full
-request on low, with evidence-driven escalation available. Continuations grade
-the remaining work using saved evidence.
+request with a low owner, with focused advice and evidence-driven escalation
+available. Continuations retain the owner and saved evidence for unfinished work.
 
 While working, a parent can borrow another tier for a focused read-only question.
-High can ask low to inspect existing logs or metadata; mid or low can ask high
-to analyze a difficult invariant. The parent pauses, receives the findings, and
+High can ask low to inspect existing logs or metadata; low or mid can consult high
+early about design, competing causes, or an invariant before speculative edits.
+No failed attempt is needed for consultation. The parent pauses, receives the findings, and
 continues the original task with its own model, effort, permissions, and ownership
 of edits and verification. Helpers use the requested tier's configured model and
 effort with restricted permissions. They cannot write, launch builds, publish,
 or recursively request helpers. Each logical task has at most three helper
-requests; interruptions reuse completed helper results, while a new request can
+requests, including initial specialists; interruptions reuse completed helper results, while a new request can
 recheck inputs changed by the parent. No extra planner or router
 call is needed for a lease.
 
@@ -1543,9 +1548,12 @@ findings and completed work. The cursor, helper results, escalation evidence, an
 interim follow-ups survive interruptions. Quota, authentication, unavailable
 prerequisites, and permission problems keep their existing recovery behavior.
 If high still cannot resolve the work, its pending state is retained without
-an automatic high-to-high loop. Existing saved plans resume their chosen tiers.
+an automatic high-to-high loop. Newly discovered obligations remain with the
+same completion owner, including after an escalation. An ordinary follow-up
+does not select another writer or restart the whole audit. Existing saved
+multi-worker plans resume their original queue and chosen tiers unchanged.
 
-`[parallel-read]` means both read-only and independent of the other consecutive
+In existing multi-worker plans, `[parallel-read]` means both read-only and independent of the other consecutive
 marked tasks. For example, inspecting existing transport logs and reviewing an
 unrelated parser can run together before one repair worker consumes both reports.
 Inspection workers do not edit files, build, run tests, launch processes, commit,
@@ -1557,30 +1565,34 @@ run the marked work serially. An unmarked task or a dependency ends the group.
 `flexible_max_parallel_workers` in `.config/config.json` limits this inspection
 concurrency to **1-4**, with **3** as the default. Set it to **1** for serial
 execution. Missing or invalid values use the default. Ordinary plans without
-markers retain their ordered behavior. The planner prefers the fewest workers
-that cover the request and uses saved checkpoints to avoid repeating completed
+markers retain their ordered behavior. New plans use one completion owner.
+Saved checkpoints avoid repeating completed
 audits, revalidating only the evidence needed for remaining work.
 The active plan, completed reports and worker cursor are saved before another
 worker starts. A later execution allowance resumes pending work without
-another planning call or replaying completed workers. Consecutive follow-up
-obligations assigned to the same tier are combined into cohesive workers;
+another planning call or replaying completed workers. In older multi-worker plans,
+consecutive follow-up obligations assigned to the same tier are combined into cohesive workers;
 all individual obligations and overflow remain explicit. Duplicate pending
 instructions are removed, while verification after changes and stronger-tier
 escalations remain distinct work.
 Fallback workers retain a full checkpoint request once, with an explicit
 reference instead of a second verbatim copy. Exactly identical long reports
 share their retained evidence while preserving every plan-item header and
-blocked marker. Judge continuations retain the prior draft before the exact
-current request suffix, preventing the planner from appending that request
-again. Distinct requirements and evidence remain present.
+blocked marker. Completion-judge findings reopen the same owner and retain its
+native session, prior specialist results, and helper allowance. Completed
+obligations remain recorded as completed. If later evidence reopens the same
+scope, a fresh obligation generation delivers that finding without inheriting
+stale retry counts. Matching provider sessions receive only new instructions,
+findings, and compact progress updates. A missing native or HTTP session receives
+the original request, retained evidence, and prior draft as a complete bootstrap.
 
 The grading rubric the planner is held to:
 
 | Tier | When | Example |
 |---|---|---|
 | `low` | Default for bounded implementation, debugging, refactoring, test repairs, and verification using existing patterns | Diagnose a module bug, repair it across related files, and verify the regression |
-| `mid` | Concrete non-routine work with interacting causes, unclear cross-component behavior, or competing invariants | Resolve an interaction between cache invalidation and request retry behavior |
-| `high` | Concrete difficult reasoning or architecture; unresolved lower-tier attempts | Resolve a subtle concurrency invariant or difficult algorithm |
+| `mid` | Involved non-routine work with an understood approach and several clear constraints | Implement an established cache migration design across its affected interfaces |
+| `high` | New design, ambiguous multi-cause diagnosis, coupled invariants, or performance/correctness tradeoffs; available upfront | Choose and implement a cache/registry transaction design, or advise a low owner on the invariant |
 
 Each tier carries its own agent, model and reasoning effort, so tiers can straddle
 backends — a local `llama` for the easy parts, `claude_code` on `opus` for
@@ -1630,18 +1642,20 @@ automatically (its `tier_models` table) — for `zai` that is
 A flexible turn can make one planner call (history and request normally fit
 within 12,000 characters, including a middle-context omission marker).
 A request or durable checkpoint that already exceeds that allowance is sent
-intact once, without an additional duplicate history excerpt. It can then make
+intact once, without an additional duplicate history excerpt. New plans keep
+one owner and up to two initial focused specialists. Owner continuations retain
+the same obligation, native conversation, and verified evidence. Specialist
+answers remain separate durable context sections. Existing multi-worker plans can make
 up to 12 planned worker calls plus worker-discovered follow-ups
 (each worker may report genuine leftovers as `[followup:<tier>]` lines,
 all of which are parsed and de-duplicated). Distinct follow-ups join the queue
 in reported order up to an execution cap of 24 worker tasks for that plan,
 including the initial tasks. Progress reads `done/total` with a growing total,
 e.g. `3/12` then `3/13`. Any further distinct follow-ups are retained in an explicit
-PARTIAL remainder listing the tasks that were not run. The turn then makes one
-merge call over the bare request. Each worker report is capped at 6,000
-characters with its truncation marker reserved inside the cap, so a clipped
-report always arrives marked `[report truncated: remainder omitted]` as a
-preview rather than a silent cut. A single-subtask plan skips the merge
+PARTIAL remainder listing the tasks that were not run. A multi-worker plan then
+makes one merge call over the bare request. Each worker report is capped at 6,000
+characters with an explicit middle-omission marker reserved inside the cap,
+retaining its opening and final evidence as a preview. A persistent-owner or single-subtask plan skips the merge
 and returns the worker report directly. When the planner hits the 12-task
 cap, the parsed plan carries an explicit PARTIAL + remainder note unless the
 planner already wrote one. Because tiers may use different
@@ -1711,9 +1725,10 @@ counts; never claim done with work left or clean from a truncated preview
 or unrun steps — say PARTIAL + remainder), and
 composed context trims carry matching omission markers within budget so
 the model cannot mistake a trimmed preview for full coverage. And when planning fails outright (summary
-CLI missing, unparseable output), the turn degrades to a single `high`-tier
-sub-task carrying the original request, so a botched split never quietly
-downgrades hard work to a weak model.
+CLI missing, unparseable output), the turn starts a low completion owner carrying
+the full original request. A malformed planner reply is not evidence of harder
+reasoning; the owner can request focused advice or escalate with concrete evidence
+without losing scope.
 The continue judge requests another turn only for concrete missing work that
 can run in the current environment. It does not expand the task to provision
 unconfigured providers or verify unavailable platforms unless requested.

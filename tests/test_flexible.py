@@ -1260,7 +1260,8 @@ class CoveragePromptTests(unittest.TestCase):
         self.assertIn("Build/verify", flexible._PLANNER_RULES)
         self.assertIn("exit codes", flexible._PLANNER_RULES)
         self.assertIn("one cohesive task", flexible._PLANNER_RULES)
-        self.assertIn("not merely for workflow stages", flexible._PLANNER_RULES)
+        self.assertIn("Never split workflow stages into different writers", flexible._PLANNER_RULES)
+        self.assertIn("same owner for every target or related target group", flexible._PLANNER_RULES)
         self.assertIn("runtime launch/exercise/log-check", flexible._PLANNER_RULES)
         # Merge must refuse clean claims without per-report evidence.
         self.assertIn("exit codes", flexible._MERGE_RULES)

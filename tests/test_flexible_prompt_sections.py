@@ -18,11 +18,11 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
         # Snapshots include the tier policy and terminal control messages.
         # Both roles still join exactly, including repeated evidence.
         cases = (
-            (0, [], None, "4b6e8cbbe69f8bf0b4841f61d45dc514f7a27e3b088dd732caf6bf3790aa5a19"),
+            (0, [], None, "7b5fa63658dce85e68539a776527f2768148aedae4a584d27d34424fcc870351"),
             (1, ["report A", "report B"], "Previous verified result",
-             "232ea2416f18106b04253746fcca7ffa26efb42f98add909cd0e5a6f9dba0fc3"),
+             "d5a0a6c81c44efb007f482da1f519a11f6217adb6be2051ab48ef6d5de6aa187"),
             (0, ["a" * 180, "a" * 180], "a" * 180,
-             "42d28ad4da009f01eb6706896ea9b9fd99413fd2c9634bbd257622e66ba32711"),
+             "795e6b88f0942658443320edae419ae00bf12c2254e270211dac5650e062db1f"),
         )
         for index, reports, draft, expected_hash in cases:
             with self.subTest(index=index, reports=len(reports), draft=draft is not None):
@@ -38,15 +38,20 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
                 self.assertIn("\n[ESCALATE]\nreason:", sections["worker_instructions"])
                 self.assertEqual(hashlib.sha256(rendered.encode()).hexdigest(), expected_hash)
 
-    def test_planner_and_both_worker_roles_share_low_first_reasoning_boundaries(self) -> None:
+    def test_planner_legacy_workers_and_owner_share_broad_low_and_early_high_boundaries(self) -> None:
         prompts = [flexible.build_plan_prompt(self.request, collaborative=False)]
         prompts.extend(flexible.build_subtask_sections(self.request, self.plan, index, [])["worker_instructions"]
                        for index in range(len(self.plan.subtasks)))
+        owner = flexible.fallback_plan(self.request)
+        prompts.append(flexible.build_subtask_sections(self.request, owner, 0, [])["worker_instructions"])
         for prompt in prompts:
             self.assertIn("low  - default for bounded implementation, debugging, refactoring, test repairs", prompt)
             self.assertIn("low is not limited to mechanical edits", prompt)
-            self.assertIn("mid  - demonstrated non-routine diagnosis or implementation", prompt)
-            self.assertIn("Unknown difficulty or unfamiliar files start with scoped low inspection", prompt)
+            self.assertIn("mid  - involved non-routine implementation or diagnosis with an understood approach", prompt)
+            self.assertIn("Unfamiliar files alone can start with low inspection", prompt)
+            self.assertIn("high - substantive new design or approach selection, ambiguous multi-cause diagnosis", prompt)
+            self.assertIn("A failed lower-tier attempt or a known root cause is not required", prompt)
+            self.assertIn("A low/mid owner can consult high early for a focused decision", prompt)
             self.assertIn("alone do not justify mid/high", prompt)
             self.assertIn("Do not force a mix of tiers", prompt)
 

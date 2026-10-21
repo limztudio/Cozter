@@ -146,14 +146,16 @@ class ParallelReadPromptTests(unittest.TestCase):
         self.assertIn("2. [mid] [parallel-read] inspect parser code", rendered)
         self.assertIn("3. [high] repair and verify related findings", rendered)
 
-    def test_planner_prefers_independent_audits_then_one_writer_and_uses_saved_evidence(self) -> None:
+    def test_planner_keeps_one_owner_with_optional_independent_advice_and_saved_evidence(self) -> None:
         prompt = flexible.build_plan_prompt("request and saved checkpoint", collaborative=False)
-        self.assertIn("fewest sub-tasks", prompt)
-        self.assertIn("one cohesive repair-and-verification task", prompt)
-        self.assertIn("independent of every other consecutive task", prompt)
+        self.assertIn("Choose ONE persistent owner", prompt)
+        self.assertIn("Never split workflow stages into different writers", prompt)
+        self.assertIn("read-only, and independent of each other", prompt)
+        self.assertIn("They run before the owner's first turn", prompt)
         self.assertIn("Exclude completed actions from the new plan", prompt)
-        self.assertIn("Never mark edits, builds, tests, process launches, repairs, commits, or pushes", prompt)
-        self.assertIn("[low] [parallel-read] inspect existing logs", prompt)
+        self.assertIn("They cannot edit, build, test, launch/stop processes, commit, push", prompt)
+        self.assertIn("[SPECIALISTS]", prompt)
+        self.assertIn("[OWNER]", prompt)
 
     def test_serial_build_worker_uses_bounded_native_parallelism_without_shared_tree_overlap(self) -> None:
         prompt = flexible.build_subtask_prompt("repair and verify", self.plan, 2, [])

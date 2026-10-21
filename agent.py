@@ -2321,6 +2321,42 @@ async def _run_parallel_flexible_workers(
                              return_exceptions=True)
 
 
+def _new_owner_obligation(instruction: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    scope = json_digest(flexible.instruction_identity(instruction))
+    generation = 1 + max((row["generation"] for row in rows if row["scope"] == scope), default=-1)
+    return {"id": json_digest([scope, generation]), "scope": scope, "generation": generation,
+            "instruction": instruction, "repeats": 0, "resolved": False}
+
+
+async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
+    """Return a judge's missing work to the same durable execution owner."""
+    saved = await execution_state.record("flexible_plan")
+    if saved is None or saved.get("owner_mode") is not True:
+        return False
+    tasks = flexible.restore_tasks(saved.get("queue"))
+    if tasks is None or len(tasks) != 1 or tasks[0].read_only:
+        raise ValueError("Saved Flexible owner is invalid")
+    instruction = instruction.strip()
+    if not instruction:
+        return False
+    obligations = {key: [dict(row) for row in rows]
+                   for key, rows in saved.get("owner_obligations", {}).items()}
+    rows = obligations.setdefault("0", [])
+    identity = json_digest(flexible.instruction_identity(instruction))
+    budget = _TURN_BUDGET.get()
+    if budget is not None and instruction not in budget.pending:
+        budget.pending.append(instruction)
+    if not any(row["scope"] == identity and not row["resolved"] for row in rows):
+        if len(rows) >= flexible.MAX_SUBTASKS * 4:
+            raise _TurnBudgetExhaustedError("the owner obligation context is full; remaining scope is checkpointed")
+        rows.append(_new_owner_obligation(instruction, rows))
+    await saved.save(
+        active=True, cursor=0, reports=[], worker_outputs={}, owner_obligations=obligations,
+        phase_previous_draft=flexible.bounded_draft_excerpt(draft),
+    )
+    return True
+
+
 async def _run_flexible(
     contextual_prompt: str,
     request: str,
@@ -2435,7 +2471,18 @@ async def _run_flexible(
             # Further allowances still represent the same accepted requirements.
             # Retain the original bounded proof, without accumulating aliases.
             folded_signatures = saved_folded_signatures
-        plan = flexible.Plan(str(saved_plan.get("understanding", "")), tuple(restored_tasks))
+        owner_mode = saved_plan.get("owner_mode", False)
+        owner_reason = saved_plan.get("owner_reason", "")
+        if (not isinstance(owner_mode, bool) or not isinstance(owner_reason, str)
+                or owner_mode and (len(restored_tasks) != 1 or restored_tasks[0].read_only)):
+            raise ValueError("Saved Flexible owner is invalid")
+        plan = flexible.Plan(str(saved_plan.get("understanding", "")), tuple(restored_tasks),
+                             owner_mode=owner_mode, owner_reason=owner_reason)
+        if owner_mode:
+            owner_request = saved_plan.get("owner_request")
+            if not isinstance(owner_request, str) or not owner_request.strip():
+                raise ValueError("Saved Flexible owner request is invalid")
+            request = owner_request
         previous_draft = saved_plan.get("phase_previous_draft")
         await status(f"flexible: resuming saved plan at {cursor + 1}/{len(restored_tasks)}")
     else:
@@ -2494,6 +2541,7 @@ async def _run_flexible(
         "resume" if restored else "plan",
         *(sum(task.tier == tier for task in plan.subtasks) for tier in flexible.TIERS),
     )
+    owner_mode = plan.owner_mode
 
     # 2. Route sub-tasks to tiers.
     result = AgentResult()
@@ -2518,6 +2566,8 @@ async def _run_flexible(
     lease_rounds: dict[str, int] = {}
     lease_delivery: dict[str, int] = {}
     interim_followups: dict[str, list[dict[str, Any]]] = {}
+    owner_obligations: dict[str, list[dict[str, Any]]] = {}
+    owner_delivery: dict[str, int] = {}
 
     def encode_output(value: AgentResult, *, text: bool = False) -> dict:
         encoded: dict[str, Any] = {
@@ -2589,6 +2639,31 @@ async def _run_flexible(
         lease_rounds = saved_plan.get("lease_rounds", {})
         lease_delivery = saved_plan.get("lease_delivery", {})
         interim_followups = saved_plan.get("interim_followups", {})
+        owner_obligations = saved_plan.get("owner_obligations", {})
+        owner_delivery = saved_plan.get("owner_delivery", {})
+        if (not isinstance(owner_obligations, dict) or not isinstance(owner_delivery, dict)
+                or any(not isinstance(key, str) or key not in {str(index) for index in range(len(queue))}
+                       or not isinstance(rows, list) or len(rows) > flexible.MAX_SUBTASKS * 4
+                       for key, rows in owner_obligations.items())):
+            raise ValueError("Saved Flexible owner obligations are invalid")
+        for rows in owner_obligations.values():
+            seen_owner_scopes: set[str] = set()
+            for row in rows:
+                if (not isinstance(row, dict) or not isinstance(row.get("instruction"), str)
+                        or not row["instruction"].strip()
+                        or row.get("scope") != json_digest(flexible.instruction_identity(row["instruction"]))
+                        or not isinstance(row.get("generation"), int) or isinstance(row["generation"], bool)
+                        or not 0 <= row["generation"] < flexible.MAX_SUBTASKS * 4
+                        or row.get("id") != json_digest([row["scope"], row["generation"]])
+                        or row["id"] in seen_owner_scopes
+                        or not isinstance(row.get("resolved"), bool)
+                        or not isinstance(row.get("repeats"), int) or isinstance(row["repeats"], bool)
+                        or not 0 <= row["repeats"] <= 3):
+                    raise ValueError("Saved Flexible owner obligation is invalid")
+                seen_owner_scopes.add(row["id"])
+        if any(not isinstance(key, str) or not isinstance(value, int) or isinstance(value, bool)
+               or not 0 <= value <= flexible.MAX_SUBTASKS * 4 for key, value in owner_delivery.items()):
+            raise ValueError("Saved Flexible owner delivery is invalid")
         if (not isinstance(interim_followups, dict) or any(
             not isinstance(key, str) or flexible.restore_tasks(rows, limit=None) is None
             for key, rows in interim_followups.items()
@@ -2631,6 +2706,26 @@ async def _run_flexible(
     if budget is not None:
         budget.pending = [_checkpoint_scope(task.instruction, request) for task in queue[done:]]
         budget.pending.extend(task.instruction for task in unrun_followups)
+        budget.pending.extend(item["instruction"] for rows in owner_obligations.values() for item in rows
+                              if not item["resolved"] and item["instruction"] not in budget.pending)
+
+    if owner_mode and not restored:
+        initial_leases = []
+        for number, specialist in enumerate(plan.specialists, 1):
+            lease_id = json_digest({"origin": "initial", "number": number, **dataclasses.asdict(specialist)})
+            initial_leases.append({
+                **dataclasses.asdict(specialist), "id": lease_id, "state": "pending",
+                "parent_tier": queue[0].tier, "round": number, "origin": "initial",
+            })
+        if initial_leases:
+            tier_leases["0"] = initial_leases
+            lease_rounds["0"] = len(initial_leases)
+    if owner_mode:
+        initial_items = [item for item in tier_leases.get("0", []) if item.get("origin") == "initial"]
+        performance_logger.info(
+            "stage=flexible_routing event=owner tier=%s specialists=%d pending_specialists=%d",
+            queue[0].tier, len(initial_items), sum(item["state"] != "complete" for item in initial_items),
+        )
 
     async def save_progress() -> None:
         if saved_plan is None:
@@ -2653,6 +2748,9 @@ async def _run_flexible(
             routing_evidence=routing_evidence,
             tier_leases=tier_leases, lease_rounds=lease_rounds, lease_delivery=lease_delivery,
             interim_followups=interim_followups,
+            owner_mode=owner_mode, owner_reason=plan.owner_reason,
+            owner_request=request if owner_mode else None,
+            owner_obligations=owner_obligations, owner_delivery=owner_delivery,
         )
 
     await save_progress()
@@ -2667,7 +2765,9 @@ async def _run_flexible(
         scope = _checkpoint_scope(queue[index].instruction, request)
         budget.reports.append((scope, flexible.truncate_report(report)))
         if (scope in budget.pending and flexible.parse_lease(sub_result.text) is None
-                and flexible.parse_escalation(sub_result.text) is None):
+                and flexible.parse_escalation(sub_result.text) is None
+                and not sub_result.continuation_reason
+                and not (owner_mode and flexible.parse_followups(sub_result.text))):
             budget.pending.remove(scope)
         if sub_result.error and "tool budget exhausted" in sub_result.error.casefold():
             budget.pending.insert(0, scope)
@@ -2681,6 +2781,8 @@ async def _run_flexible(
                     and getattr(backend, "supports_read_only_workers", False))
 
     def worker_scope(index: int) -> str:
+        if owner_mode:
+            return "flexible:owner"
         task = queue[index]
         return "flexible:" + json_digest({
             "tier": task.tier, "instruction": flexible.instruction_identity(task.instruction),
@@ -2755,6 +2857,27 @@ async def _run_flexible(
                 " Do not repeat a helper question already answered."
             )
         worker_sections.update(lease_sections)
+        obligations = owner_obligations.get(str(index), [])
+        obligation_sections = {
+            "owner_obligation:" + item["id"]: (
+                f"\nDiscovered obligation {number} for this same owner: {item['instruction']}\n"
+                "Keep it within the original request and follow the current progress state."
+            ) for number, item in enumerate(obligations, 1)
+        }
+        if obligations:
+            resolved = ", ".join(str(number) for number, item in enumerate(obligations, 1) if item["resolved"])
+            pending = ", ".join(str(number) for number, item in enumerate(obligations, 1) if not item["resolved"])
+            obligation_sections["owner_progress"] = (
+                f"\nPreviously reported completed obligations: {resolved or 'none'}."
+                f" Remaining obligations: {pending or 'none'}."
+                " Reuse completed work and valid verification; recheck only invalidated evidence or a new finding."
+            )
+            obligation_sections["owner_continuation"] = (
+                "\nContinue your original job and finish the retained obligations."
+                f" Outstanding-scope reports: {sum(item['repeats'] + 1 for item in obligations if not item['resolved'])}."
+                " Reuse verified evidence. If reasoning prevents completion, request specialist help or escalation."
+            )
+        worker_sections.update(obligation_sections)
         worker_context = None
         if backend.name in _NATIVE_BACKENDS:
             worker_context = _native_turn_prompt(
@@ -2764,15 +2887,20 @@ async def _run_flexible(
                 # A long saved checkpoint must not consume the separately
                 # bounded context needed to join split worker conversations.
                 budget_includes_request=False,
+                previous_draft=previous_draft if owner_mode else None,
             )
             worker_context.sections.update({
-                key: text for key, text in worker_sections.items() if key != "request"
+                key: text for key, text in worker_sections.items()
+                if key != "request" and not (owner_mode and key == "previous_draft")
             })
         delivery_key = f"{index}:{task.tier}"
-        http_resume = backend.name not in _NATIVE_BACKENDS and delivery_key in lease_delivery and bool(completed_leases)
+        http_resume = backend.name not in _NATIVE_BACKENDS and (
+            delivery_key in lease_delivery and bool(completed_leases)
+            or delivery_key in owner_delivery and bool(obligations)
+        )
         prompt_sections = worker_sections
         if http_resume:
-            delivered = lease_delivery[delivery_key]
+            delivered = lease_delivery.get(delivery_key, 0)
             prompt_sections = {
                 key: value for key, value in lease_sections.items()
                 if key == "lease_continuation" or any(
@@ -2780,6 +2908,14 @@ async def _run_flexible(
                     for item in completed_leases
                 )
             }
+            delivered_obligations = owner_delivery.get(delivery_key, 0)
+            prompt_sections.update({
+                key: value for key, value in obligation_sections.items()
+                if key in {"owner_continuation", "owner_progress"} or any(
+                    key == "owner_obligation:" + item["id"]
+                    for item in obligations[delivered_obligations:]
+                )
+            })
             prompt_sections["parent_scope"] = f"\nContinue parent task: {task.instruction}"
         bootstrap_prompt = _build_backend_prompt(
             backend, "\n".join(worker_sections.values()), collaborative=False,
@@ -2808,6 +2944,10 @@ async def _run_flexible(
             ), "flexible_worker", backend_name, model,
                 worker_index=index + 1, worker_count=total, worker_tier=task.tier)
         if sub_result.continuation_reason == "prerequisite":
+            if budget is not None:
+                budget.capture(sub_result, workspace_path)
+            _accumulate_usage(usage_totals, sub_result.usage)
+            _accumulate_usage(usage_audit, sub_result.usage)
             worker_outputs[str(index)] = encode_output(sub_result, text=True)
             await save_progress()
             raise _NativeRecoveryDeferred(sub_result)
@@ -2815,6 +2955,7 @@ async def _run_flexible(
             budget.capture(sub_result, workspace_path)
         if not restarting:
             lease_delivery[delivery_key] = lease_rounds.get(str(index), 0)
+            owner_delivery[delivery_key] = len(obligations)
             worker_outputs[str(index)] = encode_output(sub_result, text=True)
             try:
                 retain_report(index, sub_result)
@@ -2843,7 +2984,9 @@ async def _run_flexible(
         await save_progress()
         return result, False
 
-    async def run_lease(index: int, item: dict[str, Any]) -> tuple[AgentResult, bool]:
+    async def run_lease(
+        index: int, item: dict[str, Any], *, parallel: bool = False, catalog: str | None = None,
+    ) -> tuple[AgentResult, bool]:
         if item["state"] == "complete":
             return decode_output(item["output"]), False
         helper_name, helper_model = tiers[item["tier"]]
@@ -2866,7 +3009,8 @@ async def _run_flexible(
             return value, False
         if budget is not None:
             budget.claim_worker()
-        helper_catalog = skills.catalog_prompt(await skills.refresh(workspace_path), cli=True)
+        helper_catalog = (catalog if catalog is not None
+                          else skills.catalog_prompt(await skills.refresh(workspace_path), cli=True))
         helper_sections = {
             "parent_scope": f"\nParent task: {queue[index].instruction}",
             "helper_question": f"\nHelper question: {item['task']}\nReason: {item['reason']}",
@@ -2881,6 +3025,14 @@ async def _run_flexible(
                 " Do not request another helper or emit LEASE, ESCALATE, or followup control blocks."
             ),
         }
+        if owner_mode:
+            helper_sections["original_request"] = "\nOriginal user request and constraints:\n" + request
+        if item.get("origin") == "initial":
+            helper_sections["initial_consultation"] = (
+                "\nThis is an independent initial consultation before the owner starts."
+                " Use existing evidence and do not rely on another specialist's findings."
+                " Resolve the question so the owner can choose and implement its approach."
+            )
         helper_context = None
         if helper.name in _NATIVE_BACKENDS:
             helper_context = _native_turn_prompt(
@@ -2899,7 +3051,8 @@ async def _run_flexible(
                                       collaborative=False, allow_detached_requests=False,
                                       skills_catalog=helper_catalog),
                 helper_model, helper_approval, effort=tier_efforts[item["tier"]],
-                on_event=on_event, inject_queue=inject_queue, injected=injected,
+                on_event=on_event, inject_queue=None if parallel else inject_queue,
+                injected=None if parallel else injected,
                 on_process=on_process, native_context=helper_context,
                 native_worker=f"flexible:lease:{item['tier']}" if helper_context is not None else None,
             ), "flexible_lease", helper_name, helper_model,
@@ -2923,6 +3076,37 @@ async def _run_flexible(
         return value, restarting
 
     max_parallel = config.get_flexible_max_parallel_workers()
+    if owner_mode:
+        while True:
+            pending_initial = [item for item in tier_leases.get("0", [])
+                               if item.get("origin") == "initial" and item["state"] != "complete"]
+            if not pending_initial:
+                break
+            if _take_pending_injections(inject_queue, injected):
+                return await restart(result)
+            wave = pending_initial[:max_parallel]
+            parallel = len(wave) > 1 and all(
+                getattr(backends_agent.get_backend(tiers[item["tier"]][0]), "supports_read_only_workers", False)
+                for item in wave
+            ) and (budget is None or budget.max_workers - budget.workers_started >= len(wave))
+            if parallel:
+                catalog = skills.catalog_prompt(await skills.refresh(workspace_path), cli=True)
+                values, restarting = await _run_parallel_flexible_workers(
+                    [run_lease(0, item, parallel=True, catalog=catalog) for item in wave],
+                    inject_queue, injected,
+                )
+                if restarting:
+                    return await restart(result)
+            else:
+                values = [await run_lease(0, wave[0])]
+            for helper_result, helper_restarting in values:
+                if helper_restarting:
+                    return await restart(result)
+                if helper_result.continuation_reason:
+                    carry_forward_turn_output(result, helper_result, workspace_path)
+                    helper_result.usage = usage_totals or None
+                    return helper_result, False
+
     while done < len(queue):
         if _take_pending_injections(inject_queue, injected):
             return await restart(result)
@@ -2994,6 +3178,7 @@ async def _run_flexible(
                 values = [await run_worker(done, earlier, parallel=False)]
         except _NativeRecoveryDeferred as exc:
             carry_forward_turn_output(result, exc.result, workspace_path)
+            exc.result.usage = usage_totals or None
             return exc.result, False
         # Always merge in plan order, regardless of completion order.
         for sub_result, restarting in values:
@@ -3038,13 +3223,46 @@ async def _run_flexible(
             attach_markers.extend(markers)
             report = report.strip()
             pending_followups = interim_followups.setdefault(str(done), [])
-            for extra in flexible.parse_followups(cached_output.get("followups", "")):
+            reported_followups = flexible.parse_followups(cached_output.get("followups", ""))
+            for extra in reported_followups:
                 row = flexible.task_record(extra)
                 if row not in pending_followups:
                     pending_followups.append(row)
+            if owner_mode and reported_followups and not cached_output.get("owner_followups_processed"):
+                obligations = owner_obligations.setdefault(str(done), [])
+                delivery_key = f"{done}:{task.tier}"
+                delivered = owner_delivery.get(delivery_key, 0)
+                reported_ids: set[str] = set()
+                for extra in reported_followups:
+                    identity = json_digest(flexible.instruction_identity(extra.instruction))
+                    if identity in reported_ids:
+                        continue
+                    reported_ids.add(identity)
+                    if budget is not None and extra.instruction not in budget.pending:
+                        budget.pending.append(extra.instruction)
+                    existing = next((item for item in obligations
+                                     if item["scope"] == identity and not item["resolved"]), None)
+                    if existing is None:
+                        if len(obligations) >= flexible.MAX_SUBTASKS * 4:
+                            return await hold_current(
+                                "Flexible owner obligation capacity reached; unfinished scope is retained.",
+                                "The owner discovered more scope than can fit its bounded continuation context. "
+                                "All reported obligations remain in the saved checkpoint.",
+                            )
+                        obligations.append(_new_owner_obligation(extra.instruction, obligations))
+                    elif obligations.index(existing) < delivered:
+                        existing["repeats"] = min(3, existing["repeats"] + 1)
+                cached_output["owner_followups_processed"] = True
+
+            if owner_mode and sub_result.continuation_reason:
+                await save_progress()
+                carry_forward_turn_output(result, sub_result, workspace_path)
+                sub_result.usage = usage_totals or None
+                return sub_result, False
 
             lease = flexible.restore_lease(cached_output.get("lease"))
-            if sub_result.detached_tasks and (lease is not None or cached_output.get("escalation")):
+            if sub_result.detached_tasks and (lease is not None or cached_output.get("escalation")
+                                              or owner_mode and reported_followups):
                 return await hold_current(
                     "Flexible helper handoff has unsettled background work.",
                     "The worker requested another tier while background work was still active. "
@@ -3122,7 +3340,11 @@ async def _run_flexible(
                     **dataclasses.asdict(escalation),
                 })
                 queue[done] = dataclasses.replace(task, tier=next_tier)
-                plan = dataclasses.replace(plan, subtasks=tuple(queue))
+                plan = dataclasses.replace(
+                    plan, subtasks=tuple(queue),
+                    owner_reason=(f"Escalated to {next_tier}: {escalation.reason}"
+                                  if owner_mode else plan.owner_reason),
+                )
                 worker_outputs.pop(str(done), None)
                 restored_outputs.discard(str(done))
                 retained_worker_reports.discard(str(done))
@@ -3132,6 +3354,28 @@ async def _run_flexible(
                 )
                 await save_progress()
                 await status(f"flexible: continuing task {done + 1}/{total} on {next_tier} with saved evidence")
+                break
+
+            if (owner_mode and reported_followups and not sub_result.error
+                    and not sub_result.continuation_reason and not worker_awaiting
+                    and not sub_result.detached_tasks):
+                if any(not item["resolved"] and item["repeats"] >= 3
+                       for item in owner_obligations.get(str(done), [])):
+                    return await hold_current(
+                        "Flexible owner repeatedly returned unresolved obligations.",
+                        "The same owner returned the same unfinished scope after three supplied continuations "
+                        "without resolving it or requesting specialist help. Its evidence and obligations are saved.",
+                    )
+                if budget is not None:
+                    scope = _checkpoint_scope(task.instruction, request)
+                    if scope not in budget.pending:
+                        budget.pending.append(scope)
+                worker_outputs.pop(str(done), None)
+                restored_outputs.discard(str(done))
+                retained_worker_reports.discard(str(done))
+                interim_followups.pop(str(done), None)
+                await save_progress()
+                await status("flexible: the same owner is completing newly discovered obligations")
                 break
 
             # Empty worker report: name the tier.
@@ -3150,6 +3394,19 @@ async def _run_flexible(
             # Stuck worker: merge ends on its question.
             if worker_awaiting:
                 blocked.append(done)
+
+            if owner_mode:
+                if not sub_result.error and not worker_awaiting:
+                    for item in owner_obligations.get(str(done), []):
+                        item["resolved"] = True
+                        if budget is not None:
+                            while item["instruction"] in budget.pending:
+                                budget.pending.remove(item["instruction"])
+                done += 1
+                interim_followups.pop(str(done - 1), None)
+                worker_outputs.pop(str(done - 1), None)
+                await save_progress()
+                continue
 
             # Keep every distinct leftover, but consolidate compatible adjacent
             # scopes instead of multiplying a report into dozens of workers.
@@ -3222,7 +3479,7 @@ async def _run_flexible(
             final += "\n\n" + remainder
         append_text_result(result, final)
         result.usage = usage_totals or None
-        # A done phase never goes back to judge CONTINUE.
+        # The judge can reopen the owner with concrete missing work.
         await invalidate()
         return result, False
 
@@ -4212,6 +4469,8 @@ async def _run_turn_impl(
                 result.completion_verified = verdict.verified
                 if verdict.blocked:
                     _retain_blocked_verdict(result, verdict, turn=turn)
+                    if is_flexible and result.continue_instruction:
+                        await _continue_flexible_owner(result.continue_instruction, draft)
                 break
             judged_rounds += 1
             followup = (
@@ -4232,6 +4491,8 @@ async def _run_turn_impl(
                 _snapshot_attachment_images, workspace_path,
             )
             previous_result = result
+            if is_flexible:
+                await _continue_flexible_owner(followup.strip(), draft)
             continuation_prompt = _build_continuation_prompt(
                 contextual_prompt, effective_prompt, draft, followup,
                 draft_limit=history_budget,
@@ -4285,6 +4546,8 @@ async def _run_turn_impl(
                 result.completion_verified = _tail_verdict.verified and not _tail_verdict.should_continue
                 if _tail_verdict.blocked:
                     _retain_blocked_verdict(result, _tail_verdict, turn=turn)
+                    if is_flexible and result.continue_instruction:
+                        await _continue_flexible_owner(result.continue_instruction, result.text)
                 if _tail_verdict.should_continue:
                     _tail_next = (_tail_verdict.next_instruction or "").strip()
                     if _tail_next:
@@ -4297,6 +4560,8 @@ async def _run_turn_impl(
                             f" ({judged_rounds + 1}): {_tail_next}]"
                         )
                         result.continuation_reason = "judge_limit"
+                        if is_flexible:
+                            await _continue_flexible_owner(result.continue_instruction, result.text)
                         if budget is not None:
                             budget.pending = [result.continue_instruction]
                             result.continuation_checkpoint = budget.checkpoint(
