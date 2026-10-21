@@ -101,7 +101,8 @@ class FlexibleRoutingEscalationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.record.get("cursor"), 2)
         self.assertEqual(len(self.record.get("reports")), 2)
 
-    async def test_ordinary_mid_change_does_not_add_artificial_tiers_or_routing_calls(self):
+    async def test_explicit_mid_plan_keeps_its_backend_without_artificial_tiers_or_routing_calls(self):
+        self.plan = "[PLAN]\n1. [mid] Resolve interacting cache and registry invariants, repair and verify\n[/PLAN]"
         calls = []
 
         async def drive(backend, _ws, prompt, model, _approval, *, effort, **_kwargs):

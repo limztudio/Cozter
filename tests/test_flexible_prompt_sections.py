@@ -18,11 +18,11 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
         # Snapshots include the tier policy and terminal control messages.
         # Both roles still join exactly, including repeated evidence.
         cases = (
-            (0, [], None, "44c74fd10a207326ea53783a6e26e0205acb54a297af42314f1af49fb6c50ed8"),
+            (0, [], None, "4b6e8cbbe69f8bf0b4841f61d45dc514f7a27e3b088dd732caf6bf3790aa5a19"),
             (1, ["report A", "report B"], "Previous verified result",
-             "7a332872c0a880d51d590bebf4d92a09c51d695b9849c7b6bd5bc3dae12ad918"),
+             "232ea2416f18106b04253746fcca7ffa26efb42f98add909cd0e5a6f9dba0fc3"),
             (0, ["a" * 180, "a" * 180], "a" * 180,
-             "a0672a0d04d310cf8c21a8386f929d797a3a75e1955f7fe69823e66361f29e28"),
+             "42d28ad4da009f01eb6706896ea9b9fd99413fd2c9634bbd257622e66ba32711"),
         )
         for index, reports, draft, expected_hash in cases:
             with self.subTest(index=index, reports=len(reports), draft=draft is not None):
@@ -37,6 +37,18 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
                 self.assertIn("\n[LEASE]\ntier:", sections["worker_instructions"])
                 self.assertIn("\n[ESCALATE]\nreason:", sections["worker_instructions"])
                 self.assertEqual(hashlib.sha256(rendered.encode()).hexdigest(), expected_hash)
+
+    def test_planner_and_both_worker_roles_share_low_first_reasoning_boundaries(self) -> None:
+        prompts = [flexible.build_plan_prompt(self.request, collaborative=False)]
+        prompts.extend(flexible.build_subtask_sections(self.request, self.plan, index, [])["worker_instructions"]
+                       for index in range(len(self.plan.subtasks)))
+        for prompt in prompts:
+            self.assertIn("low  - default for bounded implementation, debugging, refactoring, test repairs", prompt)
+            self.assertIn("low is not limited to mechanical edits", prompt)
+            self.assertIn("mid  - demonstrated non-routine diagnosis or implementation", prompt)
+            self.assertIn("Unknown difficulty or unfamiliar files start with scoped low inspection", prompt)
+            self.assertIn("alone do not justify mid/high", prompt)
+            self.assertIn("Do not force a mix of tiers", prompt)
 
     def test_section_identity_is_derived_while_building_not_from_human_markers(self) -> None:
         request = "User text: Earlier reports:\nPlan:\nPrevious draft and evidence from this turn:"

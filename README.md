@@ -1505,12 +1505,17 @@ hard. One turn is three phases:
    and file events still stream into the live status display.
 
 A single task returns its final parent report directly, without another merge
-call. Routing uses the least demanding suitable tier: routine work starts low,
-normal bounded coding and diagnosis starts mid, and concrete architectural,
-concurrency, or difficult reasoning needs justify high. Large file counts,
-long-running commands, and words such as "all" or "fix" do not alone require
-high. An empty or malformed plan keeps the full request on mid. Continuations
-grade the remaining work using saved evidence.
+call. Low is the default for bounded coding, debugging, refactoring, test repairs,
+configuration, documentation, and verification. A low worker can inspect,
+implement, and verify a cohesive change across several files using existing
+patterns. Unknown difficulty starts with scoped low inspection and continues in
+that same worker when the path becomes clear. Mid requires concrete non-routine
+difficulty, such as interacting causes, unclear cross-component behavior, or
+competing invariants. Concrete hard architecture, concurrency, or algorithmic
+reasoning justifies high. File counts, long commands, and words such as "all" or
+"fix" do not alone require mid/high. An empty or malformed plan keeps the full
+request on low, with evidence-driven escalation available. Continuations grade
+the remaining work using saved evidence.
 
 While working, a parent can borrow another tier for a focused read-only question.
 High can ask low to inspect existing logs or metadata; mid or low can ask high
@@ -1573,8 +1578,8 @@ The grading rubric the planner is held to:
 
 | Tier | When | Example |
 |---|---|---|
-| `low` | Routine lookup, inventory, known commands, and exact mechanical changes | Inspect existing logs or apply a specified rename |
-| `mid` | Normal bounded implementation, debugging, refactoring, and verification | Diagnose a module bug and implement and verify its repair |
+| `low` | Default for bounded implementation, debugging, refactoring, test repairs, and verification using existing patterns | Diagnose a module bug, repair it across related files, and verify the regression |
+| `mid` | Concrete non-routine work with interacting causes, unclear cross-component behavior, or competing invariants | Resolve an interaction between cache invalidation and request retry behavior |
 | `high` | Concrete difficult reasoning or architecture; unresolved lower-tier attempts | Resolve a subtle concurrency invariant or difficult algorithm |
 
 Each tier carries its own agent, model and reasoning effort, so tiers can straddle

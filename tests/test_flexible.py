@@ -114,7 +114,7 @@ class PlanParsingTests(unittest.TestCase):
         for raw in ("", "   ", "no idea, sorry", "[PLAN]\n[/PLAN]", "[medium] inspect it"):
             plan = flexible.parse_plan(raw, "the original request")
             self.assertEqual(len(plan.subtasks), 1)
-            self.assertEqual(plan.subtasks[0].tier, "mid")
+            self.assertEqual(plan.subtasks[0].tier, "low")
             self.assertEqual(
                 plan.subtasks[0].instruction, "the original request",
             )
@@ -571,7 +571,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
 
         # A scheduled turn degrades into the fallback plan.
         self.assertNotIn("[[await]]", result.text)
-        self.assertEqual(self.driven, [("codex", "gpt-6-sol")])
+        self.assertEqual(self.driven, [("codex", "gpt-6-luna")])
 
     async def test_a_merged_answer_may_end_on_a_blocking_question(
         self,

@@ -23,12 +23,12 @@ BACKEND_NAME = "flexible"
 # Difficulty tiers, cheapest first.
 TIERS: tuple[str, ...] = ("low", "mid", "high")
 
-# Unknown work starts on the general coding tier.
-FALLBACK_TIER = "mid"
+# Start with scoped inspection when difficulty is unknown.
+FALLBACK_TIER = "low"
 
 TIER_DESCRIPTIONS = {
-    "low": "Routine inspection, known commands, and mechanical changes",
-    "mid": "Normal bounded coding and diagnosis; default for unknown work",
+    "low": "Default for bounded coding, debugging, refactoring, and verification",
+    "mid": "Non-routine diagnosis or implementation with interacting causes or competing invariants",
     "high": (
         "Concrete hard reasoning, subtle concurrency, design, or algorithms"
     ),
@@ -44,17 +44,23 @@ JUDGE_MAX_CONTINUES = 3
 
 # The rubric the planner grades each sub-task against.
 _RUBRIC = (
-    "Choose the cheapest capable tier for each remaining obligation:\n"
-    "low  - routine lookup, inventory, existing-log inspection, known build/test"
-    " commands, or mechanical edits with a clear rule.\n"
-    "mid  - normal bounded diagnosis, coding, refactoring, and verification."
-    " Use mid when the difficulty is unknown; inspect the scoped evidence first.\n"
+    "Choose the cheapest capable tier for each remaining obligation. Start low"
+    " unless the request or retained evidence gives a concrete reason for a higher tier:\n"
+    "low  - default for bounded implementation, debugging, refactoring, test repairs,"
+    " configuration, documentation, inspection, and build/runtime verification."
+    " A capable low worker can inspect, implement, and verify a complete change"
+    " across several files using existing patterns; low is not limited to mechanical edits.\n"
+    "mid  - demonstrated non-routine diagnosis or implementation: several interacting"
+    " causes, unclear cross-component behavior, or competing invariants in a refactor."
+    " Name that difficulty. Ordinary design choices following existing patterns stay low.\n"
     "high - concrete hard reasoning: subtle concurrency/correctness, difficult"
     " algorithms, or architectural decisions across components. Name the actual"
     " reasoning difficulty in the instruction.\n"
     "File count, duration, broad wording, or the words all/fix/audit/optimise"
-    " alone do not justify high. Missing initial information is usually a reason"
-    " for scoped low/mid inspection. Do not force a mix of tiers."
+    " alone do not justify mid/high. Unknown difficulty or unfamiliar files start"
+    " with scoped low inspection, followed by implementation and verification in"
+    " that same worker when a clear path emerges. Escalate or borrow a focused helper"
+    " only when concrete evidence requires it. Do not force a mix of tiers."
 )
 
 _ESCALATION_RULES = (
@@ -68,7 +74,8 @@ _ESCALATION_RULES = (
     "remaining: the self-contained unfinished scope, retaining original constraints\n"
     "[/ESCALATE]\n"
     "Do not wrap the block in a Markdown code fence. Do not mark that obligation"
-    " complete or duplicate it as a followup. The"
+    " complete or duplicate it as a followup. Scoped inspection or a targeted check"
+    " can establish the reasoning limit; do not make speculative edits just to qualify. The"
     " coordinator preserves completed evidence and advances only one tier at a"
     " time. At high, the block records unfinished reasoning; no higher tier exists."
     " Do not escalate for quota/auth/network errors,"
@@ -139,11 +146,11 @@ _PLANNER_RULES = (
     " explicit PARTIAL + remainder note after the numbered tasks.\n"
     "- Progress is Thinking... status only (done/total may grow as"
     " follow-ups join); never a chat reply; DONE ping only at the end.\n"
-    "- Grade honestly: over-grading wastes the strong model, under-grading"
-    " strands hard work on a weak one.\n"
+    "- Grade the actual reasoning needed. Low workers own complete coding and"
+    " verification tasks; select mid/high only for a named difficulty beyond routine work.\n"
     "- On a continuation, grade only the unfinished obligation. Reuse earlier"
-    " findings and verified work; a difficult original request does not make a"
-    " remaining known test command or commit/push high. A worker can request"
+    " findings and verified work; a remaining known test command or commit/push"
+    " normally stays low, even after a difficult original request. A worker can request"
     " a bounded next-tier escalation if actual evidence reveals harder reasoning.\n"
     "- Self-contained: the worker sees only the user message, the plan,"
     " and earlier reports.\n"
@@ -664,7 +671,7 @@ def coalesce_followups(report: str, known: set[str]) -> tuple[list[Subtask], lis
 
 
 def fallback_plan(request: str) -> Plan:
-    """Keep the whole request on the general coding tier when planning fails."""
+    """Keep the whole request on low when planning gives no difficulty evidence."""
     if isinstance(request, str):
         instruction = request.strip() or "(empty request)"
     else:
@@ -676,7 +683,7 @@ def fallback_plan(request: str) -> Plan:
 
 
 def parse_plan(raw: str, request: str) -> Plan:
-    """Parse a planner reply, falling back to a single mid-tier task.
+    """Parse a planner reply, falling back to a single low-tier task.
 
     A missing ``[PLAN]`` wrapper or stray prose can still yield tasks.
     Unrecognized tiers do not make malformed plans more expensive.
