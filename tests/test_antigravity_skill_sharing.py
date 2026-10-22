@@ -20,7 +20,7 @@ class AntigravitySkillSharingTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(mock.patch.object(skills.Path, "home", return_value=self.home))
         self.enterContext(mock.patch.dict(os.environ, {
             "CODEX_HOME": "", "CLAUDE_CONFIG_DIR": "", "COPILOT_HOME": "", "GROK_HOME": "",
-            "COPILOT_SKILLS_DIRS": "", "GEMINI_CLI_HOME": str(self.root / "separate-gemini-home"),
+            "COPILOT_SKILLS_DIRS": "",
         }))
 
     def write(self, path, name, body):
@@ -35,8 +35,8 @@ class AntigravitySkillSharingTests(unittest.IsolatedAsyncioTestCase):
         self.write(self.home / ".gemini/config/skills/app-only/SKILL.md", "App procedure", "App and IDE location")
         self.write(self.home / ".gemini/antigravity-cli/plugins/unverified/skills/hidden/SKILL.md",
                    "Inactive plugin", "Directory existence does not establish plugin activation")
-        self.write(self.root / "separate-gemini-home/.gemini/antigravity-cli/skills/wrong/SKILL.md",
-                   "Wrong home", "Gemini CLI's home override does not configure Antigravity")
+        self.write(self.home / ".gemini/skills/unrelated/SKILL.md", "Other native user", "Unrelated user workflow")
+        self.write(self.ws / ".gemini/skills/unrelated/SKILL.md", "Other native project", "Unrelated project workflow")
 
         catalog = skills.discover(str(self.ws))
 

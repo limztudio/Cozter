@@ -21,7 +21,6 @@ from .claude_code import ClaudeCodeBackend
 from .codex import CodexBackend
 from .copilot import CopilotBackend
 from .flexible import FlexibleBackend
-from .gemini_cli import GeminiCliBackend
 from .grok import GrokBackend
 from .llama import LlamaBackend
 from .meta import MetaModelApiBackend
@@ -32,7 +31,6 @@ _DIRECT: dict[str, Backend] = {
     "copilot": CopilotBackend(),
     "claude_code": ClaudeCodeBackend(),
     "grok": GrokBackend(),
-    "gemini_cli": GeminiCliBackend(),
     "antigravity_cli": AntigravityCliBackend(),
     "llama": LlamaBackend(),
     "meta": MetaModelApiBackend(),
@@ -85,7 +83,6 @@ __all__ = [
     "CodexBackend",
     "CopilotBackend",
     "FlexibleBackend",
-    "GeminiCliBackend",
     "GrokBackend",
     "LlamaBackend",
     "MetaModelApiBackend",

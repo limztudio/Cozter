@@ -14,7 +14,6 @@ class AntigravityNativeProgressTests(unittest.IsolatedAsyncioTestCase):
         final = ("[OWNER]\ntier: low\nreason: Retain complete requested scope\n"
                  "task: Implement and verify the whole requested change\n[/OWNER]")
         backend = AntigravityCliBackend()
-        self.assertFalse(backend.agent_text_is_delta)
         for streamed in (False, True):
             with self.subTest(streamed=streamed):
                 proc = HttpAgentProcess("Offline Antigravity terminal response")

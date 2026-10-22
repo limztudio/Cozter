@@ -108,7 +108,6 @@ class AntigravityCliBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(event.kind == "tool" and event.content == "benign tool failure" for event in left.events))
         self.assertEqual(right.text, "other")
         self.assertEqual(self.backend.extract_agent_text(terminal), "Corrected final reply")
-        self.assertFalse(self.backend.agent_text_is_delta)
         self.assertEqual(left.usage["cache_read_tokens"], 80)
 
     async def test_terminal_errors_keep_partial_text_and_never_replace_pinned_uuid(self):

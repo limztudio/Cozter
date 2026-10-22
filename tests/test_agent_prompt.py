@@ -6,6 +6,8 @@ budget must keep more history; the user's new message is always present.
 """
 
 import asyncio
+import json
+from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -147,6 +149,49 @@ class PromptPolicyTests(unittest.TestCase):
 
 
 class BackendVerificationPromptTests(unittest.TestCase):
+    def test_retired_backend_cannot_replace_any_saved_agent_selection(self) -> None:
+        from Cozter.backends_agent import get_backend
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace.set_backend_name(tmp, "antigravity_cli")
+            workspace.set_summary_backend_name(tmp, "codex")
+            for tier in workspace.FLEXIBLE_TIERS:
+                workspace.set_flexible_backend_name(tmp, tier, "antigravity_cli")
+            settings = Path(tmp) / ".cozter" / "settings.json"
+            before = settings.read_bytes()
+            selections = [
+                lambda: get_backend("gemini_cli"),
+                lambda: workspace.set_backend_name(tmp, "gemini_cli"),
+                lambda: workspace.set_summary_backend_name(tmp, "gemini_cli"),
+                *(lambda tier=tier: workspace.set_flexible_backend_name(tmp, tier, "gemini_cli")
+                  for tier in workspace.FLEXIBLE_TIERS),
+            ]
+            for select in selections:
+                with self.assertRaises(ValueError):
+                    select()
+                self.assertEqual(settings.read_bytes(), before)
+            self.assertEqual(workspace.get_backend_name(tmp), "antigravity_cli")
+            self.assertTrue(all(backend == "antigravity_cli" for backend, _model in
+                                workspace.get_flexible_run_config(tmp).values()))
+
+            stale = {"backend": "gemini_cli", "summary_backend": "gemini_cli",
+                     "gemini_cli_model": "retired-chat-model",
+                     "gemini_cli_summary_model": "retired-summary-model"}
+            for tier in workspace.FLEXIBLE_TIERS:
+                stale[f"flexible_{tier}_backend"] = "gemini_cli"
+                stale[f"gemini_cli_flexible_{tier}_model"] = "retired-tier-model"
+            settings.write_text(json.dumps(stale), encoding="utf-8")
+            before = settings.read_bytes()
+            chat, model, summary_model, _permission, summary = workspace.get_run_config(tmp)
+            self.assertEqual(chat, workspace.DEFAULT_BACKEND)
+            self.assertEqual(model, get_backend(chat).default_model)
+            self.assertEqual(summary, workspace.DEFAULT_SUMMARY_BACKEND)
+            self.assertEqual(summary_model, get_backend(summary).default_summary_model)
+            for tier, (backend, model) in workspace.get_flexible_run_config(tmp).items():
+                self.assertEqual(backend, workspace.DEFAULT_FLEXIBLE_BACKEND)
+                self.assertEqual(model, get_backend(backend).tier_model(tier))
+            self.assertEqual(settings.read_bytes(), before)
+
     def test_every_selectable_agent_gets_verify_with_evidence(self) -> None:
         from Cozter.backends_agent import AVAILABLE_BACKENDS, get_backend
 
@@ -155,7 +200,7 @@ class BackendVerificationPromptTests(unittest.TestCase):
             sorted(AVAILABLE_BACKENDS),
             sorted([
                 "flexible", "codex", "copilot", "claude_code",
-                "grok", "gemini_cli", "antigravity_cli", "llama", "meta", "zai",
+                "grok", "antigravity_cli", "llama", "meta", "zai",
             ]),
         )
         for name in AVAILABLE_BACKENDS:

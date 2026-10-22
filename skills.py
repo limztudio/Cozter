@@ -160,7 +160,7 @@ def _native_roots(workspace_path: str) -> list[tuple[Path, str]]:
             cursor = cursor.parent
     roots: list[tuple[Path, str]] = []
     for parent in chain:
-        for directory in (".agents", ".claude", ".github", ".grok", ".codex", ".cursor", ".gemini"):
+        for directory in (".agents", ".claude", ".github", ".grok", ".codex", ".cursor"):
             roots.append((parent / directory / "skills", f"native-project:{directory[1:]}"))
     home = Path.home()
     for directory, variable in (
@@ -171,10 +171,6 @@ def _native_roots(workspace_path: str) -> list[tuple[Path, str]]:
         root = Path(override) if override else home / directory
         if root.is_absolute():
             roots.append((root / "skills", f"native-user:{directory[1:]}"))
-    gemini_home = Path(os.environ.get("GEMINI_CLI_HOME") or home)
-    if gemini_home.is_absolute():
-        roots.append((gemini_home / ".gemini" / "skills", "native-user:gemini"))
-        roots.append((gemini_home / ".agents" / "skills", "native-user:gemini-agents"))
     roots.append((home / ".gemini" / "antigravity-cli" / "skills", "native-user:antigravity-cli"))
     for raw in os.environ.get("COPILOT_SKILLS_DIRS", "").split(","):
         if raw.strip() and Path(raw.strip()).is_absolute():

@@ -1467,7 +1467,7 @@ def _build_backend_prompt(
     return "\n\n".join(parts)
 
 
-_NATIVE_BACKENDS = frozenset({"codex", "claude_code", "copilot", "grok", "gemini_cli", "antigravity_cli"})
+_NATIVE_BACKENDS = frozenset({"codex", "claude_code", "copilot", "grok", "antigravity_cli"})
 
 
 class _NativeHangRecovered(Exception):
@@ -1535,11 +1535,6 @@ def _note_native_progress(proc: Any, event: dict) -> None:
         return
 
     event_type = event.get("type")
-    if event_type == "message":
-        content = event.get("content")
-        if event.get("role") == "assistant" and isinstance(content, str) and content.strip():
-            supervision.note_output(content[-12000:])
-        return
     item = event.get("item")
     if isinstance(item, dict) and event_type in {"item.started", "item.updated", "item.completed"}:
         item_type = item.get("type")
@@ -1581,13 +1576,13 @@ def _note_native_progress(proc: Any, event: dict) -> None:
         payload = event.get("data")
         payload = payload if isinstance(payload, dict) else event
         command = payload.get("command") or payload.get("toolName") or payload.get("name") or payload.get("tool_name")
-        arguments = payload.get("arguments") or payload.get("input") or payload.get("parameters")
+        arguments = payload.get("arguments") or payload.get("input")
         if isinstance(arguments, dict):
             command = arguments.get("command") or command
         if command:
             supervision.attach_process(proc, command=str(command)[:4000])
         output = payload.get("output") or payload.get("result")
-        tool_id = payload.get("toolCallId") or payload.get("tool_id") or ""
+        tool_id = payload.get("toolCallId") or ""
         if output:
             note(f"tool-output:{tool_id}", output)
         if event_type in {"tool_result", "tool_end", "tool.execution_complete"}:
@@ -2124,11 +2119,6 @@ async def _drive_backend_process(
     # Completed turn: stop same-group children.
     if has_managed_process_group(proc) and not result.detached_tasks:
         await terminate_process_group_async(proc)
-
-    if completed_stream and proc.returncode not in (0, None):
-        observe_exit = getattr(backend, "observe_process_exit", None)
-        if callable(observe_exit):
-            observe_exit(proc.returncode, stderr)
 
     # A partial reply never turns a failed run green.
     # Keep provider errors more specific than a generic exit status.

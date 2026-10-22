@@ -1,6 +1,6 @@
 # Cozter
 
-A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot, grok, gemini_cli, antigravity_cli)
+A chat-surface that wraps coding-agent CLIs (codex, claude_code, copilot, grok, antigravity_cli)
 and OpenAI-compatible HTTP backends (local llama-server, Z.ai, and Meta Model API), exposing
 them through Telegram, Slack, Signal, or a plain terminal. One Cozter
 process hosts either the local terminal or every configured daemon surface
@@ -54,7 +54,6 @@ works across every backend.
   - `claude_code` — Anthropic's CLI (`claude --print`)
   - `copilot` — GitHub's CLI
   - `grok` — xAI's Grok Build CLI (`grok --prompt-file`)
-  - `gemini_cli` — Google's Gemini CLI (`gemini --output-format stream-json`)
   - `antigravity_cli` — Google's Antigravity CLI (`agy --output-format stream-json`)
   - `llama` — an unauthenticated OpenAI-compatible HTTP server (such as
     llama-server or LM Studio); the agent loop runs in-process and uses the
@@ -267,7 +266,7 @@ limits from it. Daemon mode (`python -m Cozter` without `--cli`) validates
 
 - Python 3.11+ (CI targets 3.11 and 3.12; the codebase uses modern type syntax)
 - One agent backend CLI, server, or API key:
-  `codex`, `claude`, `copilot`, `grok`, `gemini`, an unauthenticated OpenAI-compatible HTTP
+  `codex`, `claude`, `copilot`, `grok`, `agy` (Antigravity), an unauthenticated OpenAI-compatible HTTP
   server for the `llama` backend that supports streaming
   `/v1/chat/completions` and function tools, Z.ai credentials for the
   `zai` backend, or Meta Model API credentials for the `meta` backend
@@ -408,7 +407,7 @@ worker/tool allowance. Later queued jobs remain held until the whole request
 completes. A pending update may restart between those attempts; the durable
 checkpoint restores the same job first.
 Codex (`codex`), Claude Code (`claude_code`), Copilot (`copilot`), Grok
-(`grok`), Gemini CLI (`gemini_cli`), and Antigravity CLI (`antigravity_cli`) reuse their confirmed native CLI conversation across turns in the
+(`grok`), and Antigravity CLI (`antigravity_cli`) reuse their confirmed native CLI conversation across turns in the
 same Cozter session, including after a queue job completes or Cozter restarts.
 Native state is isolated by canonical workspace, Cozter session, backend,
 resolved model, permission, reasoning effort, and execution lane. Direct turns
@@ -619,7 +618,7 @@ daemon startup and fails closed to `deny` if introduced while the daemon runs.
 
 `show_usage` (default `true`) appends a compact per-turn token/cost footer
 (e.g. `📊 12.5k in · 28 out · $0.01`) after each reply, for backends that
-report usage — `codex` (`turn.completed`) and `claude_code` / `grok` / `gemini_cli`
+report usage — `codex` (`turn.completed`) and `claude_code` / `grok` / `antigravity_cli`
 (`result`). Other backends stay silent. Set it to `false` to suppress
 the footer.
 
@@ -1012,7 +1011,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 |---|---|
 | `/new` | Prompt for a new workspace directory, create it, and select it |
 | `/open [path-or-number]` | Switch to an existing workspace |
-| `/agent` | Pick the agent backend (flexible / codex / claude_code / copilot / grok / gemini_cli / antigravity_cli / llama / meta / zai) |
+| `/agent` | Pick the agent backend (flexible / codex / claude_code / copilot / grok / antigravity_cli / llama / meta / zai) |
 | `/model` | Pick the chat model for the current backend |
 | `/agent_flexible_{low,mid,high}` | Pick the agent the flexible tier routes to |
 | `/model_flexible_{low,mid,high}` | Pick the model the flexible tier routes to |
@@ -1276,7 +1275,7 @@ shell/tool policy.
   `write_file`, `edit_file`, `multi_edit`, `apply_patch`, `delete_file`,
   `copy_file`, `move_file`, `make_dir`, `list_dir`, `tree`, `glob`, `grep`,
   `web_search`, `web_fetch`, `list_skills`, and `read_skill`)
-- **CLI backends** (`codex`, `claude_code`, `copilot`, `grok`, `gemini_cli`, `antigravity_cli`) can't have
+- **CLI backends** (`codex`, `claude_code`, `copilot`, `grok`, `antigravity_cli`) can't have
   external tools injected into their fixed toolkit. The bot
   instead lists each plugin in their prompt and tells the model to
   invoke it through the backend's own `bash` / `shell` tool as
@@ -1757,7 +1756,6 @@ its own, only the three tiers above.
 | `claude_code` | `claude --print --output-format stream-json --verbose` | `default` | `haiku` |
 | `copilot` | `copilot --output-format json --no-color` | `auto` | `auto` |
 | `grok` | `grok --prompt-file … --output-format streaming-messages-json` | `grok-4.7` | `grok-4.7` |
-| `gemini_cli` | `gemini --output-format stream-json` with the prompt on stdin | `auto` | `flash` |
 | `antigravity_cli` | `agy --input-format stream-json --output-format stream-json` with framed stdin | `gemini-4-argon-medium` | Uses the selected supported summary backend |
 | `llama` | Unauthenticated OpenAI-compatible `/v1/chat/completions` | `auto` | `auto` |
 | `meta` | Meta Model API `…/v1/chat/completions` (Bearer) | `muse-spark-1.3` | `muse-spark-1.2` |
@@ -1785,36 +1783,6 @@ Haiku 5.5 requires Claude Code 2.1.293 or newer. Claude Code's own `/fast` is a
 session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama,
 Z.ai, and Meta Model API discover models live from their configured HTTP
 endpoints.
-
-Gemini CLI uses the official `gemini` executable, verified against version
-`0.65.0`. Install it with `npm install -g @google/gemini-cli` and configure
-its supported API-key/Vertex authentication or an eligible Enterprise Code
-Assist login directly in the CLI. Google ended consumer Google-login access
-for free, Pro, and Ultra accounts on June 18, 2026; their supported coding
-client is Antigravity, available through `antigravity_cli`. See Google's
-[deprecation notice](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals).
-Choose `/agent` → `gemini_cli` in Cozter;
-it is also available for summary work and all Flexible tiers. Its `auto`,
-`pro`, `flash`, and `flash-lite` aliases are resolved by the CLI, and
-the explicit `gemini-4-argon` API model is offered with its unified
-1,048,576-token context. Concrete model IDs pass through unchanged;
-account access is still decided by the provider. `extra_models.gemini_cli`
-can add further explicit model IDs. Cozter sends prompts
-through stdin to avoid command-line length limits, captures the exact UUID
-from `init`, and resumes only that UUID. Gemini's own `/resume` can reopen the
-same native session from that workspace. Streamed assistant text and token
-usage work for both task workers and internal calls. There is no native
-per-run effort flag, so effort confirmations report the CLI/model default.
-Each launch uses Gemini's per-session `--skip-trust` for Cozter's selected
-workspace, preserving the requested permission and workspace skill discovery
-without modifying Gemini's saved trusted-folder list.
-See the official [headless](https://geminicli.com/docs/cli/headless/) and
-[session](https://geminicli.com/docs/cli/session-management/) references.
-
-Gemini's project and user `.gemini/skills` roots join the shared skill catalog;
-`GEMINI_CLI_HOME` selects the parent home directory. The existing `.agents/skills`
-bridges expose Cozter skills to Gemini without editing its configuration.
-Active extension skills remain under Gemini's own trusted extension loader.
 
 Antigravity CLI uses the official `agy` executable, verified against `1.4.5`.
 Run `agy` once to finish native Google sign-in, then choose `/agent` →
@@ -1915,12 +1883,6 @@ not send `--permission-mode auto`. `confirm`/`deny` use `dontAsk` with the
 read-only sandbox and only `read_file`, `grep`, and `list_dir` exposed.
 Grok still shows its MCP discovery/execution pair under an allowlist, so
 those calls are also denied explicitly.
-`gemini_cli` uses `--approval-mode yolo` with sandboxing explicitly disabled
-for `full`, and the CLI's `auto_edit` approval mode for `auto`. Restricted
-launches install a temporary admin policy: `confirm` allows only the verified
-builtin file/search reads, while `deny` allows no tools. Both block shell,
-MCP, writes, and transitions out of plan mode. Cozter refuses a restricted
-launch if centrally managed admin policies would override this policy.
 `antigravity_cli` uses `--dangerously-skip-permissions --sandbox=false` for
 `full`, and native `--mode auto` for `auto`. Its planning mode is not a
 permission boundary, and enforced per-launch read-only/no-tools policies
@@ -2076,7 +2038,6 @@ retain their native behavior.
 | `claude_code` | Model-aware: current Fable / Haiku 5.5 / Sonnet 5.5 / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.6 and Sonnet 4.6 use 4; Opus 4.5, Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
 | `grok` | Model-aware: grok-4.7 / grok-4.7-build-fast / grok-4.6 use 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on 4.7/4.6; `--effort high` otherwise |
-| `gemini_cli` | The CLI exposes no per-run effort flag | Native CLI/model default; no effort override is sent |
 | `antigravity_cli` | Model-aware native variant levels, discovered from the account's model catalog | Highest published level only at `100`; current Argon/Flash/Claude variants use `high`, and `99` uses `medium` |
 
 GLM-5.2 uses its three effective levels, as documented in [Z.ai's thinking guide](https://docs.z.ai/guides/capabilities/thinking).
