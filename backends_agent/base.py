@@ -807,6 +807,7 @@ class Backend(ABC):
     default_model: str = ""
     default_summary_model: str = ""
     effort_levels: tuple[str, ...] = ()
+    agent_text_is_delta: bool = False
 
     # Per-tier defaults for flexible.
     tier_models: dict[str, str] = {}
@@ -1059,13 +1060,17 @@ class Backend(ABC):
         )
         cmd.extend(self.permission_args(approval))
 
+    def observe_process_exit(self, returncode: int | None, stderr: str) -> None:
+        """Observe a completed failed process after its stderr has been drained."""
+
     @abstractmethod
     def parse_event(self, event: dict, result: AgentResult) -> None:
         """Mutate *result* based on a single parsed JSON event line."""
 
     @abstractmethod
     def extract_agent_text(self, event: dict) -> str | None:
-        """Return the agent's final text from *event*, if it carries one.
+        """Return agent text from *event*, if it carries any.
 
-        Compaction path: last assistant message. None for tool/file/unknown.
+        Internal calls keep the last message unless agent_text_is_delta is true.
+        Return None for tool/file/unknown events.
         """

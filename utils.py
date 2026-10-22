@@ -1171,8 +1171,7 @@ async def drain_llm_subprocess(
     log: logging.Logger | None = None,
     timeout: float | None = None,
 ) -> str:
-    """Drain JSON event lines from an internal LLM subprocess and return
-    the last agent text emitted, or an empty string on no output.
+    """Drain an internal response, joining deltas only for opted-in backends.
 
     A positive ``timeout`` bounds response draining. Without one, the call
     runs until completion or cancel; the caller owns its launch deadline.
@@ -1184,6 +1183,7 @@ async def drain_llm_subprocess(
     from . import supervision
 
     raw = ""
+    delta_parts: list[str] | None = [] if getattr(backend, "agent_text_is_delta", False) else None
     finished = False
     stderr_task = asyncio.create_task(drain_text_stream(proc.stderr))
 
@@ -1204,7 +1204,12 @@ async def drain_llm_subprocess(
                 if text:
                     if text != raw:
                         supervision.note_output(text)
-                    raw = text
+                    if delta_parts is None:
+                        raw = text
+                    else:
+                        delta_parts.append(text)
+            if delta_parts:
+                raw = "".join(delta_parts)
             await wait_for_process_exit(proc)
             finished = True
     except TimeoutError:

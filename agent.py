@@ -1466,7 +1466,7 @@ def _build_backend_prompt(
     return "\n\n".join(parts)
 
 
-_NATIVE_BACKENDS = frozenset({"codex", "claude_code", "copilot", "grok"})
+_NATIVE_BACKENDS = frozenset({"codex", "claude_code", "copilot", "grok", "gemini_cli"})
 
 
 class _NativeHangRecovered(Exception):
@@ -1510,6 +1510,11 @@ def _note_native_progress(proc: Any, event: dict) -> None:
         supervision.note_output(text[-12000:])
 
     event_type = event.get("type")
+    if event_type == "message":
+        content = event.get("content")
+        if event.get("role") == "assistant" and isinstance(content, str) and content.strip():
+            supervision.note_output(content[-12000:])
+        return
     item = event.get("item")
     if isinstance(item, dict) and event_type in {"item.started", "item.updated", "item.completed"}:
         item_type = item.get("type")
@@ -1550,17 +1555,18 @@ def _note_native_progress(proc: Any, event: dict) -> None:
     }):
         payload = event.get("data")
         payload = payload if isinstance(payload, dict) else event
-        command = payload.get("command") or payload.get("toolName") or payload.get("name")
-        arguments = payload.get("arguments") or payload.get("input")
+        command = payload.get("command") or payload.get("toolName") or payload.get("name") or payload.get("tool_name")
+        arguments = payload.get("arguments") or payload.get("input") or payload.get("parameters")
         if isinstance(arguments, dict):
             command = arguments.get("command") or command
         if command:
             supervision.attach_process(proc, command=str(command)[:4000])
         output = payload.get("output") or payload.get("result")
+        tool_id = payload.get("toolCallId") or payload.get("tool_id") or ""
         if output:
-            note(f"tool-output:{payload.get('toolCallId', '')}", output)
+            note(f"tool-output:{tool_id}", output)
         if event_type in {"tool_result", "tool_end", "tool.execution_complete"}:
-            note(f"tool-complete:{payload.get('toolCallId', '')}", "tool completed")
+            note(f"tool-complete:{tool_id}", "tool completed")
     elif event_type in {"assistant.message", "result"}:
         payload = event.get("data")
         payload = payload if isinstance(payload, dict) else event
@@ -1798,11 +1804,12 @@ async def _drive_backend(
             prompt_context.render(state) if prompt_context is not None else full_prompt,
             prompt_context, prompt_context.request_for(state) if prompt_context is not None else None,
         )
+        failure_text = (result.error or "").strip()
         if (not restarting and state is not None and state.get("native_resume_unavailable")
                 and not state.get("native_tools_started")
                 and not any(event.kind in {"tool", "file", "attachment"}
                             or event.kind == "text" and event.content.strip() not in {
-                                result.error, f"Error: {result.error}",
+                                failure_text, f"Error: {failure_text}",
                             } for event in result.events) and not result.detached_tasks):
             # Only a provider-confirmed missing exact session, before any
             # activity, permits one fresh launch. Never retry ambiguous work.
@@ -2033,6 +2040,11 @@ async def _drive_backend_process(
     # Completed turn: stop same-group children.
     if has_managed_process_group(proc) and not result.detached_tasks:
         await terminate_process_group_async(proc)
+
+    if completed_stream and proc.returncode not in (0, None):
+        observe_exit = getattr(backend, "observe_process_exit", None)
+        if callable(observe_exit):
+            observe_exit(proc.returncode, stderr)
 
     # A partial reply never turns a failed run green.
     # Keep provider errors more specific than a generic exit status.

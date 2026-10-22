@@ -16,7 +16,7 @@ Layout (builtin vs plugins):
 
 HTTP backends (llama, zai, future Mistral/Gemini/...) see builtin and
 plugins identically as typed tools in :data:`TOOL_SCHEMA`. CLI
-backends (codex, claude_code, copilot, grok) cannot accept external tool
+backends (codex, claude_code, copilot, grok, gemini_cli) cannot accept external tool
 injections; for them the orchestrator prepends :func:`cli_plugin_prelude`
 to the prompt so the model knows to invoke plugins through its own
 ``bash`` tool via ``python -m Cozter.agent_tools.plugins.<name>``.
