@@ -274,16 +274,35 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
         if task is not None:
             await _stop_task(task)
 
+    @staticmethod
+    def _matching_conversation(event: dict, result: AgentResult) -> bool:
+        if "conversation_id" not in event:
+            return True
+        actual = native_session_id(event["conversation_id"])
+        record = execution_state.current_run()
+        expected = native_session_id(record.get("native_session_id")) if record is not None else None
+        if actual is None:
+            record_backend_error(result, "Antigravity CLI returned an invalid native conversation ID")
+            return False
+        if expected is not None and actual != expected:
+            record_backend_error(result, "Antigravity CLI returned an event for another native conversation")
+            return False
+        return True
+
     def parse_event(self, event: dict, result: AgentResult) -> None:
         if not isinstance(event, dict):
             return
         kind = event.get("event")
         record = execution_state.current_run()
         if kind == "init":
-            execution_state.adopt_native_session_id(event.get("conversation_id"))
+            if self._matching_conversation(event, result):
+                execution_state.adopt_native_session_id(event.get("conversation_id"))
         elif kind == "step_update":
             step = event.get("step_update")
-            if not isinstance(step, dict):
+            if not isinstance(step, dict) or not self._matching_conversation(step, result):
+                return
+            if record is not None and record.get("native_stdin_failed"):
+                record_backend_error(result, "Antigravity CLI could not receive the resumed prompt")
                 return
             if record is not None:
                 record.set(native_tools_started=True)
@@ -309,6 +328,11 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
                 record_backend_error(result, "Antigravity CLI returned an invalid result")
                 return
             result.terminal_result_received = True
+            if not self._matching_conversation(terminal, result):
+                return
+            if record is not None and record.get("native_stdin_failed"):
+                record_backend_error(result, "Antigravity CLI could not receive the resumed prompt")
+                return
             execution_state.adopt_native_session_id(terminal.get("conversation_id"))
             response = terminal.get("response")
             if record is not None and (terminal.get("status") == "SUCCESS" or isinstance(response, str) and response):

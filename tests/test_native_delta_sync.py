@@ -104,6 +104,7 @@ class NativeDeltaSyncTests(unittest.IsolatedAsyncioTestCase):
         module = self.modules[launch["backend"]]
         record = launch["record"]
         yield self._started(module, launch["native_id"])
+        await record.flush()
         self.initialization_receipts.append(self._disk_values(record))
         if self.mode == "error-before-work":
             event = self._missing(module, launch["native_id"])
@@ -115,6 +116,7 @@ class NativeDeltaSyncTests(unittest.IsolatedAsyncioTestCase):
         # These provider activity events deliberately emit no ChatEvent.
         # Receipts must follow accepted work, not require visible output.
         yield self._activity(module)
+        await record.flush()
         self.activity_receipts.append(self._disk_values(record))
         self.receipt_ready.set()
         if self.mode == "hold-after-activity":

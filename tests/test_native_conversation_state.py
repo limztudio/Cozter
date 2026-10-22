@@ -133,6 +133,46 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(execution.remember_native_request(state, "late request"))
             self.assertFalse(directory.exists())
 
+    async def test_response_hashes_cannot_cross_uuid_ledger_lifetime_or_execution(self) -> None:
+        response = "UNIQUE-NATIVE-RESPONSE-MARKER\nexact trailing space "
+        async with self.scope() as (execution, state):
+            await state.save(native_session_id=_SID, native_tools_started=True,
+                             native_prompt_ledger={"session_id": _OTHER_SID})
+            self.assertFalse(execution.remember_native_response(state, response))
+            await state.save(native_prompt_ledger={"session_id": _SID}, native_tools_started=False)
+            self.assertFalse(execution.remember_native_response(state, response))
+            await state.save(native_tools_started=True)
+            self.assertTrue(execution.remember_native_response(state, response))
+            self.assertTrue(execution.native_response_is_known(state, response))
+            self.assertFalse(execution.native_response_is_known(state, response.rstrip()))
+            await execution.flush()
+            for path in Path(self.ws, ".cozter").rglob("state.json"):
+                self.assertNotIn("UNIQUE-NATIVE-RESPONSE-MARKER", path.read_text(encoding="utf-8"))
+
+            async with self.scope("other-job", conversation="other-conversation") as (other, _):
+                with self.assertRaisesRegex(ValueError, "another execution"):
+                    other.remember_native_response(state, response)
+                with self.assertRaisesRegex(ValueError, "another execution"):
+                    other.native_response_is_known(state, response)
+
+            await state.save(native_session_id=_OTHER_SID)
+            self.assertFalse(execution.native_response_is_known(state, response))
+            await state.save(native_session_id=_SID, native_prompt_ledger={"session_id": _SID})
+            self.assertFalse(execution.native_response_is_known(state, response))
+            self.assertTrue(execution.remember_native_response(state, response))
+            await state.save(native_prompt_ledger={"session_id": _OTHER_SID})
+            self.assertFalse(execution.native_response_is_known(state, response))
+            await state.save(native_prompt_ledger={"session_id": _SID})
+            self.assertFalse(execution.native_response_is_known(state, response))
+            self.assertTrue(execution.remember_native_response(state, response))
+
+        async with self.scope("reloaded-job") as (reloaded, current):
+            self.assertEqual(current.path, state.path)
+            self.assertFalse(reloaded.native_response_is_known(current, response))
+            execution_state.discard_native_conversation(self.ws, "conversation")
+            self.assertFalse(execution.native_response_is_known(state, response))
+            self.assertFalse(execution.remember_native_response(state, response))
+
     async def test_changed_flexible_tasks_reuse_main_lane_without_changing_job_keys(self) -> None:
         async with self.scope("direct") as (_, direct):
             await direct.save(native_session_id=_SID, native_prompt_ledger={"direct": "seen"})
@@ -144,7 +184,6 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(state.path, original)
                 self.assertEqual(state.get("native_session_id"), _SID)
                 self.assertEqual(state.get("native_prompt_ledger"), {"direct": "seen"})
-                self.assertIsNone(execution.native_main_record)
                 job = await execution.record({
                     "backend": "codex", "model": "chosen", "approval": "full",
                     "effort": 100, "worker": worker,
@@ -335,7 +374,6 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_new_job_reuses_exact_confirmed_conversation_generation(self) -> None:
         async with self.scope("first") as (execution, state):
-            self.assertIs(execution.native_main_record, state)
             self.assertEqual(state.execution.namespace, "native_sessions")
             await state.save(native_session_id=_SID, native_prompt={"delivered": "hash"})
             path = state.path
@@ -428,17 +466,31 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
         async with self.scope("same-conversation") as (_, state):
             self.assertEqual(state.get("native_session_id"), _SID)
 
-    async def test_flexible_scope_does_not_replace_main_acknowledgment_record(self) -> None:
+    async def test_flexible_receipts_keep_each_native_lane_and_do_not_outlive_the_job(self) -> None:
         async with self.scope() as (execution, main):
+            await main.save(native_session_id=_SID, native_tools_started=True,
+                            native_prompt_ledger={"session_id": _SID})
+            execution.remember_native_request(main, "Owner request")
+            execution.remember_native_response(main, "Owner response")
             with execution_state.worker_scope("flexible:role"):
                 async with execution_state.backend_scope(*_SETTINGS, native=True) as worker:
                     self.assertIsNot(worker, main)
-                    await worker.save(native_session_id=_OTHER_SID)
-            self.assertIs(execution.native_main_record, main)
-            await main.save(native_session_id=_SID)
+                    await worker.save(native_session_id=_OTHER_SID, native_tools_started=True,
+                                      native_prompt_ledger={"session_id": _OTHER_SID})
+                    execution.remember_native_request(worker, "Helper request")
+                    execution.remember_native_response(worker, "Helper response")
+            self.assertCountEqual(execution.native_request_deliveries(), [
+                (main, _SID, frozenset({"Owner request"})),
+                (worker, _OTHER_SID, frozenset({"Helper request"})),
+            ])
+            self.assertTrue(execution.native_response_is_known(main, "Owner response"))
+            self.assertTrue(execution.native_response_is_known(worker, "Helper response"))
+            self.assertFalse(execution.native_response_is_known(main, "Helper response"))
+            self.assertFalse(execution.native_response_is_known(worker, "Owner response"))
         async with self.scope("next", worker="flexible:role") as (execution, worker):
             self.assertEqual(worker.get("native_session_id"), _OTHER_SID)
-            self.assertIsNone(execution.native_main_record)
+            self.assertEqual(execution.native_request_deliveries(), [])
+            self.assertFalse(execution.native_response_is_known(worker, "Helper response"))
 
     async def test_non_native_and_unbound_scopes_keep_job_evidence_separate(self) -> None:
         async with execution_state.execution_scope(self.ws, "job", "request") as execution:
@@ -452,10 +504,8 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
             async with execution_state.backend_scope(*_SETTINGS) as same_job:
                 self.assertEqual(same_job.get("history"), ["private HTTP evidence"])
                 self.assertIsNone(same_job.get("native_session_id"))
-            self.assertIs(execution.native_main_record, native)
         async with self.scope("unbound", conversation=None) as (execution, state):
             self.assertEqual(state.execution.namespace, "executions")
-            self.assertIsNone(execution.native_main_record)
             self.assertIsNone(state.get("native_session_id"))
 
     async def test_existing_unfinished_native_job_stays_in_its_original_home(self) -> None:
@@ -683,7 +733,7 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
             execution_state.bind_conversation("conversation")
             with self.assertRaisesRegex(ValueError, "cannot change"):
                 execution_state.bind_conversation("other")
-            self.assertIs(execution.native_main_record, state)
+            self.assertIs(state.execution, execution.conversation)
         with tempfile.TemporaryDirectory() as outside:
             marker = Path(outside, "keep")
             marker.write_text("preserved", encoding="utf-8")

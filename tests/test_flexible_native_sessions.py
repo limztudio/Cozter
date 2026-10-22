@@ -165,7 +165,7 @@ class FlexibleNativeSessionsTests(unittest.IsolatedAsyncioTestCase):
         await self._turn("codex", "DIRECT-RETURN-REQUEST", sid=sid)
         direct = self.attempts[-1]
         self.assertEqual(direct["previous_id"], last_flexible_answer[0])
-        self.assertEqual(direct["prompt"].count(last_flexible_answer[1]), 1)
+        self.assertNotIn(last_flexible_answer[1], direct["prompt"])
         self.assertNotIn("HISTORICAL-REQUEST-MARKER", direct["prompt"])
 
     async def test_parallel_readers_keep_distinct_native_histories_and_writer_barrier(self):

@@ -316,11 +316,11 @@ class Execution:
     records: dict[str, ExecutionRecord] = field(default_factory=dict)
     namespace: str = "executions"
     conversation: "Execution | None" = field(default=None, init=False)
-    native_main_record: ExecutionRecord | None = field(default=None, init=False)
     _lifetime: _ConversationLifetime | None = field(default=None, init=False)
     _native_requests: dict[tuple[str, str], tuple[ExecutionRecord, set[str]]] = field(
         default_factory=dict, init=False, repr=False,
     )
+    _native_responses: dict[tuple[str, str], set[str]] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.namespace not in _NAMESPACES:
@@ -397,6 +397,36 @@ class Execution:
             for (_, native_id), (record, requests) in self._native_requests.items()
             if self._request_record_session(record) == native_id
         ]
+
+    def _native_response_key(self, record: ExecutionRecord) -> tuple[str, str] | None:
+        if (not isinstance(record, ExecutionRecord)
+                or record.execution is not self and record.execution is not self.conversation):
+            raise ValueError("native response record belongs to another execution")
+        if record.execution._lifetime is not None and record.execution._lifetime.discarded:
+            return None
+        directory = os.path.normcase(str(record.path.parent))
+        native_id = self._request_record_session(record)
+        for key in list(self._native_responses):
+            if key[0] == directory and key[1] != native_id:
+                del self._native_responses[key]
+        return (directory, native_id) if native_id is not None else None
+
+    def remember_native_response(self, record: ExecutionRecord, response: str) -> bool:
+        """Remember a successful final reply by hash for this job's native UUID."""
+        if not isinstance(response, str):
+            raise ValueError("native response must be a string")
+        key = self._native_response_key(record)
+        if key is None or record.get("native_tools_started") is not True:
+            return False
+        self._native_responses.setdefault(key, set()).add(json_digest(response))
+        return True
+
+    def native_response_is_known(self, record: ExecutionRecord, response: str) -> bool:
+        """Only the current confirmed native conversation can know its own reply."""
+        if not isinstance(response, str):
+            raise ValueError("native response must be a string")
+        key = self._native_response_key(record)
+        return key is not None and json_digest(response) in self._native_responses.get(key, set())
 
     @property
     def directory_id(self) -> str:
@@ -702,8 +732,6 @@ async def backend_scope(
                 await leases.enter_async_context(lane_lease)
                 execution.conversation.ensure_live()
                 state, head, expected = await execution.native_record(native_identity, state)
-                if _WORKER.get() == "main":
-                    execution.native_main_record = state
         token = _RUN.set(state)
         try:
             yield state

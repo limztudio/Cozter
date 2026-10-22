@@ -1812,6 +1812,10 @@ async def _drive_backend(
             while True:
                 try:
                     result, restarting = await attempt(prompt_text, delivery, delivered_request)
+                    execution = execution_state.current_execution()
+                    if (not restarting and not result.error and result.continuation_reason is None
+                            and state is not None and delivery is not None and execution is not None):
+                        execution.remember_native_response(state, _format_session_response(result, workspace_path))
                     carry_forward_turn_output(retained, result, workspace_path)
                     return result, restarting
                 except _NativeHangRecovered as exc:
@@ -4153,10 +4157,9 @@ def _interrupted_turn_note(turn: _InterruptedTurn) -> str:
 
 async def _acknowledge_native_user_messages(
     execution: execution_state.Execution | None, data: dict,
-    *, exclude: execution_state.ExecutionRecord | None = None,
-    conversation_only: bool = False,
+    *, conversation_only: bool = False, allow_response: bool = False,
 ) -> None:
-    """Only workers that accepted this exact logged request know its user row."""
+    """A worker knows its accepted request and an exact successful native reply."""
     if execution is None:
         return
     messages = data.get("messages", [])
@@ -4168,8 +4171,10 @@ async def _acknowledge_native_user_messages(
     content = message.get("content")
     if not isinstance(content, str):
         return
+    response = messages[-1]
+    response_content = response.get("content") if isinstance(response, dict) and response.get("role") == "assistant" else None
     for record, native_id, requests in execution.native_request_deliveries():
-        if record is exclude or content not in requests:
+        if content not in requests:
             continue
         # A detached interruption write can outlive deletion of its queue job.
         # Conversation records have their own lifetime and reject late writes.
@@ -4177,7 +4182,9 @@ async def _acknowledge_native_user_messages(
             continue
         if execution_state.native_session_id(record.get("native_session_id")) != native_id:
             continue
-        await native_prompt.acknowledge_logged_turn(record, data, request_only=True)
+        known_response = (allow_response and isinstance(response_content, str)
+                          and execution.native_response_is_known(record, response_content))
+        await native_prompt.acknowledge_logged_turn(record, data, request_only=not known_response)
 
 
 def _log_interrupted_turn(turn: _InterruptedTurn) -> None:
@@ -4713,16 +4720,12 @@ async def _run_turn_impl(
 
     # The detached owner keeps the lock on /stop.
     execution = execution_state.current_execution()
-    native_record = execution.native_main_record if execution is not None else None
     logged_native_data: dict | None = None
 
     def _log_and_snapshot() -> bool:
         nonlocal logged_native_data
         logged = _log_to_session(workspace_path, session_id, effective_prompt, result)
-        if logged and execution is not None and (
-            native_record is not None and not is_flexible and not result.error
-            or execution.native_request_deliveries()
-        ):
+        if logged and execution is not None and execution.native_request_deliveries():
             # Capture our exact pair while holding the session write lock.
             # A detached completion can append as soon as that lock releases.
             logged_native_data = session.load_session(workspace_path, session_id)
@@ -4744,10 +4747,9 @@ async def _run_turn_impl(
     turn.normal_log_task.result()
 
     if logged_native_data is not None:
-        own_pair = native_record if not is_flexible and not result.error else None
-        if own_pair is not None:
-            await native_prompt.acknowledge_logged_turn(own_pair, logged_native_data)
-        await _acknowledge_native_user_messages(execution, logged_native_data, exclude=own_pair)
+        await _acknowledge_native_user_messages(
+            execution, logged_native_data, allow_response=not result.error and result.continuation_reason is None,
+        )
 
     # Maintenance receives every input explicitly. Give its task a clean
     # context so a slow compactor/title or pipeline-lock wait cannot retain

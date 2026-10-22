@@ -75,3 +75,40 @@ class AntigravitySkillSharingTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(json.dumps(str(skills._canonical(source)), ensure_ascii=False), bridge)
             self.assertEqual(foreign.read_text(encoding="utf-8").split("---\n")[-1], "Preserve native edits")
         self.assertEqual(len(skills.discover(str(self.ws)).entries), 3)
+
+    async def test_native_reference_only_edits_refresh_with_stable_catalog_and_bridge(self):
+        native = self.write(self.home / ".gemini/antigravity-cli/skills/review/SKILL.md",
+                            "Native review", "Read references/checks.md before every review")
+        reference = native.parent / "references/checks.md"
+        reference.parent.mkdir()
+        reference.write_text("Before checks", encoding="utf-8")
+        self.write(self.ws / ".cozter/skills/procedure.md", "Workspace procedure", "Stable procedure")
+        async with skills.scope(str(self.ws)) as initial:
+            entry = next(item for item in initial.entries if item.path == native.resolve())
+            before = json.loads(skills.read_skill(str(self.ws), entry.id, resource="references/checks.md"))
+            revision = skills._catalog_revision(initial)
+            manifest = self.ws / ".cozter/skill_bridges.json"
+            original_manifest = manifest.read_bytes()
+            bridges = {relative: (self.ws / relative).read_bytes()
+                       for relative in json.loads(original_manifest)["files"]}
+            stamp = reference.stat()
+            reference.write_text("Latest checks", encoding="utf-8")
+            os.utime(reference, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+
+            refreshed = await skills.refresh(str(self.ws))
+
+            self.assertIs(skills.current_catalog(str(self.ws)), refreshed)
+            self.assertEqual(skills._catalog_revision(refreshed), revision)
+            self.assertEqual(next(item for item in refreshed.entries if item.id == entry.id).revision,
+                             entry.revision)
+            self.assertEqual(manifest.read_bytes(), original_manifest)
+            self.assertTrue(all((self.ws / relative).read_bytes() == body for relative, body in bridges.items()))
+            current = json.loads(skills.read_skill(str(self.ws), entry.id, resource="references/checks.md"))
+            self.assertEqual(current["content"], "Latest checks")
+            self.assertNotEqual(current["revision"], before["revision"])
+            pinned = json.loads(skills.read_skill(str(self.ws), entry.id, resource="references/checks.md",
+                                                 revision=before["revision"]))
+            self.assertIn("revision changed", pinned["error"])
+            reference.unlink()
+            missing = json.loads(skills.read_skill(str(self.ws), entry.id, resource="references/checks.md"))
+            self.assertIn("Skill unavailable", missing["error"])

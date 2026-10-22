@@ -2,12 +2,15 @@
 
 import asyncio
 import json
+import os
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 import uuid
 
-from Cozter import agent, execution_state, flexible, session
+from Cozter import agent, execution_state, flexible, session, skills
 from Cozter.backends_agent import antigravity_cli
 from Cozter.backends_agent.base import AgentResult
 from Cozter.backends_agent.meta import MetaModelApiBackend
@@ -27,6 +30,12 @@ class AntigravityNativeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         await delta_fixture.NativeDeltaSyncTests.asyncSetUp(self)
+        self.home = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(mock.patch.object(skills.Path, "home", return_value=self.home))
+        self.enterContext(mock.patch.dict(os.environ, {
+            "CODEX_HOME": "", "CLAUDE_CONFIG_DIR": "", "COPILOT_HOME": "", "GROK_HOME": "",
+            "COPILOT_SKILLS_DIRS": "",
+        }))
         self.backend = antigravity_cli.AntigravityCliBackend()
         self.backends["antigravity_cli"] = self.backend
         self.models["antigravity_cli"] = self.backend.default_model
@@ -151,6 +160,7 @@ class AntigravityNativeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 "cwd": self.ws, "model": self.backend.default_model, "permission_mode": "always-proceed",
             }}
         await launch["input_ready"].wait()
+        await launch["record"].flush()
         self.initialization_receipts.append(self._disk_values(launch["record"]))
         if not failure or failure.get("after_activity"):
             yield {"event": "step_update", "step_update": {
@@ -162,13 +172,15 @@ class AntigravityNativeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     "name": "run_command", "parameters": {"CommandLine": "git status --short"},
                 },
             }}
+            await launch["record"].flush()
             self.receipts.append(self._disk_values(launch["record"]))
             self.receipt_ready.set()
             if self.hold_after_activity:
                 await asyncio.Event().wait()
         if failure:
             yield {"event": "result", "result": {
-                "conversation_id": native_id, "status": "ERROR", "response": "", "error": failure["error"],
+                "conversation_id": native_id, "status": "ERROR", "response": failure.get("response", ""),
+                "error": failure["error"],
             }}
             process.returncode = 1
             return
@@ -226,10 +238,134 @@ class AntigravityNativeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self._turn("antigravity_cli", "NEXT-ANTIGRAVITY-REQUEST-MARKER", sid=sid)
         later = self.launches[-1]
         self.assertEqual(later["native_id"], first["native_id"])
+        self.assertNotIn(result.text, later["prompt"])
         for marker in ("HISTORICAL-REQUEST-MARKER", "HTTP-INTERVENING-REQUEST-MARKER", "HTTP-EXTERNAL-ANSWER-MARKER"):
             self.assertNotIn(marker, later["prompt"])
         self.assertEqual(len(self.planner_prompts), 1)
         self.assertEqual(self.merges, 0)
+
+    async def test_external_flexible_merge_is_supplied_once_while_native_final_reply_is_not_replayed(self):
+        sid = self._conversation()
+        await self._turn("antigravity_cli", "BEFORE-EXTERNAL-MERGE-MARKER", sid=sid)
+        native_id = self.launches[-1]["native_id"]
+        self.plan = "[PLAN]\n1. [low] Inspect the target.\n2. [high] Repair and verify it.\n[/PLAN]"
+
+        merged = await self._turn("flexible", "EXTERNAL-MERGE-REQUEST-MARKER", sid=sid)
+
+        self.assertEqual(merged.text, "UNSEEN-ANTIGRAVITY-MERGED-ANSWER")
+        self.assertEqual(self.merges, 1)
+        await self._turn("antigravity_cli", "AFTER-EXTERNAL-MERGE-MARKER", sid=sid)
+        first = self.launches[-1]
+        self.assertEqual(first["native_id"], native_id)
+        self.assertEqual(first["prompt"].count(merged.text), 1)
+        self.assertNotIn("EXTERNAL-MERGE-REQUEST-MARKER", first["prompt"])
+        await self._turn("antigravity_cli", "AFTER-MERGE-SYNC-MARKER", sid=sid)
+        self.assertEqual(self.launches[-1]["native_id"], native_id)
+        self.assertNotIn(merged.text, self.launches[-1]["prompt"])
+
+    async def test_skill_edits_and_deletion_refresh_each_role_without_resetting_native_owner(self):
+        source = Path(self.ws, ".cozter", "skills", "workflow.md")
+        native = self.home / ".gemini/antigravity-cli/skills/review/SKILL.md"
+
+        def write(path, body):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                "---\nname: " + path.parent.name + "\ndescription: Stable workflow metadata\n---\n" + body,
+                encoding="utf-8",
+            )
+
+        write(source, "WORKSPACE-INSTRUCTIONS-V1")
+        write(native, "NATIVE-INSTRUCTIONS-V1")
+        initial = skills.discover(self.ws)
+        first_source = next(entry for entry in initial.entries if entry.path == source.resolve())
+        first_native = next(entry for entry in initial.entries if entry.path == native.resolve())
+        sid = self._conversation()
+        await self._turn("antigravity_cli", "BEFORE-SKILL-EDITS-MARKER", sid=sid)
+        first = self.launches[-1]
+        self.assertIn(first_source.revision, first["prompt"])
+        self.assertIn(first_native.revision, first["prompt"])
+        self.parent_lease = True
+        helper_revisions = {}
+        changed = False
+
+        async def events(process, **kwargs):
+            nonlocal changed
+            async for event in self._events(process, **kwargs):
+                if (not changed and process.fixture_launch["scope"] == "flexible:owner"
+                        and event.get("event") == "result"):
+                    changed = True
+                    write(source, "WORKSPACE-INSTRUCTIONS-V2")
+                    write(native, "NATIVE-INSTRUCTIONS-V2")
+                yield event
+
+        async def drive(backend, *args, **kwargs):
+            if backend.name == "meta":
+                catalog = skills.current_catalog(self.ws)
+                self.assertTrue(execution_state._WORKER.get().startswith("flexible:lease:"))
+                for previous, body in ((first_source, "WORKSPACE-INSTRUCTIONS-V2"),
+                                       (first_native, "NATIVE-INSTRUCTIONS-V2")):
+                    current = next(entry for entry in catalog.entries if entry.id == previous.id)
+                    helper_revisions[current.id] = current.revision
+                    self.assertNotEqual(current.revision, previous.revision)
+                    self.assertIn(body, json.loads(skills.read_skill(self.ws, current.id))["content"])
+                write(source, "WORKSPACE-INSTRUCTIONS-V3")
+                native.unlink()
+            return await self._drive(backend, *args, **kwargs)
+
+        with (mock.patch.object(agent, "iter_process_json_events", side_effect=events),
+              mock.patch.object(agent, "_drive_backend_impl", side_effect=drive)):
+            result = await self._turn("flexible", "WORK-THROUGH-SKILL-EDITS-MARKER", sid=sid)
+
+        self.assertFalse(result.error)
+        self.assertEqual(len(helper_revisions), 2)
+        parent, resumed = self.launches[-2:]
+        latest = skills.discover(self.ws)
+        latest_source = next(entry for entry in latest.entries if entry.id == first_source.id)
+        self.assertNotEqual(latest_source.revision, helper_revisions[first_source.id])
+        self.assertFalse(any(entry.id == first_native.id for entry in latest.entries))
+        self.assertNotIn(first_source.revision, parent["prompt"])
+        self.assertIn("[Updated skills catalog; replaces the previous version]", resumed["prompt"])
+        self.assertIn(latest_source.revision, resumed["prompt"])
+        for stale in (first_native.id, first_native.revision, helper_revisions[first_native.id],
+                      "HISTORICAL-REQUEST-MARKER", "WORK-THROUGH-SKILL-EDITS-MARKER"):
+            self.assertNotIn(stale, resumed["prompt"])
+        self.assertIn("HTTP-HELPER-EVIDENCE-MARKER", resumed["prompt"])
+        for launch in (parent, resumed):
+            self.assertEqual(launch["native_id"], first["native_id"])
+            self.assertEqual(launch["record"].path, first["record"].path)
+            self.assertIn("re-read every selected skill", launch["prompt"])
+
+        await self._turn("antigravity_cli", "AFTER-SKILL-EDITS-MARKER", sid=sid)
+        later = self.launches[-1]
+        self.assertEqual(later["native_id"], first["native_id"])
+        self.assertIn("re-read every selected skill", later["prompt"])
+        self.assertNotIn("[Available workspace and shared native skills]", later["prompt"])
+        self.assertNotIn("WORK-THROUGH-SKILL-EDITS-MARKER", later["prompt"])
+        self.assertEqual(len(self.planner_prompts), 1)
+
+    async def test_unsupported_native_helper_cannot_launch_or_replace_existing_owner_lane(self):
+        sid = self._conversation()
+        await self._turn("antigravity_cli", "BEFORE-UNSUPPORTED-HELPER-MARKER", sid=sid)
+        first = self.launches[-1]
+        self.tiers["mid"] = ("antigravity_cli", self.backend.default_model)
+        self.parent_lease = True
+
+        result = await self._turn("flexible", "WORK-WITH-UNSUPPORTED-HELPER-MARKER", sid=sid)
+
+        self.assertFalse(result.error)
+        self.assertEqual(len(self.launches), 3)
+        parent, resumed = self.launches[-2:]
+        self.assertEqual(self.http_calls, [])
+        self.assertIn("configured helper backend cannot enforce read-only work", resumed["prompt"])
+        for launch in (parent, resumed):
+            self.assertEqual(launch["scope"], "flexible:owner")
+            self.assertEqual(launch["native_id"], first["native_id"])
+            self.assertEqual(launch["record"].path, first["record"].path)
+            self.assertIn("--dangerously-skip-permissions", launch["command"])
+            self.assertNotIn("HISTORICAL-REQUEST-MARKER", launch["prompt"])
+        await self._turn("antigravity_cli", "AFTER-UNSUPPORTED-HELPER-MARKER", sid=sid)
+        self.assertEqual(self.launches[-1]["native_id"], first["native_id"])
+        self.assertNotIn("WORK-WITH-UNSUPPORTED-HELPER-MARKER", self.launches[-1]["prompt"])
 
     async def test_cancel_after_native_acceptance_resumes_exact_id_without_replaying_original_work(self):
         sid = self._conversation()
@@ -305,6 +441,24 @@ class AntigravityNativeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self._turn("antigravity_cli", "NEW-GUIDANCE-AFTER-FAILURE", sid=sid)
         self.assertNotIn("FAILED-AFTER-ACTIVITY-MARKER", self.launches[-1]["prompt"])
         self.assertEqual(self.launches[-1]["native_id"], first["native_id"])
+
+    async def test_failed_native_reply_is_synced_once_as_external_session_evidence(self):
+        sid = self._conversation()
+        await self._turn("antigravity_cli", "BEFORE-PARTIAL-ERROR-MARKER", sid=sid)
+        native_id = self.launches[-1]["native_id"]
+        self.next_failure = {"error": "Provider stopped after partial work", "after_activity": True,
+                             "response": "FAILED-NATIVE-REPLY-MARKER"}
+
+        failed = await self._turn("flexible", "PARTIAL-ERROR-REQUEST-MARKER", sid=sid)
+
+        self.assertTrue(failed.error)
+        await self._turn("antigravity_cli", "AFTER-PARTIAL-ERROR-MARKER", sid=sid)
+        resumed = self.launches[-1]
+        self.assertEqual(resumed["native_id"], native_id)
+        self.assertEqual(resumed["prompt"].count("FAILED-NATIVE-REPLY-MARKER"), 1)
+        self.assertNotIn("PARTIAL-ERROR-REQUEST-MARKER", resumed["prompt"])
+        await self._turn("antigravity_cli", "AFTER-PARTIAL-ERROR-SYNC-MARKER", sid=sid)
+        self.assertNotIn("FAILED-NATIVE-REPLY-MARKER", self.launches[-1]["prompt"])
 
     async def test_final_response_corrects_streamed_fragments_without_duplicate_reply_or_history(self):
         sid = self._conversation()

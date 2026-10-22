@@ -126,6 +126,34 @@ class AntigravityCliBackendTests(unittest.IsolatedAsyncioTestCase):
         self.backend.parse_event({"event": "result", "result": []}, malformed)
         self.assertTrue(malformed.error)
 
+    async def test_other_conversation_events_never_acknowledge_the_pinned_prompt(self):
+        native_id = "6ca6c4ef-cc6e-4c0b-a11a-5f93bb7708f3"
+        for other_id in ("0db27f53-2116-4e99-ae78-99def40b9210", "latest", None):
+            for kind in ("init", "step_update", "result"):
+                with self.subTest(other_id=other_id, kind=kind):
+                    await self.record.save(native_session_id=native_id, native_tools_started=False,
+                                           native_resume_attempted=True, native_resume_unavailable=False)
+                    payload = {"conversation_id": other_id}
+                    event = {"event": kind}
+                    if kind == "init":
+                        event.update(payload)
+                    elif kind == "step_update":
+                        payload.update(step_type="agent_response", text_delta="Wrong conversation answer")
+                        event[kind] = payload
+                    else:
+                        payload.update(status="SUCCESS", response="Wrong conversation answer")
+                        event[kind] = payload
+                    result = AgentResult(text="Retain accepted partial work")
+
+                    self.backend.parse_event(event, result)
+                    self.backend.finalize_result(result)
+
+                    self.assertIn("conversation", result.error)
+                    self.assertEqual(result.text, "Retain accepted partial work")
+                    self.assertFalse(self.record.get("native_tools_started"))
+                    self.assertFalse(self.record.get("native_resume_unavailable"))
+                    self.assertEqual(self.record.get("native_session_id"), native_id)
+
     async def test_exact_missing_uuid_recovery_stops_after_prompt_acceptance(self):
         native_id = "6ca6c4ef-cc6e-4c0b-a11a-5f93bb7708f3"
         for active, error, recover in (
@@ -318,10 +346,18 @@ class AntigravityCliBackendTests(unittest.IsolatedAsyncioTestCase):
         process = await self.backend.launch(self.ws, "Only new guidance", None, "full")
         await asyncio.sleep(0)
         await self.backend.cleanup_process(process)
-        result = AgentResult(text="Premature response", terminal_result_received=True)
+        result = AgentResult(text="Retain accepted partial work")
+        self.backend.parse_event({"event": "step_update", "step_update": {
+            "conversation_id": native_id, "step_type": "user_input", "state": "DONE",
+        }}, result)
+        self.backend.parse_event({"event": "result", "result": {
+            "conversation_id": native_id, "status": "SUCCESS", "response": "Premature response",
+        }}, result)
         self.backend.finalize_result(result)
         self.assertIn("could not receive", result.error)
-        self.assertEqual(result.text, "Premature response")
+        self.assertEqual(result.text, "Retain accepted partial work")
+        self.assertFalse(self.record.get("native_tools_started"))
+        self.assertEqual(self.record.get("native_session_id"), native_id)
         self.reap.assert_awaited_once_with(process)
 
 
