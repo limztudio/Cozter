@@ -2056,7 +2056,7 @@ class BotPlatform(ABC):
             return
         current = workspace.get_summary_backend_name(ws)
         # The summary agent runs compaction/titling/plan/merge.
-        options = workspace.DIRECT_BACKENDS
+        options = workspace.SUMMARY_BACKENDS
         await ctx.reply_text("\n".join([
             f"Current summary agent: {current}\n",
             *self._picker_list(options, current, noun="agent"),
@@ -2066,7 +2066,7 @@ class BotPlatform(ABC):
     async def _receive_summary_agent(self, ctx: BotContext) -> None:
         selected = await self._receive_backend_choice(
             ctx,
-            options=workspace.DIRECT_BACKENDS,
+            options=workspace.SUMMARY_BACKENDS,
             retry_handler=self._receive_summary_agent,
         )
         if selected is None:

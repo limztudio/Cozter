@@ -175,6 +175,7 @@ def _native_roots(workspace_path: str) -> list[tuple[Path, str]]:
     if gemini_home.is_absolute():
         roots.append((gemini_home / ".gemini" / "skills", "native-user:gemini"))
         roots.append((gemini_home / ".agents" / "skills", "native-user:gemini-agents"))
+    roots.append((home / ".gemini" / "antigravity-cli" / "skills", "native-user:antigravity-cli"))
     for raw in os.environ.get("COPILOT_SKILLS_DIRS", "").split(","):
         if raw.strip() and Path(raw.strip()).is_absolute():
             roots.append((Path(raw.strip()), "native-user:copilot-extra"))

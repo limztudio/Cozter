@@ -268,6 +268,7 @@ def ensure_cozter_dir(path: str) -> None:
 AVAILABLE_BACKENDS = backends_agent.AVAILABLE_BACKENDS
 # Real-turn backends; ``flexible`` can't be its own tier.
 DIRECT_BACKENDS = backends_agent.DIRECT_BACKENDS
+SUMMARY_BACKENDS = backends_agent.SUMMARY_BACKENDS
 DEFAULT_BACKEND = backends_agent.DEFAULT_BACKEND
 FLEXIBLE_BACKEND = backends_agent.FLEXIBLE_BACKEND
 # Compaction/titling default to codex.
@@ -430,7 +431,7 @@ def get_summary_backend_name(workspace_path: str) -> str:
     return _coerce_backend_name(
         _load_settings(workspace_path).get("summary_backend"),
         DEFAULT_SUMMARY_BACKEND,
-        allowed=DIRECT_BACKENDS,
+        allowed=SUMMARY_BACKENDS,
     )
 
 
@@ -439,7 +440,7 @@ def set_summary_backend_name(workspace_path: str, name: str) -> None:
         workspace_path,
         "summary_backend",
         name,
-        DIRECT_BACKENDS,
+        SUMMARY_BACKENDS,
         "summary backend",
     )
 
@@ -581,7 +582,7 @@ def get_run_config(workspace_path: str) -> tuple[str, str, str, str, str]:
     backend_name = _coerce_backend_name(settings.get("backend"))
     summary_backend = _coerce_backend_name(
         settings.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
-        allowed=DIRECT_BACKENDS,
+        allowed=SUMMARY_BACKENDS,
     )
     return (
         backend_name,
@@ -621,7 +622,7 @@ def get_summary_model(workspace_path: str) -> str:
     settings = _load_settings(workspace_path)
     summary_backend = _coerce_backend_name(
         settings.get("summary_backend"), DEFAULT_SUMMARY_BACKEND,
-        allowed=DIRECT_BACKENDS,
+        allowed=SUMMARY_BACKENDS,
     )
     return _resolve_model(
         settings, summary_backend, SUMMARY_SCOPE, workspace_path=workspace_path,

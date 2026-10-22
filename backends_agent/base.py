@@ -505,6 +505,8 @@ class AgentResult:
     continuation_checkpoint: ContinuationCheckpoint | None = None
     # None for raw backend results; orchestration needs an explicit DONE verdict.
     completion_verified: bool | None = None
+    # A streamed CLI can require a final result before accepting its draft.
+    terminal_result_received: bool = False
     # A missing fix stays open; never mark it done or gated.
     blocked_reason: str = ""
 
@@ -817,6 +819,7 @@ class Backend(ABC):
 
     # Readers overlap only on a read-only surface.
     supports_read_only_workers: bool = False
+    supports_internal_calls: bool = True
 
     # Untyped bash/plugin prelude for CLIs.
     supports_plugin_prelude: bool = True
@@ -1062,6 +1065,9 @@ class Backend(ABC):
 
     def observe_process_exit(self, returncode: int | None, stderr: str) -> None:
         """Observe a completed failed process after its stderr has been drained."""
+
+    def finalize_result(self, result: AgentResult) -> None:
+        """Validate a completed stream before its reply is accepted."""
 
     @abstractmethod
     def parse_event(self, event: dict, result: AgentResult) -> None:

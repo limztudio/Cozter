@@ -1466,7 +1466,7 @@ def _build_backend_prompt(
     return "\n\n".join(parts)
 
 
-_NATIVE_BACKENDS = frozenset({"codex", "claude_code", "copilot", "grok", "gemini_cli"})
+_NATIVE_BACKENDS = frozenset({"codex", "claude_code", "copilot", "grok", "gemini_cli", "antigravity_cli"})
 
 
 class _NativeHangRecovered(Exception):
@@ -1508,6 +1508,30 @@ def _note_native_progress(proc: Any, event: dict) -> None:
             cursors.pop(next(iter(cursors)))
         cursors[key] = digest
         supervision.note_output(text[-12000:])
+
+    if event.get("event") == "step_update":
+        step = event.get("step_update")
+        if not isinstance(step, dict):
+            return
+        step_type = step.get("step_type")
+        if step_type == "agent_response":
+            text = step.get("text_delta")
+            if isinstance(text, str) and text.strip():
+                supervision.note_output(text[-12000:])
+        elif step_type == "tool":
+            info = step.get("tool_info")
+            info = info if isinstance(info, dict) else {}
+            name = step.get("tool_name") or info.get("name")
+            parameters = info.get("parameters")
+            command = parameters.get("CommandLine") if isinstance(parameters, dict) else None
+            command = command if isinstance(command, str) and command.strip() else name
+            if isinstance(command, str) and command.strip():
+                supervision.attach_process(proc, command=command[:4000])
+            identity = f"{step.get('conversation_id', '')}:{step.get('step_index', '')}"
+            note(f"agy-tool-output:{identity}", info.get("output"))
+            if step.get("state") == "DONE":
+                note(f"agy-tool-complete:{identity}", "tool completed")
+        return
 
     event_type = event.get("type")
     if event_type == "message":
@@ -2056,6 +2080,11 @@ async def _drive_backend_process(
             record_backend_error(result, msg)
         else:
             set_error_result(result, msg, display_text=msg)
+
+    if completed_stream:
+        finalize_result = getattr(backend, "finalize_result", None)
+        if callable(finalize_result):
+            finalize_result(result)
 
     return result, False
 
@@ -3669,6 +3698,18 @@ async def _resolve_or_create_user_session(
     return session_id, session_data
 
 
+def _resolve_summary_backend(backend, requested: str | None) -> str:
+    if requested:
+        selected = backends_agent.get_backend(requested)
+        if not getattr(selected, "supports_internal_calls", True):
+            raise ValueError(f"{requested} cannot enforce the tool restrictions required for summary work")
+        return requested
+    if (backend.name == flexible.BACKEND_NAME
+            or not getattr(backend, "supports_internal_calls", True)):
+        return backends_agent.DEFAULT_DIRECT_BACKEND
+    return backend.name
+
+
 def _resolve_summary_model(
     summary_model: str | None, summary_backend: str,
 ) -> str | None:
@@ -3746,7 +3787,7 @@ async def launch_detached(
                 f"{backend.name} does not support restart-safe detached tasks.",
             )
 
-        summary_backend = summary_backend_name or backend.name
+        summary_backend = _resolve_summary_backend(backend, summary_backend_name)
         summary_model = _resolve_summary_model(summary_model, summary_backend)
         session_id, session_data = await _resolve_or_create_user_session(
             prompt,
@@ -4280,9 +4321,7 @@ async def _run_turn_impl(
     is_flexible = backend.name == flexible.BACKEND_NAME
 
     # Router/compaction/titling/planner/merge share the summary backend.
-    summary_backend = summary_backend_name or (
-        backends_agent.DEFAULT_DIRECT_BACKEND if is_flexible else backend.name
-    )
+    summary_backend = _resolve_summary_backend(backend, summary_backend_name)
     summary_model = _resolve_summary_model(summary_model, summary_backend)
     compaction_context_targets = _compaction_context_targets(
         workspace_path,

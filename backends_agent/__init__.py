@@ -10,12 +10,13 @@ context building, compaction policy, and session logging stay there.
 
 One entry is not a CLI at all: ``flexible`` is a meta-agent that routes
 each sub-task of a request to one of the *direct* backends below. Hence
-the two lists - :data:`DIRECT_BACKENDS` are the ones that can actually
-run a turn (and so are the only valid summary agents and flexible tiers),
-while :data:`AVAILABLE_BACKENDS` is what a user may pick to chat with.
+the lists - :data:`DIRECT_BACKENDS` can run turns and Flexible tiers,
+:data:`SUMMARY_BACKENDS` also enforce the restrictions required for internal
+calls, and :data:`AVAILABLE_BACKENDS` is what a user may pick to chat with.
 """
 
 from .base import Backend
+from .antigravity_cli import AntigravityCliBackend
 from .claude_code import ClaudeCodeBackend
 from .codex import CodexBackend
 from .copilot import CopilotBackend
@@ -32,6 +33,7 @@ _DIRECT: dict[str, Backend] = {
     "claude_code": ClaudeCodeBackend(),
     "grok": GrokBackend(),
     "gemini_cli": GeminiCliBackend(),
+    "antigravity_cli": AntigravityCliBackend(),
     "llama": LlamaBackend(),
     "meta": MetaModelApiBackend(),
     "zai": ZaiBackend(),
@@ -47,6 +49,7 @@ _BACKENDS: dict[str, Backend] = {
 # Turn-capable only: summary agents/tiers must come from here
 # (flexible would recurse).
 DIRECT_BACKENDS = list(_DIRECT.keys())
+SUMMARY_BACKENDS = [name for name, backend in _DIRECT.items() if backend.supports_internal_calls]
 
 # Meta-agent first: the /agent picker gives it the dedicated ``0`` slot.
 AVAILABLE_BACKENDS = [FLEXIBLE_BACKEND, *_DIRECT]
@@ -74,8 +77,10 @@ __all__ = [
     "DEFAULT_BACKEND",
     "DEFAULT_DIRECT_BACKEND",
     "DIRECT_BACKENDS",
+    "SUMMARY_BACKENDS",
     "FLEXIBLE_BACKEND",
     "Backend",
+    "AntigravityCliBackend",
     "ClaudeCodeBackend",
     "CodexBackend",
     "CopilotBackend",

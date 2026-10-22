@@ -155,7 +155,7 @@ class BackendVerificationPromptTests(unittest.TestCase):
             sorted(AVAILABLE_BACKENDS),
             sorted([
                 "flexible", "codex", "copilot", "claude_code",
-                "grok", "gemini_cli", "llama", "meta", "zai",
+                "grok", "gemini_cli", "antigravity_cli", "llama", "meta", "zai",
             ]),
         )
         for name in AVAILABLE_BACKENDS:
