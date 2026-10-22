@@ -479,6 +479,22 @@ entries remove their job checkpoints while retaining native conversation
 state. Deleting a temporary scheduled session also deletes its native state.
 Internal routing, titling, planning, merging, judging, summary, compaction, and
 colony calls stay stateless and do not attach to a worker's native session.
+
+HTTP workers also budget input before each generation, including generations
+within a long-running task. The budget uses the configured or known model
+window and includes the current system prompt, tool schemas, and response
+headroom. When necessary, an owned worker sends a smaller view of older tool
+evidence, with explicit preview markers and exact references to its saved
+execution history. Original and follow-up user instructions, current skills,
+and recent complete tool exchanges remain present. The full checkpoint stays
+unchanged, and completed tools are never replayed to rebuild context. A
+structured provider context-limit rejection triggers a bounded retry of the
+generation with a smaller view. Input that cannot fit without losing required
+instructions, tool structure, or preserved reasoning fails clearly; the
+retained-history safety limits still apply. Stateless internal calls cannot
+omit evidence into a worker checkpoint and fail clearly if their fixed input
+is too large.
+
 Large snapshots are privately copied and encoded on worker threads, with one
 serialization per atomic checkpoint write. Independent HTTP reads share a
 checkpoint per bounded wave, retaining completed results if that wave is

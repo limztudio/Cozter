@@ -34,12 +34,15 @@ from typing import Any
 
 import aiohttp
 
-from .. import agent_tools as tools, supervision
+from .. import agent_tools as tools, config as cfg, supervision
 from ..agent_tools.base import public_http_pool_scope
 from ..agent_tools.builtin.bash import shell_context
 from ..execution_state import current_run
 from ..utils import clip_status_value, iter_bounded_lines, validate_json_nesting
 from ._http_process import HttpAgentProcess, http_error_translator
+from ._http_context import (
+    ContextLengthError, context_budget, context_error, payload_bytes, project_payload,
+)
 from .base import (
     DOC_FOLLOWING_RULE, PROGRESS_RULE, VISION_RULE, WHOLE_SCOPE_RULE,
     AgentResult, Backend, CachedModelCatalog, ChatEvent, append_text_result,
@@ -74,6 +77,7 @@ _COMPLETION_TAIL_DRAIN_BYTES = 64 * 1024
 _BLOCKED_TOOL_ROUND_LIMIT = 3
 _PARALLEL_READ_TOOLS = 4
 _GENERATION_HANG_RECOVERY_LIMIT = 3
+_CONTEXT_RECOVERY_LIMIT = 3
 # Bound error bodies without imposing a generation deadline.
 _MAX_HTTP_ERROR_BODY_BYTES = 8 * 1024
 _EOF_SUCCESS_FINISH_REASONS = frozenset({
@@ -656,6 +660,14 @@ class OpenAIChatBackend(Backend):
             max_segments = 1
         tool_repeat_limit = self._tool_repeat_limit()
         request_model = self._request_model(model)
+        context_window = cfg.get_model_context_window(self.name, request_model)
+        if context_window is None:
+            context_window = self.context_window_tokens(request_model)
+        input_budget = (
+            context_budget(context_window)
+            if isinstance(context_window, int) and not isinstance(context_window, bool)
+            and context_window > 0 else None
+        )
 
         # Approval -> tools.
         effective_approval = "confirm" if skill_planning else "deny" if compaction else approval
@@ -797,6 +809,7 @@ class OpenAIChatBackend(Backend):
         if message_bytes > _MAX_AGENT_MESSAGE_BYTES:
             emit_message_limit_error()
             return
+        archive_path = str(execution.path) if execution is not None and hasattr(execution, "path") else None
         tool_repeat_counts: dict[str, int] = {}
         blocked_rounds = 0
         stopped_on_refusals = False
@@ -832,6 +845,8 @@ class OpenAIChatBackend(Backend):
             async def stream_completion(payload: dict[str, Any]) -> tuple[
                 str, str, list[dict],
             ]:
+                nonlocal input_budget
+                context_recoveries = 0
                 # A generation has not executed any tool calls yet. A
                 # diagnosed stall can therefore retry this exact retained
                 # transcript without replaying completed mutations.
@@ -841,19 +856,51 @@ class OpenAIChatBackend(Backend):
                         details=f"{self.name}/{request_model or 'default'}",
                     )
                     with supervision.operation_scope(ticket):
-                        request = asyncio.create_task(_stream_completion(
-                            endpoint, payload, headers, max_retries,
-                            self.name, session=http_session,
-                        ))
-                        try:
-                            diagnosis = await supervision.wait_owned(request, ticket)
-                            if diagnosis is None:
-                                return request.result()
-                        except BaseException:
-                            # An operator cancel must settle its owned HTTP
-                            # request before the session/worker can be reused.
-                            await _cancel_generation_request(request)
-                            raise
+                        while True:
+                            projected = (
+                                project_payload(payload, input_budget, archive_path)
+                                if input_budget is not None else payload
+                            )
+                            before_bytes = payload_bytes(payload)
+                            after_bytes = payload_bytes(projected)
+                            if before_bytes != after_bytes or context_recoveries:
+                                performance_logger.info(
+                                    "stage=http_context backend=%s model=%s before_bytes=%d "
+                                    "after_bytes=%d budget=%s reason=%s",
+                                    self.name, clip_status_value(str(request_model or "default"), 120),
+                                    before_bytes, after_bytes, input_budget,
+                                    "provider_rejection" if context_recoveries else "preflight",
+                                )
+                            request = asyncio.create_task(_stream_completion(
+                                endpoint, projected, headers, max_retries,
+                                self.name, session=http_session,
+                            ))
+                            try:
+                                diagnosis = await supervision.wait_owned(request, ticket)
+                                if diagnosis is None:
+                                    return request.result()
+                                break
+                            except ContextLengthError as exc:
+                                if context_recoveries >= _CONTEXT_RECOVERY_LIMIT:
+                                    raise RuntimeError(
+                                        f"{self.name} still rejected reduced context after "
+                                        f"{_CONTEXT_RECOVERY_LIMIT} generation-only retries; "
+                                        "the exact execution history is preserved."
+                                    ) from exc
+                                context_recoveries += 1
+                                smaller = max(1, after_bytes * 7 // 10)
+                                if smaller >= after_bytes:
+                                    raise RuntimeError(
+                                        f"{self.name} cannot reduce the rejected context any further; "
+                                        "the exact execution history is preserved."
+                                    ) from exc
+                                if exc.window is not None:
+                                    smaller = min(smaller, context_budget(exc.window))
+                                input_budget = min(input_budget, smaller) if input_budget is not None else smaller
+                            except BaseException:
+                                # Settle the owned request before reusing its session.
+                                await _cancel_generation_request(request)
+                                raise
                     if recovery < _GENERATION_HANG_RECOVERY_LIMIT:
                         logger.warning(
                             "%s generation stalled after diagnosis; recovery=%d/%d model=%s",
@@ -1441,8 +1488,21 @@ async def _post_completion_stream(
             endpoint, json=payload, headers=headers or None,
             timeout=timeout,
         ) as resp:
-            if resp.status == 429 or resp.status >= 500:
+            body = ""
+            if resp.status != 200:
                 body = await _read_error_body(resp)
+                try:
+                    body_object = json.loads(body)
+                except (ValueError, TypeError):
+                    body_object = None
+                if isinstance(body_object, dict):
+                    limit_error = context_error(
+                        body_object.get("error"),
+                        f"{label} returned HTTP {resp.status}: {clip_status_value(body, 500)}",
+                    )
+                    if limit_error is not None:
+                        raise limit_error
+            if resp.status == 429 or resp.status >= 500:
                 clipped = clip_status_value(body, 200)
                 raise _RetryableError(
                     f"{label} returned HTTP {resp.status}: {clipped}",
@@ -1451,7 +1511,6 @@ async def _post_completion_stream(
                     ),
                 )
             if resp.status != 200:
-                body = await _read_error_body(resp)
                 clipped = clip_status_value(body, 500)
                 raise RuntimeError(
                     f"{label} returned HTTP {resp.status}: {clipped}"
@@ -1478,6 +1537,11 @@ async def _post_completion_stream(
                     if not isinstance(message, str) or not message.strip():
                         message = str(error)
                     clipped_message = clip_status_value(message.strip(), 500)
+                    limit_error = context_error(
+                        error, f"{label} stream error: {clipped_message}",
+                    )
+                    if limit_error is not None:
+                        raise limit_error
                     raise RuntimeError(
                         f"{label} stream error: {clipped_message}"
                     )
@@ -1492,6 +1556,10 @@ async def _post_completion_stream(
                 if finish_reason == "network_error":
                     raise _RetryableError(
                         f"{label} stream ended with network_error",
+                    )
+                if finish_reason == "model_context_window_exceeded":
+                    raise ContextLengthError(
+                        f"{label} stream ended with model_context_window_exceeded; response was incomplete",
                     )
                 if isinstance(finish_reason, str) and finish_reason:
                     if finish_reason in _EOF_SUCCESS_FINISH_REASONS:
