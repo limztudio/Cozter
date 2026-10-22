@@ -29,7 +29,7 @@ from . import workspace as workspace_mod
 from .agent_tools.base import copy_file_atomically
 from .agent_tools.owned_worker import run_owned_worker
 from .backends_agent.base import (
-    DOC_FOLLOWING_RULE, NO_RESPONSE_TEXT, WHOLE_SCOPE_RULE, AgentResult,
+    DOC_FOLLOWING_RULE, NO_RESPONSE_TEXT, SHELL_INPUT_RULE, WHOLE_SCOPE_RULE, AgentResult,
     ChatEvent, ContinuationCheckpoint, ContinuationReason, ContinuationReport,
     NativeSessionUnavailableError,
     append_detached_task_request,
@@ -1703,7 +1703,7 @@ def _native_turn_prompt(
         partial_sections=partial_sections,
         message_sources=message_sources,
         request_identity=request_identity,
-        turn_instructions=skills.refresh_instructions(cli=True),
+        turn_instructions=SHELL_INPUT_RULE + "\n\n" + skills.refresh_instructions(cli=True),
     )
     if _prepare:
         def prepare(record: execution_state.ExecutionRecord | None) -> native_prompt.NativePrompt:

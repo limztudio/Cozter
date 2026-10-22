@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from Cozter import agent_tools, backends_agent, execution_state, supervision, utils
+from Cozter import agent_tools, backends_agent, config, execution_state, process_observation, supervision, utils
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.tests.helpers import OfflineHttpBackend
 from Cozter.tests.test_http_execution_continuation import _call
@@ -21,6 +21,76 @@ def _decision(verdict="uncertain", **changes):
 
 
 class HangDiagnosisBackendTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hidden_confirmation_diagnosis_reads_children_and_settles_without_changing_job_state(self):
+        payloads = []
+        settled = asyncio.Event()
+
+        async def stream(_endpoint, payload, *_args, **_kwargs):
+            payloads.append(copy.deepcopy(payload))
+            if len(payloads) == 1:
+                prompt = payload["messages"][1]["content"]
+                self.assertIn("hidden interactive input", prompt)
+                self.assertIn("matching target state", prompt)
+                self.assertIn("Do not repeat the same inconclusive checks", prompt)
+                self.assertIn("Previous review did not inspect directory children", prompt)
+                return "", "", [_call("inspect-parent", "list_dir", "crashes")]
+            if len(payloads) == 2:
+                self.assertEqual(payload["messages"][-1]["content"], "packages/")
+                return "", "", [_call("inspect-children", "list_dir", "crashes/packages")]
+            self.assertEqual(payload["messages"][-1]["content"], "evidence.nwbcrashpkg")
+            return json.dumps(_decision(
+                "confirmed_hang", evidence="crashes/packages contains evidence.nwbcrashpkg; command omits -Recurse",
+                diagnosis="Remove-Item waits for a confirmation that this unattended shell cannot receive.",
+                repair="Preserve the crash package; inspect exact scope and use -NonInteractive without automatic deletion.",
+            )), "", []
+
+        async def work():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                settled.set()
+
+        with tempfile.TemporaryDirectory() as workspace:
+            crash = Path(workspace, "crashes", "packages", "evidence.nwbcrashpkg")
+            crash.parent.mkdir(parents=True)
+            crash.write_bytes(b"preserved crash evidence")
+            identity = process_observation.ProcessIdentity(123, "fixture:owned")
+            ticket = supervision.Operation(supervision.Worker(workspace, "offline", "model-a"), "native")
+            ticket.command = "Remove-Item -Force -ErrorAction SilentlyContinue crashes/*"
+            ticket.process = SimpleNamespace(pid=123)
+            ticket.identity = identity
+            ticket.snapshot = process_observation.ProcessSnapshot(identity, ())
+            ticket.progress_at -= 60
+            ticket.review_history = [{"verdict": "uncertain", "evidence": "Previous review did not inspect directory children"}]
+            with (
+                mock.patch.object(backends_agent, "get_backend", return_value=OfflineHttpBackend()),
+                mock.patch.object(oa, "_stream_completion", side_effect=stream),
+                mock.patch.object(supervision, "_observe", new=mock.AsyncMock()),
+                mock.patch.object(config, "get_hang_check_interval_seconds", return_value=.001),
+                mock.patch.object(config, "get_hang_diagnose_after_seconds", return_value=.001),
+                mock.patch.object(config, "get_hang_review_interval_seconds", return_value=0),
+            ):
+                async with execution_state.execution_scope(workspace, "same-job", "Finish remaining target"):
+                    plan = await execution_state.record("flexible_plan")
+                    await plan.save(active=True, cursor=1, completed=["verified target A"])
+                    async with execution_state.backend_scope("codex", "model", "full", 0, native=True) as record:
+                        await record.save(native_session_id="67f170b2-d850-4661-a99a-aa7eda414504")
+                        original_record, original_plan = record.path.read_bytes(), plan.path.read_bytes()
+                        task = asyncio.create_task(work())
+                        try:
+                            result = await asyncio.wait_for(supervision.wait_owned(task, ticket), 5)
+                        finally:
+                            if not task.done():
+                                task.cancel()
+                            await asyncio.gather(task, return_exceptions=True)
+                        self.assertTrue(task.cancelled())
+                        self.assertTrue(settled.is_set())
+                        self.assertIn("confirmation", result)
+                        self.assertEqual(record.path.read_bytes(), original_record)
+                        self.assertEqual(plan.path.read_bytes(), original_plan)
+            self.assertEqual(crash.read_bytes(), b"preserved crash evidence")
+            self.assertEqual(len(payloads), 3)
+
     async def test_diagnostic_cannot_expand_into_original_workflow_or_continue_tool_segments(self):
         class LongWorkerBackend(OfflineHttpBackend):
             supports_vision = True

@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from Cozter import agent, agent_tools, execution_state, skills, utils, workspace
-from Cozter.backends_agent.base import AgentResult, ChatEvent
+from Cozter.backends_agent.base import SHELL_INPUT_RULE, AgentResult, ChatEvent
 from Cozter.tests import test_native_session_turns as native_turns
 
 
@@ -79,7 +79,7 @@ class SkillPromptIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(
                 self._native_prompt(index, "next request").render(record),
-                skills.refresh_instructions(cli=True) + "\n\nNew message:\nnext request",
+                SHELL_INPUT_RULE + "\n\n" + skills.refresh_instructions(cli=True) + "\n\nNew message:\nnext request",
             )
             self._write_skill("UPDATED-SKILL-CATALOG-DESCRIPTION")
             async with skills.scope(self.ws) as updated_catalog:

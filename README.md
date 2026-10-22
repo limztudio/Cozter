@@ -27,6 +27,11 @@ works across every backend.
   recovery requires a verified owned process; it preserves unfinished coverage
   without requiring a deadlock claim. Repeated inconclusive reviews of the same
   unchanged search also return control to the worker, using the previous findings.
+  Every review uses earlier findings and tests a new hypothesis. Hidden shell
+  confirmations count as a blocked input prerequisite only when the prompt or
+  command semantics and target state establish the cause. Native workers receive
+  noninteractive shell guidance on every turn, including session resumptions;
+  cleanup recovery preserves crash/log evidence and requires an exact scope.
   Reports are saved under `.cozter/hang_reports/`.
   Global `config.json` settings `hang_check_interval_seconds` (30),
   `hang_diagnose_after_seconds` (300), `hang_review_interval_seconds` (300) and

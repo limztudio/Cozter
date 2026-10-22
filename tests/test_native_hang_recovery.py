@@ -9,6 +9,7 @@ from unittest import mock
 
 from Cozter import agent, execution_state, supervision, utils
 from Cozter.backends_agent import codex
+from Cozter.backends_agent.base import SHELL_INPUT_RULE
 from Cozter.tests import test_native_delta_sync as delta
 from Cozter.tests import test_native_session_turns as turns
 
@@ -109,6 +110,8 @@ class NativeHangRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[Sub-task 2/2:", self.launches[1]["prompt"])
         self.assertIs(self.launches[1]["record"], self.launches[2]["record"])
         self.assertEqual(self.launches[1]["native_id"], self.launches[2]["native_id"])
+        for launch in self.launches:
+            self.assertIn(SHELL_INPUT_RULE, launch["prompt"])
         planner_calls = [call for call in agent.run_internal_backend.call_args_list
                          if call.kwargs["label"] == "Flexible planner"]
         self.assertEqual(len(planner_calls), 1)

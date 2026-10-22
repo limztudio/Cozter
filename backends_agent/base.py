@@ -55,6 +55,15 @@ PROGRESS_RULE = (
     "Progress is tool status (Thinking... preview, done/total may grow);"
     " notify DONE only when everything is done."
 )
+SHELL_INPUT_RULE = (
+    "Shell tools run without human input. On Windows, run PowerShell scripts with"
+    " -NoProfile -NonInteractive so an unexpected prompt fails instead of waiting."
+    " Inspect and fix the cause; never answer hidden confirmations automatically."
+    " Remove-Item can prompt for nonempty directories without -Recurse even with"
+    " -Force or -ErrorAction SilentlyContinue. Do not add recursive deletion just"
+    " to unblock a command. Verify exact cleanup scope and preserve existing logs"
+    " and crash evidence before any authorized cleanup."
+)
 VISION_RULE = (
     "Photo uploads: the prompt carries the saved path plus verified"
     " dimensions/format/size. On vision backends the image pixels also"
