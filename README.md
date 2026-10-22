@@ -1775,12 +1775,19 @@ Z.ai, and Meta Model API discover models live from their configured HTTP
 endpoints.
 
 Gemini CLI uses the official `gemini` executable, verified against version
-`0.65.0`. Install it with `npm install -g @google/gemini-cli`, then run `gemini`
-once to sign in with Google, or configure Gemini's API-key/Vertex
-authentication directly in the CLI. Choose `/agent` → `gemini_cli` in Cozter;
+`0.65.0`. Install it with `npm install -g @google/gemini-cli` and configure
+its supported API-key/Vertex authentication or an eligible Enterprise Code
+Assist login directly in the CLI. Google ended consumer Google-login access
+for free, Pro, and Ultra accounts on June 18, 2026; their supported coding
+client is Antigravity, which requires a separate backend. See Google's
+[deprecation notice](https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals).
+Choose `/agent` → `gemini_cli` in Cozter;
 it is also available for summary work and all Flexible tiers. Its `auto`,
 `pro`, `flash`, and `flash-lite` aliases are resolved by the CLI, and
-`extra_models.gemini_cli` can add explicit model IDs. Cozter sends prompts
+the explicit `gemini-4-argon` API model is offered with its unified
+1,048,576-token context. Concrete model IDs pass through unchanged;
+account access is still decided by the provider. `extra_models.gemini_cli`
+can add further explicit model IDs. Cozter sends prompts
 through stdin to avoid command-line length limits, captures the exact UUID
 from `init`, and resumes only that UUID. Gemini's own `/resume` can reopen the
 same native session from that workspace. Streamed assistant text and token

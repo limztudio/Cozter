@@ -22,9 +22,10 @@ from .base import (
 )
 
 
-# Official 0.65.0 models.ts aliases and cloud chat models; access varies by account.
+# Official CLI aliases and API model IDs; access depends on authentication.
 _MODELS = (
     "auto", "pro", "flash", "flash-lite", "auto-gemini-3", "auto-gemini-2.5",
+    "gemini-4-argon",
     "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools",
     "gemini-3-pro-preview", "gemini-3.8-flash", "gemini-3.5-flash",
     "gemini-3-flash-preview", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
@@ -106,6 +107,11 @@ class GeminiCliBackend(Backend):
 
     def __init__(self) -> None:
         self._policy_files = ProcessResourceMap()
+
+    def context_window_tokens(self, model: str | None) -> int | None:
+        if (model or "").strip() == "gemini-4-argon":
+            return 1_048_576
+        return None
 
     async def launch(
         self, workspace_path: str, prompt: str, model: str | None, approval: str,

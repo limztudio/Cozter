@@ -48,6 +48,28 @@ class GeminiCliBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("--session-id", resumed)
         self.assertTrue(self.record.get("native_resume_attempted"))
 
+    async def test_api_model_pin_keeps_native_session_without_alias_or_effort_fallback(self):
+        self.launch.return_value = SimpleNamespace(pid=42)
+        await self.backend.launch(self.ws, "Original request", "gemini-4-argon", "full")
+        native_id = self.record.get("native_session_id")
+        fresh = self.launch.call_args.args[0]
+        self.assertEqual(fresh[fresh.index("--model") + 1], "gemini-4-argon")
+        self.assertEqual(fresh[fresh.index("--session-id") + 1], native_id)
+        self.assertNotIn("--resume", fresh)
+        await self.backend.launch(self.ws, "Only new guidance", "gemini-4-argon", "full", effort=100)
+        cmd, prompt = self.launch.call_args.args
+        self.assertIn("gemini-4-argon", self.backend.available_models)
+        self.assertEqual(cmd[cmd.index("--model") + 1], "gemini-4-argon")
+        self.assertEqual(cmd[cmd.index("--resume") + 1], native_id)
+        self.assertEqual(cmd[cmd.index("--approval-mode") + 1], "yolo")
+        self.assertNotIn("--session-id", cmd)
+        self.assertNotIn("--effort", cmd)
+        self.assertEqual(prompt, "Only new guidance")
+        self.assertEqual(self.backend.context_window_tokens("gemini-4-argon"), 1_048_576)
+        for model in (None, "auto", "pro", "gemini-4-argon-private"):
+            with self.subTest(model=model):
+                self.assertIsNone(self.backend.context_window_tokens(model))
+
     async def test_compaction_cannot_reuse_worker_session_or_widen_full_approval(self):
         worker_id = "6ca6c4ef-cc6e-4c0b-a11a-5f93bb7708f3"
         await self.record.save(native_session_id=worker_id)
