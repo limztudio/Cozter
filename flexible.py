@@ -29,7 +29,7 @@ FALLBACK_TIER = "low"
 TIER_DESCRIPTIONS = {
     "low": "Default for bounded coding, debugging, refactoring, and verification",
     "mid": "Involved implementation with an understood approach and several constraints",
-    "high": "New design, ambiguous causes, coupled invariants, or performance/correctness tradeoffs",
+    "high": "Preferred for uncertain diagnosis, design decisions, coupled behavior, and costly rework",
 }
 
 # Cap fan-out: each sub-task is a turn.
@@ -43,8 +43,9 @@ JUDGE_MAX_CONTINUES = 3
 
 # Shared by the planner and workers choosing focused help.
 _RUBRIC = (
-    "Choose the cheapest capable owner or specialist for the reasoning required."
-    " Low is the broad default; the request itself can justify mid/high upfront:\n"
+    "Choose the owner or specialist most likely to finish reliably with the fewest"
+    " total reasoning passes. Give high a wider role when judgment or uncertainty"
+    " matters; do not minimize the cost of a single call at the expense of rework:\n"
     "low  - default for bounded implementation, debugging, refactoring, test repairs,"
     " configuration, documentation, inspection, and build/runtime verification."
     " A capable low worker can inspect, implement, and verify a complete change"
@@ -52,24 +53,30 @@ _RUBRIC = (
     "mid  - involved non-routine implementation or diagnosis with an understood"
     " approach: carry several clear constraints through the change and its checks."
     " Ordinary choices following existing patterns stay low.\n"
-    "high - substantive new design or approach selection, ambiguous multi-cause"
-    " diagnosis, refactors with coupled invariants, difficult algorithms, subtle"
-    " concurrency, or performance/correctness tradeoffs. Choose high directly when"
-    " this reasoning is central and tightly coupled to implementation and verification."
+    "high - preferred for non-routine diagnosis with an uncertain cause, choosing"
+    " or changing an approach, cross-component behavior or contracts, recurring"
+    " defects, refactors with coupled invariants, difficult algorithms, subtle"
+    " concurrency, or performance/correctness tradeoffs. One meaningful uncertainty"
+    " or consequential design decision is enough; several interacting causes or"
+    " exceptional difficulty are not required. If mid and high both look plausible"
+    " for this reasoning, choose high. Let high own the complete change when"
+    " investigation, decisions, implementation, and verification depend on each other."
     " A failed lower-tier attempt or a known root cause is not required.\n"
     "File count, duration, broad wording, or the words all/fix/audit/optimise"
     " alone do not justify mid/high. Unfamiliar files alone can start with low"
     " inspection and continue in that owner when the path is clear. When the request"
-    " already presents design uncertainty, multiple plausible interacting causes,"
-    " or competing invariants, use high reasoning upfront rather than requiring"
+    " presents an uncertain non-routine cause, an approach decision, or competing"
+    " invariants, use high reasoning upfront rather than requiring"
     " lower-tier failures. A low/mid owner can consult high early for a focused"
-    " decision, then retain the straightforward implementation. Do not force a mix of tiers."
+    " decision, then retain the straightforward implementation. Keep"
+    " routine work low and understood multi-constraint work mid. Do not force a mix of tiers."
 )
 
 _ESCALATION_RULES = (
-    "Try the appropriate same-tier diagnosis, repair, and verification first."
-    " If a reasoning limit prevents finishing this SAME obligation after inspecting"
-    " evidence and attempting the relevant verification, request the next tier"
+    "Reassess the reasoning needed as evidence arrives. If the remaining SAME"
+    " obligation needs stronger reasoning, use scoped inspection or a targeted"
+    " check to establish why, then request the next tier. A failed repair attempt"
+    " is not required. Ask for that escalation"
     " by ending your report with exactly one block, using one nonempty line per field:\n"
     "[ESCALATE]\n"
     "reason: the concrete reasoning difficulty this attempt could not resolve\n"
@@ -93,8 +100,9 @@ _LEASE_RULES = (
     " For example, high can use low for routine inventory, and low/mid can consult"
     " high early for approach selection, competing causes, or an invariant before"
     " making speculative changes. No failed attempt is required for consultation."
-    " Choose the cheapest capable helper"
-    " when the saved work warrants the handoff; finish trivial queries directly."
+    " When a low/mid owner faces a consequential decision or an uncertain"
+    " non-routine cause, prefer a focused high consultation before further edits."
+    " Choose help that reduces total diagnosis and rework; finish trivial queries directly."
     " Retain ownership of edits, verification, and completion. To yield, end your"
     " report with exactly this block, using one nonempty line per field:\n"
     "[LEASE]\n"
@@ -170,9 +178,10 @@ _PLANNER_RULES = (
     " Do not drop difficult work merely because a specialist is unavailable.\n"
     "- Progress is Thinking... status only (done/total may grow as"
     " follow-ups join); never a chat reply; DONE ping only at the end.\n"
-    "- Grade the actual reasoning needed. Low owners can complete coding and"
-    " verification; mid handles involved work with a known approach; high can"
-    " own design or ambiguous diagnosis directly, without prior lower-tier attempts.\n"
+    "- Grade the actual reasoning needed. Low owners can complete bounded coding"
+    " and verification; mid handles involved work with a known approach. Prefer"
+    " high for uncertainty, approach decisions, or coupled behavior; do not wait"
+    " for an exceptional problem or a failed lower-tier attempt.\n"
     "- On a continuation, grade only the unfinished obligation. Reuse earlier"
     " findings and verified work; a remaining known test command or commit/push"
     " normally stays low, even after a difficult original request. An owner can request"

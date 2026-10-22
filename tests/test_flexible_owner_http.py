@@ -1,5 +1,6 @@
 """The owner receives initial findings once, then only new answers unless history is lost."""
 
+import asyncio
 import copy
 import unittest
 from unittest import mock
@@ -49,6 +50,147 @@ class FlexibleOwnerHttpTests(unittest.IsolatedAsyncioTestCase):
     async def invoke(self):
         original_driver = agent._drive_backend
         return await lease_fixture.FlexibleTierLeaseTests.invoke(self, original_driver)
+
+    def changing_policy(self):
+        original = flexible.build_subtask_sections
+        self.policy_revision = "ROUTING-POLICY-OLD"
+
+        def build(*args, **kwargs):
+            sections = original(*args, **kwargs)
+            sections["worker_instructions"] += "\n" + self.policy_revision
+            return sections
+
+        self.enterContext(mock.patch.object(flexible, "build_subtask_sections", side_effect=build))
+
+    async def test_saved_markerless_low_owner_receives_new_policy_once_then_consults_high(self):
+        self.plan = owner_fixture.owner_plan(specialists=[])
+        self.changing_policy()
+        owner_payloads = []
+        helper_calls = 0
+        original_driver = agent._drive_backend
+
+        async def drive(backend, *args, **kwargs):
+            value = await original_driver(backend, *args, **kwargs)
+            if backend.name == "llama" and len(owner_payloads) == 1:
+                messages = self.parent_record.get("http_messages")
+                messages[0]["content"] = agent._HTTP_WORKER_POLICY_MARKER.sub("", messages[0]["content"])
+                await self.parent_record.save(http_messages=messages)
+            return value
+
+        async def stream(_endpoint, payload, *_args, **_kwargs):
+            nonlocal helper_calls
+            if payload["model"] == "muse-spark-1.3":
+                helper_calls += 1
+                return "HIGH-DECISION: retain registry ownership.", "", []
+            self.parent_record = oa.current_run()
+            owner_payloads.append(copy.deepcopy(payload))
+            if len(owner_payloads) == 1:
+                self.policy_revision = "ROUTING-POLICY-NEW"
+                return "[followup:low] Resolve the remaining registry design question", "", []
+            if len(owner_payloads) == 2:
+                return lease_fixture.lease("high", "registry-design-after-policy-update"), "", []
+            if len(owner_payloads) == 3:
+                return "[followup:low] Verify the selected registry invariant", "", []
+            return "The same low owner implemented and verified the original scope.", "", []
+
+        with (mock.patch.object(oa, "_stream_completion", side_effect=stream),
+              mock.patch.object(agent, "_drive_backend", side_effect=drive)):
+            result, restarting = await self.invoke()
+
+        self.assertFalse(restarting)
+        self.assertFalse(result.error)
+        self.assertEqual(helper_calls, 1)
+        self.assertEqual(len(owner_payloads), 4)
+        users = [[row["content"] for row in payload["messages"] if row["role"] == "user"]
+                 for payload in owner_payloads]
+        self.assertIn("ROUTING-POLICY-NEW", users[1][-1])
+        self.assertNotIn("Original request", users[1][-1])
+        self.assertNotIn("ROUTING-POLICY-OLD", users[1][-1])
+        self.assertIn("HIGH-DECISION", users[2][-1])
+        self.assertNotIn("ROUTING-POLICY-NEW", users[2][-1])
+        self.assertNotIn("ROUTING-POLICY-NEW", users[3][-1])
+        self.assertEqual(sum(text.count("ROUTING-POLICY-NEW") for text in users[-1]), 1)
+        self.assertEqual(self.record.get("queue")[0]["tier"], "low")
+        self.assertEqual(self.internal_labels, ["Flexible planner"])
+        self.assertEqual(self.parent_record.get("http_worker_policy")["http_identity"],
+                         self.parent_record.get("http_identity"))
+
+    async def test_unaccepted_policy_survives_cancel_without_false_receipt_or_duplicate_on_resume(self):
+        self.plan = owner_fixture.owner_plan(specialists=[])
+        self.changing_policy()
+        owner_payloads = []
+        waiting_for_provider = asyncio.Event()
+
+        async def stream(_endpoint, payload, *_args, **_kwargs):
+            self.parent_record = oa.current_run()
+            owner_payloads.append(copy.deepcopy(payload))
+            if len(owner_payloads) == 1:
+                self.policy_revision = "ROUTING-POLICY-NEW"
+                return "[followup:low] Verify the remaining registry invariant", "", []
+            if len(owner_payloads) == 2:
+                waiting_for_provider.set()
+                await asyncio.Event().wait()
+            if len(owner_payloads) == 3:
+                return "[followup:low] Verify the final registry export", "", []
+            return "All original obligations verified by the same owner.", "", []
+
+        with mock.patch.object(oa, "_stream_completion", side_effect=stream):
+            running = asyncio.create_task(self.invoke())
+            try:
+                await asyncio.wait_for(waiting_for_provider.wait(), 5)
+            finally:
+                running.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await running
+            first_record = self.parent_record
+            self.assertIsNone(first_record.get("http_worker_policy"))
+            self.assertEqual(first_record.get("http_messages")[-1]["role"], "user")
+            self.assertEqual(self.record.get("cursor"), 0)
+            result, restarting = await self.invoke()
+
+        self.assertFalse(restarting)
+        self.assertFalse(result.error)
+        self.assertEqual(first_record.key, self.parent_record.key)
+        self.assertEqual(len(owner_payloads), 4)
+        self.assertEqual(owner_payloads[2]["messages"], owner_payloads[1]["messages"])
+        resumed_users = [row["content"] for row in owner_payloads[2]["messages"] if row["role"] == "user"]
+        self.assertEqual(sum(text.count("Verify the remaining registry invariant") for text in resumed_users), 1)
+        self.assertEqual(sum(text.count("Continue parent task:") for text in resumed_users), 1)
+        final_users = [row["content"] for row in owner_payloads[-1]["messages"] if row["role"] == "user"]
+        self.assertEqual(sum(text.count("ROUTING-POLICY-NEW") for text in final_users), 1)
+        self.assertEqual(sum(text.count("Original request") for text in final_users), 1)
+        self.assertIsNotNone(self.parent_record.get("http_worker_policy"))
+        self.assertEqual(self.internal_labels, ["Flexible planner"])
+
+    async def test_returning_to_an_older_policy_replaces_the_latest_policy_once(self):
+        self.plan = owner_fixture.owner_plan(specialists=[])
+        self.changing_policy()
+        owner_payloads = []
+
+        async def stream(_endpoint, payload, *_args, **_kwargs):
+            self.parent_record = oa.current_run()
+            owner_payloads.append(copy.deepcopy(payload))
+            count = len(owner_payloads)
+            if count == 1:
+                self.policy_revision = "ROUTING-POLICY-NEW"
+            elif count == 2:
+                self.policy_revision = "ROUTING-POLICY-OLD"
+            if count < 4:
+                return f"[followup:low] Verify remaining invariant {count}", "", []
+            return "All registry invariants verified.", "", []
+
+        with mock.patch.object(oa, "_stream_completion", side_effect=stream):
+            result, restarting = await self.invoke()
+
+        self.assertFalse(restarting)
+        self.assertFalse(result.error)
+        deltas = [[row["content"] for row in payload["messages"] if row["role"] == "user"][-1]
+                  for payload in owner_payloads]
+        self.assertIn("ROUTING-POLICY-NEW", deltas[1])
+        self.assertIn("ROUTING-POLICY-OLD", deltas[2])
+        self.assertNotIn("Original request", deltas[2])
+        self.assertNotIn("ROUTING-POLICY-OLD", deltas[3])
+        self.assertEqual(self.internal_labels, ["Flexible planner"])
 
     async def test_initial_findings_bootstrap_owner_then_later_answer_is_a_delta(self):
         result, restarting = await self.invoke()

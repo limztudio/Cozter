@@ -6,6 +6,7 @@ auto-titling background tasks.
 
 import asyncio
 import contextvars
+import hashlib
 import logging
 import math
 import os
@@ -1721,6 +1722,54 @@ def _native_turn_prompt(
     return result
 
 
+_HTTP_WORKER_POLICY_MARKER = re.compile(r"\[Flexible worker instructions: ([0-9a-f]{64})\]\n")
+
+
+def _http_worker_policy_section(instructions: str) -> str:
+    return (f"[Flexible worker instructions: {json_digest(instructions)}]\n"
+            f"These instructions replace earlier Flexible worker instructions.\n{instructions}")
+
+
+def _http_worker_policy_status(
+    state: execution_state.ExecutionRecord | None, instructions: str,
+) -> tuple[bool, dict[str, Any] | None]:
+    if state is None:
+        return False, None
+    identity = state.get("http_identity")
+    messages = state.get("http_messages", [])
+    if not isinstance(identity, str) or not identity or not isinstance(messages, list):
+        return False, None
+    fingerprint = json_digest(instructions)
+    marked = _http_worker_policy_section(instructions)
+    legacy_index = None
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(part["text"] for part in content
+                                if isinstance(part, dict) and isinstance(part.get("text"), str))
+        if not isinstance(content, str):
+            continue
+        markers = list(_HTTP_WORKER_POLICY_MARKER.finditer(content))
+        if markers:
+            marker = markers[-1]
+            if marker.group(1) != fingerprint or not content[marker.start():].startswith(marked):
+                return False, None
+            break
+        if legacy_index is None and instructions in content:
+            legacy_index = index
+    else:
+        if legacy_index is None:
+            return False, None
+        index = legacy_index
+    accepted = any(isinstance(message, dict) and message.get("role") == "assistant"
+                   for message in messages[index + 1:])
+    return True, ({"http_identity": identity, "fingerprint": fingerprint, "message_index": index}
+                  if accepted else None)
+
+
 async def _drive_backend(
     backend,
     workspace_path: str,
@@ -1736,11 +1785,18 @@ async def _drive_backend(
     on_process: Callable[[Any], None] | None = None,
     native_context: native_prompt.NativePrompt | None = None,
     native_worker: str | None = None,
+    http_worker_instructions: str | None = None,
 ) -> tuple[AgentResult, bool]:
     async with execution_state.backend_scope(
         backend.name, model or getattr(backend, "default_model", None), approval, effort,
         native=backend.name in _NATIVE_BACKENDS, native_worker=native_worker,
     ) as state:
+        if http_worker_instructions is not None and backend.name not in _NATIVE_BACKENDS:
+            queued, _receipt = _http_worker_policy_status(state, http_worker_instructions)
+            refreshed_prompt = full_prompt + "\n\n" + _http_worker_policy_section(http_worker_instructions)
+            if (not queued or state is not None and state.get("http_prompt_digest")
+                    == hashlib.sha256(refreshed_prompt.encode("utf-8")).hexdigest()):
+                full_prompt = refreshed_prompt
         context_template = native_context if backend.name in _NATIVE_BACKENDS else None
         prompt_context = context_template.for_record(state) if context_template is not None else None
 
@@ -1823,6 +1879,10 @@ async def _drive_backend(
                 return AgentResult(error="The exact native session is unavailable."), False
             finally:
                 await acknowledge_activity()
+                if http_worker_instructions is not None and state is not None:
+                    _queued, receipt = _http_worker_policy_status(state, http_worker_instructions)
+                    if receipt is not None and state.get("http_worker_policy") != receipt:
+                        await state.save(http_worker_policy=receipt)
 
         result, restarting = await invoke(
             prompt_context.render(state) if prompt_context is not None else full_prompt,
@@ -2881,6 +2941,10 @@ async def _run_flexible(
         worker_sections = flexible.build_subtask_sections(
             request, plan, index, earlier, previous_draft=previous_draft,
         )
+        http_worker_instructions = None
+        if backend.name not in _NATIVE_BACKENDS:
+            http_worker_instructions = worker_sections["worker_instructions"]
+            worker_sections["worker_instructions"] = _http_worker_policy_section(http_worker_instructions)
         attempts = routing_evidence.get(str(index), [])
         if attempts:
             worker_sections["routing_evidence"] = (
@@ -2994,6 +3058,7 @@ async def _run_flexible(
                 # have distinct slots so independent work stays concurrent.
                 native_worker=((f"flexible:reader:{index}" if task.read_only else "main")
                                if worker_context is not None else None),
+                http_worker_instructions=http_worker_instructions if http_resume else None,
             ), "flexible_worker", backend_name, model,
                 worker_index=index + 1, worker_count=total, worker_tier=task.tier)
         if sub_result.continuation_reason == "prerequisite":

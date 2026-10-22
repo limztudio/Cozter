@@ -1514,10 +1514,14 @@ configuration, documentation, and verification. A low owner can inspect,
 implement, and verify a cohesive change across several files using existing
 patterns. Unfamiliar files alone can start with scoped low inspection and continue
 in that owner when the path becomes clear. Mid handles involved non-routine work
-with an understood approach and several clear constraints. High can own new
-design, ambiguous multi-cause diagnosis, refactors with coupled invariants,
-difficult algorithms, or performance/correctness tradeoffs from the start.
-Neither a failed lower-tier attempt nor an already-known root cause is required.
+with an understood approach and several clear constraints. High is preferred
+for uncertain non-routine diagnosis, approach decisions, cross-component
+contracts, recurring defects, coupled refactors, difficult algorithms,
+concurrency, and performance/correctness tradeoffs. One meaningful uncertainty
+or consequential decision is enough; when mid and high both look plausible,
+choose high. Routing aims to reduce total diagnosis and rework rather than
+minimize the cost of one call. Neither exceptional difficulty, a failed
+lower-tier attempt, nor an already-known root cause is required.
 File counts, long commands, and words such as "all" or
 "fix" do not alone require mid/high. An empty or malformed plan keeps the full
 request with a low owner, with focused advice and evidence-driven escalation
@@ -1526,6 +1530,8 @@ available. Continuations retain the owner and saved evidence for unfinished work
 While working, a parent can borrow another tier for a focused read-only question.
 High can ask low to inspect existing logs or metadata; low or mid can consult high
 early about design, competing causes, or an invariant before speculative edits.
+A low/mid owner should prefer this consultation when a consequential decision
+or uncertain non-routine cause emerges, before spending more turns on edits.
 No failed attempt is needed for consultation. The parent pauses, receives the findings, and
 continues the original task with its own model, effort, permissions, and ownership
 of edits and verification. Helpers use the requested tier's configured model and
@@ -1587,6 +1593,10 @@ scope, a fresh obligation generation delivers that finding without inheriting
 stale retry counts. Matching provider sessions receive only new instructions,
 findings, and compact progress updates. A missing native or HTTP session receives
 the original request, retained evidence, and prior draft as a complete bootstrap.
+An existing HTTP owner also receives changed worker routing instructions once,
+without replacing its transcript or replanning its task. The saved transcript
+tracks the queued policy, and a later assistant response confirms its receipt.
+Unchanged policy and already supplied findings are not repeated on each continuation.
 
 The grading rubric the planner is held to:
 
@@ -1594,7 +1604,7 @@ The grading rubric the planner is held to:
 |---|---|---|
 | `low` | Default for bounded implementation, debugging, refactoring, test repairs, and verification using existing patterns | Diagnose a module bug, repair it across related files, and verify the regression |
 | `mid` | Involved non-routine work with an understood approach and several clear constraints | Implement an established cache migration design across its affected interfaces |
-| `high` | New design, ambiguous multi-cause diagnosis, coupled invariants, or performance/correctness tradeoffs; available upfront | Choose and implement a cache/registry transaction design, or advise a low owner on the invariant |
+| `high` | Preferred for uncertain non-routine causes, approach decisions, cross-component contracts, recurring defects, and coupled behavior; choose high when mid/high are both plausible | Diagnose a recurring session/queue failure and implement its fix, or advise a low owner before speculative edits |
 
 Each tier carries its own agent, model and reasoning effort, so tiers can straddle
 backends — a local `llama` for the easy parts, `claude_code` on `opus` for
