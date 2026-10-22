@@ -638,14 +638,13 @@ an occurrence. The scheduler retries the human-readable `schedules.json`
 status projection independently; projection errors do not block execution or
 other schedules.
 
-On the first launch after the queue database upgrade, Cozter migrates the old
-`queue_<platform>.json` exactly once, preserving owner order, job IDs, native
-sessions and checkpoints. It saves an exact `.json.migrated.<sha256>` backup
-before committing, then removes the imported source. The versioned database
-is authoritative after migration; a subsequently recreated old JSON file is
-never imported. Include the database and its migration backup in operational
-backups. Corrupt input or an unsupported database version stops startup rather
-than silently replacing accepted work.
+SQLite is the only queue store. JSON queue import and archival have been
+retired. A new database refuses initialization if its matching
+`queue_<platform>.json` exists, preserving that file for explicit recovery.
+An existing versioned database remains authoritative and leaves any obsolete
+JSON file untouched. Back up the database and existing recovery files.
+Corrupt databases and unsupported database versions stop startup instead of
+replacing accepted work.
 
 Before Cozter sends a completed queued reply, it writes the reply text and
 any usage footer to `Cozter/.config/reply_deliveries_<platform>.json`. If the

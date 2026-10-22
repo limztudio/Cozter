@@ -1,4 +1,4 @@
-"""Offline regressions for stalled loops and streaming request deadlines."""
+"""Offline regressions for stalled loops and cancellation of streaming requests."""
 
 import asyncio
 import copy
@@ -144,17 +144,17 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("tools", payloads[-1])
 
 
-class RequestDeadlineTests(unittest.IsolatedAsyncioTestCase):
-    async def test_retries_share_one_total_budget(self):
+class RequestCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_retry_and_backoff_keep_running_until_cancelled(self):
         attempts = 0
-        cancelled = asyncio.Event()
+        retry_started, cancelled = asyncio.Event(), asyncio.Event()
 
         async def once(*_args, **_kwargs):
             nonlocal attempts
             attempts += 1
             if attempts == 1:
-                await asyncio.sleep(0.08)
                 raise oa._RetryableError("disconnected")
+            retry_started.set()
             try:
                 await asyncio.Event().wait()
             finally:
@@ -163,18 +163,23 @@ class RequestDeadlineTests(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch.object(oa, "_stream_once", side_effect=once),
             mock.patch.object(oa, "_backoff_delay", return_value=0),
-            self.assertRaisesRegex(RuntimeError, "timed out"),
         ):
-            await oa._stream_completion("http://offline", {}, {}, 0.16, 3, "test")
+            task = asyncio.create_task(oa._stream_completion("http://offline", {}, {}, 3, "test"))
+            await retry_started.wait()
+            self.assertFalse(task.done())
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
         self.assertEqual(attempts, 2)
         self.assertTrue(cancelled.is_set())
 
-    async def test_heartbeat_stream_cannot_extend_total_deadline(self):
-        closed = asyncio.Event()
+    async def test_heartbeat_stream_runs_until_cancelled_and_closes_response(self):
+        started, closed = asyncio.Event(), asyncio.Event()
 
         class Content:
             async def iter_any(self):
                 while True:
+                    started.set()
                     yield b": heartbeat\n\n"
                     await asyncio.sleep(0.01)
 
@@ -186,12 +191,16 @@ class RequestDeadlineTests(unittest.IsolatedAsyncioTestCase):
         response.content = Content()
         with (
             mock.patch.object(oa.aiohttp, "ClientSession", return_value=_SSESession(response)),
-            self.assertRaisesRegex(RuntimeError, "timed out"),
         ):
-            await oa._stream_completion("http://offline", {}, {}, 0.05, 3, "test")
+            task = asyncio.create_task(oa._stream_completion("http://offline", {}, {}, 3, "test"))
+            await started.wait()
+            self.assertFalse(task.done())
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
         self.assertTrue(closed.is_set())
 
-    async def test_cancel_without_total_deadline_interrupts_request(self):
+    async def test_cancel_interrupts_request(self):
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -204,7 +213,7 @@ class RequestDeadlineTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(oa, "_stream_once", side_effect=once):
             task = asyncio.create_task(oa._stream_completion(
-                "http://offline", {}, {}, None, 3, "test",
+                "http://offline", {}, {}, 3, "test",
             ))
             await started.wait()
             task.cancel()
@@ -224,7 +233,7 @@ class RequestDeadlineTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await oa._stream_completion(
                 "http://offline", {"messages": [{"content": "private prompt"}], "model": "m"},
-                {"Authorization": "private key"}, 30, 0, "test",
+                {"Authorization": "private key"}, 0, "test",
             )
         self.assertEqual(result[:2], ("private answer", "private reasoning"))
         logs = "\n".join(captured.output)
@@ -320,7 +329,7 @@ class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
             oa.aiohttp, "ClientSession", return_value=_SSESession(response),
         ):
             result = await oa._stream_completion(
-                "http://offline", {}, {}, 0.2, 0, "test",
+                "http://offline", {}, {}, 0, "test",
             )
         self.assertFalse(tail_read)
         self.assertTrue(response_closed)
@@ -384,16 +393,6 @@ class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
                 }]}}],
             }])
 
-    async def test_terminal_event_near_request_deadline_skips_trailer_grace(self):
-        response = _SSEResponse([
-            b'data: {"choices":[{"finish_reason":"stop","delta":{"content":"done"}}]}\n\n',
-        ])
-        with mock.patch.object(oa, "_COMPLETION_TAIL_DRAIN_SECONDS", 1):
-            result = await oa._stream_completion(
-                "http://offline", {}, {}, 0.1, 0, "test", session=_SSESession(response),
-            )
-        self.assertEqual(result[0], "done")
-
     async def test_trailer_drain_is_bounded_in_bytes(self):
         response = _SSEResponse([])
         reads = []
@@ -404,7 +403,7 @@ class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
                 return b"x" * size
 
         response.content = Content()
-        await oa._drain_completion_tail(response, None)
+        await oa._drain_completion_tail(response)
         self.assertEqual(sum(reads), oa._COMPLETION_TAIL_DRAIN_BYTES)
 
     async def test_cancellation_during_trailer_drain_still_cancels_request(self):
@@ -424,7 +423,7 @@ class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
 
         response.content = Content()
         task = asyncio.create_task(oa._stream_completion(
-            "http://offline", {}, {}, None, 0, "test", session=_SSESession(response),
+            "http://offline", {}, {}, 0, "test", session=_SSESession(response),
         ))
         await started.wait()
         task.cancel()
@@ -460,7 +459,7 @@ class CompletedConnectionReuseTests(unittest.IsolatedAsyncioTestCase):
             async with aiohttp.ClientSession() as session:
                 for _ in range(2):
                     result = await oa._stream_completion(
-                        f"http://127.0.0.1:{port}/chat", {}, {}, 5, 0,
+                        f"http://127.0.0.1:{port}/chat", {}, {}, 0,
                         "offline", session=session,
                     )
                     self.assertEqual(result[0], "ok")
@@ -506,7 +505,7 @@ class CompletedConnectionReuseTests(unittest.IsolatedAsyncioTestCase):
             async with aiohttp.ClientSession() as session:
                 for number in range(1, 3):
                     result = await oa._stream_completion(
-                        f"http://127.0.0.1:{port}/chat", {}, {}, 5, 0,
+                        f"http://127.0.0.1:{port}/chat", {}, {}, 0,
                         "offline", session=session,
                     )
                     self.assertEqual(result[0], f"answer-{number}")

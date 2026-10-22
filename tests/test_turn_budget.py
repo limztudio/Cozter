@@ -565,7 +565,7 @@ class VerificationConvergencePromptTests(unittest.TestCase):
         plan = flexible.Plan("verify", (flexible.Subtask("low", "verify tests"),))
         for prompt in (
             flexible.build_plan_prompt("request", collaborative=False),
-            flexible.build_subtask_prompt("request", plan, 0, []),
+            "\n".join(flexible.build_subtask_sections("request", plan, 0, []).values()),
             flexible.build_merge_prompt("request", plan, ["passed"], collaborative=False, blocked=[]),
             flexible.build_judge_prompt("request", "passed with expected negative-path warnings"),
         ):

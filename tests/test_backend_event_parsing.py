@@ -360,16 +360,19 @@ class CopilotParseTests(unittest.TestCase):
     def setUp(self) -> None:
         self.backend = CopilotBackend()
 
-    def test_tool_use_event(self) -> None:
+    def test_tool_execution_event(self) -> None:
         result = _run(self.backend, [
-            {"type": "tool_use", "name": "bash",
-             "input": {"command": "echo hi"}},
+            {"type": "tool.execution_start", "data": {
+                "toolName": "shell", "arguments": {"command": "echo hi"},
+            }},
         ])
         self.assertIn("tool", _kinds(result))
 
-    def test_file_change_event(self) -> None:
+    def test_file_edit_event(self) -> None:
         result = _run(self.backend, [
-            {"type": "file_change", "path": "b.py", "action": "modified"},
+            {"type": "tool.execution_start", "data": {
+                "toolName": "edit", "arguments": {"path": "b.py"},
+            }},
         ])
         self.assertIn("file", _kinds(result))
         self.assertIn("b.py", result.events[0].content)

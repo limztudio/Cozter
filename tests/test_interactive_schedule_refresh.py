@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import deque
+from datetime import datetime
 import os
 from pathlib import Path
 import tempfile
@@ -9,7 +10,7 @@ import threading
 import unittest
 from unittest import mock
 
-from Cozter import agent, flexible, session, workspace
+from Cozter import agent, flexible, schedules, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import BotPlatform, MessageHandle, _RecoverableTurnStatus
 from Cozter.tests.helpers import persist_queue_entry, OfflineBot
@@ -96,12 +97,20 @@ class ScheduleWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.bot = _ReplyDeliveryBot(self.origin, fail_final=False)
 
     async def test_admission_pins_origin_before_first_execution_and_restart(self):
-        schedule = {'command': 'scheduled work', 'chat_id': 'chat',
+        schedule = {'id': 'calendar', 'days': [16], 'time': '09:00',
+                    'created': '2026-10-01T00:00:00',
+                    'command': 'scheduled work', 'chat_id': 'chat',
                     'platform_id': self.bot.platform_id}
-        with mock.patch.object(self.bot, "_start_queue_drain"):
-            await self.bot._fire_schedule("u1", schedule, workspace_path=self.origin)
+        schedules.add_schedule(self.origin, "u1", schedule)
+        with (
+            mock.patch.object(self.bot, "_start_queue_drain"),
+            mock.patch.object(workspace, "iter_current_workspaces", return_value=[("u1", self.origin)]),
+            mock.patch("Cozter.backends_bot.base.datetime") as clock,
+        ):
+            clock.now.return_value = datetime(2026, 10, 16, 9, 0)
+            await self.bot._scheduler_tick()
         entry = self.bot._read_queue_file()['u1'][0]
-        self.assertEqual(entry['job']['workspace_path'], self.origin)
+        self.assertEqual(os.path.normcase(entry['job']['workspace_path']), os.path.normcase(self.origin))
 
         # Simulate /open B followed by process restart before any session exists.
         restarted = _ReplyDeliveryBot(self.other, fail_final=False)
@@ -118,7 +127,8 @@ class ScheduleWorkspaceTests(unittest.IsolatedAsyncioTestCase):
             await restarted._run_ephemeral_turn(
                 "u1", "chat", schedule['command'], queue_entry_id=entry['id'],
             )
-        self.assertEqual(calls, [(self.origin, True)])
+        self.assertEqual([(os.path.normcase(path), scheduled) for path, scheduled in calls],
+                         [(os.path.normcase(self.origin), True)])
 
     async def test_missing_origin_pauses_without_creating_workspace(self):
         missing = os.path.join(self.origin, 'missing')

@@ -1570,27 +1570,34 @@ def _note_native_progress(proc: Any, event: dict) -> None:
                     if value:
                         note(f"message:{block_type}:{block.get('tool_use_id', '')}", value)
         return
-    if isinstance(event_type, str) and (event_type.startswith("tool.") or event_type in {
-        "tool_use", "tool_call", "tool_start", "tool", "tool_result", "tool_output", "tool_end",
-    }):
+    if isinstance(event_type, str) and event_type.startswith("tool."):
         payload = event.get("data")
-        payload = payload if isinstance(payload, dict) else event
-        command = payload.get("command") or payload.get("toolName") or payload.get("name") or payload.get("tool_name")
-        arguments = payload.get("arguments") or payload.get("input")
+        if not isinstance(payload, dict):
+            return
+        command = payload.get("toolName")
+        arguments = payload.get("arguments")
         if isinstance(arguments, dict):
-            command = arguments.get("command") or command
+            command = arguments.get("command") or arguments.get("fullCommandText") or command
         if command:
             supervision.attach_process(proc, command=str(command)[:4000])
-        output = payload.get("output") or payload.get("result")
+        result = payload.get("result")
+        output = result.get("content") if isinstance(result, dict) else None
         tool_id = payload.get("toolCallId") or ""
         if output:
             note(f"tool-output:{tool_id}", output)
-        if event_type in {"tool_result", "tool_end", "tool.execution_complete"}:
+        if event_type == "tool.shell_output":
+            note(f"tool-shell:{tool_id}:{payload.get('sequence', '')}", payload.get("text"))
+        elif event_type == "tool.execution_progress":
+            note(f"tool-progress:{tool_id}", payload.get("progressMessage"))
+        elif event_type == "tool.execution_complete":
             note(f"tool-complete:{tool_id}", "tool completed")
-    elif event_type in {"assistant.message", "result"}:
+    elif event_type == "assistant.message":
         payload = event.get("data")
-        payload = payload if isinstance(payload, dict) else event
-        text = payload.get("content") or payload.get("text") or payload.get("result")
+        text = payload.get("content") if isinstance(payload, dict) else None
+        if isinstance(text, str) and text.strip():
+            note("final-text", text)
+    elif event_type == "result":
+        text = event.get("result")
         if isinstance(text, str) and text.strip():
             note("final-text", text)
 

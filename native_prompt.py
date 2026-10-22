@@ -22,21 +22,6 @@ def matching_ledger(record: execution_state.ExecutionRecord | None) -> dict | No
     return None
 
 
-def message_is_known(
-    record: execution_state.ExecutionRecord | None, coordinate: str, source_hash: str,
-    rendered_text: str,
-) -> bool:
-    """Only proven full coverage can suppress a different view of a message.
-
-    Call this before allocating history space, then again on a budgeted excerpt
-    before spending its allowance. A known partial preview must not prevent
-    older unseen messages from using the same space.
-    """
-    return message_is_known_from_ledger(
-        matching_ledger(record), coordinate, source_hash, rendered_text,
-    )
-
-
 def message_is_known_from_ledger(
     ledger: dict | None, coordinate: str, source_hash: str, rendered_text: str,
 ) -> bool:

@@ -36,18 +36,12 @@ class OpenAIBackoffTests(unittest.TestCase):
 
 class HttpErrorTranslatorTests(unittest.TestCase):
     def test_timeout_reports_request_failure(self) -> None:
-        for operation_timeout in (None, 0, 30):
-            with self.subTest(operation_timeout=operation_timeout):
-                async def fail() -> None:
-                    async with http_error_translator("Z.ai", operation_timeout):
-                        raise TimeoutError("timed out")
+        async def fail() -> None:
+            async with http_error_translator("Z.ai"):
+                raise TimeoutError("timed out")
 
-                with self.assertRaisesRegex(RuntimeError, r"Z\.ai request timed out") as caught:
-                    asyncio.run(fail())
-                if operation_timeout:
-                    self.assertIn("after 30s", str(caught.exception))
-                else:
-                    self.assertNotIn("after", str(caught.exception))
+        with self.assertRaisesRegex(RuntimeError, r"Z\.ai request timed out"):
+            asyncio.run(fail())
 
 
 class HttpAgentProcessCancellationTests(unittest.IsolatedAsyncioTestCase):
@@ -83,7 +77,7 @@ class OpenAIRetryLoopTests(unittest.TestCase):
         oa._stream_once = once
         # max_retries=2: attempt + 2 retries.
         return asyncio.run(oa._stream_completion(
-            "http://x/chat/completions", {}, {}, 300, 2, "test",
+            "http://x/chat/completions", {}, {}, 2, "test",
         ))
 
     def test_retries_then_succeeds(self) -> None:
@@ -116,7 +110,7 @@ class OpenAIRetryLoopTests(unittest.TestCase):
             mock.patch.object(oa, "_backoff_delay", return_value=0.0),
         ):
             result = asyncio.run(oa._stream_completion(
-                "http://x/chat/completions", {}, {}, 300, 1, "test",
+                "http://x/chat/completions", {}, {}, 1, "test",
             ))
 
         self.assertEqual(result, ("answer", "new", []))
@@ -248,7 +242,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             oa.aiohttp, "ClientSession", return_value=RecordingSession(response),
         ):
             text, _, _ = asyncio.run(oa._stream_once(
-                "http://x/chat/completions", {}, {}, None, "test",
+                "http://x/chat/completions", {}, {}, "test",
             ))
         self.assertEqual(text, "ok")
         timeout = captured[0]
@@ -256,30 +250,6 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         self.assertIsNone(timeout.sock_read)
         self.assertEqual(timeout.sock_connect, 30)
         self.assertEqual(timeout.connect, 30)
-
-    def test_stream_once_honors_explicit_operation_timeout(self) -> None:
-        captured: list[object] = []
-
-        class RecordingSession(_SSESession):
-            def post(self, *args, **kwargs):
-                captured.append(kwargs.get("timeout"))
-                return super().post(*args, **kwargs)
-
-        response = _SSEResponse([
-            b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
-            b'data: [DONE]\n\n',
-        ])
-        with mock.patch.object(
-            oa.aiohttp, "ClientSession", return_value=RecordingSession(response),
-        ):
-            text, _, _ = asyncio.run(oa._stream_once(
-                "http://x/chat/completions", {}, {}, 30, "test",
-            ))
-        self.assertEqual(text, "ok")
-        timeout = captured[0]
-        self.assertEqual(timeout.sock_read, 30)
-        self.assertEqual(timeout.total, 30)
-        self.assertEqual(timeout.sock_connect, 30)
 
     def _stream(
         self, events: list[object], *, include_done: bool = True,
@@ -294,7 +264,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         session = _SSESession(response)
         with mock.patch.object(oa.aiohttp, "ClientSession", return_value=session):
             return asyncio.run(oa._stream_once(
-                "http://x/chat/completions", {}, {}, 30, "test",
+                "http://x/chat/completions", {}, {}, "test",
             ))
 
     def test_malformed_sse_shapes_are_ignored_without_losing_valid_deltas(
@@ -417,7 +387,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             with mock.patch.object(
                 oa.aiohttp, "ClientSession", return_value=_SSESession(response),
             ), self.assertRaises(RuntimeError) as raised:
-                await oa._stream_once("http://x/chat/completions", {}, {}, 30, "test")
+                await oa._stream_once("http://x/chat/completions", {}, {}, "test")
             self.assertEqual(str(raised.exception), f"test returned HTTP {status}: {body}")
 
         for status, lengths in ((400, (489, 490, 500)), (429, (189, 190, 200))):
@@ -438,7 +408,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 oa.aiohttp, "ClientSession", return_value=session,
             ), self.assertRaisesRegex(RuntimeError, "HTTP 400"):
                 await oa._stream_once(
-                    "http://x/chat/completions", {}, {}, 30, "test",
+                    "http://x/chat/completions", {}, {}, "test",
                 )
             self.assertEqual(
                 content.read_sizes, [oa._MAX_HTTP_ERROR_BODY_BYTES],
@@ -557,7 +527,7 @@ class OpenAIStreamShapeTests(unittest.TestCase):
                 oa.aiohttp, "ClientSession", return_value=session,
             ):
                 return await oa._stream_once(
-                    "http://x/chat/completions", {}, {}, 30, "test",
+                    "http://x/chat/completions", {}, {}, "test",
                 )
 
         text, reasoning, tool_calls = asyncio.run(stream())

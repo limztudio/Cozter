@@ -7,20 +7,15 @@ occurrence has one commit point. Call these synchronous methods off the loop.
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-import hashlib
 import json
-import logging
 import os
 from pathlib import Path
 import sqlite3
-import tempfile
 from typing import Iterator
 import uuid
 
 from . import schedules, workspace
-from .utils import fsync_directory
 
-logger = logging.getLogger(__name__)
 _VERSION = 1
 _BUSY_TIMEOUT_SECONDS = 5
 
@@ -61,9 +56,8 @@ class AdmissionResult:
 class QueueStore:
     """A per-platform store; construction itself performs no filesystem I/O."""
 
-    def __init__(self, path: str | os.PathLike[str], legacy_path: str | os.PathLike[str] | None = None) -> None:
+    def __init__(self, path: str | os.PathLike[str]) -> None:
         self.path = os.fspath(path)
-        self.legacy_path = os.fspath(legacy_path) if legacy_path is not None else None
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
@@ -76,9 +70,6 @@ class QueueStore:
             self._initialize(connection)
             yield connection
             connection.commit()
-            # The backup is already durable. Archival is housekeeping after the
-            # database commit and must not hide a successful admission outcome.
-            self._archive_source(connection)
         except BaseException:
             connection.rollback()
             raise
@@ -93,108 +84,17 @@ class QueueStore:
             raise ValueError(f"Unsupported queue database version: {version}")
         if connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone() is not None:
             raise ValueError("Unversioned queue database contains an unknown schema")
-        body: dict = {}
-        migration: tuple[str, str, str, str] | None = None
-        if self.legacy_path is not None:
-            source = Path(self.legacy_path)
-            try:
-                with source.open("rb") as stream:
-                    fingerprint = self._fingerprint(os.fstat(stream.fileno()))
-                    raw = stream.read()
-            except FileNotFoundError:
-                pass
-            else:
-                try:
-                    body = json.loads(raw.decode("utf-8-sig"))
-                except (UnicodeError, ValueError) as error:
-                    raise ValueError("Cannot migrate corrupt queue JSON") from error
-                if not isinstance(body, dict):
-                    raise ValueError("Queue migration requires a JSON object")
-                # Validate before committing any schema or migration state.
-                self._encode(body)
-                digest = hashlib.sha256(raw).hexdigest()
-                backup = str(source) + ".migrated." + digest
-                self._save_backup(backup, raw)
-                migration = (str(source), fingerprint, backup, digest)
+        source = Path(self.path).with_suffix(".json")
+        try:
+            source.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError(f"JSON queue storage is retired; preserve {source} and restore its SQLite queue")
         connection.execute("CREATE TABLE queue_state (id INTEGER PRIMARY KEY CHECK (id = 1), body TEXT NOT NULL)")
         connection.execute("CREATE TABLE schedule_watermarks (occurrence_key TEXT PRIMARY KEY, slot TEXT NOT NULL)")
-        connection.execute("CREATE TABLE queue_migration (source TEXT NOT NULL, fingerprint TEXT NOT NULL, backup TEXT NOT NULL, digest TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0)")
-        self._write_body(connection, body)
-        # Convert explicit receipts once, without changing their historical
-        # entry IDs. A pending old admission may predate its JSON projection.
-        self._import_watermarks(connection, body)
-        if migration is not None:
-            connection.execute("INSERT INTO queue_migration (source, fingerprint, backup, digest) VALUES (?, ?, ?, ?)", migration)
+        self._write_body(connection, {})
         connection.execute(f"PRAGMA user_version={_VERSION}")
-
-    @classmethod
-    def _import_watermarks(cls, connection: sqlite3.Connection, body: dict) -> None:
-        latest: dict[str, ScheduledOccurrence] = {}
-        for owner, entries in body.items():
-            if not isinstance(entries, list):
-                continue
-            for entry in entries:
-                if not isinstance(entry, dict) or entry.get("ephemeral") is not True:
-                    continue
-                job = entry.get("job")
-                if not isinstance(job, dict):
-                    continue
-                origin, schedule_id, slot = (job.get(field) for field in ("workspace_path", "schedule_id", "schedule_slot"))
-                if not isinstance(origin, str) or not isinstance(schedule_id, str) or not isinstance(slot, str):
-                    continue
-                try:
-                    occurrence = ScheduledOccurrence(origin, owner, schedule_id, slot)
-                except (TypeError, ValueError):
-                    # Other historical payloads remain byte-for-byte in the
-                    # backup and structurally unchanged in the queue body.
-                    continue
-                previous = latest.get(occurrence.key())
-                if previous is None or occurrence.slot > previous.slot:
-                    latest[occurrence.key()] = occurrence
-        for occurrence in latest.values():
-            cls._write_watermark(connection, occurrence)
-
-    @staticmethod
-    def _fingerprint(stat: os.stat_result) -> str:
-        return json.dumps([stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns])
-
-    @staticmethod
-    def _save_backup(path: str, raw: bytes) -> None:
-        if Path(path).exists():
-            if Path(path).read_bytes() != raw:
-                raise ValueError("Existing queue migration backup differs from source")
-            return
-        descriptor, temporary = tempfile.mkstemp(dir=Path(path).parent, prefix="queue-migration-", suffix=".tmp")
-        try:
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-            fsync_directory(str(Path(path).parent))
-        except BaseException:
-            Path(temporary).unlink(missing_ok=True)
-            raise
-
-    def _archive_source(self, connection: sqlite3.Connection) -> None:
-        row = connection.execute("SELECT source, fingerprint FROM queue_migration WHERE archived = 0").fetchone()
-        if row is None:
-            return
-        source, fingerprint = row
-        try:
-            try:
-                stat = os.stat(source)
-            except FileNotFoundError:
-                pass
-            else:
-                # A newly written stale JSON file is neither authoritative nor
-                # ours to delete. Never parse a legacy file after version 1.
-                if self._fingerprint(stat) == fingerprint:
-                    os.unlink(source)
-                    fsync_directory(str(Path(source).parent))
-            connection.execute("UPDATE queue_migration SET archived = 1 WHERE source = ?", (source,))
-        except (OSError, sqlite3.Error):
-            logger.warning("Could not archive migrated queue source; will retry", exc_info=True)
 
     @staticmethod
     def _encode(data: dict) -> str:

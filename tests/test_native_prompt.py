@@ -443,7 +443,9 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
 
         for text in (session.format_msg_line(message), full_text[:100], full_text[:2]):
             with self.subTest(preview_length=len(text)):
-                self.assertTrue(native_prompt.message_is_known(self.record, "7", source, text))
+                self.assertTrue(native_prompt.message_is_known_from_ledger(
+                    native_prompt.matching_ledger(self.record), "7", source, text,
+                ))
                 smaller = NativePrompt(
                     "request", {}, [("7", native_prompt.delivery_fingerprint(source, text), text)],
                     message_sources={"7": (source, False)},
@@ -451,13 +453,17 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(smaller.render(self.record), "New message:\nrequest")
                 await smaller.acknowledge(self.record)
                 self.assertTrue(self.record.get("native_prompt_ledger")["message_sources"]["7"]["complete"])
-        self.assertTrue(native_prompt.message_is_known(self.record, "7", source, full_text))
+        self.assertTrue(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "7", source, full_text,
+        ))
 
         # A rewrite can preserve its visible prefix while changing its source.
         rewritten = dict(message, content=message["content"] + " changed-unseen-tail")
         changed_source = json_digest(rewritten)
         same_preview = full_text[:100]
-        self.assertFalse(native_prompt.message_is_known(self.record, "7", changed_source, same_preview))
+        self.assertFalse(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "7", changed_source, same_preview,
+        ))
         changed = NativePrompt(
             "request", {}, [("7", native_prompt.delivery_fingerprint(changed_source, same_preview), same_preview)],
             message_sources={"7": (changed_source, False)},
@@ -466,7 +472,9 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         receipt = self.record.get("native_prompt_ledger")["message_sources"]["7"]
         self.assertEqual(receipt["source"], changed_source)
         self.assertFalse(receipt["complete"])
-        self.assertFalse(native_prompt.message_is_known(self.record, "7", source, full_text))
+        self.assertFalse(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "7", source, full_text,
+        ))
 
     async def test_partial_receipts_remember_exact_views_without_claiming_full_source(self) -> None:
         source = json_digest(_message("user", "source with content beyond both previews"))
@@ -483,13 +491,19 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         first = await supply("first partial preview")
         await supply("different smaller preview")
         self.assertEqual(first.render(self.record), "New message:\nrequest")
-        self.assertTrue(native_prompt.message_is_known(self.record, "12", source, "first partial preview"))
-        self.assertFalse(native_prompt.message_is_known(self.record, "12", source, "first partial"))
+        self.assertTrue(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "12", source, "first partial preview",
+        ))
+        self.assertFalse(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "12", source, "first partial",
+        ))
         # A partial receipt cannot hide a different preview until the full
         # source is proven.
         self.assertFalse(self.record.get("native_prompt_ledger")["message_sources"]["12"]["complete"])
         await supply("full canonical message", complete=True)
-        self.assertTrue(native_prompt.message_is_known(self.record, "12", source, "any shorter preview"))
+        self.assertTrue(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "12", source, "any shorter preview",
+        ))
 
     async def test_existing_exact_delivery_hash_proves_only_its_view_without_source_upgrade(self) -> None:
         data = {"messages": [_message("assistant", "previously supplied full short message")]}
@@ -497,8 +511,12 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         await NativePrompt("request", {}, _history(data)).acknowledge(self.record)
         source = native_prompt.history_snapshot(data)["0"]
         text = session.format_msg_line(data["messages"][0], cap=None)
-        self.assertTrue(native_prompt.message_is_known(self.record, "0", source, text))
-        self.assertFalse(native_prompt.message_is_known(self.record, "0", source, text[:10]))
+        self.assertTrue(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "0", source, text,
+        ))
+        self.assertFalse(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "0", source, text[:10],
+        ))
         self.assertEqual(self.record.get("native_prompt_ledger")["message_sources"], {})
 
     async def test_source_receipts_survive_reload_but_never_cross_native_uuid(self) -> None:
@@ -511,11 +529,15 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         await prompt.acknowledge(self.record)
         await self.execution.flush()
         await self.record.reload()
-        self.assertTrue(native_prompt.message_is_known(self.record, "3", source, "excerpt"))
+        self.assertTrue(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "3", source, "excerpt",
+        ))
         for changed_id in (_OTHER_SESSION_ID, None, "--last"):
             with self.subTest(changed_id=changed_id):
                 await self.record.save(native_session_id=changed_id)
-                self.assertFalse(native_prompt.message_is_known(self.record, "3", source, "excerpt"))
+                self.assertFalse(native_prompt.message_is_known_from_ledger(
+                    native_prompt.matching_ledger(self.record), "3", source, "excerpt",
+                ))
 
     async def test_budget_omission_preserves_full_source_receipts_but_uuid_change_drops_them(self) -> None:
         source = json_digest(_message("assistant", "known full content"))
@@ -528,12 +550,16 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         await prompt.acknowledge(self.record)
         omitted = NativePrompt("request", {})
         await omitted.acknowledge(self.record)
-        self.assertTrue(native_prompt.message_is_known(self.record, "9", source, "shorter preview"))
+        self.assertTrue(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "9", source, "shorter preview",
+        ))
 
         await self.record.save(native_session_id=_OTHER_SESSION_ID)
         await omitted.acknowledge(self.record)
         self.assertEqual(self.record.get("native_prompt_ledger")["message_sources"], {})
-        self.assertFalse(native_prompt.message_is_known(self.record, "9", source, "shorter preview"))
+        self.assertFalse(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "9", source, "shorter preview",
+        ))
 
     async def test_logged_own_long_messages_are_full_coverage_but_flexible_merge_is_unseen(self) -> None:
         await self._confirm()
@@ -544,17 +570,17 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         ]}
         marks = native_prompt.history_snapshot(data)
         await native_prompt.acknowledge_logged_turn(self.record, data, request_only=True)
-        self.assertTrue(native_prompt.message_is_known(
-            self.record, "40", marks["40"], "tiny request preview",
+        self.assertTrue(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "40", marks["40"], "tiny request preview",
         ))
-        self.assertFalse(native_prompt.message_is_known(
-            self.record, "41", marks["41"], session.format_msg_line(data["messages"][1]),
+        self.assertFalse(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "41", marks["41"], session.format_msg_line(data["messages"][1]),
         ))
         self.assertEqual(set(self.record.get("native_prompt_ledger")["messages"]), {"40"})
 
         await native_prompt.acknowledge_logged_turn(self.record, data)
-        self.assertTrue(native_prompt.message_is_known(
-            self.record, "41", marks["41"], session.format_msg_line(data["messages"][1], cap=None),
+        self.assertTrue(native_prompt.message_is_known_from_ledger(
+            native_prompt.matching_ledger(self.record), "41", marks["41"], session.format_msg_line(data["messages"][1], cap=None),
         ))
 
     async def test_same_durable_request_uses_continuation_but_identical_new_job_remains_actionable(self) -> None:

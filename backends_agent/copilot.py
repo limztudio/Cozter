@@ -528,12 +528,6 @@ class CopilotBackend(Backend):
         if home is not None:
             await asyncio.to_thread(_remove_isolated_copilot_home, home)
 
-    _TOOL_USE_TYPES = ("tool_use", "tool_call", "tool_start", "tool")
-    _TOOL_RESULT_TYPES = ("tool_result", "tool_output", "tool_end")
-    _FILE_TYPES = ("file_change", "edit", "file")
-    _ERROR_TYPES = ("error", "turn.failed", "failed", "session.error")
-    _ASSISTANT_TYPES = ("assistant.message",)
-
     def parse_event(self, event: dict, result: AgentResult) -> None:
         from .. import execution_state
 
@@ -544,12 +538,10 @@ class CopilotBackend(Backend):
             return
         record = execution_state.current_run()
         if (record is not None and not record.get("native_tools_started")
-                and (event_type in (*self._TOOL_USE_TYPES, *self._TOOL_RESULT_TYPES,
-                                    *self._FILE_TYPES, *self._ASSISTANT_TYPES)
-                     or event_type.startswith(("tool.", "tool.execution_", "assistant.")))):
+                and event_type.startswith(("tool.", "assistant."))):
             record.set(native_tools_started=True)
+        data = event.get("data")
         if event_type in ("session.start", "session.resume"):
-            data = event.get("data")
             native_id = native_session_id(data.get("sessionId")) if isinstance(data, dict) else None
             record = execution_state.current_run()
             if record is not None and native_id is not None:
@@ -559,62 +551,46 @@ class CopilotBackend(Backend):
                     record.set(native_session_id=native_id, native_candidate_session_id=None)
             return
 
-        # Typed branches first.
-        if event_type in self._TOOL_USE_TYPES:
-            tool = (
-                event.get("name")
-                or event.get("tool")
-                or event.get("tool_name")
-                or "?"
-            )
-            tool_input = event.get("input") or event.get("args") or {}
+        if event_type == "error":
+            message = event.get("message") or event.get("error")
+            if isinstance(message, dict):
+                message = message.get("message")
+            record_missing_native_session(message)
+            record_backend_error(result, message)
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        if event_type == "tool.execution_start":
+            tool = data.get("toolName")
+            tool_input = data.get("arguments")
             result.events.append(ChatEvent(
                 kind="tool", content=summarize_cli_tool(tool, tool_input),
             ))
+            if isinstance(tool, str) and tool in {"create", "edit"} and isinstance(tool_input, dict):
+                path = tool_input.get("path")
+                if isinstance(path, str) and path:
+                    result.events.append(ChatEvent(kind="file", content=f"📄 {tool}: {path}"))
             return
 
-        if event_type in self._TOOL_RESULT_TYPES:
-            tool = event.get("name") or event.get("tool") or "tool"
-            output = event.get("output") or event.get("result") or ""
-            if isinstance(output, (dict, list)):
-                output = str(output)
-            content = f"{tool} done"
-            if output:
-                content += f"\n{truncate_status_text(output)}"
+        if event_type == "tool.execution_complete":
+            failed = data.get("success") is False
+            output = data.get("error") if failed else data.get("result")
+            text = output.get("message" if failed else "content") if isinstance(output, dict) else None
+            content = "tool failed" if failed else "tool done"
+            if isinstance(text, str) and text:
+                content += f"\n{truncate_status_text(text)}"
             result.events.append(ChatEvent(kind="tool", content=content))
             return
 
-        if event_type in self._FILE_TYPES:
-            path = (
-                event.get("path")
-                or event.get("file")
-                or event.get("filename")
-                or "?"
-            )
-            kind = event.get("action") or event.get("kind") or "change"
-            result.events.append(ChatEvent(
-                kind="file", content=f"📄 {kind}: {path}",
-            ))
+        if event_type == "session.error":
+            message = data.get("message")
+            record_missing_native_session(message)
+            record_backend_error(result, message)
             return
 
-        if event_type in self._ERROR_TYPES:
-            data = event.get("data")
-            payload = data if isinstance(data, dict) and event_type == "session.error" else event
-            msg = payload.get("message")
-            if not msg:
-                err = payload.get("error")
-                if isinstance(err, dict):
-                    msg = err.get("message")
-                elif isinstance(err, str):
-                    msg = err
-            if not msg:
-                msg = "Unknown error"
-            record_missing_native_session(msg)
-            record_backend_error(result, msg)
-            return
-
-        # Only a current final assistant message carries the visible reply.
-        text = self._assistant_text(event, event_type)
+        text = self.extract_agent_text(event)
         if text:
             append_text_result(result, text)
             return
@@ -623,34 +599,13 @@ class CopilotBackend(Backend):
                      event_type, list(event.keys()))
 
     def extract_agent_text(self, event: dict) -> str | None:
-        if not isinstance(event, dict):
+        if not isinstance(event, dict) or event.get("type") != "assistant.message":
             return None
-        event_type = event.get("type")
-        if not isinstance(event_type, str):
-            return None
-        return self._assistant_text(event, event_type)
-
-    def _assistant_text(self, event: dict, event_type: str) -> str | None:
-        """Read only the current final assistant message envelope."""
-        if event_type != "assistant.message":
-            return None
-        return self._extract_text(event)
-
-    @staticmethod
-    def _extract_text(event: dict) -> str | None:
-        """Read visible text from the current CLI's nested data payload."""
         payload = event.get("data")
         if not isinstance(payload, dict):
             return None
-        for key in ("text", "content", "message"):
-            val = payload.get(key)
-            if isinstance(val, str) and val.strip():
-                return val
-            if isinstance(val, dict):
-                inner = val.get("text") or val.get("content")
-                if isinstance(inner, str) and inner.strip():
-                    return inner
-        return None
+        text = payload.get("content")
+        return text if isinstance(text, str) and text.strip() else None
 
 
 def _parse_acp_model_options(payload: object) -> tuple[str, ...]:

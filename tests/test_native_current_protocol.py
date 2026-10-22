@@ -18,6 +18,9 @@ class CurrentCopilotPayloadTests(unittest.TestCase):
             {"type": "assistant_message", "role": "assistant", "text": "retired wrapper"},
             {"type": "assistant.message", "content": "retired wrapper"},
             {"type": "assistant.message", "text": "retired wrapper", "data": None},
+            {"type": "assistant.message", "data": {"text": "retired wrapper"}},
+            {"type": "assistant.message", "data": {"message": "retired wrapper"}},
+            {"type": "assistant.message", "data": {"content": {"text": "retired wrapper"}}},
         ):
             with self.subTest(event=event):
                 result = AgentResult()
@@ -28,7 +31,7 @@ class CurrentCopilotPayloadTests(unittest.TestCase):
     def test_current_nested_payload_wins_over_any_outer_text(self):
         backend = CopilotBackend()
         event = {"type": "assistant.message", "content": "retired wrapper",
-                 "data": {"content": "current visible reply"}}
+                 "data": {"text": "retired wrapper", "content": "current visible reply"}}
         result = AgentResult()
         backend.parse_event(event, result)
         self.assertEqual(result.text, "current visible reply")
@@ -51,6 +54,40 @@ class CurrentCopilotPayloadTests(unittest.TestCase):
                 backend.parse_event(event, result)
                 self.assertEqual(result.text, "")
                 self.assertIsNone(backend.extract_agent_text(event))
+
+    def test_retired_tool_file_and_error_aliases_cannot_report_activity(self):
+        backend = CopilotBackend()
+        for alias in ("tool_use", "tool_call", "tool_start", "tool", "tool_result",
+                      "tool_output", "tool_end", "file_change", "edit", "file",
+                      "turn.failed", "failed"):
+            with self.subTest(alias=alias):
+                result = AgentResult()
+                backend.parse_event({
+                    "type": alias, "name": "shell", "message": "retired error",
+                    "path": "retired.py", "input": {"command": "retired command"},
+                    "data": {"content": "retired nested reply"},
+                }, result)
+                self.assertEqual(result.events, [])
+                self.assertIsNone(result.error)
+
+    def test_current_tool_result_uses_nested_content_and_keeps_failures_recoverable(self):
+        backend = CopilotBackend()
+        result = AgentResult()
+        for payload in (
+            {"toolCallId": "first", "success": True, "result": {"content": "current output"}},
+            {"toolCallId": "second", "success": False, "error": {"message": "fixable tool failure"}},
+            {"toolCallId": "third", "success": True, "result": ["malformed output"]},
+        ):
+            backend.parse_event({
+                "type": "tool.execution_complete", "output": "retired output", "data": payload,
+            }, result)
+        self.assertEqual([event.content for event in result.events], [
+            "tool done\ncurrent output", "tool failed\nfixable tool failure", "tool done",
+        ])
+        self.assertIsNone(result.error)
+        backend.parse_event({"type": "session.error", "message": "retired outer error",
+                             "data": {"message": "current session failure"}}, result)
+        self.assertEqual(result.error, "current session failure")
 
 
 class CurrentClaudeJobOutputTests(unittest.IsolatedAsyncioTestCase):

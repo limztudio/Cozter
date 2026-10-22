@@ -932,23 +932,28 @@ class ScheduleParserTests(unittest.TestCase):
             try:
                 workspace.select_workspace("u1", ws, "test:queue")
                 bot = QueueRestoreBot(["u1"])
-                original_claim = schedules.update_schedule_fired
+                original_read = bot._platform_schedules
+                reads = 0
 
-                def cancel_before_claim(*args, **kwargs):
-                    schedules.remove_schedule(ws, "u1", "cancelled")
-                    return original_claim(*args, **kwargs)
+                def cancel_before_recheck(*args, **kwargs):
+                    nonlocal reads
+                    reads += 1
+                    if reads == 2:
+                        schedules.remove_schedule(ws, "u1", "cancelled")
+                    return original_read(*args, **kwargs)
 
                 with (
                     mock.patch.object(
-                        schedules, "update_schedule_fired",
-                        side_effect=cancel_before_claim,
+                        bot, "_platform_schedules", side_effect=cancel_before_recheck,
                     ),
                     mock.patch.object(
-                        bot, "_fire_schedule", new=mock.AsyncMock(),
+                        bot, "_admit_schedule", new=mock.AsyncMock(),
                     ) as fire,
                 ):
                     asyncio.run(bot._scheduler_tick())
                 fire.assert_not_awaited()
+                self.assertEqual(reads, 2)
+                self.assertEqual(schedules.list_schedules(ws, "u1"), [])
             finally:
                 workspace.WORKSPACE_STATE_PATH = old_path
 

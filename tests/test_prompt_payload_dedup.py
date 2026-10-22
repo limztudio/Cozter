@@ -15,9 +15,9 @@ class PromptPayloadDedupTests(unittest.TestCase):
         for read_only in (False, True):
             with self.subTest(read_only=read_only):
                 task = flexible.Subtask("high", request, read_only=read_only)
-                prompt = flexible.build_subtask_prompt(
+                prompt = "\n".join(flexible.build_subtask_sections(
                     request, flexible.Plan("", (task,)), 0, [],
-                )
+                ).values())
                 self.assertEqual(prompt.count(request), 1)
                 self.assertIn("Your task: the complete user request above", prompt)
                 self.assertIn("including every saved obligation and constraint", prompt)
@@ -27,16 +27,16 @@ class PromptPayloadDedupTests(unittest.TestCase):
     def test_revised_task_keeps_its_distinct_scope(self):
         request = "Original exact scope and constraints.\n" * 100
         instruction = request + "Additionally check the distinct target X."
-        prompt = flexible.build_subtask_prompt(
+        prompt = "\n".join(flexible.build_subtask_sections(
             request, flexible.Plan("", (flexible.Subtask("high", instruction),)), 0, [],
-        )
+        ).values())
         self.assertIn(f"Your task: {instruction}\n", prompt)
         self.assertEqual(prompt.count(instruction), 1)
 
     def test_identical_reports_keep_every_plan_mapping_with_one_evidence_copy(self):
         report = "Verified every target; command test.exe; exit 0; warnings 0.\n" * 40
         plan = flexible.Plan("", tuple(flexible.Subtask("mid", f"scope {i}") for i in range(3)))
-        worker = flexible.build_subtask_prompt("all scopes", plan, 2, [report, report])
+        worker = "\n".join(flexible.build_subtask_sections("all scopes", plan, 2, [report, report]).values())
         merge = flexible.build_merge_prompt("all scopes", plan, [report, report, "final evidence"],
                                             collaborative=False, blocked=(1,))
         for prompt in (worker, merge):
@@ -53,7 +53,7 @@ class PromptPayloadDedupTests(unittest.TestCase):
         self.assertEqual(flexible.truncate_report(first), flexible.truncate_report(second))
         plan = flexible.Plan("", (flexible.Subtask("mid", "one"), flexible.Subtask("high", "two")))
         for prompt in (
-            flexible.build_subtask_prompt("request", plan, 1, [first, second]),
+            "\n".join(flexible.build_subtask_sections("request", plan, 1, [first, second]).values()),
             flexible.build_merge_prompt("request", plan, [first, second], collaborative=False),
         ):
             self.assertNotIn("identical report", prompt)
@@ -62,13 +62,13 @@ class PromptPayloadDedupTests(unittest.TestCase):
     def test_previous_draft_reuses_only_evidence_actually_retained_in_prompt(self):
         draft = "Saved full verification evidence: exit 0; warning count 0.\n" * 50
         plan = flexible.Plan("", (flexible.Subtask("high", "finish remaining publication"),))
-        in_request = flexible.build_subtask_prompt("Request\n" + draft, plan, 0, [], previous_draft=draft)
-        in_report = flexible.build_subtask_prompt("Request", plan, 0, [draft], previous_draft=draft)
+        in_request = "\n".join(flexible.build_subtask_sections("Request\n" + draft, plan, 0, [], previous_draft=draft).values())
+        in_report = "\n".join(flexible.build_subtask_sections("Request", plan, 0, [draft], previous_draft=draft).values())
         for prompt in (in_request, in_report):
             self.assertEqual(prompt.count(draft), 1)
             self.assertIn("The same retained evidence already appears", prompt)
-        distinct = flexible.build_subtask_prompt("Request", plan, 0, [draft + "NEW REMAINDER"],
-                                                 previous_draft=draft + "OTHER REMAINDER")
+        distinct = "\n".join(flexible.build_subtask_sections("Request", plan, 0, [draft + "NEW REMAINDER"],
+                                                 previous_draft=draft + "OTHER REMAINDER").values())
         self.assertIn("NEW REMAINDER", distinct)
         self.assertIn("OTHER REMAINDER", distinct)
 

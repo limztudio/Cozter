@@ -842,7 +842,7 @@ class OpenAIChatBackend(Backend):
                     )
                     with supervision.operation_scope(ticket):
                         request = asyncio.create_task(_stream_completion(
-                            endpoint, payload, headers, None, max_retries,
+                            endpoint, payload, headers, max_retries,
                             self.name, session=http_session,
                         ))
                         try:
@@ -1332,7 +1332,6 @@ async def _stream_completion(
     endpoint: str,
     payload: dict,
     headers: dict[str, str],
-    timeout_seconds: float | None,
     max_retries: int,
     label: str,
     session: aiohttp.ClientSession | None = None,
@@ -1343,12 +1342,10 @@ async def _stream_completion(
     and HTTP 429/5xx are retried with exponential backoff up to
     *max_retries* times. Malformed tool-call batches use the same bounded
     retry before any call is persisted or executed. Other bad statuses and
-    malformed responses are not retried. Worker generation has no imposed deadline.
-    A positive explicit ``timeout_seconds`` bounds this operation across
-    retries and backoff; cancellation always stops it.
+    malformed responses are not retried. Generation runs until completion
+    or cancellation.
     """
     started = time.monotonic()
-    deadline = started + timeout_seconds if timeout_seconds is not None and timeout_seconds > 0 else None
     retries = 0
     outcome = "error"
 
@@ -1357,8 +1354,7 @@ async def _stream_completion(
         while True:
             try:
                 result = await _stream_once(
-                    endpoint, payload, headers, timeout_seconds, label,
-                    session=session, deadline=deadline,
+                    endpoint, payload, headers, label, session=session,
                 )
                 _validate_tool_call_batch(result[2])
                 return result
@@ -1375,11 +1371,8 @@ async def _stream_completion(
                 await asyncio.sleep(delay)
 
     try:
-        async with http_error_translator(label, timeout_seconds):
-            if timeout_seconds is not None and timeout_seconds > 0:
-                result = await asyncio.wait_for(with_retries(), timeout=timeout_seconds)
-            else:
-                result = await with_retries()
+        async with http_error_translator(label):
+            result = await with_retries()
         outcome = "ok"
         return result
     except asyncio.CancelledError:
@@ -1397,38 +1390,26 @@ async def _stream_once(
     endpoint: str,
     payload: dict,
     headers: dict[str, str],
-    timeout_seconds: float | None,
     label: str,
     session: aiohttp.ClientSession | None = None,
-    deadline: float | None = None,
 ) -> tuple[str, str, list[dict]]:
     """One streaming attempt; raise _RetryableError for transient failures.
 
     Parses Server-Sent Events. ``data:`` lines carry JSON deltas;
     ``data: [DONE]`` terminates the stream. Generation runs until completion
-    or cancellation unless the caller explicitly requests an operation timeout.
+    or cancellation.
     """
-    if timeout_seconds is not None and timeout_seconds > 0:
-        if deadline is None:
-            deadline = time.monotonic() + timeout_seconds
-        timeout = aiohttp.ClientTimeout(
-            total=timeout_seconds, sock_read=timeout_seconds,
-            connect=min(_HTTP_CONNECT_TIMEOUT, timeout_seconds),
-            sock_connect=min(_HTTP_CONNECT_TIMEOUT, timeout_seconds),
-        )
-    else:
-        timeout = aiohttp.ClientTimeout(
-            total=None, connect=_HTTP_CONNECT_TIMEOUT,
-            sock_connect=_HTTP_CONNECT_TIMEOUT,
-        )
+    timeout = aiohttp.ClientTimeout(
+        total=None, connect=_HTTP_CONNECT_TIMEOUT,
+        sock_connect=_HTTP_CONNECT_TIMEOUT,
+    )
     if session is None:
         async with aiohttp.ClientSession(json_serialize=_compact_json) as owned_session:
             return await _stream_once(
-                endpoint, payload, headers, timeout_seconds, label,
-                session=owned_session, deadline=deadline,
+                endpoint, payload, headers, label, session=owned_session,
             )
     return await _post_completion_stream(
-        session, endpoint, payload, headers, timeout, label, deadline,
+        session, endpoint, payload, headers, timeout, label,
     )
 
 
@@ -1439,7 +1420,6 @@ async def _post_completion_stream(
     headers: dict[str, str],
     timeout: aiohttp.ClientTimeout,
     label: str,
-    deadline: float | None = None,
 ) -> tuple[str, str, list[dict]]:
     """Read one streaming completion from an existing HTTP session."""
     text_parts: list[str] = []
@@ -1527,7 +1507,7 @@ async def _post_completion_stream(
                 delta = choice.get("delta")
                 if not isinstance(delta, dict):
                     if terminal_event:
-                        await _drain_completion_tail(resp, deadline)
+                        await _drain_completion_tail(resp)
                         break
                     continue
                 if first_delta is None and any(
@@ -1581,7 +1561,7 @@ async def _post_completion_stream(
                                     supervision.note_output(arguments_delta)
                 # Choice finished: keep its final delta; never retry a stalled tail.
                 if terminal_event:
-                    await _drain_completion_tail(resp, deadline)
+                    await _drain_completion_tail(resp)
                     break
             if saw_terminal_marker and not (
                 terminal_finish_reason in {"length", "content_filter"} and tool_buffers
@@ -1647,20 +1627,13 @@ async def _post_completion_stream(
     return "".join(text_parts), "".join(reasoning_parts), tool_calls
 
 
-async def _drain_completion_tail(
-    resp: aiohttp.ClientResponse, deadline: float | None,
-) -> None:
+async def _drain_completion_tail(resp: aiohttp.ClientResponse) -> None:
     """Keep normal completed responses reusable without waiting on stalled tails.
 
     Finishing the small [DONE]/usage trailer permits connection reuse. The
-    completion is already retained, so a slow or broken tail must not spend
-    the real-work timeout or trigger another model request.
+    completion is already retained, so a slow or broken tail must not hold
+    the turn open or trigger another model request.
     """
-    if deadline is not None and (
-        deadline - time.monotonic() <= _COMPLETION_TAIL_DRAIN_SECONDS + 0.01
-    ):
-        return
-
     async def drain() -> None:
         remaining = _COMPLETION_TAIL_DRAIN_BYTES
         while remaining > 0:

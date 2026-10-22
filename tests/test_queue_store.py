@@ -2,7 +2,6 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
-import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -20,7 +19,7 @@ class QueueStoreTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.path = self.root / "queue_signal.sqlite3"
         self.legacy = self.root / "queue_signal.json"
-        self.store = QueueStore(self.path, self.legacy)
+        self.store = QueueStore(self.path)
 
     def occurrence(self, slot: str = "2026-10-17T09:00:00", owner: str = "owner", schedule: str = "daily") -> ScheduledOccurrence:
         return ScheduledOccurrence(str(self.root / "work"), owner, schedule, slot)
@@ -82,7 +81,7 @@ class QueueStoreTests(unittest.TestCase):
         entry = self.entry(occurrence)
         self.store.admit("owner", entry, occurrence)
         self.store.write_entries({})
-        restarted = QueueStore(self.path, self.legacy)
+        restarted = QueueStore(self.path)
         self.assertEqual(restarted.admit("owner", entry, occurrence), AdmissionResult(None, False, True))
         self.assertEqual(restarted.read_entries(), {})
         self.assertEqual(restarted.schedule_watermarks(), {occurrence.key(): occurrence.slot})
@@ -136,78 +135,126 @@ class QueueStoreTests(unittest.TestCase):
         self.assertEqual(self.store.schedule_watermarks(), {})
         self.assertEqual(self.store.read_entries(), {"owner": [entry]})
 
-    def test_migration_preserves_all_54_jobs_exactly_and_keeps_raw_backup(self) -> None:
-        body = {
-            owner: [{"id": f"job-{owner}-{index}", "text": f"request {index}", "chat_id": owner,
-                     "ephemeral": index % 2 == 0,
-                     "job": {"session_id": f"native-{owner}-{index}", "workspace_path": "C:\\WorkStation\\Project",
-                             "request": "exact request", "evidence": ["a", {"unknown": index}]},
-                     "unknown_future_field": [True, None, "한글"]}
-                    for index in range(27)]
-            for owner in ("room-one", "room-two")
-        }
-        raw = json.dumps(body, ensure_ascii=False, indent=2).encode("utf-8") + b"\r\n"
-        self.legacy.write_bytes(raw)
-        self.assertEqual(self.store.read_entries(), body)
-        backup = Path(str(self.legacy) + ".migrated." + hashlib.sha256(raw).hexdigest())
-        self.assertEqual(backup.read_bytes(), raw)
-        self.assertFalse(self.legacy.exists())
-        self.assertEqual(self.store.schedule_watermarks(), {})
-
-    def test_version_one_never_reads_a_recreated_legacy_file(self) -> None:
-        self.legacy.write_text('{"owner": []}', encoding="utf-8")
-        self.store.read_entries()
-        self.store.write_entries({"owner": [self.entry()]})
-        self.legacy.write_text("corrupt obsolete JSON", encoding="utf-8")
-        restarted = QueueStore(self.path, self.legacy)
-        self.assertEqual(restarted.read_entries(), {"owner": [self.entry()]})
-        self.assertEqual(self.legacy.read_text(encoding="utf-8"), "corrupt obsolete JSON")
-
-    def test_migration_seeds_only_explicit_receipts_without_changing_old_ids(self) -> None:
-        older = self.occurrence()
-        latest = self.occurrence("2026-10-18T09:00:00")
-        old_entry = self.entry(older, "old-short-id")
-        old_entry["id"] = "old-short-id"
-        latest_entry = self.entry(latest)
-        latest_entry["id"] = "new-short-id"
-        malformed = {"id": "other", "ephemeral": True, "job": {"schedule_id": "daily"}}
-        body = {"owner": [old_entry, latest_entry, malformed]}
-        self.legacy.write_text(json.dumps(body), encoding="utf-8")
-        self.assertEqual(self.store.read_entries(), body)
-        self.assertEqual(self.store.schedule_watermarks(), {latest.key(): latest.slot})
-        self.assertTrue(self.store.admit("owner", self.entry(latest), latest).already_consumed)
-        self.assertEqual(self.store.read_entries(), body)
-
-    def test_restart_after_commit_before_archive_is_idempotent(self) -> None:
-        raw = b'{"owner": [{"id": "exact-id", "job": {"session_id": "native-id"}}]}'
-        self.legacy.write_bytes(raw)
-        with mock.patch.object(self.store, "_archive_source", side_effect=RuntimeError("process stopped")):
-            with self.assertRaisesRegex(RuntimeError, "process stopped"):
-                self.store.read_entries()
-        self.assertTrue(self.legacy.exists())
-        restarted = QueueStore(self.path, self.legacy)
-        self.assertEqual(restarted.read_entries(), json.loads(raw))
-        self.assertFalse(self.legacy.exists())
-        self.assertEqual(len(list(self.root.glob("*.migrated.*"))), 1)
-
-    def test_changed_legacy_after_commit_is_ignored_and_preserved(self) -> None:
-        self.legacy.write_text('{"owner": []}', encoding="utf-8")
-        with mock.patch.object(self.store, "_archive_source"):
-            self.assertEqual(self.store.read_entries(), {"owner": []})
-        self.legacy.write_text("new external content", encoding="utf-8")
-        self.assertEqual(QueueStore(self.path, self.legacy).read_entries(), {"owner": []})
-        self.assertEqual(self.legacy.read_text(encoding="utf-8"), "new external content")
-
-    def test_invalid_legacy_fails_closed_and_does_not_archive(self) -> None:
-        for raw in (b"not JSON", b"[]", b'{"invalid": NaN}', b"\xff"):
+    def test_json_sibling_blocks_initialization_without_reading_or_changing_it(self) -> None:
+        for raw in (b'{"owner": [{"id": "saved-job"}]}', b"not JSON", b"[]", b'{"invalid": NaN}', b"\xff"):
             with self.subTest(raw=raw):
                 self.legacy.write_bytes(raw)
-                with self.assertRaises(ValueError):
-                    self.store.read_entries()
+                for _ in range(2):
+                    with self.assertRaisesRegex(ValueError, "JSON queue storage is retired"):
+                        self.store.read_entries()
                 self.assertEqual(self.legacy.read_bytes(), raw)
                 self.assertEqual(list(self.root.glob("*.migrated.*")), [])
                 with closing(sqlite3.connect(self.path)) as connection:
                     self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+                    self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
+
+    def test_json_sibling_directory_blocks_initialization(self) -> None:
+        self.legacy.mkdir()
+        retained = self.legacy / "retained-source"
+        retained.write_bytes(b"saved queue evidence")
+        with self.assertRaisesRegex(ValueError, "JSON queue storage is retired"):
+            self.store.read_entries()
+        self.assertEqual(retained.read_bytes(), b"saved queue evidence")
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
+
+    def test_broken_json_sibling_symlink_blocks_initialization(self) -> None:
+        target = self.root / "missing-json-source"
+        try:
+            self.legacy.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("Creating symlinks is unavailable")
+        with self.assertRaisesRegex(ValueError, "JSON queue storage is retired"):
+            self.store.read_entries()
+        self.assertTrue(self.legacy.is_symlink())
+        self.assertFalse(target.exists())
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
+
+    def test_unreadable_json_sibling_cannot_be_treated_as_absent(self) -> None:
+        self.legacy.write_bytes(b"saved queue")
+        with mock.patch.object(Path, "lstat", side_effect=PermissionError("source inaccessible")):
+            with self.assertRaisesRegex(PermissionError, "source inaccessible"):
+                self.store.read_entries()
+        self.assertEqual(self.legacy.read_bytes(), b"saved queue")
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
+
+    def test_version_one_keeps_checkpoints_and_receipts_without_archiving_old_sources(self) -> None:
+        occurrence = self.occurrence()
+        entry = self.entry(occurrence)
+        entry["job"].update(state="running", request="exact saved request", session_id="saved-native-session")
+        entry["job"]["checkpoint"] = {"reports": ["verified output"], "pending": ["remaining task"]}
+        self.store.admit("owner", entry, occurrence)
+        raw = b"retained obsolete source bytes"
+        self.legacy.write_bytes(raw)
+        backup = self.root / "queue_signal.json.migrated.saved"
+        backup.write_bytes(raw)
+        stat = self.legacy.stat()
+        fingerprint = json.dumps([stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns])
+        rows = [
+            (str(self.legacy), fingerprint, str(backup), "retired", 0),
+            (str(self.root / "archived-source.json"), "old", str(backup), "archived", 1),
+        ]
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.execute("CREATE TABLE queue_migration (source TEXT NOT NULL, fingerprint TEXT NOT NULL, backup TEXT NOT NULL, digest TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0)")
+            connection.executemany("INSERT INTO queue_migration VALUES (?, ?, ?, ?, ?)", rows)
+            connection.commit()
+        restarted = QueueStore(self.path)
+        self.assertEqual(restarted.read_entries(), {"owner": [entry]})
+        self.assertEqual(restarted.schedule_watermarks(), {occurrence.key(): occurrence.slot})
+        self.assertEqual(restarted.admit("owner", self.entry(occurrence), occurrence), AdmissionResult(entry, False))
+        self.assertEqual(self.legacy.read_bytes(), raw)
+        self.assertEqual(backup.read_bytes(), raw)
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("SELECT * FROM queue_migration").fetchall(), rows)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+
+    def test_other_platform_json_and_archived_backups_are_not_adopted(self) -> None:
+        obsolete = self.root / "queue_old_owner.json"
+        backup = self.root / "queue_signal.json.migrated.saved"
+        raw = b'{"old": [{"id": "unrelated-job"}]}'
+        obsolete.write_bytes(raw)
+        backup.write_bytes(raw)
+        self.assertEqual(self.store.read_entries(), {})
+        self.assertEqual(self.store.schedule_watermarks(), {})
+        self.assertEqual(obsolete.read_bytes(), raw)
+        self.assertEqual(backup.read_bytes(), raw)
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(set(connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()), {
+                ("queue_state",), ("schedule_watermarks",),
+            })
+
+    def test_concurrent_initialization_admits_every_unique_job(self) -> None:
+        def admit(index: int) -> AdmissionResult:
+            occurrence = self.occurrence(schedule=f"schedule-{index}")
+            return QueueStore(self.path).admit("owner", self.entry(occurrence), occurrence)
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(admit, range(24)))
+        self.assertTrue(all(result.created for result in results))
+        self.assertEqual(len(self.store.read_entries()["owner"]), 24)
+        self.assertEqual(len(self.store.schedule_watermarks()), 24)
+        self.assertEqual(list(self.root.glob("*.migrated.*")), [])
+
+    def test_concurrent_json_guard_never_accepts_or_imports_jobs(self) -> None:
+        raw = b'{"old": [{"id": "retained-native-job"}]}'
+        self.legacy.write_bytes(raw)
+
+        def admit(index: int) -> None:
+            with self.assertRaisesRegex(ValueError, "JSON queue storage is retired"):
+                QueueStore(self.path).admit("owner", self.entry(entry_id=f"job-{index}"))
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(executor.map(admit, range(24)))
+        self.assertEqual(self.legacy.read_bytes(), raw)
+        self.assertEqual(list(self.root.glob("*.migrated.*")), [])
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(), [])
 
     def test_unknown_version_and_unversioned_schema_fail_closed(self) -> None:
         with closing(sqlite3.connect(self.path)) as connection:
@@ -220,29 +267,12 @@ class QueueStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown schema"):
             self.store.read_entries()
 
-    def test_corrupt_database_fails_closed_without_importing_legacy(self) -> None:
+    def test_corrupt_database_fails_closed_without_touching_json_sibling(self) -> None:
         self.path.write_bytes(b"This is not a SQLite database")
         self.legacy.write_text('{"owner": []}', encoding="utf-8")
         with self.assertRaises(sqlite3.DatabaseError):
             self.store.read_entries()
         self.assertTrue(self.legacy.exists())
-
-    def test_concurrent_initialization_imports_once_and_admits_every_unique_job(self) -> None:
-        old = {"old": [{"id": "old-job", "job": {"native_session_id": "native-id"}}]}
-        self.legacy.write_text(json.dumps(old), encoding="utf-8")
-
-        def admit(index: int) -> AdmissionResult:
-            occurrence = self.occurrence(schedule=f"schedule-{index}")
-            return QueueStore(self.path, self.legacy).admit("owner", self.entry(occurrence), occurrence)
-
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            results = list(executor.map(admit, range(24)))
-        self.assertTrue(all(result.created for result in results))
-        saved = self.store.read_entries()
-        self.assertEqual(saved["old"], old["old"])
-        self.assertEqual(len(saved["owner"]), 24)
-        self.assertEqual(len(self.store.schedule_watermarks()), 24)
-        self.assertEqual(len(list(self.root.glob("*.migrated.*"))), 1)
 
     def test_concurrent_duplicate_occurrence_has_one_commit_owner(self) -> None:
         occurrence = self.occurrence()

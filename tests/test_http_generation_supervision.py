@@ -205,7 +205,7 @@ class HttpGenerationSupervisionTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(supervision, "note_output") as output,
         ):
             _, reasoning, calls = await oa._stream_once(
-                "http://offline.invalid", {}, {}, None, "offline", session=_SSESession(response),
+                "http://offline.invalid", {}, {}, "offline", session=_SSESession(response),
             )
         self.assertEqual(reasoning, private)
         self.assertEqual(len(calls), 1)

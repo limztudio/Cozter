@@ -100,7 +100,7 @@ class PlanParsingTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 plan = flexible.parse_plan(raw, "verify and deploy")
                 self.assertIn(note, plan.understanding)
-                self.assertIn(note, flexible.build_subtask_prompt("request", plan, 0, []))
+                self.assertIn(note, "\n".join(flexible.build_subtask_sections("request", plan, 0, []).values()))
 
     def test_lines_with_an_unknown_tier_are_skipped(self) -> None:
         plan = flexible.parse_plan(
@@ -709,7 +709,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(excerpt.endswith(final_evidence))
                 self.assertIn(flexible.REPORT_TRUNCATION_MARKER, excerpt)
                 for downstream in (
-                    flexible.build_subtask_prompt("request", plan, 0, [report]),
+                    "\n".join(flexible.build_subtask_sections("request", plan, 0, [report]).values()),
                     flexible.build_merge_prompt("request", plan, [report], collaborative=False),
                 ):
                     self.assertIn(final_evidence, downstream)
@@ -729,9 +729,9 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                 flexible.Subtask(tier="high", instruction=instruction),
             ),
         )
-        prompt = flexible.build_subtask_prompt(
+        prompt = "\n".join(flexible.build_subtask_sections(
             "original user request", plan, 1, ["Fixture evidence: exit code 0."],
-        )
+        ).values())
         self.assertEqual(prompt.count(instruction), 1)
         self.assertIn(f"Your task: {instruction}\n", prompt)
         self.assertIn(earlier_instruction, prompt)
@@ -1271,7 +1271,7 @@ class CoveragePromptTests(unittest.TestCase):
             understanding="",
             subtasks=(flexible.Subtask(tier="high", instruction="verify"),),
         )
-        worker = flexible.build_subtask_prompt("verify build", plan, 0, [])
+        worker = "\n".join(flexible.build_subtask_sections("verify build", plan, 0, []).values())
         self.assertIn("FULL logs", worker)
         self.assertIn("exit codes", worker)
         # Per-turn preamble must carry the same rule to direct turns.
@@ -1292,7 +1292,7 @@ class FlexibleUserReplyPolicyTests(unittest.TestCase):
             understanding="",
             subtasks=(flexible.Subtask(tier="low", instruction="do it"),),
         )
-        prompt = flexible.build_subtask_prompt("req", plan, 0, [])
+        prompt = "\n".join(flexible.build_subtask_sections("req", plan, 0, []).values())
         self.assertIn("[followup:", prompt)
         self.assertIn("Never write 'Next turn should:'", prompt)
 

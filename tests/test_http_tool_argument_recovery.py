@@ -164,7 +164,7 @@ class HttpToolArgumentRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     _call("invalid-sibling", arguments=arguments),
                 ]))])
                 with self.assertRaises(oa._RetryableError):
-                    await oa._stream_completion("http://offline.invalid", {}, {}, None, 0, "Meta", session=provider)
+                    await oa._stream_completion("http://offline.invalid", {}, {}, 0, "Meta", session=provider)
                 self.assertEqual(len(provider.requests), 1)
 
     async def test_interleaved_fragmented_json_validates_only_after_both_calls_are_complete(self):
@@ -180,7 +180,7 @@ class HttpToolArgumentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         ]
         provider = _StrictMetaSession([_response(events)])
         _text, _reasoning, calls = await oa._stream_completion(
-            "http://offline.invalid", {}, {}, None, 0, "Meta", session=provider,
+            "http://offline.invalid", {}, {}, 0, "Meta", session=provider,
         )
         self.assertEqual([call["id"] for call in calls], ["first", "second"])
         self.assertEqual([_strict_object(call["function"]["arguments"]) for call in calls], [
@@ -213,7 +213,7 @@ class HttpToolArgumentRecoveryTests(unittest.IsolatedAsyncioTestCase):
         ])
         rejected = _StrictMetaSession([])
         with self.assertRaisesRegex(RuntimeError, "HTTP 400"):
-            await oa._stream_completion("http://offline.invalid", {"messages": history}, {}, None, 0,
+            await oa._stream_completion("http://offline.invalid", {"messages": history}, {}, 0,
                                         "Meta", session=rejected)
         self.assertEqual(rejected.rejected, 1)
         Path(self.ws, "already-written.txt").write_text("Previous completed mutation", encoding="utf-8")

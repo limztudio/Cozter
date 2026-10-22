@@ -30,9 +30,6 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
                     self.request, self.plan, index, reports, previous_draft=draft,
                 )
                 rendered = "\n".join(sections.values())
-                self.assertEqual(rendered, flexible.build_subtask_prompt(
-                    self.request, self.plan, index, reports, previous_draft=draft,
-                ))
                 self.assertEqual(sections["request"], self.request)
                 self.assertIn("\n[LEASE]\ntier:", sections["worker_instructions"])
                 self.assertIn("\n[ESCALATE]\nreason:", sections["worker_instructions"])

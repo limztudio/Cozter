@@ -99,7 +99,7 @@ class ParallelReadPromptTests(unittest.TestCase):
         ))
 
     def test_inspection_prompt_has_scope_and_mutation_restrictions_without_repair_directives(self) -> None:
-        prompt = flexible.build_subtask_prompt("inspect and repair the project", self.plan, 0, [])
+        prompt = "\n".join(flexible.build_subtask_sections("inspect and repair the project", self.plan, 0, []).values())
         self.assertIn("Inspection only:", prompt)
         self.assertIn("Do not write, edit, delete, apply fixes, create files", prompt)
         self.assertIn("build, run tests, launch or stop processes, commit, or push", prompt)
@@ -111,20 +111,20 @@ class ParallelReadPromptTests(unittest.TestCase):
         self.assertNotIn("line as [followup:", prompt)
 
     def test_readers_use_preceding_reports_but_not_their_concurrent_peers(self) -> None:
-        prompt = flexible.build_subtask_prompt(
+        prompt = "\n".join(flexible.build_subtask_sections(
             "inspect and repair", self.plan, 1, ["Previously confirmed workspace and scope"],
             previous_draft="Checkpoint: transport ownership was already verified.",
-        )
+        ).values())
         self.assertIn("Previously confirmed workspace and scope", prompt)
         self.assertIn("Checkpoint: transport ownership was already verified.", prompt)
         self.assertIn("cannot rely on another concurrent task's findings or file changes", prompt)
         self.assertIn("Do not request redundant workflow stages or repeat completed work", prompt)
 
     def test_writer_keeps_implementation_and_verification_instructions_and_all_earlier_reports(self) -> None:
-        prompt = flexible.build_subtask_prompt(
+        prompt = "\n".join(flexible.build_subtask_sections(
             "inspect and repair", self.plan, 2,
             ["Transport finding: duplicate sync message", "Parser finding: missing source filter"],
-        )
+        ).values())
         self.assertIn("Transport finding: duplicate sync message", prompt)
         self.assertIn("Parser finding: missing source filter", prompt)
         self.assertIn("Build/verify, when needed", prompt)
@@ -136,7 +136,7 @@ class ParallelReadPromptTests(unittest.TestCase):
         serial_reader = flexible.Plan("inspect", (
             flexible.Subtask("low", "inspect a dependency", read_only=True),
         ))
-        prompt = flexible.build_subtask_prompt("request", serial_reader, 0, [])
+        prompt = "\n".join(flexible.build_subtask_sections("request", serial_reader, 0, []).values())
         self.assertIn("Inspection only:", prompt)
         self.assertNotIn("run canonical build/test", prompt)
 
@@ -158,7 +158,7 @@ class ParallelReadPromptTests(unittest.TestCase):
         self.assertIn("[OWNER]", prompt)
 
     def test_serial_build_worker_uses_bounded_native_parallelism_without_shared_tree_overlap(self) -> None:
-        prompt = flexible.build_subtask_prompt("repair and verify", self.plan, 2, [])
+        prompt = "\n".join(flexible.build_subtask_sections("repair and verify", self.plan, 2, []).values())
         self.assertIn("project's supported jobs/parallel flag", prompt)
         self.assertIn("resource bound appropriate to available CPU and memory", prompt)
         self.assertIn("Never overlap configure/build commands that share a generated tree or dependency metadata", prompt)
@@ -169,10 +169,10 @@ class ParallelReadPromptTests(unittest.TestCase):
         remaining = flexible.Plan("Finish the verified change", (
             flexible.Subtask("low", "commit and push the verified changes"),
         ))
-        prompt = flexible.build_subtask_prompt(
+        prompt = "\n".join(flexible.build_subtask_sections(
             "finish the original repair and verification", remaining, 0,
             ["Checkpoint: builds/tests passed; relevant inputs unchanged; commit/push pending."],
-        )
+        ).values())
         self.assertIn("builds/tests passed; relevant inputs unchanged; commit/push pending", prompt)
         self.assertIn("Reuse verified completed build/test evidence when relevant inputs and environment are unchanged", prompt)
         self.assertIn("rerun only invalidated checks", prompt)

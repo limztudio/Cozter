@@ -35,7 +35,7 @@ class FlexibleOwnerPlanTests(unittest.TestCase):
         self.assertEqual(plan.subtasks, (flexible.Subtask("high", self.task),))
         self.assertEqual(plan.owner_reason, "Choose the approach for coupled invariants.")
         self.assertEqual(plan.specialists, tuple(flexible.Lease(**row) for row in rows))
-        prompt = flexible.build_subtask_prompt(self.request, plan, 0, ["Inventory evidence retained."])
+        prompt = "\n".join(flexible.build_subtask_sections(self.request, plan, 0, ["Inventory evidence retained."]).values())
         self.assertIn(self.request, prompt)
         self.assertIn(self.task, prompt)
         self.assertIn("completion owner of the whole user request", prompt)
@@ -63,7 +63,7 @@ class FlexibleOwnerPlanTests(unittest.TestCase):
                 self.assertEqual(plan.subtasks, (flexible.Subtask("low", self.task),))
                 self.assertEqual(plan.specialists, ())
                 self.assertIn("advice was omitted", plan.understanding)
-                self.assertIn(self.request, flexible.build_subtask_prompt(self.request, plan, 0, []))
+                self.assertIn(self.request, "\n".join(flexible.build_subtask_sections(self.request, plan, 0, []).values()))
 
     def test_bad_json_duplicate_keys_and_fenced_advice_cannot_launch_helpers(self):
         for prefix in (
@@ -120,6 +120,6 @@ class FlexibleOwnerPlanTests(unittest.TestCase):
         self.assertEqual(len(plan.subtasks), 2)
         self.assertTrue(plan.subtasks[0].read_only)
         self.assertTrue(plan.subtasks[0].independent)
-        self.assertIn("others have their own workers", flexible.build_subtask_prompt(self.request, plan, 1, []))
+        self.assertIn("others have their own workers", "\n".join(flexible.build_subtask_sections(self.request, plan, 1, []).values()))
         self.assertEqual(flexible.Plan("", (flexible.Subtask("mid", "old saved task"),)).specialists, ())
 

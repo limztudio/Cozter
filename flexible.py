@@ -903,16 +903,6 @@ def _render_plan(plan: Plan, *, current: int | None = None) -> str:
     return "\n".join(lines)
 
 
-def build_subtask_prompt(
-    context: str, plan: Plan, index: int, results: list[str],
-    *, previous_draft: str | None = None,
-) -> str:
-    """Render the complete worker prompt, retaining its established format."""
-    return "\n".join(build_subtask_sections(
-        context, plan, index, results, previous_draft=previous_draft,
-    ).values())
-
-
 def build_subtask_sections(
     context: str, plan: Plan, index: int, results: list[str],
     *, previous_draft: str | None = None,

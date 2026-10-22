@@ -64,7 +64,7 @@ class UnboundedToolHttpExecutionTests(unittest.IsolatedAsyncioTestCase):
                 elapsed = 0.0
 
                 async def stream(*_args, **kwargs):
-                    self.assertIsNone(kwargs["deadline"])
+                    self.assertNotIn("deadline", kwargs)
                     started.set()
                     try:
                         await release.wait()
@@ -78,7 +78,7 @@ class UnboundedToolHttpExecutionTests(unittest.IsolatedAsyncioTestCase):
                     mock.patch.object(asyncio, "wait_for", side_effect=AssertionError("no generation deadline")),
                 ):
                     owner = asyncio.create_task(oa._stream_completion(
-                        "http://offline.invalid", {}, {}, None, 0, "offline",
+                        "http://offline.invalid", {}, {}, 0, "offline",
                     ))
                     await started.wait()
                     elapsed = 7201.0
@@ -105,13 +105,12 @@ class UnboundedToolHttpExecutionTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(config, "CONFIG_PATH", str(path)),
                 mock.patch.object(oa, "current_run", return_value=None),
                 mock.patch.object(oa, "_stream_completion", new_callable=mock.AsyncMock,
-                                  return_value=("verified", "", [])) as stream,
+                                  return_value=("verified", "", [])),
             ):
                 for backend in (LlamaBackend(), MetaModelApiBackend(), ZaiBackend()):
                     with self.subTest(backend=backend.name):
                         await backend._run_agent(SimpleNamespace(emit=lambda event: None), directory,
                                                  "synthetic request", "model-a", "full", False, 50)
-                        self.assertIsNone(stream.call_args.args[3])
                         self.assertFalse(hasattr(backend, "_socket_timeout"))
                         self.assertFalse(hasattr(backend, "_socket_timeout_setting"))
         for key in ("tool_timeout", "llama_socket_timeout", "meta_socket_timeout", "zai_socket_timeout"):

@@ -2950,7 +2950,7 @@ class BotPlatform(ABC):
         return os.path.splitext(self._platform_state_file_path("queue"))[0] + ".sqlite3"
 
     def _queue_store(self) -> QueueStore:
-        return QueueStore(self._queue_file_path(), self._platform_state_file_path("queue"))
+        return QueueStore(self._queue_file_path())
 
     def _read_queue_file(self) -> dict:
         return self._queue_store().read_entries()
@@ -4348,21 +4348,9 @@ class BotPlatform(ABC):
             logger.exception("Could not project committed schedule receipt user=%s schedule=%s; will retry",
                              uid, schedule_id)
 
-    async def _fire_schedule(
-        self, uid: str, sched: dict, *, workspace_path: str,
-    ) -> None:
-        admission = None
-        try:
-            admission = await self._admit_schedule(uid, sched, workspace_path=workspace_path)
-            if admission is not None:
-                await self._announce_schedule(uid, sched, admission)
-        finally:
-            if admission is not None:
-                self._wake_schedule(uid, admission)
-
     async def _admit_schedule(
         self, uid: str, sched: dict, *, workspace_path: str,
-        schedule_slot: str | None = None,
+        schedule_slot: str,
     ) -> tuple[str, int, bool] | None:
         command = sched.get("command", "")
         chat_id = sched.get("chat_id", "")
@@ -4374,8 +4362,7 @@ class BotPlatform(ABC):
             return None
         if not isinstance(workspace_path, str) or not workspace_path.strip():
             raise ValueError("Schedules require their source workspace")
-        occurrence = (ScheduledOccurrence(workspace_path, uid, sched["id"], schedule_slot)
-                      if schedule_slot is not None else None)
+        occurrence = ScheduledOccurrence(workspace_path, uid, sched["id"], schedule_slot)
         try:
             result = await self._admit_queue_entry(
                 uid, command, chat_id, generation, ephemeral=True,

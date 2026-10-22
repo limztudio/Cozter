@@ -119,13 +119,49 @@ class NativeStreamProgressTests(unittest.IsolatedAsyncioTestCase):
                     "arguments": {"command": "cmake --build build --parallel 2"}},
                 })
                 attach.assert_called_with(proc, command="cmake --build build --parallel 2")
-                event = {"type": "tool.execution_complete", "data": {"toolCallId": tool_id, "output": "OK"}}
+                event = {"type": "tool.execution_complete", "data": {"toolCallId": tool_id, "result": {"content": "OK"}}}
                 agent._note_native_progress(proc, event)
                 count = note.call_count
                 agent._note_native_progress(proc, event)
                 self.assertEqual(note.call_count, count)
             self.assertEqual(note.call_args_list,
                              [mock.call("OK"), mock.call("tool completed"), mock.call("OK"), mock.call("tool completed")])
+
+    def test_copilot_progress_rejects_retired_wrappers_and_tracks_distinct_shell_chunks(self):
+        proc = SimpleNamespace(pid=-1)
+        with (mock.patch.object(supervision, "note_output") as note,
+              mock.patch.object(supervision, "attach_process") as attach):
+            for event in (
+                {"type": "tool_use", "input": {"command": "retired command"}},
+                {"type": "tool.execution_start", "toolName": "retired tool"},
+                {"type": "assistant.message", "content": "retired text"},
+                {"type": "assistant.message", "data": {"text": "retired text"}},
+            ):
+                agent._note_native_progress(proc, event)
+            note.assert_not_called()
+            attach.assert_not_called()
+
+            agent._note_native_progress(proc, {
+                "type": "tool.execution_start", "data": {
+                    "toolCallId": "shell", "toolName": "shell",
+                    "arguments": {"fullCommandText": "build --verbose"},
+                },
+            })
+            attach.assert_called_once_with(proc, command="build --verbose")
+            for sequence in (0, 0, 1):
+                agent._note_native_progress(proc, {
+                    "type": "tool.shell_output", "data": {
+                        "toolCallId": "shell", "sequence": sequence, "text": "still building",
+                    },
+                })
+            agent._note_native_progress(proc, {
+                "type": "tool.execution_progress", "data": {
+                    "toolCallId": "shell", "progressMessage": "checking output",
+                },
+            })
+            self.assertEqual(note.call_args_list, [
+                mock.call("still building"), mock.call("still building"), mock.call("checking output"),
+            ])
 
     async def test_failed_exit_keeps_partial_reply_and_drained_stderr_after_cleanup(self):
         stdout = asyncio.StreamReader()
