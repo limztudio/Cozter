@@ -360,6 +360,42 @@ class AntigravityCliBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.record.get("native_session_id"), native_id)
         self.reap.assert_awaited_once_with(process)
 
+    async def test_completed_final_response_step_ignores_stale_trajectory_error_unless_post_response_step_follows(self):
+        native_id = "6ca6c4ef-cc6e-4c0b-a11a-5f93bb7708f3"
+        recovered = AgentResult()
+        self.backend.parse_event({"event": "init", "conversation_id": native_id, "init": {}}, recovered)
+        self.backend.parse_event({"event": "step_update", "step_update": {
+            "conversation_id": native_id, "step_type": "agent_response", "state": "DONE",
+            "text_delta": "DONE\n\nAll verification complete.",
+        }}, recovered)
+        self.backend.parse_event({"event": "result", "result": {
+            "conversation_id": native_id, "status": "ERROR",
+            "response": "DONE\n\nAll verification complete.",
+            "error": "The stream was interrupted. Please continue the task you were working on.",
+        }}, recovered)
+        self.backend.finalize_result(recovered)
+        self.assertIsNone(recovered.error)
+        self.assertEqual(recovered.text, "DONE\n\nAll verification complete.")
+        self.assertEqual(
+            getattr(recovered, "_antigravity_stale_error", None),
+            "The stream was interrupted. Please continue the task you were working on.",
+        )
+
+        failed_after_tool = AgentResult()
+        self.backend.parse_event({"event": "step_update", "step_update": {
+            "conversation_id": native_id, "step_type": "agent_response", "state": "DONE",
+            "text_delta": "Interim plan",
+        }}, failed_after_tool)
+        self.backend.parse_event({"event": "step_update", "step_update": {
+            "conversation_id": native_id, "step_type": "tool", "state": "DONE", "tool_name": "read_file",
+        }}, failed_after_tool)
+        self.backend.parse_event({"event": "result", "result": {
+            "conversation_id": native_id, "status": "ERROR", "response": "Interim plan",
+            "error": "API error (attempt 7): request failed: stream idle timeout (5m0s): context deadline exceeded",
+        }}, failed_after_tool)
+        self.backend.finalize_result(failed_after_tool)
+        self.assertIn("stream idle timeout", failed_after_tool.error)
+
 
 class AntigravityExecutableTests(unittest.TestCase):
     def test_canonical_install_fills_stale_path_but_never_overrides_resolved_cli(self):

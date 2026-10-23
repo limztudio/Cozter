@@ -1772,6 +1772,19 @@ def _http_worker_policy_status(
                   if accepted else None)
 
 
+def _transient_native_stream_error(error: str | None) -> bool:
+    """Recognize transient native provider SSE stream drops and idle timeouts."""
+    if not isinstance(error, str) or not error.strip():
+        return False
+    normalized = " ".join(error.casefold().split())
+    return any(marker in normalized for marker in (
+        "the stream was interrupted",
+        "connection to the agent was interrupted before the response finished",
+        "stream idle timeout",
+        "stream reading error",
+    ))
+
+
 async def _drive_backend(
     backend,
     workspace_path: str,
@@ -1812,6 +1825,49 @@ async def _drive_backend(
             while True:
                 try:
                     result, restarting = await attempt(prompt_text, delivery, delivered_request)
+                    if (not restarting and state is not None and backend.name in _NATIVE_BACKENDS
+                            and _transient_native_stream_error(result.error)):
+                        carry_forward_turn_output(result, retained, workspace_path)
+                        if result.text.strip():
+                            retained.text = result.text
+                        recoveries += 1
+                        if _take_pending_injections(inject_queue, injected):
+                            return retained, True
+                        stream_error = (result.error or "").strip()[:8000]
+                        guidance = (
+                            "[Automatic stream recovery: the previous native CLI stream ended with a "
+                            "transient interruption or idle timeout after partial progress. Inspect the "
+                            "current workspace and preserved native conversation, then continue and "
+                            "finish the SAME job. Preserve completed work and valid evidence; check "
+                            "commands with unknown outcomes before repeating them.]\n" + stream_error
+                        )
+                        if recoveries >= 3:
+                            retained.error = (
+                                "Repeated native stream interruptions require another recovery attempt: "
+                                + stream_error
+                            )
+                            retained.continuation_reason = "prerequisite"
+                            retained.continue_instruction = guidance
+                            retained.blocked_reason = retained.error
+                            return retained, False
+                        if state.get("native_tools_started") and execution_state.native_session_id(
+                            state.get("native_session_id")
+                        ) is not None:
+                            if delivery is not None:
+                                delivery = dataclasses.replace(
+                                    delivery, turn_instructions="\n\n".join(filter(None, (
+                                        turn_instructions, guidance,
+                                    ))),
+                                )
+                                prompt_text = delivery.render(state)
+                                delivered_request = delivery.request_for(state)
+                            else:
+                                prompt_text = full_prompt + "\n\n" + guidance
+                        logger.warning(
+                            "%s continuing its saved native session after transient stream error: %s",
+                            backend.name, stream_error,
+                        )
+                        continue
                     execution = execution_state.current_execution()
                     if (not restarting and not result.error and result.continuation_reason is None
                             and state is not None and delivery is not None and execution is not None):
@@ -2133,6 +2189,10 @@ async def _drive_backend_process(
 
     # A partial reply never turns a failed run green.
     # Keep provider errors more specific than a generic exit status.
+    stale_error = getattr(result, "_antigravity_stale_error", None)
+    if (isinstance(stale_error, str) and stale_error.strip() and not result.error
+            and (proc.returncode != 0 or (stderr and "[AGENT_ERROR]" in stderr))):
+        record_backend_error(result, stale_error)
     if proc.returncode != 0 and not result.error:
         msg = f"{backend.name} exited with code {proc.returncode}"
         if stderr:

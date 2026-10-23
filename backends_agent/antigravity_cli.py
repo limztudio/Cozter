@@ -311,7 +311,9 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
                 if isinstance(text, str) and text:
                     result.text += text
                     result.events.append(ChatEvent(kind="text", content=text))
+                setattr(result, "_antigravity_response_done", step.get("state") == "DONE" and bool(result.text.strip()))
             elif step.get("step_type") == "tool":
+                setattr(result, "_antigravity_response_done", False)
                 info = step.get("tool_info")
                 if not isinstance(info, dict):
                     info = {}
@@ -322,6 +324,8 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
                 output = error.get("message") if isinstance(error, dict) else info.get("output")
                 if isinstance(output, str) and output:
                     result.events.append(ChatEvent(kind="tool", content=truncate_status_text(output)))
+            else:
+                setattr(result, "_antigravity_response_done", False)
         elif kind == "result":
             terminal = event.get("result")
             if not isinstance(terminal, dict):
@@ -348,8 +352,14 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
                 error = terminal.get("error")
                 if not isinstance(error, str) or not error.strip():
                     error = f"Antigravity CLI ended with status {terminal.get('status') or 'unknown'}"
-                record_missing_native_session(error)
-                record_backend_error(result, error)
+                if (getattr(result, "_antigravity_response_done", False)
+                        and isinstance(response, str) and response.strip()):
+                    setattr(result, "_antigravity_stale_error", error)
+                else:
+                    record_missing_native_session(error)
+                    record_backend_error(result, error)
+            else:
+                setattr(result, "_antigravity_stale_error", None)
 
     def finalize_result(self, result: AgentResult) -> None:
         record = execution_state.current_run()

@@ -517,3 +517,90 @@ class AntigravityNativeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(later["command"][later["command"].index("--conversation") + 1], replacement["native_id"])
         self.assertNotIn("HISTORICAL-REQUEST-MARKER", later["prompt"])
         self.assertNotIn("RESUME-MISSING-CONVERSATION-MARKER", later["prompt"])
+
+    async def test_stale_trajectory_error_on_clean_completed_turn_succeeds_while_nonzero_exit_fails(self):
+        sid = self._conversation()
+
+        async def clean_recovered_events(process, **kwargs):
+            async for event in self._events(process, **kwargs):
+                if event.get("event") == "result":
+                    event = {
+                        "event": "result",
+                        "result": {
+                            **event["result"],
+                            "status": "ERROR",
+                            "error": "The stream was interrupted. Please continue the task you were working on.",
+                        },
+                    }
+                yield event
+
+        with mock.patch.object(agent, "iter_process_json_events", side_effect=clean_recovered_events):
+            result = await self._turn("antigravity_cli", "RECOVERED-MID-TURN-ERROR-MARKER", sid=sid)
+
+        self.assertFalse(result.error)
+        self.assertEqual(result.text, "ANTIGRAVITY-ANSWER-MARKER-1")
+        self.assertEqual(len(self.launches), 1)
+
+        async def nonzero_error_events(process, **kwargs):
+            async for event in clean_recovered_events(process, **kwargs):
+                if event.get("event") == "result":
+                    event["result"]["error"] = "Provider rejected final commit"
+                yield event
+            process.returncode = 1
+
+        with mock.patch.object(agent, "iter_process_json_events", side_effect=nonzero_error_events):
+            failed = await self._turn("antigravity_cli", "GENUINE-EXIT-ERROR-MARKER", sid=sid)
+
+        self.assertTrue(failed.error)
+        self.assertIn("Provider rejected final commit", failed.error)
+        self.assertEqual(len(self.launches), 2)
+
+    async def test_transient_stream_timeout_recovers_in_same_native_session_and_defers_when_repeated(self):
+        sid = self._conversation()
+        failures = [
+            {
+                "error": "agent executor error: generating and executing: request failed: stream idle timeout (5m0s): context deadline exceeded",
+                "after_activity": True,
+            },
+            None,
+        ]
+
+        async def recover_once_events(process, **kwargs):
+            process.fixture_launch["failure"] = failures.pop(0)
+            async for event in self._events(process, **kwargs):
+                yield event
+
+        with mock.patch.object(agent, "iter_process_json_events", side_effect=recover_once_events):
+            recovered = await self._turn("flexible", "TRANSIENT-TIMEOUT-RECOVERY-MARKER", sid=sid)
+
+        self.assertFalse(recovered.error)
+        self.assertEqual(len(self.launches), 2)
+        first, second = self.launches
+        self.assertEqual(first["native_id"], second["native_id"])
+        self.assertEqual(second["command"][second["command"].index("--conversation") + 1], first["native_id"])
+        self.assertIn("Automatic stream recovery", second["prompt"])
+        self.assertIn("Continue the current job from this native conversation", second["prompt"])
+        self.assertNotIn("TRANSIENT-TIMEOUT-RECOVERY-MARKER", second["prompt"])
+
+        async def always_timeout_events(process, **kwargs):
+            process.fixture_launch["failure"] = {
+                "error": "API error (attempt 7): request failed: stream idle timeout (5m0s): context deadline exceeded",
+                "after_activity": True,
+            }
+            async for event in self._events(process, **kwargs):
+                yield event
+
+        with mock.patch.object(agent, "iter_process_json_events", side_effect=always_timeout_events):
+            deferred = await agent.run(
+                "REPEATED-TIMEOUT-JOB-MARKER", self.ws, 7, model="unused-flexible-model",
+                approval="full", backend_name="flexible", summary_backend_name="codex",
+                summary_model="offline-summary", session_id=sid, execution_id="agy-repeated-timeout-job",
+            )
+
+        self.assertEqual(deferred.continuation_reason, "prerequisite")
+        self.assertIn("stream idle timeout", deferred.error)
+        self.assertEqual(len(self.launches), 5)
+        async with execution_state.execution_scope(self.ws, "agy-repeated-timeout-job", "REPEATED-TIMEOUT-JOB-MARKER"):
+            plan = await execution_state.record("flexible_plan")
+            self.assertTrue(plan.get("active"))
+            self.assertEqual(plan.get("cursor"), 0)
