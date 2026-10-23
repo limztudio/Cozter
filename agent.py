@@ -1529,7 +1529,9 @@ def _note_native_progress(proc: Any, event: dict) -> None:
             if isinstance(command, str) and command.strip():
                 supervision.attach_process(proc, command=command[:4000])
             identity = f"{step.get('conversation_id', '')}:{step.get('step_index', '')}"
-            note(f"agy-tool-output:{identity}", info.get("output"))
+            error = info.get("error")
+            output = error.get("message") if isinstance(error, dict) else info.get("output")
+            note(f"agy-tool-output:{identity}", output)
             if step.get("state") == "DONE":
                 note(f"agy-tool-complete:{identity}", "tool completed")
         return
@@ -1826,10 +1828,13 @@ async def _drive_backend(
                 try:
                     result, restarting = await attempt(prompt_text, delivery, delivered_request)
                     if (not restarting and state is not None and backend.name in _NATIVE_BACKENDS
+                            and state.get("native_tools_started")
+                            and execution_state.native_session_id(state.get("native_session_id")) is not None
                             and _transient_native_stream_error(result.error)):
-                        carry_forward_turn_output(result, retained, workspace_path)
-                        if result.text.strip():
-                            retained.text = result.text
+                        step_retained = AgentResult()
+                        carry_forward_turn_output(result, step_retained, workspace_path)
+                        carry_forward_turn_output(retained, step_retained, workspace_path)
+                        retained = step_retained
                         recoveries += 1
                         if _take_pending_injections(inject_queue, injected):
                             return retained, True
@@ -1850,19 +1855,16 @@ async def _drive_backend(
                             retained.continue_instruction = guidance
                             retained.blocked_reason = retained.error
                             return retained, False
-                        if state.get("native_tools_started") and execution_state.native_session_id(
-                            state.get("native_session_id")
-                        ) is not None:
-                            if delivery is not None:
-                                delivery = dataclasses.replace(
-                                    delivery, turn_instructions="\n\n".join(filter(None, (
-                                        turn_instructions, guidance,
-                                    ))),
-                                )
-                                prompt_text = delivery.render(state)
-                                delivered_request = delivery.request_for(state)
-                            else:
-                                prompt_text = full_prompt + "\n\n" + guidance
+                        if delivery is not None:
+                            delivery = dataclasses.replace(
+                                delivery, turn_instructions="\n\n".join(filter(None, (
+                                    turn_instructions, guidance,
+                                ))),
+                            )
+                            prompt_text = delivery.render(state)
+                            delivered_request = delivery.request_for(state)
+                        else:
+                            prompt_text = full_prompt + "\n\n" + guidance
                         logger.warning(
                             "%s continuing its saved native session after transient stream error: %s",
                             backend.name, stream_error,
@@ -1875,7 +1877,10 @@ async def _drive_backend(
                     carry_forward_turn_output(retained, result, workspace_path)
                     return result, restarting
                 except _NativeHangRecovered as exc:
-                    carry_forward_turn_output(exc.partial, retained, workspace_path)
+                    step_retained = AgentResult()
+                    carry_forward_turn_output(exc.partial, step_retained, workspace_path)
+                    carry_forward_turn_output(retained, step_retained, workspace_path)
+                    retained = step_retained
                     recoveries += 1
                     if _take_pending_injections(inject_queue, injected):
                         return retained, True

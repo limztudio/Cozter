@@ -365,8 +365,12 @@ class AntigravityCliBackendTests(unittest.IsolatedAsyncioTestCase):
         recovered = AgentResult()
         self.backend.parse_event({"event": "init", "conversation_id": native_id, "init": {}}, recovered)
         self.backend.parse_event({"event": "step_update", "step_update": {
-            "conversation_id": native_id, "step_type": "agent_response", "state": "DONE",
+            "conversation_id": native_id, "step_index": 3, "step_type": "agent_response", "state": "ACTIVE",
             "text_delta": "DONE\n\nAll verification complete.",
+        }}, recovered)
+        self.backend.parse_event({"event": "step_update", "step_update": {
+            "conversation_id": native_id, "step_index": 3, "step_type": "agent_response", "state": "DONE",
+            "text_delta": "\n",
         }}, recovered)
         self.backend.parse_event({"event": "result", "result": {
             "conversation_id": native_id, "status": "ERROR",
@@ -383,11 +387,15 @@ class AntigravityCliBackendTests(unittest.IsolatedAsyncioTestCase):
 
         failed_after_tool = AgentResult()
         self.backend.parse_event({"event": "step_update", "step_update": {
-            "conversation_id": native_id, "step_type": "agent_response", "state": "DONE",
+            "conversation_id": native_id, "step_index": 1, "step_type": "agent_response", "state": "DONE",
             "text_delta": "Interim plan",
         }}, failed_after_tool)
         self.backend.parse_event({"event": "step_update", "step_update": {
-            "conversation_id": native_id, "step_type": "tool", "state": "DONE", "tool_name": "read_file",
+            "conversation_id": native_id, "step_index": 2, "step_type": "tool", "state": "DONE", "tool_name": "read_file",
+        }}, failed_after_tool)
+        self.backend.parse_event({"event": "step_update", "step_update": {
+            "conversation_id": native_id, "step_index": 3, "step_type": "agent_response", "state": "DONE",
+            "text_delta": "",
         }}, failed_after_tool)
         self.backend.parse_event({"event": "result", "result": {
             "conversation_id": native_id, "status": "ERROR", "response": "Interim plan",

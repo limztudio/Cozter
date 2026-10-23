@@ -599,6 +599,7 @@ class AntigravityNativeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(deferred.continuation_reason, "prerequisite")
         self.assertIn("stream idle timeout", deferred.error)
+        self.assertNotIn("Error:", deferred.text)
         self.assertEqual(len(self.launches), 5)
         async with execution_state.execution_scope(self.ws, "agy-repeated-timeout-job", "REPEATED-TIMEOUT-JOB-MARKER"):
             plan = await execution_state.record("flexible_plan")

@@ -201,8 +201,8 @@ class NativeHangRecoveryTests(unittest.IsolatedAsyncioTestCase):
         started = set()
         role_by_record = {}
         attempts = {}
-        healthy_task = None
-        calls = 0
+        tasks_by_key = {}
+        diagnosed_keys = set()
 
         async def events(process, **_kwargs):
             launch = process.fixture_launch
@@ -225,14 +225,14 @@ class NativeHangRecoveryTests(unittest.IsolatedAsyncioTestCase):
             process.returncode = 0
 
         async def diagnose(task, ticket):
-            nonlocal calls, healthy_task
-            calls += 1
-            index = calls
-            if index == 2:
-                healthy_task = task
-            if index != 1:
-                return await self._wait(task, ticket)
+            key = execution_state.current_run().key
+            tasks_by_key[key] = task
             await both_started.wait()
+            if role_by_record[key] != 1 or key in diagnosed_keys:
+                return await self._wait(task, ticket)
+            diagnosed_keys.add(key)
+            healthy_key = next(k for k, role in role_by_record.items() if role == 2)
+            healthy_task = tasks_by_key[healthy_key]
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             self.assertIsNotNone(healthy_task)

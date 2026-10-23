@@ -311,8 +311,21 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
                 if isinstance(text, str) and text:
                     result.text += text
                     result.events.append(ChatEvent(kind="text", content=text))
-                setattr(result, "_antigravity_response_done", step.get("state") == "DONE" and bool(result.text.strip()))
+                step_index = step.get("step_index")
+                prev_index = getattr(result, "_antigravity_step_index", None)
+                if (getattr(result, "_antigravity_response_done", False)
+                        or (step_index is not None and prev_index is not None and step_index != prev_index)):
+                    step_has_text = False
+                else:
+                    step_has_text = getattr(result, "_antigravity_step_has_text", False)
+                if isinstance(text, str) and text.strip():
+                    step_has_text = True
+                setattr(result, "_antigravity_step_index", step_index)
+                setattr(result, "_antigravity_step_has_text", step_has_text)
+                setattr(result, "_antigravity_response_done", step.get("state") == "DONE" and step_has_text)
             elif step.get("step_type") == "tool":
+                setattr(result, "_antigravity_step_index", None)
+                setattr(result, "_antigravity_step_has_text", False)
                 setattr(result, "_antigravity_response_done", False)
                 info = step.get("tool_info")
                 if not isinstance(info, dict):
@@ -325,6 +338,8 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
                 if isinstance(output, str) and output:
                     result.events.append(ChatEvent(kind="tool", content=truncate_status_text(output)))
             else:
+                setattr(result, "_antigravity_step_index", None)
+                setattr(result, "_antigravity_step_has_text", False)
                 setattr(result, "_antigravity_response_done", False)
         elif kind == "result":
             terminal = event.get("result")
@@ -348,11 +363,15 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
             usage = terminal.get("usage")
             if isinstance(usage, dict):
                 result.usage = dict(usage)
+            response_done = getattr(result, "_antigravity_response_done", False)
+            setattr(result, "_antigravity_step_index", None)
+            setattr(result, "_antigravity_step_has_text", False)
+            setattr(result, "_antigravity_response_done", False)
             if terminal.get("status") != "SUCCESS":
                 error = terminal.get("error")
                 if not isinstance(error, str) or not error.strip():
                     error = f"Antigravity CLI ended with status {terminal.get('status') or 'unknown'}"
-                if (getattr(result, "_antigravity_response_done", False)
+                if (result.error is None and response_done
                         and isinstance(response, str) and response.strip()):
                     setattr(result, "_antigravity_stale_error", error)
                 else:
