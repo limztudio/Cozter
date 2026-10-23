@@ -15,6 +15,13 @@ class ContextLengthError(RuntimeError):
         self.window = window
 
 
+_CONTEXT_WINDOW_RE = re.compile(
+    r"(?:context window(?: of)?|maximum context length(?: is)?|context limit(?: is)?)"
+    r"\s*([0-9][0-9,_]*)",
+    re.IGNORECASE,
+)
+
+
 def context_error(error: object, message: str) -> ContextLengthError | None:
     if not isinstance(error, dict):
         return None
@@ -32,10 +39,7 @@ def context_error(error: object, message: str) -> ContextLengthError | None:
             break
     if window is None:
         detail = error.get("message")
-        match = re.search(
-            r"(?:context window(?: of)?|maximum context length(?: is)?|context limit(?: is)?)"
-            r"\s*([0-9][0-9,_]*)", detail, re.IGNORECASE,
-        ) if isinstance(detail, str) else None
+        match = _CONTEXT_WINDOW_RE.search(detail) if isinstance(detail, str) else None
         if match:
             try:
                 window = int(match.group(1).replace(",", "").replace("_", "")) or None
@@ -136,6 +140,9 @@ def project_payload(
         removed.update(range(start, end))
         removed_bytes += sum(message_sizes[start:end])
         ranges.append(f"{start - 1}:{end - 2}")
+        base_bytes = total_bytes - removed_bytes - len(removed)
+        if base_bytes >= budget:
+            continue
         notice = {
             "role": "assistant",
             "content": (
@@ -147,7 +154,7 @@ def project_payload(
                 "unknown outcomes require verification. This is not full evidence.]"
             ),
         }
-        candidate_bytes = total_bytes - removed_bytes - len(removed) + payload_bytes(notice) + 1
+        candidate_bytes = base_bytes + payload_bytes(notice) + 1
         if candidate_bytes <= budget:
             visible = []
             inserted = False

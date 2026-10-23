@@ -77,13 +77,18 @@ def _model_family(model: str) -> str:
     return base if suffix in _EFFORTS else model
 
 
+_MODEL_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]*")
+
+
 def _parse_models(output: bytes) -> tuple[str, ...]:
-    models = []
+    models: list[str] = []
+    seen: set[str] = set()
     for line in output.decode("utf-8", errors="replace").splitlines():
         slug, separator, label = line.partition("\t")
         if (separator and label.strip() and slug.casefold() not in {"model", "slug", "id"}
-                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", slug) and slug not in models):
+                and _MODEL_SLUG_RE.fullmatch(slug) and slug not in seen):
             models.append(slug)
+            seen.add(slug)
     return tuple(models)
 
 

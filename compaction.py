@@ -164,8 +164,12 @@ def _bounded_long_term(
             " items shown and carry the rest forward unchanged;"
             " say PARTIAL + remainder when coverage is unclear]"
         )
-        while lines and len("\n".join([marker, *lines])) > budget:
-            lines.pop(0)
+        total_chars = len(marker) + sum(len(line) + 1 for line in lines)
+        start = 0
+        while start < len(lines) and total_chars > budget:
+            total_chars -= len(lines[start]) + 1
+            start += 1
+        lines = lines[start:]
         shown = len(lines)
         if budget < len(marker):
             marker = marker[:max(0, budget - 1)] + ("…" if budget else "")

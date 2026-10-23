@@ -658,6 +658,10 @@ _INSTRUCTION_QUOTE_DELIMITERS = {
 }
 
 
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
+_PLEASE_PREFIX_RE = re.compile(r"^Please\s+")
+
+
 def instruction_identity(instruction: str) -> str:
     """Normalize formatting, preserving case and whitespace in quoted targets.
 
@@ -696,14 +700,14 @@ def instruction_identity(instruction: str) -> str:
             else:
                 failed_until[quote] = len(instruction)
         if end is not None:
-            pieces.append(re.sub(r"\s+", " ", instruction[plain_start:start]))
+            pieces.append(_WHITESPACE_RUN_RE.sub(" ", instruction[plain_start:start]))
             pieces.append(instruction[start:end])
             plain_start = search_from = end
-    pieces.append(re.sub(r"\s+", " ", instruction[plain_start:]))
+    pieces.append(_WHITESPACE_RUN_RE.sub(" ", instruction[plain_start:]))
     normalized = "".join(pieces).strip()
     # A polite request prefix does not create another obligation. Everything
     # identifying a target or action remains case-sensitive and unchanged.
-    return re.sub(r"^Please\s+", "", normalized)
+    return _PLEASE_PREFIX_RE.sub("", normalized)
 
 
 def task_identity(task: Subtask) -> str:

@@ -57,8 +57,16 @@ def _within(path: Path, root: Path) -> bool:
         return False
 
 
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_FRONTMATTER_FIELD_RE = re.compile(r"(name|description)\s*:\s*(.*)")
+_HEADING_RE = re.compile(r"^#{1,6}\s+\S")
+_BRIDGE_RELPATH_RE = re.compile(
+    r"\.(?:agents|claude)/skills/cozter-[a-z0-9-]+/SKILL\.md",
+)
+
+
 def _slug(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")[:40] or "skill"
+    return _SLUG_RE.sub("-", value.lower()).strip("-")[:40] or "skill"
 
 
 def _digest(value: bytes) -> str:
@@ -68,7 +76,8 @@ def _digest(value: bytes) -> str:
 def _read_utf8(path: Path, root: Path) -> tuple[str, str, Path]:
     """Read one bounded regular file whose resolved target stays in its root."""
     resolved = _canonical(path)
-    if len(str(resolved)) > 4_096 or not _within(resolved, _canonical(root)):
+    canonical_root = _canonical(root)
+    if len(str(resolved)) > 4_096 or not _within(resolved, canonical_root):
         raise ValueError("skill path leaves its declared root")
     if not stat.S_ISREG(resolved.stat().st_mode):
         raise ValueError("skill source is not a regular file")
@@ -109,7 +118,7 @@ def _metadata(text: str, fallback: str) -> tuple[str, str]:
             if line.strip() == "---":
                 body = lines[index + 1:]
                 break
-            match = re.fullmatch(r"(name|description)\s*:\s*(.*)", line)
+            match = _FRONTMATTER_FIELD_RE.fullmatch(line)
             if match:
                 raw = match[2].strip()
                 if raw in {"|", "|-", "|+", ">", ">-", ">+"}:
@@ -122,7 +131,7 @@ def _metadata(text: str, fallback: str) -> tuple[str, str]:
                 else:
                     fields[match[1]] = _scalar(raw)
     heading = next((line.lstrip("#").strip() for line in body
-                    if re.match(r"^#{1,6}\s+\S", line)), "")
+                    if _HEADING_RE.match(line)), "")
     paragraph: list[str] = []
     for line in body:
         if not line.strip():
@@ -212,9 +221,11 @@ def discover(workspace_path: str) -> SkillCatalog:
         except (OSError, UnicodeError, ValueError) as exc:
             warn(f"Skipped skill {path}: {exc}")
 
-    def children(directory: Path, root: Path) -> list[Path]:
+    def children(
+        directory: Path, canonical_root: Path, resolved_dir: Path | None = None,
+    ) -> list[Path]:
         nonlocal scanned
-        if not _within(_canonical(directory), _canonical(root)):
+        if not _within(resolved_dir or _canonical(directory), canonical_root):
             warn(f"Skipped linked skill directory outside its root: {directory}")
             return []
         try:
@@ -235,7 +246,8 @@ def discover(workspace_path: str) -> SkillCatalog:
 
     try:
         flat = Path(workspace.workspace_state_path(str(base), "skills"))
-        for path in children(flat, flat):
+        canonical_flat = _canonical(flat)
+        for path in children(flat, canonical_flat, canonical_flat):
             if path.suffix.lower() == ".md" and path.is_file():
                 add(path, flat, "workspace")
     except ValueError as exc:
@@ -254,7 +266,7 @@ def discover(workspace_path: str) -> SkillCatalog:
             if resolved in visited:
                 continue
             visited.add(resolved)
-            paths = children(directory, root)
+            paths = children(directory, canonical_root, resolved)
             manifests = [path for path in paths if path.name.lower() == "skill.md" and path.is_file()]
             if manifests:
                 for path in manifests:
@@ -321,11 +333,14 @@ def catalog_prompt(catalog: SkillCatalog, *, cli: bool = False) -> str:
                  "read_skill is also available as python -m Cozter.agent_tools.builtin.read_skill." if cli else
                  "Use list_skills to browse and read_skill with the exact id to load instructions.")
     selected = 0
+    used_chars = sum(len(item) + 1 for item in lines)
+    budget = MAX_CATALOG_CHARS - 1_400
     for skill in catalog.entries:
         line = json.dumps(_row(skill, path=cli), ensure_ascii=False)
-        if sum(len(item) + 1 for item in lines) + len(line) > MAX_CATALOG_CHARS - 1_400:
+        if used_chars + len(line) > budget:
             break
         lines.append(line)
+        used_chars += len(line) + 1
         selected += 1
     if selected < len(catalog.entries):
         pager = ("python -m Cozter.agent_tools.builtin.list_skills "
@@ -348,21 +363,27 @@ def list_skills(workspace_path: str, *, offset: int = 0, max_results: int = 50) 
     _integer(max_results, "max_results", 1, 200)
     catalog = discover(workspace_path)
     warnings: list[str] = []
+    warnings_len = 2
     for warning in catalog.warnings:
-        if len(json.dumps([*warnings, warning], ensure_ascii=False)) > 12_000:
+        added_len = len(json.dumps(warning, ensure_ascii=False)) + (2 if warnings else 0)
+        if warnings_len + added_len > 12_000:
             break
         warnings.append(warning)
+        warnings_len += added_len
     if len(warnings) < len(catalog.warnings):
         warnings.append(f"{len(catalog.warnings) - len(warnings)} further warnings omitted.")
+    rows: list[dict] = []
     result = {"catalog_revision": _catalog_revision(catalog), "total": len(catalog.entries),
-              "offset": offset, "skills": [], "next_offset": None, "warnings": warnings}
-    rows = []
+              "offset": offset, "skills": rows, "next_offset": None, "warnings": warnings}
+    result_len = len(json.dumps(result, ensure_ascii=False, indent=2))
     for skill in catalog.entries[offset:offset + max_results]:
-        rows.append(_row(skill, path=True))
-        result["skills"] = rows
-        if len(json.dumps(result, ensure_ascii=False, indent=2)) > MAX_RESPONSE_CHARS - 100:
-            rows.pop()
+        row = _row(skill, path=True)
+        row_json = json.dumps(row, ensure_ascii=False, indent=2)
+        added_len = len(row_json) + 4 * (row_json.count("\n") + 1) + (4 if not rows else 2)
+        if result_len + added_len > MAX_RESPONSE_CHARS - 100:
             break
+        rows.append(row)
+        result_len += added_len
     end = offset + len(rows)
     result["next_offset"] = end if end < len(catalog.entries) else None
     return json.dumps(result, ensure_ascii=False, indent=2)
@@ -482,9 +503,7 @@ def _sync_bridges(catalog: SkillCatalog) -> SkillCatalog:
         kept: dict[str, str] = {}
         for relative in dict.fromkeys([*desired, *old]):
             try:
-                if (not isinstance(relative, str) or not re.fullmatch(
-                    r"\.(?:agents|claude)/skills/cozter-[a-z0-9-]+/SKILL\.md", relative,
-                )):
+                if not isinstance(relative, str) or not _BRIDGE_RELPATH_RE.fullmatch(relative):
                     raise ValueError("manifest contains an invalid bridge path")
                 target = _target(base, relative)
                 existing = target.read_bytes() if target.exists() and target.stat().st_size <= MAX_SKILL_BYTES else None

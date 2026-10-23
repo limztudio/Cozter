@@ -332,11 +332,21 @@ async def _run_with_stage_timing(
         )
 
 
+_TERMINAL_HTTP_STATUS_RE = re.compile(
+    r"\bHTTP\s*(?:status\s*)?(?:401|403|429)\b", re.IGNORECASE,
+)
+_HTTP_401_RE = re.compile(r"\bHTTP\s*(?:status\s*)?401\b", re.IGNORECASE)
+_MONTHLY_SPEND_LIMIT_RE = re.compile(
+    r"\b(?:hit|reached|exceeded)\s+(?:(?:your|the|a)\s+)?monthly\s+spend(?:ing)?\s+limit\b"
+    r"|\bmonthly\s+spend(?:ing)?\s+limit\s+(?:(?:has\s+been|was|is)\s+)?(?:hit|reached|exceeded)\b",
+)
+
+
 def _terminal_provider_error(error: str) -> bool:
     """Recognize explicit account/auth failures and Cozter's refusal stop."""
     if _account_provider_unavailable(error):
         return True
-    if re.search(r"\bHTTP\s*(?:status\s*)?(?:401|403|429)\b", error, re.IGNORECASE):
+    if _TERMINAL_HTTP_STATUS_RE.search(error):
         return True
     normalized = error.casefold().replace("_", " ").replace("-", " ")
     return any(marker in normalized for marker in (
@@ -353,14 +363,10 @@ def _account_provider_unavailable(error: str) -> bool:
     403 can depend on the task. Only explicit exhausted limits or failed
     authentication justify suppressing another launch on the same model.
     """
-    if re.search(r"\bHTTP\s*(?:status\s*)?401\b", error, re.IGNORECASE):
+    if _HTTP_401_RE.search(error):
         return True
     normalized = error.casefold().replace("_", " ").replace("-", " ")
-    if re.search(
-        r"\b(?:hit|reached|exceeded)\s+(?:(?:your|the|a)\s+)?monthly\s+spend(?:ing)?\s+limit\b"
-        r"|\bmonthly\s+spend(?:ing)?\s+limit\s+(?:(?:has\s+been|was|is)\s+)?(?:hit|reached|exceeded)\b",
-        normalized,
-    ):
+    if _MONTHLY_SPEND_LIMIT_RE.search(normalized):
         return True
     return any(marker in normalized for marker in (
         "usage limit reached", "usage limit exceeded", "reached your usage limit",
@@ -1343,8 +1349,8 @@ def _build_contextual_prompt(
             [len(natural) for _render, natural in descriptors], context_budget,
         )
         history_parts = [
-            render(quota)
-            for (render, _natural), quota in zip(descriptors, quotas, strict=True)
+            natural if quota >= len(natural) else render(quota)
+            for (render, natural), quota in zip(descriptors, quotas, strict=True)
             if quota
         ]
         history_parts = [part for part in history_parts if part]
@@ -1635,7 +1641,11 @@ def _native_turn_prompt(
         coordinate = str(start + index)
         digest = marks[coordinate]
         text = session.format_msg_line(message)
-        complete = text == session.format_msg_line(message, cap=None)
+        content = message.get("content")
+        complete = (
+            isinstance(content, str) and len(content) <= session.MSG_CONTENT_MAX
+            or text == session.format_msg_line(message, cap=None)
+        )
         if not native_prompt.message_is_known_from_ledger(
             ledger, coordinate, digest, text,
         ):
@@ -1647,14 +1657,18 @@ def _native_turn_prompt(
             "Long-term Memory", memory, lambda item: f"- {item}", limit)),
         ("summary", lambda limit: _bounded_context_block("Session Summary", summary, limit)),
     ]
+    natural_sections = [render(None) for _, render in descriptors]
     known_sections = ledger.get("sections", {})
     if not isinstance(known_sections, dict):
         known_sections = {}
     known_full_sections = {
-        name for name, render in descriptors
-        if known_sections.get(name) == json_digest([render(None), False])
+        name for (name, _), natural in zip(descriptors, natural_sections, strict=True)
+        if known_sections.get(name) == json_digest([natural, False])
     }
-    lengths = [0 if name in known_full_sections else len(render(None)) for name, render in descriptors]
+    lengths = [
+        0 if name in known_full_sections else len(natural)
+        for (name, _), natural in zip(descriptors, natural_sections, strict=True)
+    ]
     lengths.append(sum(len(text) + 1 for _, _, text, _ in history))
     execution = execution_state.current_execution()
     request_identity = execution.execution_id if execution is not None else None
@@ -1669,9 +1683,12 @@ def _native_turn_prompt(
     if skills_catalog:
         sections["skills catalog"] = skills_catalog
     partial_sections: set[str] = set()
-    for index, (name, render) in enumerate(descriptors):
-        natural = render(None)
-        excerpt = natural if name in known_full_sections else render(quotas[index])
+    for index, ((name, render), natural) in enumerate(zip(descriptors, natural_sections, strict=True)):
+        excerpt = (
+            natural
+            if name in known_full_sections or quotas[index] >= len(natural)
+            else render(quotas[index])
+        )
         if natural and excerpt != natural:
             partial_sections.add(name)
             if not excerpt:
@@ -1824,6 +1841,36 @@ async def _drive_backend(
             recoveries = 0
             retained = AgentResult()
             turn_instructions = delivery.turn_instructions if delivery is not None else ""
+
+            def recover_attempt(
+                partial: AgentResult, guidance: str, deferred_error: str,
+            ) -> tuple[AgentResult, bool] | None:
+                nonlocal delivery, delivered_request, prompt_text, recoveries, retained
+                step_retained = AgentResult()
+                carry_forward_turn_output(partial, step_retained, workspace_path)
+                carry_forward_turn_output(retained, step_retained, workspace_path)
+                retained = step_retained
+                recoveries += 1
+                if _take_pending_injections(inject_queue, injected):
+                    return retained, True
+                if recoveries >= 3:
+                    retained.error = deferred_error
+                    retained.continuation_reason = "prerequisite"
+                    retained.continue_instruction = guidance
+                    retained.blocked_reason = retained.error
+                    return retained, False
+                if delivery is not None:
+                    delivery = dataclasses.replace(
+                        delivery, turn_instructions="\n\n".join(filter(None, (
+                            turn_instructions, guidance,
+                        ))),
+                    )
+                    prompt_text = delivery.render(state)
+                    delivered_request = delivery.request_for(state)
+                else:
+                    prompt_text = full_prompt + "\n\n" + guidance
+                return None
+
             while True:
                 try:
                     result, restarting = await attempt(prompt_text, delivery, delivered_request)
@@ -1831,13 +1878,6 @@ async def _drive_backend(
                             and state.get("native_tools_started")
                             and execution_state.native_session_id(state.get("native_session_id")) is not None
                             and _transient_native_stream_error(result.error)):
-                        step_retained = AgentResult()
-                        carry_forward_turn_output(result, step_retained, workspace_path)
-                        carry_forward_turn_output(retained, step_retained, workspace_path)
-                        retained = step_retained
-                        recoveries += 1
-                        if _take_pending_injections(inject_queue, injected):
-                            return retained, True
                         stream_error = (result.error or "").strip()[:8000]
                         guidance = (
                             "[Automatic stream recovery: the previous native CLI stream ended with a "
@@ -1846,25 +1886,14 @@ async def _drive_backend(
                             "finish the SAME job. Preserve completed work and valid evidence; check "
                             "commands with unknown outcomes before repeating them.]\n" + stream_error
                         )
-                        if recoveries >= 3:
-                            retained.error = (
-                                "Repeated native stream interruptions require another recovery attempt: "
-                                + stream_error
-                            )
-                            retained.continuation_reason = "prerequisite"
-                            retained.continue_instruction = guidance
-                            retained.blocked_reason = retained.error
-                            return retained, False
-                        if delivery is not None:
-                            delivery = dataclasses.replace(
-                                delivery, turn_instructions="\n\n".join(filter(None, (
-                                    turn_instructions, guidance,
-                                ))),
-                            )
-                            prompt_text = delivery.render(state)
-                            delivered_request = delivery.request_for(state)
-                        else:
-                            prompt_text = full_prompt + "\n\n" + guidance
+                        outcome = recover_attempt(
+                            result,
+                            guidance,
+                            "Repeated native stream interruptions require another recovery attempt: "
+                            + stream_error,
+                        )
+                        if outcome is not None:
+                            return outcome
                         logger.warning(
                             "%s continuing its saved native session after transient stream error: %s",
                             backend.name, stream_error,
@@ -1877,13 +1906,6 @@ async def _drive_backend(
                     carry_forward_turn_output(retained, result, workspace_path)
                     return result, restarting
                 except _NativeHangRecovered as exc:
-                    step_retained = AgentResult()
-                    carry_forward_turn_output(exc.partial, step_retained, workspace_path)
-                    carry_forward_turn_output(retained, step_retained, workspace_path)
-                    retained = step_retained
-                    recoveries += 1
-                    if _take_pending_injections(inject_queue, injected):
-                        return retained, True
                     diagnosis = exc.diagnosis[:8000]
                     guidance = (
                         "[Automatic hang recovery: the previous owned CLI and its child processes "
@@ -1892,22 +1914,13 @@ async def _drive_backend(
                         "then finish the SAME job. Preserve completed work and valid evidence; "
                         "check commands with unknown outcomes before repeating them.]\n" + diagnosis
                     )
-                    if recoveries >= 3:
-                        retained.error = "Repeated native hangs require another recovery attempt: " + diagnosis
-                        retained.continuation_reason = "prerequisite"
-                        retained.continue_instruction = guidance
-                        retained.blocked_reason = retained.error
-                        return retained, False
-                    if delivery is not None:
-                        delivery = dataclasses.replace(
-                            delivery, turn_instructions="\n\n".join(filter(None, (
-                                turn_instructions, guidance,
-                            ))),
-                        )
-                        prompt_text = delivery.render(state)
-                        delivered_request = delivery.request_for(state)
-                    else:
-                        prompt_text = full_prompt + "\n\n" + guidance
+                    outcome = recover_attempt(
+                        exc.partial,
+                        guidance,
+                        "Repeated native hangs require another recovery attempt: " + diagnosis,
+                    )
+                    if outcome is not None:
+                        return outcome
                     logger.warning("%s continuing its saved native session after confirmed hang", backend.name)
 
         async def attempt(
