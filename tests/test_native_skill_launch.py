@@ -86,6 +86,12 @@ class NativeSkillLaunchTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(session_marker.read_text(encoding="utf-8"), '{"id":"keep-me"}')
 
+                # Removing settings.json in source_home also removes stale settings in copilot-home.
+                (source_home / "settings.json").unlink()
+                copilot._native_copilot_home(record)
+                self.assertFalse((native_home / "settings.json").exists())
+                self.assertEqual(session_marker.read_text(encoding="utf-8"), '{"id":"keep-me"}')
+
 
 if __name__ == "__main__":
     unittest.main()

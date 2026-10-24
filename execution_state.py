@@ -585,7 +585,7 @@ def record_missing_native_session(message: object) -> None:
         rf"\s*(?:(?:Error|Warning):\s*)?(?:No (?:saved )?(?:session|conversation) found (?:with |for )?"
         rf"(?:(?:session )?ID[: ]+)?['\"]?{escaped}['\"]?"
         rf"|No session, task, or name matched\s+['\"]?{escaped}['\"]?"
-        rf"|(?:thread/resume:\s*)*thread/resume failed:\s*no rollout found for thread id\s+['\"]?{escaped}['\"]?(?:\s*\(code -?\d+\))?"
+        rf"|(?:(?:thread/resume:\s*)*thread/resume failed:\s*)?no rollout found for (?:thread|conversation) id\s+['\"]?{escaped}['\"]?(?:\s*\(code -?\d+\))?"
         rf"|(?:Session|Conversation|Thread)(?: ID)?[: ]+['\"]?{escaped}['\"]? (?:was )?not found"
         rf"|(?:Session|Conversation|Thread) not found[: ]+['\"]?{escaped}['\"]?)\.?\s*",
         message, re.IGNORECASE,

@@ -298,7 +298,7 @@ def _load_session_path(
 ) -> dict | None:
     """Read, normalize, and identity-check one durable session file."""
     try:
-        with open(path, encoding="utf-8") as file_handle:
+        with open(path, encoding="utf-8", buffering=65536) as file_handle:
             data = json.load(file_handle)
         validate_json_nesting(data)
     except (ValueError, OSError, RecursionError):

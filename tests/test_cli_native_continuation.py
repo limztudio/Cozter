@@ -285,6 +285,7 @@ class NativeCliContinuationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(record.get("native_session_id"))
                     for provider_missing in (
                         f"Error: thread/resume: thread/resume failed: no rollout found for thread id {_SID} (code -32600)",
+                        f"no rollout found for conversation id {_SID}",
                         f"Error: No session, task, or name matched '{_SID}'.",
                         f"No conversation found with session ID: {_SID}",
                         f'warning: conversation "{_SID}" not found',

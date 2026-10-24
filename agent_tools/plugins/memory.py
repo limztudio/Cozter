@@ -132,7 +132,7 @@ def _reload_session(sessions_dir: str, metadata: dict) -> dict:
 
 def _load_session_file(path: str, session_id: str, *, capture_signature: bool = False) -> dict | None:
     try:
-        with open(path, encoding="utf-8") as file_handle:
+        with open(path, encoding="utf-8", buffering=65536) as file_handle:
             # Handle metadata avoids two extra Windows path-stat round trips
             # per transcript. Atomic replacement leaves this read coherent;
             # a selected reread compares its saved signature with the path.

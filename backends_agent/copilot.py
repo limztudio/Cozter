@@ -89,8 +89,11 @@ def _native_copilot_home(record: "execution_state.ExecutionRecord") -> str:
             raise RuntimeError("Copilot native state must remain inside its execution home")
         if name in _COPILOT_HOME_FILES:
             source = os.path.join(source_home, name)
-            if os.path.isfile(source) and os.path.realpath(source) != os.path.realpath(target):
-                shutil.copy2(source, target)
+            if os.path.isfile(source) and not os.path.islink(source):
+                if os.path.realpath(source) != os.path.realpath(target):
+                    shutil.copy2(source, target)
+            elif name == "settings.json" and not os.path.exists(source) and os.path.isfile(target):
+                os.unlink(target)
     return home
 
 _ACP_PROTOCOL_VERSION = 1
