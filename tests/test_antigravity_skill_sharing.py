@@ -112,3 +112,48 @@ class AntigravitySkillSharingTests(unittest.IsolatedAsyncioTestCase):
             reference.unlink()
             missing = json.loads(skills.read_skill(str(self.ws), entry.id, resource="references/checks.md"))
             self.assertIn("Skill unavailable", missing["error"])
+
+    async def test_all_five_cli_native_roots_and_copilot_settings_skill_directories_are_discovered(self):
+        extra_copilot = self.root / "copilot-custom-skills"
+        files = {
+            "native-user:antigravity-cli": self.write(
+                self.home / ".gemini/antigravity-cli/skills/agy-skill/SKILL.md", "Agy user", "Agy body",
+            ),
+            "native-user:codex": self.write(
+                self.home / ".codex/skills/codex-skill/SKILL.md", "Codex user", "Codex body",
+            ),
+            "native-user:claude": self.write(
+                self.home / ".claude/skills/claude-skill/SKILL.md", "Claude user", "Claude body",
+            ),
+            "native-user:copilot": self.write(
+                self.home / ".copilot/skills/copilot-skill/SKILL.md", "Copilot user", "Copilot body",
+            ),
+            "native-user:copilot-extra": self.write(
+                extra_copilot / "copilot-added/SKILL.md", "Copilot settings skill", "Added via copilot skill add",
+            ),
+            "native-user:grok": self.write(
+                self.home / ".grok/skills/grok-skill/SKILL.md", "Grok user", "Grok body",
+            ),
+            "native-project:agents": self.write(
+                self.ws / ".agents/skills/proj-agents/SKILL.md", "Project agents", "Shared project skill",
+            ),
+            "native-project:claude": self.write(
+                self.ws / ".claude/skills/proj-claude/SKILL.md", "Project claude", "Claude project skill",
+            ),
+            "native-project:github": self.write(
+                self.ws / ".github/skills/proj-github/SKILL.md", "Project github", "Copilot github skill",
+            ),
+            "native-project:grok": self.write(
+                self.ws / ".grok/skills/proj-grok/SKILL.md", "Project grok", "Grok project skill",
+            ),
+        }
+        (self.home / ".copilot/settings.json").write_text(
+            json.dumps({"skillDirectories": [str(extra_copilot)]}),
+            encoding="utf-8",
+        )
+
+        catalog = skills.discover(str(self.ws))
+
+        self.assertEqual({entry.source: entry.path for entry in catalog.entries},
+                         {source: path.resolve() for source, path in files.items()})
+        self.assertEqual(catalog.warnings, ())

@@ -87,9 +87,9 @@ def _native_copilot_home(record: "execution_state.ExecutionRecord") -> str:
         target = os.path.join(home, name)
         if os.path.islink(target) or not is_path_within(target, home):
             raise RuntimeError("Copilot native state must remain inside its execution home")
-        if name in _COPILOT_HOME_FILES and not os.path.exists(target):
+        if name in _COPILOT_HOME_FILES:
             source = os.path.join(source_home, name)
-            if os.path.isfile(source):
+            if os.path.isfile(source) and os.path.realpath(source) != os.path.realpath(target):
                 shutil.copy2(source, target)
     return home
 
@@ -910,13 +910,14 @@ def _stop_acp_process(
             pass
     tree_stopped = False
     if kill_tree:
+        pid = getattr(proc, "pid", None)
         if os.name == "nt":
             # Shims can own the real child.
-            tree_stopped = terminate_windows_process_tree(proc.pid)
-        else:
+            tree_stopped = terminate_windows_process_tree(pid)
+        elif isinstance(pid, int) and not isinstance(pid, bool) and pid > 1:
             try:
-                if proc.pid != getattr(os, "getpgid")(0):
-                    getattr(os, "killpg")(proc.pid, getattr(signal, "SIGKILL"))
+                if pid != getattr(os, "getpgid")(0):
+                    getattr(os, "killpg")(pid, getattr(signal, "SIGKILL"))
             except (ProcessLookupError, PermissionError, OSError):
                 pass
     try:

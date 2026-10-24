@@ -2214,6 +2214,9 @@ async def _drive_backend_process(
     if proc.returncode != 0 and not result.error:
         msg = f"{backend.name} exited with code {proc.returncode}"
         if stderr:
+            if not result.events:
+                for line in stderr.splitlines():
+                    execution_state.record_missing_native_session(line)
             msg += f"\n{stderr}"
         if result.text:
             record_backend_error(result, msg)

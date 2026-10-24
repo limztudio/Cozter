@@ -1580,9 +1580,12 @@ warning: ignored after the catalog
         proc.stderr = None
         proc.poll.return_value = 0
 
-        with mock.patch.object(
-            copilot_mod, "terminate_windows_process_tree", return_value=True,
-        ) as taskkill:
+        with (
+            mock.patch.object(copilot_mod.os, "name", "nt"),
+            mock.patch.object(
+                copilot_mod, "terminate_windows_process_tree", return_value=True,
+            ) as taskkill,
+        ):
             copilot_mod._stop_acp_process(proc, kill_tree=True)
 
         taskkill.assert_called_once_with(12345)

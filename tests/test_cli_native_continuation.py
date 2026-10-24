@@ -283,6 +283,17 @@ class NativeCliContinuationTests(unittest.IsolatedAsyncioTestCase):
                                         AgentResult())
                     self.assertTrue(record.get("native_resume_unavailable"))
                     self.assertIsNone(record.get("native_session_id"))
+                    for provider_missing in (
+                        f"Error: thread/resume: thread/resume failed: no rollout found for thread id {_SID} (code -32600)",
+                        f"Error: No session, task, or name matched '{_SID}'.",
+                        f"No conversation found with session ID: {_SID}",
+                        f'warning: conversation "{_SID}" not found',
+                    ):
+                        await record.save(native_session_id=_SID, native_resume_attempted=True,
+                                          native_resume_unavailable=False, native_tools_started=False)
+                        backend.parse_event(self.error_event(module, provider_missing), AgentResult())
+                        self.assertTrue(record.get("native_resume_unavailable"))
+                        self.assertIsNone(record.get("native_session_id"))
                     await record.save(native_session_id=_SID, native_resume_attempted=True,
                                       native_resume_unavailable=False, native_tools_started=False)
                     activity = ({"type": "turn.started"} if module is codex else

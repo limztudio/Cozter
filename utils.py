@@ -347,7 +347,7 @@ def terminate_windows_process_tree(pid: object) -> bool:
     long-lived backend processes and short-lived CLI probes.  The boolean
     result lets callers choose their appropriate single-process fallback.
     """
-    if not isinstance(pid, int) or pid <= 0:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     try:
         completed = subprocess.run(
@@ -375,7 +375,7 @@ def mark_process_group_leader(proc: asyncio.subprocess.Process) -> None:
     if os.name == "nt":
         return
     pid = getattr(proc, "pid", None)
-    if not isinstance(pid, int) or pid <= 0:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
         return
     # asyncio's Process permits custom attributes; stay defensive.
     with contextlib.suppress(AttributeError, TypeError):
@@ -385,12 +385,22 @@ def mark_process_group_leader(proc: asyncio.subprocess.Process) -> None:
 def has_managed_process_group(proc: object) -> bool:
     """Whether *proc* has a POSIX group Cozter created and owns."""
     group_id = getattr(proc, _PROCESS_GROUP_ID_ATTR, None)
-    return os.name != "nt" and isinstance(group_id, int) and group_id > 0
+    return (
+        os.name != "nt"
+        and isinstance(group_id, int)
+        and not isinstance(group_id, bool)
+        and group_id > 1
+    )
 
 
 def _kill_process_group(group_id: int) -> bool:
     """Kill one non-current POSIX process group, if it is still reachable."""
-    if os.name == "nt":
+    if (
+        os.name == "nt"
+        or not isinstance(group_id, int)
+        or isinstance(group_id, bool)
+        or group_id <= 1
+    ):
         return False
     killpg = getattr(os, "killpg", None)
     getpgid = getattr(os, "getpgid", None)
@@ -431,7 +441,7 @@ def terminate_process_group(proc: asyncio.subprocess.Process) -> None:
         # Use the stored group (parent may have exited).
         if _kill_process_group(getattr(proc, _PROCESS_GROUP_ID_ATTR)):
             return
-    elif isinstance(pid, int) and pid > 0:
+    elif isinstance(pid, int) and not isinstance(pid, bool) and pid > 1:
         getpgid = getattr(os, "getpgid", None)
         try:
             pgid = getpgid(pid) if getpgid is not None else None

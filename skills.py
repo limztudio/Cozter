@@ -154,6 +154,23 @@ def _is_bridge(text: str) -> bool:
     return end >= 0 and text[end + 5:].startswith(_BRIDGE_HEADER + "\n")
 
 
+def _copilot_settings_roots(copilot_home: Path) -> list[tuple[Path, str]]:
+    settings = copilot_home / "settings.json"
+    try:
+        if settings.is_symlink() or not settings.is_file() or settings.stat().st_size > MAX_SKILL_BYTES:
+            return []
+        payload = json.loads(settings.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict) or not isinstance(payload.get("skillDirectories"), list):
+        return []
+    roots: list[tuple[Path, str]] = []
+    for raw in payload["skillDirectories"][:MAX_SKILLS]:
+        if isinstance(raw, str) and raw.strip() and Path(raw.strip()).is_absolute():
+            roots.append((Path(raw.strip()), "native-user:copilot-extra"))
+    return roots
+
+
 def _native_roots(workspace_path: str) -> list[tuple[Path, str]]:
     """Return explicit skill roots, never unrestricted plugin-cache trees."""
     base = _canonical(workspace_path)
@@ -180,6 +197,8 @@ def _native_roots(workspace_path: str) -> list[tuple[Path, str]]:
         root = Path(override) if override else home / directory
         if root.is_absolute():
             roots.append((root / "skills", f"native-user:{directory[1:]}"))
+            if directory == ".copilot":
+                roots.extend(_copilot_settings_roots(root))
     roots.append((home / ".gemini" / "antigravity-cli" / "skills", "native-user:antigravity-cli"))
     for raw in os.environ.get("COPILOT_SKILLS_DIRS", "").split(","):
         if raw.strip() and Path(raw.strip()).is_absolute():

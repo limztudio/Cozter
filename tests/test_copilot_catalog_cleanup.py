@@ -48,6 +48,20 @@ class CopilotCatalogCleanupTests(unittest.TestCase):
         killpg.assert_called_once_with(12345, 9)
         proc.terminate.assert_not_called()
 
+    def test_posix_cleanup_never_signals_non_integer_or_special_pids(self):
+        for invalid_pid in (mock.MagicMock(), None, True, False, -1, 0, 1):
+            with self.subTest(pid=invalid_pid):
+                proc = mock.MagicMock(stdin=None, stdout=None, stderr=None)
+                proc.pid = invalid_pid
+                proc.poll.return_value = 0
+                with (
+                    mock.patch.object(copilot.os, "name", "posix"),
+                    mock.patch.object(copilot.os, "getpgid", return_value=54321, create=True),
+                    mock.patch.object(copilot.os, "killpg", create=True) as killpg,
+                ):
+                    copilot._stop_acp_process(proc, kill_tree=True)
+                killpg.assert_not_called()
+
     def test_cleanup_never_closes_stream_owned_by_busy_reader(self):
         proc = mock.Mock(stdin=None, stderr=None)
         proc.poll.return_value = 0

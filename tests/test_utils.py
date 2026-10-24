@@ -419,6 +419,20 @@ class ProcessTerminationTests(unittest.TestCase):
         taskkill.assert_not_called()
         proc.kill.assert_called_once_with()
 
+    def test_posix_termination_never_signals_non_integer_or_special_groups(self) -> None:
+        for invalid_pid in (mock.MagicMock(), None, True, False, -1, 0, 1):
+            with self.subTest(pid=invalid_pid):
+                proc = mock.MagicMock()
+                proc.pid = invalid_pid
+                with (
+                    mock.patch.object(utils.os, "name", "posix"),
+                    mock.patch.object(utils.os, "getpgid", return_value=1, create=True),
+                    mock.patch.object(utils.os, "killpg", create=True) as killpg,
+                ):
+                    utils.terminate_process_group(proc)
+                killpg.assert_not_called()
+                proc.kill.assert_called_once_with()
+
 
 class AsyncProcessTerminationTests(unittest.IsolatedAsyncioTestCase):
     async def test_http_cancellation_stays_on_its_owning_event_loop(self) -> None:

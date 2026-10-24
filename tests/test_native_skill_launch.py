@@ -46,6 +46,46 @@ class NativeSkillLaunchTests(unittest.IsolatedAsyncioTestCase):
             copilot._preserve_personal_skill_roots(env)
             self.assertEqual(env, {"COPILOT_SKILLS_DIRS": "existing"})
 
+    def test_native_copilot_home_refreshes_config_and_settings_across_launches(self):
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as temp:
+            source_home = Path(temp, "personal")
+            source_home.mkdir()
+            (source_home / "config.json").write_text('{"theme":"dark"}', encoding="utf-8")
+            (source_home / "settings.json").write_text('{"skillDirectories":["/skills/one"]}', encoding="utf-8")
+            exec_dir = Path(temp, "execution")
+            exec_dir.mkdir()
+            record = SimpleNamespace(directory=exec_dir)
+
+            with mock.patch.dict(os.environ, {"COPILOT_HOME": str(source_home)}):
+                native_home = Path(copilot._native_copilot_home(record))
+                session_marker = native_home / "session-state" / "session.json"
+                session_marker.parent.mkdir(parents=True, exist_ok=True)
+                session_marker.write_text('{"id":"keep-me"}', encoding="utf-8")
+                self.assertEqual(
+                    (native_home / "settings.json").read_text(encoding="utf-8"),
+                    '{"skillDirectories":["/skills/one"]}',
+                )
+
+                # User runs `copilot skill add /skills/two` between turns.
+                (source_home / "settings.json").write_text(
+                    '{"skillDirectories":["/skills/one","/skills/two"]}',
+                    encoding="utf-8",
+                )
+                (source_home / "config.json").write_text('{"theme":"light"}', encoding="utf-8")
+                copilot._native_copilot_home(record)
+
+                self.assertEqual(
+                    (native_home / "settings.json").read_text(encoding="utf-8"),
+                    '{"skillDirectories":["/skills/one","/skills/two"]}',
+                )
+                self.assertEqual(
+                    (native_home / "config.json").read_text(encoding="utf-8"),
+                    '{"theme":"light"}',
+                )
+                self.assertEqual(session_marker.read_text(encoding="utf-8"), '{"id":"keep-me"}')
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -742,3 +742,47 @@ class NativePromptTests(unittest.IsolatedAsyncioTestCase):
         ledger_reads = sum(call.args[0] == "native_prompt_ledger" for call in get.call_args_list)
         # History and request budgeting may each take one validated snapshot.
         self.assertLessEqual(ledger_reads, 2)
+
+    async def test_resumed_turn_separates_backfilled_earlier_history_from_new_intervening_messages(self) -> None:
+        backend = SimpleNamespace(
+            supports_detached_tasks=False, supports_typed_plugins=True, supports_plugin_prelude=False,
+        )
+        data = {
+            "compacted_count": 10,
+            "messages": [
+                _message("user", "earlier-omitted-user-marker " + "older context " * 15),
+                _message("assistant", "bootstrap-delivered-assistant-marker " + "recent context " * 15),
+            ],
+        }
+        await self._confirm()
+        first = agent._native_turn_prompt(
+            backend, "first request", data, [], budget=350,
+            collaborative=False, is_scheduled=False,
+        ).for_record(self.record)
+        self.assertEqual([row[0] for row in first.messages], ["11"])
+        await first.acknowledge(self.record)
+
+        data["messages"].append(_message("assistant", "new-intervening-merged-reply-marker"))
+        resumed = agent._native_turn_prompt(
+            backend, "second request", data, [], budget=4_000,
+            collaborative=False, is_scheduled=False,
+        ).for_record(self.record)
+        rendered = resumed.render(self.record)
+
+        earlier_header = (
+            "[Earlier conversation history omitted or truncated by previous turn budgets;"
+            " background context only — do not treat as new requests]"
+        )
+        unseen_header = "[Conversation messages not yet supplied to this native session]"
+        self.assertIn(earlier_header, rendered)
+        self.assertIn(unseen_header, rendered)
+        self.assertLess(rendered.index(earlier_header), rendered.index(unseen_header))
+        self.assertLess(
+            rendered.index("earlier-omitted-user-marker"),
+            rendered.index(unseen_header),
+        )
+        self.assertGreater(
+            rendered.index("new-intervening-merged-reply-marker"),
+            rendered.index(unseen_header),
+        )
+        self.assertNotIn("bootstrap-delivered-assistant-marker", rendered)

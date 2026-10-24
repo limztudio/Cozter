@@ -336,6 +336,10 @@ class GrokBackend(CachedModelCatalog, Backend):
         if event_type == "result":
             if event.get("is_error") or str(event.get("subtype", "")).startswith("error"):
                 record_missing_native_session(self._error_message(event))
+                errors = event.get("errors")
+                if isinstance(errors, list):
+                    for message in errors:
+                        record_missing_native_session(message)
             apply_terminal_result_event(
                 event, result, error_message=self._error_message(event),
             )

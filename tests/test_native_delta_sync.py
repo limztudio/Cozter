@@ -103,6 +103,10 @@ class NativeDeltaSyncTests(unittest.IsolatedAsyncioTestCase):
         launch = process.fixture_launch
         module = self.modules[launch["backend"]]
         record = launch["record"]
+        if self.mode == "stderr-missing-session":
+            self.mode = "complete"
+            process.returncode = 1
+            return
         yield self._started(module, launch["native_id"])
         await record.flush()
         self.initialization_receipts.append(self._disk_values(record))
@@ -242,6 +246,35 @@ class NativeDeltaSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("DELIVERED-FOREGROUND-REQUEST", returned["prompt"])
         for marker in (merged.text, "UNSEEN-DETACHED-REQUEST", "UNSEEN-DETACHED-ANSWER"):
             self.assertEqual(returned["prompt"].count(marker), 1)
+
+    async def test_stderr_missing_session_before_events_retries_once_with_full_bootstrap_for_all_four(self):
+        for module, cls, _model in _CASES:
+            with self.subTest(backend=cls.name):
+                sid = self._conversation()
+                await self._turn(cls.name, "BEFORE-STDERR-MISSING-REQUEST", sid=sid)
+                original_id = self.launches[-1]["native_id"]
+                start = len(self.launches)
+                self.mode = "stderr-missing-session"
+                stderr_msg = (
+                    f"Error: thread/resume: thread/resume failed: no rollout found for thread id {original_id} (code -32600)"
+                    if module is codex else
+                    f"Error: No session, task, or name matched '{original_id}'.\nTo resume: copilot --resume=<id>"
+                    if module is copilot else
+                    f"No conversation found with session ID: {original_id}"
+                )
+                with mock.patch.object(agent, "finish_process_stderr", new=mock.AsyncMock(return_value=stderr_msg)):
+                    result = await self._turn(cls.name, "RECOVERED-AFTER-STDERR-MISSING", sid=sid)
+                self.assertFalse(result.error)
+                launches = self.launches[start:]
+                self.assertEqual(len(launches), 2)
+                self.assertEqual(launches[0]["previous_id"], original_id)
+                self.assertIsNone(launches[1]["previous_id"])
+                self.assertNotEqual(launches[1]["native_id"], original_id)
+                for marker in (
+                    "HISTORICAL-REQUEST-MARKER", "HISTORICAL-ANSWER-MARKER",
+                    "BEFORE-STDERR-MISSING-REQUEST", "RECOVERED-AFTER-STDERR-MISSING",
+                ):
+                    self.assertIn(marker, launches[1]["prompt"])
 
 
 if __name__ == "__main__":

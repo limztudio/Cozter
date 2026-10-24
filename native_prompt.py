@@ -151,6 +151,15 @@ class NativePrompt:
                     parts.append(f"[Updated {name}: cleared; replaces the previous version]")
         if not resumed:
             parts.extend(content for content in self.bootstrap_sections.values() if content)
+        previous_sources = ledger.get("message_sources", {}) if resumed else {}
+        if not isinstance(previous_sources, dict):
+            previous_sources = {}
+        known_coords = [
+            int(coord) for coord in (*previous_messages, *previous_sources)
+            if isinstance(coord, str) and coord.isdigit()
+        ]
+        max_known_coord = max(known_coords) if resumed and known_coords else None
+        earlier_unseen = []
         unseen = []
         for coordinate, digest, text in self.messages:
             source = self.message_sources.get(coordinate)
@@ -158,7 +167,18 @@ class NativePrompt:
                 source is not None
             ) else resumed and previous_messages.get(coordinate) == digest
             if not known:
-                unseen.append(text)
+                if (max_known_coord is not None
+                        and isinstance(coordinate, str) and coordinate.isdigit()
+                        and int(coordinate) <= max_known_coord):
+                    earlier_unseen.append(text)
+                else:
+                    unseen.append(text)
+        if earlier_unseen:
+            parts.append(
+                "[Earlier conversation history omitted or truncated by previous turn budgets;"
+                " background context only — do not treat as new requests]\n"
+                + "\n".join(earlier_unseen)
+            )
         if unseen:
             parts.append("[Conversation messages not yet supplied to this native session]\n"
                          + "\n".join(unseen))

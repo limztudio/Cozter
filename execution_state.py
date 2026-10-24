@@ -582,10 +582,12 @@ def record_missing_native_session(message: object) -> None:
         return
     escaped = re.escape(native_id)
     missing = re.fullmatch(
-        rf"\s*(?:No (?:saved )?(?:session|conversation) found (?:with |for )?"
+        rf"\s*(?:(?:Error|Warning):\s*)?(?:No (?:saved )?(?:session|conversation) found (?:with |for )?"
         rf"(?:(?:session )?ID[: ]+)?['\"]?{escaped}['\"]?"
-        rf"|(?:Session|Conversation)(?: ID)?[: ]+['\"]?{escaped}['\"]? (?:was )?not found"
-        rf"|Session not found[: ]+['\"]?{escaped}['\"]?)\.?\s*",
+        rf"|No session, task, or name matched\s+['\"]?{escaped}['\"]?"
+        rf"|(?:thread/resume:\s*)*thread/resume failed:\s*no rollout found for thread id\s+['\"]?{escaped}['\"]?(?:\s*\(code -?\d+\))?"
+        rf"|(?:Session|Conversation|Thread)(?: ID)?[: ]+['\"]?{escaped}['\"]? (?:was )?not found"
+        rf"|(?:Session|Conversation|Thread) not found[: ]+['\"]?{escaped}['\"]?)\.?\s*",
         message, re.IGNORECASE,
     )
     if missing:
