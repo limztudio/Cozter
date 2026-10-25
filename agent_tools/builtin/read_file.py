@@ -90,7 +90,6 @@ class ReadFileTool(AgentTool):
         if not os.path.isfile(target):
             return f"File not found: {args.get('path')}"
 
-        # Binary images: return metadata.
         if os.path.splitext(target)[1].lower() in {
             ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp",
         }:
@@ -246,8 +245,6 @@ def _skip_lines(file, count: int) -> bool:
         if callable(seekable) and seekable():
             return _skip_lines_in_chunks(file, count)
 
-    # Preserve nonseekable/readline-only streams and avoid a cookie/rewind
-    # for the common small-offset case.
     remaining = _READ_FILE_MAX_SKIP_CHARS
     for _ in range(count):
         while True:

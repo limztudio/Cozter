@@ -202,7 +202,6 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             ["https://signal.group/#test"], jsonrpc_socket="/tmp/signal.sock",
         )
         with tempfile.TemporaryDirectory() as ws:
-            # Minimal 1x1 PNG.
             png = (
                 base64.b64decode(
                     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlE"

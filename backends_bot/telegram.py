@@ -8,7 +8,6 @@ import math
 import os
 import re
 
-# Opt into PTB's timedelta API.
 os.environ.setdefault("PTB_TIMEDELTA", "1")
 
 from telegram import Update
@@ -79,7 +78,6 @@ def _telegram_message_id(handle: MessageHandle) -> int:
             f"invalid Telegram message id: {raw!r}",
         ) from exc
 
-# Reply-line regexes: module-level.
 _TELEGRAM_ITALIC_STAR_RE = re.compile(r"(?<!\w)\*([^*]+?)\*(?!\w)")
 _TELEGRAM_ITALIC_UNDER_RE = re.compile(r"(?<!\w)_([^_]+?)_(?!\w)")
 _TELEGRAM_STRIKE_RE = re.compile(r"~~(.+?)~~")
@@ -103,7 +101,6 @@ def _telegram_retry_delay(exc: BaseException) -> float | None:
             ) else float(retry_after)
         except (TypeError, ValueError, OverflowError):
             return None
-        # Non-finite throttles: cap +inf.
         if not math.isfinite(seconds):
             if seconds == float("inf"):
                 return _TELEGRAM_SEND_MAX_DELAY_SEC
@@ -482,7 +479,6 @@ class TelegramBot(BotPlatform):
     async def _on_file(
         self, update: Update, _context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
-        # Early auth before downloads.
         if not self._precheck(update):
             return
         uid = str(update.effective_user.id)
@@ -544,7 +540,6 @@ class TelegramBot(BotPlatform):
             return
 
         caption = (message.caption or "").strip()
-        # Strip paths to prevent traversal.
         filename = os.path.basename(filename) or f"file_{telegram_file.file_id}"
 
         if not ws or not os.path.isdir(ws):

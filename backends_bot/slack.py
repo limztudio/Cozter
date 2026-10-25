@@ -97,13 +97,10 @@ def _mrkdwn_prose(line: str) -> str:
         bold_sub = collision_safe_bold_sub
 
     line = render_headings_and_bold(line, bold_sub)
-    # Italic: `*text*` -> `_text_`.
     if "*" in line:
         line = _SLACK_ITALIC_STAR_RE.sub(r"_\1_", line)
-    # Strikethrough to `~text~`.
     if "~~" in line:
         line = _SLACK_STRIKE_RE.sub(r"~\1~", line)
-    # Swap bold placeholders back.
     if bold_open in line:
         line = line.replace(bold_open, "*").replace(bold_close, "*")
     return line
@@ -113,8 +110,8 @@ def _mrkdwn_code_block(lines: list[str]) -> list[str]:
     return ["```", *(escape_html_entities(line) for line in lines), "```"]
 
 
-_SLACK_MAX_CHARS = 39_000  # Slack caps around 40K.
-_SLACK_MARKDOWN_LIMIT = 12_000  # Markdown-block text per payload.
+_SLACK_MAX_CHARS = 39_000
+_SLACK_MARKDOWN_LIMIT = 12_000
 _SLACK_SEND_MAX_ATTEMPTS = 5
 _SLACK_SEND_MAX_DELAY_SEC = 60.0
 _FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,}).*$")
@@ -153,7 +150,6 @@ def _slack_retry_delay(error: SlackApiError) -> float | None:
         delay = float(raw)
     except (TypeError, ValueError, OverflowError):
         delay = 1.0
-    # Never sleep nan/inf.
     if not math.isfinite(delay):
         if delay == float("inf"):
             return _SLACK_SEND_MAX_DELAY_SEC
@@ -247,10 +243,8 @@ def _split_slack_markdown(
         max_opener + max_marker + 2 if (max_opener or max_marker) else 0
     )
     if limit <= fence_wrap_reserve:
-        # Over-long fences: send bounded chunks.
         return split_text_chunks(text, limit)
 
-    # Keep raw chunks below the limit.
     raw_chunks = split_text_chunks(text, limit - fence_wrap_reserve)
     chunks: list[str] = []
     active_fence: tuple[str, str] | None = None
@@ -302,8 +296,6 @@ async def _update_rich_markdown(
     )
 
 
-# Slack platform adapter
-
 class SlackBot(BotPlatform):
     """Slack Socket-Mode adapter."""
 
@@ -317,7 +309,6 @@ class SlackBot(BotPlatform):
         max_queue_size: int = DEFAULT_MESSAGE_QUEUE_SIZE,
         max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
     ):
-        # channel_ids is the auth set.
         super().__init__(
             channel_ids,
             recent_limit=recent_limit,
@@ -332,7 +323,6 @@ class SlackBot(BotPlatform):
 
     @property
     def platform_id(self) -> str:
-        # Prefix avoids collision with a numerically identical Telegram id.
         if self._bot_user_id is None:
             raise RuntimeError("platform_id is only valid after start()")
         return f"slack:{self._bot_user_id}"
@@ -519,7 +509,6 @@ class SlackBot(BotPlatform):
     async def _handle_files(
         self, event: dict, files: list[dict], caption: str,
     ) -> None:
-        # Caller already verified channel authorization.
         uid = str(event["user"])
         channel = str(event["channel"])
         ctx_for_reply = self.make_context(uid, channel, text=caption)
@@ -528,7 +517,6 @@ class SlackBot(BotPlatform):
             return
 
         for attached_file in files:
-            # Prefer the user name, else the file id.
             filename = os.path.basename(attached_file.get("name") or "")
             if not filename:
                 filename = attached_file.get("id") or "file"

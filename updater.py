@@ -82,7 +82,6 @@ def _local_ahead_of_upstream() -> bool:
         )
     except OSError:
         return True
-    # No upstream configured: skip pull.
     if upstream_result.returncode != 0:
         return True
     upstream = upstream_result.stdout.strip()
@@ -94,7 +93,6 @@ def _local_ahead_of_upstream() -> bool:
         )
     except OSError:
         return True
-    # Indeterminate compare: treat as ahead.
     if count_result.returncode != 0:
         return True
     count = count_result.stdout.strip()
@@ -348,7 +346,6 @@ def restart_script(exit_code: int = 0) -> None:
                     "the bootstrap supervisor",
                     WINDOWS_SUPERVISOR_ENV,
                 )
-            # No os.execv(); the supervisor relaunches.
             os._exit(WINDOWS_SUPERVISOR_RESTART_EXIT_CODE)
             return  # pylint: disable=unreachable  # reachable when os._exit is mocked in tests
         parent_dir = os.path.dirname(MODULE_ROOT)

@@ -53,7 +53,7 @@ class FlexibleParallelRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     both.set()
                 await asyncio.wait_for(both.wait(), 1)
                 if index == 1:
-                    await asyncio.sleep(.02)  # report 2 completes first
+                    await asyncio.sleep(.02)
             else:
                 self.assertEqual(finished, {1, 2})
                 self.assertLess(prompt.index("report-1"), prompt.index("report-2"))

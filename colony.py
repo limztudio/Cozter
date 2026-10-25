@@ -404,7 +404,6 @@ async def _consolidate_inner(
         if not existing_colony:
             logger.info("Colony pass: no sessions in %s", workspace_path)
             return False
-        # No sessions: drop memory deterministically.
         async with workspace_mod.get_lock(workspace_path):
             if not await run_owned_worker(
                 _clear_empty_colony, workspace_path, existing_colony,
@@ -432,7 +431,6 @@ async def _consolidate_inner(
         parts.append("(empty)")
     parts.append("")
 
-    # Greedy, newest-first.
     used = sum(len(part) + 1 for part in parts)
     included: list[str] = []
     fully_shown: set[str] = set()
@@ -485,7 +483,6 @@ async def _consolidate_inner(
         )
         return False
 
-    # Ignore model-invented sessions.
     included_set = set(included)
     per_session = {
         sid: long_term for sid, long_term in per_session.items() if sid in included_set

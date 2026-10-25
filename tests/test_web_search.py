@@ -204,7 +204,7 @@ class WebSearchToolTests(unittest.TestCase):
         )
         result = _run_search(net, query="anything")
         self.assertTrue(result.startswith("Search failed:"))
-        self.assertEqual(result.count("down"), 2)  # one per endpoint
+        self.assertEqual(result.count("down"), 2)
 
     def test_empty_pages_with_200_report_no_results(self) -> None:
         net = _FakeNet(

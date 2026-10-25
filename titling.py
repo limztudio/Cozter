@@ -163,7 +163,6 @@ async def generate(
     parts.append("Recent messages:")
     parts_len += (1 if parts_len else 0) + len("Recent messages:")
 
-    # Newest-first: gist only.
     message_budget = max(0, context_budget - parts_len - 1)
     msg_lines = session.take_recent_messages(
         data.get("messages", []), message_budget,

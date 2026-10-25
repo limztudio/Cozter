@@ -20,7 +20,6 @@ from ...utils import (
     wait_for_process_exit,
 )
 
-# Shared output/error clipping.
 MAX_OUTPUT_CHARS = 12_000
 MAX_GIT_ERROR_CHARS = 500
 TRUNCATION_MARKER = "say PARTIAL + remainder when coverage is unclear"

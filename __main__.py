@@ -73,7 +73,6 @@ if __name__ == "__main__":
         import_module(f"{__package__}.launch_job").ensure_launch_job()
 
 
-# Expose Cozter to spawned CLIs/bash.
 _PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _EXISTING_PYTHONPATH = os.environ.get("PYTHONPATH", "")
 if _PACKAGE_PARENT not in _EXISTING_PYTHONPATH.split(os.pathsep):
@@ -351,7 +350,6 @@ def log_crash(exc: BaseException) -> str:
 logger = logging.getLogger(__name__)
 
 
-# Dump target: opened lazily.
 _dump_file: TextIO | None = None
 
 
@@ -670,7 +668,6 @@ async def main_cli() -> None:
     """
     from .backends_bot.cli import CliBot
 
-    # CLI reads no config.
     cli_interval = cfg.DEFAULT_UPDATE_CHECK_INTERVAL
 
     updater.init_startup_commit()
@@ -813,7 +810,6 @@ async def main() -> None:
         except NotImplementedError:
             signal.signal(sig, lambda *_: _signal_handler())
 
-    # SIGUSR1 dumps tasks/threads/turn state (POSIX).
     if hasattr(signal, "SIGUSR1"):
         try:
             loop.add_signal_handler(

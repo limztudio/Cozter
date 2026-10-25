@@ -393,7 +393,6 @@ def _apply_file_patch(workspace_path: str, file_patch: _FilePatch) -> str:
         if output_error is not None:
             return f"{file_patch.new_path}: skipped ({output_error})"
         ensure_parent_dir(target)
-        # No-clobber: partial writes stay hidden.
         if not create_text_file_atomically(target, out, uses_crlf=False):
             return f"{file_patch.new_path}: skipped (file already exists)"
         return f"{file_patch.new_path}: created ({len(new_lines)} lines)"
@@ -445,7 +444,7 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
         raise _FileLimitError(
             f"file exceeds the {_MAX_FILE_BYTES:,}-byte limit",
         )
-    content = raw.decode("utf-8")  # UnicodeDecodeError on binary -> caller
+    content = raw.decode("utf-8")
     uses_crlf = "\r\n" in content
     if uses_crlf:
         content = content.replace("\r\n", "\n")
@@ -520,7 +519,6 @@ def _locate(
     exact = _find_first(lines, old)
     if exact is not None:
         return exact
-    # Fuzzy match: ignore trailing whitespace.
     old_stripped = [line_text.rstrip() for line_text in old]
     if _matches_at(lines, old_stripped, hint, strip_trailing=True):
         return hint

@@ -103,12 +103,10 @@ _MAX_ACP_MESSAGES_PER_REQUEST = 100
 # Bound provider-controlled catalog data like HTTP backends.
 _MAX_ACP_MODEL_ID_CHARS = 512
 _MAX_ACP_MODEL_OPTIONS = 4_096
-# Also bound node count/depth.
 _MAX_ACP_OPTION_NODES = _MAX_ACP_MODEL_OPTIONS * 4
 _MAX_ACP_OPTION_GROUP_DEPTH = 16
 _MAX_ACP_LINE_CHARS = 1 * 1024 * 1024
 _COPILOT_HOME_FILES = ("config.json", "settings.json")
-# Short-lived discovery caches, bounded.
 _MAX_WORKSPACE_MODEL_CACHE_ENTRIES = 64
 
 # ``auto`` always works; don't fall back to help names.
@@ -147,7 +145,6 @@ class CopilotBackend(Backend):
     name = "copilot"
     executable = "copilot"
     supports_vision = True
-    # Restricted modes expose no tools.
     permission_arg_sets = {
         "full": ("--yolo",),
         "auto": ("--allow-all-tools",),
@@ -286,7 +283,6 @@ class CopilotBackend(Backend):
                 )
                 self._workspace_fallback_expires_at.pop(workspace_key, None)
                 return models
-            # Short throttle: avoid per-input spawns.
             self._workspace_fallback_expires_at[workspace_key] = (
                 time.monotonic() + _MODEL_FAILURE_RETRY_SEC
             )
@@ -486,13 +482,10 @@ class CopilotBackend(Backend):
         if native_id is not None:
             cmd += ["--resume", native_id]
         elif record is not None:
-            # This client-selected UUID is not resumable until the CLI emits
-            # its matching session.start confirmation.
             candidate_id = str(uuid.uuid4())
             cmd += ["--session-id", candidate_id]
             await record.save(native_candidate_session_id=candidate_id)
 
-        # Native vision via --attachment flags.
         for image_path in image_paths:
             cmd += ["--attachment", image_path]
 
@@ -519,7 +512,6 @@ class CopilotBackend(Backend):
                 _remove_isolated_copilot_home(isolated_home)
             raise
 
-        # Key by Process, not PID.
         if record is None:
             self._process_homes.remember(proc, isolated_home)
         return proc
@@ -709,7 +701,6 @@ def _catalog_model_ids(values: object, *, key: str) -> tuple[str, ...]:
         nested = value.get("options")
         if isinstance(nested, list) and depth < _MAX_ACP_OPTION_GROUP_DEPTH:
             pending.append((nested, 0, depth + 1))
-    # ``auto`` stays available.
     return ("auto", *models) if models or "auto" in seen else ()
 
 

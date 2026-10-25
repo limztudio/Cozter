@@ -114,7 +114,6 @@ def _parse_models_output(output: str | bytes) -> tuple[str, ...]:
     reading_models = False
     for line in output.splitlines():
         stripped = line.strip()
-        # Case-insensitive heading match.
         if (
             len(stripped) == len("Available models:")
             and stripped.casefold() == "available models:"
@@ -167,9 +166,7 @@ class GrokBackend(CachedModelCatalog, Backend):
     supports_vision = True
     default_model = "grok-4.7"
     default_summary_model = "grok-4.7"
-    # Default-model vocabulary.
     effort_levels = (*_COMMON_EFFORT_LEVELS, "xhigh")
-    # Account-dependent catalog: leave tiers unset.
     tier_models: dict[str, str] = {}
     permission_arg_sets = {
         "full": ("--always-approve",),
@@ -290,7 +287,6 @@ class GrokBackend(CachedModelCatalog, Backend):
             if prompt_path:
                 _remove_prompt_file(prompt_path)
             raise
-# Key by Process, not PID.
         self._prompt_files.remember(proc, prompt_path)
         return proc
 

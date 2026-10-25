@@ -177,7 +177,6 @@ UPLOADS_DIR = "uploads"
 # Status previews must never block the stream or answer.
 _STATUS_OPERATION_TIMEOUT_SEC = 4.0
 _STATUS_EDIT_INTERVAL_SEC = 1.5
-# Ack is cosmetic; bound it.
 _INJECT_ACK_TIMEOUT_SEC = 8.0
 _ATTACHMENT_TAIL_WAIT_SEC = 5.0
 _ATTACHMENT_UPLOAD_CONCURRENCY = 3
@@ -185,7 +184,6 @@ _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
 # A stalled provider or chat must leave capacity for unrelated owners.
 _DURABLE_POLL_CONCURRENCY = 4
 _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
-# Precompiled for state save/load.
 _UNSAFE_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 NO_WORKSPACE_TEXT = (
     "No workspace selected (or it was deleted). Use /new or /open."
@@ -732,7 +730,6 @@ class BotPlatform(ABC):
         max_queue_size: int = config.DEFAULT_MESSAGE_QUEUE_SIZE,
         max_upload_bytes: int = config.DEFAULT_MAX_UPLOAD_BYTES,
     ):
-        # Startup-greet + default auth set.
         self.notify_targets: list[str] = [str(target) for target in notify_targets]
         self.recent_limit = recent_limit
         self.max_queue_size = max_queue_size
@@ -761,11 +758,9 @@ class BotPlatform(ABC):
         self._daemon_services_started = False
         # Update pulled; waiting for active replies before restart.
         self._update_restart_pending = False
-        # Serializes persistent-queue read-modify-write.
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
         # Staged final text for retry without rerunning.
         self._reply_delivery_file_lock: asyncio.Lock = asyncio.Lock()
-        # Per-user delivery-vs-cancel lock.
         self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
         # Recovery poll classes run independently; outbound chunks for one
         # owner still form one ordered delivery rather than interleaving.
@@ -774,7 +769,6 @@ class BotPlatform(ABC):
         self._pending_reply_delivery_users: set[str] = set()
         # Stop/cancel can overlap while durable file operations settle.
         self._cancel_work_depths: dict[str, int] = {}
-        # Pipelined attachment uploads: per-chat tails.
         self._attachment_tasks: dict[str, set[asyncio.Task]] = {}
         self._attachment_tails: dict[str, asyncio.Task] = {}
         # Detached tasks: results awaiting delivery, not prompts.
@@ -1326,7 +1320,6 @@ class BotPlatform(ABC):
 
         pending = self._pending_input.pop(ctx.user_id, None)
         if pending is not None:
-            # Multi-step flow continuation.
             await pending(ctx)
             return
         await self._ai_chat(ctx)
@@ -1337,7 +1330,6 @@ class BotPlatform(ABC):
             return
         if ctx.attachment is None:
             return
-        # File uploads cancel pending flows.
         self._pending_input.pop(ctx.user_id, None)
         await self._ai_file(ctx)
 
@@ -1374,7 +1366,6 @@ class BotPlatform(ABC):
         turn, which would strand that backlog forever.
         """
         for entry in msg_queue._queue:  # type: ignore[attr-defined]
-            # Only well-formed non-ephemeral entries count.
             if (
                 isinstance(entry, tuple)
                 and len(entry) == 4
@@ -1543,7 +1534,6 @@ class BotPlatform(ABC):
         )
         self._cancel_work_depths[uid] = self._cancel_work_depths.get(uid, 0) + 1
         try:
-            # Signal foreground agents first.
             task = self._running_tasks.get(uid)
             task_running = task is not None and not task.done()
             if task_running:
@@ -1598,8 +1588,6 @@ class BotPlatform(ABC):
             else:
                 self._cancel_work_depths.pop(uid, None)
 
-    # /new (dir-input flow)
-
     async def cmd_new(self, ctx: BotContext) -> None:
         current = workspace.get_current(ctx.user_id, self.platform_id)
         await ctx.reply_text(
@@ -1638,8 +1626,6 @@ class BotPlatform(ABC):
             return
         workspace.select_workspace(ctx.user_id, path, self.platform_id)
         await ctx.reply_text(f"Workspace created and selected:\n{path}")
-
-    # /open
 
     async def cmd_open(self, ctx: BotContext) -> None:
         if ctx.args.strip():
@@ -1718,14 +1704,11 @@ class BotPlatform(ABC):
         workspace.select_workspace(ctx.user_id, path, self.platform_id)
         await ctx.reply_text(f"Workspace selected:\n{path}")
 
-    # /model
-
     async def cmd_model(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
         if ws is None:
             return
         backend_name = workspace.get_backend_name(ws)
-        # Flexible has per-tier models.
         if backend_name == workspace.FLEXIBLE_BACKEND:
             await ctx.reply_text(self._flexible_summary(ws))
             return
@@ -1747,8 +1730,6 @@ class BotPlatform(ABC):
             set_model=workspace.set_model,
             success_text="Model set to: {model}",
         )
-
-    # /summarymodel
 
     async def cmd_summary_model(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1776,8 +1757,6 @@ class BotPlatform(ABC):
             set_model=workspace.set_summary_model,
             success_text="Summary model set to: {model}",
         )
-
-    # /agent
 
     async def cmd_agent(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -1814,7 +1793,6 @@ class BotPlatform(ABC):
         _, model, summary_model, _, summary_backend = (
             workspace.get_run_config(ws)
         )
-        # Always show the summary agent.
         await ctx.reply_text(
             f"Agent set to: {name}\n"
             f"Model: {model}\n"
@@ -1975,8 +1953,6 @@ class BotPlatform(ABC):
         native = backends_agent.get_backend(name).describe_effort(workspace.get_reasoning_effort(ws), model)
         return f"{name}/{model} → {native}"
 
-    # Flexible tier settings.
-
     async def _show_flexible_agent(self, ctx: BotContext, tier: str) -> None:
         ws = await self._require_ws(ctx)
         if ws is None:
@@ -2054,14 +2030,12 @@ class BotPlatform(ABC):
             success_text=f"Flexible {tier} model set to: {{model}}",
         )
 
-    # /summaryagent
 
     async def cmd_summary_agent(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
         if ws is None:
             return
         current = workspace.get_summary_backend_name(ws)
-        # The summary agent runs compaction/titling/plan/merge.
         options = workspace.SUMMARY_BACKENDS
         await ctx.reply_text("\n".join([
             f"Current summary agent: {current}\n",
@@ -2085,7 +2059,6 @@ class BotPlatform(ABC):
             f"Summary model: {summary_model}"
         )
 
-    # /permission
 
     async def cmd_permission(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -2136,7 +2109,6 @@ class BotPlatform(ABC):
         desc = workspace.PERMISSION_DESCRIPTIONS[perm]
         await ctx.reply_text(f"Permission set to: {perm}\n{desc}")
 
-    # /style
 
     async def cmd_style(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -2179,7 +2151,6 @@ class BotPlatform(ABC):
         desc = workspace.STYLE_DESCRIPTIONS[style]
         await ctx.reply_text(f"Interaction style set to: {style}\n{desc}")
 
-    # /effort
 
     async def cmd_effort(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -2265,7 +2236,6 @@ class BotPlatform(ABC):
         await ctx.reply_text(f"Flexible {tier} reasoning effort set to: {self._flexible_effort_text(ws, tier)}"
                              + f"\n{self._effort_resolution_text(ws, tier)}")
 
-    # /refresh
 
     async def cmd_refresh(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -2287,7 +2257,6 @@ class BotPlatform(ABC):
             + "\nSelected models, configuration, and native conversations are preserved."
         )
 
-    # /compact
 
     @staticmethod
     def _first_command_argument(ctx: BotContext) -> str:
@@ -2366,7 +2335,6 @@ class BotPlatform(ABC):
         ]
         await ctx.reply_text("\n".join(lines))
 
-    # /context
 
     async def cmd_context(self, ctx: BotContext) -> None:
         ws = await self._workspace_for_decimal_setting(
@@ -2393,7 +2361,6 @@ class BotPlatform(ABC):
         ]
         await ctx.reply_text("\n".join(lines))
 
-    # /newsession
 
     async def cmd_new_session(self, ctx: BotContext) -> None:
         """Start a fresh session in the current workspace.
@@ -2415,7 +2382,6 @@ class BotPlatform(ABC):
             "Your next message goes into this fresh session.",
         )
 
-    # /sessions
 
     @staticmethod
     def _pick_session(choice: str, sessions: list[dict]) -> dict | None:
@@ -2494,8 +2460,6 @@ class BotPlatform(ABC):
             "Your next message continues this conversation.",
         )
 
-    # /colony
-
     async def cmd_colony(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
         if ws is None:
@@ -2551,17 +2515,13 @@ class BotPlatform(ABC):
         ])
         await ctx.reply_text("\n".join(lines))
 
-    # /stop
-
     async def cmd_stop(self, ctx: BotContext) -> None:
-        # /stop abandons questions and queued prompts.
         task_running, cancelled_work = await self._cancel_user_work(ctx.user_id)
         if task_running or cancelled_work:
             await ctx.reply_text("Cancelled.")
             return
         await ctx.reply_text("Nothing is running.")
 
-    # /bg, /background
 
     async def cmd_background(self, ctx: BotContext) -> None:
         """Launch a provider-owned detached task and arrange its callback."""
@@ -2693,8 +2653,6 @@ class BotPlatform(ABC):
         except Exception:
             logger.warning("Could not stop cancelled detached launch %s", launch.task_id, exc_info=True)
 
-    # /inject
-
     async def cmd_inject(self, ctx: BotContext) -> None:
         text = ctx.args.strip()
         if not text:
@@ -2704,13 +2662,12 @@ class BotPlatform(ABC):
         if inject_q is not None:
             outcome = inject_q.put_if_active(text)
             if outcome == "accepted":
-                # Ack is cosmetic; bound it.
                 try:
                     await asyncio.wait_for(
                         ctx.reply_text("Injected."),
                         timeout=_INJECT_ACK_TIMEOUT_SEC,
                     )
-                except TimeoutError:  # == asyncio.TimeoutError on 3.11+
+                except TimeoutError:
                     logger.warning(
                         "Inject ack send timed out after %.1fs (message queued)",
                         _INJECT_ACK_TIMEOUT_SEC,
@@ -2761,7 +2718,6 @@ class BotPlatform(ABC):
             if self._cancel_generations.get(uid, 0) == generation:
                 self._start_queue_drain(uid)
 
-    # /reserve (recurring schedule wizard)
 
     async def cmd_reserve(self, ctx: BotContext) -> None:
         ws = await self._require_ws(ctx)
@@ -2872,7 +2828,6 @@ class BotPlatform(ABC):
             f"  Command: {command}"
         )
 
-    # /schedules (list/delete)
 
     def _platform_schedules(self, ws: str, uid: str) -> list[dict]:
         """Return only schedules explicitly owned by this platform."""
@@ -2940,7 +2895,6 @@ class BotPlatform(ABC):
     def _platform_state_file_path(self, stem: str) -> str:
         """Return a durable per-platform state path with a safe file name."""
         os.makedirs(workspace.CONFIG_DIR, exist_ok=True)
-        # Sanitize platform_id for files.
         safe = _UNSAFE_FILENAME_CHARS_RE.sub('_', self.platform_id)
         return os.path.join(workspace.CONFIG_DIR, f"{stem}_{safe}.json")
 
@@ -3008,7 +2962,7 @@ class BotPlatform(ABC):
 
         entry = await run_durable_file_operation(self._queue_file_lock, read)
         if entry is None:
-            return  # /stop already removed it
+            return
         queue = self._ensure_message_queue(uid)
         if not any(isinstance(item, tuple) and len(item) == 4
                    and item[2] == entry_id for item in queue._queue):
@@ -3197,7 +3151,6 @@ class BotPlatform(ABC):
         persisted entries, refill the in-memory queue and spawn a drain
         task so the oldest entry runs first.
         """
-        # Park prompts with staged replies.
         await self.restore_reply_deliveries()
         data = await run_durable_file_operation(
             self._queue_file_lock, self._read_queue_file,
@@ -3217,7 +3170,6 @@ class BotPlatform(ABC):
             for entry in entries:
                 if entry.get("id") in cached_ids or entry.get("id") == self._active_queue_entries.get(uid):
                     continue
-                # Oldest-first preserves ordering.
                 msg_queue.put_nowait((
                     entry.get("text", ""),
                     entry.get("chat_id", ""),
@@ -3377,7 +3329,6 @@ class BotPlatform(ABC):
         def staged(outcome: tuple[dict, bool]) -> None:
             if outcome[1]:
                 self._pending_reply_delivery_users.add(uid)
-                # Starting is idempotent.
                 self.start_detached_task_watcher()
 
         record, _ = await run_durable_file_operation(
@@ -4074,7 +4025,6 @@ class BotPlatform(ABC):
         result = agent.AgentResult()
         agent.append_text_result(result, message)
         try:
-            # Uploads stay user-owned.
             await self._send_detached_result(
                 record["chat_id"], record["workspace_path"], result,
                 record["user_id"],
@@ -4254,7 +4204,6 @@ class BotPlatform(ABC):
 
     async def _scheduler_loop(self) -> None:
         """Poll every 30s; fire schedules whose day+time match 'now'."""
-        # Let the platform start.
         await asyncio.sleep(5)
         while True:
             try:
@@ -4426,7 +4375,7 @@ class BotPlatform(ABC):
         if ws is None:
             return
         attachment = ctx.attachment
-        assert attachment is not None  # dispatch_file already checked
+        assert attachment is not None
 
         rel_path = os.path.relpath(attachment.local_path, ws)
         parts: list[str] = []
@@ -5065,7 +5014,6 @@ class BotPlatform(ABC):
                     log=logger,
                 )
 
-        # [[await]] pause is interactive-only.
         if queue_entry_id is None:
             await self._send_result(
                 chat_id, ws, result,
@@ -5355,7 +5303,6 @@ class BotPlatform(ABC):
             for path in attach_paths:
                 await run_owned_worker(collect_attachment, path)
 
-        # Compact per-turn token/cost footer.
         if result.usage and config.get_show_usage():
             footer = agent.format_usage(result.usage)
             if footer:

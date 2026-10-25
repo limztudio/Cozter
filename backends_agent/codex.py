@@ -143,7 +143,6 @@ class CodexBackend(Backend):
     effort_levels = (*common_effort_levels, "max", "ultra")
 
     def __init__(self) -> None:
-        # Singletons: short-interval refresh.
         self._cached_model_catalog: (
             tuple[tuple[str, ...], dict[str, tuple[str, ...]]] | None
         ) = None
@@ -349,7 +348,6 @@ class CodexBackend(Backend):
             approval,
             model_flag="-m",
             effort_flag="-c",
-            # Effort rides the config-override flag.
             effort_template="model_reasoning_effort={effort}",
         )
         if native_id is not None:
@@ -359,9 +357,8 @@ class CodexBackend(Backend):
             await record.save(native_session_id=native_id, native_resume_supported=True,
                               native_resume_attempted=native_id is not None,
                               native_tools_started=False, native_resume_unavailable=False)
-        cmd.append("-")  # read prompt from stdin
+        cmd.append("-")
 
-        # Vision: repeatable -i/--image flags ride as real pixels.
         if self.supports_vision and not compaction:
             for image_path in attachment_image_paths(prompt, workspace_path):
                 cmd += ["--image", image_path]
@@ -382,7 +379,6 @@ class CodexBackend(Backend):
             record.set(native_tools_started=True)
         if event_type == "thread.started":
             execution_state.adopt_native_session_id(event.get("thread_id"))
-        # `or {}` guards present-but-null `"item"`.
         item = event.get("item") or {}
         if not isinstance(item, dict):
             item = {}

@@ -135,7 +135,7 @@ class InterruptedTurnMemoryTests(unittest.IsolatedAsyncioTestCase):
             await kwargs["on_event"](
                 ChatEvent(kind="text", content="Refactored router.py;"),
             )
-            await asyncio.Event().wait()  # hang until /stop cancels us
+            await asyncio.Event().wait()
 
         with tempfile.TemporaryDirectory() as workspace_path:
             data = await asyncio.to_thread(

@@ -103,10 +103,8 @@ class AgentTool(ABC):
     parallel_safe: ClassVar[bool] = False
     max_result_chars: ClassVar[int] = 4_000
 
-    # Set per instance by the loader.
     is_plugin: bool = False
 
-    # Populated by __init_subclass__.
     registry: ClassVar[list[AgentTool]] = []
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -114,7 +112,6 @@ class AgentTool(ABC):
         if getattr(cls.run, "__isabstractmethod__", False):
             return
         instance = cls()
-        # Idempotent re-registration.
         AgentTool.registry[:] = [
             tool for tool in AgentTool.registry if tool.name != instance.name
         ]
@@ -820,7 +817,7 @@ def apply_string_replacement(
     return content.replace(old, new, replacements), count, replacements
 
 
-_MAX_EDIT_FILE_BYTES = 5 * 1024 * 1024  # 5 MiB
+_MAX_EDIT_FILE_BYTES = 5 * 1024 * 1024
 
 
 def _edit_file_too_large_error() -> str:
@@ -966,7 +963,6 @@ def copy_file_atomically(source_path: str, target_path: str) -> bool:
             tmp_path, target_path, preserve_metadata=True,
         )
     finally:
-        # Temp stays ours either way.
         with suppress(OSError):
             os.unlink(tmp_path)
 
@@ -1157,7 +1153,6 @@ def _move_regular_file_no_clobber(source_path: str, target_path: str) -> bool:
     except OSError as exc:
         if not _hard_link_unsupported(exc):
             raise
-        # No-link filesystem: finished-copy publish instead.
         if not copy_file_atomically(source_path, target_path):
             return False
         target_stat = os.stat(target_path, follow_symlinks=False)
@@ -1207,7 +1202,6 @@ def _complete_no_clobber_move(
     try:
         os.unlink(source_path)
     except OSError:
-        # Roll back only our target.
         _unlink_if_same_file(target_path, target_stat)
         raise
 
@@ -1273,14 +1267,12 @@ async def read_bounded_text(
     remaining = _MAX_FETCH_BYTES
     truncated = False
     while remaining:
-        # read(n) may short-return: loop.
         chunk = await resp.content.read(min(64 * 1024, remaining))
         if not chunk:
             break
         chunks.append(chunk)
         remaining -= len(chunk)
         if remaining <= 0:
-            # Probe one byte without buffering.
             extra = await resp.content.read(1)
             if extra:
                 truncated = True
@@ -1348,7 +1340,6 @@ def is_public_ip(value: str) -> bool:
     except ValueError:
         return False
 
-    # Scoped IPv6 is never public.
     if isinstance(address, ipaddress.IPv6Address) and address.scope_id:
         return False
 
@@ -1415,7 +1406,6 @@ def validate_public_url(url: str) -> str | None:
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        # Same IDNA handling as aiohttp/yarl.
         numeric_host = host.encode("idna").decode("ascii")
     else:
         numeric_host = host
@@ -1525,7 +1515,6 @@ async def open_public_http_session() -> AsyncIterator[_http_types.ClientSession]
     resolver = _http_types.PublicResolver()
     connector = aiohttp.TCPConnector(
         resolver=resolver,
-        # Re-resolve per connection.
         use_dns_cache=False,
     )
     try:

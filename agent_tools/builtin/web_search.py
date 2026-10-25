@@ -90,10 +90,6 @@ class WebSearchTool(AgentTool):
                             if search_capped:
                                 body += "<!-- … [fetch capped at 5 MB — preview only] -->"
                             saw_local_page = True
-                            # This pure parse has a byte-capped input and
-                            # forward-only scanners. Cancellation closes the
-                            # response context while a bounded parse can finish
-                            # on its worker thread without side effects.
                             results = await asyncio.to_thread(_parse_results, body, max_results)
                             if results:
                                 return results, local_failures, True

@@ -62,7 +62,6 @@ _NO_EFFORT_MODELS = frozenset({
 })
 _FOUR_LEVEL_EFFORTS = ("low", "medium", "high", "max")
 
-# https://code.claude.com/docs/en/model-config#extended-context
 _LONG_CONTEXT_WINDOW_TOKENS = 1_000_000
 _STANDARD_CONTEXT_WINDOW_TOKENS = 200_000
 _ONE_MILLION_CONTEXT_MODELS = frozenset({
@@ -132,7 +131,6 @@ def _background_guard_settings() -> str:
         os.path.dirname(__file__), "claude_background_guard.py",
     )
     return json.dumps({
-        # CLI settings win.
         "disableAllHooks": False,
         "hooks": {
             "PreToolUse": [{
@@ -318,7 +316,6 @@ def _iter_bounded_transcript_lines(path: str):
                 yield line
                 continue
 
-            # readline(limit) may split lines.
             while not line.endswith(b"\n"):
                 line = file_handle.readline(_MAX_DETACHED_TRANSCRIPT_LINE_BYTES + 1)
                 if not line:
@@ -539,7 +536,6 @@ class ClaudeCodeBackend(Backend):
         "restricted": ("--permission-mode", "plan"),
     }
     supports_detached_tasks = True
-    # Curated fallback (+ config.extra_models).
     available_models = (
         "default",
         "sonnet",
@@ -629,8 +625,7 @@ class ClaudeCodeBackend(Backend):
             *prefix,
             "--print",
             "--output-format", "stream-json",
-            "--verbose",  # required with stream-json
-            # Claude's Bash is outside our tree; the hook blocks background jobs.
+            "--verbose",
             "--settings", _background_guard_settings(),
         ]
         if record is None:
@@ -677,7 +672,6 @@ class ClaudeCodeBackend(Backend):
             "--settings", _background_guard_settings(),
         ]
         self.append_launch_options(cmd, model, effort, approval)
-        # ``--bg`` takes a positional prompt.
         cmd.append(prompt)
 
         returncode, stdout, stderr = await _run_claude_command(
@@ -715,7 +709,6 @@ class ClaudeCodeBackend(Backend):
                 "Claude Code background task listing failed for %s: %s",
                 task_id, stderr or stdout,
             )
-            # Transient supervisor errors aren't disappearance.
             local = _local_background_status(workspace_path, task_id)
             if local is not None:
                 return local
@@ -851,7 +844,6 @@ class ClaudeCodeBackend(Backend):
         )
 
     def extract_agent_text(self, event: dict) -> str | None:
-        # Compaction prefers terminal result.result.
         return extract_messages_style_agent_text(event)
 
     def _handle_user_tool_results(
@@ -932,5 +924,4 @@ class ClaudeCodeBackend(Backend):
             ))
             return
 
-        # Best-effort summary for generic tools.
         result.events.append(ChatEvent(kind="tool", content=tool))

@@ -95,9 +95,6 @@ def skill_planning_scope() -> Iterator[None]:
         _SKILL_PLANNING.reset(token)
 
 
-# Import siblings to trigger self-registration.
-
-
 def _load_subpackage(subpackage: str, *, mark_as_plugin: bool) -> None:
     """Import every module of ``agent_tools/<subpackage>/`` so tool classes
     inside auto-register via ``AgentTool.__init_subclass__``. New
@@ -119,7 +116,6 @@ def _load_subpackage(subpackage: str, *, mark_as_plugin: bool) -> None:
         try:
             importlib.import_module(f"{package_name}.{module_info.name}")
         except Exception:
-            # May have self-registered: roll back.
             AgentTool.registry[:] = before
             logger.exception(
                 "Failed to load %s.%s", package_name, module_info.name,
@@ -316,7 +312,6 @@ async def execute_tool(
     emit: _EmitFunc,
 ) -> str:
     """Run a tool by name; emit status events; return the result string."""
-    # Normalize malformed output before emitting.
     if not isinstance(name, str):
         name = ""
     if not isinstance(args, dict):
@@ -358,7 +353,6 @@ async def execute_tool(
         approval = "confirm"
 
     if approval not in {"auto", "full", "confirm"}:
-        # Schemas omit tools; fail closed.
         logger.info("%s mode blocked tool: %s", approval, name)
         result = (
             f"Blocked: '{name}' cannot run because permission mode "
@@ -367,7 +361,6 @@ async def execute_tool(
         return _emit_tool_result(emit, name, result)
 
     if approval == "confirm" and not _is_confirm_read_only(tool):
-        # "confirm" is a read-only gate.
         logger.info("confirm mode blocked state-changing tool: %s", name)
         result = (
             f"Blocked: '{name}' can change state, and confirm mode only "

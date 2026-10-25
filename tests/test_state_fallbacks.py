@@ -356,10 +356,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             original_get_max_permission = config.get_max_permission
             config.get_max_permission = _auto_ceiling
             try:
-                # Above the ceiling is rejected.
                 with self.assertRaises(ValueError):
                     workspace.set_permission(tmp, "full")
-                # At/below allowed.
                 workspace.set_permission(tmp, "auto")
                 self.assertEqual(workspace.get_permission(tmp), "auto")
                 # Stored higher values clamp on read.
@@ -375,11 +373,9 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
 
     def test_interaction_style_falls_back_to_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            # Missing -> default.
             self.assertEqual(
                 workspace.get_interaction_style(tmp), "collaborative",
             )
-            # Invalid -> default.
             os.makedirs(os.path.join(tmp, ".cozter"))
             with open(
                 os.path.join(tmp, ".cozter", "settings.json"),
@@ -405,9 +401,8 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
     def test_extra_models_parsing_tolerates_malformed(self) -> None:
         with temporary_config({
             "extra_models": {
-                # Non-string entries dropped.
                 "codex": ["private-codex-model", "", 123],
-                "copilot": "not-a-list",         # wrong type -> []
+                "copilot": "not-a-list",
             },
         }):
             self.assertEqual(
@@ -418,7 +413,6 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             self.assertEqual(config.get_extra_models("missing"), [])
 
     def test_extra_models_missing_or_non_object_returns_empty(self) -> None:
-        # No config file -> [].
         old = config.CONFIG_PATH
         config.CONFIG_PATH = "/nonexistent/config.json"
         try:
@@ -1091,7 +1085,6 @@ class SessionStateFallbackTests(unittest.TestCase):
                 tmp, data["id"],
                 [{"role": "user", "content": str(index)} for index in range(5)],
             )
-            # Negative retain-count clamps to 0.
             session.set_summary(tmp, data["id"], "s", keep_recent=-3, summarized_count=5)
             loaded = session.load_session(tmp, data["id"])
             assert loaded is not None

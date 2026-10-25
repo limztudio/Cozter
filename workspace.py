@@ -263,15 +263,12 @@ def ensure_cozter_dir(path: str) -> None:
     _workspace_state_dir(path, create=True)
 
 
-# Settings (``.cozter/settings.json``)
-
 AVAILABLE_BACKENDS = backends_agent.AVAILABLE_BACKENDS
 # Real-turn backends; ``flexible`` can't be its own tier.
 DIRECT_BACKENDS = backends_agent.DIRECT_BACKENDS
 SUMMARY_BACKENDS = backends_agent.SUMMARY_BACKENDS
 DEFAULT_BACKEND = backends_agent.DEFAULT_BACKEND
 FLEXIBLE_BACKEND = backends_agent.FLEXIBLE_BACKEND
-# Compaction/titling default to codex.
 DEFAULT_SUMMARY_BACKEND = backends_agent.DEFAULT_DIRECT_BACKEND
 
 FLEXIBLE_TIERS = flexible.TIERS
@@ -771,7 +768,6 @@ def get_reasoning_effort(workspace_path: str) -> int:
 
 def set_reasoning_effort(workspace_path: str, effort: int) -> None:
     """Clamp to 0-100 and persist."""
-    # Strict int-only: reject floats/strings loudly.
     if isinstance(effort, bool) or not isinstance(effort, int):
         raise ValueError("reasoning effort must be an integer 0-100")
     clamped = max(0, min(effort, 100))

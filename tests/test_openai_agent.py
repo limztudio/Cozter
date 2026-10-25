@@ -75,7 +75,6 @@ class OpenAIRetryLoopTests(unittest.TestCase):
 
     def _run(self, once) -> tuple:
         oa._stream_once = once
-        # max_retries=2: attempt + 2 retries.
         return asyncio.run(oa._stream_completion(
             "http://x/chat/completions", {}, {}, 2, "test",
         ))
@@ -124,7 +123,7 @@ class OpenAIRetryLoopTests(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             self._run(once)
-        self.assertEqual(calls["n"], 3)  # initial + 2 retries
+        self.assertEqual(calls["n"], 3)
 
 
 class _SseContent:
@@ -1022,7 +1021,6 @@ class OpenAIParallelToolTests(unittest.TestCase):
 
         _run_tool_fixture(stream, execute_tool)
 
-        # Overlap proves gather.
         self.assertGreaterEqual(peak, 2)
         tool_msgs = [
             msg for msg in payloads[1]["messages"] if msg.get("role") == "tool"

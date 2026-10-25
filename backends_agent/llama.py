@@ -23,8 +23,7 @@ logger = logging.getLogger(__name__)
 
 class LlamaBackend(CachedOpenAIChatBackend):
     name = "llama"
-    executable = "llama-server"  # "not found" error text only
-    # From /v1/models, cached briefly.
+    executable = "llama-server"
     default_model = "auto"
     default_summary_model = "auto"
 

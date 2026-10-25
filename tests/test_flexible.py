@@ -495,11 +495,9 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             workspace.ensure_cozter_dir(ws)
             result, _ = await self._run(ws)
 
-        # Worker text is internal.
         texts = [event.content for event in result.events if event.kind == "text"]
         self.assertEqual(texts, ["merged answer"])
         self.assertEqual(result.text, "merged answer")
-        # Their tool events still stream through.
         self.assertEqual(
             len([event for event in result.events if event.kind == "tool"]), 2,
         )
@@ -662,7 +660,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
             self.internal.append(kwargs["label"])
             if kwargs["label"] == "Flexible planner":
                 return self.plan_output
-            return None  # CLI not found
+            return None
 
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)

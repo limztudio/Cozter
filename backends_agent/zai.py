@@ -37,15 +37,11 @@ class _ZaiModelSpec(NamedTuple):
     streams_tools: bool
 
 
-# Discovery fallback: curated chat IDs + capabilities.
 _FALLBACK_MODEL_SPECS = (
-    # General endpoint flagship.
     _ZaiModelSpec("glm-5.3", 1_000_000, True, True),
-    # Flash/FlashX share the endpoint.
     _ZaiModelSpec("glm-5.3-flash", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.3-flashx", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.2", 1_000_000, True, True),
-    # Vision: no text-only ``tool_stream`` extension.
     _ZaiModelSpec("glm-5v-turbo", 200_000, True, False),
     _ZaiModelSpec("glm-5.1", 200_000, True, True),
     _ZaiModelSpec("glm-5-turbo", 200_000, True, True),
@@ -106,9 +102,7 @@ _NON_CHAT_COMPLETION_MODEL_IDS = frozenset({
     # Phone-use agent, not a workspace chat model.
     "autoglm-phone-multilingual",
 })
-# 4.6V has native functions (not 4.5V): keep 4.5V text-only.
 _NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
-# These two always reason.
 _COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
 _GLM_5_3_REASONING_MODELS = frozenset({"glm-5.3", "glm-5.3-flash", "glm-5.3-flashx"})
 _GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
@@ -148,7 +142,6 @@ class ZaiBackend(CachedOpenAIChatBackend):
         "high": "glm-5.3",
     }
     # GLM-5.2 aliases xhigh to max; keep only its distinct levels.
-    # https://docs.z.ai/guides/capabilities/thinking
     effort_levels = ("none", "high", "max")
 
     def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
@@ -232,7 +225,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
         was selected, request the provider's normal enabled-thinking mode so
         an upcoming tool result can carry the required opaque block.
         """
-        del model  # Capability was checked by _preserve_reasoning_content.
+        del model
         thinking = effort_fields.get("thinking")
         if isinstance(thinking, dict):
             return {

@@ -1303,7 +1303,6 @@ class ParseOpenAICallTests(unittest.TestCase):
         self.assertEqual(args, {"path": "a.py"})
 
     def test_dict_arguments_are_accepted(self) -> None:
-        # Already-parsed objects must not crash.
         _, args = agent_tools.parse_openai_call(
             {"function": {"name": "x", "arguments": {"path": "b.py"}}},
         )
@@ -1345,7 +1344,7 @@ class TreeToolTests(unittest.TestCase):
                 for marker in ("src/", "main.py", "pkg/", "util.py",
                                "README.md"):
                     self.assertIn(marker, out)
-                self.assertNotIn(".git", out)  # noise dir skipped
+                self.assertNotIn(".git", out)
 
         asyncio.run(run())
 
@@ -1356,7 +1355,7 @@ class TreeToolTests(unittest.TestCase):
                 self._touch(os.path.join(tmp, "a", "b", "c", "deep.py"))
                 out = await TreeTool().run(tmp, {"depth": 1})
                 self.assertIn("a/", out)
-                self.assertNotIn("deep.py", out)  # beyond depth 1
+                self.assertNotIn("deep.py", out)
 
         asyncio.run(run())
 

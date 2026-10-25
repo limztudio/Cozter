@@ -76,7 +76,6 @@ class CliBot(BotPlatform):
         pass
 
     async def send_file(self, chat_id: str, path: str) -> None:
-        # Local-only files: absolute path.
         print(f"[Attached file: {os.path.abspath(path)}]")
 
     async def send_status(self, chat_id: str, text: str) -> None:

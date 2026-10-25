@@ -24,12 +24,11 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-# One compaction per session.
 _IN_FLIGHT: set[tuple[str, str]] = set()
 
 
 KEEP_RECENT_AFTER_COMPACT = 5
-MAX_SUMMARY_CHARS = 80_000  # ~20K tokens
+MAX_SUMMARY_CHARS = 80_000
 
 # Trigger before stored material crowds the reply.
 _MODEL_CONTEXT_COMPACT_FRACTION = 0.60
@@ -42,7 +41,6 @@ _PREVIOUS_SUMMARY_TRUNCATION_MARKER = (
     "\n… [previous summary truncated: remainder omitted — this is a preview,"
     " not full coverage; say PARTIAL + remainder when coverage is unclear]\n"
 )
-# Shared oversized-first-message marker.
 _OVERSIZED_MESSAGE_MARKER = (
     "… [message truncated for budget — preview only;"
     " summarize only shown prefix; say PARTIAL + remainder]"
@@ -433,7 +431,6 @@ async def _maybe_compact_under_maintenance_lock(
         return
     keep_recent = KEEP_RECENT_AFTER_COMPACT
     if oversized_first is not None:
-        # Retain the unseen suffix.
         if covered_count != 1:
             logger.error(
                 "Oversized-message compaction covered an unsafe number of "

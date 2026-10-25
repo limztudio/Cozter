@@ -18,9 +18,7 @@ from ..utils import (
     clip_status_value,
 )
 
-# Shared catalog refresh cadence.
 MODEL_CATALOG_TTL_SEC = 60.0
-# Shared detached-task stub suffix.
 _DETACHED_UNSUPPORTED_SUFFIX = "does not support detached tasks"
 # CLI probe timeouts (copilot/HTTP use their own).
 CLI_MODEL_DISCOVERY_TIMEOUT_SEC = 15
@@ -40,7 +38,6 @@ class NativeSessionUnavailableError(Exception):
         super().__init__(f"{backend_name} exact native session {native_session_id} is unavailable")
 
 
-# Canonical turn-preamble wording (agent.py re-exports).
 WHOLE_SCOPE_RULE = (
     "Whole-scope: all/entire/every/whole = list every target first,"
     " do each, re-check leftovers; never sample; never claim done"
@@ -430,7 +427,7 @@ def grok_prompt_json(prompt: str, image_paths: list[str]) -> str:
 @dataclass
 class ChatEvent:
     """An event produced during an agent turn."""
-    kind: str  # "tool", "file", "text", "attachment"
+    kind: str
     content: str
 
 
@@ -454,7 +451,6 @@ class DetachedTaskStatus:
     waiting_for: str = ""
 
 
-# Presentation-only empty-reply fallback: never stored.
 NO_RESPONSE_TEXT = "(no response)"
 
 
@@ -503,7 +499,6 @@ class AgentResult:
         default_factory=list,
     )
     session_id: str | None = None
-    # Per-run parser correlation ids.
     detached_task_tool_use_ids: set[str] = field(
         default_factory=set, repr=False,
     )
@@ -813,13 +808,11 @@ class Backend(ABC):
     name: str = ""
     executable: str = ""  # binary name used in "CLI not found" messages
     available_models: tuple[str, ...] = ()
-    # Curated catalogs accept ``config.extra_models``.
     allow_unverified_extra_models: bool = True
     default_model: str = ""
     default_summary_model: str = ""
     effort_levels: tuple[str, ...] = ()
 
-    # Per-tier defaults for flexible.
     tier_models: dict[str, str] = {}
 
     # True = consumes TOOL_SCHEMA directly (OpenAI-shape HTTP).
@@ -829,10 +822,8 @@ class Backend(ABC):
     supports_read_only_workers: bool = False
     supports_internal_calls: bool = True
 
-    # Untyped bash/plugin prelude for CLIs.
     supports_plugin_prelude: bool = True
 
-    # Native image pixels.
     supports_vision: bool = False
 
     # Provider-owned jobs queryable after our subprocess exits.

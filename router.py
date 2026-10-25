@@ -135,7 +135,6 @@ def _parse_router_output(raw: str, valid_ids: set[str]) -> str | None:
             continue
         if token.upper() == "NEW":
             return "NEW"
-        # IDs may carry punctuation.
         if token in valid_ids:
             return token
     return None

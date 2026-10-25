@@ -20,7 +20,6 @@ from .utils import extract_marker_block
 
 BACKEND_NAME = "flexible"
 
-# Difficulty tiers, cheapest first.
 TIERS: tuple[str, ...] = ("low", "mid", "high")
 
 # Start with scoped inspection when difficulty is unknown.
@@ -443,8 +442,8 @@ _FOLLOWUP_LINE_RE = re.compile(
 )
 
 _PLAN_LINE_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?"      # optional bullet / "3." numbering
-    r"\[\s*(?P<tier>[A-Za-z]+)\s*\]\s*"     # [high]
+    r"^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?"
+    r"\[\s*(?P<tier>[A-Za-z]+)\s*\]\s*"
     r"(?P<instruction>.+?)\s*$",
     re.IGNORECASE,
 )

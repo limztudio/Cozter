@@ -177,7 +177,7 @@ class NotesToolTests(unittest.TestCase):
             size = len(file_handle.read())
         notes = self.invoke("read")
         self.assertLessEqual(size, 64 * 1024 + 16 * 1024)
-        self.assertIn("entry 399", notes)  # newest entry always kept
+        self.assertIn("entry 399", notes)
 
     def test_tail_read_and_clipped_entry_mark_preview_and_partial(self) -> None:
         for index in range(60):
@@ -299,7 +299,6 @@ class GitInfoToolTests(unittest.TestCase):
                 self.assertFalse(os.path.exists(marker))
 
     def test_diff_without_head_falls_back_to_index(self) -> None:
-        # Zero-commit repository: no HEAD yet.
         with open(os.path.join(self.workspace, "a.txt"), "w") as file_handle:
             file_handle.write("staged\n")
         self._git("add", "a.txt")
@@ -466,7 +465,7 @@ class GitOpsToolTests(_GitRepoTestCase):
         )
         checked_out = self.invoke(action="checkout", branch="feat/x")
         self.assertTrue(checked_out.startswith("OK"), checked_out)
-        self.assertIn("feat/x", checked_out)  # Git reports checkout on stderr.
+        self.assertIn("feat/x", checked_out)
 
     def test_branch_delete_and_rename(self) -> None:
         self.write("a.txt", "hello\n")
@@ -731,7 +730,7 @@ class MemoryToolTests(unittest.TestCase):
         )
         result = self.invoke(action="search", query="redis")
         self.assertIn("Found 1 match(es)", result)
-        self.assertIn("…", result)  # long content is excerpted
+        self.assertIn("…", result)
         self.assertIn("port 6379", result)
 
     def test_search_matches_unicode_casefold_expansions_and_equivalences(self) -> None:
@@ -831,7 +830,7 @@ class MemoryToolTests(unittest.TestCase):
         self.assertIn("30 message(s), showing last 3", result)
         self.assertIn("28.", result)
         self.assertNotIn("1. User:", result)
-        self.assertIn("…", result)  # per-line cap applied
+        self.assertIn("…", result)
         self.assertIn("[line clipped]", result)
 
     def test_colony_search_covers_items_beyond_the_output_limit(self) -> None:
@@ -1129,7 +1128,7 @@ class HttpRequestToolTests(unittest.TestCase):
             url="https://api.example.com/old",
         )
         self.assertIn("publicly routable", result)
-        self.assertEqual(len(session.calls), 1)  # redirect was not followed
+        self.assertEqual(len(session.calls), 1)
 
     def test_too_many_redirects_refused(self) -> None:
         responses = [

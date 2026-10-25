@@ -16,7 +16,7 @@ from .base import AgentResult, Backend
 
 class FlexibleBackend(Backend):
     name = BACKEND_NAME
-    executable = "flexible"  # never spawned; error-text parity
+    executable = "flexible"
 
     # No model of its own; /model picker points at tier commands.
     available_models = ()

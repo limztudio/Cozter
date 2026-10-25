@@ -238,8 +238,6 @@ class NativeCliContinuationTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(record.get("native_resume_attempted"))
             self.assertFalse(record.get("native_tools_started"))
 
-            # Once the driver selects bootstrap input, a fresh launch remains
-            # possible with the same provider/model/permission/effort.
             cmd, _, proc = await self.launch(copilot, backend, "fixture-model")
             self.assertNotIn("--resume", cmd)
             self.assertIn("--session-id", cmd)

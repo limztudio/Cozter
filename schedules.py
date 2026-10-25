@@ -163,8 +163,6 @@ def update_schedule_fired(
     return claimed
 
 
-# Field parsers + time-slot computation
-
 def _parse_year_day(value: str) -> str | None:
     parts = value.split("/")
     if len(parts) != 2 or any(
@@ -240,7 +238,6 @@ def parse_days(text: object) -> list[ScheduleDay]:
         if day is None:
             return []
         days.append(day)
-    # dict.fromkeys dedups, preserving order.
     return list(dict.fromkeys(days))
 
 

@@ -683,7 +683,7 @@ class UpdateHandoffTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.wait_for(update, 1)
                 self.assertEqual(bot.gated, changed)
                 self.assertEqual(bot.cancel_update_restart.await_count, 0 if changed else 1)
-                bot.stop.assert_not_awaited()  # Parent shutdown owns these stops.
+                bot.stop.assert_not_awaited()
         self.install.assert_not_called()
         self.restart.assert_not_called()
 

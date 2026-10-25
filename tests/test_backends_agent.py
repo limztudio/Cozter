@@ -1632,8 +1632,6 @@ warning: ignored after the catalog
             launcher = os.path.join(root, "launcher.js")
             identities = os.path.join(root, "identities.json")
             with open(launcher, "w", encoding="utf-8") as handle:
-                # Detached leaves Node's kill-on-close job, so only the tree
-                # kill can end the child.
                 handle.write(
                     "const {spawn}=require('node:child_process');"
                     "const fs=require('node:fs');"
@@ -2235,7 +2233,6 @@ class ZaiBackendTests(unittest.TestCase):
             )
 
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
-        # Z.ai's base already carries /api/paas/v4.
         endpoint = ZaiBackend()._chat_endpoint()
         self.assertTrue(endpoint.endswith("/chat/completions"))
         self.assertNotIn("/v1/chat/completions", endpoint)
@@ -2588,7 +2585,6 @@ class MetaBackendTests(unittest.TestCase):
             )
 
     def test_chat_endpoint_appends_only_chat_completions(self) -> None:
-        # Meta's base already carries /v1.
         endpoint = MetaModelApiBackend()._chat_endpoint()
         self.assertEqual(
             endpoint, "https://api.meta.ai/v1/chat/completions",

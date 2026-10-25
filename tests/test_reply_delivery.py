@@ -28,7 +28,6 @@ class ReplyDeliveryBot(OfflineBot):
         return "test:reply-delivery"
 
     def start_detached_task_watcher(self) -> None:
-        # This test drives retry passes.
         return
 
     async def send_text(
@@ -95,7 +94,6 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertLogs("Cozter.backends_bot.base", level="WARNING"):
                     await bot._dispatch_ai(ctx, "prompt")
 
-                # Recovery uses the persisted reply.
                 self.assertEqual(
                     [entry["text"] for entry in bot._read_queue_file()["u1"]],
                     ["later prompt"],
@@ -430,7 +428,6 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("second answer", bot.sent)
             bot.release_uploads.set()
             await second_task
-            # Yield so background uploads drain.
             for _ in range(20):
                 await asyncio.sleep(0)
             self.assertEqual(bot.sent, ["first answer", "second answer"])

@@ -44,8 +44,7 @@ _BACKENDS: dict[str, Backend] = {
     FLEXIBLE_BACKEND: FlexibleBackend(),
 }
 
-# Turn-capable only: summary agents/tiers must come from here
-# (flexible would recurse).
+# Turn-capable only: summary agents and tiers come from here.
 DIRECT_BACKENDS = list(_DIRECT.keys())
 SUMMARY_BACKENDS = [name for name, backend in _DIRECT.items() if backend.supports_internal_calls]
 

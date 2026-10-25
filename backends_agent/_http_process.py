@@ -82,7 +82,6 @@ class HttpAgentProcess:
                 self.returncode = 130
                 raise
             except RuntimeError as exc:
-                # User-facing failure: log briefly.
                 logger.warning("%s: %s", self._label, exc)
                 self.emit({"type": "error", "message": str(exc)})
                 self.returncode = 1

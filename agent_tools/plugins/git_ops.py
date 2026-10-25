@@ -161,7 +161,7 @@ class GitOpsTool(AgentTool):
         except ValueError as exc:
             return str(exc)
         if isinstance(argv, str):
-            return argv  # model-facing "Error: ..." from builder
+            return argv
         try:
             stdout, stderr = await _run_git(argv, workspace_path)
         except (FileNotFoundError, TimeoutError, _GitFailedError) as exc:
@@ -287,7 +287,6 @@ class GitOpsTool(AgentTool):
                 if err is not None:
                     return err
                 assert spec is not None
-                # Path-scoped reset unstages those paths.
                 return base + ["reset", ref_name, "--", *spec]
             return base + ["reset", f"--{mode}", ref_name]
         if action == "merge":

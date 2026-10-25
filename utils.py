@@ -16,7 +16,7 @@ from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
 
-COZTER_DIR = ".cozter"  # per-workspace dotfile directory
+COZTER_DIR = ".cozter"
 CONFIG_DIR = os.path.join(  # package-wide config dir (config.json, queues, etc.)
     os.path.dirname(os.path.abspath(__file__)), ".config",
 )
@@ -32,7 +32,6 @@ _MAX_JSON_NESTING_DEPTH = 100
 _PROCESS_GROUP_ID_ATTR = "_cozter_process_group_id"
 # After signalling the group, allow a short pipe-shutdown grace.
 _POST_EXIT_STREAM_DRAIN_TIMEOUT = 1.0
-# Exited-parent stdout is untrusted.
 _POST_EXIT_STREAM_DRAIN_BYTES = 8 * 1024 * 1024
 _PROCESS_EXIT_POLL_INTERVAL = 0.05
 _BackgroundResult = TypeVar("_BackgroundResult")
@@ -153,12 +152,10 @@ def probe_image_dimensions(path: str) -> tuple[int, int, str] | None:
         return None
     kind = image_header_extension(head)
     try:
-        # PNG: signature + IHDR width/height.
         if kind == ".png" and len(head) >= 24:
             width, height = struct.unpack(">II", head[16:24])
             if 0 < width <= 100000 and 0 < height <= 100000:
                 return (width, height, "PNG")
-        # GIF: header + width/height.
         elif kind == ".gif":
             width, height = struct.unpack("<HH", head[6:10])
             if width and height:
@@ -250,7 +247,7 @@ def atomic_write(target: str, data: dict, tmp_dir: str) -> None:
             # fsync before rename: a torn write reads as "absent".
             file_handle.flush()
             os.fsync(file_handle.fileno())
-        os.replace(tmp_path, target)  # atomic on same filesystem
+        os.replace(tmp_path, target)
         fsync_directory(os.path.dirname(os.path.abspath(target)) or ".")
     except Exception:
         with contextlib.suppress(OSError):
@@ -916,8 +913,6 @@ async def iter_process_json_events(
             if parent_exited:
                 assert post_exit_deadline is not None
                 if not next_event_task.done():
-                    # Expose buffered output or EOF before abandoning a pipe
-                    # whose read allowance has expired.
                     await asyncio.sleep(0)
                 if not next_event_task.done():
                     remaining = post_exit_deadline - loop.time()
@@ -1115,7 +1110,7 @@ def take_recent_lines(
         if used + len(line) > budget:
             break
         out.append(line)
-        used += len(line) + 1  # +1 for the joining newline
+        used += len(line) + 1
     out.reverse()
     return out
 
@@ -1202,7 +1197,7 @@ async def drain_llm_subprocess(
             raw = line
             supervision.note_output(line)
 
-    assert proc.stdout is not None  # spawned with stdout=PIPE
+    assert proc.stdout is not None
     try:
         drain_timeout = timeout if timeout is not None and timeout > 0 else None
         async with asyncio.timeout(drain_timeout):

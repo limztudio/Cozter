@@ -149,7 +149,6 @@ class BotCommandTests(unittest.TestCase):
         self._run(self.bot._receive_effort(self._ctx(text="9" * 5_000)))
         self.assertIn("Not a number", self._last())
 
-    # /context
     def test_numeric_commands_reject_overlong_decimal_input(self) -> None:
         too_long = "9" * 5_000
 
@@ -162,7 +161,6 @@ class BotCommandTests(unittest.TestCase):
                 self._run(handler(self._ctx(args=too_long)))
                 self.assertEqual(self._last(), "Error: number is too large.")
 
-    # /reserve
     def test_reserve_wizard_binds_days_and_time_across_callbacks(self) -> None:
         self._run(self.bot.cmd_reserve(self._ctx()))
         self._run(self.bot.dispatch_text(self._ctx(text="mon,wed")))
@@ -452,7 +450,6 @@ class BotCommandTests(unittest.TestCase):
             with self.subTest(updated_time=updated_time):
                 self._run(run(updated_time, expected_slot))
 
-    # /agent
     def test_agent_picker_reserves_zero_for_flexible(self) -> None:
         self._run(self.bot.cmd_agent(self._ctx()))
 
@@ -501,16 +498,13 @@ class BotCommandTests(unittest.TestCase):
                 self.assertIn("Unknown model: missing", self._last())
                 self.assertIn(self.uid, self.bot._pending_input)
 
-    # /sessions
     def test_sessions_list_and_switch(self) -> None:
         first = session.create_session(self.ws, name="First")
         session.create_session(self.ws, name="Second")
-        # Bare command lists them.
         self._run(self.bot.cmd_sessions(self._ctx()))
         listing = self._last()
         self.assertIn("First", listing)
         self.assertIn("Second", listing)
-        # Switch by name.
         self._run(self.bot.cmd_sessions(self._ctx(args="First")))
         self.assertIn("Switched to session: First", self._last())
         self.assertEqual(
@@ -518,10 +512,9 @@ class BotCommandTests(unittest.TestCase):
         )
 
     def test_no_workspace_replies_gracefully(self) -> None:
-        # No workspace: expect the no-workspace message, not a crash.
         ctx = self.bot.make_context("nobody", "c1")
         self._run(self.bot.cmd_permission(ctx))
-        self.assertTrue(self.bot.replies)  # replied rather than raised
+        self.assertTrue(self.bot.replies)
 
 
 if __name__ == "__main__":

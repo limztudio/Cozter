@@ -1337,7 +1337,6 @@ def _build_contextual_prompt(
         continuation = (
             "New message:"
         )
-        # Keep the request intact.
         fixed_length = len(continuation) + 1 + len(prompt)
         if fixed_length > budget:
             return prompt
@@ -2078,7 +2077,6 @@ async def _drive_backend_process(
         # Surface launch failures instead of stranding queued work.
         result = AgentResult()
         set_error_result(result, f"{backend.name} could not start: {exc}")
-        # A pre-failure /inject still counts.
         if _take_pending_injections(inject_queue, injected):
             return result, True
         if close_inject_on_completion:
@@ -2107,7 +2105,7 @@ async def _drive_backend_process(
         active_proc: asyncio.subprocess.Process = proc,
     ) -> None:
         nonlocal restarting
-        assert inject_queue is not None  # only scheduled when set
+        assert inject_queue is not None
         msg = await inject_queue.get()
         if injected is not None:
             injected.append(msg)
@@ -2120,7 +2118,7 @@ async def _drive_backend_process(
     if inject_queue is not None:
         inject_task = asyncio.create_task(_watch_inject())
 
-    assert proc.stdout is not None  # spawned with stdout=PIPE
+    assert proc.stdout is not None
     try:
         async for event in iter_process_json_events(
             proc,
@@ -2152,9 +2150,7 @@ async def _drive_backend_process(
         )
         raise
     finally:
-        # Never leak the drain task.
         try:
-            # No durable provider task: tear down the whole tree.
             if (
                 proc.returncode is None
                 or cancelled
@@ -2277,13 +2273,11 @@ async def _run_with_inject_watch(
         except asyncio.CancelledError:
             pass
         except Exception:
-            # Same-tick race: inject wins.
             logger.debug(
                 "Discarding internal backend failure after an inject",
                 exc_info=True,
             )
         return None, True
-    # Call finished first: stop watching.
     watch_task.cancel()
     await await_cancelled(watch_task)
     # A message can arrive after cancel; collect and restart.
@@ -2300,12 +2294,10 @@ async def _run_with_inject_watch(
             )
         return None, True
     if close_inject_on_completion:
-        # Terminal phase: close before I/O.
         _close_inject_queue(inject_queue)
     return call_task.result(), False
 
 
-# Flexible: plan, route, merge; usage summed.
 _USAGE_TOTAL_FIELDS = ("input_tokens", "output_tokens", "total_cost_usd")
 
 
@@ -2710,10 +2702,8 @@ async def _run_flexible(
         plan = flexible.parse_plan(raw_plan or "", request)
     budget = _TURN_BUDGET.get()
 
-    # Only the planner may ask.
     if plan.question:
         if collaborative:
-            # A planner question ends the turn pre-merge.
             if _take_pending_injections(inject_queue, injected):
                 return await restart(AgentResult())
             if close_inject_on_completion:
@@ -2738,7 +2728,6 @@ async def _run_flexible(
     )
     owner_mode = plan.owner_mode
 
-    # 2. Route sub-tasks to tiers.
     result = AgentResult()
     reports: list[str] = []
     attach_markers: list[str] = []
@@ -3695,12 +3684,8 @@ async def _run_flexible(
         ).strip()
         if result.error and len(worker_errors) < len(queue):
             final = "PARTIAL: task failures prevented full completion.\n\n" + final
-        # Every iteration appends a non-empty report, so `final` is non-empty
-        # (empty workers get a tier diagnostic; the all-empty merge path below
-        # handles the rest).
         return await finish(final, awaiting=bool(collaborative and blocked))
 
-    # 3. Merge reports into the user reply.
     await status(
         f"flexible: merging with {summary_backend.name}/{summary_model}"
     )
@@ -4175,7 +4160,6 @@ async def _run_post_turn_maintenance(
 
 INTERRUPTED_TURN_MAX_CHARS = 1200
 INTERRUPTED_TURN_ACTIVITY_CHARS = 300
-# Digest keeps the newest material.
 INTERRUPTED_TURN_EVENT_KEEP = 100
 
 
@@ -4482,15 +4466,12 @@ async def _run_turn_impl(
         summary_model,
     )
 
-    # Pinned sessions never clobber last_session.
     explicit_session = session_id is not None
 
-    # session_data reused across inject restarts.
     if explicit_session:
-        assert session_id is not None  # set by both branches above
+        assert session_id is not None
         session_data = session.load_session(workspace_path, session_id)
         if session_data is None:
-            # Pinned session deleted; bail.
             result = AgentResult()
             set_error_result(
                 result,
@@ -4506,21 +4487,17 @@ async def _run_turn_impl(
             summary_backend,
         )
 
-    # session_id set by both branches.
     assert session_id is not None
     execution_state.bind_conversation(session_id)
     turn.session_id = session_id
     if on_session is not None:
         await on_session(session_id)
-    # Workspace memory loads once.
     colony_items = colony.get_items(workspace_path)
 
-    # Scheduled/ephemeral turns run autonomous.
     collaborative = _is_collaborative_turn(
         workspace_path, is_scheduled=is_scheduled,
     )
 
-    # Prepended context-block budget.
     history_budget = workspace_mod.get_history_budget(workspace_path)
     native_skills_catalog = skills.catalog_prompt(
         skills.current_catalog(workspace_path), cli=True,
@@ -4612,7 +4589,7 @@ async def _run_turn_impl(
         )
 
     # Tee phases so a cancelled turn records progress.
-    while True:  # restart loop for inject
+    while True:
         effective_prompt = prompt
         if injected:
             effective_prompt += (
@@ -4626,7 +4603,6 @@ async def _run_turn_impl(
             budget=history_budget,
         )
 
-        # Workspace scans off the event loop.
         attachment_images_before = await asyncio.to_thread(
             _snapshot_attachment_images, workspace_path,
         )
@@ -4650,7 +4626,6 @@ async def _run_turn_impl(
 
         await _append_new_attachment_images(result, attachment_images_before, workspace_path)
 
-        # CONTINUE re-drives the backend (capped).
         budget = _TURN_BUDGET.get()
         if budget is not None:
             budget.latest_draft = flexible.bounded_draft_excerpt(result.text)

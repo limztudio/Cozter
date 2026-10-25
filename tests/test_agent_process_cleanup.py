@@ -334,7 +334,6 @@ class AgentProcessCleanupTests(unittest.TestCase):
 
                     @staticmethod
                     def parse_event(_event: dict, _result) -> None:
-                        # Retain nothing: isolates stream termination.
                         return
 
                 completed = False

@@ -158,7 +158,6 @@ def fetch_model_ids(
     if headers:
         request = urllib.request.Request(url, method="GET")
         for name, value in headers.items():
-            # Auth must never follow redirects.
             request.add_unredirected_header(name, value)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         body = response.read(_MAX_MODEL_DISCOVERY_BYTES + 1)
@@ -454,9 +453,6 @@ def _restore_owned_http_messages(
             "name": name, "content": result,
         }
         messages.append(tool_message)
-        # Recovery outcomes count toward the caller's full conversation cap,
-        # just as the existing initial recount did. The saved-history cap above
-        # retains its own validation/error behavior.
         byte_count += _message_payload_bytes(tool_message)
     return messages, byte_count
 
@@ -469,10 +465,8 @@ class OpenAIChatBackend(Backend):
     """
 
     supports_read_only_workers = True
-    # OpenAI-shape tools consumed directly.
     supports_typed_plugins = True
     supports_vision = True
-    # Standard 4-level effort words.
     effort_levels: tuple[str, ...] = ("minimal", "low", "medium", "high")
 
     def _base_url(self) -> str:
@@ -594,7 +588,6 @@ class OpenAIChatBackend(Backend):
         return "api_key"
 
     def health_check(self) -> tuple[bool, str]:
-        # Readiness = "key configured?".
         if not self._api_key():
             return False, (
                 f"no API key set (set {self._api_key_setting()}"
@@ -656,7 +649,6 @@ class OpenAIChatBackend(Backend):
         endpoint = self._chat_endpoint()
         headers = self._auth_headers()
         max_retries = self._max_retries()
-        # Per-turn caps, read fresh.
         max_agent_turns = self._max_agent_turns()
         max_segments = self._max_segments()
         diagnostic_reading = tools.diagnostic_reading_active()
@@ -675,7 +667,6 @@ class OpenAIChatBackend(Backend):
             and context_window > 0 else None
         )
 
-        # Approval -> tools.
         effective_approval = "confirm" if skill_planning else "deny" if compaction else approval
         tools_schema = _tools_for_approval(effective_approval, compaction)
         if tools_schema and not self._supports_tools_for_model(request_model):
@@ -825,7 +816,6 @@ class OpenAIChatBackend(Backend):
         has_preserved_reasoning = preserve_reasoning and any(
             message.get("reasoning_content") for message in restored
         )
-        # One session per turn.
 
         def completion_payload(
             tools_schema: list[dict] | None,
@@ -834,7 +824,6 @@ class OpenAIChatBackend(Backend):
             payload = _completion_payload(
                 messages, request_model, effort_fields, tools_schema,
             )
-            # Preserve reasoning once present.
             if preserve_reasoning and (
                 tools_schema is not None or has_preserved_reasoning
             ):
@@ -853,9 +842,6 @@ class OpenAIChatBackend(Backend):
             ]:
                 nonlocal input_budget
                 context_recoveries = 0
-                # A generation has not executed any tool calls yet. A
-                # diagnosed stall can therefore retry this exact retained
-                # transcript without replaying completed mutations.
                 for recovery in range(_GENERATION_HANG_RECOVERY_LIMIT + 1):
                     ticket = supervision.new_operation(
                         workspace_path, kind="generation",
@@ -942,7 +928,6 @@ class OpenAIChatBackend(Backend):
                     if tool_calls:
                         assistant_msg["tool_calls"] = tool_calls
                         if preserve_reasoning and reasoning_content:
-                            # Opaque Z.ai provider state.
                             assistant_msg["reasoning_content"] = (
                                 reasoning_content
                             )
@@ -1045,10 +1030,6 @@ class OpenAIChatBackend(Backend):
                             await save_pending_results()
                             raise
                         if position < len(tool_calls):
-                            # Also acts as the durability barrier before the
-                            # next mutation. The final wave is saved below as
-                            # the complete ordered transcript without writing
-                            # an otherwise redundant pending-results snapshot.
                             await save_pending_results()
                     performance_logger.info(
                         "stage=tool_batch backend=%s seconds=%.3f calls=%d skipped=%d",
@@ -1079,7 +1060,6 @@ class OpenAIChatBackend(Backend):
                             result = result_text
                         batch_results.append(result)
 
-                        # Include ``name`` alongside tool_call_id.
                         tool_message = {
                             "role": "tool",
                             "tool_call_id": call.get("id", ""),
@@ -1210,7 +1190,6 @@ class OpenAIChatBackend(Backend):
         if event_type == "assistant_text":
             text = event.get("text")
             if isinstance(text, str) and text:
-                # Last text wins.
                 append_text_result(result, text)
             return
 
@@ -1224,7 +1203,6 @@ class OpenAIChatBackend(Backend):
             content = tools.summarize_tool_use(tool, tool_input)
             result.events.append(ChatEvent(kind="tool", content=content))
             if event.get("file_action"):
-                # write/edit/delete surface as kind="file".
                 path = tool_input.get("path", "?")
                 action = event["file_action"]
                 result.events.append(ChatEvent(
@@ -1268,9 +1246,6 @@ class CachedOpenAIChatBackend(CachedModelCatalog, OpenAIChatBackend):
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]
         return self._live_model_catalog()
-
-
-# Streaming client
 
 
 def _completion_payload(
@@ -1345,7 +1320,6 @@ def _backoff_delay(
         ):
             retry_after = None
         elif not math.isfinite(retry_after):
-            # Never sleep nan/inf.
             retry_after = cap if retry_after == float("inf") else None
         elif retry_after < 0:
             retry_after = None
@@ -1361,7 +1335,6 @@ def _backoff_delay(
 def _parse_retry_after(value: str | None) -> float | None:
     """Parse a Retry-After header (delta-seconds form); ignore HTTP dates."""
     if not value or isinstance(value, bool):
-        # A bool is not a duration.
         return None
     try:
         parsed = float(value)
@@ -1486,9 +1459,7 @@ async def _post_completion_stream(
     reasoning_parts: list[str] = []
     reasoning_bytes = 0
     tool_argument_bytes = 0
-    # Tool calls fragment: accumulate by index.
     tool_buffers: dict[int, dict[str, Any]] = {}
-    # EOF alone isn't completion.
     saw_terminal_marker = False
     terminal_finish_reason: str | None = None
     started = time.monotonic()
@@ -1621,8 +1592,6 @@ async def _post_completion_stream(
                         text_bytes, reasoning_bytes, tool_argument_bytes,
                     )
                     reasoning_parts.append(reasoning_content)
-                    # Provider reasoning remains opaque; only its arrival is
-                    # useful liveness evidence for supervision.
                     supervision.note_progress()
                 tool_call_deltas = delta.get("tool_calls")
                 if isinstance(tool_call_deltas, list):
@@ -1678,7 +1647,6 @@ async def _post_completion_stream(
             f"{label} stream ended before a completion marker",
         )
 
-    # ``length`` = output cap.
     if terminal_finish_reason == "length" and tool_buffers:
         raise _RetryableError(
             f"{label} stream ended with length while a tool call was pending",
@@ -1692,7 +1660,6 @@ async def _post_completion_stream(
             "response was incomplete",
         )
 
-    # Normalize buffers into tool_calls.
     tool_calls: list[dict] = []
     for idx in sorted(tool_buffers.keys()):
         buf = tool_buffers[idx]
@@ -1793,10 +1760,8 @@ async def _iter_sse_events(
         if not line.startswith("data:"):
             continue
         data = line[len("data:"):]
-        # SSE permits one space after the colon.
         if data.startswith(" "):
             data = data[1:]
-        # Newline counts too.
         event_bytes += len(data.encode("utf-8")) + (1 if data_lines else 0)
         if event_bytes > _MAX_SSE_EVENT_BYTES:
             raise _SseEventTooLargeError(
@@ -1875,7 +1840,6 @@ def _merge_tool_call(
     if not isinstance(previous_bytes, int):
         previous_bytes = 0
     if isinstance(raw_arguments, str):
-        # Arguments stream as fragments.
         fragment_bytes = len(raw_arguments.encode("utf-8", errors="replace"))
         next_bytes = previous_bytes + fragment_bytes
         if next_bytes > _MAX_TOOL_ARGUMENT_BYTES:
@@ -1887,11 +1851,9 @@ def _merge_tool_call(
         buf["_argument_bytes"] = next_bytes
         return fragment_bytes
     if isinstance(raw_arguments, dict):
-        # Some servers send the whole arguments object in one delta.
         try:
             serialized = json.dumps(raw_arguments)
         except (TypeError, ValueError):
-            # Keeps this boundary safe for direct custom-provider calls.
             logger.debug("Ignoring non-serializable tool-call arguments")
             return 0
         serialized_bytes = len(serialized.encode("utf-8", errors="replace"))
@@ -1924,9 +1886,6 @@ def _vision_parts_for_prompt(
     return [{"type": "text", "text": prompt}, *images]
 
 
-# Tools + system prompt
-
-
 def _tools_for_approval(
     approval: str, compaction: bool,
 ) -> list[dict] | None:
@@ -1946,7 +1905,6 @@ def _tools_for_approval(
         return tools.DIAGNOSTIC_READ_TOOL_SCHEMA or None
     if tools.skill_planning_active():
         return tools.SKILL_TOOL_SCHEMA or None
-    # Malformed approval never widens tools.
     if compaction or approval not in {"auto", "full", "confirm"}:
         return None
     if approval == "confirm":

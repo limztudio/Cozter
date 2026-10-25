@@ -485,7 +485,6 @@ class ClaudeDetachedTaskTests(unittest.IsolatedAsyncioTestCase):
             ):
                 output = await backend.get_detached_task_output("/work", task_id)
 
-        # Separator counts toward budget.
         self.assertEqual(output, "first…")
         self.assertIn("…", output)
         self.assertLessEqual(len(output.encode("utf-8")), 8)

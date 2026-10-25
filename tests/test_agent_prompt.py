@@ -195,7 +195,6 @@ class BackendVerificationPromptTests(unittest.TestCase):
     def test_every_selectable_agent_gets_verify_with_evidence(self) -> None:
         from Cozter.backends_agent import AVAILABLE_BACKENDS, get_backend
 
-        # Every chat-selectable agent.
         self.assertEqual(
             sorted(AVAILABLE_BACKENDS),
             sorted([

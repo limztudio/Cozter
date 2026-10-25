@@ -31,7 +31,6 @@ performance_logger = logging.getLogger("Cozter.performance")
 
 class BashTool(AgentTool):
     name = "bash"
-    # Unrestricted shell: full-permission only.
     requires_full_permission = True
     description = (
         "Run a host shell command using the shell stated in the system prompt"
@@ -58,7 +57,6 @@ class BashTool(AgentTool):
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return "Error: 'command' must be a non-empty string"
-        # Pipes/redirection need a real shell.
         shell = _find_shell()
         if shell is None:
             return "Error: no shell available to run bash commands"
@@ -83,7 +81,7 @@ class BashTool(AgentTool):
             else:
                 await wait_for_process_exit(proc)
         except BaseException:
-            await _kill_command_tree(proc)  # /stop must not leak it.
+            await _kill_command_tree(proc)
             raise
         finally:
             close_subprocess_pipe(proc, 1)
@@ -141,7 +139,6 @@ async def _spawn_command(
     async def create() -> asyncio.subprocess.Process:
         proc = await asyncio.create_subprocess_exec(
             *shell, command,
-            # Never inherit interactive stdin.
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -278,5 +275,4 @@ async def _kill_command_tree(proc: asyncio.subprocess.Process) -> None:
     """Terminate the shell and any children it spawned."""
     if proc.returncode is not None and not has_managed_process_group(proc):
         return
-    # Process-group/taskkill cleanup: no orphaned children.
     await kill_and_wait(proc)
