@@ -1,7 +1,7 @@
 """Structured, UUID-bound context delivery for native CLI conversations."""
 
 from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
 
 from . import execution_state, session
 from .utils import json_digest

@@ -20,6 +20,7 @@ from typing import Any, ClassVar
 import aiohttp
 
 from ..base import (
+    REDIRECT_STATUSES as _REDIRECT_STATUSES,
     AgentTool,
     coerce_int_arg,
     object_parameters,
@@ -33,7 +34,6 @@ from ..base import (
 )
 
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
-_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 5
 _CREDENTIAL_HEADERS = frozenset({"authorization", "proxy-authorization", "cookie"})
 _DEFAULT_MAX_CHARS = 3_500

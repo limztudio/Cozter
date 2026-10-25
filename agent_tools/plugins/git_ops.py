@@ -101,6 +101,21 @@ def _collect_pathspecs(
     return resolved, None
 
 
+def _has_path_args(args: dict) -> bool:
+    return isinstance(args.get("paths"), list) or isinstance(args.get("path"), str)
+
+
+def _append_optional_ref(argv: list[str], args: dict) -> str | None:
+    ref = args.get("ref")
+    if isinstance(ref, str) and ref.strip():
+        start, err = _clean_ref(ref.strip(), what="ref")
+        if err is not None:
+            return err
+        assert start is not None
+        argv.append(start)
+    return None
+
+
 class GitOpsTool(AgentTool):
     name = "git_ops"
     order = 21
@@ -160,12 +175,9 @@ class GitOpsTool(AgentTool):
         base: list[str] = ["git", "-C", workspace_path]
         if action == "add":
             all_flag = args.get("all") is True
-            has_paths = isinstance(args.get("paths"), list) or isinstance(
-                args.get("path"), str,
-            )
             if all_flag:
                 argv = base + ["add", "-A"]
-                if has_paths:
+                if _has_path_args(args):
                     spec, err = _collect_pathspecs(workspace_path, args)
                     if err is not None:
                         return err
@@ -199,14 +211,8 @@ class GitOpsTool(AgentTool):
             assert branch is not None
             if args.get("create") is True:
                 argv = base + ["checkout", "-b", branch]
-                ref = args.get("ref")
-                if isinstance(ref, str) and ref.strip():
-                    start, err = _clean_ref(ref.strip(), what="ref")
-                    if err is not None:
-                        return err
-                    assert start is not None
-                    argv.append(start)
-                return argv
+                err = _append_optional_ref(argv, args)
+                return err or argv
             # Keep the branch-only form a revision: without the separator a
             # missing branch matching a tracked filename becomes a path checkout.
             return base + ["checkout", branch, "--"]
@@ -216,14 +222,8 @@ class GitOpsTool(AgentTool):
                 return err
             assert branch is not None
             argv = base + ["branch", branch]
-            ref = args.get("ref")
-            if isinstance(ref, str) and ref.strip():
-                start, err = _clean_ref(ref.strip(), what="ref")
-                if err is not None:
-                    return err
-                assert start is not None
-                argv.append(start)
-            return argv
+            err = _append_optional_ref(argv, args)
+            return err or argv
         if action == "branch-delete":
             branch, err = _clean_ref(args.get("branch"), what="branch")
             if err is not None:
@@ -250,9 +250,7 @@ class GitOpsTool(AgentTool):
                     return err
                 assert clean is not None
                 argv += ["-m", clean]
-            paths = args.get("paths")
-            single = args.get("path")
-            if isinstance(paths, list) or isinstance(single, str):
+            if _has_path_args(args):
                 spec, err = _collect_pathspecs(workspace_path, args)
                 if err is not None:
                     return err
@@ -284,9 +282,7 @@ class GitOpsTool(AgentTool):
                     return err
                 assert cleaned_ref is not None
                 ref_name = cleaned_ref
-            paths = args.get("paths")
-            single = args.get("path")
-            if isinstance(paths, list) or isinstance(single, str):
+            if _has_path_args(args):
                 spec, err = _collect_pathspecs(workspace_path, args)
                 if err is not None:
                     return err
@@ -336,14 +332,8 @@ class GitOpsTool(AgentTool):
                 argv += ["-a", tag, "-m", clean]
             else:
                 argv.append(tag)
-            ref = args.get("ref")
-            if isinstance(ref, str) and ref.strip():
-                start, err = _clean_ref(ref.strip(), what="ref")
-                if err is not None:
-                    return err
-                assert start is not None
-                argv.append(start)
-            return argv
+            err = _append_optional_ref(argv, args)
+            return err or argv
         if action == "tag-delete":
             tag, err = _clean_ref(args.get("tag"), what="tag")
             if err is not None:
@@ -362,12 +352,10 @@ class GitOpsTool(AgentTool):
         if action == "clean":
             if args.get("force") is not True:
                 return "Error: 'clean' deletes untracked files; pass force=true to confirm"
-            paths = args.get("paths")
-            single = args.get("path")
             argv = base + ["clean", "-fd"]
             if args.get("all") is True:
                 return argv
-            if isinstance(paths, list) or isinstance(single, str):
+            if _has_path_args(args):
                 spec, err = _collect_pathspecs(workspace_path, args)
                 if err is not None:
                     return err

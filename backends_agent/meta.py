@@ -16,7 +16,6 @@ via ``extra_models`` in config without editing source.
 
 from __future__ import annotations
 
-import hashlib
 from typing import NamedTuple
 
 from .. import config as cfg
@@ -58,7 +57,6 @@ _NON_CHAT_COMPLETION_MODEL_PREFIXES = (
     "muse-voice",
     "sam-",
 )
-_MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
 
 def _is_non_chat_completion_model_id(model_id: str) -> bool:
@@ -116,18 +114,11 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
         selected = _capability_model_id(model or self.default_model)
         return _MODEL_CONTEXT_WINDOWS.get(selected)
 
-    def _model_catalog_key(self) -> object:
-        return (
-            hashlib.sha256(cfg.get_meta_base_url().rstrip("/").encode()).digest(),
-            hashlib.sha256(cfg.get_meta_api_key().encode()).digest(),
-        )
-
     def _fetch_models(self) -> tuple[str, ...]:
         return discover_bearer_models(
             label="Meta Model API",
-            api_key=cfg.get_meta_api_key(),
-            base_url=cfg.get_meta_base_url(),
-            timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
+            api_key=self._api_key(),
+            base_url=self._base_url(),
             fallback_models=_FALLBACK_MODELS,
             keep_model_id=lambda model_id: (
                 isinstance(model_id, str)
@@ -136,17 +127,8 @@ class MetaModelApiBackend(CachedOpenAIChatBackend):
             fetch=fetch_model_ids,
         )
 
-    def _chat_endpoint(self) -> str:
-        # base_url carries /v1: append /chat/completions.
-        return cfg.get_meta_base_url().rstrip("/") + "/chat/completions"
-
-    def _auth_headers(self) -> dict[str, str]:
-        key = cfg.get_meta_api_key()
-        return {"Authorization": f"Bearer {key}"} if key else {}
-
-    def _request_model(self, model: str | None) -> str:
-        # The Model API requires a model field.
-        return model or self.default_model
+    def _base_url(self) -> str:
+        return cfg.get_meta_base_url()
 
     def _auto_continue_after_tool_limit(self) -> bool:
         # Muse Spark handles long runs; continue in a fresh segment.

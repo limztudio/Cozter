@@ -437,6 +437,15 @@ class MessageHandle:
     message_id: str
 
 
+def _format_status_event_line(ev: agent.ChatEvent) -> str:
+    content = ev.content.split("\n")[0] if ev.kind == "tool" else ev.content
+    clipped = (
+        content[:80 - len("… [clipped]")] + "… [clipped]"
+        if len(content) > 80 else content
+    )
+    return f"» {clipped}"
+
+
 class _RecoverableTurnStatus:
     """Own an editable status without letting slow creation block agent work."""
 
@@ -480,10 +489,7 @@ class _RecoverableTurnStatus:
             if ev.content.strip():
                 self.latest_text = ev.content
         elif ev.kind in ("tool", "file"):
-            content = ev.content.split("\n")[0] if ev.kind == "tool" else ev.content
-            clipped = (content[:80 - len("… [clipped]")] + "… [clipped]"
-                       if len(content) > 80 else content)
-            self.lines.append(f"» {clipped}")
+            self.lines.append(_format_status_event_line(ev))
             self.total_lines += 1
         else:
             return
@@ -4949,15 +4955,7 @@ class BotPlatform(ABC):
                 if ev.content.strip():
                     latest_text = ev.content
             elif ev.kind in ("tool", "file"):
-                content = (
-                    ev.content.split(chr(10))[0]
-                    if ev.kind == "tool" else ev.content
-                )
-                clipped = (
-                    content[:80 - len("… [clipped]")] + "… [clipped]"
-                    if len(content) > 80 else content
-                )
-                status_lines.append(f"» {clipped}")
+                status_lines.append(_format_status_event_line(ev))
                 total_status_lines += 1
             else:
                 return

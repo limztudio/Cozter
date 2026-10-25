@@ -3595,6 +3595,13 @@ async def _run_flexible(
             if worker_awaiting:
                 blocked.append(done)
 
+            async def advance_completed_worker() -> None:
+                nonlocal done
+                done += 1
+                interim_followups.pop(str(done - 1), None)
+                worker_outputs.pop(str(done - 1), None)
+                await save_progress()
+
             if owner_mode:
                 if not sub_result.error and not worker_awaiting:
                     for item in owner_obligations.get(str(done), []):
@@ -3602,10 +3609,7 @@ async def _run_flexible(
                         if budget is not None:
                             while item["instruction"] in budget.pending:
                                 budget.pending.remove(item["instruction"])
-                done += 1
-                interim_followups.pop(str(done - 1), None)
-                worker_outputs.pop(str(done - 1), None)
-                await save_progress()
+                await advance_completed_worker()
                 continue
 
             # Keep every distinct leftover, but consolidate compatible adjacent
@@ -3647,10 +3651,7 @@ async def _run_flexible(
                 )
                 await status(f"flexible: plan grew to {total} sub-tasks")
 
-            done += 1
-            interim_followups.pop(str(done - 1), None)
-            worker_outputs.pop(str(done - 1), None)
-            await save_progress()
+            await advance_completed_worker()
 
     remainder = ""
     if unrun_followups:

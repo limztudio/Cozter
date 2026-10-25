@@ -30,6 +30,7 @@ from . import _http_types
 _MAX_FETCH_BYTES = 5 * 1024 * 1024
 _GIT_DISCOVERY_MAX_BYTES = 32 * 1024 * 1024
 _GIT_DISCOVERY_TIMEOUT_SECONDS = 10
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 HTTP_USER_AGENT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 compatible; CozterAgent/1.0; +https://local"

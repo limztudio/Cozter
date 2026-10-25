@@ -493,7 +493,7 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(execution.native_response_is_known(worker, "Helper response"))
 
     async def test_non_native_and_unbound_scopes_keep_job_evidence_separate(self) -> None:
-        async with execution_state.execution_scope(self.ws, "job", "request") as execution:
+        async with execution_state.execution_scope(self.ws, "job", "request"):
             async with execution_state.backend_scope(*_SETTINGS) as job:
                 await job.save(history=["private HTTP evidence"], completed_workers=["done"])
             execution_state.bind_conversation("conversation")
@@ -504,7 +504,7 @@ class NativeConversationStateTests(unittest.IsolatedAsyncioTestCase):
             async with execution_state.backend_scope(*_SETTINGS) as same_job:
                 self.assertEqual(same_job.get("history"), ["private HTTP evidence"])
                 self.assertIsNone(same_job.get("native_session_id"))
-        async with self.scope("unbound", conversation=None) as (execution, state):
+        async with self.scope("unbound", conversation=None) as (_, state):
             self.assertEqual(state.execution.namespace, "executions")
             self.assertIsNone(state.get("native_session_id"))
 

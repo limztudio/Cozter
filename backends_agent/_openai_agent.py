@@ -71,6 +71,7 @@ _MAX_TOOL_CALLS_PER_COMPLETION = 128
 _MAX_MODEL_DISCOVERY_BYTES = 1 * 1024 * 1024
 _MAX_MODEL_ID_CHARS = 512
 _MAX_MODEL_IDS = 4_096
+MODEL_DISCOVERY_TIMEOUT_SEC = 10
 _HTTP_CONNECT_TIMEOUT = 30.0
 _COMPLETION_TAIL_DRAIN_SECONDS = 0.05
 _COMPLETION_TAIL_DRAIN_BYTES = 64 * 1024
@@ -175,7 +176,7 @@ def discover_bearer_models(
     label: str,
     api_key: str,
     base_url: str,
-    timeout: float,
+    timeout: float = MODEL_DISCOVERY_TIMEOUT_SEC,
     fallback_models: tuple[str, ...],
     keep_model_id: Callable[[object], bool] | None = None,
     fetch: Callable[..., tuple[str, ...]] = fetch_model_ids,
@@ -474,17 +475,22 @@ class OpenAIChatBackend(Backend):
     # Standard 4-level effort words.
     effort_levels: tuple[str, ...] = ("minimal", "low", "medium", "high")
 
+    def _base_url(self) -> str:
+        """Configured API base URL when it already carries the version segment."""
+        raise NotImplementedError
+
     def _chat_endpoint(self) -> str:
         """Full URL of the chat/completions endpoint."""
-        raise NotImplementedError
+        return self._base_url().rstrip("/") + "/chat/completions"
 
     def _auth_headers(self) -> dict[str, str]:
         """Extra HTTP headers (e.g. Authorization). Empty for local servers."""
-        return {}
+        key = self._api_key()
+        return {"Authorization": f"Bearer {key}"} if key else {}
 
     def _request_model(self, model: str | None) -> str | None:
         """Model id to send, or None to omit the field entirely."""
-        return model or None
+        return model or self.default_model
 
     def _effort_fields(
         self,
@@ -1252,6 +1258,12 @@ class CachedOpenAIChatBackend(CachedModelCatalog, OpenAIChatBackend):
     catalog. The common cache avoids a network request each time users open a
     model picker while retaining the existing one-minute refresh cadence.
     """
+
+    def _model_catalog_key(self) -> object:
+        return (
+            hashlib.sha256(self._base_url().rstrip("/").encode()).digest(),
+            hashlib.sha256(self._api_key().encode()).digest(),
+        )
 
     @property
     def available_models(self) -> tuple[str, ...]:  # type: ignore[override]

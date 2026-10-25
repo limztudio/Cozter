@@ -16,11 +16,11 @@ and ``zai_max_retries``. Pick the model with
 
 from __future__ import annotations
 
-import hashlib
 from typing import NamedTuple
 
 from .. import config as cfg
 from ._openai_agent import (
+    MODEL_DISCOVERY_TIMEOUT_SEC as _MODEL_DISCOVERY_TIMEOUT_SEC,
     CachedOpenAIChatBackend,
     discover_bearer_models,
     fetch_model_ids,
@@ -112,7 +112,6 @@ _NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
 _COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
 _GLM_5_3_REASONING_MODELS = frozenset({"glm-5.3", "glm-5.3-flash", "glm-5.3-flashx"})
 _GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
-_MODEL_DISCOVERY_TIMEOUT_SEC = 10
 
 
 def _capability_model_id(model: str | None) -> str:
@@ -166,21 +165,14 @@ class ZaiBackend(CachedOpenAIChatBackend):
         selected = _capability_model_id(model or self.default_model)
         return _MODEL_CONTEXT_WINDOWS.get(selected)
 
-    def _model_catalog_key(self) -> object:
-        return (
-            hashlib.sha256(cfg.get_zai_base_url().rstrip("/").encode()).digest(),
-            hashlib.sha256(cfg.get_zai_api_key().encode()).digest(),
-        )
-
     def _fetch_models(self) -> tuple[str, ...]:
+        base_url = self._base_url()
         return discover_bearer_models(
             label="Z.ai",
-            api_key=cfg.get_zai_api_key(),
-            base_url=cfg.get_zai_base_url(),
+            api_key=self._api_key(),
+            base_url=base_url,
             timeout=_MODEL_DISCOVERY_TIMEOUT_SEC,
-            fallback_models=_coding_plan_fallback_models(
-                cfg.get_zai_base_url(),
-            ),
+            fallback_models=_coding_plan_fallback_models(base_url),
             keep_model_id=lambda model_id: (
                 isinstance(model_id, str)
                 and model_id.casefold()
@@ -189,17 +181,8 @@ class ZaiBackend(CachedOpenAIChatBackend):
             fetch=fetch_model_ids,
         )
 
-    def _chat_endpoint(self) -> str:
-        # base_url already carries the version segment: append directly.
-        return cfg.get_zai_base_url().rstrip("/") + "/chat/completions"
-
-    def _auth_headers(self) -> dict[str, str]:
-        key = cfg.get_zai_api_key()
-        return {"Authorization": f"Bearer {key}"} if key else {}
-
-    def _request_model(self, model: str | None) -> str:
-        # Model field is required; default when unset.
-        return model or self.default_model
+    def _base_url(self) -> str:
+        return cfg.get_zai_base_url()
 
     def _effort_fields(
         self,

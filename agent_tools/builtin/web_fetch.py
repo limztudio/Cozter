@@ -9,6 +9,7 @@ from .. import _http_types
 from ..html_scan import first_title_contents
 
 from ..base import (
+    REDIRECT_STATUSES as _REDIRECT_STATUSES,
     AgentTool,
     coerce_int_arg,
     html_to_text,
@@ -24,7 +25,6 @@ from ..base import (
 
 
 _MAX_REDIRECTS = 10
-_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _FETCH_ATTEMPTS = 2
 _FETCH_RETRY_DELAY_SECONDS = 0.4
 

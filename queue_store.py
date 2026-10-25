@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-from typing import Iterator
+from collections.abc import Iterator
 import uuid
 
 from . import schedules, workspace
