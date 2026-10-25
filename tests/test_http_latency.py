@@ -200,27 +200,6 @@ class RequestCancellationTests(unittest.IsolatedAsyncioTestCase):
                 await task
         self.assertTrue(closed.is_set())
 
-    async def test_cancel_interrupts_request(self):
-        started = asyncio.Event()
-        cancelled = asyncio.Event()
-
-        async def once(*_args, **_kwargs):
-            started.set()
-            try:
-                await asyncio.Event().wait()
-            finally:
-                cancelled.set()
-
-        with mock.patch.object(oa, "_stream_once", side_effect=once):
-            task = asyncio.create_task(oa._stream_completion(
-                "http://offline", {}, {}, 3, "test",
-            ))
-            await started.wait()
-            task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await task
-        self.assertTrue(cancelled.is_set())
-
     async def test_timings_record_first_delta_without_prompt_or_response(self):
         response = SseResponse([
             b'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}\n\n',

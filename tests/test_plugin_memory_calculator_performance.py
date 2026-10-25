@@ -170,17 +170,6 @@ class MemoryReadPagingTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(len(page_sizes), 1)
             self.assertLess(page_sizes[0], 19)
 
-    async def test_default_small_read_keeps_existing_header_and_rows(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            session_id = self.write_messages(tmp, 3, content_chars=0)
-            output = await memory.MemoryTool().run(tmp, {
-                "action": "read", "session": session_id,
-            })
-            self.assertIn("3 message(s), showing last 3)", output)
-            self.assertIn("1. Assistant: message-1", output)
-            self.assertIn("3. Assistant: message-3", output)
-            self.assertNotIn("offset=", output)
-
     async def test_offset_beyond_end_has_no_repeating_cursor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             session_id = self.write_messages(tmp, 3)

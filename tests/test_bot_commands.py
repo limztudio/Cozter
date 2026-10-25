@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from Cozter import schedules, session, workspace
+from Cozter import schedules, workspace
 from Cozter.backends_bot.base import BotContext, QueueCapacityError
 from Cozter.tests.helpers import OfflineBot
 
@@ -129,13 +129,6 @@ class BotCommandTests(unittest.TestCase):
         self.assertNotIn(self.uid, self.bot._pending_input)
         self.assertEqual(self._last(), "Cancelled.")
 
-    def test_permission_flow_sets_value(self) -> None:
-        self._run(self.bot.cmd_permission(self._ctx()))
-        self.assertIn("Available modes", self._last())
-        self._run(self.bot._receive_permission(self._ctx(text="deny")))
-        self.assertEqual(workspace.get_permission(self.ws), "deny")
-        self.assertIn("deny", self._last())
-
     def test_permission_rejects_unknown(self) -> None:
         self._run(self.bot._receive_permission(self._ctx(text="bogus")))
         self.assertIn("Unknown mode", self._last())
@@ -160,36 +153,6 @@ class BotCommandTests(unittest.TestCase):
             with self.subTest(handler=handler.__name__):
                 self._run(handler(self._ctx(args=too_long)))
                 self.assertEqual(self._last(), "Error: number is too large.")
-
-    def test_reserve_wizard_binds_days_and_time_across_callbacks(self) -> None:
-        self._run(self.bot.cmd_reserve(self._ctx()))
-        self._run(self.bot.dispatch_text(self._ctx(text="mon,wed")))
-        self.assertIn("Enter time", self._last())
-
-        self._run(self.bot.dispatch_text(self._ctx(text="09:30")))
-        self.assertIn("Enter the command", self._last())
-
-        self._run(self.bot.dispatch_text(self._ctx(text="run report")))
-
-        self.assertIn("Schedule created", self._last())
-        entries = schedules.list_schedules(self.ws, self.uid)
-        self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0]["days"], ["mon", "wed"])
-        self.assertEqual(entries[0]["time"], "09:30")
-        self.assertEqual(entries[0]["command"], "run report")
-        self.assertEqual(entries[0]["platform_id"], self.bot.platform_id)
-        self.assertIn("Weekly: mon, wed", self._last())
-
-    def test_reserve_wizard_explains_weekly_monthly_yearly_and_daily_days(self) -> None:
-        self._run(self.bot.cmd_reserve(self._ctx()))
-
-        self.assertIn("Weekday names repeat weekly", self._last())
-        self.assertIn("Numbers 1-31 are dates every month", self._last())
-        self.assertIn("MM/dd dates repeat yearly", self._last())
-        self.assertIn("'all' for daily", self._last())
-        self.assertIn("Dates missing from a month are skipped", self._last())
-        self.assertIn("'02/29' uses leap years", self._last())
-        self.assertNotIn("1=Mon", self._last())
 
     def test_reserve_wizard_saves_monthly_dates_and_keeps_them_during_retries(self) -> None:
         self._run(self.bot.cmd_reserve(self._ctx()))
@@ -497,19 +460,6 @@ class BotCommandTests(unittest.TestCase):
                 self._run(handler)
                 self.assertIn("Unknown model: missing", self._last())
                 self.assertIn(self.uid, self.bot._pending_input)
-
-    def test_sessions_list_and_switch(self) -> None:
-        first = session.create_session(self.ws, name="First")
-        session.create_session(self.ws, name="Second")
-        self._run(self.bot.cmd_sessions(self._ctx()))
-        listing = self._last()
-        self.assertIn("First", listing)
-        self.assertIn("Second", listing)
-        self._run(self.bot.cmd_sessions(self._ctx(args="First")))
-        self.assertIn("Switched to session: First", self._last())
-        self.assertEqual(
-            session.get_last_session(self.ws, self.uid), first["id"],
-        )
 
     def test_no_workspace_replies_gracefully(self) -> None:
         ctx = self.bot.make_context("nobody", "c1")

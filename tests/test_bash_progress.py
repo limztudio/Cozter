@@ -27,6 +27,8 @@ class BashProgressTests(unittest.IsolatedAsyncioTestCase):
                     bash._read_command_output(proc, 4096), 3,
                 )
             self.assertGreaterEqual(len(capture.output), 2)
+            self.assertTrue(all("outcome=running" in line for line in capture.output))
+            self.assertTrue(all("stage=tool_wait tool=bash pid=" in line for line in capture.output))
             self.assertEqual(b"".join(call.args[0] for call in output.call_args_list), result)
             self.assertIn(b"completed output", result)
             self.assertFalse(truncated)
@@ -61,27 +63,6 @@ class BashProgressTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 release.set()
                 await asyncio.gather(running, return_exceptions=True)
-
-    async def test_quiet_command_survives_multiple_heartbeats_and_keeps_its_output(self):
-        proc = await create_python_script_process(
-            'import time;time.sleep(.18);print("completed output",flush=True)'
-        )
-        try:
-            with (mock.patch.object(bash, "_BASH_PROGRESS_INTERVAL_SEC", .02),
-                  self.assertLogs("Cozter.performance", level="INFO") as capture):
-                output, truncated, incomplete = await asyncio.wait_for(
-                    bash._read_command_output(proc, 4096), 3,
-                )
-            self.assertIn(b"completed output", output)
-            self.assertFalse(truncated)
-            self.assertFalse(incomplete)
-            self.assertGreaterEqual(len(capture.output), 2)
-            self.assertTrue(all("outcome=running" in line for line in capture.output))
-            self.assertTrue(all("stage=tool_wait tool=bash pid=" in line for line in capture.output))
-        finally:
-            await kill_and_wait(proc)
-            close_subprocess_pipe(proc, 1)
-            close_subprocess_pipe(proc, 2)
 
     async def test_heartbeat_wait_does_not_delay_tool_cancellation(self):
         tool = bash.BashTool()

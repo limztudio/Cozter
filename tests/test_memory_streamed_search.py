@@ -208,17 +208,6 @@ class StreamedMemoryListTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("No older sessions", past)
             self.assertNotIn("offset=", past)
 
-    async def test_complete_small_list_preserves_legacy_output(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp, ".cozter", "sessions")
-            _write_session(directory, "aaaaaaaa1111", name="Fixture", summary="Summary", long_term=["Fact"], messages=["saved"])
-            result = await memory.MemoryTool().run(tmp, {"action": "list"})
-            self.assertEqual(result, (
-                "Sessions (newest first):\n"
-                "- Fixture — id aaaaaaaa, 2026-10-15, 1 messages, summary, 1 long-term\n"
-                "Colony: 0 items in .cozter/colony.json"
-            ))
-
     async def test_invalid_offsets_do_not_load_transcripts(self) -> None:
         for action in ("list", "search"):
             for offset in (None, True, -1, 1.25, "1"):

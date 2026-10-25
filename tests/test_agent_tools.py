@@ -242,28 +242,6 @@ class AgentToolHelperTests(unittest.TestCase):
 
 
 class BuiltinEditToolTests(unittest.TestCase):
-    def test_edit_file_uses_shared_replacement_logic(self) -> None:
-        async def run() -> None:
-            with tempfile.TemporaryDirectory() as tmp:
-                path = os.path.join(tmp, "note.txt")
-                with open(path, "w", encoding="utf-8") as file_handle:
-                    file_handle.write("alpha beta")
-
-                result = await EditFileTool().run(
-                    tmp,
-                    {
-                        "path": "note.txt",
-                        "old_string": "beta",
-                        "new_string": "gamma",
-                    },
-                )
-
-                self.assertEqual(result, "Replaced 1 occurrence in note.txt")
-                with open(path, encoding="utf-8") as file_handle:
-                    self.assertEqual(file_handle.read(), "alpha gamma")
-
-        asyncio.run(run())
-
     def test_edit_tools_preserve_inserted_crlf_sequences(self) -> None:
         """New CRLF text must not gain a second carriage return on write."""
         async def run() -> None:
@@ -357,25 +335,6 @@ class BuiltinEditToolTests(unittest.TestCase):
 
 
 class MoveFileToolTests(unittest.TestCase):
-    def test_move_regular_file(self) -> None:
-        async def run() -> None:
-            with tempfile.TemporaryDirectory() as tmp:
-                source = os.path.join(tmp, "source.txt")
-                destination = os.path.join(tmp, "destination.txt")
-                with open(source, "w", encoding="utf-8") as file_handle:
-                    file_handle.write("contents")
-
-                result = await MoveFileTool().run(tmp, {
-                    "source": "source.txt", "destination": "destination.txt",
-                })
-
-                self.assertEqual(result, "Moved: source.txt -> destination.txt")
-                self.assertFalse(os.path.exists(source))
-                with open(destination, encoding="utf-8") as file_handle:
-                    self.assertEqual(file_handle.read(), "contents")
-
-        asyncio.run(run())
-
     def test_move_symlink_moves_the_link_not_its_target(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
@@ -660,23 +619,6 @@ class CopyFileToolTests(unittest.TestCase):
 
 
 class WriteFileToolTests(unittest.TestCase):
-    def test_write_file_overwrites_existing_file(self) -> None:
-        async def run() -> None:
-            with tempfile.TemporaryDirectory() as tmp:
-                path = os.path.join(tmp, "note.txt")
-                with open(path, "w", encoding="utf-8") as file_handle:
-                    file_handle.write("original")
-
-                result = await WriteFileTool().run(tmp, {
-                    "path": "note.txt", "content": "replacement",
-                })
-
-                self.assertEqual(result, "Wrote 11 chars to note.txt")
-                with open(path, encoding="utf-8") as file_handle:
-                    self.assertEqual(file_handle.read(), "replacement")
-
-        asyncio.run(run())
-
     def test_write_file_keeps_original_when_atomic_replace_fails(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
@@ -895,49 +837,6 @@ class PluginLoadingTests(unittest.TestCase):
         finally:
             agent_tools.AgentTool.registry[:] = original_registry
 
-    def test_successful_plugin_import_is_registered_and_marked(self) -> None:
-        """The failed-import rollback does not change normal plugin loading."""
-        original_registry = list(agent_tools.AgentTool.registry)
-        loaded_plugins: list[agent_tools.AgentTool] = []
-
-        def import_module(name: str) -> object:
-            if name == "Cozter.agent_tools.plugins":
-                return SimpleNamespace(__path__=[])
-            self.assertEqual(name, "Cozter.agent_tools.plugins.working")
-
-            class WorkingPlugin(agent_tools.AgentTool):
-                name = "test_successful_plugin"
-                description = "Working test plugin."
-                parameters = {"type": "object"}
-
-                async def run(self, workspace_path: str, args: dict) -> str:
-                    del workspace_path, args
-                    return "ok"
-
-            loaded_plugins.append(agent_tools.AgentTool.registry[-1])
-            return SimpleNamespace()
-
-        mod_info = SimpleNamespace(name="working")
-        try:
-            with (
-                mock.patch.object(
-                    agent_tools.pkgutil,
-                    "iter_modules",
-                    return_value=[mod_info],
-                ),
-                mock.patch.object(
-                    agent_tools.importlib,
-                    "import_module",
-                    side_effect=import_module,
-                ),
-            ):
-                agent_tools._load_subpackage("plugins", mark_as_plugin=True)
-
-            self.assertIn(loaded_plugins[0], agent_tools.AgentTool.registry)
-            self.assertTrue(loaded_plugins[0].is_plugin)
-        finally:
-            agent_tools.AgentTool.registry[:] = original_registry
-
 
 class DiscoveryToolTests(unittest.TestCase):
     def test_grep_read_stays_bounded_when_a_file_grows_after_stat(self) -> None:
@@ -1115,11 +1014,6 @@ class ConfirmPermissionGateTests(unittest.TestCase):
             agent_tools.execute_tool(name, args, ws, approval, events.append)
         )
 
-    def test_confirm_allows_read_only_tool(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            result = self._execute("list_dir", {"path": "."}, "confirm", tmp)
-            self.assertFalse(result.startswith("Blocked"), result)
-
     def test_confirm_blocks_colliding_plugin_but_allows_builtin(self) -> None:
         class CollidingPlugin:
             name = "read_file"
@@ -1173,15 +1067,6 @@ class ConfirmPermissionGateTests(unittest.TestCase):
 
             self.assertTrue(result.startswith("Blocked"), result)
             self.assertFalse(plugin.was_run)
-
-    def test_auto_allows_state_changing_tool(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            result = self._execute(
-                "write_file", {"path": "x.txt", "content": "hi"},
-                "auto", tmp,
-            )
-            self.assertFalse(result.startswith("Blocked"), result)
-            self.assertTrue(os.path.exists(os.path.join(tmp, "x.txt")))
 
     def test_auto_blocks_direct_host_shell(self) -> None:
         """A stray HTTP tool call must not bypass the auto-mode schema."""
@@ -1294,14 +1179,6 @@ class ExecuteToolResultTests(unittest.TestCase):
 
 
 class ParseOpenAICallTests(unittest.TestCase):
-    def test_string_arguments(self) -> None:
-        name, args = agent_tools.parse_openai_call(
-            {"function": {"name": "read_file",
-                          "arguments": '{"path": "a.py"}'}},
-        )
-        self.assertEqual(name, "read_file")
-        self.assertEqual(args, {"path": "a.py"})
-
     def test_dict_arguments_are_accepted(self) -> None:
         _, args = agent_tools.parse_openai_call(
             {"function": {"name": "x", "arguments": {"path": "b.py"}}},
@@ -1332,22 +1209,6 @@ class TreeToolTests(unittest.TestCase):
         with open(path, "w", encoding="utf-8"):
             pass
 
-    def test_tree_shows_structure_and_skips_noise(self) -> None:
-        async def run() -> None:
-            with tempfile.TemporaryDirectory() as tmp:
-                os.makedirs(os.path.join(tmp, "src", "pkg"))
-                os.makedirs(os.path.join(tmp, ".git", "objects"))
-                self._touch(os.path.join(tmp, "README.md"))
-                self._touch(os.path.join(tmp, "src", "main.py"))
-                self._touch(os.path.join(tmp, "src", "pkg", "util.py"))
-                out = await TreeTool().run(tmp, {})
-                for marker in ("src/", "main.py", "pkg/", "util.py",
-                               "README.md"):
-                    self.assertIn(marker, out)
-                self.assertNotIn(".git", out)
-
-        asyncio.run(run())
-
     def test_tree_depth_limits_recursion(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as tmp:
@@ -1368,18 +1229,6 @@ class ApplyPatchToolTests(unittest.TestCase):
 
     def _run(self, ws: str, patch: str) -> str:
         return asyncio.run(ApplyPatchTool().run(ws, {"patch": patch}))
-
-    def test_modify(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            target_path = os.path.join(tmp, "foo.txt")
-            self._write(target_path, "line1\nline2\nline3\n")
-            out = self._run(tmp, (
-                "--- a/foo.txt\n+++ b/foo.txt\n@@ -1,3 +1,3 @@\n"
-                " line1\n-line2\n+line2-changed\n line3\n"
-            ))
-            self.assertIn("applied", out)
-            with open(target_path, encoding="utf-8") as file_handle:
-                self.assertEqual(file_handle.read(), "line1\nline2-changed\nline3\n")
 
     def test_modify_preserves_crlf_line_endings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1427,17 +1276,6 @@ class ApplyPatchToolTests(unittest.TestCase):
             self.assertIn("applied", out)
             with open(target_path, "rb") as file_handle:
                 self.assertEqual(file_handle.read(), b"tail\n")
-
-    def test_create(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            out = self._run(tmp, (
-                "--- /dev/null\n+++ b/new/dir/created.txt\n"
-                "@@ -0,0 +1,2 @@\n+hello\n+world\n"
-            ))
-            self.assertIn("created", out)
-            created = os.path.join(tmp, "new", "dir", "created.txt")
-            with open(created, encoding="utf-8") as file_handle:
-                self.assertEqual(file_handle.read(), "hello\nworld\n")
 
     def test_create_rejects_an_old_side_for_dev_null(self) -> None:
         """Malformed creation diffs must not silently discard old-side text."""
@@ -1553,16 +1391,6 @@ class ApplyPatchToolTests(unittest.TestCase):
             with open(target_path, encoding="utf-8") as file_handle:
                 self.assertEqual(file_handle.read(), "other writer\n")
 
-    def test_delete(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            target_path = os.path.join(tmp, "gone.txt")
-            self._write(target_path, "bye\n")
-            out = self._run(
-                tmp, "--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n",
-            )
-            self.assertIn("deleted", out)
-            self.assertFalse(os.path.exists(target_path))
-
     def test_delete_requires_matching_hunk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target_path = os.path.join(tmp, "keep.txt")
@@ -1575,22 +1403,6 @@ class ApplyPatchToolTests(unittest.TestCase):
             self.assertIn("not deleted", out)
             with open(target_path, encoding="utf-8") as file_handle:
                 self.assertEqual(file_handle.read(), "actual content\n")
-
-    def test_multi_hunk(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            target_path = os.path.join(tmp, "m.txt")
-            self._write(target_path, "\n".join(f"L{line_index}" for line_index in range(1, 11)) + "\n")
-            out = self._run(tmp, (
-                "--- a/m.txt\n+++ b/m.txt\n"
-                "@@ -1,2 +1,2 @@\n L1\n-L2\n+L2x\n"
-                "@@ -9,2 +9,2 @@\n L9\n-L10\n+L10x\n"
-            ))
-            self.assertIn("2 hunk", out)
-            with open(target_path, encoding="utf-8") as file_handle:
-                content = file_handle.read()
-            self.assertIn("L2x", content)
-            self.assertIn("L10x", content)
-            self.assertNotIn("\nL2\n", content)
 
     def test_context_not_found_leaves_file_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

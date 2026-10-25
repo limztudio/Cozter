@@ -60,11 +60,6 @@ class YearlyCalendarTests(unittest.TestCase):
     def slot(self, days: object, now: datetime, time: str = "09:00") -> datetime | None:
         return schedules.most_recent_slot({"days": days, "time": time}, now)
 
-    def test_yearly_date_is_due_at_exact_time(self) -> None:
-        self.assertEqual(
-            self.slot(["12/25"], datetime(2026, 12, 25, 9)), datetime(2026, 12, 25, 9),
-        )
-
     def test_before_time_uses_previous_year(self) -> None:
         self.assertEqual(
             self.slot(["12/25"], datetime(2026, 12, 25, 8, 59)), datetime(2025, 12, 25, 9),

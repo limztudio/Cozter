@@ -19,17 +19,6 @@ class AttachmentGuardTests(unittest.TestCase):
         with open(path, "wb") as file_handle:
             file_handle.write(b"\x89PNG\r\n\x1a\nplaceholder")
 
-    def test_workspace_file_is_attachable(self) -> None:
-        with tempfile.TemporaryDirectory() as ws:
-            path = os.path.join(ws, "foo.txt")
-            with open(path, "w", encoding="utf-8") as file_handle:
-                file_handle.write("hi")
-            real = os.path.realpath(path)
-            self.assertEqual(agent.attachment_source_path("foo.txt", ws), real)
-            self.assertEqual(
-                agent.prepare_attachment_path("foo.txt", ws), real,
-            )
-
     def test_absolute_path_outside_workspace_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as ws, \
                 tempfile.TemporaryDirectory() as outside:

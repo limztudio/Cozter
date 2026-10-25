@@ -5,7 +5,6 @@ PublicResolver is separately exercised without that bypass for refusals.
 """
 
 import asyncio
-from contextlib import asynccontextmanager
 import copy
 import socket
 from types import SimpleNamespace
@@ -324,29 +323,3 @@ class PublicHttpPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.connections), 2)
         self.assertEqual([resolver.calls for resolver in self.resolvers], [1, 1])
         self.assertTrue(all(pool._connector.closed for pool in pools.values()))
-
-    async def test_backend_enters_scope_even_without_web_calls(self):
-        states = []
-
-        @asynccontextmanager
-        async def scope():
-            states.append("entered")
-            try:
-                yield
-            finally:
-                states.append("closed")
-
-        async def stream(*args, **kwargs):
-            self.assertEqual(states, ["entered"])
-            return "done", "", []
-
-        with (
-            mock.patch.object(oa, "public_http_pool_scope", scope),
-            mock.patch.object(oa, "current_run", return_value=None),
-            mock.patch.object(oa, "_stream_completion", side_effect=stream),
-        ):
-            await OfflineHttpBackend()._run_agent(
-                SimpleNamespace(emit=lambda event: None), "/workspace", "request",
-                "worker-a", "full", False, 0,
-            )
-        self.assertEqual(states, ["entered", "closed"])

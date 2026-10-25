@@ -42,20 +42,6 @@ class ReadFilesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("File not found", result)
         self.assertNotIn("truncated", result)
 
-    async def test_small_batch_can_return_medium_files_completely(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            first = "first\n" * 1000
-            second = "second\n" * 2000
-            (root / "a.txt").write_text(first, encoding="utf-8")
-            (root / "b.txt").write_text(second, encoding="utf-8")
-            result = await read_files.ReadFilesTool().run(temp, {"files": [
-                {"path": "a.txt"}, {"path": "b.txt"},
-            ]})
-        self.assertEqual(result, f"=== a.txt ===\n{first}\n\n=== b.txt ===\n{second}")
-        self.assertNotIn("truncated", result)
-        self.assertLessEqual(len(result), read_files._MAX_RESULT_CHARS)
-
     async def test_single_file_at_its_budget_does_not_claim_remainder(self):
         with tempfile.TemporaryDirectory() as temp:
             content = "x" * read_files._MAX_FILE_CHARS

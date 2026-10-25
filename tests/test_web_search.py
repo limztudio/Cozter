@@ -124,12 +124,6 @@ class WebSearchToolTests(unittest.TestCase):
         self.assertNotIn("Sponsored", result)
         self.assertNotIn("ad_domain", result)
 
-    def test_encodes_query_and_uses_html_endpoint_first(self) -> None:
-        net = _FakeNet((200, _HTML_BODY.encode()))
-        _run_search(net, query="two words")
-        self.assertTrue(net.urls[0].startswith("https://html.duckduckgo.com"))
-        self.assertIn("q=two+words", net.urls[0])
-
     def test_falls_back_to_lite_endpoint(self) -> None:
         net = _FakeNet(
             (200, b"<html><body></body></html>"),

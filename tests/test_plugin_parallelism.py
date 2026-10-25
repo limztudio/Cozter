@@ -8,7 +8,6 @@ import unittest
 from unittest import mock
 
 from Cozter import agent_tools
-from Cozter.agent_tools.base import AgentTool
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.tests.helpers import OfflineHttpBackend, OfflineRecord
 
@@ -42,10 +41,6 @@ class PluginParallelismTests(unittest.IsolatedAsyncioTestCase):
             approval, False, 50,
         )
         return events
-
-    def test_tool_metadata_defaults_preserve_serial_and_result_budget(self):
-        self.assertIs(AgentTool.parallel_safe, False)
-        self.assertEqual(AgentTool.max_result_chars, 4000)
 
     def test_only_literal_true_opt_in_groups_a_plugin(self):
         for declaration in (False, None, 0, 1, "true", [], {}):

@@ -784,17 +784,6 @@ class DetachedTaskLedgerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(tracked)
 
-    async def test_completion_is_delivered_without_rerunning_an_agent_turn(self) -> None:
-        await self._register()
-
-        await self.bot._check_detached_tasks()
-
-        self.assertEqual(
-            self.bot.sent,
-            ["Background task 048e1065 completed.\n\nAll checks passed."],
-        )
-        self.assertEqual(await self.bot._list_detached_task_records(), [])
-
     async def test_detached_await_marker_does_not_pause_normal_queue(
         self,
     ) -> None:

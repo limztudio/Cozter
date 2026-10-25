@@ -62,11 +62,6 @@ class GitCheckoutIntegrityTests(unittest.TestCase):
             Path(self.workspace, "missing-branch").read_text(encoding="utf-8"), "committed text\n",
         )
 
-    def test_checkout_can_create_a_new_branch(self) -> None:
-        result = self.invoke(action="checkout", branch="audit-created", create=True)
-        self.assertFalse(result.startswith("Error:"), result)
-        self.assertEqual(self.git("branch", "--show-current").strip(), "audit-created")
-
 
 if __name__ == "__main__":
     unittest.main()

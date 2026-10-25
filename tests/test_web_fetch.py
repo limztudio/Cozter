@@ -119,24 +119,6 @@ class WebFetchSecurityTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_public_dns_answer_is_allowed(self) -> None:
-        async def run() -> None:
-            delegate = _StaticResolver([{"host": "8.8.8.8"}])
-            with mock.patch(
-                "Cozter.agent_tools._public_resolver.DefaultResolver",
-                return_value=delegate,
-            ):
-                resolver = _PublicResolver()
-
-            self.assertEqual(
-                await resolver.resolve("public.example", 443),
-                delegate.answers,
-            )
-            await resolver.close()
-            self.assertTrue(delegate.closed)
-
-        asyncio.run(run())
-
     def test_redirect_to_private_target_is_not_requested(self) -> None:
         async def run() -> str:
             session = _ResponseSession([

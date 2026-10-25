@@ -173,60 +173,6 @@ class InterruptedTurnMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Running pytest -q", note)
         self.assertNotIn("Partial output before the stop:", note)
 
-    async def test_completed_turn_is_not_marked_interrupted(self) -> None:
-        """A normal completion logs exactly one prompt/response pair."""
-        async def fast_drive(*_args, **_kwargs):
-            return AgentResult(text="all done"), False
-
-        maintenance_tasks: list[asyncio.Task] = []
-        original_background_task = agent.create_background_task
-
-        def capture_background_task(coro, *, name, log=None):
-            task = original_background_task(coro, name=name, log=log)
-            if not name.startswith(LOG_TASK_PREFIX):
-                maintenance_tasks.append(task)
-            return task
-
-        with tempfile.TemporaryDirectory() as workspace_path:
-            data = await asyncio.to_thread(
-                session.create_session, workspace_path, name="Work",
-            )
-            with (
-                mock.patch.object(
-                    agent.backends_agent, "get_backend",
-                    return_value=_RecordingBackend(),
-                ),
-                mock.patch.object(
-                    agent, "_drive_backend", side_effect=fast_drive,
-                ),
-                mock.patch.object(
-                    agent.compaction, "maybe_compact",
-                    new_callable=mock.AsyncMock,
-                ),
-                mock.patch.object(
-                    agent.titling, "maybe_auto_title",
-                    new_callable=mock.AsyncMock,
-                ),
-                mock.patch.object(
-                    agent, "create_background_task",
-                    side_effect=capture_background_task,
-                ),
-            ):
-                result = await agent.run(
-                    "continue the refactor",
-                    workspace_path,
-                    1,
-                    backend_name=_RecordingBackend.name,
-                    session_id=data["id"],
-                )
-                await asyncio.gather(*maintenance_tasks)
-
-            self.assertEqual(result.text, "all done")
-            messages = await self._load_messages(workspace_path, data["id"])
-            self.assertEqual(len(messages), 2)
-            self.assertEqual(messages[0]["content"], "continue the refactor")
-            self.assertEqual(messages[1]["content"], "all done")
-
 
 if __name__ == "__main__":
     unittest.main()

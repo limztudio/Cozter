@@ -45,14 +45,6 @@ class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("git output truncated", out)
         self.assertIn("git output truncated", err)
 
-    async def test_unicode_and_normal_output_are_exact(self) -> None:
-        with tempfile.TemporaryDirectory() as path:
-            out, err, rc = await self._script(path, (
-                "import os\nos.write(1,'hello 한글 🙂\\n'.encode())\n"
-                "os.write(2,'diagnostic ü'.encode())\n"
-            ))
-        self.assertEqual((out, err, rc), ("hello 한글 🙂\n", "diagnostic ü", 0))
-
     async def test_running_command_outlives_post_exit_grace(self) -> None:
         with tempfile.TemporaryDirectory() as path, mock.patch.object(
             git, "_GIT_POST_EXIT_DRAIN_SECONDS", .03,

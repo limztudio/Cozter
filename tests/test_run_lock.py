@@ -1,6 +1,5 @@
 """Tests for the per-workspace run lock that serializes agent turns."""
 
-import asyncio
 import os
 import tempfile
 import unittest
@@ -9,22 +8,18 @@ from Cozter import workspace
 
 
 class RunLockTests(unittest.TestCase):
-    def test_run_lock_is_per_workspace(self) -> None:
-        lock_a = workspace.get_run_lock("/ws/a")
-        self.assertIs(lock_a, workspace.get_run_lock("/ws/a"))
-        self.assertIsNot(lock_a, workspace.get_run_lock("/ws/b"))
-        self.assertIsInstance(lock_a, asyncio.Lock)
-        # Distinct from the file lock so a turn can hold it without deadlocking.
-        self.assertIsNot(
-            workspace.get_run_lock("/ws/a"), workspace.get_lock("/ws/a"),
-        )
-
     def test_workspace_aliases_share_file_and_run_locks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = os.path.join(tmp, "workspace")
             os.mkdir(target)
             dotted_alias = os.path.join(target, ".")
 
+            self.assertIsNot(
+                workspace.get_run_lock(target), workspace.get_lock(target),
+            )
+            self.assertIsNot(
+                workspace.get_run_lock(target), workspace.get_run_lock(tmp),
+            )
             self.assertIs(
                 workspace.get_lock(target), workspace.get_lock(dotted_alias),
             )

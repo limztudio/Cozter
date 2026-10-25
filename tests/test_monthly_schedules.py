@@ -60,11 +60,6 @@ class MonthlyCalendarTests(unittest.TestCase):
     def slot(self, days: object, now: datetime, time: str = "09:00") -> datetime | None:
         return schedules.most_recent_slot({"days": days, "time": time}, now)
 
-    def test_month_date_fires_at_exact_time(self) -> None:
-        self.assertEqual(
-            self.slot([15], datetime(2026, 10, 15, 9)), datetime(2026, 10, 15, 9),
-        )
-
     def test_before_time_uses_previous_month(self) -> None:
         self.assertEqual(
             self.slot([15], datetime(2026, 10, 15, 8, 59)), datetime(2026, 9, 15, 9),

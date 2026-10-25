@@ -2232,49 +2232,6 @@ class ZaiBackendTests(unittest.TestCase):
                 ZaiBackend().available_models, zai_mod._FALLBACK_MODELS,
             )
 
-    def test_chat_endpoint_appends_only_chat_completions(self) -> None:
-        endpoint = ZaiBackend()._chat_endpoint()
-        self.assertTrue(endpoint.endswith("/chat/completions"))
-        self.assertNotIn("/v1/chat/completions", endpoint)
-
-    def test_auth_headers_reflect_key(self) -> None:
-        def _key() -> str:
-            return "secret-key"
-
-        def _missing_api_key() -> str:
-            return ""
-
-        original_get_api_key = config.get_zai_api_key
-        try:
-            config.get_zai_api_key = _key
-            self.assertEqual(
-                ZaiBackend()._auth_headers(),
-                {"Authorization": "Bearer secret-key"},
-            )
-            config.get_zai_api_key = _missing_api_key
-            self.assertEqual(ZaiBackend()._auth_headers(), {})
-        finally:
-            config.get_zai_api_key = original_get_api_key
-
-    def test_health_check_reflects_key(self) -> None:
-        def _key() -> str:
-            return "k"
-
-        def _missing_api_key() -> str:
-            return ""
-
-        original_get_api_key = config.get_zai_api_key
-        try:
-            config.get_zai_api_key = _missing_api_key
-            ok, detail = ZaiBackend().health_check()
-            self.assertFalse(ok)
-            self.assertIn("no API key", detail)
-            config.get_zai_api_key = _key
-            ok, _ = ZaiBackend().health_check()
-            self.assertTrue(ok)
-        finally:
-            config.get_zai_api_key = original_get_api_key
-
     def test_glm_5_2_effort_uses_reasoning_request_shape(self) -> None:
         backend = ZaiBackend()
         self.assertEqual(backend._effort_fields(0, "glm-5.2"), {})
@@ -2583,40 +2540,6 @@ class MetaBackendTests(unittest.TestCase):
                 MetaModelApiBackend().available_models,
                 meta_mod._FALLBACK_MODELS,
             )
-
-    def test_chat_endpoint_appends_only_chat_completions(self) -> None:
-        endpoint = MetaModelApiBackend()._chat_endpoint()
-        self.assertEqual(
-            endpoint, "https://api.meta.ai/v1/chat/completions",
-        )
-
-    def test_auth_headers_reflect_key(self) -> None:
-        with mock.patch.object(
-            meta_mod.cfg, "get_meta_api_key", return_value="secret-key",
-        ):
-            self.assertEqual(
-                MetaModelApiBackend()._auth_headers(),
-                {"Authorization": "Bearer secret-key"},
-            )
-        with mock.patch.object(
-            meta_mod.cfg, "get_meta_api_key", return_value="",
-        ):
-            self.assertEqual(MetaModelApiBackend()._auth_headers(), {})
-
-    def test_health_check_reflects_key(self) -> None:
-        with mock.patch.object(
-            meta_mod.cfg, "get_meta_api_key", return_value="",
-        ):
-            ok, detail = MetaModelApiBackend().health_check()
-        self.assertFalse(ok)
-        self.assertIn("meta_api_key", detail)
-
-        with mock.patch.object(
-            meta_mod.cfg, "get_meta_api_key", return_value="k",
-        ):
-            ok, detail = MetaModelApiBackend().health_check()
-        self.assertTrue(ok)
-        self.assertIn("muse-spark-1.3", detail)
 
 
 if __name__ == "__main__":

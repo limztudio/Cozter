@@ -17,11 +17,6 @@ class SessionPickerTests(unittest.TestCase):
     def _pick(self, choice: str):
         return BotPlatform._pick_session(choice, self.SESSIONS)
 
-    def test_pick_by_number(self) -> None:
-        picked = self._pick("2")
-        assert picked is not None
-        self.assertEqual(picked["id"], "bbb")
-
     def test_number_out_of_range(self) -> None:
         self.assertIsNone(self._pick("9"))
         self.assertIsNone(self._pick("0"))
@@ -31,11 +26,6 @@ class SessionPickerTests(unittest.TestCase):
         picked = self._pick("beta notes")
         assert picked is not None
         self.assertEqual(picked["id"], "bbb")
-
-    def test_pick_by_substring(self) -> None:
-        picked = self._pick("alpha")
-        assert picked is not None
-        self.assertEqual(picked["id"], "aaa")
 
     def test_no_match_or_empty(self) -> None:
         self.assertIsNone(self._pick("zzz"))

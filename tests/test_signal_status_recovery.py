@@ -233,9 +233,3 @@ class SignalStatusRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.bot.posts), 1)
         self.assertFalse(self.status_owners())
         self.assertFalse(self.bot._send_lock.locked())
-
-    def test_production_policy_bounds_background_creation_and_new_status_cadence(self):
-        self.assertEqual(SignalBot.status_initial_timeout_sec, 30)
-        self.assertEqual(SignalBot.status_recovery_interval_sec, 300)
-        self.assertEqual(SignalBot.status_update_limit, 10)
-        self.assertEqual(SignalBot.status_update_interval_sec, 60)

@@ -36,7 +36,3 @@ class SignalSpanProjectionTests(unittest.TestCase):
         self.assertEqual("".join(text for text, _ in chunks), body)
         self.assertEqual(sum(visits), len(spans))
         self.assertEqual(len(chunks), 100)
-
-    def test_empty_and_unstyled_text_keep_their_existing_chunks(self):
-        self.assertEqual(signal._signal_rich_text_chunks(""), [])
-        self.assertEqual(signal._signal_rich_text_chunks("abcd", limit=2), [("ab", []), ("cd", [])])

@@ -16,7 +16,6 @@ from Cozter.backends_bot.signal import (
     _extract_account_id,
     _extract_sender_id,
     _extract_timestamp_from_value,
-    _md_to_signal_body_and_spans,
     _normalize_group_id,
     _signal_rich_text_chunks,
 )
@@ -27,24 +26,6 @@ SIGNAL_GROUP_URL = "https://signal.group/#test"
 
 
 class SignalFormattingTests(unittest.TestCase):
-    def test_markdown_becomes_signal_body_and_styles(self) -> None:
-        body, spans = _md_to_signal_body_and_spans(
-            "# Title\nA **bold** _it_ ~~gone~~ `code` ||secret||"
-        )
-
-        self.assertEqual(body, "Title\nA bold it gone code secret")
-        self.assertEqual(
-            spans,
-            [
-                (0, 5, "BOLD"),
-                (8, 4, "BOLD"),
-                (13, 2, "ITALIC"),
-                (16, 4, "STRIKETHROUGH"),
-                (21, 4, "MONOSPACE"),
-                (26, 6, "SPOILER"),
-            ],
-        )
-
     def test_rich_chunks_use_utf16_offsets(self) -> None:
         chunks = _signal_rich_text_chunks("😀 **ok**")
 

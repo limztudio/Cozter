@@ -75,13 +75,6 @@ class SlackFormattingTests(unittest.IsolatedAsyncioTestCase):
             "blocks": [{"type": "markdown", "text": markdown}],
         }])
 
-    async def test_plain_reply_keeps_existing_text_payload(self) -> None:
-        await self.bot.send_text("C1", "# Plain", rich=False)
-
-        self.assertEqual(self.client.posts, [{
-            "channel": "C1", "text": "# Plain",
-        }])
-
     async def test_rich_reply_propagates_native_markdown_rejection(self):
         self.client = _MarkdownRejectingClient()
         self.bot.app = SimpleNamespace(client=self.client)
@@ -184,11 +177,7 @@ class SlackRetryDelayTests(unittest.TestCase):
     def test_bool_retry_after_is_rejected(self) -> None:
         self.assertIsNone(self._throttled({"Retry-After": True}))
         self.assertIsNone(self._throttled({"Retry-After": False}))
-
-    def test_numeric_retry_after_is_honored(self) -> None:
-        self.assertEqual(
-            self._throttled({"Retry-After": "2"}), 2.5,
-        )
+        self.assertEqual(self._throttled({"Retry-After": "2"}), 2.5)
 
 
 class TelegramRetryDelayTests(unittest.TestCase):

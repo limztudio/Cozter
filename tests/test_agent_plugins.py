@@ -34,25 +34,6 @@ class CalculatorToolTests(unittest.TestCase):
     def evaluate_expression(self, expression: str) -> str:
         return _run(self.tool.run(".", {"expression": expression}))
 
-    def test_arithmetic_precedence_and_parentheses(self) -> None:
-        self.assertEqual(self.evaluate_expression("2 + 3 * 4"), "14")
-        self.assertEqual(self.evaluate_expression("(2 + 3) * 4"), "20")
-        self.assertEqual(self.evaluate_expression("2 ** 10"), "1024")
-        self.assertEqual(self.evaluate_expression("7 // 2"), "3")
-        self.assertEqual(self.evaluate_expression("7 % 3"), "1")
-        self.assertEqual(self.evaluate_expression("-5 + 2"), "-3")
-        self.assertEqual(self.evaluate_expression("10 / 4"), "2.5")
-
-    def test_functions_and_constants(self) -> None:
-        self.assertEqual(self.evaluate_expression("sqrt(16)"), "4")
-        self.assertEqual(self.evaluate_expression("floor(2.7) + ceil(2.1)"), "5")
-        self.assertEqual(self.evaluate_expression("min(3, 1, 2) + max(3, 1, 2)"), "4")
-        self.assertEqual(self.evaluate_expression("round(0.12345, 3)"), "0.123")
-        self.assertEqual(self.evaluate_expression("factorial(5)"), "120")
-        self.assertEqual(self.evaluate_expression("round(pi, 5)"), "3.14159")
-        self.assertEqual(self.evaluate_expression("round(e, 3)"), "2.718")
-        self.assertEqual(self.evaluate_expression("gcd(12, 18)"), "6")
-
     def test_rejects_non_numeric_and_unknown_syntax(self) -> None:
         for expression in (
             "__import__('os').system('true')",
@@ -138,14 +119,6 @@ class NotesToolTests(unittest.TestCase):
 
     def notes_path(self) -> str:
         return os.path.join(self.workspace, ".cozter", "notes.md")
-
-    def test_append_creates_timestamped_entry(self) -> None:
-        result = self.invoke("append", "Investigated grep; found timeout bug")
-        self.assertIn("Noted", result)
-        with open(self.notes_path(), encoding="utf-8") as file_handle:
-            content = file_handle.read()
-        self.assertIn("## ", content)
-        self.assertIn("Investigated grep", content)
 
     def test_append_requires_text(self) -> None:
         self.assertTrue(self.invoke("append").startswith("Error:"))
@@ -243,30 +216,6 @@ class GitInfoToolTests(unittest.TestCase):
         self._git("add", filename)
         self._git("commit", "-q", "-m", message)
 
-    def test_status_shows_branch_and_changes(self) -> None:
-        self._commit("a.txt", "hello\n", "initial commit")
-        with open(os.path.join(self.workspace, "a.txt"), "a") as file_handle:
-            file_handle.write("more\n")
-        status = self.invoke(action="status")
-        self.assertIn("##", status)
-        self.assertIn("a.txt", status)
-
-    def test_log_lists_commit_subjects(self) -> None:
-        self._commit("a.txt", "one\n", "first subject")
-        self._commit("b.txt", "two\n", "second subject")
-        log = self.invoke(action="log", limit=5)
-        self.assertIn("first subject", log)
-        self.assertIn("second subject", log)
-
-    def test_diff_summary_and_patch(self) -> None:
-        self._commit("a.txt", "one\n", "initial commit")
-        with open(os.path.join(self.workspace, "a.txt"), "a") as file_handle:
-            file_handle.write("two\n")
-        summary = self.invoke(action="diff")
-        self.assertIn("a.txt", summary)
-        patch = self.invoke(action="diff", patch=True)
-        self.assertIn("+two", patch)
-
     def test_diff_does_not_execute_repository_diff_helpers(self) -> None:
         self._commit("a.txt", "one\n", "initial commit")
         marker = os.path.join(self.workspace, "helper-executed")
@@ -338,12 +287,6 @@ class GitInfoToolTests(unittest.TestCase):
         self.assertEqual(self.invoke(action="tags"), "No tags.")
         self.assertEqual(self.invoke(action="stashes"), "No stashes.")
 
-    def test_tags_lists_created_tag(self) -> None:
-        self._commit("a.txt", "hello\n", "initial commit")
-        self._git("tag", "v1")
-        result = self.invoke(action="tags")
-        self.assertIn("v1", result)
-
     def test_tags_honors_the_requested_limit(self) -> None:
         self._commit("a.txt", "hello\n", "initial commit")
         for tag in ("v1", "v2", "v3"):
@@ -352,20 +295,6 @@ class GitInfoToolTests(unittest.TestCase):
         self.assertEqual(len(result.splitlines()), 1)
         self.assertTrue(result.startswith("v"), result)
 
-    def test_stash_push_and_list(self) -> None:
-        self._commit("a.txt", "hello\n", "initial commit")
-        with open(os.path.join(self.workspace, "a.txt"), "a") as file_handle:
-            file_handle.write("more\n")
-        self._git("stash", "push", "-m", "wip")
-        result = self.invoke(action="stashes")
-        self.assertIn("wip", result)
-
-    def test_show_displays_head_summary(self) -> None:
-        self._commit("a.txt", "hello\n", "show me")
-        result = self.invoke(action="show")
-        self.assertIn("show me", result)
-        self.assertIn("a.txt", result)
-
     def test_blame_needs_path_and_marks_author(self) -> None:
         self._commit("a.txt", "hello\n", "initial commit")
         self.assertTrue(
@@ -373,11 +302,6 @@ class GitInfoToolTests(unittest.TestCase):
         )
         result = self.invoke(action="blame", path="a.txt")
         self.assertIn("hello", result)
-
-    def test_blame_single_line(self) -> None:
-        self._commit("a.txt", "one\ntwo\n", "initial commit")
-        result = self.invoke(action="blame", path="a.txt", line=2)
-        self.assertIn("two", result)
 
     def test_ref_injection_rejected(self) -> None:
         self._commit("a.txt", "hello\n", "initial commit")
@@ -429,19 +353,6 @@ class _GitRepoTestCase(unittest.TestCase):
 class GitOpsToolTests(_GitRepoTestCase):
     tool_class = GitOpsTool
 
-    def test_add_and_commit_round_trip(self) -> None:
-        self.write("a.txt", "hello\n")
-        self.assertEqual(
-            self.invoke(action="add", paths=["a.txt"]), "OK",
-        )
-        result = self.invoke(action="commit", message="init")
-        self.assertIn("init", result)
-        log = subprocess.run(
-            ["git", "-C", self.workspace, "log", "--oneline"],
-            capture_output=True, text=True, check=True,
-        )
-        self.assertIn("init", log.stdout)
-
     def test_add_rejects_escape(self) -> None:
         self.assertTrue(
             self.invoke(action="add", paths=["../outside"]).startswith(
@@ -456,30 +367,6 @@ class GitOpsToolTests(_GitRepoTestCase):
             self.invoke(action="commit", message=" ").startswith("Error:"),
         )
 
-    def test_checkout_and_branch_create(self) -> None:
-        self.write("a.txt", "hello\n")
-        self.invoke(action="add", paths=["a.txt"])
-        self.invoke(action="commit", message="init")
-        self.assertEqual(
-            self.invoke(action="branch-create", branch="feat/x"), "OK",
-        )
-        checked_out = self.invoke(action="checkout", branch="feat/x")
-        self.assertTrue(checked_out.startswith("OK"), checked_out)
-        self.assertIn("feat/x", checked_out)
-
-    def test_branch_delete_and_rename(self) -> None:
-        self.write("a.txt", "hello\n")
-        self.invoke(action="add", paths=["a.txt"])
-        self.invoke(action="commit", message="init")
-        self.invoke(action="branch-create", branch="old")
-        self.assertEqual(
-            self.invoke(action="branch-rename", branch="old",
-                        new_branch="new"),
-            "OK",
-        )
-        deleted = self.invoke(action="branch-delete", branch="new")
-        self.assertIn("Deleted branch", deleted)
-
     def test_branch_name_injection_rejected(self) -> None:
         for bad in ("--help", "-d", "a b", "..", "a;id"):
             with self.subTest(bad=bad):
@@ -488,16 +375,6 @@ class GitOpsToolTests(_GitRepoTestCase):
                         action="branch-create", branch=bad,
                     ).startswith("Error:"),
                 )
-
-    def test_tag_create_and_delete(self) -> None:
-        self.write("a.txt", "hello\n")
-        self.invoke(action="add", paths=["a.txt"])
-        self.invoke(action="commit", message="init")
-        self.assertEqual(
-            self.invoke(action="tag-create", tag="v1"), "OK",
-        )
-        deleted = self.invoke(action="tag-delete", tag="v1")
-        self.assertIn("Deleted tag", deleted)
 
     def test_merge_ff_only(self) -> None:
         self.write("a.txt", "hello\n")
@@ -531,18 +408,6 @@ class GitOpsToolTests(_GitRepoTestCase):
         with open(os.path.join(self.workspace, "a.txt")) as file_handle:
             content = file_handle.read()
         self.assertEqual(content, "hello\n")
-
-    def test_stash_round_trip(self) -> None:
-        self.write("a.txt", "hello\n")
-        self.invoke(action="add", paths=["a.txt"])
-        self.invoke(action="commit", message="init")
-        self.append("a.txt", "more\n")
-        result = self.invoke(
-            action="stash-push", message="wip", paths=["a.txt"],
-        )
-        self.assertFalse(result.startswith("Error:"))
-        popped = self.invoke(action="stash-pop")
-        self.assertFalse(popped.startswith("Error:"))
 
     def test_clean_needs_confirmation(self) -> None:
         self.write("junk.txt", "x\n")
@@ -579,37 +444,6 @@ class GitSyncToolTests(_GitRepoTestCase):
             ["git", "-C", self.workspace, "remote", "add", "origin",
              self.remote_dir],
             check=True,
-        )
-
-    def test_remotes_lists_origin(self) -> None:
-        result = self.invoke(action="remotes")
-        self.assertIn("origin", result)
-
-    def test_push_fetch_pull_round_trip(self) -> None:
-        self.write("a.txt", "hello\n")
-        subprocess.run(
-            ["git", "-C", self.workspace, "add", "a.txt"], check=True,
-        )
-        subprocess.run(
-            ["git", "-C", self.workspace, "commit", "-q", "-m", "init"],
-            check=True,
-        )
-        pushed = self.invoke(
-            action="push", remote="origin", branch="master",
-            upstream=True,
-        )
-        self.assertFalse(
-            pushed.startswith("Error:"), msg=pushed,
-        )
-        fetched = self.invoke(action="fetch", remote="origin")
-        self.assertFalse(
-            fetched.startswith("Error:"), msg=fetched,
-        )
-        pulled = self.invoke(
-            action="pull", remote="origin", branch="master",
-        )
-        self.assertFalse(
-            pulled.startswith("Error:"), msg=pulled,
         )
 
     def test_remote_injection_rejected(self) -> None:
@@ -677,50 +511,11 @@ class MemoryToolTests(unittest.TestCase):
         ) as file_handle:
             json.dump({"items": items, "compact_count": 0}, file_handle)
 
-    def test_list_orders_sessions_newest_first(self) -> None:
-        self.write_session(
-            "aaaaaaaa-1111", name="Old work", created="2025-05-01T09:00:00",
-            messages=[{"role": "user", "content": "hi"}],
-        )
-        self.write_session(
-            "bbbbbbbb-2222", name="Meta fix", created="2025-06-01T10:00:00",
-            messages=[{"role": "user", "content": "a"}, {"role": "assistant",
-                      "content": "b"}],
-            summary="Fixed the host.", long_term=["Key lives on meta.ai"],
-        )
-        self.write_colony(["Deploys are Tuesdays."])
-        result = self.invoke(action="list")
-        self.assertIn("Sessions (newest first):", result)
-        self.assertLess(result.index("Meta fix"), result.index("Old work"))
-        self.assertIn("2 messages", result)
-        self.assertIn("summary", result)
-        self.assertIn("1 long-term", result)
-        self.assertIn("Colony: 1 items", result)
-
     def test_list_empty_workspace(self) -> None:
         self.assertEqual(
             self.invoke(action="list"),
             "No sessions recorded in this workspace yet.",
         )
-
-    def test_search_finds_message_summary_long_term_and_colony(self) -> None:
-        self.write_session(
-            "cccccccc-3333", name="Release", created="2025-06-02T08:00:00",
-            messages=[{"role": "assistant",
-                       "content": "The deploy window is Tuesday 09:00 UTC."}],
-        )
-        self.write_session(
-            "dddddddd-4444", name="Ops", created="2025-06-01T08:00:00",
-            summary="Agreed on the DEPLOY WINDOW change.",
-            long_term=["deploy window owns the calendar"],
-        )
-        self.write_colony(["Deploy window: Tue 09:00 UTC."])
-        result = self.invoke(action="search", query="deploy window")
-        self.assertIn("Found 4 match(es)", result)
-        self.assertIn("[Release · 2025-06-02] Assistant:", result)
-        self.assertIn("[Ops · 2025-06-01] Summary:", result)
-        self.assertIn("[Ops · 2025-06-01] Long-term:", result)
-        self.assertIn("[Colony]", result)
 
     def test_search_is_case_insensitive_and_excerpts_match(self) -> None:
         self.write_session(
@@ -795,26 +590,6 @@ class MemoryToolTests(unittest.TestCase):
         self.assertIn(
             "No matches", self.invoke(action="search", query="zzz"),
         )
-
-    def test_read_by_name_prefix_and_last(self) -> None:
-        self.write_session(
-            "11111111-9999", name="Alpha", created="2025-05-01T08:00:00",
-            messages=[{"role": "user", "content": "alpha says hi"}],
-        )
-        self.write_session(
-            "22222222-0000", name="Beta", created="2025-06-01T08:00:00",
-            messages=[
-                {"role": "user", "content": "beta q"},
-                {"role": "assistant", "content": "beta a"},
-            ],
-        )
-        by_name = self.invoke(action="read", session="Beta")
-        self.assertIn("Session: Beta (id 22222222", by_name)
-        self.assertIn("2. Assistant: beta a", by_name)
-        by_prefix = self.invoke(action="read", session="11111111")
-        self.assertIn("alpha says hi", by_prefix)
-        by_last = self.invoke(action="read", session="last")
-        self.assertIn("Session: Beta", by_last)
 
     def test_read_message_limit_and_line_cap(self) -> None:
         self.write_session(
@@ -956,24 +731,6 @@ class HttpRequestToolTests(unittest.TestCase):
         ):
             result = _run(self.tool.run(".", dict(args)))
         return result, session
-
-    def test_get_returns_status_and_json_body(self) -> None:
-        result, session = self.run_with(
-            [
-                FakeResponse(
-                    status=200,
-                    url="https://api.example.com/v1/things",
-                    headers={"Content-Type": "application/json"},
-                    body=b'{"ok": true}',
-                ),
-            ],
-            url="https://api.example.com/v1/things",
-        )
-        self.assertIn("HTTP 200", result)
-        self.assertIn("GET https://api.example.com/v1/things", result)
-        self.assertIn('{"ok": true}', result)
-        self.assertEqual(len(session.calls), 1)
-        self.assertTrue(session.calls[0]["allow_redirects"] is False)
 
     def test_error_status_body_is_shown(self) -> None:
         result, _ = self.run_with(

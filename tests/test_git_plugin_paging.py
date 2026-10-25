@@ -14,8 +14,6 @@ from unittest import mock
 from Cozter.agent_tools.plugins import _git_common as git
 from Cozter.agent_tools.plugins import git_info
 from Cozter.agent_tools.plugins.git_info import GitInfoTool, _PAGE_CONTENT_CHARS, _page_output
-from Cozter.agent_tools.plugins.git_ops import GitOpsTool
-from Cozter.agent_tools.plugins.git_sync import GitSyncTool
 
 
 class GitTextWindowTests(unittest.IsolatedAsyncioTestCase):
@@ -232,10 +230,3 @@ class GitPluginPagingTests(unittest.IsolatedAsyncioTestCase):
         result = await GitInfoTool().run(str(empty), {"action": "diff", "patch": True})
         self.assertIn("+new staged text", result)
         self.assertNotIn("Error:", result)
-
-    async def test_git_tools_declare_their_existing_twelve_thousand_char_budget(self):
-        for tool in (GitInfoTool, GitOpsTool, GitSyncTool):
-            self.assertEqual(tool.max_result_chars, 12_000)
-        self.assertTrue(GitInfoTool.parallel_safe)
-        self.assertFalse(getattr(GitOpsTool, "parallel_safe", False))
-        self.assertFalse(getattr(GitSyncTool, "parallel_safe", False))

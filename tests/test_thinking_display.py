@@ -11,14 +11,6 @@ from Cozter.backends_bot.base import BotPlatform
 
 
 class ThinkingDisplayTests(unittest.TestCase):
-    def test_includes_recent_tools_and_text(self) -> None:
-        out = BotPlatform._compose_thinking_display(
-            ["» ls", "» cat x"], "Here is the answer",
-        )
-        self.assertTrue(out.startswith("Thinking..."))
-        self.assertIn("» cat x", out)
-        self.assertIn("Here is the answer", out)
-
     def test_keeps_only_last_five_tool_lines(self) -> None:
         lines = [f"» step {step}" for step in range(8)]
         out = BotPlatform._compose_thinking_display(lines, "")

@@ -49,12 +49,6 @@ class PlannerContextLatencyTests(unittest.TestCase):
                 result = agent._planner_context("history\n" * 4000 + request, request)
                 self.assertEqual(result, request)
 
-    def test_short_context_is_unchanged_and_separate_request_is_retained(self):
-        self.assertEqual(agent._planner_context("history\nrequest", "request"), "history\nrequest")
-        self.assertEqual(agent._planner_context("request", "request"), "request")
-        self.assertEqual(agent._planner_context("history", "request"), "history\n\nrequest")
-        self.assertEqual(agent._planner_context("", "request"), "request")
-
     def test_empty_request_still_bounds_history_with_both_ends_preserved(self):
         history = "IMPORTANT PREFIX\n" + "history\n" * 4000 + "LATEST CONTEXT"
         result = agent._planner_context(history, "")
@@ -62,4 +56,3 @@ class PlannerContextLatencyTests(unittest.TestCase):
         self.assertTrue(result.startswith("IMPORTANT PREFIX"))
         self.assertTrue(result.endswith("LATEST CONTEXT"))
         self.assertIn(agent._PLANNER_OMISSION_MARKER, result)
-

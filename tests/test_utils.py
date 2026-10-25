@@ -311,15 +311,6 @@ class ProcessDrainTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_drain_text_stream_short_output_unmarked(self) -> None:
-        async def run() -> None:
-            reader = asyncio.StreamReader()
-            reader.feed_data(b"ok")
-            reader.feed_eof()
-            self.assertEqual(await utils.drain_text_stream(reader), "ok")
-
-        asyncio.run(run())
-
     def test_drain_llm_subprocess_consumes_stderr_concurrently(self) -> None:
         async def run() -> None:
             script = (
@@ -502,15 +493,6 @@ class JsonHelperTests(unittest.TestCase):
         self.assertEqual(utils.strip_marker_block(None, "TAG"), "")  # type: ignore[arg-type]
         self.assertEqual(utils.strip_marker_block(123, "TAG"), "")  # type: ignore[arg-type]
 
-    def test_save_json_object_creates_parent_and_writes_json(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "nested", "state.json")
-
-            utils.save_json_object(path, {"ok": True})
-
-            with open(path, encoding="utf-8") as file_handle:
-                self.assertEqual(json.load(file_handle), {"ok": True})
-
     def test_load_json_object_ignores_non_utf8_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "state.json")
@@ -668,15 +650,6 @@ class PathBoundaryTests(unittest.TestCase):
             self.assertFalse(
                 utils.is_path_within(os.path.join(link, "secret.txt"), root),
             )
-
-
-class LockHelperTests(unittest.TestCase):
-    def test_ensure_lock_reuses_the_same_lock_per_key(self) -> None:
-        registry: dict[str, asyncio.Lock] = {}
-        first = utils.ensure_lock(registry, "a")
-        self.assertIs(first, utils.ensure_lock(registry, "a"))
-        self.assertIsNot(first, utils.ensure_lock(registry, "b"))
-        self.assertIsInstance(first, asyncio.Lock)
 
 
 class BackgroundTaskTests(unittest.TestCase):

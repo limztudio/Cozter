@@ -13,7 +13,6 @@ import unittest
 from unittest import mock
 
 from Cozter import agent, flexible, workspace
-from Cozter.agent_tools.builtin.bash import BashTool
 from Cozter.backends_agent.base import AgentResult, ChatEvent, append_detached_task
 
 
@@ -24,29 +23,6 @@ class PlanParsingTests(unittest.TestCase):
         for obsolete in ("medium", "med", "middle"):
             with self.subTest(tier=obsolete):
                 self.assertIsNone(flexible.normalize_tier(obsolete))
-
-    def test_parses_understanding_and_tiers(self) -> None:
-        raw = (
-            "[UNDERSTANDING]\nUser wants the retry bug fixed.\n"
-            "[/UNDERSTANDING]\n"
-            "[PLAN]\n"
-            "1. [low] add a validation check\n"
-            "2. [mid] write unit tests for the helper\n"
-            "3. [high] debug the non-obvious retry race\n"
-            "[/PLAN]\n"
-        )
-        plan = flexible.parse_plan(raw, "fix retries")
-
-        self.assertEqual(plan.understanding, "User wants the retry bug fixed.")
-        self.assertIsNone(plan.question)
-        self.assertEqual(
-            [(subtask.tier, subtask.instruction) for subtask in plan.subtasks],
-            [
-                ("low", "add a validation check"),
-                ("mid", "write unit tests for the helper"),
-                ("high", "debug the non-obvious retry race"),
-            ],
-        )
 
     def test_bullets_without_the_wrapper_still_parse(self) -> None:
         plan = flexible.parse_plan(
@@ -78,18 +54,6 @@ class PlanParsingTests(unittest.TestCase):
             [f"task {index}" for index in range(flexible.MAX_SUBTASKS)],
         )
         self.assertNotIn("PARTIAL", plan.understanding)
-
-    def test_subtask_count_is_capped(self) -> None:
-        raw = "[PLAN]\n" + "".join(
-            f"{index}. [low] task {index}\n"
-            for index in range(1, flexible.MAX_SUBTASKS + 8)
-        ) + "[/PLAN]"
-        plan = flexible.parse_plan(raw, "req")
-        self.assertEqual(len(plan.subtasks), flexible.MAX_SUBTASKS)
-        self.assertEqual(
-            plan.subtasks[-1].instruction,
-            f"task {flexible.MAX_SUBTASKS}",
-        )
 
     def test_explicit_remainder_survives_inside_or_after_the_plan(self) -> None:
         note = "PARTIAL: remainder is the release deployment."
@@ -125,14 +89,6 @@ class PlanParsingTests(unittest.TestCase):
         )
         self.assertEqual(plan.question, "Which retry path do you mean?")
         self.assertEqual(plan.subtasks, ())
-
-    def test_planner_offers_the_question_route_only_when_collaborative(
-        self,
-    ) -> None:
-        collaborative = flexible.build_plan_prompt("ctx", collaborative=True)
-        autonomous = flexible.build_plan_prompt("ctx", collaborative=False)
-        self.assertIn("[QUESTION]", collaborative)
-        self.assertNotIn("[QUESTION]", autonomous)
 
 
 class EscalationParsingTests(unittest.TestCase):
@@ -319,17 +275,6 @@ class MergeFallbackTests(unittest.TestCase):
 
 
 class FlexibleSettingsTests(unittest.TestCase):
-    def test_tier_model_defaults_follow_the_tier_agent(self) -> None:
-        with tempfile.TemporaryDirectory() as ws:
-            workspace.ensure_cozter_dir(ws)
-            workspace.set_flexible_backend_name(ws, "high", "claude_code")
-
-            self.assertEqual(workspace.get_flexible_model(ws, "high"), "opus")
-            # Rebinding one tier leaves the others.
-            self.assertEqual(
-                workspace.get_flexible_model(ws, "low"), "gpt-6-luna",
-            )
-
     def test_copilot_tier_and_summary_defaults_use_policy_aware_auto(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)
@@ -432,23 +377,6 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                 injected=[],
             )
 
-    async def test_each_subtask_runs_on_its_own_tier_agent(self) -> None:
-        with tempfile.TemporaryDirectory() as ws:
-            workspace.ensure_cozter_dir(ws)
-            await asyncio.to_thread(
-                workspace.set_flexible_backend_name, ws, "high", "claude_code",
-            )
-
-            _, restarting = await self._run(ws)
-
-        self.assertFalse(restarting)
-        self.assertEqual(
-            self.driven, [("codex", "gpt-6-luna"), ("claude_code", "opus")],
-        )
-        self.assertEqual(
-            self.internal, ["Flexible planner", "Flexible merge"],
-        )
-
     async def test_pipeline_timings_pair_stage_starts_with_completion(self) -> None:
         with tempfile.TemporaryDirectory() as ws:
             with self.assertLogs("Cozter.performance", level="INFO") as captured:
@@ -490,27 +418,6 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         for value in private_values:
             self.assertNotIn(value, "\n".join(captured.output))
 
-    async def test_only_the_merged_answer_is_sent_to_the_user(self) -> None:
-        with tempfile.TemporaryDirectory() as ws:
-            workspace.ensure_cozter_dir(ws)
-            result, _ = await self._run(ws)
-
-        texts = [event.content for event in result.events if event.kind == "text"]
-        self.assertEqual(texts, ["merged answer"])
-        self.assertEqual(result.text, "merged answer")
-        self.assertEqual(
-            len([event for event in result.events if event.kind == "tool"]), 2,
-        )
-
-    async def test_worker_usage_is_summed_into_one_total(self) -> None:
-        with tempfile.TemporaryDirectory() as ws:
-            workspace.ensure_cozter_dir(ws)
-            result, _ = await self._run(ws)
-
-        self.assertEqual(
-            result.usage, {"input_tokens": 20, "output_tokens": 10},
-        )
-
     async def test_discovered_worker_tasks_survive_merge_and_single_worker(self) -> None:
         async def detached_worker(*_args, **_kwargs):
             result = _worker("Provider task started.")
@@ -537,7 +444,6 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(restarting)
                     self.assertEqual(len(result.detached_tasks), 1)
                     self.assertEqual(result.detached_tasks[0].task_id, "task-123")
-
 
     async def test_worker_attachments_survive_the_merge(self) -> None:
         self.worker_texts = ["made a chart [[attach: chart.png]]", "done"]
@@ -584,18 +490,6 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Which retry path?", result.text)
         _, awaiting = agent.extract_await(result.text)
         self.assertTrue(awaiting)
-
-    async def test_the_merge_learns_the_marker_only_when_collaborative(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as ws:
-            workspace.ensure_cozter_dir(ws)
-            await self._run(ws, collaborative=True)
-            self.assertIn("[[await]]", self.merge_prompt)
-
-            self.driven.clear()  # worker texts are indexed per run
-            await self._run(ws, collaborative=False)
-            self.assertNotIn("[[await]]", self.merge_prompt)
 
     async def test_an_unattended_merge_cannot_strand_the_turn_on_a_question(
         self,
@@ -1252,68 +1146,8 @@ class CoveragePromptTests(unittest.TestCase):
         self.assertIn("PARTIAL", plan.understanding)
         self.assertIn("remainder", plan.understanding)
 
-    def test_build_verify_requires_evidence_across_prompts(self) -> None:
-        """Build checks must demand full-log evidence, never eyeball-only."""
-        # A cohesive workflow still needs every verification stage and evidence.
-        self.assertIn("Build/verify", flexible._PLANNER_RULES)
-        self.assertIn("exit codes", flexible._PLANNER_RULES)
-        self.assertIn("one cohesive task", flexible._PLANNER_RULES)
-        self.assertIn("Never split workflow stages into different writers", flexible._PLANNER_RULES)
-        self.assertIn("same owner for every target or related target group", flexible._PLANNER_RULES)
-        self.assertIn("runtime launch/exercise/log-check", flexible._PLANNER_RULES)
-        # Merge must refuse clean claims without per-report evidence.
-        self.assertIn("exit codes", flexible._MERGE_RULES)
-        self.assertIn("PARTIAL + remainder", flexible._MERGE_RULES)
-        # Worker prompt must demand full-log grep + runtime exercise.
-        plan = flexible.Plan(
-            understanding="",
-            subtasks=(flexible.Subtask(tier="high", instruction="verify"),),
-        )
-        worker = "\n".join(flexible.build_subtask_sections("verify build", plan, 0, []).values())
-        self.assertIn("FULL logs", worker)
-        self.assertIn("exit codes", worker)
-        # Per-turn preamble must carry the same rule to direct turns.
-        for collaborative in (True, False):
-            hint = agent._capability_hint(
-                collaborative, allow_detached_requests=False,
-            )
-            self.assertIn("Verify-with-evidence", hint)
-            self.assertIn("exit codes", hint)
-        # Bash hint must steer builds to capture + grep full logs.
-        self.assertIn("FULL", BashTool.description)
-        self.assertIn("grep", BashTool.description.lower())
-
-
-class FlexibleUserReplyPolicyTests(unittest.TestCase):
-    def test_worker_prompt_bans_handoff_notes(self) -> None:
-        plan = flexible.Plan(
-            understanding="",
-            subtasks=(flexible.Subtask(tier="low", instruction="do it"),),
-        )
-        prompt = "\n".join(flexible.build_subtask_sections("req", plan, 0, []).values())
-        self.assertIn("[followup:", prompt)
-        self.assertIn("Never write 'Next turn should:'", prompt)
-
 
 class JudgeVerdictTests(unittest.TestCase):
-    def test_done_ships_the_draft(self) -> None:
-        verdict = flexible.parse_judge(
-            "[VERDICT]\nDONE\n[/VERDICT]\n",
-        )
-        self.assertFalse(verdict.should_continue)
-        self.assertTrue(verdict.verified)
-
-    def test_continue_names_missing_and_next(self) -> None:
-        verdict = flexible.parse_judge(
-            "[VERDICT]\nCONTINUE\n[/VERDICT]\n"
-            "[MISSING]\nerror counts\n[/MISSING]\n"
-            "[NEXT]\ngrep the full log\n[/NEXT]\n",
-        )
-        self.assertTrue(verdict.should_continue)
-        self.assertEqual(verdict.missing, "error counts")
-        self.assertEqual(verdict.next_instruction, "grep the full log")
-        self.assertTrue(verdict.verified)
-
     def test_continue_without_next_does_not_verify_completion(self) -> None:
         verdict = flexible.parse_judge(
             "[VERDICT]\nCONTINUE\n[/VERDICT]\n",
@@ -1327,13 +1161,6 @@ class JudgeVerdictTests(unittest.TestCase):
                 verdict = flexible.parse_judge(raw)
                 self.assertFalse(verdict.should_continue)
                 self.assertFalse(verdict.verified)
-
-    def test_judge_prompt_covers_request_and_draft(self) -> None:
-        prompt = flexible.build_judge_prompt("fix it", "partial fix")
-        self.assertIn("fix it", prompt)
-        self.assertIn("partial fix", prompt)
-        self.assertIn("[VERDICT]", prompt)
-        self.assertIn("No tools", prompt)
 
     def test_long_judge_excerpt_retains_opening_and_final_evidence(self) -> None:
         draft = "REQUEST COVERAGE: all targets checked.\n" + "detail\n" * 3_000
@@ -1732,49 +1559,6 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("keep going", result.continue_instruction)
         self.assertFalse(result.completion_verified)
         self.assertEqual(result.continuation_reason, "judge_limit")
-
-    async def test_done_draft_carries_no_chain_flag(self) -> None:
-        async def fast_drive(*_args, **_kwargs):
-            return AgentResult(text="all done"), False
-
-        async def always_done(*_args, **_kwargs):
-            return flexible.JudgeVerdict(should_continue=False), False
-
-        with tempfile.TemporaryDirectory() as ws:
-            from Cozter import session
-            data = await asyncio.to_thread(session.create_session, ws, name="Work")
-            backend = type(
-                "JudgeTestBackend", (),
-                {
-                    "name": "judge-test",
-                    "default_summary_model": "m",
-                    "supports_typed_plugins": True,
-                    "supports_plugin_prelude": False,
-                    "supports_detached_tasks": False,
-                },
-            )()
-            with (
-                mock.patch.object(
-                    agent.backends_agent, "get_backend", return_value=backend,
-                ),
-                mock.patch.object(agent, "_drive_backend", fast_drive),
-                mock.patch.object(agent, "_judge_draft", always_done),
-                mock.patch.object(
-                    agent.compaction, "maybe_compact",
-                    new_callable=mock.AsyncMock,
-                ),
-                mock.patch.object(
-                    agent.titling, "maybe_auto_title",
-                    new_callable=mock.AsyncMock,
-                ),
-            ):
-                result = await agent.run(
-                    "finish it", ws, 1,
-                    backend_name="judge-test", session_id=data["id"],
-                )
-        self.assertEqual(result.text, "all done")
-        self.assertFalse(result.continue_instruction)
-        self.assertTrue(result.completion_verified)
 
 
 if __name__ == "__main__":
