@@ -160,8 +160,9 @@ class CopilotBackend(Backend):
     tier_models: dict[str, str] = {}
     # An ACP list is authoritative; ignore unverified ``extra_models``.
     allow_unverified_extra_models = False
-    # effort=0 omits the flag.
-    effort_levels = ("minimal", "low", "medium", "high", "xhigh", "max")
+    # effort=0 omits the flag. The CLI names the option --reasoning-effort.
+    effort_flag = "--reasoning-effort"
+    effort_levels = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
     def __init__(self) -> None:
         # Cache ACP per workspace; fail closed to auto.

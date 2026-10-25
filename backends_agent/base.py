@@ -1052,7 +1052,7 @@ class Backend(ABC):
         approval: str,
         *,
         model_flag: str = "--model",
-        effort_flag: str = "--effort",
+        effort_flag: str | None = None,
         effort_template: str = "{effort}",
     ) -> None:
         """Append model, reasoning, and backend permission CLI options.
@@ -1060,6 +1060,8 @@ class Backend(ABC):
         Options always precede the prompt arg (shared ordering keeps the
         permission flag from drifting).
         """
+        if effort_flag is None:
+            effort_flag = getattr(self, "effort_flag", "--effort")
         self.append_model_effort_args(
             cmd,
             model,

@@ -72,10 +72,12 @@ class EffortMaximumPolicyTests(unittest.TestCase):
                 with self.subTest(backend=backend.name, model=model, effort=effort):
                     command: list[str] = []
                     backend.append_launch_options(command, model, effort, "auto")
+                    flag = getattr(backend, "effort_flag", "--effort")
                     if expected is None:
                         self.assertNotIn("--effort", command)
+                        self.assertNotIn("--reasoning-effort", command)
                     else:
-                        self.assertEqual(command[command.index("--effort") + 1], expected)
+                        self.assertEqual(command[command.index(flag) + 1], expected)
 
     def test_codex_cached_custom_catalog_is_authoritative_without_new_discovery(self) -> None:
         backend = codex.CodexBackend()
@@ -156,7 +158,8 @@ class EffortLaunchArgumentTests(unittest.IsolatedAsyncioTestCase):
                             if backend.name == "codex":
                                 self.assertIn(f"model_reasoning_effort={expected}", command)
                             else:
-                                self.assertEqual(command[command.index("--effort") + 1], expected)
+                                flag = getattr(backend, "effort_flag", "--effort")
+                                self.assertEqual(command[command.index(flag) + 1], expected)
                         finally:
                             await backend.cleanup_process(process)
 

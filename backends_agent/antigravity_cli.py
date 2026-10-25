@@ -19,7 +19,7 @@ from .base import (
 )
 
 
-# Verified 1.4.5 account catalog; live discovery decides actual availability.
+# Verified 1.4.6 account catalog; live discovery decides actual availability.
 _MODELS = (
     "gemini-4-argon-medium", "gemini-4-argon-high", "gemini-4-argon-low",
     "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",

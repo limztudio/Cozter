@@ -1694,10 +1694,11 @@ warning: ignored after the catalog
         backend = CopilotBackend()
         self.assertEqual(
             backend.effort_levels,
-            ("minimal", "low", "medium", "high", "xhigh", "max"),
+            ("none", "minimal", "low", "medium", "high", "xhigh", "max"),
         )
+        self.assertEqual(backend.effort_flag, "--reasoning-effort")
         self.assertIsNone(backend.convert_effort(0))
-        self.assertEqual(backend.convert_effort(1), "minimal")
+        self.assertEqual(backend.convert_effort(1), "none")
         self.assertEqual(backend.convert_effort(100), "max")
         self.assertEqual(backend.effort_levels_for_model("auto"), ())
         self.assertEqual(backend.effort_levels_for_model(None), ())
@@ -1750,16 +1751,18 @@ warning: ignored after the catalog
         auto_command = asyncio.run(launch("auto"))
         self.assertIn("--model", auto_command)
         self.assertIn("auto", auto_command)
+        self.assertNotIn("--reasoning-effort", auto_command)
         self.assertNotIn("--effort", auto_command)
 
         implicit_auto_command = asyncio.run(launch(None))
         self.assertNotIn("--model", implicit_auto_command)
+        self.assertNotIn("--reasoning-effort", implicit_auto_command)
         self.assertNotIn("--effort", implicit_auto_command)
 
         named_command = asyncio.run(launch("company-allowed"))
         self.assertIn("--model", named_command)
         self.assertIn("company-allowed", named_command)
-        self.assertIn("--effort", named_command)
+        self.assertIn("--reasoning-effort", named_command)
         self.assertIn("max", named_command)
 
     def test_claude_context_windows_cover_native_and_explicit_1m_models(

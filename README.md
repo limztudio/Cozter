@@ -1658,7 +1658,7 @@ tiers still inherit their existing workspace effort.
 Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
 `gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
 These defaults follow the [current Codex model guidance](https://developers.openai.com/codex/models)
-and the installed CLI catalog (verified 2026-10-21 against codex-cli 0.163.0
+and the installed CLI catalog (verified 2026-10-25 against codex-cli 0.164.0
 and grok 1.0.52; codex's `gpt-5.5` retired from the live catalog on 2026-10-14 and is no longer in the fallback; Claude picker adds Haiku 5.5,
 released 2026-10-07).
 Model access depends on the account and client; select an available model on
@@ -1804,7 +1804,7 @@ session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama,
 Z.ai, and Meta Model API discover models live from their configured HTTP
 endpoints.
 
-Antigravity CLI uses the official `agy` executable, verified against `1.4.5`.
+Antigravity CLI uses the official `agy` executable, verified against `1.4.6`.
 Run `agy` once to finish native Google sign-in, then choose `/agent` →
 `antigravity_cli`. The model picker reads the signed-in account's `agy models`
 catalog and refreshes it after 60 seconds. It includes Argon Low, Medium,
@@ -1906,7 +1906,7 @@ those calls are also denied explicitly.
 `antigravity_cli` uses `--dangerously-skip-permissions --sandbox=false` for
 `full`, and native `--mode auto` for `auto`. Its planning mode is not a
 permission boundary, and enforced per-launch read-only/no-tools policies
-have not been verified in `1.4.5`. Cozter therefore refuses `confirm`/`deny`
+have not been verified in `1.4.6`. Cozter therefore refuses `confirm`/`deny`
 Antigravity launches, excludes it from summary selection, and does not use it
 for restricted parallel helpers. It remains available for direct tasks and
 Flexible owners with `full`/`auto`; choose another supported backend for
@@ -1996,11 +1996,11 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. The Codex fallback was verified on 2026-10-21 against
-codex-cli 0.163.0 and the [official model guide](https://learn.chatgpt.com/docs/models).
+authoritative. The Codex fallback was verified on 2026-10-25 against
+codex-cli 0.164.0 and the [official model guide](https://learn.chatgpt.com/docs/models).
 It includes `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, and
-the GPT-5.6 Sol/Terra/Luna family. The installed CLI advertises a 272K
-active window for all seven; its larger optional maximum does not determine
+the GPT-5.6 Sol/Terra/Luna family. The installed CLI advertises a 500K
+active window for `gpt-6.1-sol` and 272K for the other six; its larger optional maximum does not determine
 Cozter's compaction threshold. Hidden and retired entries are excluded.
 Grok's published `grok-4.7`, `grok-4.7-build-fast`,
 `grok-4.6`, and `grok-4.5` IDs use a 500K-token
@@ -2056,7 +2056,7 @@ retain their native behavior.
 | `meta` | Muse Wonder 1.0 and Standard Spark 1.3: 6 levels (`minimal` through `max`); older and Contributor models: 5 levels (`minimal` through `xhigh`) | `payload["reasoning_effort"] = "max"` for Wonder/standard 1.3; `xhigh` for older and Contributor models |
 | `zai` | GLM-5.3/Flash/FlashX: `low` / `high` / `max`; GLM-5.2: `none` / `high` / `max`; other GLMs use documented thinking switches | `payload["reasoning_effort"] = "max"` for graded models |
 | `claude_code` | Model-aware: current Fable / Haiku 5.5 / Sonnet 5.5 / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.6 and Sonnet 4.6 use 4; Opus 4.5, Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
-| `copilot` | 6 levels (`minimal` through `max`) for an explicit model; `auto` delegates to Copilot | `--effort max` for an explicit model; omitted for `auto` |
+| `copilot` | 7 levels (`none` through `max`) for an explicit model; `auto` delegates to Copilot | `--reasoning-effort max` for an explicit model; omitted for `auto` |
 | `grok` | Model-aware: grok-4.7 / grok-4.7-build-fast / grok-4.6 use 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on 4.7/4.6; `--effort high` otherwise |
 | `antigravity_cli` | Model-aware native variant levels, discovered from the account's model catalog | Highest published level only at `100`; current Argon/Flash/Claude variants use `high`, and `99` uses `medium` |
 

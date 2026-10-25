@@ -26,7 +26,7 @@ class ModelCatalogRefreshTests(unittest.TestCase):
             backend.invalidate_model_catalog("/workspace")
             self.assertNotIn("private-model", backend.model_effort_levels)
             self.assertIsNone(backend.context_window_tokens("private-model"))
-            self.assertEqual(backend.context_window_tokens("gpt-6.1-sol"), 272_000)
+            self.assertEqual(backend.context_window_tokens("gpt-6.1-sol"), 500_000)
             discover.assert_not_called()
             self.assertEqual(backend.available_models, ("new-model",))
             self.assertEqual(backend.context_window_tokens("new-model"), 100_000)
@@ -63,7 +63,7 @@ class ModelCatalogRefreshTests(unittest.TestCase):
     def test_codex_metadata_never_waits_for_a_slow_catalog_probe(self):
         backend = CodexBackend()
         with backend._model_catalog_lock:
-            self.assertEqual(backend.context_window_tokens("gpt-6.1-sol"), 272_000)
+            self.assertEqual(backend.context_window_tokens("gpt-6.1-sol"), 500_000)
             self.assertIsNone(backend.context_window_tokens("private-model"))
             self.assertEqual(backend.effort_levels_for_model("gpt-6-luna")[-1], "max")
 
